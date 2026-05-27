@@ -145,11 +145,26 @@ async def run_tool(
     raise last_exc
 
 
-async def render_tool_result(tool: "Tool", result: Any, ctx: "RunContext") -> str:
-    """Convert a raw tool result into the string the model receives."""
-    if tool.result_renderer is None:
+async def render_tool_result(
+    tool: "Tool",
+    result: Any,
+    ctx: "RunContext",
+    *,
+    default: ToolResultRenderer | None = None,
+) -> str:
+    """Convert a raw tool result into the string the model receives.
+
+    Resolution order:
+
+    1. The tool's own ``result_renderer`` if set.
+    2. ``default`` (typically ``agent.tool_result_renderer``) if provided.
+    3. The framework's :func:`default_result_renderer` (``str`` /
+       ``json.dumps``).
+    """
+    renderer = tool.result_renderer or default
+    if renderer is None:
         return default_result_renderer(result)
-    rendered = tool.result_renderer(result, ctx)
+    rendered = renderer(result, ctx)
     rendered = await _maybe_await(rendered)
     return rendered if isinstance(rendered, str) else str(rendered)
 

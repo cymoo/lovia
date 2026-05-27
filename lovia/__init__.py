@@ -60,7 +60,8 @@ from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
 from .skills import Skill, SkillCatalog
-from .tools import Tool, tool
+from .output import DefaultOutputRepair, OutputRepairStrategy
+from .tools import Tool, ToolResultRenderer, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 __all__ = [
@@ -87,6 +88,8 @@ __all__ = [
     "NoopTracer",
     "OpenAIChatProvider",
     "OutputGuardrail",
+    "OutputRepairStrategy",
+    "DefaultOutputRepair",
     "OutputValidationError",
     "Provider",
     "ProviderError",
@@ -105,6 +108,7 @@ __all__ = [
     "Tool",
     "ToolCall",
     "ToolError",
+    "ToolResultRenderer",
     "Tracer",
     "Usage",
     "UserError",

@@ -171,7 +171,13 @@ print(result.output.temp_c)  # typed!
 
 If the model returns something that can't be parsed, lovia re-prompts it
 once to fix the output. Set `output_repair=False` on the agent to fail fast
-with `OutputValidationError` instead.
+with `OutputValidationError` instead, or pass a custom
+`OutputRepairStrategy` for multi-attempt or localised repair prompts:
+
+```python
+from lovia import DefaultOutputRepair
+agent = Agent(..., output_repair=DefaultOutputRepair(max_attempts=3))
+```
 
 ### Handoffs
 

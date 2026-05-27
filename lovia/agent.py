@@ -22,7 +22,9 @@ if TYPE_CHECKING:
     from .mcp import MCPServer
     from .memory import Memory
     from .messages import ToolCall
+    from .output import OutputRepairStrategy
     from .skills import SkillCatalog
+    from .tools import ToolResultRenderer
     from .tracing import Tracer
 
 
@@ -82,7 +84,11 @@ class Agent(Generic[TContext]):
     model: "str | Provider | list[str | Provider]" = "openai:gpt-4o-mini"
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
-    output_repair: bool = True
+    # When ``True`` (default), a failed structured-output parse triggers one
+    # English repair prompt before giving up. Set to ``False`` to fail fast,
+    # or pass an :class:`~lovia.output.OutputRepairStrategy` instance for
+    # custom retry policies (multi-attempt, localised prompts, etc.).
+    output_repair: "bool | OutputRepairStrategy" = True
     handoffs: list["Agent | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
     skills: "SkillCatalog | None" = None
@@ -95,6 +101,10 @@ class Agent(Generic[TContext]):
     # Tools may still override either knob individually.
     default_tool_retries: int = 1
     default_tool_timeout: float | None = None
+    # Optional agent-wide renderer applied to any tool whose own
+    # ``result_renderer`` is ``None``. Useful for things like always
+    # JSON-serialising via a custom encoder.
+    tool_result_renderer: "ToolResultRenderer | None" = None
     # Optional observability + long-term memory hooks. When ``tracer`` is
     # ``None`` the runner uses a no-op tracer, so instrumentation is free.
     tracer: "Tracer | None" = None

@@ -17,13 +17,45 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .exceptions import OutputValidationError
 from .schema import coerce_output, model_json_schema
 
 
 FINAL_OUTPUT_TOOL_NAME = "final_output"
+
+
+class OutputRepairStrategy(Protocol):
+    """Decide how to recover from an output validation failure.
+
+    Called after the model produces a final message that doesn't match the
+    requested ``output_type``. Return a follow-up *user* prompt the runner
+    will append before re-rolling, or ``None`` to give up and re-raise the
+    :class:`OutputValidationError`.
+
+    ``attempt`` is 1 on the first failure, 2 after the first repair has
+    itself failed, and so on — implementations decide their own cap.
+    """
+
+    def build_prompt(self, exc: OutputValidationError, attempt: int) -> str | None: ...
+
+
+@dataclass
+class DefaultOutputRepair:
+    """Single-shot English repair prompt — the historical lovia behaviour."""
+
+    max_attempts: int = 1
+
+    def build_prompt(self, exc: OutputValidationError, attempt: int) -> str | None:
+        if attempt > self.max_attempts:
+            return None
+        return (
+            "Your previous response could not be parsed into the expected output "
+            f"type: {exc}. Please reply again with a response that exactly matches "
+            "the required schema. Do not include any explanation, markdown, or "
+            "code fences — only the JSON document."
+        )
 
 
 @dataclass

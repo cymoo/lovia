@@ -32,6 +32,7 @@ from .hooks import dispatch
 from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
 from .output import (
     FINAL_OUTPUT_TOOL_NAME,
+    DefaultOutputRepair,
     OutputSpec,
     build_output_spec,
     loads_lenient,
@@ -424,13 +425,12 @@ class _RunLoop:
                             assistant, output_spec
                         )
                     except OutputValidationError as exc:
-                        if (
-                            agent.output_repair
-                            and output_spec is not None
-                            and output_repair_attempts == 0
-                        ):
+                        repair_prompt = self._build_repair_prompt(
+                            agent, exc, output_repair_attempts + 1
+                        )
+                        if repair_prompt is not None and output_spec is not None:
                             output_repair_attempts += 1
-                            transcript.append(user(_repair_prompt(exc)))
+                            transcript.append(user(repair_prompt))
                             ev_end = events.TurnEnded(agent=agent, turn=turns)
                             yield ev_end
                             await dispatch(agent.hooks, ev_end)
@@ -528,6 +528,22 @@ class _RunLoop:
                     pass
 
     # ------------------------------------------------------------------ helpers
+
+    def _build_repair_prompt(
+        self, agent: Agent, exc: OutputValidationError, attempt: int
+    ) -> str | None:
+        """Resolve the agent's :attr:`output_repair` policy for one failure.
+
+        Returns the user-prompt to append, or ``None`` to stop retrying.
+        Supports both the ergonomic ``bool`` form and a full
+        :class:`~lovia.output.OutputRepairStrategy` instance.
+        """
+        policy = agent.output_repair
+        if policy is False:
+            return None
+        if policy is True:
+            policy = DefaultOutputRepair()
+        return policy.build_prompt(exc, attempt)
 
     async def _run_model_turn(
         self,
@@ -646,7 +662,9 @@ class _RunLoop:
                 f" ({result.reason})" if result.reason else ""
             )
         else:
-            result_text = await render_tool_result(tool, result, run_ctx)
+            result_text = await render_tool_result(
+                tool, result, run_ctx, default=agent.tool_result_renderer
+            )
 
         transcript.append(tool_message(call.id, result_text))
         yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
@@ -845,16 +863,6 @@ def _supports_json_schema(agent: Agent) -> bool:
 
 async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
     raise AssertionError("final_output tool must be intercepted by the runner")
-
-
-def _repair_prompt(exc: OutputValidationError) -> str:
-    """Build the repair message appended after a failed output validation."""
-    return (
-        "Your previous response could not be parsed into the expected output "
-        f"type: {exc}. Please reply again with a response that exactly matches "
-        "the required schema. Do not include any explanation, markdown, or "
-        "code fences — only the JSON document."
-    )
 
 
 async def _stream_with_fallback(

@@ -13,6 +13,10 @@ from pydantic import BaseModel
 
 from lovia import Agent, Runner
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 class WeatherReport(BaseModel):
     city: str
@@ -24,7 +28,7 @@ async def main() -> None:
     agent = Agent(
         name="Weather",
         instructions="Report the weather using the provided structure.",
-        model="openai:gpt-4o-mini",
+        model="deepseek-v4-pro",
         output_type=WeatherReport,
     )
     result = await Runner.run(agent, "Make up a sunny report for Lisbon.")

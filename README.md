@@ -47,8 +47,8 @@ Hard dependencies are only `httpx` and `pydantic`.
   `HandoffOccurred`, `RunCompleted`, … the same events go to hooks for
   observability.
 - 🗣 **Handoffs & agent-as-tool.** Compose multi-agent systems without ceremony.
-- 💾 **Sessions & memory.** `InMemorySession`, `SQLiteSession`, and a tiny
-  `MemoryStore` protocol you can implement on Redis, Postgres, …
+- 💾 **Sessions.** `InMemorySession` and `SQLiteSession`; plug your own
+  `Session` implementation for Redis, Postgres, …
 - 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
 - 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
 - 🪝 **Hooks.** Subclass `AgentHooks`, plug into Logfire / OTel / your logger.
@@ -70,10 +70,47 @@ Requires Python 3.10+.
 ```python
 from lovia import Runner, events
 
+# Iterate the event stream as the run executes.
 async for ev in Runner.run_stream(agent, "Tell me a joke"):
     if isinstance(ev, events.TextDelta):
         print(ev.delta, end="", flush=True)
+
+# Or use ``run_streamed``, which returns a ``RunHandle`` that is both
+# async-iterable and awaitable — so you can stream events *and* get the
+# final ``RunResult`` from the same call.
+handle = Runner.run_streamed(agent, "Tell me a joke")
+async for ev in handle:
+    if isinstance(ev, events.TextDelta):
+        print(ev.delta, end="", flush=True)
+result = await handle.result()
 ```
+
+### Human-in-the-loop approval
+
+Tools declared with `needs_approval=True` pause the runner and emit an
+`ApprovalRequired` event. Resolve it however you like:
+
+```python
+from lovia import Agent, Runner, tool, events
+
+@tool(needs_approval=True)
+async def send_email(to: str, body: str) -> str: ...
+
+# Option 1: decide while streaming.
+handle = Runner.run_streamed(agent, "email Alice")
+async for ev in handle:
+    if isinstance(ev, events.ApprovalRequired):
+        ev.approve()      # or ev.reject()
+
+# Option 2: a programmatic handler on the agent.
+async def policy(call, ctx):
+    return call.name != "drop_database"
+
+agent = Agent(name="ops", model=..., tools=[send_email], approval_handler=policy)
+```
+
+If nothing resolves the approval, the call is denied by default — runs never
+hang on an absent decision.
 
 ### Structured output
 
@@ -90,16 +127,26 @@ result = await Runner.run(agent, "weather in Tokyo")
 print(result.output.temp_c)  # typed!
 ```
 
+If the model returns something that can't be parsed, lovia re-prompts it
+once to fix the output. Set `output_repair=False` on the agent to fail fast
+with `OutputValidationError` instead.
+
 ### Handoffs
 
 ```python
+from lovia import Agent, Handoff, drop_stale_tool_calls
+
 billing = Agent(name="Billing", model="openai:gpt-4o-mini", instructions="...")
 support = Agent(name="Support", model="openai:gpt-4o-mini", instructions="...")
 
 triage = Agent(
     name="Triage",
     model="openai:gpt-4o-mini",
-    handoffs=[billing, support],
+    # Bare agents are fine; wrap in ``Handoff`` to customise.
+    handoffs=[
+        billing,
+        Handoff(target=support, input_filter=drop_stale_tool_calls),
+    ],
 )
 ```
 
@@ -157,6 +204,7 @@ See [`examples/`](./examples) for runnable scripts covering every feature:
 | `08_skills.py` | Lazy-loaded `SKILL.md` skills |
 | `09_compat_provider.py` | DeepSeek / Ollama via OpenAI-compat |
 | `10_hooks.py` | `AgentHooks` for observability |
+| `11_approval.py` | Human-in-the-loop tool approval |
 
 ## Public surface
 
@@ -164,15 +212,15 @@ The complete API:
 
 ```python
 from lovia import (
-    Agent, Runner, RunContext, RunResult,
+    Agent, Runner, RunContext, RunResult, RunHandle,
     tool, Tool,
-    Session, MemoryStore, AgentHooks,
+    Session, AgentHooks,
     ChatMessage, ToolCall, Usage,
     Provider, OpenAIChatProvider, ModelSettings,
-    Skill, SkillCatalog, Handoff,
+    Skill, SkillCatalog, Handoff, agent_as_tool, drop_stale_tool_calls,
     events,
 )
-from lovia.stores import InMemorySession, SQLiteSession, InMemoryMemoryStore, SQLiteMemoryStore
+from lovia.stores import InMemorySession, SQLiteSession
 ```
 
 That's it.

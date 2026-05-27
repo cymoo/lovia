@@ -60,13 +60,21 @@ class ScriptedProvider:
 
 
 def text(content: str) -> AssistantMessage:
-    return AssistantMessage(content=content, usage=Usage(input_tokens=1, output_tokens=1))
+    return AssistantMessage(
+        content=content, usage=Usage(input_tokens=1, output_tokens=1)
+    )
 
 
-def call(name: str, args: dict[str, Any], *, call_id: str | None = None) -> AssistantMessage:
+def call(
+    name: str, args: dict[str, Any], *, call_id: str | None = None
+) -> AssistantMessage:
     return AssistantMessage(
         content=None,
-        tool_calls=[ToolCall(id=call_id or f"call_{name}", name=name, arguments=json.dumps(args))],
+        tool_calls=[
+            ToolCall(
+                id=call_id or f"call_{name}", name=name, arguments=json.dumps(args)
+            )
+        ],
         usage=Usage(input_tokens=1, output_tokens=1),
     )
 

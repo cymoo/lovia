@@ -18,6 +18,8 @@ from .tools import Tool
 if TYPE_CHECKING:
     from .hooks import AgentHooks
     from .mcp import MCPServer
+    from .messages import ToolCall
+    from .runner import RunContext
     from .skills import SkillCatalog
 
 
@@ -28,6 +30,13 @@ TOutput = TypeVar("TOutput")
 # An instructions callable receives the optional user-supplied context and
 # returns the system prompt. May be sync or async.
 InstructionsFn = Callable[[Any], "str | Awaitable[str]"]
+
+# A programmatic approval handler. Returns True to allow the call, False to
+# deny. May be sync or async (the runner awaits the result either way).
+ApprovalHandler = Callable[
+    ["ToolCall", "RunContext"],
+    "bool | Awaitable[bool]",
+]
 
 
 @dataclass
@@ -44,6 +53,10 @@ class Agent(Generic[TContext, TOutput]):
         output_type: Pydantic model, dataclass, TypedDict, or builtin type that
             describes the structured final output. ``str`` (the default) means
             free-form text.
+        output_repair: When ``True`` (the default), and the model produces an
+            output that fails to parse against ``output_type``, the runner
+            asks the model once to fix it. Set to ``False`` to fail fast with
+            :class:`OutputValidationError`.
         handoffs: Agents (or :class:`Handoff` objects) the model may transfer
             control to via a synthetic ``transfer_to_<name>`` tool.
         settings: Sampling parameters forwarded to the provider.
@@ -51,6 +64,11 @@ class Agent(Generic[TContext, TOutput]):
         mcp_servers: MCP client connections whose tools will be merged at run
             time.
         hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
+        approval_handler: Optional async callable consulted whenever a tool
+            with ``needs_approval`` is about to run. Returns ``True`` to allow,
+            ``False`` to deny. If ``None`` and no streaming consumer resolves
+            the :class:`~lovia.events.ApprovalRequired` event, the call is
+            denied by default.
     """
 
     name: str
@@ -58,11 +76,13 @@ class Agent(Generic[TContext, TOutput]):
     model: "str | Provider" = "openai:gpt-4o-mini"
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
+    output_repair: bool = True
     handoffs: list["Agent | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
     skills: "SkillCatalog | None" = None
     mcp_servers: list["MCPServer"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
+    approval_handler: ApprovalHandler | None = None
 
     def resolve_provider(self) -> Provider:
         """Return the :class:`Provider` to use for this agent."""

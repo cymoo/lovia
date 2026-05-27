@@ -50,7 +50,9 @@ class AnthropicProvider:
         default_max_tokens: int = 4096,
     ) -> None:
         self.model = model
-        self.base_url = (base_url or os.environ.get("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
+        self.base_url = (
+            base_url or os.environ.get("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL
+        ).rstrip("/")
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
@@ -81,7 +83,11 @@ class AnthropicProvider:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": anthropic_messages,
-            "max_tokens": (settings.max_tokens if settings and settings.max_tokens else self._default_max_tokens),
+            "max_tokens": (
+                settings.max_tokens
+                if settings and settings.max_tokens
+                else self._default_max_tokens
+            ),
         }
         if system_text:
             payload["system"] = system_text
@@ -191,14 +197,20 @@ class AnthropicProvider:
                         if idx in tool_calls:
                             tool_calls[idx]["arguments"] += partial
                         yield StreamChunk(
-                            tool_call_delta=ToolCallDelta(index=idx, arguments_delta=partial)
+                            tool_call_delta=ToolCallDelta(
+                                index=idx, arguments_delta=partial
+                            )
                         )
                 elif etype == "message_delta":
-                    stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
-                    if (u := event.get("usage")):
-                        usage.output_tokens = u.get("output_tokens", usage.output_tokens)
+                    stop_reason = (event.get("delta") or {}).get(
+                        "stop_reason"
+                    ) or stop_reason
+                    if u := event.get("usage"):
+                        usage.output_tokens = u.get(
+                            "output_tokens", usage.output_tokens
+                        )
                 elif etype == "message_start":
-                    if (u := (event.get("message") or {}).get("usage")):
+                    if u := (event.get("message") or {}).get("usage"):
                         usage.input_tokens = u.get("input_tokens", 0)
                         usage.output_tokens = u.get("output_tokens", 0)
                 elif etype == "message_stop":
@@ -207,7 +219,9 @@ class AnthropicProvider:
         final = AssistantMessage(
             content="".join(text_buf) or None,
             tool_calls=[
-                ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"] or "{}")
+                ToolCall(
+                    id=tc["id"], name=tc["name"], arguments=tc["arguments"] or "{}"
+                )
                 for _, tc in sorted(tool_calls.items())
             ],
             usage=usage,

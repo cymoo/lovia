@@ -16,7 +16,6 @@ correct on tricky cases (``Optional``, ``Literal``, ``Union``, nested models).
 
 from __future__ import annotations
 
-import dataclasses
 import inspect
 from typing import Any, Callable, get_type_hints
 
@@ -52,7 +51,10 @@ def function_args_schema(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[s
     for name, param in sig.parameters.items():
         if name.startswith("_") or name in ("self", "cls", "ctx", "context"):
             continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
             continue
         annotation = hints.get(name, str)
         default = param.default if param.default is not inspect.Parameter.empty else ...
@@ -83,7 +85,10 @@ def validate_args(fn: Callable[..., Any], data: dict[str, Any]) -> dict[str, Any
     for name, param in sig.parameters.items():
         if name.startswith("_") or name in ("self", "cls", "ctx", "context"):
             continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
             continue
         annotation = hints.get(name, str)
         default = param.default if param.default is not inspect.Parameter.empty else ...

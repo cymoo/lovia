@@ -1,4 +1,4 @@
-"""SQLite-backed :class:`Session` and :class:`MemoryStore`.
+"""SQLite-backed :class:`Session`.
 
 Uses :mod:`sqlite3` from the stdlib via :func:`asyncio.to_thread` so we don't
 add ``aiosqlite`` as a dependency. Concurrency is serialized through a single
@@ -27,17 +27,11 @@ CREATE TABLE IF NOT EXISTS session_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_session_messages_sid
     ON session_messages(session_id, id);
-
-CREATE TABLE IF NOT EXISTS memory_kv (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at REAL NOT NULL DEFAULT (julianday('now'))
-);
 """
 
 
 class _SQLiteBase:
-    """Shared connection/lock plumbing for both stores."""
+    """Shared connection/lock plumbing."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = str(path)
@@ -108,68 +102,6 @@ class SQLiteSession(_SQLiteBase):
         await self._run(_impl)
 
 
-class SQLiteMemoryStore(_SQLiteBase):
-    """A :class:`MemoryStore` persisted to a SQLite file."""
-
-    async def get(self, key: str) -> str | None:
-        def _impl() -> str | None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-            try:
-                conn.executescript(_SCHEMA)
-                row = conn.execute(
-                    "SELECT value FROM memory_kv WHERE key = ?", (key,)
-                ).fetchone()
-                return row[0] if row else None
-            finally:
-                conn.close()
-
-        return await self._run(_impl)
-
-    async def set(self, key: str, value: str) -> None:
-        def _impl() -> None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-            try:
-                conn.executescript(_SCHEMA)
-                conn.execute(
-                    "INSERT INTO memory_kv (key, value) VALUES (?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
-                    "updated_at = julianday('now')",
-                    (key, value),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-        await self._run(_impl)
-
-    async def delete(self, key: str) -> None:
-        def _impl() -> None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-            try:
-                conn.executescript(_SCHEMA)
-                conn.execute("DELETE FROM memory_kv WHERE key = ?", (key,))
-                conn.commit()
-            finally:
-                conn.close()
-
-        await self._run(_impl)
-
-    async def list(self, prefix: str = "") -> list[tuple[str, str]]:
-        def _impl() -> list[tuple[str, str]]:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
-            try:
-                conn.executescript(_SCHEMA)
-                rows = conn.execute(
-                    "SELECT key, value FROM memory_kv WHERE key LIKE ? ORDER BY key",
-                    (prefix + "%",),
-                ).fetchall()
-                return [(r[0], r[1]) for r in rows]
-            finally:
-                conn.close()
-
-        return await self._run(_impl)
-
-
 def _serialize(msg: ChatMessage) -> dict:
     return {
         "role": msg.role,
@@ -180,6 +112,7 @@ def _serialize(msg: ChatMessage) -> dict:
         ],
         "tool_call_id": msg.tool_call_id,
         "name": msg.name,
+        "reasoning_content": msg.reasoning_content,
     }
 
 
@@ -193,4 +126,5 @@ def _deserialize(d: dict) -> ChatMessage:
         ],
         tool_call_id=d.get("tool_call_id"),
         name=d.get("name"),
+        reasoning_content=d.get("reasoning_content"),
     )

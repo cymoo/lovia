@@ -93,9 +93,7 @@ def tool(
         parameters, _ = function_args_schema(func)
 
         sig = inspect.signature(func)
-        wants_context = any(
-            p in sig.parameters for p in ("ctx", "context")
-        )
+        wants_context = any(p in sig.parameters for p in ("ctx", "context"))
 
         is_async = inspect.iscoroutinefunction(func)
 

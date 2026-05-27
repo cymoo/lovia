@@ -62,7 +62,9 @@ class MCPServerStdio(MCPServer):
                 "MCP support requires the optional 'mcp' package. Install with: pip install mcp"
             ) from exc
 
-        params = StdioServerParameters(command=self.command, args=self.args, env=self.env)
+        params = StdioServerParameters(
+            command=self.command, args=self.args, env=self.env
+        )
         stack = AsyncExitStack()
         try:
             read, write = await stack.enter_async_context(stdio_client(params))
@@ -96,7 +98,9 @@ class MCPServerStreamableHTTP(MCPServer):
 
         stack = AsyncExitStack()
         try:
-            ctx = await stack.enter_async_context(streamablehttp_client(self.url, headers=self.headers))
+            ctx = await stack.enter_async_context(
+                streamablehttp_client(self.url, headers=self.headers)
+            )
             # streamablehttp_client yields (read, write, _get_session_id) in
             # recent versions; older versions yielded just (read, write).
             read, write = ctx[0], ctx[1]
@@ -127,7 +131,9 @@ async def _list_remote_tools(session: Any, *, prefix: str | None) -> list[Tool]:
                 if getattr(block, "type", None) == "text":
                     parts.append(block.text)
                 else:
-                    parts.append(json.dumps(getattr(block, "model_dump", lambda: str(block))()))
+                    parts.append(
+                        json.dumps(getattr(block, "model_dump", lambda: str(block))())
+                    )
             return "\n".join(parts)
 
         tools.append(

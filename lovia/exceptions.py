@@ -37,7 +37,3 @@ class MaxTurnsExceeded(LoviaError):
 
 class OutputValidationError(LoviaError):
     """Raised when the model output cannot be parsed into ``output_type``."""
-
-
-class ApprovalDenied(LoviaError):
-    """Raised when a tool requiring approval is explicitly denied."""

@@ -7,10 +7,15 @@ appends the new turns. Use the same ``session_id`` across processes to resume.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from lovia import Agent, Runner
 from lovia.stores import SQLiteSession
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 async def main() -> None:
@@ -18,7 +23,7 @@ async def main() -> None:
     agent = Agent(
         name="Companion",
         instructions="You remember the user across turns.",
-        model="openai:gpt-4o-mini",
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
     )
 
     r1 = await Runner.run(agent, "Hi, I'm Mei.", session=session, session_id="user-mei")

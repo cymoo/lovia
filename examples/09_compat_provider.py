@@ -12,11 +12,15 @@ import os
 
 from lovia import Agent, OpenAIChatProvider, Runner
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 async def main() -> None:
     provider = OpenAIChatProvider(
         model="deepseek-chat",
-        api_key=os.environ["DEEPSEEK_API_KEY"],
+        api_key=os.environ.get("DEEPSEEK_API_KEY") or os.environ["OPENAI_API_KEY"],
         base_url="https://api.deepseek.com/v1",
     )
     agent = Agent(

@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
+dotenv = ["python-dotenv>=1.0.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -39,3 +40,9 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/cymoo/lovia"
 Repository = "https://github.com/cymoo/lovia"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]

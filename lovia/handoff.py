@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from .messages import ChatMessage
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -27,24 +28,67 @@ if TYPE_CHECKING:
 
 HANDOFF_TOOL_PREFIX = "transfer_to_"
 
+
 # Internal sentinel that the runner recognises in a tool result to mean
 # "switch the active agent to ``target`` and continue".
 @dataclass
 class _HandoffSignal:
     target: "Agent"
+    handoff: "Handoff"
     reason: str | None = None
+
+
+# A function that rewrites the conversation transcript when control is
+# transferred. Receives the body of the transcript (everything except the
+# leading system prompt, which is re-rendered by the new agent) and returns a
+# possibly-filtered version.
+HandoffInputFilter = Callable[[list[ChatMessage]], list[ChatMessage]]
 
 
 @dataclass
 class Handoff:
-    """A handoff target with optional custom name and description."""
+    """A handoff target with optional customisation.
+
+    Attributes:
+        target: The agent to transfer control to.
+        name: Override for the ``transfer_to_<name>`` tool name.
+        description: Override for the tool description shown to the model.
+        on_handoff: Optional callback invoked when the handoff fires; receives
+            the parsed arguments (a single ``reason`` string by default) and
+            the run context.
+        input_filter: Optional function that rewrites the transcript before
+            the new agent sees it. Use :func:`drop_stale_tool_calls` to strip
+            references to tools the new agent doesn't have.
+    """
 
     target: "Agent"
     name: str | None = None
     description: str | None = None
-    # Optional callback invoked when the handoff fires; receives the parsed
-    # arguments (a single ``reason`` string by default) and the run context.
-    on_handoff: Callable[[dict[str, Any], "RunContext"], Awaitable[None] | None] | None = None
+    on_handoff: (
+        Callable[[dict[str, Any], "RunContext"], Awaitable[None] | None] | None
+    ) = None
+    input_filter: HandoffInputFilter | None = None
+
+
+def drop_stale_tool_calls(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Strip tool calls and tool responses from a transcript.
+
+    A safe default ``input_filter`` for handoffs: keeps user messages,
+    assistant text replies, and system messages, but drops references to
+    tools the new agent may not have registered. Assistant turns that only
+    carried tool calls (no text content) are dropped entirely.
+    """
+    out: list[ChatMessage] = []
+    for m in messages:
+        if m.role == "tool":
+            continue
+        if m.role == "assistant" and m.tool_calls:
+            if m.content:
+                # Preserve text but drop the dangling tool_calls.
+                out.append(ChatMessage(role="assistant", content=m.content))
+            continue
+        out.append(m)
+    return out
 
 
 def build_handoff_tool(handoff: Handoff) -> Tool:
@@ -61,7 +105,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
             result = handoff.on_handoff(args, ctx)
             if hasattr(result, "__await__"):
                 await result  # type: ignore[func-returns-value]
-        return _HandoffSignal(target=target, reason=args.get("reason"))
+        return _HandoffSignal(target=target, handoff=handoff, reason=args.get("reason"))
 
     parameters = {
         "type": "object",
@@ -92,17 +136,26 @@ def agent_as_tool(
     """Wrap ``agent`` as a tool callable by another agent.
 
     The wrapped agent runs as an isolated sub-runner; its result becomes the
-    tool's return value (stringified by the runner as usual).
+    tool's return value (stringified by the runner as usual). Token usage
+    from the sub-run is accumulated into the parent's :class:`Usage` so cost
+    reports stay consistent.
     """
     tool_name = name or f"ask_{_slug(agent.name)}"
-    tool_desc = description or f"Delegate a task to the {agent.name} agent and get its answer."
+    tool_desc = (
+        description or f"Delegate a task to the {agent.name} agent and get its answer."
+    )
 
     async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
         # Imported here to avoid a circular import at module load time.
         from .runner import Runner
 
         prompt = args.get("input") or ""
-        result = await Runner.run(agent, prompt, context=ctx.context)
+        result = await Runner.run(
+            agent,
+            prompt,
+            context=ctx.context,
+            _parent_usage=ctx.usage,
+        )
         return result.output
 
     parameters = {

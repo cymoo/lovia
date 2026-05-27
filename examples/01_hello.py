@@ -11,12 +11,16 @@ import asyncio
 
 from lovia import Agent, Runner
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 async def main() -> None:
     agent = Agent(
         name="Greeter",
         instructions="You are a friendly assistant. Keep answers under 20 words.",
-        model="openai:gpt-4o-mini",
+        model="deepseek-v4-pro",
     )
     result = await Runner.run(agent, "Say hello in three languages.")
     print(result.output)

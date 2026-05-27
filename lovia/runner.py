@@ -10,32 +10,32 @@ orchestrates:
 * Handling structured output, multi-agent handoffs, human approval, and
   event hooks.
 
-Public surface area is small: :meth:`Runner.run` and :meth:`Runner.run_stream`.
+Public surface area is small: :meth:`Runner.run`, :meth:`Runner.run_streamed`,
+and :meth:`Runner.run_stream`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Generic, TypeVar
 
 from . import events
 from .agent import Agent
-from .exceptions import ApprovalDenied, MaxTurnsExceeded, UserError
+from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
-from .messages import AssistantMessage, ChatMessage, ToolCall, Usage, system, tool_message, user
+from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
 from .output import (
     FINAL_OUTPUT_TOOL_NAME,
     OutputSpec,
     build_output_spec,
-    final_output_tool_schema,
     loads_lenient,
     parse_output,
     response_format_for,
 )
-from .providers import Provider
 from .providers.openai_chat import OpenAIChatProvider
 from .session import Session
 from .tools import Tool
@@ -58,9 +58,6 @@ class RunContext(Generic[TContext]):
     messages: list[ChatMessage]
     agent: Agent
     usage: Usage = field(default_factory=Usage)
-    # Per-tool-call approval decisions made by the caller while streaming.
-    # The key is the tool call id; the value is True/False.
-    approvals: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -74,8 +71,97 @@ class RunResult(Generic[TOutput]):
     turns: int
 
 
+class RunHandle:
+    """Awaitable, async-iterable handle to a streamed run.
+
+    Two equivalent ways to drive a run::
+
+        # 1. Iterate the event stream and inspect the result at the end.
+        handle = Runner.run_streamed(agent, "hi")
+        async for event in handle:
+            ...
+        result = await handle.result()
+
+        # 2. Just await it; events are consumed internally.
+        result = await Runner.run_streamed(agent, "hi")
+
+    Iteration is single-shot: a handle can be consumed exactly once. After
+    iteration finishes (or an exception escapes), :meth:`result` returns the
+    :class:`RunResult` (or re-raises the same exception).
+    """
+
+    def __init__(self, _stream: AsyncIterator[events.Event]) -> None:
+        self._stream = _stream
+        self._result: RunResult[Any] | None = None
+        self._error: BaseException | None = None
+        self._done = asyncio.Event()
+        self._consumed = False
+
+    def __aiter__(self) -> AsyncIterator[events.Event]:
+        return self._iter()
+
+    async def _iter(self) -> AsyncIterator[events.Event]:
+        if self._consumed:
+            raise RuntimeError("RunHandle can only be iterated once")
+        self._consumed = True
+        try:
+            async for ev in self._stream:
+                if isinstance(ev, events.RunCompleted):
+                    self._result = ev.result
+                yield ev
+        except BaseException as exc:
+            self._error = exc
+            self._done.set()
+            raise
+        else:
+            self._done.set()
+
+    async def result(self) -> RunResult[Any]:
+        """Return the final :class:`RunResult`, driving the stream if needed."""
+        if not self._consumed:
+            async for _ in self:
+                pass
+        else:
+            await self._done.wait()
+        if self._error is not None:
+            raise self._error
+        if self._result is None:
+            raise RuntimeError("Run completed without producing a result")
+        return self._result
+
+    def __await__(self):  # type: ignore[no-untyped-def]
+        return self.result().__await__()
+
+
 class Runner:
     """Stateless orchestrator. All entry points are class/static methods."""
+
+    @staticmethod
+    def run_streamed(
+        agent: Agent,
+        input: "str | list[ChatMessage]",
+        *,
+        context: Any = None,
+        session: Session | None = None,
+        session_id: str | None = None,
+        max_turns: int = 20,
+        _parent_usage: Usage | None = None,
+    ) -> RunHandle:
+        """Start a run and return a :class:`RunHandle`.
+
+        The handle is both awaitable (for the final :class:`RunResult`) and
+        async-iterable (for the event stream). See :class:`RunHandle`.
+        """
+        loop = _RunLoop(
+            initial_agent=agent,
+            user_input=input,
+            context=context,
+            session=session,
+            session_id=session_id,
+            max_turns=max_turns,
+            parent_usage=_parent_usage,
+        )
+        return RunHandle(loop.stream())
 
     @staticmethod
     async def run(
@@ -86,22 +172,18 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        _parent_usage: Usage | None = None,
     ) -> RunResult[Any]:
         """Run ``agent`` to completion and return the final result."""
-        # Consume the stream internally; ``run`` is just a convenience over it.
-        last_result: RunResult[Any] | None = None
-        async for event in Runner.run_stream(
+        return await Runner.run_streamed(
             agent,
             input,
             context=context,
             session=session,
             session_id=session_id,
             max_turns=max_turns,
-        ):
-            if isinstance(event, events.RunCompleted):
-                last_result = event.result
-        assert last_result is not None, "Runner.run_stream did not emit RunCompleted"
-        return last_result
+            _parent_usage=_parent_usage,
+        ).result()
 
     @staticmethod
     async def run_stream(
@@ -113,15 +195,20 @@ class Runner:
         session_id: str | None = None,
         max_turns: int = 20,
     ) -> AsyncIterator[events.Event]:
-        """Run ``agent`` and yield :class:`Event` instances as they happen."""
-        async for event in _RunLoop(
-            initial_agent=agent,
-            user_input=input,
+        """Run ``agent`` and yield :class:`Event` instances as they happen.
+
+        Equivalent to iterating :meth:`run_streamed`. Kept for backward
+        compatibility; new code should prefer :meth:`run_streamed` because
+        the handle also exposes the final :class:`RunResult`.
+        """
+        async for event in Runner.run_streamed(
+            agent,
+            input,
             context=context,
             session=session,
             session_id=session_id,
             max_turns=max_turns,
-        ).stream():
+        ):
             yield event
 
 
@@ -142,6 +229,7 @@ class _RunLoop:
         session: Session | None,
         session_id: str | None,
         max_turns: int,
+        parent_usage: Usage | None = None,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -151,6 +239,7 @@ class _RunLoop:
         self.session = session
         self.session_id = session_id
         self.max_turns = max_turns
+        self.parent_usage = parent_usage
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
@@ -173,6 +262,7 @@ class _RunLoop:
         try:
             output: Any = None
             turns = 0
+            output_repair_attempts = 0
             while True:
                 if turns >= self.max_turns:
                     raise MaxTurnsExceeded(
@@ -197,7 +287,9 @@ class _RunLoop:
                 ):
                     if chunk.text_delta is not None:
                         yield events.TextDelta(delta=chunk.text_delta)
-                        await dispatch(agent.hooks, events.TextDelta(delta=chunk.text_delta))
+                        await dispatch(
+                            agent.hooks, events.TextDelta(delta=chunk.text_delta)
+                        )
                     if chunk.done is not None:
                         assistant = chunk.done
 
@@ -215,7 +307,24 @@ class _RunLoop:
 
                 # No tool calls -> we're done. Parse text or JSON output.
                 if not assistant.tool_calls:
-                    output = await self._finalize_text_output(assistant, output_spec)
+                    try:
+                        output = await self._finalize_text_output(
+                            assistant, output_spec
+                        )
+                    except OutputValidationError as exc:
+                        if (
+                            agent.output_repair
+                            and output_spec is not None
+                            and output_repair_attempts == 0
+                        ):
+                            output_repair_attempts += 1
+                            transcript.append(user(_repair_prompt(exc)))
+                            ev_end = events.TurnEnded(agent=agent, turn=turns)
+                            yield ev_end
+                            await dispatch(agent.hooks, ev_end)
+                            continue
+                        await dispatch(agent.hooks, events.ErrorOccurred(error=exc))
+                        raise
                     ev_end = events.TurnEnded(agent=agent, turn=turns)
                     yield ev_end
                     await dispatch(agent.hooks, ev_end)
@@ -223,25 +332,27 @@ class _RunLoop:
 
                 # Process tool calls. May trigger a handoff, in which case we
                 # swap ``agent`` and continue the loop.
-                handoff_target: Agent | None = None
+                handoff_signal: _HandoffSignal | None = None
                 final_via_tool: Any = None
                 for call in assistant.tool_calls:
                     if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
                         # Synthetic final-output tool: parse, ack, terminate.
                         final_via_tool = parse_output(output_spec, call.arguments)
-                        transcript.append(
-                            tool_message(call.id, "ok")
-                        )
+                        transcript.append(tool_message(call.id, "ok"))
                         continue
 
                     tool = tools_by_name.get(call.name)
                     if tool is None:
                         err = f"Tool {call.name!r} is not available."
                         transcript.append(tool_message(call.id, err))
-                        yield events.ToolCallCompleted(call=call, result=err, is_error=True)
+                        yield events.ToolCallCompleted(
+                            call=call, result=err, is_error=True
+                        )
                         await dispatch(
                             agent.hooks,
-                            events.ToolCallCompleted(call=call, result=err, is_error=True),
+                            events.ToolCallCompleted(
+                                call=call, result=err, is_error=True
+                            ),
                         )
                         continue
 
@@ -252,13 +363,34 @@ class _RunLoop:
 
                     # Approval gate.
                     if tool.requires_approval(args, run_ctx):
-                        ev = events.ApprovalRequired(call=call)
+                        loop = asyncio.get_running_loop()
+                        fut: "asyncio.Future[bool]" = loop.create_future()
+                        ev = events.ApprovalRequired(call=call, _future=fut)
                         yield ev
                         await dispatch(agent.hooks, ev)
-                        approved = run_ctx.approvals.get(call.id, ev.approved)
-                        if approved is None:
-                            # Default to deny if the caller didn't decide.
-                            approved = False
+
+                        # If a programmatic handler is configured and the
+                        # streaming consumer hasn't already resolved the
+                        # future, consult it.
+                        if agent.approval_handler is not None and not fut.done():
+                            try:
+                                decision = agent.approval_handler(call, run_ctx)
+                                if inspect.isawaitable(decision):
+                                    decision = await decision
+                            except Exception as exc:
+                                await dispatch(
+                                    agent.hooks, events.ErrorOccurred(error=exc)
+                                )
+                                decision = False
+                            if not fut.done():
+                                fut.set_result(bool(decision))
+
+                        # No one resolved the future → default deny so the
+                        # run cannot hang on an absent decision.
+                        if not fut.done():
+                            fut.set_result(False)
+
+                        approved = fut.result()
                         if not approved:
                             denial = f"Tool {call.name} was not approved."
                             transcript.append(tool_message(call.id, denial))
@@ -287,10 +419,9 @@ class _RunLoop:
                     if isinstance(result, _HandoffSignal):
                         # Defer the actual swap until after we've recorded the
                         # tool result, so the transcript stays consistent.
-                        handoff_target = result.target
-                        result_text = (
-                            f"Transferred to {result.target.name}"
-                            + (f" ({result.reason})" if result.reason else "")
+                        handoff_signal = result
+                        result_text = f"Transferred to {result.target.name}" + (
+                            f" ({result.reason})" if result.reason else ""
                         )
                     else:
                         result_text = _stringify_tool_result(result)
@@ -301,7 +432,9 @@ class _RunLoop:
                     )
                     await dispatch(
                         agent.hooks,
-                        events.ToolCallCompleted(call=call, result=result, is_error=is_error),
+                        events.ToolCallCompleted(
+                            call=call, result=result, is_error=is_error
+                        ),
                     )
 
                 ev_te = events.TurnEnded(agent=agent, turn=turns)
@@ -312,19 +445,24 @@ class _RunLoop:
                     output = final_via_tool
                     break
 
-                if handoff_target is not None:
+                if handoff_signal is not None:
                     prev_agent = agent
-                    agent = handoff_target
+                    agent = handoff_signal.target
                     run_ctx.agent = agent
                     output_spec = build_output_spec(
                         agent.output_type, _supports_json_schema(agent)
                     )
                     tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
-                    # Update system prompt for the new agent.
-                    transcript[:] = await self._reset_system_prompt(transcript, agent)
-                    ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=agent)
-                    yield ev
-                    await dispatch(agent.hooks, ev)
+                    # Update system prompt for the new agent and optionally
+                    # filter the inherited transcript.
+                    transcript[:] = await self._reset_for_handoff(
+                        transcript, agent, handoff_signal.handoff
+                    )
+                    handoff_ev = events.HandoffOccurred(
+                        from_agent=prev_agent, to_agent=agent
+                    )
+                    yield handoff_ev
+                    await dispatch(agent.hooks, handoff_ev)
 
             # Final bookkeeping.
             if output_spec is not None and output is None:
@@ -343,6 +481,11 @@ class _RunLoop:
 
             if self.session is not None:
                 await self._persist_session(transcript)
+
+            # Propagate usage into a parent run (e.g. agent_as_tool) so token
+            # accounting accumulates across nested invocations.
+            if self.parent_usage is not None:
+                self.parent_usage.add(run_ctx.usage)
 
             done = events.RunCompleted(result=result)
             yield done
@@ -379,13 +522,25 @@ class _RunLoop:
             text = f"{text}\n\n{agent.skills.render_catalog()}".strip()
         return text
 
-    async def _reset_system_prompt(
-        self, transcript: list[ChatMessage], agent: Agent
+    async def _reset_for_handoff(
+        self,
+        transcript: list[ChatMessage],
+        agent: Agent,
+        handoff: Handoff | None,
     ) -> list[ChatMessage]:
-        """Swap the leading system message when an agent handoff occurs."""
+        """Swap the leading system message when an agent handoff occurs.
+
+        If the originating :class:`Handoff` declares an ``input_filter``, it is
+        applied to the inherited transcript (excluding the old system prompt)
+        before the new system prompt is prepended.
+        """
         new_system = await self._system_prompt(agent)
-        # Drop any leading system messages; keep the rest.
-        body = [m for m in transcript if m.role != "system" or m is not transcript[0]]
+        # Drop the leading system message if present; preserve the rest.
+        body: list[ChatMessage] = list(transcript)
+        if body and body[0].role == "system":
+            body = body[1:]
+        if handoff is not None and handoff.input_filter is not None:
+            body = list(handoff.input_filter(body))
         if new_system:
             return [system(new_system), *body]
         return body
@@ -436,11 +591,11 @@ class _RunLoop:
     ) -> Any:
         if output_spec is None:
             return assistant.content or ""
-        # ``response_format`` path: the assistant's content is a JSON document.
-        if not output_spec.use_tool_fallback:
-            return parse_output(output_spec, loads_lenient(assistant.content or ""))
-        # Falling here means the model failed to call ``final_output``. Best
-        # effort: try to parse content as JSON anyway.
+        # Either the model used the structured ``response_format`` path or it
+        # was supposed to call the synthetic ``final_output`` tool. In both
+        # cases, the remaining text content should parse as JSON describing the
+        # target type. Any failure here surfaces as ``OutputValidationError``
+        # and may be repaired in the main loop if the agent opts in.
         return parse_output(output_spec, loads_lenient(assistant.content or ""))
 
     async def _persist_session(self, transcript: list[ChatMessage]) -> None:
@@ -460,7 +615,9 @@ class _RunLoop:
 def _supports_json_schema(agent: Agent) -> bool:
     """Whether the agent's provider can use OpenAI-style ``response_format``."""
     provider = agent.resolve_provider() if isinstance(agent.model, str) else agent.model
-    return isinstance(provider, OpenAIChatProvider)
+    if isinstance(provider, OpenAIChatProvider):
+        return provider.supports_json_schema
+    return False
 
 
 def _stringify_tool_result(result: Any) -> str:
@@ -476,5 +633,15 @@ async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
     raise AssertionError("final_output tool must be intercepted by the runner")
 
 
+def _repair_prompt(exc: OutputValidationError) -> str:
+    """Build the repair message appended after a failed output validation."""
+    return (
+        "Your previous response could not be parsed into the expected output "
+        f"type: {exc}. Please reply again with a response that exactly matches "
+        "the required schema. Do not include any explanation, markdown, or "
+        "code fences — only the JSON document."
+    )
+
+
 # Re-export for convenience.
-__all__ = ["Runner", "RunContext", "RunResult"]
+__all__ = ["Runner", "RunContext", "RunResult", "RunHandle"]

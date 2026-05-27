@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+import os
 
 from dotenv import load_dotenv
 
@@ -31,7 +32,7 @@ async def main() -> None:
     agent = Agent(
         name="Assistant",
         instructions="Help the user with email tasks. Always call send_email for outgoing messages.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
         tools=[send_email],
     )
 

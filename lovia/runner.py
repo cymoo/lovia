@@ -24,7 +24,9 @@ from typing import Any, AsyncIterator, Generic, TypeVar
 
 from . import events
 from .agent import Agent
+from .checkpointer import Checkpointer, RunSnapshot
 from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
+from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
 from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
@@ -36,9 +38,11 @@ from .output import (
     parse_output,
     response_format_for,
 )
+from .providers.base import Provider, StreamChunk
 from .providers.openai_chat import OpenAIChatProvider
+from .reliability import CancelToken, RetryPolicy, RunBudget
 from .session import Session
-from .tools import Tool
+from .tools import Tool, run_tool
 
 
 TContext = TypeVar("TContext")
@@ -71,7 +75,7 @@ class RunResult(Generic[TOutput]):
     turns: int
 
 
-class RunHandle:
+class RunHandle(Generic[TOutput]):
     """Awaitable, async-iterable handle to a streamed run.
 
     Two equivalent ways to drive a run::
@@ -92,7 +96,7 @@ class RunHandle:
 
     def __init__(self, _stream: AsyncIterator[events.Event]) -> None:
         self._stream = _stream
-        self._result: RunResult[Any] | None = None
+        self._result: "RunResult[TOutput] | None" = None
         self._error: BaseException | None = None
         self._done = asyncio.Event()
         self._consumed = False
@@ -116,7 +120,7 @@ class RunHandle:
         else:
             self._done.set()
 
-    async def result(self) -> RunResult[Any]:
+    async def result(self) -> "RunResult[TOutput]":
         """Return the final :class:`RunResult`, driving the stream if needed."""
         if not self._consumed:
             async for _ in self:
@@ -138,15 +142,21 @@ class Runner:
 
     @staticmethod
     def run_streamed(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
-    ) -> RunHandle:
+    ) -> "RunHandle[TOutput]":
         """Start a run and return a :class:`RunHandle`.
 
         The handle is both awaitable (for the final :class:`RunResult`) and
@@ -160,20 +170,32 @@ class Runner:
             session_id=session_id,
             max_turns=max_turns,
             parent_usage=_parent_usage,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=resume_from,
         )
         return RunHandle(loop.stream())
 
     @staticmethod
     async def run(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
-    ) -> RunResult[Any]:
+    ) -> "RunResult[TOutput]":
         """Run ``agent`` to completion and return the final result."""
         return await Runner.run_streamed(
             agent,
@@ -182,25 +204,63 @@ class Runner:
             session=session,
             session_id=session_id,
             max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=resume_from,
             _parent_usage=_parent_usage,
         ).result()
 
     @staticmethod
+    async def resume(
+        agent: Agent[TContext, TOutput],
+        *,
+        checkpointer: Checkpointer,
+        run_id: str,
+        context: TContext | None = None,
+        max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
+    ) -> "RunResult[TOutput]":
+        """Resume a previously checkpointed run to completion.
+
+        Loads the snapshot for ``run_id`` and continues the loop from the
+        saved transcript. The opaque ``context`` value is *not* snapshotted —
+        callers re-supply it here.
+        """
+        snapshot = await checkpointer.load(run_id)
+        if snapshot is None:
+            raise UserError(f"No snapshot found for run_id={run_id!r}")
+        return await Runner.run(
+            agent,
+            input=[],  # ignored when resume_from is provided
+            context=context,
+            max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=snapshot,
+        )
+
+    @staticmethod
     async def run_stream(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
     ) -> AsyncIterator[events.Event]:
-        """Run ``agent`` and yield :class:`Event` instances as they happen.
-
-        Equivalent to iterating :meth:`run_streamed`. Kept for backward
-        compatibility; new code should prefer :meth:`run_streamed` because
-        the handle also exposes the final :class:`RunResult`.
-        """
+        """Run ``agent`` and yield :class:`Event` instances as they happen."""
         async for event in Runner.run_streamed(
             agent,
             input,
@@ -208,6 +268,9 @@ class Runner:
             session=session,
             session_id=session_id,
             max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
         ):
             yield event
 
@@ -230,6 +293,12 @@ class _RunLoop:
         session_id: str | None,
         max_turns: int,
         parent_usage: Usage | None = None,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -240,13 +309,26 @@ class _RunLoop:
         self.session_id = session_id
         self.max_turns = max_turns
         self.parent_usage = parent_usage
+        self.budget = budget
+        self.cancel_token = cancel_token
+        self.retry = retry
+        self.checkpointer = checkpointer
+        self.run_id = run_id or (resume_from.run_id if resume_from else None)
+        self.resume_from = resume_from
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
 
         # 1. Build the initial conversation: system prompt + (session history) + input.
-        transcript = await self._build_initial_messages(agent)
+        if self.resume_from is not None:
+            # Resume: transcript = snapshot, skip session/input rebuild and
+            # input guardrails (already vetted on the original run).
+            transcript = list(self.resume_from.messages)
+        else:
+            transcript = await self._build_initial_messages(agent)
         run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
+        if self.resume_from is not None:
+            run_ctx.usage.add(self.resume_from.usage)
 
         # 2. Discover MCP tools (if any). Connections are kept open for the
         # whole run and closed in a finally block.
@@ -260,22 +342,34 @@ class _RunLoop:
         yield ev_start
         await dispatch(agent.hooks, ev_start)
         try:
+            # Input guardrails run once on the fully-built initial transcript.
+            # Skip on resume — they already ran on the original input.
+            if agent.input_guardrails and self.resume_from is None:
+                await check_input_guardrails(
+                    agent.input_guardrails, transcript, run_ctx
+                )
+
             output: Any = None
-            turns = 0
+            turns = self.resume_from.turns if self.resume_from is not None else 0
             output_repair_attempts = 0
             while True:
                 if turns >= self.max_turns:
                     raise MaxTurnsExceeded(
                         f"Run exceeded max_turns={self.max_turns} without producing output"
                     )
+                if self.cancel_token is not None:
+                    self.cancel_token.check()
+                if self.budget is not None:
+                    self.budget.check(run_ctx.usage)
                 turns += 1
                 ev_turn = events.TurnStarted(agent=agent, turn=turns)
                 yield ev_turn
                 await dispatch(agent.hooks, ev_turn)
 
-                provider = agent.resolve_provider()
+                providers = agent.resolve_providers()
                 assistant = None
-                async for chunk in provider.stream(
+                async for chunk in _stream_with_fallback(
+                    providers,
                     transcript,
                     tools=[t.openai_schema() for t in tools_by_name.values()] or None,
                     response_format=(
@@ -284,12 +378,17 @@ class _RunLoop:
                         else None
                     ),
                     settings=agent.settings,
+                    retry=self.retry,
                 ):
                     if chunk.text_delta is not None:
                         yield events.TextDelta(delta=chunk.text_delta)
                         await dispatch(
                             agent.hooks, events.TextDelta(delta=chunk.text_delta)
                         )
+                    if chunk.reasoning_delta is not None:
+                        ev_r = events.ReasoningDelta(delta=chunk.reasoning_delta)
+                        yield ev_r
+                        await dispatch(agent.hooks, ev_r)
                     if chunk.done is not None:
                         assistant = chunk.done
 
@@ -299,6 +398,8 @@ class _RunLoop:
                     raise RuntimeError("Provider stream ended without final message")
 
                 run_ctx.usage.add(assistant.usage)
+                if self.budget is not None:
+                    self.budget.check(run_ctx.usage)
                 msg = assistant.to_chat_message()
                 transcript.append(msg)
                 ev_msg = events.MessageCompleted(message=msg)
@@ -328,6 +429,7 @@ class _RunLoop:
                     ev_end = events.TurnEnded(agent=agent, turn=turns)
                     yield ev_end
                     await dispatch(agent.hooks, ev_end)
+                    await self._snapshot(agent, transcript, run_ctx, turns)
                     break
 
                 # Process tool calls. May trigger a handoff, in which case we
@@ -335,6 +437,12 @@ class _RunLoop:
                 handoff_signal: _HandoffSignal | None = None
                 final_via_tool: Any = None
                 for call in assistant.tool_calls:
+                    if self.cancel_token is not None:
+                        self.cancel_token.check()
+                    if self.budget is not None:
+                        self.budget.record_tool_call()
+                        self.budget.check(run_ctx.usage)
+
                     if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
                         # Synthetic final-output tool: parse, ack, terminate.
                         final_via_tool = parse_output(output_spec, call.arguments)
@@ -371,7 +479,10 @@ class _RunLoop:
 
                         # If a programmatic handler is configured and the
                         # streaming consumer hasn't already resolved the
-                        # future, consult it.
+                        # future, consult it. The handler may return:
+                        #   * truthy / "allow" → approve
+                        #   * "ask" → defer to streaming consumer
+                        #   * falsy / "deny"  → reject
                         if agent.approval_handler is not None and not fut.done():
                             try:
                                 decision = agent.approval_handler(call, run_ctx)
@@ -382,7 +493,15 @@ class _RunLoop:
                                     agent.hooks, events.ErrorOccurred(error=exc)
                                 )
                                 decision = False
-                            if not fut.done():
+                            if isinstance(decision, str):
+                                token = decision.strip().lower()
+                                if token == "ask":
+                                    pass  # leave fut unresolved
+                                elif token in ("allow", "approve", "yes"):
+                                    fut.set_result(True)
+                                else:
+                                    fut.set_result(False)
+                            elif not fut.done():
                                 fut.set_result(bool(decision))
 
                         # No one resolved the future → default deny so the
@@ -409,7 +528,7 @@ class _RunLoop:
                     await dispatch(agent.hooks, events.ToolCallStarted(call=call))
 
                     try:
-                        result = await tool.invoke(args, run_ctx)
+                        result = await run_tool(tool, args, run_ctx)
                         is_error = False
                     except Exception as exc:
                         result = f"Tool error: {exc}"
@@ -440,6 +559,7 @@ class _RunLoop:
                 ev_te = events.TurnEnded(agent=agent, turn=turns)
                 yield ev_te
                 await dispatch(agent.hooks, ev_te)
+                await self._snapshot(agent, transcript, run_ctx, turns)
 
                 if final_via_tool is not None:
                     output = final_via_tool
@@ -470,6 +590,10 @@ class _RunLoop:
                 raise UserError(
                     f"Agent {agent.name!r} ended without producing structured output"
                 )
+
+            # Output guardrails: last gate before the result is returned.
+            if agent.output_guardrails:
+                await check_output_guardrails(agent.output_guardrails, output, run_ctx)
 
             result = RunResult(
                 output=output,
@@ -584,6 +708,30 @@ class _RunLoop:
             cleanup.append(server.aclose)
         return tools, cleanup
 
+    async def _snapshot(
+        self,
+        agent: Agent,
+        transcript: list[ChatMessage],
+        run_ctx: RunContext,
+        turns: int,
+    ) -> None:
+        """Persist a :class:`RunSnapshot` if a checkpointer is configured."""
+        if self.checkpointer is None or self.run_id is None:
+            return
+        snapshot = RunSnapshot(
+            run_id=self.run_id,
+            agent_name=agent.name,
+            messages=list(transcript),
+            usage=Usage(
+                input_tokens=run_ctx.usage.input_tokens,
+                output_tokens=run_ctx.usage.output_tokens,
+                cache_read_tokens=run_ctx.usage.cache_read_tokens,
+                cache_write_tokens=run_ctx.usage.cache_write_tokens,
+            ),
+            turns=turns,
+        )
+        await self.checkpointer.save(snapshot)
+
     async def _finalize_text_output(
         self,
         assistant: AssistantMessage,
@@ -641,6 +789,60 @@ def _repair_prompt(exc: OutputValidationError) -> str:
         "the required schema. Do not include any explanation, markdown, or "
         "code fences — only the JSON document."
     )
+
+
+async def _stream_with_fallback(
+    providers: list[Provider],
+    messages: list[ChatMessage],
+    *,
+    tools: list[dict[str, Any]] | None,
+    response_format: dict[str, Any] | None,
+    settings: Any,
+    retry: RetryPolicy | None,
+) -> AsyncIterator[StreamChunk]:
+    """Stream from the first provider that succeeds.
+
+    For each provider we apply ``retry`` (if any) on errors that occur *before*
+    any chunk has been forwarded. Once the stream starts producing data, the
+    run is committed: a mid-stream error propagates immediately so we don't
+    duplicate text or tool calls already seen by the caller.
+
+    When all retries on a provider are exhausted, we move to the next provider
+    in the chain. If all providers fail, the last exception is re-raised.
+    """
+    last_exc: BaseException | None = None
+    max_attempts = retry.max_attempts if retry is not None else 1
+    for provider in providers:
+        attempt = 0
+        while True:
+            attempt += 1
+            committed = False
+            try:
+                async for chunk in provider.stream(
+                    messages,
+                    tools=tools,
+                    response_format=response_format,
+                    settings=settings,
+                ):
+                    committed = True
+                    yield chunk
+                return  # success
+            except BaseException as exc:
+                last_exc = exc
+                if committed:
+                    raise
+                if retry is not None and attempt < max_attempts and retry.retry_on(exc):
+                    import random as _random
+
+                    delay = min(
+                        retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1))
+                    )
+                    delay *= 0.5 + _random.random()
+                    await retry.sleep(delay)
+                    continue
+                break  # next provider
+    if last_exc is not None:
+        raise last_exc
 
 
 # Re-export for convenience.

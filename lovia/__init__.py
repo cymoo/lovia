@@ -25,13 +25,23 @@ from __future__ import annotations
 
 from . import events
 from .agent import Agent
+from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
+from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
+    BudgetExceeded,
+    GuardrailTripped,
     LoviaError,
     MaxTurnsExceeded,
     OutputValidationError,
     ProviderError,
+    RunCancelled,
     ToolError,
     UserError,
+)
+from .guardrails import (
+    GuardrailFn,
+    InputGuardrail,
+    OutputGuardrail,
 )
 from .handoff import Handoff, agent_as_tool, drop_stale_tool_calls
 from .hooks import AgentHooks
@@ -45,6 +55,7 @@ from .messages import (
     user,
 )
 from .providers import ModelSettings, OpenAIChatProvider, Provider, provider_from_string
+from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
 from .skills import Skill, SkillCatalog
@@ -54,22 +65,37 @@ __all__ = [
     "Agent",
     "AgentHooks",
     "AssistantMessage",
+    "BudgetExceeded",
+    "CancelToken",
     "ChatMessage",
+    "Checkpointer",
+    "ContentBlock",
+    "GuardrailFn",
+    "GuardrailTripped",
     "Handoff",
+    "ImageBlock",
+    "InMemoryCheckpointer",
+    "InputGuardrail",
     "LoviaError",
     "MaxTurnsExceeded",
     "ModelSettings",
     "OpenAIChatProvider",
+    "OutputGuardrail",
     "OutputValidationError",
     "Provider",
     "ProviderError",
+    "RetryPolicy",
+    "RunBudget",
+    "RunCancelled",
     "RunContext",
     "RunHandle",
     "RunResult",
+    "RunSnapshot",
     "Runner",
     "Session",
     "Skill",
     "SkillCatalog",
+    "TextBlock",
     "Tool",
     "ToolCall",
     "ToolError",

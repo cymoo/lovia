@@ -47,6 +47,17 @@ class TextDelta(Event):
 
 
 @dataclass
+class ReasoningDelta(Event):
+    """A partial chain-of-thought fragment from providers that expose it.
+
+    Surface in your UI as collapsed/secondary text — these fragments are not
+    part of the user-visible response and must not be relied on for behavior.
+    """
+
+    delta: str
+
+
+@dataclass
 class MessageCompleted(Event):
     """An assistant message fully assembled (may contain tool calls)."""
 

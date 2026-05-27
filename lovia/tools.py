@@ -31,6 +31,19 @@ if TYPE_CHECKING:
 # whether a tool invocation needs human approval.
 ApprovalPredicate = Callable[[dict[str, Any], "RunContext"], bool]
 
+# Tool middleware: ``before`` may mutate/replace the arguments before they
+# reach the underlying callable; ``after`` may transform or replace the
+# returned value before the runner serializes it back to the model. Either
+# hook may be sync or async; the runner always awaits the result.
+ToolBefore = Callable[
+    [dict[str, Any], "RunContext"],
+    "dict[str, Any] | Awaitable[dict[str, Any]]",
+]
+ToolAfter = Callable[
+    [Any, "RunContext"],
+    "Any | Awaitable[Any]",
+]
+
 
 @dataclass
 class Tool:
@@ -43,6 +56,12 @@ class Tool:
     # callables are wrapped during construction.
     invoke: Callable[[dict[str, Any], "RunContext"], Awaitable[Any]]
     needs_approval: bool | ApprovalPredicate = False
+    # Optional middleware. ``before`` runs after argument validation but
+    # before the underlying callable; ``after`` runs on the returned value
+    # before the runner stringifies it. Use them for logging, redaction,
+    # caching, mocking, rate limiting, etc.
+    before: ToolBefore | None = None
+    after: ToolAfter | None = None
     # When True the runner passes the RunContext as the first argument.
     _wants_context: bool = field(default=False, repr=False)
 
@@ -62,12 +81,30 @@ class Tool:
         }
 
 
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def run_tool(tool: "Tool", args: dict[str, Any], ctx: "RunContext") -> Any:
+    """Invoke a tool, applying its optional ``before`` / ``after`` middleware."""
+    if tool.before is not None:
+        args = await _maybe_await(tool.before(args, ctx))
+    result = await tool.invoke(args, ctx)
+    if tool.after is not None:
+        result = await _maybe_await(tool.after(result, ctx))
+    return result
+
+
 def tool(
     fn: Callable[..., Any] | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
     needs_approval: bool | ApprovalPredicate = False,
+    before: ToolBefore | None = None,
+    after: ToolAfter | None = None,
 ) -> Any:
     """Decorate a function to turn it into a :class:`Tool`.
 
@@ -114,6 +151,8 @@ def tool(
             parameters=parameters,
             invoke=invoke,
             needs_approval=needs_approval,
+            before=before,
+            after=after,
             _wants_context=wants_context,
         )
 

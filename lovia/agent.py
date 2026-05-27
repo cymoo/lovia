@@ -16,6 +16,7 @@ from .providers import ModelSettings, Provider, provider_from_string
 from .tools import Tool
 
 if TYPE_CHECKING:
+    from .guardrails import GuardrailFn
     from .hooks import AgentHooks
     from .mcp import MCPServer
     from .messages import ToolCall
@@ -73,7 +74,7 @@ class Agent(Generic[TContext, TOutput]):
 
     name: str
     instructions: "str | InstructionsFn" = ""
-    model: "str | Provider" = "openai:gpt-4o-mini"
+    model: "str | Provider | list[str | Provider]" = "openai:gpt-4o-mini"
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
     output_repair: bool = True
@@ -83,12 +84,27 @@ class Agent(Generic[TContext, TOutput]):
     mcp_servers: list["MCPServer"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
+    input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    output_guardrails: list["GuardrailFn"] = field(default_factory=list)
+
+    def resolve_providers(self) -> list[Provider]:
+        """Return the ordered fallback chain of providers for this agent.
+
+        When ``model`` is a single value the chain has length 1. When it is a
+        list, each entry is resolved and the runner tries them in order.
+        """
+        items: list[Any]
+        if isinstance(self.model, list):
+            items = list(self.model)
+        else:
+            items = [self.model]
+        if not items:
+            raise ValueError("Agent.model must not be empty")
+        return [provider_from_string(m) if isinstance(m, str) else m for m in items]
 
     def resolve_provider(self) -> Provider:
-        """Return the :class:`Provider` to use for this agent."""
-        if isinstance(self.model, str):
-            return provider_from_string(self.model)
-        return self.model
+        """Return the primary provider (first entry of the fallback chain)."""
+        return self.resolve_providers()[0]
 
     async def render_instructions(self, context: Any) -> str:
         """Materialize the system prompt for a given run."""

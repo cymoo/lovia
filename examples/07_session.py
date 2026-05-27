@@ -23,7 +23,7 @@ async def main() -> None:
     agent = Agent(
         name="Companion",
         instructions="You remember the user across turns.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
     )
 
     r1 = await Runner.run(agent, "Hi, I'm Mei.", session=session, session_id="user-mei")

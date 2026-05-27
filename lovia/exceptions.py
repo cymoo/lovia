@@ -37,3 +37,15 @@ class MaxTurnsExceeded(LoviaError):
 
 class OutputValidationError(LoviaError):
     """Raised when the model output cannot be parsed into ``output_type``."""
+
+
+class BudgetExceeded(LoviaError):
+    """Raised when a :class:`~lovia.RunBudget` limit is exceeded mid-run."""
+
+
+class RunCancelled(LoviaError):
+    """Raised when a :class:`~lovia.CancelToken` was tripped during a run."""
+
+
+class GuardrailTripped(LoviaError):
+    """Raised when an input or output :class:`~lovia.Guardrail` rejects a value."""

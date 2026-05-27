@@ -51,6 +51,9 @@ class ScriptedProvider:
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[StreamChunk]:
         msg = self._pop(messages)
+        if msg.reasoning_content:
+            for ch in msg.reasoning_content:
+                yield StreamChunk(reasoning_delta=ch)
         # Emit content character-by-character so streaming consumers receive
         # multiple deltas, then the final assembled message.
         if msg.content:
@@ -59,9 +62,11 @@ class ScriptedProvider:
         yield StreamChunk(done=msg)
 
 
-def text(content: str) -> AssistantMessage:
+def text(content: str, *, reasoning: str | None = None) -> AssistantMessage:
     return AssistantMessage(
-        content=content, usage=Usage(input_tokens=1, output_tokens=1)
+        content=content,
+        reasoning_content=reasoning,
+        usage=Usage(input_tokens=1, output_tokens=1),
     )
 
 

@@ -8,8 +8,13 @@ agent definition.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from lovia import Agent, AgentHooks, Runner, tool
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 @tool
@@ -33,7 +38,7 @@ async def main() -> None:
     agent = Agent(
         name="Clock",
         instructions="Use the now tool to answer time questions.",
-        model="openai:gpt-4o-mini",
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         tools=[now],
         hooks=PrintingHooks(),
     )

@@ -47,6 +47,7 @@ class OpenAIChatProvider:
         client: httpx.AsyncClient | None = None,
         timeout: float = 60.0,
         default_headers: dict[str, str] | None = None,
+        supports_json_schema: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
@@ -54,6 +55,19 @@ class OpenAIChatProvider:
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
         self._extra_headers = default_headers or {}
+        self._supports_json_schema = supports_json_schema
+
+    @property
+    def supports_json_schema(self) -> bool:
+        """True when the endpoint supports OpenAI-style ``json_schema`` response_format.
+
+        Defaults to True only for the official OpenAI API; other compatible
+        endpoints vary in support. Override via the constructor parameter.
+        """
+        if self._supports_json_schema is not None:
+            return self._supports_json_schema
+        from urllib.parse import urlparse
+        return urlparse(self.base_url).hostname == "api.openai.com"
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -137,6 +151,7 @@ class OpenAIChatProvider:
 
         # Incremental state assembled while we forward deltas to the caller.
         text_buf: list[str] = []
+        reasoning_buf: list[str] = []
         tool_calls: dict[int, dict[str, str]] = {}  # index -> {id, name, arguments}
         usage = Usage()
         finish_reason: str | None = None
@@ -177,6 +192,9 @@ class OpenAIChatProvider:
                     text_buf.append(text)
                     yield StreamChunk(text_delta=text)
 
+                if (reasoning := delta.get("reasoning_content")):
+                    reasoning_buf.append(reasoning)
+
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
                     slot = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
@@ -201,6 +219,7 @@ class OpenAIChatProvider:
 
         final = AssistantMessage(
             content="".join(text_buf) or None,
+            reasoning_content="".join(reasoning_buf) or None,
             tool_calls=[
                 ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
                 for _, tc in sorted(tool_calls.items())
@@ -229,6 +248,7 @@ def _parse_completion(data: dict[str, Any]) -> AssistantMessage:
     )
     return AssistantMessage(
         content=msg.get("content"),
+        reasoning_content=msg.get("reasoning_content"),
         tool_calls=tool_calls,
         usage=usage,
         finish_reason=choice.get("finish_reason"),

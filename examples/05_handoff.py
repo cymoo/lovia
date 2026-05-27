@@ -11,16 +11,20 @@ import asyncio
 
 from lovia import Agent, Runner
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 billing = Agent(
     name="Billing",
     instructions="You handle invoices, refunds, and subscription questions.",
-    model="openai:gpt-4o-mini",
+    model="deepseek-v4-pro",
 )
 
 support = Agent(
     name="Support",
     instructions="You debug product issues. Ask for reproduction steps.",
-    model="openai:gpt-4o-mini",
+    model="deepseek-v4-pro",
 )
 
 triage = Agent(
@@ -30,7 +34,7 @@ triage = Agent(
         "If they mention money, transfer to Billing. "
         "If they mention bugs or errors, transfer to Support."
     ),
-    model="openai:gpt-4o-mini",
+    model="deepseek-v4-pro",
     handoffs=[billing, support],
 )
 

@@ -6,12 +6,16 @@ import asyncio
 
 from lovia import Agent, Runner, events
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 async def main() -> None:
     agent = Agent(
         name="Storyteller",
         instructions="You write short, vivid stories.",
-        model="openai:gpt-4o-mini",
+        model="deepseek-v4-pro",
     )
     async for ev in Runner.run_stream(agent, "Tell me a 4-sentence story about a fox."):
         if isinstance(ev, events.TextDelta):

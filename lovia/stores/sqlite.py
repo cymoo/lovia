@@ -180,6 +180,7 @@ def _serialize(msg: ChatMessage) -> dict:
         ],
         "tool_call_id": msg.tool_call_id,
         "name": msg.name,
+        "reasoning_content": msg.reasoning_content,
     }
 
 
@@ -193,4 +194,5 @@ def _deserialize(d: dict) -> ChatMessage:
         ],
         tool_call_id=d.get("tool_call_id"),
         name=d.get("name"),
+        reasoning_content=d.get("reasoning_content"),
     )

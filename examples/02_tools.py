@@ -6,6 +6,10 @@ import asyncio
 
 from lovia import Agent, Runner, tool
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @tool
 async def get_weather(city: str, units: str = "c") -> str:
@@ -24,7 +28,7 @@ async def main() -> None:
     agent = Agent(
         name="Helper",
         instructions="Use tools when they help. Answer concisely.",
-        model="openai:gpt-4o-mini",
+        model="deepseek-v4-pro",
         tools=[get_weather, add],
     )
     result = await Runner.run(agent, "What's the weather in Tokyo, and what is 2+2?")

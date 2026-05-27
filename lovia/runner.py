@@ -460,7 +460,9 @@ class _RunLoop:
 def _supports_json_schema(agent: Agent) -> bool:
     """Whether the agent's provider can use OpenAI-style ``response_format``."""
     provider = agent.resolve_provider() if isinstance(agent.model, str) else agent.model
-    return isinstance(provider, OpenAIChatProvider)
+    if isinstance(provider, OpenAIChatProvider):
+        return provider.supports_json_schema
+    return False
 
 
 def _stringify_tool_result(result: Any) -> str:

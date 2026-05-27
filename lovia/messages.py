@@ -42,6 +42,9 @@ class ChatMessage:
     ``content`` is optional because assistant messages that only call tools
     carry no textual content. ``tool_calls`` is only meaningful when
     ``role == "assistant"``; ``tool_call_id`` only when ``role == "tool"``.
+    ``reasoning_content`` carries chain-of-thought text from providers that
+    expose it (e.g. DeepSeek thinking mode) and must be echoed back verbatim
+    in subsequent turns.
     """
 
     role: Role
@@ -49,12 +52,15 @@ class ChatMessage:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None  # optional: agent/tool display name
+    reasoning_content: str | None = None
 
     def as_openai(self) -> dict[str, Any]:
         """Serialize to the OpenAI Chat Completions wire format."""
         msg: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             msg["content"] = self.content
+        if self.reasoning_content is not None and self.role == "assistant":
+            msg["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
             msg["tool_calls"] = [tc.as_openai() for tc in self.tool_calls]
         if self.tool_call_id is not None:
@@ -85,18 +91,22 @@ class AssistantMessage:
     """A model response returned by :class:`Provider.generate`.
 
     Streaming providers assemble this from chunks before returning it.
+    ``reasoning_content`` is preserved when the provider returns chain-of-thought
+    text that must be echoed back in subsequent requests.
     """
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     finish_reason: str | None = None
+    reasoning_content: str | None = None
 
     def to_chat_message(self) -> ChatMessage:
         return ChatMessage(
             role="assistant",
             content=self.content,
             tool_calls=list(self.tool_calls),
+            reasoning_content=self.reasoning_content,
         )
 
 

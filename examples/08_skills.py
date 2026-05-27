@@ -9,12 +9,16 @@ prompt so the model knows what's available.
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
 from lovia import Agent, Runner
 from lovia.skills import SkillCatalog
 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 SKILL_BODY = """---
 name: refund-policy
@@ -37,7 +41,7 @@ async def main() -> None:
         agent = Agent(
             name="SupportBot",
             instructions="Help the customer. Load skills when relevant.",
-            model="openai:gpt-4o-mini",
+            model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
             skills=SkillCatalog.from_dir(root),
         )
         result = await Runner.run(agent, "Can I get a refund 5 days after purchase?")

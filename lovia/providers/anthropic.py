@@ -79,7 +79,15 @@ class AnthropicProvider:
         settings: ModelSettings | None,
         stream: bool,
     ) -> dict[str, Any]:
-        system_text, anthropic_messages = _to_anthropic_messages(messages)
+        system_blocks, anthropic_messages = _to_anthropic_messages(messages)
+        cache_system = bool(settings and settings.cache_system)
+        if cache_system and system_blocks:
+            # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
+            system_blocks[-1] = {
+                **system_blocks[-1],
+                "cache_control": {"type": "ephemeral"},
+            }
+
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": anthropic_messages,
@@ -89,10 +97,18 @@ class AnthropicProvider:
                 else self._default_max_tokens
             ),
         }
-        if system_text:
-            payload["system"] = system_text
+        if system_blocks:
+            payload["system"] = system_blocks
         if tools:
-            payload["tools"] = [_openai_tool_to_anthropic(t) for t in tools]
+            anthropic_tools = [_openai_tool_to_anthropic(t) for t in tools]
+            if cache_system and anthropic_tools:
+                # Cache the tool definitions too — they typically change less
+                # often than the conversation.
+                anthropic_tools[-1] = {
+                    **anthropic_tools[-1],
+                    "cache_control": {"type": "ephemeral"},
+                }
+            payload["tools"] = anthropic_tools
         if stream:
             payload["stream"] = True
         if settings is not None:
@@ -144,6 +160,7 @@ class AnthropicProvider:
         payload = self._build_payload(messages, tools, settings, stream=True)
 
         text_buf: list[str] = []
+        thinking_buf: list[str] = []
         # Tool call assembly: index -> {id, name, arguments}
         tool_calls: dict[int, dict[str, str]] = {}
         block_kinds: dict[int, str] = {}
@@ -188,11 +205,16 @@ class AnthropicProvider:
                 elif etype == "content_block_delta":
                     idx = event.get("index", 0)
                     delta = event.get("delta") or {}
-                    if delta.get("type") == "text_delta":
+                    dtype = delta.get("type")
+                    if dtype == "text_delta":
                         chunk_text = delta.get("text", "")
                         text_buf.append(chunk_text)
                         yield StreamChunk(text_delta=chunk_text)
-                    elif delta.get("type") == "input_json_delta":
+                    elif dtype == "thinking_delta":
+                        thinking_text = delta.get("thinking", "")
+                        thinking_buf.append(thinking_text)
+                        yield StreamChunk(reasoning_delta=thinking_text)
+                    elif dtype == "input_json_delta":
                         partial = delta.get("partial_json", "")
                         if idx in tool_calls:
                             tool_calls[idx]["arguments"] += partial
@@ -209,10 +231,18 @@ class AnthropicProvider:
                         usage.output_tokens = u.get(
                             "output_tokens", usage.output_tokens
                         )
+                        if "cache_creation_input_tokens" in u:
+                            usage.cache_write_tokens = u["cache_creation_input_tokens"]
+                        if "cache_read_input_tokens" in u:
+                            usage.cache_read_tokens = u["cache_read_input_tokens"]
                 elif etype == "message_start":
                     if u := (event.get("message") or {}).get("usage"):
                         usage.input_tokens = u.get("input_tokens", 0)
                         usage.output_tokens = u.get("output_tokens", 0)
+                        usage.cache_write_tokens = u.get(
+                            "cache_creation_input_tokens", 0
+                        )
+                        usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
                 elif etype == "message_stop":
                     break
 
@@ -226,6 +256,7 @@ class AnthropicProvider:
             ],
             usage=usage,
             finish_reason=_normalize_stop_reason(stop_reason),
+            reasoning_content="".join(thinking_buf) or None,
         )
         yield StreamChunk(done=final)
 
@@ -244,19 +275,23 @@ def _normalize_stop_reason(reason: str | None) -> str | None:
 
 def _to_anthropic_messages(
     messages: list[ChatMessage],
-) -> tuple[str | None, list[dict[str, Any]]]:
-    """Translate internal messages into Anthropic's API shape."""
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]]:
+    """Translate internal messages into Anthropic's API shape.
+
+    Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
+    ``None`` or a list of text blocks suitable for the Anthropic ``system``
+    parameter (we use the block form so callers can attach ``cache_control``).
+    """
     system_parts: list[str] = []
     out: list[dict[str, Any]] = []
 
     for msg in messages:
         if msg.role == "system":
             if msg.content:
-                system_parts.append(msg.content)
+                system_parts.append(_text_only(msg.content))
             continue
 
         if msg.role == "tool":
-            # Tool results are user messages wrapping a tool_result content block.
             out.append(
                 {
                     "role": "user",
@@ -264,7 +299,7 @@ def _to_anthropic_messages(
                         {
                             "type": "tool_result",
                             "tool_use_id": msg.tool_call_id,
-                            "content": msg.content or "",
+                            "content": _text_only(msg.content) or "",
                         }
                     ],
                 }
@@ -273,11 +308,13 @@ def _to_anthropic_messages(
 
         if msg.role == "assistant":
             blocks: list[dict[str, Any]] = []
+            # Anthropic requires thinking blocks to appear *before* text/tool_use
+            # when echoing back extended-thinking responses.
+            if msg.reasoning_content:
+                blocks.append({"type": "thinking", "thinking": msg.reasoning_content})
             if msg.content:
-                blocks.append({"type": "text", "text": msg.content})
+                blocks.extend(_content_to_anthropic_blocks(msg.content))
             for tc in msg.tool_calls:
-                # Anthropic expects parsed JSON in ``input``; degrade gracefully
-                # if the model emitted invalid JSON.
                 try:
                     parsed = json.loads(tc.arguments or "{}")
                 except json.JSONDecodeError:
@@ -293,11 +330,61 @@ def _to_anthropic_messages(
             out.append({"role": "assistant", "content": blocks or ""})
             continue
 
-        # user
-        out.append({"role": "user", "content": msg.content or ""})
+        # user — may carry images via ContentBlock list
+        if msg.content is None:
+            out.append({"role": "user", "content": ""})
+        else:
+            out.append(
+                {"role": "user", "content": _content_to_anthropic_blocks(msg.content)}
+            )
 
-    system_text = "\n\n".join(system_parts) if system_parts else None
-    return system_text, out
+    system_blocks: list[dict[str, Any]] | None
+    if system_parts:
+        system_blocks = [{"type": "text", "text": "\n\n".join(system_parts)}]
+    else:
+        system_blocks = None
+    return system_blocks, out
+
+
+def _text_only(content: "str | list[Any] | None") -> str:
+    """Flatten a content value to a plain string for fields that don't accept blocks."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
+
+
+def _content_to_anthropic_blocks(
+    content: "str | list[Any]",
+) -> list[dict[str, Any]]:
+    """Convert internal content into Anthropic content blocks."""
+    from ..content import ImageBlock, TextBlock
+
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    out: list[dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, TextBlock):
+            out.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageBlock):
+            if block.url is not None:
+                source: dict[str, Any] = {"type": "url", "url": block.url}
+            else:
+                source = {
+                    "type": "base64",
+                    "media_type": block.mime_type,
+                    "data": block.data,
+                }
+            out.append({"type": "image", "source": source})
+        else:  # pragma: no cover
+            raise TypeError(f"Unsupported content block: {block!r}")
+    return out
 
 
 def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
@@ -311,11 +398,14 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_anthropic_response(data: dict[str, Any]) -> AssistantMessage:
     content_parts: list[str] = []
+    thinking_parts: list[str] = []
     tool_calls: list[ToolCall] = []
     for block in data.get("content") or []:
         btype = block.get("type")
         if btype == "text":
             content_parts.append(block.get("text", ""))
+        elif btype == "thinking":
+            thinking_parts.append(block.get("thinking", ""))
         elif btype == "tool_use":
             tool_calls.append(
                 ToolCall(
@@ -328,10 +418,13 @@ def _parse_anthropic_response(data: dict[str, Any]) -> AssistantMessage:
     usage = Usage(
         input_tokens=usage_data.get("input_tokens", 0),
         output_tokens=usage_data.get("output_tokens", 0),
+        cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
+        cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
     )
     return AssistantMessage(
         content="".join(content_parts) or None,
         tool_calls=tool_calls,
         usage=usage,
         finish_reason=_normalize_stop_reason(data.get("stop_reason")),
+        reasoning_content="".join(thinking_parts) or None,
     )

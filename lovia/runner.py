@@ -71,7 +71,7 @@ class RunResult(Generic[TOutput]):
     turns: int
 
 
-class RunHandle:
+class RunHandle(Generic[TOutput]):
     """Awaitable, async-iterable handle to a streamed run.
 
     Two equivalent ways to drive a run::
@@ -92,7 +92,7 @@ class RunHandle:
 
     def __init__(self, _stream: AsyncIterator[events.Event]) -> None:
         self._stream = _stream
-        self._result: RunResult[Any] | None = None
+        self._result: "RunResult[TOutput] | None" = None
         self._error: BaseException | None = None
         self._done = asyncio.Event()
         self._consumed = False
@@ -116,7 +116,7 @@ class RunHandle:
         else:
             self._done.set()
 
-    async def result(self) -> RunResult[Any]:
+    async def result(self) -> "RunResult[TOutput]":
         """Return the final :class:`RunResult`, driving the stream if needed."""
         if not self._consumed:
             async for _ in self:
@@ -138,15 +138,15 @@ class Runner:
 
     @staticmethod
     def run_streamed(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
         _parent_usage: Usage | None = None,
-    ) -> RunHandle:
+    ) -> "RunHandle[TOutput]":
         """Start a run and return a :class:`RunHandle`.
 
         The handle is both awaitable (for the final :class:`RunResult`) and
@@ -165,15 +165,15 @@ class Runner:
 
     @staticmethod
     async def run(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
         _parent_usage: Usage | None = None,
-    ) -> RunResult[Any]:
+    ) -> "RunResult[TOutput]":
         """Run ``agent`` to completion and return the final result."""
         return await Runner.run_streamed(
             agent,
@@ -187,10 +187,10 @@ class Runner:
 
     @staticmethod
     async def run_stream(
-        agent: Agent,
+        agent: Agent[TContext, TOutput],
         input: "str | list[ChatMessage]",
         *,
-        context: Any = None,
+        context: TContext | None = None,
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
@@ -290,6 +290,10 @@ class _RunLoop:
                         await dispatch(
                             agent.hooks, events.TextDelta(delta=chunk.text_delta)
                         )
+                    if chunk.reasoning_delta is not None:
+                        ev_r = events.ReasoningDelta(delta=chunk.reasoning_delta)
+                        yield ev_r
+                        await dispatch(agent.hooks, ev_r)
                     if chunk.done is not None:
                         assistant = chunk.done
 

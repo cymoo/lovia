@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from . import events
 from .agent import Agent
+from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
     LoviaError,
     MaxTurnsExceeded,
@@ -55,7 +56,9 @@ __all__ = [
     "AgentHooks",
     "AssistantMessage",
     "ChatMessage",
+    "ContentBlock",
     "Handoff",
+    "ImageBlock",
     "LoviaError",
     "MaxTurnsExceeded",
     "ModelSettings",
@@ -70,6 +73,7 @@ __all__ = [
     "Session",
     "Skill",
     "SkillCatalog",
+    "TextBlock",
     "Tool",
     "ToolCall",
     "ToolError",

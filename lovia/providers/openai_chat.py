@@ -186,8 +186,11 @@ class OpenAIChatProvider:
                     continue
 
                 if "usage" in event and event["usage"]:
-                    usage.input_tokens = event["usage"].get("prompt_tokens", 0)
-                    usage.output_tokens = event["usage"].get("completion_tokens", 0)
+                    u = event["usage"]
+                    usage.input_tokens = u.get("prompt_tokens", 0)
+                    usage.output_tokens = u.get("completion_tokens", 0)
+                    pdetails = u.get("prompt_tokens_details") or {}
+                    usage.cache_read_tokens = pdetails.get("cached_tokens", 0)
 
                 choices = event.get("choices") or []
                 if not choices:
@@ -201,6 +204,7 @@ class OpenAIChatProvider:
 
                 if reasoning := delta.get("reasoning_content"):
                     reasoning_buf.append(reasoning)
+                    yield StreamChunk(reasoning_delta=reasoning)
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
@@ -255,9 +259,12 @@ def _parse_completion(data: dict[str, Any]) -> AssistantMessage:
                 arguments=fn.get("arguments", ""),
             )
         )
+    usage_data = data.get("usage") or {}
+    pdetails = usage_data.get("prompt_tokens_details") or {}
     usage = Usage(
-        input_tokens=(data.get("usage") or {}).get("prompt_tokens", 0),
-        output_tokens=(data.get("usage") or {}).get("completion_tokens", 0),
+        input_tokens=usage_data.get("prompt_tokens", 0),
+        output_tokens=usage_data.get("completion_tokens", 0),
+        cache_read_tokens=pdetails.get("cached_tokens", 0),
     )
     return AssistantMessage(
         content=msg.get("content"),

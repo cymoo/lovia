@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Union
 
 from .content import ContentBlock, ImageBlock, TextBlock
-from .messages import Usage
+from .messages import AssistantMessage, ChatMessage, ToolCall, Usage
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +309,141 @@ def _content_from_dict(
         else:
             raise ValueError(f"Unknown content block type: {t!r}")
     return blocks
+
+
+# ---------------------------------------------------------------------------
+# ChatMessage ↔ Item conversions (Phase 9b boundary)
+#
+# These helpers let the runner pivot to Items internally while providers and
+# the persisted transcript continue to speak ChatMessage. They are also what
+# 9c / 9d will repurpose when the wire boundary moves: the conversion logic
+# below becomes the inverse of what each provider adapter ends up doing.
+# ---------------------------------------------------------------------------
+
+
+def assistant_to_items(am: AssistantMessage) -> list[Item]:
+    """Split an :class:`AssistantMessage` into its component Items.
+
+    Order matches the conceptual emission order: reasoning first (it logically
+    precedes the visible answer), then the message body, then any tool calls.
+    Empty / absent fields are skipped — a tool-only turn produces just the
+    ``ToolCallItem``\\ s with no preceding message item.
+    """
+    out: list[Item] = []
+    if am.reasoning_content:
+        out.append(ReasoningItem(content=am.reasoning_content))
+    if am.content:
+        out.append(MessageOutputItem(content=am.content))
+    for tc in am.tool_calls:
+        out.append(ToolCallItem(call_id=tc.id, name=tc.name, arguments=tc.arguments))
+    return out
+
+
+def input_to_items(messages: list[ChatMessage]) -> list[Item]:
+    """Translate a system/user message prefix to :class:`InputMessageItem`\\ s.
+
+    Only ``system`` and ``user`` roles are accepted — the runner uses this to
+    seed ``items_log`` with the initial transcript. Assistant / tool messages
+    in a snapshot are handled by :func:`transcript_to_items` instead.
+    """
+    out: list[Item] = []
+    for m in messages:
+        if m.role not in ("system", "user"):
+            raise ValueError(f"input_to_items: unexpected role {m.role!r}")
+        content = m.content if m.content is not None else ""
+        out.append(InputMessageItem(role=m.role, content=content))  # type: ignore[arg-type]
+    return out
+
+
+def transcript_to_items(messages: list[ChatMessage]) -> list[Item]:
+    """Translate a full transcript (any roles) back to Items.
+
+    Used when resuming from a snapshot. ``tool`` messages have no ``raw``
+    return value to recover, so ``ToolCallOutputItem.raw`` is left ``None``.
+    """
+    out: list[Item] = []
+    for m in messages:
+        if m.role in ("system", "user"):
+            content = m.content if m.content is not None else ""
+            out.append(InputMessageItem(role=m.role, content=content))  # type: ignore[arg-type]
+        elif m.role == "assistant":
+            if m.reasoning_content:
+                out.append(ReasoningItem(content=m.reasoning_content))
+            if m.content:
+                # ``content`` may be a list[ContentBlock]; flatten to text for
+                # the MessageOutputItem (richer shapes are 9d territory).
+                from .content import text_of
+
+                out.append(MessageOutputItem(content=text_of(m.content)))
+            for tc in m.tool_calls:
+                out.append(
+                    ToolCallItem(call_id=tc.id, name=tc.name, arguments=tc.arguments)
+                )
+        elif m.role == "tool":
+            from .content import text_of
+
+            out.append(
+                ToolCallOutputItem(
+                    call_id=m.tool_call_id or "",
+                    output=text_of(m.content),
+                )
+            )
+        else:  # pragma: no cover - defensive
+            raise ValueError(f"transcript_to_items: unknown role {m.role!r}")
+    return out
+
+
+def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
+    """Inverse of :func:`transcript_to_items`.
+
+    Groups consecutive assistant-side items (reasoning + message + tool calls)
+    into one :class:`ChatMessage`, matching how the runner appends them.
+    Server tool calls and handoff items are skipped — they don't have a
+    ChatMessage analogue in the v1 wire format. (9c/9d will revisit.)
+    """
+    out: list[ChatMessage] = []
+    # Buffer for the in-progress assistant message.
+    pending_reasoning: str | None = None
+    pending_content: str | None = None
+    pending_calls: list[ToolCall] = []
+
+    def flush_assistant() -> None:
+        nonlocal pending_reasoning, pending_content, pending_calls
+        if pending_content is None and not pending_calls and pending_reasoning is None:
+            return
+        out.append(
+            ChatMessage(
+                role="assistant",
+                content=pending_content,
+                tool_calls=pending_calls,
+                reasoning_content=pending_reasoning,
+            )
+        )
+        pending_reasoning = None
+        pending_content = None
+        pending_calls = []
+
+    for it in items:
+        if isinstance(it, InputMessageItem):
+            flush_assistant()
+            out.append(ChatMessage(role=it.role, content=it.content))
+        elif isinstance(it, ReasoningItem):
+            pending_reasoning = it.content
+        elif isinstance(it, MessageOutputItem):
+            pending_content = it.content
+        elif isinstance(it, (ToolCallItem, HandoffCallItem)):
+            pending_calls.append(
+                ToolCall(id=it.call_id, name=it.name, arguments=it.arguments)
+            )
+        elif isinstance(it, ToolCallOutputItem):
+            flush_assistant()
+            out.append(
+                ChatMessage(
+                    role="tool", content=it.output, tool_call_id=it.call_id
+                )
+            )
+        elif isinstance(it, (HandoffOutputItem, ServerToolCallItem)):
+            # No ChatMessage analogue; surfaced via events / RunResult later.
+            continue
+    flush_assistant()
+    return out

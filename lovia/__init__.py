@@ -77,8 +77,12 @@ from .items import (
     ToolCallItem,
     ToolCallOutputItem,
     UsageDelta,
+    assistant_to_items,
+    input_to_items,
     item_from_dict,
     item_to_dict,
+    items_to_chat_messages,
+    transcript_to_items,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
 from .tools import Tool, ToolResultRenderer, tool
@@ -150,11 +154,15 @@ __all__ = [
     "UserError",
     "agent_as_tool",
     "assistant",
+    "assistant_to_items",
     "drop_stale_tool_calls",
     "events",
+    "input_to_items",
     "item_from_dict",
     "item_to_dict",
+    "items_to_chat_messages",
     "provider_from_string",
+    "transcript_to_items",
     "system",
     "tool",
     "user",

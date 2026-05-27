@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TypeVar
 
 from . import events
@@ -29,6 +29,13 @@ from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
 from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
+from .items import (
+    Item,
+    assistant_to_items,
+    transcript_to_items,
+)
+from .items import InputMessageItem as _InputMessageItem
+from .items import ToolCallOutputItem as _ToolCallOutputItem
 from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
 from .output import (
     FINAL_OUTPUT_TOOL_NAME,
@@ -80,6 +87,11 @@ class RunResult:
     final_agent: Agent
     usage: Usage
     turns: int
+    # Phase 9b: parallel Item view of the transcript. Not yet part of the
+    # documented public API — 9d renames this to ``new_items`` and drops the
+    # ``messages`` field. Populated by the runner; round-trips with
+    # ``messages`` via :func:`items_to_chat_messages`.
+    items: list[Item] = field(default_factory=list)
 
 
 class RunHandle:
@@ -355,6 +367,9 @@ class _RunLoop:
             transcript = list(self.resume_from.messages)
         else:
             transcript = await self._build_initial_messages(agent)
+        # Phase 9b: mirror the transcript as Items. Stays in lockstep with
+        # ``transcript`` for the whole run — invariant verified by tests.
+        items_log: list[Item] = transcript_to_items(transcript)
         run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
@@ -414,6 +429,7 @@ class _RunLoop:
                     self.budget.check(run_ctx.usage)
                 msg = assistant.to_chat_message()
                 transcript.append(msg)
+                items_log.extend(assistant_to_items(assistant))
                 ev_msg = events.MessageCompleted(message=msg)
                 yield ev_msg
                 await dispatch(agent.hooks, ev_msg)
@@ -431,6 +447,9 @@ class _RunLoop:
                         if repair_prompt is not None and output_spec is not None:
                             output_repair_attempts += 1
                             transcript.append(user(repair_prompt))
+                            items_log.append(
+                                _InputMessageItem(role="user", content=repair_prompt)
+                            )
                             ev_end = events.TurnEnded(agent=agent, turn=turns)
                             yield ev_end
                             await dispatch(agent.hooks, ev_end)
@@ -449,7 +468,8 @@ class _RunLoop:
                 # control flow back to the orchestrator.
                 for call in assistant.tool_calls:
                     async for ev in self._process_tool_call(
-                        call, agent, tools_by_name, run_ctx, tracer, output_spec, transcript, state
+                        call, agent, tools_by_name, run_ctx, tracer, output_spec,
+                        transcript, items_log, state,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -481,6 +501,10 @@ class _RunLoop:
                         transcript[:] = await self._reset_for_handoff(
                             transcript, agent, state.handoff_signal.handoff
                         )
+                        # Mirror the reset on items_log so the invariant
+                        # ``items_to_chat_messages(items_log) ≈ transcript``
+                        # keeps holding after handoffs.
+                        items_log[:] = transcript_to_items(transcript)
                     handoff_ev = events.HandoffOccurred(
                         from_agent=prev_agent, to_agent=agent
                     )
@@ -504,6 +528,7 @@ class _RunLoop:
                 final_agent=agent,
                 usage=run_ctx.usage,
                 turns=turns,
+                items=items_log,
             )
 
             if self.session is not None:
@@ -592,14 +617,16 @@ class _RunLoop:
         tracer: Tracer,
         output_spec: OutputSpec | None,
         transcript: list[ChatMessage],
+        items_log: list[Item],
         state: _TurnState,
     ) -> AsyncIterator[events.Event]:
         """Handle one tool call from the assistant.
 
         Yields approval / start / completion events as appropriate, appends
-        the tool result to the transcript, and records handoff / final-output
-        outcomes on ``state``. The caller is responsible for forwarding
-        yielded events to hooks and to the outer stream.
+        the tool result to the transcript (and its Item mirror), and records
+        handoff / final-output outcomes on ``state``. The caller is
+        responsible for forwarding yielded events to hooks and to the outer
+        stream.
         """
         # Pre-flight: cancellation and budget.
         if self.cancel_token is not None:
@@ -612,12 +639,16 @@ class _RunLoop:
         if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
             state.final_via_tool = parse_output(output_spec, call.arguments)
             transcript.append(tool_message(call.id, "ok"))
+            items_log.append(_ToolCallOutputItem(call_id=call.id, output="ok"))
             return
 
         tool = tools_by_name.get(call.name)
         if tool is None:
             err = f"Tool {call.name!r} is not available."
             transcript.append(tool_message(call.id, err))
+            items_log.append(
+                _ToolCallOutputItem(call_id=call.id, output=err, is_error=True)
+            )
             yield events.ToolCallCompleted(call=call, result=err, is_error=True)
             return
 
@@ -634,6 +665,9 @@ class _RunLoop:
             if not approved:
                 denial = f"Tool {call.name} was not approved."
                 transcript.append(tool_message(call.id, denial))
+                items_log.append(
+                    _ToolCallOutputItem(call_id=call.id, output=denial, is_error=True)
+                )
                 yield events.ToolCallCompleted(call=call, result=denial, is_error=True)
                 return
 
@@ -667,6 +701,17 @@ class _RunLoop:
             )
 
         transcript.append(tool_message(call.id, result_text))
+        # ``raw`` preserves the Python-side return value (or the handoff
+        # signal) so downstream Item consumers can introspect it without
+        # re-parsing the rendered string.
+        items_log.append(
+            _ToolCallOutputItem(
+                call_id=call.id,
+                output=result_text,
+                raw=result,
+                is_error=is_error,
+            )
+        )
         yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
 
     async def _await_approval(

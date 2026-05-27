@@ -16,14 +16,12 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .base import ModelSettings, Provider, StreamChunk, ToolCallDelta
+from .base import ModelSettings, Provider
 from .openai_chat import OpenAIChatProvider
 
 __all__ = [
     "ModelSettings",
     "Provider",
-    "StreamChunk",
-    "ToolCallDelta",
     "OpenAIChatProvider",
     "provider_from_string",
     "register_provider",

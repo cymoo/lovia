@@ -1,8 +1,14 @@
 """Provider abstraction.
 
-A :class:`Provider` is a thin async interface over a chat-completion-shaped
+A :class:`Provider` is a thin async interface over a streaming chat-completion
 LLM endpoint. The runner only ever talks to providers through this protocol,
 so adding support for a new vendor is a matter of writing one adapter class.
+
+Providers yield a stream of :class:`ItemDelta` values
+(:class:`TextDelta` / :class:`ReasoningDelta` / :class:`ToolCallDelta` /
+:class:`UsageDelta` / :class:`FinishDelta`) — the runner assembles them into
+:class:`Item`\\ s and the final assistant turn. There is no non-streaming
+``generate`` method; non-streaming clients can still buffer the stream.
 """
 
 from __future__ import annotations
@@ -10,7 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from ..messages import AssistantMessage, ChatMessage
+from ..items import ItemDelta
+from ..messages import ChatMessage
 
 
 @dataclass
@@ -35,45 +42,11 @@ class ModelSettings:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class StreamChunk:
-    """A single chunk yielded by :meth:`Provider.stream`.
-
-    Exactly one of ``text_delta``, ``reasoning_delta``, ``tool_call_delta`` or
-    ``done`` is set on each chunk. ``done`` carries the fully assembled
-    :class:`AssistantMessage`.
-    """
-
-    text_delta: str | None = None
-    reasoning_delta: str | None = None
-    tool_call_delta: "ToolCallDelta | None" = None
-    done: AssistantMessage | None = None
-
-
-@dataclass
-class ToolCallDelta:
-    """An incremental update to one tool call during streaming."""
-
-    index: int
-    id: str | None = None
-    name: str | None = None
-    arguments_delta: str | None = None
-
-
 @runtime_checkable
 class Provider(Protocol):
     """The minimal interface every LLM backend must implement."""
 
     name: str
-
-    async def generate(
-        self,
-        messages: list[ChatMessage],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-        settings: ModelSettings | None = None,
-    ) -> AssistantMessage: ...
 
     def stream(
         self,
@@ -82,4 +55,4 @@ class Provider(Protocol):
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[StreamChunk]: ...
+    ) -> AsyncIterator[ItemDelta]: ...

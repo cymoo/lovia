@@ -18,8 +18,13 @@ from lovia import (
     Runner,
     tool,
 )
+from lovia.items import (
+    FinishDelta,
+    ItemDelta,
+    TextDelta,
+    UsageDelta,
+)
 from lovia.messages import AssistantMessage, Usage
-from lovia.providers.base import StreamChunk
 from lovia.reliability import RunBudget as _RunBudget  # noqa: F401  (re-export sanity)
 
 from .scripted_provider import ScriptedProvider, call, text
@@ -117,16 +122,15 @@ class _FailingProvider:
         self.answer = answer
         self.attempts = 0
 
-    async def generate(
-        self, *a: Any, **kw: Any
-    ) -> AssistantMessage:  # pragma: no cover
-        raise NotImplementedError
-
-    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[StreamChunk]:
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ItemDelta]:
         self.attempts += 1
         if self.attempts <= self.fail_times:
             raise ProviderError(f"boom #{self.attempts}")
-        yield StreamChunk(done=self.answer)
+        # Successful path: emit the canned answer as a minimal delta sequence.
+        if self.answer.content:
+            yield TextDelta(text=self.answer.content)
+        yield UsageDelta(usage=self.answer.usage)
+        yield FinishDelta(reason=self.answer.finish_reason)
 
 
 @pytest.mark.asyncio

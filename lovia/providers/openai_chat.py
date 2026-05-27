@@ -16,8 +16,16 @@ import httpx
 
 from ..content import ImageBlock, TextBlock
 from ..exceptions import ProviderError
-from ..messages import AssistantMessage, ChatMessage, ToolCall, Usage
-from .base import ModelSettings, StreamChunk, ToolCallDelta
+from ..items import (
+    FinishDelta,
+    ItemDelta,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    UsageDelta,
+)
+from ..messages import ChatMessage, ToolCall, Usage
+from .base import ModelSettings
 
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -171,33 +179,6 @@ class OpenAIChatProvider:
             payload.setdefault("stream_options", {"include_usage": True})
         return payload
 
-    async def generate(
-        self,
-        messages: list[ChatMessage],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-        settings: ModelSettings | None = None,
-    ) -> AssistantMessage:
-        payload = self._build_payload(
-            messages, tools, response_format, settings, stream=False
-        )
-        try:
-            response = await self._client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"OpenAI request failed: {exc}") from exc
-
-        if response.status_code >= 400:
-            raise ProviderError(
-                f"OpenAI returned HTTP {response.status_code}: {response.text}"
-            )
-        data = response.json()
-        return _parse_completion(data)
-
     async def stream(
         self,
         messages: list[ChatMessage],
@@ -205,15 +186,16 @@ class OpenAIChatProvider:
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[StreamChunk]:
+    ) -> AsyncIterator[ItemDelta]:
         payload = self._build_payload(
             messages, tools, response_format, settings, stream=True
         )
 
-        # Incremental state assembled while we forward deltas to the caller.
-        text_buf: list[str] = []
-        reasoning_buf: list[str] = []
-        tool_calls: dict[int, dict[str, str]] = {}  # index -> {id, name, arguments}
+        # We only need to remember the per-index tool-call id+name so we can
+        # echo them on every argument delta — the runner does the final
+        # assembly itself.
+        tool_call_ids: dict[int, str] = {}
+        tool_call_names: dict[int, str] = {}
         usage = Usage()
         finish_reason: str | None = None
 
@@ -253,77 +235,29 @@ class OpenAIChatProvider:
                 delta = choice.get("delta") or {}
 
                 if text := delta.get("content"):
-                    text_buf.append(text)
-                    yield StreamChunk(text_delta=text)
+                    yield TextDelta(text=text)
 
                 if reasoning := delta.get("reasoning_content"):
-                    reasoning_buf.append(reasoning)
-                    yield StreamChunk(reasoning_delta=reasoning)
+                    yield ReasoningDelta(text=reasoning)
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
-                    slot = tool_calls.setdefault(
-                        idx, {"id": "", "name": "", "arguments": ""}
-                    )
                     if tc.get("id"):
-                        slot["id"] = tc["id"]
+                        tool_call_ids[idx] = tc["id"]
                     fn = tc.get("function") or {}
                     if fn.get("name"):
-                        slot["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        slot["arguments"] += fn["arguments"]
-                    yield StreamChunk(
-                        tool_call_delta=ToolCallDelta(
-                            index=idx,
-                            id=tc.get("id"),
-                            name=fn.get("name"),
-                            arguments_delta=fn.get("arguments"),
-                        )
+                        tool_call_names[idx] = fn["name"]
+                    # Echo the id/name we've seen so far on every delta so
+                    # downstream consumers don't need to track them.
+                    yield ToolCallDelta(
+                        index=idx,
+                        call_id=tool_call_ids.get(idx, ""),
+                        name=tool_call_names.get(idx, ""),
+                        arguments=fn.get("arguments", ""),
                     )
 
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
 
-        final = AssistantMessage(
-            content="".join(text_buf) or None,
-            reasoning_content="".join(reasoning_buf) or None,
-            tool_calls=[
-                ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                for _, tc in sorted(tool_calls.items())
-            ],
-            usage=usage,
-            finish_reason=finish_reason,
-        )
-        yield StreamChunk(done=final)
-
-
-def _parse_completion(data: dict[str, Any]) -> AssistantMessage:
-    """Parse a non-streamed completion response."""
-    if not data.get("choices"):
-        raise ProviderError(f"OpenAI response has no choices: {data}")
-    choice = data["choices"][0]
-    msg = choice.get("message") or {}
-    tool_calls = []
-    for tc in msg.get("tool_calls") or []:
-        fn = tc.get("function") or {}
-        tool_calls.append(
-            ToolCall(
-                id=tc.get("id", ""),
-                name=fn.get("name", ""),
-                arguments=fn.get("arguments", ""),
-            )
-        )
-    usage_data = data.get("usage") or {}
-    pdetails = usage_data.get("prompt_tokens_details") or {}
-    usage = Usage(
-        input_tokens=usage_data.get("prompt_tokens", 0),
-        output_tokens=usage_data.get("completion_tokens", 0),
-        cache_read_tokens=pdetails.get("cached_tokens", 0),
-    )
-    return AssistantMessage(
-        content=msg.get("content"),
-        reasoning_content=msg.get("reasoning_content"),
-        tool_calls=tool_calls,
-        usage=usage,
-        finish_reason=choice.get("finish_reason"),
-    )
+        yield UsageDelta(usage=usage)
+        yield FinishDelta(reason=finish_reason)

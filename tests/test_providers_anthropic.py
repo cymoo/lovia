@@ -9,7 +9,6 @@ from lovia.messages import ChatMessage, ToolCall
 from lovia.providers.anthropic import (
     AnthropicProvider,
     _openai_tool_to_anthropic,
-    _parse_anthropic_response,
     _to_anthropic_messages,
 )
 from lovia.providers.base import ModelSettings
@@ -81,36 +80,8 @@ def test_translates_image_blocks_with_url_and_base64() -> None:
 
 
 # ---------- Response parsing ----------
-
-
-def test_response_parsing_extracts_text_tool_use_and_usage() -> None:
-    data = {
-        "content": [
-            {"type": "text", "text": "Sure, "},
-            {"type": "tool_use", "id": "tu1", "name": "add", "input": {"a": 1, "b": 2}},
-        ],
-        "usage": {"input_tokens": 10, "output_tokens": 5},
-        "stop_reason": "tool_use",
-    }
-    msg = _parse_anthropic_response(data)
-    assert msg.content == "Sure, "
-    assert msg.tool_calls[0].name == "add"
-    assert msg.finish_reason == "tool_calls"
-    assert msg.usage.input_tokens == 10
-
-
-def test_response_parsing_preserves_thinking_as_reasoning_content() -> None:
-    data = {
-        "content": [
-            {"type": "thinking", "thinking": "let me think"},
-            {"type": "text", "text": "answer"},
-        ],
-        "usage": {"input_tokens": 1, "output_tokens": 1},
-        "stop_reason": "end_turn",
-    }
-    msg = _parse_anthropic_response(data)
-    assert msg.reasoning_content == "let me think"
-    assert msg.content == "answer"
+# Non-streaming response parsing was removed alongside ``Provider.generate``;
+# the streaming path is exercised end-to-end via the runner tests.
 
 
 # ---------- cache_control on system + tools ----------

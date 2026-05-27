@@ -10,8 +10,15 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
+from lovia.items import (
+    FinishDelta,
+    ItemDelta,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    UsageDelta,
+)
 from lovia.messages import AssistantMessage, ChatMessage, ToolCall, Usage
-from lovia.providers import StreamChunk
 from lovia.providers.base import ModelSettings
 
 
@@ -32,16 +39,6 @@ class ScriptedProvider:
             raise AssertionError("ScriptedProvider ran out of canned responses")
         return self._script.pop(0)
 
-    async def generate(
-        self,
-        messages: list[ChatMessage],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-        settings: ModelSettings | None = None,
-    ) -> AssistantMessage:
-        return self._pop(messages)
-
     async def stream(
         self,
         messages: list[ChatMessage],
@@ -49,17 +46,23 @@ class ScriptedProvider:
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[StreamChunk]:
+    ) -> AsyncIterator[ItemDelta]:
         msg = self._pop(messages)
+        # Reasoning streams first (matches Anthropic / Responses ordering).
         if msg.reasoning_content:
             for ch in msg.reasoning_content:
-                yield StreamChunk(reasoning_delta=ch)
-        # Emit content character-by-character so streaming consumers receive
-        # multiple deltas, then the final assembled message.
+                yield ReasoningDelta(text=ch)
+        # Text streams character-by-character so consumers see multiple deltas.
         if msg.content:
             for ch in msg.content:
-                yield StreamChunk(text_delta=ch)
-        yield StreamChunk(done=msg)
+                yield TextDelta(text=ch)
+        # Tool calls: emit the full assembled call as a single delta per index.
+        for idx, tc in enumerate(msg.tool_calls):
+            yield ToolCallDelta(
+                index=idx, call_id=tc.id, name=tc.name, arguments=tc.arguments
+            )
+        yield UsageDelta(usage=msg.usage)
+        yield FinishDelta(reason=msg.finish_reason)
 
 
 def text(content: str, *, reasoning: str | None = None) -> AssistantMessage:

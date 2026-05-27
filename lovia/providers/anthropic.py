@@ -13,7 +13,8 @@ Conversions worth noting:
 * Assistant tool calls become ``tool_use`` content blocks; we generate the
   ``id`` mapping on the fly.
 * Streaming uses Anthropic's SSE event types (``content_block_delta``,
-  ``message_delta``, ...) which we translate into :class:`StreamChunk`.
+  ``message_delta``, ...) which we translate into :class:`ItemDelta` values
+  consumed by the runner.
 """
 
 from __future__ import annotations
@@ -25,8 +26,16 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..exceptions import ProviderError
-from ..messages import AssistantMessage, ChatMessage, ToolCall, Usage
-from .base import ModelSettings, StreamChunk, ToolCallDelta
+from ..items import (
+    FinishDelta,
+    ItemDelta,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    UsageDelta,
+)
+from ..messages import ChatMessage, Usage
+from .base import ModelSettings
 
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
@@ -121,33 +130,6 @@ class AnthropicProvider:
             payload.update(settings.extra)
         return payload
 
-    async def generate(
-        self,
-        messages: list[ChatMessage],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-        settings: ModelSettings | None = None,
-    ) -> AssistantMessage:
-        # Anthropic ignores response_format for now; structured output falls
-        # back to the final_output tool, handled one layer up.
-        _ = response_format
-        payload = self._build_payload(messages, tools, settings, stream=False)
-        try:
-            response = await self._client.post(
-                f"{self.base_url}/messages",
-                headers=self._headers(),
-                json=payload,
-            )
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"Anthropic request failed: {exc}") from exc
-
-        if response.status_code >= 400:
-            raise ProviderError(
-                f"Anthropic returned HTTP {response.status_code}: {response.text}"
-            )
-        return _parse_anthropic_response(response.json())
-
     async def stream(
         self,
         messages: list[ChatMessage],
@@ -155,15 +137,15 @@ class AnthropicProvider:
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[StreamChunk]:
+    ) -> AsyncIterator[ItemDelta]:
         _ = response_format
         payload = self._build_payload(messages, tools, settings, stream=True)
 
-        text_buf: list[str] = []
-        thinking_buf: list[str] = []
-        # Tool call assembly: index -> {id, name, arguments}
-        tool_calls: dict[int, dict[str, str]] = {}
+        # Anthropic streams content blocks by index. We only need to remember
+        # id/name per block so we can echo them on every argument delta.
         block_kinds: dict[int, str] = {}
+        tool_call_ids: dict[int, str] = {}
+        tool_call_names: dict[int, str] = {}
         usage = Usage()
         stop_reason: str | None = None
 
@@ -192,36 +174,29 @@ class AnthropicProvider:
                     block = event.get("content_block") or {}
                     block_kinds[idx] = block.get("type", "")
                     if block.get("type") == "tool_use":
-                        tool_calls[idx] = {
-                            "id": block.get("id", ""),
-                            "name": block.get("name", ""),
-                            "arguments": "",
-                        }
-                        yield StreamChunk(
-                            tool_call_delta=ToolCallDelta(
-                                index=idx, id=block.get("id"), name=block.get("name")
-                            )
+                        tool_call_ids[idx] = block.get("id", "")
+                        tool_call_names[idx] = block.get("name", "")
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=tool_call_ids[idx],
+                            name=tool_call_names[idx],
+                            arguments="",
                         )
                 elif etype == "content_block_delta":
                     idx = event.get("index", 0)
                     delta = event.get("delta") or {}
                     dtype = delta.get("type")
                     if dtype == "text_delta":
-                        chunk_text = delta.get("text", "")
-                        text_buf.append(chunk_text)
-                        yield StreamChunk(text_delta=chunk_text)
+                        yield TextDelta(text=delta.get("text", ""))
                     elif dtype == "thinking_delta":
-                        thinking_text = delta.get("thinking", "")
-                        thinking_buf.append(thinking_text)
-                        yield StreamChunk(reasoning_delta=thinking_text)
+                        yield ReasoningDelta(text=delta.get("thinking", ""))
                     elif dtype == "input_json_delta":
                         partial = delta.get("partial_json", "")
-                        if idx in tool_calls:
-                            tool_calls[idx]["arguments"] += partial
-                        yield StreamChunk(
-                            tool_call_delta=ToolCallDelta(
-                                index=idx, arguments_delta=partial
-                            )
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=tool_call_ids.get(idx, ""),
+                            name=tool_call_names.get(idx, ""),
+                            arguments=partial,
                         )
                 elif etype == "message_delta":
                     stop_reason = (event.get("delta") or {}).get(
@@ -246,19 +221,8 @@ class AnthropicProvider:
                 elif etype == "message_stop":
                     break
 
-        final = AssistantMessage(
-            content="".join(text_buf) or None,
-            tool_calls=[
-                ToolCall(
-                    id=tc["id"], name=tc["name"], arguments=tc["arguments"] or "{}"
-                )
-                for _, tc in sorted(tool_calls.items())
-            ],
-            usage=usage,
-            finish_reason=_normalize_stop_reason(stop_reason),
-            reasoning_content="".join(thinking_buf) or None,
-        )
-        yield StreamChunk(done=final)
+        yield UsageDelta(usage=usage)
+        yield FinishDelta(reason=_normalize_stop_reason(stop_reason))
 
 
 def _normalize_stop_reason(reason: str | None) -> str | None:
@@ -394,37 +358,3 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
         "description": fn.get("description", ""),
         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
     }
-
-
-def _parse_anthropic_response(data: dict[str, Any]) -> AssistantMessage:
-    content_parts: list[str] = []
-    thinking_parts: list[str] = []
-    tool_calls: list[ToolCall] = []
-    for block in data.get("content") or []:
-        btype = block.get("type")
-        if btype == "text":
-            content_parts.append(block.get("text", ""))
-        elif btype == "thinking":
-            thinking_parts.append(block.get("thinking", ""))
-        elif btype == "tool_use":
-            tool_calls.append(
-                ToolCall(
-                    id=block.get("id", ""),
-                    name=block.get("name", ""),
-                    arguments=json.dumps(block.get("input") or {}),
-                )
-            )
-    usage_data = data.get("usage") or {}
-    usage = Usage(
-        input_tokens=usage_data.get("input_tokens", 0),
-        output_tokens=usage_data.get("output_tokens", 0),
-        cache_read_tokens=usage_data.get("cache_read_input_tokens", 0),
-        cache_write_tokens=usage_data.get("cache_creation_input_tokens", 0),
-    )
-    return AssistantMessage(
-        content="".join(content_parts) or None,
-        tool_calls=tool_calls,
-        usage=usage,
-        finish_reason=_normalize_stop_reason(data.get("stop_reason")),
-        reasoning_content="".join(thinking_parts) or None,
-    )

@@ -30,13 +30,19 @@ from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
 from .items import (
+    FinishDelta,
     Item,
+    ItemDelta,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    UsageDelta,
     assistant_to_items,
     transcript_to_items,
 )
 from .items import InputMessageItem as _InputMessageItem
 from .items import ToolCallOutputItem as _ToolCallOutputItem
-from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
+from .messages import AssistantMessage, ChatMessage, ToolCall, Usage, system, tool_message, user
 from .output import (
     FINAL_OUTPUT_TOOL_NAME,
     DefaultOutputRepair,
@@ -46,7 +52,7 @@ from .output import (
     parse_output,
     response_format_for,
 )
-from .providers.base import Provider, StreamChunk
+from .providers.base import Provider
 from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
@@ -584,12 +590,22 @@ class _RunLoop:
         """Stream one model call: yield deltas and capture the final message.
 
         Yields :class:`events.TextDelta` and :class:`events.ReasoningDelta`
-        as the provider streams. Populates ``state.assistant`` with the
-        final :class:`AssistantMessage` once the stream completes.
+        as the provider streams. Assembles incoming :class:`ItemDelta` values
+        into the final :class:`AssistantMessage` stored on ``state.assistant``.
         """
         model_label = getattr(providers[0], "model", None) if providers else None
+
+        # Incremental state assembled from the provider's delta stream.
+        text_buf: list[str] = []
+        reasoning_buf: list[str] = []
+        # index -> {id, name, arguments}. We use a dict (not list) because
+        # providers can emit deltas for indices out of order.
+        tc_slots: dict[int, dict[str, str]] = {}
+        usage = Usage()
+        finish_reason: str | None = None
+
         with tracer.span("model_call", model=model_label, turn=turn):
-            async for chunk in _stream_with_fallback(
+            async for delta in _stream_with_fallback(
                 providers,
                 transcript,
                 tools=[t.openai_schema() for t in tools_by_name.values()] or None,
@@ -601,12 +617,37 @@ class _RunLoop:
                 settings=agent.settings,
                 retry=self.retry,
             ):
-                if chunk.text_delta is not None:
-                    yield events.TextDelta(delta=chunk.text_delta)
-                if chunk.reasoning_delta is not None:
-                    yield events.ReasoningDelta(delta=chunk.reasoning_delta)
-                if chunk.done is not None:
-                    state.assistant = chunk.done
+                if isinstance(delta, TextDelta):
+                    text_buf.append(delta.text)
+                    yield events.TextDelta(delta=delta.text)
+                elif isinstance(delta, ReasoningDelta):
+                    reasoning_buf.append(delta.text)
+                    yield events.ReasoningDelta(delta=delta.text)
+                elif isinstance(delta, ToolCallDelta):
+                    slot = tc_slots.setdefault(
+                        delta.index, {"id": "", "name": "", "arguments": ""}
+                    )
+                    if delta.call_id:
+                        slot["id"] = delta.call_id
+                    if delta.name:
+                        slot["name"] = delta.name
+                    if delta.arguments:
+                        slot["arguments"] += delta.arguments
+                elif isinstance(delta, UsageDelta):
+                    usage = delta.usage
+                elif isinstance(delta, FinishDelta):
+                    finish_reason = delta.reason
+
+        state.assistant = AssistantMessage(
+            content="".join(text_buf) or None,
+            reasoning_content="".join(reasoning_buf) or None,
+            tool_calls=[
+                ToolCall(id=s["id"], name=s["name"], arguments=s["arguments"] or "{}")
+                for _, s in sorted(tc_slots.items())
+            ],
+            usage=usage,
+            finish_reason=finish_reason,
+        )
 
     async def _process_tool_call(
         self,
@@ -918,11 +959,11 @@ async def _stream_with_fallback(
     response_format: dict[str, Any] | None,
     settings: Any,
     retry: RetryPolicy | None,
-) -> AsyncIterator[StreamChunk]:
+) -> AsyncIterator[ItemDelta]:
     """Stream from the first provider that succeeds.
 
     For each provider we apply ``retry`` (if any) on errors that occur *before*
-    any chunk has been forwarded. Once the stream starts producing data, the
+    any delta has been forwarded. Once the stream starts producing data, the
     run is committed: a mid-stream error propagates immediately so we don't
     duplicate text or tool calls already seen by the caller.
 
@@ -937,14 +978,14 @@ async def _stream_with_fallback(
             attempt += 1
             committed = False
             try:
-                async for chunk in provider.stream(
+                async for delta in provider.stream(
                     messages,
                     tools=tools,
                     response_format=response_format,
                     settings=settings,
                 ):
                     committed = True
-                    yield chunk
+                    yield delta
                 return  # success
             except BaseException as exc:
                 last_exc = exc

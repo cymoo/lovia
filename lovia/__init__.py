@@ -27,10 +27,13 @@ from . import events
 from .agent import Agent
 from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
+    BudgetExceeded,
+    GuardrailTripped,
     LoviaError,
     MaxTurnsExceeded,
     OutputValidationError,
     ProviderError,
+    RunCancelled,
     ToolError,
     UserError,
 )
@@ -46,6 +49,7 @@ from .messages import (
     user,
 )
 from .providers import ModelSettings, OpenAIChatProvider, Provider, provider_from_string
+from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
 from .skills import Skill, SkillCatalog
@@ -55,8 +59,11 @@ __all__ = [
     "Agent",
     "AgentHooks",
     "AssistantMessage",
+    "BudgetExceeded",
+    "CancelToken",
     "ChatMessage",
     "ContentBlock",
+    "GuardrailTripped",
     "Handoff",
     "ImageBlock",
     "LoviaError",
@@ -66,6 +73,9 @@ __all__ = [
     "OutputValidationError",
     "Provider",
     "ProviderError",
+    "RetryPolicy",
+    "RunBudget",
+    "RunCancelled",
     "RunContext",
     "RunHandle",
     "RunResult",

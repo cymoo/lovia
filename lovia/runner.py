@@ -36,7 +36,9 @@ from .output import (
     parse_output,
     response_format_for,
 )
+from .providers.base import Provider, StreamChunk
 from .providers.openai_chat import OpenAIChatProvider
+from .reliability import CancelToken, RetryPolicy, RunBudget
 from .session import Session
 from .tools import Tool
 
@@ -145,6 +147,9 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunHandle[TOutput]":
         """Start a run and return a :class:`RunHandle`.
@@ -160,6 +165,9 @@ class Runner:
             session_id=session_id,
             max_turns=max_turns,
             parent_usage=_parent_usage,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
         )
         return RunHandle(loop.stream())
 
@@ -172,6 +180,9 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunResult[TOutput]":
         """Run ``agent`` to completion and return the final result."""
@@ -182,6 +193,9 @@ class Runner:
             session=session,
             session_id=session_id,
             max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
             _parent_usage=_parent_usage,
         ).result()
 
@@ -194,13 +208,11 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
     ) -> AsyncIterator[events.Event]:
-        """Run ``agent`` and yield :class:`Event` instances as they happen.
-
-        Equivalent to iterating :meth:`run_streamed`. Kept for backward
-        compatibility; new code should prefer :meth:`run_streamed` because
-        the handle also exposes the final :class:`RunResult`.
-        """
+        """Run ``agent`` and yield :class:`Event` instances as they happen."""
         async for event in Runner.run_streamed(
             agent,
             input,
@@ -208,6 +220,9 @@ class Runner:
             session=session,
             session_id=session_id,
             max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
         ):
             yield event
 
@@ -230,6 +245,9 @@ class _RunLoop:
         session_id: str | None,
         max_turns: int,
         parent_usage: Usage | None = None,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -240,6 +258,9 @@ class _RunLoop:
         self.session_id = session_id
         self.max_turns = max_turns
         self.parent_usage = parent_usage
+        self.budget = budget
+        self.cancel_token = cancel_token
+        self.retry = retry
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
@@ -268,14 +289,19 @@ class _RunLoop:
                     raise MaxTurnsExceeded(
                         f"Run exceeded max_turns={self.max_turns} without producing output"
                     )
+                if self.cancel_token is not None:
+                    self.cancel_token.check()
+                if self.budget is not None:
+                    self.budget.check(run_ctx.usage)
                 turns += 1
                 ev_turn = events.TurnStarted(agent=agent, turn=turns)
                 yield ev_turn
                 await dispatch(agent.hooks, ev_turn)
 
-                provider = agent.resolve_provider()
+                providers = agent.resolve_providers()
                 assistant = None
-                async for chunk in provider.stream(
+                async for chunk in _stream_with_fallback(
+                    providers,
                     transcript,
                     tools=[t.openai_schema() for t in tools_by_name.values()] or None,
                     response_format=(
@@ -284,6 +310,7 @@ class _RunLoop:
                         else None
                     ),
                     settings=agent.settings,
+                    retry=self.retry,
                 ):
                     if chunk.text_delta is not None:
                         yield events.TextDelta(delta=chunk.text_delta)
@@ -303,6 +330,8 @@ class _RunLoop:
                     raise RuntimeError("Provider stream ended without final message")
 
                 run_ctx.usage.add(assistant.usage)
+                if self.budget is not None:
+                    self.budget.check(run_ctx.usage)
                 msg = assistant.to_chat_message()
                 transcript.append(msg)
                 ev_msg = events.MessageCompleted(message=msg)
@@ -339,6 +368,12 @@ class _RunLoop:
                 handoff_signal: _HandoffSignal | None = None
                 final_via_tool: Any = None
                 for call in assistant.tool_calls:
+                    if self.cancel_token is not None:
+                        self.cancel_token.check()
+                    if self.budget is not None:
+                        self.budget.record_tool_call()
+                        self.budget.check(run_ctx.usage)
+
                     if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
                         # Synthetic final-output tool: parse, ack, terminate.
                         final_via_tool = parse_output(output_spec, call.arguments)
@@ -645,6 +680,63 @@ def _repair_prompt(exc: OutputValidationError) -> str:
         "the required schema. Do not include any explanation, markdown, or "
         "code fences — only the JSON document."
     )
+
+
+async def _stream_with_fallback(
+    providers: list[Provider],
+    messages: list[ChatMessage],
+    *,
+    tools: list[dict[str, Any]] | None,
+    response_format: dict[str, Any] | None,
+    settings: Any,
+    retry: RetryPolicy | None,
+) -> AsyncIterator[StreamChunk]:
+    """Stream from the first provider that succeeds.
+
+    For each provider we apply ``retry`` (if any) on errors that occur *before*
+    any chunk has been forwarded. Once the stream starts producing data, the
+    run is committed: a mid-stream error propagates immediately so we don't
+    duplicate text or tool calls already seen by the caller.
+
+    When all retries on a provider are exhausted, we move to the next provider
+    in the chain. If all providers fail, the last exception is re-raised.
+    """
+    last_exc: BaseException | None = None
+    max_attempts = retry.max_attempts if retry is not None else 1
+    for provider in providers:
+        attempt = 0
+        while True:
+            attempt += 1
+            committed = False
+            try:
+                async for chunk in provider.stream(
+                    messages,
+                    tools=tools,
+                    response_format=response_format,
+                    settings=settings,
+                ):
+                    committed = True
+                    yield chunk
+                return  # success
+            except BaseException as exc:
+                last_exc = exc
+                if committed:
+                    raise
+                if (
+                    retry is not None
+                    and attempt < max_attempts
+                    and retry.retry_on(exc)
+                ):
+                    import asyncio as _asyncio
+                    import random as _random
+
+                    delay = min(retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1)))
+                    delay *= 0.5 + _random.random()
+                    await retry.sleep(delay)
+                    continue
+                break  # next provider
+    if last_exc is not None:
+        raise last_exc
 
 
 # Re-export for convenience.

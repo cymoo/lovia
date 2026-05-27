@@ -44,6 +44,7 @@ from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
 from .session import Session
 from .tools import Tool, render_tool_result, run_tool
+from .tracing import NoopTracer, Tracer
 
 
 TContext = TypeVar("TContext")
@@ -308,7 +309,23 @@ class _RunLoop:
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
+        tracer: Tracer = agent.tracer or NoopTracer()
 
+        with tracer.span(
+            "run",
+            agent=agent.name,
+            run_id=self.run_id,
+            resumed=self.resume_from is not None,
+        ) as run_span:
+            async for ev in self._stream_inner(agent, tracer, run_span):
+                yield ev
+
+    async def _stream_inner(
+        self,
+        agent: Agent,
+        tracer: Tracer,
+        run_span: Any,
+    ) -> AsyncIterator[events.Event]:
         # 1. Build the initial conversation: system prompt + (session history) + input.
         if self.resume_from is not None:
             # Resume: transcript = snapshot, skip session/input rebuild and
@@ -358,29 +375,31 @@ class _RunLoop:
 
                 providers = agent.resolve_providers()
                 assistant = None
-                async for chunk in _stream_with_fallback(
-                    providers,
-                    transcript,
-                    tools=[t.openai_schema() for t in tools_by_name.values()] or None,
-                    response_format=(
-                        response_format_for(output_spec)
-                        if output_spec and not output_spec.use_tool_fallback
-                        else None
-                    ),
-                    settings=agent.settings,
-                    retry=self.retry,
-                ):
-                    if chunk.text_delta is not None:
-                        yield events.TextDelta(delta=chunk.text_delta)
-                        await dispatch(
-                            agent.hooks, events.TextDelta(delta=chunk.text_delta)
-                        )
-                    if chunk.reasoning_delta is not None:
-                        ev_r = events.ReasoningDelta(delta=chunk.reasoning_delta)
-                        yield ev_r
-                        await dispatch(agent.hooks, ev_r)
-                    if chunk.done is not None:
-                        assistant = chunk.done
+                model_label = getattr(providers[0], "model", None) if providers else None
+                with tracer.span("model_call", model=model_label, turn=turns):
+                    async for chunk in _stream_with_fallback(
+                        providers,
+                        transcript,
+                        tools=[t.openai_schema() for t in tools_by_name.values()] or None,
+                        response_format=(
+                            response_format_for(output_spec)
+                            if output_spec and not output_spec.use_tool_fallback
+                            else None
+                        ),
+                        settings=agent.settings,
+                        retry=self.retry,
+                    ):
+                        if chunk.text_delta is not None:
+                            yield events.TextDelta(delta=chunk.text_delta)
+                            await dispatch(
+                                agent.hooks, events.TextDelta(delta=chunk.text_delta)
+                            )
+                        if chunk.reasoning_delta is not None:
+                            ev_r = events.ReasoningDelta(delta=chunk.reasoning_delta)
+                            yield ev_r
+                            await dispatch(agent.hooks, ev_r)
+                        if chunk.done is not None:
+                            assistant = chunk.done
 
                 if assistant is None:
                     # Provider exited without emitting ``done`` - shouldn't
@@ -518,13 +537,14 @@ class _RunLoop:
                     await dispatch(agent.hooks, events.ToolCallStarted(call=call))
 
                     try:
-                        result = await run_tool(
-                            tool,
-                            args,
-                            run_ctx,
-                            default_retries=agent.default_tool_retries,
-                            default_timeout=agent.default_tool_timeout,
-                        )
+                        with tracer.span("tool", name=tool.name, call_id=call.id):
+                            result = await run_tool(
+                                tool,
+                                args,
+                                run_ctx,
+                                default_retries=agent.default_tool_retries,
+                                default_timeout=agent.default_tool_timeout,
+                            )
                         is_error = False
                     except Exception as exc:
                         result = f"Tool error: {exc}"
@@ -563,17 +583,22 @@ class _RunLoop:
 
                 if handoff_signal is not None:
                     prev_agent = agent
-                    agent = handoff_signal.target
-                    run_ctx.agent = agent
-                    output_spec = build_output_spec(
-                        agent.output_type, _supports_json_schema(agent)
-                    )
-                    tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
-                    # Update system prompt for the new agent and optionally
-                    # filter the inherited transcript.
-                    transcript[:] = await self._reset_for_handoff(
-                        transcript, agent, handoff_signal.handoff
-                    )
+                    with tracer.span(
+                        "handoff",
+                        from_agent=prev_agent.name,
+                        to_agent=handoff_signal.target.name,
+                    ):
+                        agent = handoff_signal.target
+                        run_ctx.agent = agent
+                        output_spec = build_output_spec(
+                            agent.output_type, _supports_json_schema(agent)
+                        )
+                        tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+                        # Update system prompt for the new agent and optionally
+                        # filter the inherited transcript.
+                        transcript[:] = await self._reset_for_handoff(
+                            transcript, agent, handoff_signal.handoff
+                        )
                     handoff_ev = events.HandoffOccurred(
                         from_agent=prev_agent, to_agent=agent
                     )
@@ -610,6 +635,8 @@ class _RunLoop:
             done = events.RunCompleted(result=result)
             yield done
             await dispatch(agent.hooks, done)
+            run_span.set_attribute("turns", turns)
+            run_span.set_attribute("total_tokens", run_ctx.usage.total_tokens)
 
         finally:
             for cleanup in mcp_cleanup:

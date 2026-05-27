@@ -326,6 +326,30 @@ to any tool whose own field is left as `None`.
 
 ### Observability
 
+Out of the box, attach a tracer to see the run / model_call / tool / handoff
+tree:
+
+```python
+import logging
+from lovia import Agent, ConsoleTracer
+
+logging.basicConfig(level=logging.INFO)
+agent = Agent(..., tracer=ConsoleTracer())
+# Logs lines like:
+#   run (212.3ms) agent='triage' turns=2 total_tokens=148
+#     model_call (95.1ms) model='openai:gpt-4o-mini' turn=1
+#     tool (1.2ms) name='add' call_id='c1'
+#     model_call (78.4ms) model='openai:gpt-4o-mini' turn=2
+```
+
+`InMemoryTracer` records spans in `tracer.spans` for tests. The `Tracer`
+Protocol is two methods (`span` + a `Span` with `set_attribute` /
+`record_exception`) — wire an OpenTelemetry / Logfire backend by writing a
+thin adapter.
+
+For finer-grained hooks (per-event callbacks instead of spans), pass an
+`AgentHooks` subclass:
+
 ```python
 from lovia import AgentHooks
 

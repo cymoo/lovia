@@ -60,6 +60,7 @@ from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
 from .skills import Skill, SkillCatalog
 from .tools import Tool, tool
+from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 __all__ = [
     "Agent",
@@ -69,16 +70,19 @@ __all__ = [
     "CancelToken",
     "ChatMessage",
     "Checkpointer",
+    "ConsoleTracer",
     "ContentBlock",
     "GuardrailFn",
     "GuardrailTripped",
     "Handoff",
     "ImageBlock",
     "InMemoryCheckpointer",
+    "InMemoryTracer",
     "InputGuardrail",
     "LoviaError",
     "MaxTurnsExceeded",
     "ModelSettings",
+    "NoopTracer",
     "OpenAIChatProvider",
     "OutputGuardrail",
     "OutputValidationError",
@@ -99,6 +103,7 @@ __all__ = [
     "Tool",
     "ToolCall",
     "ToolError",
+    "Tracer",
     "Usage",
     "UserError",
     "agent_as_tool",

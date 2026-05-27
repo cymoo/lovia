@@ -20,8 +20,10 @@ if TYPE_CHECKING:
     from .guardrails import GuardrailFn
     from .hooks import AgentHooks
     from .mcp import MCPServer
+    from .memory import Memory
     from .messages import ToolCall
     from .skills import SkillCatalog
+    from .tracing import Tracer
 
 
 TContext = TypeVar("TContext")
@@ -93,6 +95,10 @@ class Agent(Generic[TContext]):
     # Tools may still override either knob individually.
     default_tool_retries: int = 1
     default_tool_timeout: float | None = None
+    # Optional observability + long-term memory hooks. When ``tracer`` is
+    # ``None`` the runner uses a no-op tracer, so instrumentation is free.
+    tracer: "Tracer | None" = None
+    memory: "Memory | None" = None
 
     def resolve_providers(self) -> list[Provider]:
         """Return the ordered fallback chain of providers for this agent.

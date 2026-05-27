@@ -14,12 +14,66 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ..content import ImageBlock, TextBlock
 from ..exceptions import ProviderError
 from ..messages import AssistantMessage, ChatMessage, ToolCall, Usage
 from .base import ModelSettings, StreamChunk, ToolCallDelta
 
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+
+# ---------------------------------------------------------------------------
+# Wire-format serialization (OpenAI Chat Completions schema)
+#
+# Kept here — not on ``ChatMessage`` itself — so the core message type stays
+# vendor-neutral. Other providers translate their own way.
+
+
+def _content_to_openai(
+    content: "str | list[Any]",
+) -> "str | list[dict[str, Any]]":
+    if isinstance(content, str):
+        return content
+    parts: list[dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, TextBlock):
+            parts.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageBlock):
+            if block.url is not None:
+                image_url: dict[str, Any] = {"url": block.url}
+            else:
+                image_url = {"url": f"data:{block.mime_type};base64,{block.data}"}
+            if block.detail is not None:
+                image_url["detail"] = block.detail
+            parts.append({"type": "image_url", "image_url": image_url})
+        else:  # pragma: no cover - exhaustiveness guard
+            raise TypeError(f"Unsupported content block: {block!r}")
+    return parts
+
+
+def _tool_call_to_openai(tc: ToolCall) -> dict[str, Any]:
+    return {
+        "id": tc.id,
+        "type": "function",
+        "function": {"name": tc.name, "arguments": tc.arguments},
+    }
+
+
+def message_to_openai(msg: ChatMessage) -> dict[str, Any]:
+    """Serialize a :class:`ChatMessage` to the OpenAI Chat Completions wire format."""
+    out: dict[str, Any] = {"role": msg.role}
+    if msg.content is not None:
+        out["content"] = _content_to_openai(msg.content)
+    if msg.reasoning_content is not None and msg.role == "assistant":
+        out["reasoning_content"] = msg.reasoning_content
+    if msg.tool_calls:
+        out["tool_calls"] = [_tool_call_to_openai(tc) for tc in msg.tool_calls]
+    if msg.tool_call_id is not None:
+        out["tool_call_id"] = msg.tool_call_id
+    if msg.name is not None and msg.role in ("user", "assistant"):
+        out["name"] = msg.name
+    return out
 
 
 class OpenAIChatProvider:
@@ -93,7 +147,7 @@ class OpenAIChatProvider:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [m.as_openai() for m in messages],
+            "messages": [message_to_openai(m) for m in messages],
             "stream": stream,
         }
         if tools:

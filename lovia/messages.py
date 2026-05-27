@@ -29,13 +29,6 @@ class ToolCall:
     # we can show the original payload in errors.
     arguments: str
 
-    def as_openai(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "function",
-            "function": {"name": self.name, "arguments": self.arguments},
-        }
-
 
 @dataclass
 class ChatMessage:
@@ -62,46 +55,6 @@ class ChatMessage:
     def text(self) -> str:
         """Flattened text view of :attr:`content` for logging / fallbacks."""
         return text_of(self.content)
-
-    def as_openai(self) -> dict[str, Any]:
-        """Serialize to the OpenAI Chat Completions wire format."""
-        msg: dict[str, Any] = {"role": self.role}
-        if self.content is not None:
-            msg["content"] = _content_to_openai(self.content)
-        if self.reasoning_content is not None and self.role == "assistant":
-            msg["reasoning_content"] = self.reasoning_content
-        if self.tool_calls:
-            msg["tool_calls"] = [tc.as_openai() for tc in self.tool_calls]
-        if self.tool_call_id is not None:
-            msg["tool_call_id"] = self.tool_call_id
-        if self.name is not None and self.role in ("user", "assistant"):
-            msg["name"] = self.name
-        return msg
-
-
-def _content_to_openai(
-    content: "str | list[ContentBlock]",
-) -> "str | list[dict[str, Any]]":
-    """Serialize a message's content to the OpenAI Chat Completions wire format."""
-    from .content import ImageBlock  # avoid cycle at module import
-
-    if isinstance(content, str):
-        return content
-    parts: list[dict[str, Any]] = []
-    for block in content:
-        if isinstance(block, TextBlock):
-            parts.append({"type": "text", "text": block.text})
-        elif isinstance(block, ImageBlock):
-            if block.url is not None:
-                image_url: dict[str, Any] = {"url": block.url}
-            else:
-                image_url = {"url": f"data:{block.mime_type};base64,{block.data}"}
-            if block.detail is not None:
-                image_url["detail"] = block.detail
-            parts.append({"type": "image_url", "image_url": image_url})
-        else:  # pragma: no cover - exhaustiveness guard
-            raise TypeError(f"Unsupported content block: {block!r}")
-    return parts
 
 
 @dataclass

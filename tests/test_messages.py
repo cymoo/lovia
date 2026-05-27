@@ -7,6 +7,7 @@ import pytest
 from lovia import ImageBlock, TextBlock, user
 from lovia.content import normalize_content, text_of
 from lovia.messages import AssistantMessage, ChatMessage, Usage
+from lovia.providers.openai_chat import message_to_openai
 
 
 # ---------- TextBlock / ImageBlock ----------
@@ -14,7 +15,7 @@ from lovia.messages import AssistantMessage, ChatMessage, Usage
 
 def test_text_block_serializes_to_openai_parts() -> None:
     msg = user([TextBlock("hello"), ImageBlock(url="https://x/y.png")])
-    payload = msg.as_openai()
+    payload = message_to_openai(msg)
     assert payload["content"] == [
         {"type": "text", "text": "hello"},
         {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
@@ -23,7 +24,7 @@ def test_text_block_serializes_to_openai_parts() -> None:
 
 def test_image_block_base64_serializes_with_data_url() -> None:
     msg = user(ImageBlock(data="ZmFrZQ==", mime_type="image/png"))
-    payload = msg.as_openai()
+    payload = message_to_openai(msg)
     assert payload["content"][0]["image_url"]["url"].startswith(
         "data:image/png;base64,"
     )

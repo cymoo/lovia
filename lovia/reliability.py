@@ -47,7 +47,10 @@ class RunBudget:
         if self._started_at is None:
             self._started_at = now
 
-        if self.max_input_tokens is not None and usage.input_tokens > self.max_input_tokens:
+        if (
+            self.max_input_tokens is not None
+            and usage.input_tokens > self.max_input_tokens
+        ):
             raise BudgetExceeded(
                 f"input tokens {usage.input_tokens} exceeds budget {self.max_input_tokens}"
             )
@@ -65,10 +68,7 @@ class RunBudget:
             raise BudgetExceeded(
                 f"total tokens {usage.total_tokens} exceeds budget {self.max_total_tokens}"
             )
-        if (
-            self.max_tool_calls is not None
-            and self._tool_calls > self.max_tool_calls
-        ):
+        if self.max_tool_calls is not None and self._tool_calls > self.max_tool_calls:
             raise BudgetExceeded(
                 f"tool call count {self._tool_calls} exceeds budget {self.max_tool_calls}"
             )
@@ -138,7 +138,10 @@ class RetryPolicy:
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
 
     async def run(
-        self, op: Callable[[], Awaitable[None]], *, on_error: Callable[[BaseException], None] | None = None
+        self,
+        op: Callable[[], Awaitable[None]],
+        *,
+        on_error: Callable[[BaseException], None] | None = None,
     ) -> None:
         """Run ``op`` with retries. ``op`` must be re-callable on failure."""
         attempt = 0

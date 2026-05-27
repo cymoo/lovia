@@ -18,7 +18,7 @@ from lovia import (
     Runner,
     tool,
 )
-from lovia.messages import AssistantMessage, ChatMessage, ToolCall, Usage
+from lovia.messages import AssistantMessage, ChatMessage, Usage
 from lovia.providers.base import ModelSettings, StreamChunk
 
 from .scripted_provider import ScriptedProvider, call, text
@@ -87,7 +87,9 @@ class _FailingProvider:
         self.answer = answer
         self.attempts = 0
 
-    async def generate(self, *a: Any, **kw: Any) -> AssistantMessage:  # pragma: no cover
+    async def generate(
+        self, *a: Any, **kw: Any
+    ) -> AssistantMessage:  # pragma: no cover
         raise NotImplementedError
 
     async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[StreamChunk]:
@@ -100,7 +102,9 @@ class _FailingProvider:
 def test_retry_recovers_from_transient_error() -> None:
     provider = _FailingProvider(fail_times=2, answer=text("ok"))
     agent = Agent(name="a", model=provider)
-    retry = RetryPolicy(max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0))
+    retry = RetryPolicy(
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
 
     result = asyncio.run(Runner.run(agent, "hi", retry=retry))
     assert result.output == "ok"
@@ -111,7 +115,9 @@ def test_provider_fallback_chain() -> None:
     primary = _FailingProvider(fail_times=99, answer=text("never"))
     backup = ScriptedProvider([text("recovered")])
     agent = Agent(name="a", model=[primary, backup])
-    retry = RetryPolicy(max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0))
+    retry = RetryPolicy(
+        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
 
     result = asyncio.run(Runner.run(agent, "hi", retry=retry))
     assert result.output == "recovered"
@@ -125,14 +131,21 @@ def test_anthropic_cache_control_inserted_when_cache_system_true() -> None:
     provider = AnthropicProvider(
         model="claude-3-haiku-20240307",
         api_key="x",
-        client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))),
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200))
+        ),
     )
     payload = provider._build_payload(
         messages=[
             ChatMessage(role="system", content="be terse"),
             ChatMessage(role="user", content="hi"),
         ],
-        tools=[{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {"type": "object"}},
+            }
+        ],
         settings=ModelSettings(cache_system=True),
         stream=False,
     )

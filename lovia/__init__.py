@@ -37,6 +37,11 @@ from .exceptions import (
     ToolError,
     UserError,
 )
+from .guardrails import (
+    GuardrailFn,
+    InputGuardrail,
+    OutputGuardrail,
+)
 from .handoff import Handoff, agent_as_tool, drop_stale_tool_calls
 from .hooks import AgentHooks
 from .messages import (
@@ -63,13 +68,16 @@ __all__ = [
     "CancelToken",
     "ChatMessage",
     "ContentBlock",
+    "GuardrailFn",
     "GuardrailTripped",
     "Handoff",
     "ImageBlock",
+    "InputGuardrail",
     "LoviaError",
     "MaxTurnsExceeded",
     "ModelSettings",
     "OpenAIChatProvider",
+    "OutputGuardrail",
     "OutputValidationError",
     "Provider",
     "ProviderError",

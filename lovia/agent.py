@@ -16,6 +16,7 @@ from .providers import ModelSettings, Provider, provider_from_string
 from .tools import Tool
 
 if TYPE_CHECKING:
+    from .guardrails import GuardrailFn
     from .hooks import AgentHooks
     from .mcp import MCPServer
     from .messages import ToolCall
@@ -83,6 +84,8 @@ class Agent(Generic[TContext, TOutput]):
     mcp_servers: list["MCPServer"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
+    input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    output_guardrails: list["GuardrailFn"] = field(default_factory=list)
 
     def resolve_providers(self) -> list[Provider]:
         """Return the ordered fallback chain of providers for this agent.

@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Generic, TypeVar
 from . import events
 from .agent import Agent
 from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
+from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
 from .messages import AssistantMessage, ChatMessage, Usage, system, tool_message, user
@@ -40,7 +41,7 @@ from .providers.base import Provider, StreamChunk
 from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .session import Session
-from .tools import Tool
+from .tools import Tool, run_tool
 
 
 TContext = TypeVar("TContext")
@@ -281,6 +282,12 @@ class _RunLoop:
         yield ev_start
         await dispatch(agent.hooks, ev_start)
         try:
+            # Input guardrails run once on the fully-built initial transcript.
+            if agent.input_guardrails:
+                await check_input_guardrails(
+                    agent.input_guardrails, transcript, run_ctx
+                )
+
             output: Any = None
             turns = 0
             output_repair_attempts = 0
@@ -448,7 +455,7 @@ class _RunLoop:
                     await dispatch(agent.hooks, events.ToolCallStarted(call=call))
 
                     try:
-                        result = await tool.invoke(args, run_ctx)
+                        result = await run_tool(tool, args, run_ctx)
                         is_error = False
                     except Exception as exc:
                         result = f"Tool error: {exc}"
@@ -509,6 +516,10 @@ class _RunLoop:
                 raise UserError(
                     f"Agent {agent.name!r} ended without producing structured output"
                 )
+
+            # Output guardrails: last gate before the result is returned.
+            if agent.output_guardrails:
+                await check_output_guardrails(agent.output_guardrails, output, run_ctx)
 
             result = RunResult(
                 output=output,
@@ -722,15 +733,12 @@ async def _stream_with_fallback(
                 last_exc = exc
                 if committed:
                     raise
-                if (
-                    retry is not None
-                    and attempt < max_attempts
-                    and retry.retry_on(exc)
-                ):
-                    import asyncio as _asyncio
+                if retry is not None and attempt < max_attempts and retry.retry_on(exc):
                     import random as _random
 
-                    delay = min(retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1)))
+                    delay = min(
+                        retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1))
+                    )
                     delay *= 0.5 + _random.random()
                     await retry.sleep(delay)
                     continue

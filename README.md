@@ -50,7 +50,8 @@ Hard dependencies are only `httpx` and `pydantic`.
 - 🖼 **Multimodal.** `TextBlock` / `ImageBlock` content; both OpenAI and
   Anthropic adapters translate them transparently.
 - 🧠 **Reasoning tokens.** A `ReasoningDelta` event surfaces Anthropic thinking
-  blocks and DeepSeek / OpenAI reasoning models.
+  blocks and DeepSeek / OpenAI reasoning models; the persisted `ReasoningItem`
+  keeps the trace alive across turns.
 - 🔁 **Streaming = events.** `run_stream` yields `TextDelta`,
   `ToolCallStarted`, `ReasoningDelta`, `HandoffOccurred`, `RunCompleted`, … the
   same events go to hooks for observability.
@@ -59,7 +60,8 @@ Hard dependencies are only `httpx` and `pydantic`.
   transient provider errors with backoff; `Guardrail`s veto inputs/outputs.
 - 💾 **Sessions + checkpoints.** `InMemorySession`/`SQLiteSession` for chat
   history; `InMemoryCheckpointer`/`SQLiteCheckpointer` for per-turn snapshots
-  with `Runner.resume(...)`.
+  with `Runner.resume(...)`. Storage is **Item-based**, so reasoning traces
+  and server-side tool calls round-trip losslessly.
 - 🗣 **Handoffs & agent-as-tool.** Compose multi-agent systems without ceremony.
 - 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
 - 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
@@ -215,6 +217,37 @@ await Runner.run(agent, "What's my name?", session=session, session_id="user-mei
 ```
 
 `session_id` is yours — use a user id, conversation id, or anything else.
+
+### The transcript: Items, not just messages
+
+A run returns a `RunResult` whose canonical transcript lives in `new_items`
+— a list of typed `Item` values (`InputMessageItem`, `MessageOutputItem`,
+`ReasoningItem`, `ToolCallItem`, `ToolCallOutputItem`, `HandoffCallItem`,
+…). Items preserve provider-specific richness — reasoning traces, encrypted
+o-series tokens, server-side tool calls — that the OpenAI Chat wire format
+flattens away. Sessions and checkpoints persist Items so round-tripping
+between providers stays lossless.
+
+```python
+from lovia import MessageOutputItem, ReasoningItem, ToolCallItem
+
+result = await Runner.run(agent, "What's 2+2?")
+for it in result.new_items:
+    match it:
+        case ReasoningItem(content=trace):
+            ...                 # chain-of-thought
+        case ToolCallItem(name=name, arguments=args):
+            ...                 # the model asked to call ``name(args)``
+        case MessageOutputItem(content=text):
+            print(text)         # final answer
+
+# ``result.messages`` is a derived OpenAI-Chat view, handy for printing.
+for m in result.messages:
+    print(m.role, m.text)
+```
+
+Hook subscribers receive Items the same way: `MessageCompleted.items` is
+the slice of Items produced by one assistant turn.
 
 ### Any OpenAI-compatible model
 
@@ -468,6 +501,12 @@ from lovia import (
     Session, AgentHooks, ApprovalChannel,
     ChatMessage, ToolCall, Usage,
     TextBlock, ImageBlock, ContentBlock,
+    Item, ItemDelta,
+    InputMessageItem, MessageOutputItem, ReasoningItem,
+    ToolCallItem, ToolCallOutputItem,
+    HandoffCallItem, HandoffOutputItem, ServerToolCallItem,
+    TextDelta, ReasoningDelta, ToolCallDelta, UsageDelta, FinishDelta,
+    item_to_dict, item_from_dict, items_to_chat_messages,
     Provider, OpenAIChatProvider, ModelSettings,
     RunBudget, RetryPolicy, CancelToken,
     InputGuardrail, OutputGuardrail, GuardrailTripped,

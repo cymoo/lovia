@@ -10,12 +10,16 @@ from lovia import (
     Agent,
     ImageBlock,
     InMemoryCheckpointer,
+    InputMessageItem,
+    MessageOutputItem,
     Runner,
     RunSnapshot,
     TextBlock,
+    ToolCallItem,
+    ToolCallOutputItem,
     tool,
 )
-from lovia.messages import ChatMessage, ToolCall, Usage
+from lovia.messages import Usage
 from lovia.stores.sqlite_checkpointer import SQLiteCheckpointer
 
 from .scripted_provider import ScriptedProvider, text
@@ -33,27 +37,24 @@ async def test_checkpointer_snapshot_round_trip() -> None:
     assert snap is not None
     assert snap.run_id == "r1"
     assert snap.agent_name == "a"
-    assert any(m.role == "assistant" for m in snap.messages)
+    # The assistant turn shows up as a MessageOutputItem in the snapshot.
+    assert any(isinstance(it, MessageOutputItem) for it in snap.items)
     assert snap.usage.output_tokens > 0
 
 
 @pytest.mark.asyncio
 async def test_resume_continues_from_snapshot() -> None:
     cp = InMemoryCheckpointer()
-    transcript = [
-        ChatMessage(role="user", content="What is the time?"),
-        ChatMessage(
-            role="assistant",
-            content=None,
-            tool_calls=[ToolCall(id="c1", name="clock", arguments="{}")],
-        ),
-        ChatMessage(role="tool", tool_call_id="c1", content="12:00"),
+    items = [
+        InputMessageItem(role="user", content="What is the time?"),
+        ToolCallItem(call_id="c1", name="clock", arguments="{}"),
+        ToolCallOutputItem(call_id="c1", output="12:00"),
     ]
     await cp.save(
         RunSnapshot(
             run_id="r2",
             agent_name="a",
-            messages=transcript,
+            items=items,
             usage=Usage(input_tokens=10, output_tokens=5),
             turns=1,
         )
@@ -68,7 +69,8 @@ async def test_resume_continues_from_snapshot() -> None:
 
     result = await Runner.resume(agent, checkpointer=cp, run_id="r2")
     assert result.output == "It is noon."
-    assert result.messages[:3] == transcript
+    # The first three items survive the resume verbatim.
+    assert result.new_items[:3] == items
     assert result.usage.input_tokens >= 10
 
 
@@ -108,12 +110,12 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
     snap = RunSnapshot(
         run_id="r",
         agent_name="a",
-        messages=[
-            ChatMessage(
+        items=[
+            InputMessageItem(
                 role="user",
                 content=[TextBlock("describe this"), ImageBlock(url="https://x/y.png")],
             ),
-            ChatMessage(role="assistant", content="a cat"),
+            MessageOutputItem(content="a cat"),
         ],
         usage=Usage(input_tokens=3, output_tokens=2, cache_read_tokens=1),
         turns=1,
@@ -122,8 +124,9 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
     restored = RunSnapshot.from_dict(payload)
     assert restored.run_id == snap.run_id
     assert restored.usage.cache_read_tokens == 1
-    msg = restored.messages[0]
-    assert isinstance(msg.content, list)
-    assert isinstance(msg.content[0], TextBlock)
-    assert isinstance(msg.content[1], ImageBlock)
-    assert msg.content[1].url == "https://x/y.png"
+    first = restored.items[0]
+    assert isinstance(first, InputMessageItem)
+    assert isinstance(first.content, list)
+    assert isinstance(first.content[0], TextBlock)
+    assert isinstance(first.content[1], ImageBlock)
+    assert first.content[1].url == "https://x/y.png"

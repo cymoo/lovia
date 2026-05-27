@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .messages import ChatMessage, ToolCall
+from .items import Item
+from .messages import ToolCall
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -61,9 +62,15 @@ class ReasoningDelta(Event):
 
 @dataclass
 class MessageCompleted(Event):
-    """An assistant message fully assembled (may contain tool calls)."""
+    """One assistant turn fully assembled.
 
-    message: ChatMessage
+    ``items`` is the slice of new :class:`Item` values produced by that
+    turn — typically a :class:`ReasoningItem`, a :class:`MessageOutputItem`,
+    and any :class:`ToolCallItem` / :class:`HandoffCallItem` the model
+    requested. Subscribers can pattern-match on the concrete item types.
+    """
+
+    items: list[Item]
 
 
 @dataclass

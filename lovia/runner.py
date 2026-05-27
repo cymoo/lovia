@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, TypeVar
 
 from . import events
@@ -38,6 +38,7 @@ from .items import (
     ToolCallDelta,
     UsageDelta,
     assistant_to_items,
+    items_to_chat_messages,
     transcript_to_items,
 )
 from .items import InputMessageItem as _InputMessageItem
@@ -86,18 +87,31 @@ class RunResult:
     ``output`` is typed ``Any`` because the structured output type is a
     runtime field on :class:`Agent`, not a static generic parameter — call
     sites that know their output type can cast or annotate locally.
+
+    The transcript lives in ``new_items`` (the canonical Item-list form
+    consumed by other agents, Session storage, and the Responses API).
+    ``messages`` is a derived view in OpenAI Chat wire format, convenient
+    for printing or forwarding to legacy clients.
     """
 
     output: Any
-    messages: list[ChatMessage]
+    new_items: list[Item]
     final_agent: Agent
     usage: Usage
     turns: int
-    # Phase 9b: parallel Item view of the transcript. Not yet part of the
-    # documented public API — 9d renames this to ``new_items`` and drops the
-    # ``messages`` field. Populated by the runner; round-trips with
-    # ``messages`` via :func:`items_to_chat_messages`.
-    items: list[Item] = field(default_factory=list)
+
+    @property
+    def messages(self) -> list[ChatMessage]:
+        """ChatMessage view derived from :attr:`new_items`.
+
+        Useful for inspecting the transcript in OpenAI-Chat wire format.
+        Items that have no Chat analogue (``HandoffOutputItem``,
+        ``ServerToolCallItem``) are skipped — round-trip back through Items
+        is lossy in that direction.
+        """
+        from .items import items_to_chat_messages
+
+        return items_to_chat_messages(self.new_items)
 
 
 class RunHandle:
@@ -368,14 +382,14 @@ class _RunLoop:
     ) -> AsyncIterator[events.Event]:
         # 1. Build the initial conversation: system prompt + (session history) + input.
         if self.resume_from is not None:
-            # Resume: transcript = snapshot, skip session/input rebuild and
-            # input guardrails (already vetted on the original run).
-            transcript = list(self.resume_from.messages)
+            # Resume: rebuild transcript from the snapshot's items.
+            items_log: list[Item] = list(self.resume_from.items)
+            transcript = items_to_chat_messages(items_log)
         else:
             transcript = await self._build_initial_messages(agent)
-        # Phase 9b: mirror the transcript as Items. Stays in lockstep with
-        # ``transcript`` for the whole run — invariant verified by tests.
-        items_log: list[Item] = transcript_to_items(transcript)
+            # Mirror the transcript as Items. Stays in lockstep with
+            # ``transcript`` for the whole run — invariant verified by tests.
+            items_log = transcript_to_items(transcript)
         run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
@@ -435,8 +449,9 @@ class _RunLoop:
                     self.budget.check(run_ctx.usage)
                 msg = assistant.to_chat_message()
                 transcript.append(msg)
-                items_log.extend(assistant_to_items(assistant))
-                ev_msg = events.MessageCompleted(message=msg)
+                turn_items = assistant_to_items(assistant)
+                items_log.extend(turn_items)
+                ev_msg = events.MessageCompleted(items=turn_items)
                 yield ev_msg
                 await dispatch(agent.hooks, ev_msg)
 
@@ -465,7 +480,7 @@ class _RunLoop:
                     ev_end = events.TurnEnded(agent=agent, turn=turns)
                     yield ev_end
                     await dispatch(agent.hooks, ev_end)
-                    await self._snapshot(agent, transcript, run_ctx, turns)
+                    await self._snapshot(agent, items_log, run_ctx, turns)
                     break
 
                 # Process tool calls. May trigger a handoff, in which case we
@@ -483,7 +498,7 @@ class _RunLoop:
                 ev_te = events.TurnEnded(agent=agent, turn=turns)
                 yield ev_te
                 await dispatch(agent.hooks, ev_te)
-                await self._snapshot(agent, transcript, run_ctx, turns)
+                await self._snapshot(agent, items_log, run_ctx, turns)
 
                 if state.final_via_tool is not None:
                     output = state.final_via_tool
@@ -530,15 +545,14 @@ class _RunLoop:
 
             result = RunResult(
                 output=output,
-                messages=transcript,
+                new_items=items_log,
                 final_agent=agent,
                 usage=run_ctx.usage,
                 turns=turns,
-                items=items_log,
             )
 
             if self.session is not None:
-                await self._persist_session(transcript)
+                await self._persist_session(items_log)
 
             # Propagate usage into a parent run (e.g. agent_as_tool) so token
             # accounting accumulates across nested invocations.
@@ -810,8 +824,10 @@ class _RunLoop:
             msgs.append(system(system_text))
 
         if self.session is not None:
-            history = await self.session.load(self.session_id)  # type: ignore[arg-type]
-            msgs.extend(history)
+            # Session stores Items (the canonical form); flatten to wire
+            # format for the in-flight transcript.
+            history_items = await self.session.load(self.session_id)  # type: ignore[arg-type]
+            msgs.extend(items_to_chat_messages(history_items))
 
         if isinstance(self.user_input, str):
             msgs.append(user(self.user_input))
@@ -890,7 +906,7 @@ class _RunLoop:
     async def _snapshot(
         self,
         agent: Agent,
-        transcript: list[ChatMessage],
+        items_log: list[Item],
         run_ctx: RunContext,
         turns: int,
     ) -> None:
@@ -900,7 +916,7 @@ class _RunLoop:
         snapshot = RunSnapshot(
             run_id=self.run_id,
             agent_name=agent.name,
-            messages=list(transcript),
+            items=list(items_log),
             usage=Usage(
                 input_tokens=run_ctx.usage.input_tokens,
                 output_tokens=run_ctx.usage.output_tokens,
@@ -925,12 +941,19 @@ class _RunLoop:
         # and may be repaired in the main loop if the agent opts in.
         return parse_output(output_spec, loads_lenient(assistant.content or ""))
 
-    async def _persist_session(self, transcript: list[ChatMessage]) -> None:
+    async def _persist_session(self, items_log: list[Item]) -> None:
         # Replace stored transcript with the latest (simple and predictable).
-        # System prompts are agent-owned and re-rendered each run, so they are
-        # excluded from the persisted history.
+        # System prompts are agent-owned and re-rendered each run, so any
+        # system :class:`InputMessageItem` is excluded from the persisted
+        # history.
+        from .items import InputMessageItem
+
         assert self.session is not None and self.session_id is not None
-        body = [m for m in transcript if m.role != "system"]
+        body = [
+            it
+            for it in items_log
+            if not (isinstance(it, InputMessageItem) and it.role == "system")
+        ]
         await self.session.clear(self.session_id)
         await self.session.append(self.session_id, body)
 

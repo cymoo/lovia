@@ -13,6 +13,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .. import events
 from ..agent import Agent
+from ..items import items_to_chat_messages
 from ..runner import Runner
 from ..session import Session
 from .approvals import ApprovalRegistry
@@ -117,7 +118,10 @@ def build_router(
 
     @router.get("/api/sessions/{session_id}", response_model=list[MessageOut])
     async def get_session(session_id: str) -> list[MessageOut]:
-        msgs = await session.load(session_id)
+        # Session storage is Item-based; flatten to ChatMessage for the UI
+        # which only cares about user-visible roles + tool results.
+        items = await session.load(session_id)
+        msgs = items_to_chat_messages(items)
         return [
             MessageOut(
                 role=m.role,

@@ -4,8 +4,9 @@ Uses :mod:`sqlite3` from the stdlib via :func:`asyncio.to_thread` so we don't
 add ``aiosqlite`` as a dependency. Concurrency is serialized through a single
 async lock; that's plenty for the kind of workloads agent frameworks see.
 
-The schema is intentionally trivial: messages are stored as JSON blobs in
-insertion order. Loading deserializes them back into :class:`ChatMessage`.
+The schema is intentionally trivial: items are stored as JSON blobs in
+insertion order (one row per :class:`Item`). Loading deserializes them via
+:func:`lovia.items.item_from_dict`.
 """
 
 from __future__ import annotations
@@ -15,18 +16,18 @@ import json
 import sqlite3
 from pathlib import Path
 
-from ..messages import ChatMessage, ToolCall
+from ..items import Item, item_from_dict, item_to_dict
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS session_messages (
+CREATE TABLE IF NOT EXISTS session_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     payload TEXT NOT NULL,
     created_at REAL NOT NULL DEFAULT (julianday('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_session_messages_sid
-    ON session_messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_session_items_sid
+    ON session_items(session_id, id);
 """
 
 
@@ -57,29 +58,29 @@ class _SQLiteBase:
 class SQLiteSession(_SQLiteBase):
     """A :class:`Session` persisted to a SQLite file."""
 
-    async def load(self, session_id: str) -> list[ChatMessage]:
-        def _impl() -> list[ChatMessage]:
+    async def load(self, session_id: str) -> list[Item]:
+        def _impl() -> list[Item]:
             conn = sqlite3.connect(self._path, check_same_thread=False)
             try:
                 conn.executescript(_SCHEMA)
                 rows = conn.execute(
-                    "SELECT payload FROM session_messages WHERE session_id = ? ORDER BY id ASC",
+                    "SELECT payload FROM session_items WHERE session_id = ? ORDER BY id ASC",
                     (session_id,),
                 ).fetchall()
-                return [_deserialize(json.loads(r[0])) for r in rows]
+                return [item_from_dict(json.loads(r[0])) for r in rows]
             finally:
                 conn.close()
 
         return await self._run(_impl)
 
-    async def append(self, session_id: str, messages: list[ChatMessage]) -> None:
+    async def append(self, session_id: str, items: list[Item]) -> None:
         def _impl() -> None:
             conn = sqlite3.connect(self._path, check_same_thread=False)
             try:
                 conn.executescript(_SCHEMA)
                 conn.executemany(
-                    "INSERT INTO session_messages (session_id, payload) VALUES (?, ?)",
-                    [(session_id, json.dumps(_serialize(m))) for m in messages],
+                    "INSERT INTO session_items (session_id, payload) VALUES (?, ?)",
+                    [(session_id, json.dumps(item_to_dict(it))) for it in items],
                 )
                 conn.commit()
             finally:
@@ -93,38 +94,10 @@ class SQLiteSession(_SQLiteBase):
             try:
                 conn.executescript(_SCHEMA)
                 conn.execute(
-                    "DELETE FROM session_messages WHERE session_id = ?", (session_id,)
+                    "DELETE FROM session_items WHERE session_id = ?", (session_id,)
                 )
                 conn.commit()
             finally:
                 conn.close()
 
         await self._run(_impl)
-
-
-def _serialize(msg: ChatMessage) -> dict:
-    return {
-        "role": msg.role,
-        "content": msg.content,
-        "tool_calls": [
-            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-            for tc in msg.tool_calls
-        ],
-        "tool_call_id": msg.tool_call_id,
-        "name": msg.name,
-        "reasoning_content": msg.reasoning_content,
-    }
-
-
-def _deserialize(d: dict) -> ChatMessage:
-    return ChatMessage(
-        role=d["role"],
-        content=d.get("content"),
-        tool_calls=[
-            ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-            for tc in d.get("tool_calls") or []
-        ],
-        tool_call_id=d.get("tool_call_id"),
-        name=d.get("name"),
-        reasoning_content=d.get("reasoning_content"),
-    )

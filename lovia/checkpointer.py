@@ -1,9 +1,10 @@
 """Run checkpointing — pause a run mid-flight and resume it later.
 
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
-serialize after each turn: the transcript, the active agent's name, the
-accumulated usage, and turn counter. The opaque ``RunContext.context``
-value is *not* snapshotted — callers re-supply it on resume.
+serialize after each turn: the transcript (as :class:`Item` list), the
+active agent's name, the accumulated usage, and the turn counter. The
+opaque ``RunContext.context`` value is *not* snapshotted — callers
+re-supply it on resume.
 
 The default in-process implementation is :class:`InMemoryCheckpointer`;
 :class:`~lovia.stores.sqlite_checkpointer.SQLiteCheckpointer` persists
@@ -17,7 +18,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from .messages import ChatMessage, ToolCall, Usage
+from .items import Item, item_from_dict, item_to_dict
+from .messages import Usage
 
 
 @dataclass
@@ -26,7 +28,7 @@ class RunSnapshot:
 
     run_id: str
     agent_name: str
-    messages: list[ChatMessage]
+    items: list[Item]
     usage: Usage
     turns: int
     updated_at: float = field(default_factory=time.time)
@@ -37,7 +39,7 @@ class RunSnapshot:
         return {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
-            "messages": [_message_to_dict(m) for m in self.messages],
+            "items": [item_to_dict(it) for it in self.items],
             "usage": {
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,
@@ -53,7 +55,7 @@ class RunSnapshot:
         return cls(
             run_id=data["run_id"],
             agent_name=data["agent_name"],
-            messages=[_message_from_dict(m) for m in data["messages"]],
+            items=[item_from_dict(d) for d in data["items"]],
             usage=Usage(**data.get("usage", {})),
             turns=data.get("turns", 0),
             updated_at=data.get("updated_at", time.time()),
@@ -65,59 +67,6 @@ class RunSnapshot:
     @classmethod
     def from_json(cls, payload: str) -> "RunSnapshot":
         return cls.from_dict(json.loads(payload))
-
-
-def _message_to_dict(msg: ChatMessage) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": msg.role}
-    # Content may be a string or list of content blocks; for blocks we fall
-    # back to their pydantic dump so multimodal content survives a round-trip.
-    if isinstance(msg.content, list):
-        out["content"] = [
-            block.model_dump() if hasattr(block, "model_dump") else block
-            for block in msg.content
-        ]
-    else:
-        out["content"] = msg.content
-    if msg.tool_calls:
-        out["tool_calls"] = [
-            {"id": c.id, "name": c.name, "arguments": c.arguments}
-            for c in msg.tool_calls
-        ]
-    if msg.tool_call_id:
-        out["tool_call_id"] = msg.tool_call_id
-    if msg.name:
-        out["name"] = msg.name
-    if msg.reasoning_content:
-        out["reasoning_content"] = msg.reasoning_content
-    return out
-
-
-def _message_from_dict(data: dict[str, Any]) -> ChatMessage:
-    from .content import TextBlock, ImageBlock  # local import: cheap, avoid cycle
-
-    raw_content = data.get("content")
-    content: Any
-    if isinstance(raw_content, list):
-        rebuilt: list[Any] = []
-        for block in raw_content:
-            if isinstance(block, dict) and block.get("type") == "image":
-                rebuilt.append(ImageBlock(**block))
-            elif isinstance(block, dict) and block.get("type") == "text":
-                rebuilt.append(TextBlock(**block))
-            else:
-                rebuilt.append(block)
-        content = rebuilt
-    else:
-        content = raw_content
-
-    return ChatMessage(
-        role=data["role"],
-        content=content,
-        tool_calls=[ToolCall(**c) for c in data.get("tool_calls", [])],
-        tool_call_id=data.get("tool_call_id"),
-        name=data.get("name"),
-        reasoning_content=data.get("reasoning_content"),
-    )
 
 
 @runtime_checkable

@@ -1,7 +1,7 @@
 """Phase 9b: items_log mirrors the transcript across all runner paths.
 
 Invariant the runner now maintains:
-    items_to_chat_messages(result.items) == result.messages
+    items_to_chat_messages(result.new_items) == result.messages
 
 (modulo intentional structural normalization — see below.)
 
@@ -73,11 +73,11 @@ async def test_items_mirror_simple_text() -> None:
     agent = Agent(name="t", instructions="be brief", model=provider)
     result = await Runner.run(agent, "hello")
     # The Item view round-trips back to the same transcript shape.
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
     # And the structure is what we expect: system, user, assistant.
-    kinds = [type(i).__name__ for i in result.items]
+    kinds = [type(i).__name__ for i in result.new_items]
     assert kinds == ["InputMessageItem", "InputMessageItem", "MessageOutputItem"]
 
 
@@ -87,11 +87,11 @@ async def test_items_mirror_tool_call_and_reply() -> None:
     )
     agent = Agent(name="t", instructions="use tools", model=provider, tools=[add])
     result = await Runner.run(agent, "1 + 2 = ?")
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
     # Tool output preserves the raw int return.
-    tool_outputs = [i for i in result.items if isinstance(i, ToolCallOutputItem)]
+    tool_outputs = [i for i in result.new_items if isinstance(i, ToolCallOutputItem)]
     assert len(tool_outputs) == 1
     assert tool_outputs[0].raw == 3
     assert tool_outputs[0].output == "3"
@@ -102,10 +102,10 @@ async def test_items_mirror_tool_error() -> None:
     provider = ScriptedProvider([call("boom", {}), text("ok, recovered")])
     agent = Agent(name="t", instructions="x", model=provider, tools=[boom])
     result = await Runner.run(agent, "go")
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
-    tool_out = next(i for i in result.items if isinstance(i, ToolCallOutputItem))
+    tool_out = next(i for i in result.new_items if isinstance(i, ToolCallOutputItem))
     assert tool_out.is_error is True
     assert "kaboom" in tool_out.output
 
@@ -115,7 +115,7 @@ async def test_items_mirror_reasoning() -> None:
     agent = Agent(name="t", instructions="x", model=provider)
     result = await Runner.run(agent, "q")
     # Reasoning becomes its own Item, appearing before the message output.
-    kinds = [type(i).__name__ for i in result.items]
+    kinds = [type(i).__name__ for i in result.new_items]
     assert kinds == [
         "InputMessageItem",
         "InputMessageItem",
@@ -124,7 +124,7 @@ async def test_items_mirror_reasoning() -> None:
     ]
     # The forward direction (items -> messages) re-merges reasoning + content
     # into a single assistant ChatMessage, matching ``result.messages``.
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
 
@@ -148,7 +148,7 @@ async def test_items_mirror_handoff_transcript_reset() -> None:
     result = await Runner.run(triage, "help me")
     # After a handoff, ``transcript`` is rewritten by ``_reset_for_handoff``;
     # the items_log mirror must follow.
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
     assert result.final_agent.name == "Specialist"
@@ -173,51 +173,52 @@ async def test_items_mirror_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> No
     assert isinstance(result.output, Out) and result.output.value == 7
     # Repair prompt appears as a user item between the two assistant items.
     user_items = [
-        i for i in result.items if isinstance(i, InputMessageItem) and i.role == "user"
+        i for i in result.new_items if isinstance(i, InputMessageItem) and i.role == "user"
     ]
     # original user + repair prompt = 2 user items
     assert len(user_items) == 2
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
 
 
 async def test_items_mirror_resume_from_snapshot() -> None:
-    """Resume rebuilds items_log from the snapshot transcript via
-    ``transcript_to_items``; the mirror must still round-trip."""
+    """Resume rebuilds the transcript from the snapshot's items; the
+    mirror must still round-trip."""
+    from lovia import InputMessageItem, MessageOutputItem
     from lovia.checkpointer import RunSnapshot
-
-    # Build a snapshot mid-conversation: system + user + assistant + user.
-    snap_msgs = [
-        ChatMessage(role="system", content="be helpful"),
-        ChatMessage(role="user", content="2+2?"),
-        ChatMessage(role="assistant", content="4"),
-        ChatMessage(role="user", content="thanks"),
-    ]
     from lovia.messages import Usage
 
+    # Build a snapshot mid-conversation: system + user + assistant + user.
+    snap_items = [
+        InputMessageItem(role="system", content="be helpful"),
+        InputMessageItem(role="user", content="2+2?"),
+        MessageOutputItem(content="4"),
+        InputMessageItem(role="user", content="thanks"),
+    ]
+
     snap = RunSnapshot(
-        run_id="r1", agent_name="t", messages=snap_msgs, usage=Usage(), turns=1
+        run_id="r1", agent_name="t", items=snap_items, usage=Usage(), turns=1
     )
 
     provider = ScriptedProvider([text("you're welcome")])
     agent = Agent(name="t", instructions="be helpful", model=provider)
     result = await Runner.run(agent, "ignored", resume_from=snap)
-    assert _normalize(items_to_chat_messages(result.items)) == _normalize(
+    assert _normalize(items_to_chat_messages(result.new_items)) == _normalize(
         result.messages
     )
-    # Snapshot contributed 4 messages -> 4 items; assistant turn adds 1.
-    assert len(result.items) == 5
+    # Snapshot contributed 4 items; the assistant turn adds 1.
+    assert len(result.new_items) == 5
 
 
 async def test_items_message_output_item_preserves_content() -> None:
     provider = ScriptedProvider([text("the answer")])
     agent = Agent(name="t", instructions="x", model=provider)
     result = await Runner.run(agent, "?")
-    msg_items = [i for i in result.items if isinstance(i, MessageOutputItem)]
+    msg_items = [i for i in result.new_items if isinstance(i, MessageOutputItem)]
     assert msg_items == [MessageOutputItem(content="the answer")]
     # And no spurious reasoning item.
-    assert not any(isinstance(i, ReasoningItem) for i in result.items)
+    assert not any(isinstance(i, ReasoningItem) for i in result.new_items)
 
 
 async def test_items_tool_call_item_carries_call_metadata() -> None:
@@ -226,7 +227,7 @@ async def test_items_tool_call_item_carries_call_metadata() -> None:
     )
     agent = Agent(name="t", instructions="x", model=provider, tools=[add])
     result = await Runner.run(agent, "add")
-    call_items = [i for i in result.items if isinstance(i, ToolCallItem)]
+    call_items = [i for i in result.new_items if isinstance(i, ToolCallItem)]
     assert len(call_items) == 1
     assert call_items[0].call_id == "my_id"
     assert call_items[0].name == "add"

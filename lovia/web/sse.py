@@ -11,18 +11,33 @@ import json
 from typing import Any, AsyncIterator
 
 from .. import events
-from ..messages import ChatMessage
+from ..items import Item, MessageOutputItem, ReasoningItem, ToolCallItem
 
 
-def _msg_to_dict(msg: ChatMessage) -> dict[str, Any]:
+def _items_to_dict(items: list[Item]) -> dict[str, Any]:
+    """Flatten the items emitted in one assistant turn into a wire shape.
+
+    The web UI only needs the user-facing pieces: assistant text, the
+    reasoning trace, and any tool calls the model requested.
+    """
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tool_calls: list[dict[str, str]] = []
+    for it in items:
+        if isinstance(it, MessageOutputItem):
+            if isinstance(it.content, str):
+                text_parts.append(it.content)
+        elif isinstance(it, ReasoningItem):
+            reasoning_parts.append(it.content)
+        elif isinstance(it, ToolCallItem):
+            tool_calls.append(
+                {"id": it.call_id, "name": it.name, "arguments": it.arguments}
+            )
     return {
-        "role": msg.role,
-        "content": msg.text or None,
-        "tool_calls": [
-            {"id": c.id, "name": c.name, "arguments": c.arguments}
-            for c in (msg.tool_calls or [])
-        ]
-        or None,
+        "role": "assistant",
+        "content": "".join(text_parts) or None,
+        "reasoning": "".join(reasoning_parts) or None,
+        "tool_calls": tool_calls or None,
     }
 
 
@@ -44,7 +59,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     if isinstance(ev, events.MessageCompleted):
         return {
             "event": "message_completed",
-            "data": json.dumps({"message": _msg_to_dict(ev.message)}),
+            "data": json.dumps({"message": _items_to_dict(ev.items)}),
         }
     if isinstance(ev, events.ToolCallStarted):
         return {

@@ -41,10 +41,12 @@ Hard dependencies are only `httpx` and `pydantic`.
   Qwen, …) just needs a `base_url`. Pass a **list** of providers for automatic
   fallback.
 - 🛠 **Tools from anywhere.** `@tool` on a function, pydantic / dataclass /
-  TypedDict / plain hints — all become JSON Schema automatically. Optional
-  `before` / `after` middleware lets you redact, transform, or audit calls.
+  TypedDict / plain hints — all become JSON Schema automatically. Flat
+  policies (`retries`, `timeout`, `result_renderer`) plus a `wrap` escape
+  hatch for the rare custom cases.
 - 🧱 **Structured output.** Pass `output_type=YourModel`; uses native
   `response_format` when available, falls back to a synthetic tool otherwise.
+  Plug in a custom `OutputRepairStrategy` for non-default retry behaviour.
 - 🖼 **Multimodal.** `TextBlock` / `ImageBlock` content; both OpenAI and
   Anthropic adapters translate them transparently.
 - 🧠 **Reasoning tokens.** A `ReasoningDelta` event surfaces Anthropic thinking
@@ -61,7 +63,11 @@ Hard dependencies are only `httpx` and `pydantic`.
 - 🗣 **Handoffs & agent-as-tool.** Compose multi-agent systems without ceremony.
 - 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
 - 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
-- 🪝 **Hooks.** Subclass `AgentHooks`, plug into Logfire / OTel / your logger.
+- 🪝 **Hooks.** Subscribe to any `Event` type via `hooks.on(EventType)` —
+  decouples observability from event names.
+- 📡 **Tracing built in.** `ConsoleTracer` / `InMemoryTracer` give you
+  span trees out of the box; the `Tracer` Protocol is two methods, swap
+  in OpenTelemetry / Logfire with a thin adapter.
 - 🖥 **Web layer (optional).** `from lovia.web import serve`: FastAPI + SSE +
   a bundled chat UI for any agent. Approval gates surface as buttons.
 
@@ -458,8 +464,8 @@ The complete API:
 ```python
 from lovia import (
     Agent, Runner, RunContext, RunResult, RunHandle,
-    tool, Tool,
-    Session, AgentHooks,
+    tool, Tool, ToolResultRenderer,
+    Session, AgentHooks, ApprovalChannel,
     ChatMessage, ToolCall, Usage,
     TextBlock, ImageBlock, ContentBlock,
     Provider, OpenAIChatProvider, ModelSettings,
@@ -467,8 +473,12 @@ from lovia import (
     InputGuardrail, OutputGuardrail, GuardrailTripped,
     Checkpointer, InMemoryCheckpointer, RunSnapshot,
     Skill, SkillCatalog, Handoff, agent_as_tool, drop_stale_tool_calls,
+    OutputRepairStrategy, DefaultOutputRepair,
+    Tracer, ConsoleTracer, InMemoryTracer, NoopTracer,
+    Memory,
     events,
 )
+from lovia.providers import register_provider, provider_from_string
 from lovia.stores import InMemorySession, SQLiteSession, SQLiteCheckpointer
 from lovia.web import serve, create_app   # optional, requires `lovia[web]`
 ```

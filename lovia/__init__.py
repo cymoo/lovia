@@ -60,6 +60,7 @@ from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
 from .skills import Skill, SkillCatalog
+from .memory import Memory
 from .output import DefaultOutputRepair, OutputRepairStrategy
 from .tools import Tool, ToolResultRenderer, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
@@ -84,6 +85,7 @@ __all__ = [
     "InputGuardrail",
     "LoviaError",
     "MaxTurnsExceeded",
+    "Memory",
     "ModelSettings",
     "NoopTracer",
     "OpenAIChatProvider",

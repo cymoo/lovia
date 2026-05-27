@@ -19,6 +19,11 @@ class ModelSettings:
 
     Only widely supported fields live here. Provider-specific settings can be
     passed via ``extra`` and forwarded as kwargs.
+
+    ``cache_system`` is honored by providers that support prompt caching
+    (currently Anthropic): when set, the adapter injects ``cache_control``
+    breakpoints on the system prompt and the last tool definition so repeated
+    runs with the same context are billed at the cached rate.
     """
 
     temperature: float | None = None
@@ -26,6 +31,7 @@ class ModelSettings:
     max_tokens: int | None = None
     stop: list[str] | None = None
     parallel_tool_calls: bool | None = None
+    cache_system: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -33,11 +39,13 @@ class ModelSettings:
 class StreamChunk:
     """A single chunk yielded by :meth:`Provider.stream`.
 
-    Exactly one of ``text_delta``, ``tool_call_delta`` or ``done`` is set on
-    each chunk. ``done`` carries the fully assembled :class:`AssistantMessage`.
+    Exactly one of ``text_delta``, ``reasoning_delta``, ``tool_call_delta`` or
+    ``done`` is set on each chunk. ``done`` carries the fully assembled
+    :class:`AssistantMessage`.
     """
 
     text_delta: str | None = None
+    reasoning_delta: str | None = None
     tool_call_delta: "ToolCallDelta | None" = None
     done: AssistantMessage | None = None
 

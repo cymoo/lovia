@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .content import ContentBlock, TextBlock, text_of
+
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -39,26 +41,33 @@ class ToolCall:
 class ChatMessage:
     """One message in a conversation.
 
-    ``content`` is optional because assistant messages that only call tools
-    carry no textual content. ``tool_calls`` is only meaningful when
-    ``role == "assistant"``; ``tool_call_id`` only when ``role == "tool"``.
-    ``reasoning_content`` carries chain-of-thought text from providers that
-    expose it (e.g. DeepSeek thinking mode) and must be echoed back verbatim
-    in subsequent turns.
+    ``content`` may be a plain string (the common case), a list of typed
+    :class:`ContentBlock`\\ s (for multimodal input like images), or ``None``
+    when the assistant only emitted tool calls. ``tool_calls`` is only
+    meaningful when ``role == "assistant"``; ``tool_call_id`` only when
+    ``role == "tool"``. ``reasoning_content`` carries chain-of-thought text
+    from providers that expose it (e.g. DeepSeek thinking, Anthropic
+    extended thinking, OpenAI o-series) and must be echoed back verbatim in
+    subsequent turns.
     """
 
     role: Role
-    content: str | None = None
+    content: "str | list[ContentBlock] | None" = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None  # optional: agent/tool display name
     reasoning_content: str | None = None
 
+    @property
+    def text(self) -> str:
+        """Flattened text view of :attr:`content` for logging / fallbacks."""
+        return text_of(self.content)
+
     def as_openai(self) -> dict[str, Any]:
         """Serialize to the OpenAI Chat Completions wire format."""
         msg: dict[str, Any] = {"role": self.role}
         if self.content is not None:
-            msg["content"] = self.content
+            msg["content"] = _content_to_openai(self.content)
         if self.reasoning_content is not None and self.role == "assistant":
             msg["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
@@ -70,12 +79,43 @@ class ChatMessage:
         return msg
 
 
+def _content_to_openai(
+    content: "str | list[ContentBlock]",
+) -> "str | list[dict[str, Any]]":
+    """Serialize a message's content to the OpenAI Chat Completions wire format."""
+    from .content import ImageBlock  # avoid cycle at module import
+
+    if isinstance(content, str):
+        return content
+    parts: list[dict[str, Any]] = []
+    for block in content:
+        if isinstance(block, TextBlock):
+            parts.append({"type": "text", "text": block.text})
+        elif isinstance(block, ImageBlock):
+            if block.url is not None:
+                image_url: dict[str, Any] = {"url": block.url}
+            else:
+                image_url = {"url": f"data:{block.mime_type};base64,{block.data}"}
+            if block.detail is not None:
+                image_url["detail"] = block.detail
+            parts.append({"type": "image_url", "image_url": image_url})
+        else:  # pragma: no cover - exhaustiveness guard
+            raise TypeError(f"Unsupported content block: {block!r}")
+    return parts
+
+
 @dataclass
 class Usage:
     """Token usage for one or more model calls."""
 
     input_tokens: int = 0
     output_tokens: int = 0
+    # Provider-reported cache statistics (Anthropic returns
+    # ``cache_creation_input_tokens`` and ``cache_read_input_tokens``; OpenAI
+    # surfaces ``cached_tokens``). The exact accounting differs per vendor but
+    # the meaning is the same: input tokens served from cache.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -84,6 +124,8 @@ class Usage:
     def add(self, other: Usage) -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.cache_write_tokens += other.cache_write_tokens
 
 
 @dataclass
@@ -114,8 +156,22 @@ def system(text: str) -> ChatMessage:
     return ChatMessage(role="system", content=text)
 
 
-def user(text: str) -> ChatMessage:
-    return ChatMessage(role="user", content=text)
+def user(
+    content: "str | ContentBlock | list[ContentBlock]",
+) -> ChatMessage:
+    """Build a user message from a string, a single block, or a block list."""
+    if isinstance(content, str):
+        return ChatMessage(role="user", content=content)
+    if isinstance(content, (TextBlock,)) or _is_image_block(content):
+        return ChatMessage(role="user", content=[content])  # type: ignore[list-item]
+    return ChatMessage(role="user", content=list(content))
+
+
+def _is_image_block(value: Any) -> bool:
+    # Late import to avoid a hard cycle; ImageBlock lives in content.py.
+    from .content import ImageBlock
+
+    return isinstance(value, ImageBlock)
 
 
 def assistant(text: str) -> ChatMessage:

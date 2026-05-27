@@ -21,8 +21,8 @@ def test_message_translation_extracts_system() -> None:
         ChatMessage(role="user", content="thanks"),
     ]
     system, out = _to_anthropic_messages(msgs)
-    assert system == "be terse"
-    assert out[0] == {"role": "user", "content": "hi"}
+    assert system == [{"type": "text", "text": "be terse"}]
+    assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
     # Assistant message becomes a content list with a tool_use block.
     assert out[1]["role"] == "assistant"
     blocks = out[1]["content"]

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lovia</title>
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="rule"></div>
+      <h1>lovia</h1>
+      <div class="meta">
+        <span id="agent-label" class="agent-label">—</span>
+        <button id="reset" class="ghost" type="button" title="New conversation">
+          new
+        </button>
+      </div>
+      <div class="rule"></div>
+    </header>
+
+    <main id="transcript" class="transcript" aria-live="polite"></main>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <label class="vh" for="prompt">message</label>
+      <textarea
+        id="prompt"
+        name="prompt"
+        rows="1"
+        placeholder="ask anything…"
+        required
+      ></textarea>
+      <button id="send" class="primary" type="submit">send →</button>
+    </form>
+
+    <template id="tmpl-turn">
+      <article class="turn">
+        <header class="turn-head">
+          <span class="role"></span>
+        </header>
+        <div class="body"></div>
+      </article>
+    </template>
+
+    <template id="tmpl-tool">
+      <details class="tool">
+        <summary>
+          <span class="bullet">▸</span>
+          <span class="tool-name"></span>
+          <span class="tool-args"></span>
+        </summary>
+        <pre class="tool-result"></pre>
+      </details>
+    </template>
+
+    <template id="tmpl-approval">
+      <div class="approval">
+        <div class="approval-head">
+          <span class="dot"></span>
+          <span class="label">awaiting your decision</span>
+        </div>
+        <div class="approval-body">
+          <code class="approval-name"></code>
+          <pre class="approval-args"></pre>
+        </div>
+        <div class="approval-actions">
+          <button type="button" class="ghost approve">approve</button>
+          <button type="button" class="ghost decline">decline</button>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="/static/chat.js"></script>
+  </body>
+</html>

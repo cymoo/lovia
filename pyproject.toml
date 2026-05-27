@@ -30,11 +30,18 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 dotenv = ["python-dotenv>=1.0.0"]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sse-starlette>=2.1",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    "fastapi>=0.110",
+    "httpx>=0.27",
 ]
 
 [project.urls]

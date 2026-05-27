@@ -28,7 +28,11 @@ writer = Agent(
         "Return both versions."
     ),
     model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
-    tools=[translator.as_tool(name="translate_to_french", description="Translate to French.")],
+    tools=[
+        translator.as_tool(
+            name="translate_to_french", description="Translate to French."
+        )
+    ],
 )
 
 

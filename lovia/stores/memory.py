@@ -1,8 +1,7 @@
-"""In-memory implementations of :class:`Session` and :class:`MemoryStore`.
+"""In-memory implementation of :class:`Session`.
 
-These backends keep everything in process; perfect for tests, CLIs, or
-single-process applications. For anything else, persist to SQLite or a
-custom backend.
+Keeps transcripts in process; perfect for tests, CLIs, or single-process
+applications. For anything else, persist to SQLite or a custom backend.
 """
 
 from __future__ import annotations
@@ -31,27 +30,3 @@ class InMemorySession:
     async def clear(self, session_id: str) -> None:
         async with self._lock:
             self._data.pop(session_id, None)
-
-
-class InMemoryMemoryStore:
-    """A :class:`MemoryStore` backed by a dict."""
-
-    def __init__(self) -> None:
-        self._data: dict[str, str] = {}
-        self._lock = asyncio.Lock()
-
-    async def get(self, key: str) -> str | None:
-        async with self._lock:
-            return self._data.get(key)
-
-    async def set(self, key: str, value: str) -> None:
-        async with self._lock:
-            self._data[key] = value
-
-    async def delete(self, key: str) -> None:
-        async with self._lock:
-            self._data.pop(key, None)
-
-    async def list(self, prefix: str = "") -> list[tuple[str, str]]:
-        async with self._lock:
-            return [(k, v) for k, v in self._data.items() if k.startswith(prefix)]

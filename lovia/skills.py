@@ -54,7 +54,9 @@ class SkillCatalog:
             skills.append(
                 Skill(
                     name=meta.get("name", entry.name),
-                    description=meta.get("description", body.splitlines()[0] if body else ""),
+                    description=meta.get(
+                        "description", body.splitlines()[0] if body else ""
+                    ),
                     content=raw,
                 )
             )
@@ -77,6 +79,7 @@ class SkillCatalog:
 
     def tools(self) -> list[Tool]:
         """Return the tools that expose this catalog to the model."""
+
         # Bound here so the closure captures the catalog instance.
         async def load_skill(name: str) -> str:
             skill = self.get(name)

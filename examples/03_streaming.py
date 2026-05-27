@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from lovia import Agent, Runner, events
-
 from dotenv import load_dotenv
+
+from lovia import Agent, Runner, events
 
 load_dotenv()
 
@@ -17,11 +17,14 @@ async def main() -> None:
         instructions="You write short, vivid stories.",
         model="deepseek-v4-pro",
     )
-    async for ev in Runner.run_stream(agent, "Tell me a 4-sentence story about a fox."):
+    # ``run_streamed`` returns a ``RunHandle`` that is both async-iterable
+    # (yields events) and awaitable (resolves to the final ``RunResult``).
+    handle = Runner.run_streamed(agent, "Tell me a 4-sentence story about a fox.")
+    async for ev in handle:
         if isinstance(ev, events.TextDelta):
             print(ev.delta, end="", flush=True)
-        elif isinstance(ev, events.RunCompleted):
-            print(f"\n\n[done, turns={ev.result.turns}]")
+    result = await handle.result()
+    print(f"\n\n[done, turns={result.turns}, tokens={result.usage.output_tokens}]")
 
 
 if __name__ == "__main__":

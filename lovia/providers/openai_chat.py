@@ -50,7 +50,9 @@ class OpenAIChatProvider:
         supports_json_schema: bool | None = None,
     ) -> None:
         self.model = model
-        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
+        self.base_url = (
+            base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
+        ).rstrip("/")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
@@ -67,6 +69,7 @@ class OpenAIChatProvider:
         if self._supports_json_schema is not None:
             return self._supports_json_schema
         from urllib.parse import urlparse
+
         return urlparse(self.base_url).hostname == "api.openai.com"
 
     async def aclose(self) -> None:
@@ -122,7 +125,9 @@ class OpenAIChatProvider:
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AssistantMessage:
-        payload = self._build_payload(messages, tools, response_format, settings, stream=False)
+        payload = self._build_payload(
+            messages, tools, response_format, settings, stream=False
+        )
         try:
             response = await self._client.post(
                 f"{self.base_url}/chat/completions",
@@ -147,7 +152,9 @@ class OpenAIChatProvider:
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        payload = self._build_payload(messages, tools, response_format, settings, stream=True)
+        payload = self._build_payload(
+            messages, tools, response_format, settings, stream=True
+        )
 
         # Incremental state assembled while we forward deltas to the caller.
         text_buf: list[str] = []
@@ -188,16 +195,18 @@ class OpenAIChatProvider:
                 choice = choices[0]
                 delta = choice.get("delta") or {}
 
-                if (text := delta.get("content")):
+                if text := delta.get("content"):
                     text_buf.append(text)
                     yield StreamChunk(text_delta=text)
 
-                if (reasoning := delta.get("reasoning_content")):
+                if reasoning := delta.get("reasoning_content"):
                     reasoning_buf.append(reasoning)
 
                 for tc in delta.get("tool_calls") or []:
                     idx = tc.get("index", 0)
-                    slot = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                    slot = tool_calls.setdefault(
+                        idx, {"id": "", "name": "", "arguments": ""}
+                    )
                     if tc.get("id"):
                         slot["id"] = tc["id"]
                     fn = tc.get("function") or {}
@@ -240,7 +249,11 @@ def _parse_completion(data: dict[str, Any]) -> AssistantMessage:
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function") or {}
         tool_calls.append(
-            ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=fn.get("arguments", ""))
+            ToolCall(
+                id=tc.get("id", ""),
+                name=fn.get("name", ""),
+                arguments=fn.get("arguments", ""),
+            )
         )
     usage = Usage(
         input_tokens=(data.get("usage") or {}).get("prompt_tokens", 0),

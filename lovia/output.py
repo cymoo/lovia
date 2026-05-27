@@ -37,7 +37,9 @@ class OutputSpec:
     schema: dict[str, Any]
 
 
-def build_output_spec(output_type: type, supports_response_format: bool) -> OutputSpec | None:
+def build_output_spec(
+    output_type: type, supports_response_format: bool
+) -> OutputSpec | None:
     """Return an :class:`OutputSpec` or ``None`` for plain text output."""
     if output_type is str:
         return None

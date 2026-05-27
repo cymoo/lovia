@@ -26,7 +26,6 @@ from __future__ import annotations
 from . import events
 from .agent import Agent
 from .exceptions import (
-    ApprovalDenied,
     LoviaError,
     MaxTurnsExceeded,
     OutputValidationError,
@@ -34,31 +33,38 @@ from .exceptions import (
     ToolError,
     UserError,
 )
-from .handoff import Handoff
+from .handoff import Handoff, agent_as_tool, drop_stale_tool_calls
 from .hooks import AgentHooks
-from .messages import AssistantMessage, ChatMessage, ToolCall, Usage, assistant, system, user
+from .messages import (
+    AssistantMessage,
+    ChatMessage,
+    ToolCall,
+    Usage,
+    assistant,
+    system,
+    user,
+)
 from .providers import ModelSettings, OpenAIChatProvider, Provider, provider_from_string
-from .runner import RunContext, Runner, RunResult
-from .session import MemoryStore, Session
+from .runner import RunContext, RunHandle, Runner, RunResult
+from .session import Session
 from .skills import Skill, SkillCatalog
 from .tools import Tool, tool
 
 __all__ = [
     "Agent",
     "AgentHooks",
-    "ApprovalDenied",
     "AssistantMessage",
     "ChatMessage",
     "Handoff",
     "LoviaError",
     "MaxTurnsExceeded",
-    "MemoryStore",
     "ModelSettings",
     "OpenAIChatProvider",
     "OutputValidationError",
     "Provider",
     "ProviderError",
     "RunContext",
+    "RunHandle",
     "RunResult",
     "Runner",
     "Session",
@@ -69,7 +75,9 @@ __all__ = [
     "ToolError",
     "Usage",
     "UserError",
+    "agent_as_tool",
     "assistant",
+    "drop_stale_tool_calls",
     "events",
     "provider_from_string",
     "system",

@@ -117,7 +117,7 @@ def user(
         return ChatMessage(role="user", content=content)
     if isinstance(content, (TextBlock,)) or _is_image_block(content):
         return ChatMessage(role="user", content=[content])  # type: ignore[list-item]
-    return ChatMessage(role="user", content=list(content))
+    return ChatMessage(role="user", content=list(content))  # type: ignore[arg-type]
 
 
 def _is_image_block(value: Any) -> bool:

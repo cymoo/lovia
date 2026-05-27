@@ -104,7 +104,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
         if handoff.on_handoff is not None:
             result = handoff.on_handoff(args, ctx)
             if hasattr(result, "__await__"):
-                await result  # type: ignore[func-returns-value]
+                await result  # type: ignore[misc]
         return _HandoffSignal(target=target, handoff=handoff, reason=args.get("reason"))
 
     parameters = {

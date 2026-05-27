@@ -105,9 +105,6 @@ class RunResult:
         """ChatMessage view derived from :attr:`new_items`.
 
         Useful for inspecting the transcript in OpenAI-Chat wire format.
-        Items that have no Chat analogue (``HandoffOutputItem``,
-        ``ServerToolCallItem``) are skipped — round-trip back through Items
-        is lossy in that direction.
         """
         from .items import items_to_chat_messages
 
@@ -946,13 +943,11 @@ class _RunLoop:
         # System prompts are agent-owned and re-rendered each run, so any
         # system :class:`InputMessageItem` is excluded from the persisted
         # history.
-        from .items import InputMessageItem
-
         assert self.session is not None and self.session_id is not None
         body = [
             it
             for it in items_log
-            if not (isinstance(it, InputMessageItem) and it.role == "system")
+            if not (isinstance(it, _InputMessageItem) and it.role == "system")
         ]
         await self.session.clear(self.session_id)
         await self.session.append(self.session_id, body)

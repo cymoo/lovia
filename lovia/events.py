@@ -66,8 +66,8 @@ class MessageCompleted(Event):
 
     ``items`` is the slice of new :class:`Item` values produced by that
     turn — typically a :class:`ReasoningItem`, a :class:`MessageOutputItem`,
-    and any :class:`ToolCallItem` / :class:`HandoffCallItem` the model
-    requested. Subscribers can pattern-match on the concrete item types.
+    and any :class:`ToolCallItem`\\ s the model requested. Subscribers can
+    pattern-match on the concrete item types.
     """
 
     items: list[Item]

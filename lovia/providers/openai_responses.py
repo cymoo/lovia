@@ -9,10 +9,8 @@ adapter brings two big wins:
   (with their opaque ``encrypted_content`` blob and stable id) are
   forwarded verbatim, which is required for multi-turn agentic flows
   on o-series models.
-* **Server-side tools.** ``web_search``, ``file_search`` and
-  ``code_interpreter`` calls executed inside the model show up as
-  :class:`ServerToolCallItem` entries in the transcript so the runner
-  can persist and replay them.
+* **Function tools.** Function-call items are streamed as
+  :class:`ToolCallDelta`, just like the Chat Completions adapter.
 
 The adapter speaks raw HTTP via ``httpx`` (no ``openai`` SDK).
 
@@ -20,11 +18,10 @@ Notes / limitations:
 
 * This is a *streaming-only* adapter; non-streaming clients can buffer
   the deltas.
-* Server-tool deltas are not emitted as :class:`ItemDelta` (the type
-  family deliberately models chat-style deltas only). Server tool calls
-  are surfaced via the assembled :class:`AssistantMessage` once the
-  ``response.output_item.done`` event arrives — they appear in
-  ``new_items`` after the turn completes.
+* Server-side tools (``web_search``, ``file_search``,
+  ``code_interpreter``) are not surfaced as distinct items yet — they
+  are best invoked through the Responses-native flow once the type
+  family grows a dedicated server-tool delta.
 * ``previous_response_id`` (for stateful conversations stored on
   OpenAI's side) can be passed through :attr:`ModelSettings.extra`.
 """
@@ -47,7 +44,6 @@ from ..items import (
     MessageOutputItem,
     ReasoningDelta,
     ReasoningItem,
-    ServerToolCallItem,
     TextDelta,
     ToolCallDelta,
     ToolCallItem,
@@ -92,11 +88,7 @@ def _content_to_input_blocks(content: str | list[Any]) -> list[dict[str, Any]]:
 
 
 def _items_to_responses_input(items: list[Item]) -> list[dict[str, Any]]:
-    """Translate lovia Items to the Responses API ``input`` array.
-
-    Skips :class:`HandoffOutputItem` (purely internal marker, has no
-    wire representation on any backend).
-    """
+    """Translate lovia Items to the Responses API ``input`` array."""
     out: list[dict[str, Any]] = []
     for it in items:
         if isinstance(it, InputMessageItem):
@@ -144,14 +136,6 @@ def _items_to_responses_input(items: list[Item]) -> list[dict[str, Any]]:
                     "output": it.output,
                 }
             )
-        elif isinstance(it, ServerToolCallItem):
-            # Round-trip the raw payload exactly as the provider sent it.
-            payload = dict(it.data)
-            payload.setdefault("type", it.name)
-            if it.id:
-                payload.setdefault("id", it.id)
-            out.append(payload)
-        # HandoffCallItem / HandoffOutputItem are runner-internal markers.
     return out
 
 

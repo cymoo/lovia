@@ -19,7 +19,7 @@ Streaming providers don't emit whole Items per chunk — they emit
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Literal, Union
 
 from .content import ContentBlock, ImageBlock, TextBlock
@@ -105,65 +105,20 @@ class ToolCallOutputItem:
     type: Literal["tool_call_output"] = "tool_call_output"
 
 
-@dataclass
-class HandoffCallItem:
-    """A tool call that the runner recognised as a handoff trigger.
-
-    Carries the same fields as :class:`ToolCallItem` plus the resolved
-    target agent name so consumers don't have to re-derive it.
-    """
-
-    call_id: str
-    name: str
-    arguments: str
-    target_agent: str
-    type: Literal["handoff_call"] = "handoff_call"
-
-
-@dataclass
-class HandoffOutputItem:
-    """Marker emitted after a handoff completes.
-
-    ``source_agent`` is the agent that initiated the handoff;
-    ``target_agent`` is the one taking over. ``message`` is an optional
-    human-readable note (rendered as the tool result the source agent
-    sees).
-    """
-
-    call_id: str
-    source_agent: str
-    target_agent: str
-    message: str = ""
-    type: Literal["handoff_output"] = "handoff_output"
-
-
-@dataclass
-class ServerToolCallItem:
-    """A provider-side built-in tool invocation (web_search, file_search, …).
-
-    We don't try to normalise these across providers — the shape is too
-    vendor-specific. ``data`` holds the provider's raw payload so it can
-    be round-tripped back to the same provider next turn.
-    """
-
-    provider: str
-    name: str
-    data: dict[str, Any] = field(default_factory=dict)
-    id: str | None = None
-    type: Literal["server_tool_call"] = "server_tool_call"
-
-
 Item = Union[
     InputMessageItem,
     MessageOutputItem,
     ReasoningItem,
     ToolCallItem,
     ToolCallOutputItem,
-    HandoffCallItem,
-    HandoffOutputItem,
-    ServerToolCallItem,
 ]
-"""Discriminated union of every item kind that can appear in a transcript."""
+"""Discriminated union of every item kind that can appear in a transcript.
+
+Handoffs reuse :class:`ToolCallItem` / :class:`ToolCallOutputItem`; we
+add specialised types only when a provider exposes a structurally
+distinct concept that we cannot lossily flatten (e.g. server-side
+tools on OpenAI Responses — coming in a future release).
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -235,9 +190,6 @@ _ITEM_TYPES: dict[str, type[Any]] = {
     "reasoning": ReasoningItem,
     "tool_call": ToolCallItem,
     "tool_call_output": ToolCallOutputItem,
-    "handoff_call": HandoffCallItem,
-    "handoff_output": HandoffOutputItem,
-    "server_tool_call": ServerToolCallItem,
 }
 
 
@@ -398,8 +350,6 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
 
     Groups consecutive assistant-side items (reasoning + message + tool calls)
     into one :class:`ChatMessage`, matching how the runner appends them.
-    Server tool calls and handoff items are skipped — they don't have a
-    ChatMessage analogue in the v1 wire format. (9c/9d will revisit.)
     """
     out: list[ChatMessage] = []
     # Buffer for the in-progress assistant message.
@@ -431,7 +381,7 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
             pending_reasoning = it.content
         elif isinstance(it, MessageOutputItem):
             pending_content = it.content
-        elif isinstance(it, (ToolCallItem, HandoffCallItem)):
+        elif isinstance(it, ToolCallItem):
             pending_calls.append(
                 ToolCall(id=it.call_id, name=it.name, arguments=it.arguments)
             )
@@ -442,8 +392,5 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
                     role="tool", content=it.output, tool_call_id=it.call_id
                 )
             )
-        elif isinstance(it, (HandoffOutputItem, ServerToolCallItem)):
-            # No ChatMessage analogue; surfaced via events / RunResult later.
-            continue
     flush_assistant()
     return out

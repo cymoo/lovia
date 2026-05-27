@@ -6,14 +6,11 @@ import pytest
 
 from lovia import (
     FinishDelta,
-    HandoffCallItem,
-    HandoffOutputItem,
     ImageBlock,
     InputMessageItem,
     MessageOutputItem,
     ReasoningDelta,
     ReasoningItem,
-    ServerToolCallItem,
     TextBlock,
     TextDelta,
     ToolCallDelta,
@@ -42,18 +39,6 @@ from lovia import (
         ToolCallItem(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
         ToolCallOutputItem(call_id="c1", output="3", raw=3),
         ToolCallOutputItem(call_id="c2", output="boom", is_error=True),
-        HandoffCallItem(
-            call_id="h1", name="to_specialist", arguments="{}", target_agent="Specialist"
-        ),
-        HandoffOutputItem(
-            call_id="h1",
-            source_agent="Triage",
-            target_agent="Specialist",
-            message="handed off",
-        ),
-        ServerToolCallItem(
-            provider="openai", name="web_search", data={"query": "lovia"}, id="ws_1"
-        ),
     ],
 )
 def test_item_roundtrip(item: object) -> None:

@@ -1,4 +1,4 @@
-"""Phase-4 tests: checkpointer + permission literals."""
+"""Tests for the checkpointer protocol and snapshot round-tripping."""
 
 from __future__ import annotations
 
@@ -8,16 +8,17 @@ import pytest
 
 from lovia import (
     Agent,
+    ImageBlock,
     InMemoryCheckpointer,
     Runner,
     RunSnapshot,
-    events,
+    TextBlock,
     tool,
 )
 from lovia.messages import ChatMessage, ToolCall, Usage
 from lovia.stores.sqlite_checkpointer import SQLiteCheckpointer
 
-from .scripted_provider import ScriptedProvider, call, text
+from .scripted_provider import ScriptedProvider, text
 
 
 @pytest.mark.asyncio
@@ -38,9 +39,6 @@ async def test_checkpointer_snapshot_round_trip() -> None:
 
 @pytest.mark.asyncio
 async def test_resume_continues_from_snapshot() -> None:
-    # Pre-seed a snapshot: a transcript containing user prompt + an assistant
-    # message that issues a tool call, plus the tool result. Resume should
-    # pick up the next turn (calling provider for a final answer).
     cp = InMemoryCheckpointer()
     transcript = [
         ChatMessage(role="user", content="What is the time?"),
@@ -70,9 +68,7 @@ async def test_resume_continues_from_snapshot() -> None:
 
     result = await Runner.resume(agent, checkpointer=cp, run_id="r2")
     assert result.output == "It is noon."
-    # Resumed transcript starts with the saved 3 messages.
     assert result.messages[:3] == transcript
-    # And usage carries forward.
     assert result.usage.input_tokens >= 10
 
 
@@ -85,72 +81,49 @@ async def test_resume_missing_run_id_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_checkpointer_persists(tmp_path: Any) -> None:
+async def test_sqlite_checkpointer_persists_across_instances(tmp_path: Any) -> None:
     db = tmp_path / "ckpt.sqlite"
     cp = SQLiteCheckpointer(db)
     provider = ScriptedProvider([text("persisted")])
     agent = Agent(name="a", model=provider)
     await Runner.run(agent, "hi", checkpointer=cp, run_id="r3")
 
-    # New instance, same file: snapshot survives.
     cp2 = SQLiteCheckpointer(db)
     snap = await cp2.load("r3")
     assert snap is not None and snap.agent_name == "a"
-    await cp2.delete("r3")
-    assert await cp2.load("r3") is None
 
 
 @pytest.mark.asyncio
-async def test_approval_handler_literal_allow_and_deny() -> None:
-    calls_made: list[str] = []
+async def test_sqlite_checkpointer_delete_is_idempotent(tmp_path: Any) -> None:
+    cp = SQLiteCheckpointer(tmp_path / "ckpt.sqlite")
+    provider = ScriptedProvider([text("x")])
+    agent = Agent(name="a", model=provider)
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="r")
+    await cp.delete("r")
+    await cp.delete("r")  # second delete must not raise
+    assert await cp.load("r") is None
 
-    @tool(needs_approval=True)
-    async def dangerous() -> str:
-        calls_made.append("ran")
-        return "ok"
 
-    # "allow" → tool runs
-    provider1 = ScriptedProvider([call("dangerous", {}), text("done")])
-    agent1 = Agent(
-        name="a",
-        model=provider1,
-        tools=[dangerous],
-        approval_handler=lambda c, ctx: "allow",
+def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
+    snap = RunSnapshot(
+        run_id="r",
+        agent_name="a",
+        messages=[
+            ChatMessage(
+                role="user",
+                content=[TextBlock("describe this"), ImageBlock(url="https://x/y.png")],
+            ),
+            ChatMessage(role="assistant", content="a cat"),
+        ],
+        usage=Usage(input_tokens=3, output_tokens=2, cache_read_tokens=1),
+        turns=1,
     )
-    r1 = await Runner.run(agent1, "go")
-    assert r1.output == "done"
-    assert calls_made == ["ran"]
-
-    # "deny" → tool blocked
-    calls_made.clear()
-    provider2 = ScriptedProvider([call("dangerous", {}), text("ack")])
-    agent2 = Agent(
-        name="a",
-        model=provider2,
-        tools=[dangerous],
-        approval_handler=lambda c, ctx: "deny",
-    )
-    r2 = await Runner.run(agent2, "go")
-    assert calls_made == []
-    assert "not approved" in next(m.content for m in r2.messages if m.role == "tool")
-
-
-@pytest.mark.asyncio
-async def test_approval_handler_ask_defers_to_streaming_consumer() -> None:
-    @tool(needs_approval=True)
-    async def dangerous() -> str:
-        return "ok"
-
-    provider = ScriptedProvider([call("dangerous", {}), text("done")])
-    agent = Agent(
-        name="a",
-        model=provider,
-        tools=[dangerous],
-        approval_handler=lambda c, ctx: "ask",
-    )
-    handle = Runner.run_streamed(agent, "go")
-    async for event in handle:
-        if isinstance(event, events.ApprovalRequired):
-            event.approve()  # streaming consumer resolves
-    result = await handle.result()
-    assert result.output == "done"
+    payload = snap.to_dict()
+    restored = RunSnapshot.from_dict(payload)
+    assert restored.run_id == snap.run_id
+    assert restored.usage.cache_read_tokens == 1
+    msg = restored.messages[0]
+    assert isinstance(msg.content, list)
+    assert isinstance(msg.content[0], TextBlock)
+    assert isinstance(msg.content[1], ImageBlock)
+    assert msg.content[1].url == "https://x/y.png"

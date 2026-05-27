@@ -18,7 +18,7 @@ load_dotenv()
 translator = Agent(
     name="Translator",
     instructions="Translate the user's text to French. Reply with the translation only.",
-    model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+    model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
 )
 
 writer = Agent(
@@ -27,7 +27,7 @@ writer = Agent(
         "Draft a short tweet in English, then use the translate tool to render it in French. "
         "Return both versions."
     ),
-    model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+    model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
     tools=[
         translator.as_tool(
             name="translate_to_french", description="Translate to French."

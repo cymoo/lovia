@@ -14,6 +14,10 @@ const state = {
   agent: null,
   agents: [],
   streaming: false,
+  // streaming targets — explicitly tracked so DOM lookups never go stale
+  bubble: null,
+  body: null,
+  toolNodes: new Map(), // id → details element
 };
 
 // ---------------------------------------------------------------- init -
@@ -23,7 +27,7 @@ async function loadAgents() {
     const res = await fetch("/api/agents");
     state.agents = await res.json();
     state.agent = state.agents[0]?.name ?? null;
-    agentLabel.textContent = state.agent ? `agent · ${state.agent}` : "no agent";
+    agentLabel.textContent = state.agent ?? "no agent";
   } catch {
     agentLabel.textContent = "offline";
   }
@@ -34,14 +38,23 @@ resetBtn.addEventListener("click", async () => {
     try { await fetch(`/api/sessions/${state.sessionId}`, { method: "DELETE" }); } catch {}
   }
   state.sessionId = null;
-  transcript.innerHTML = "";
+  state.bubble = null;
+  state.body = null;
+  state.toolNodes.clear();
+  transcript.innerHTML = `
+    <div class="empty-state" id="empty-state">
+      <h1>How can I help you today?</h1>
+      <p>Ask anything — I'll think it through and respond.</p>
+    </div>`;
   promptEl.focus();
 });
 
-promptEl.addEventListener("input", () => {
+const autoresize = () => {
   promptEl.style.height = "auto";
-  promptEl.style.height = Math.min(promptEl.scrollHeight, window.innerHeight * 0.3) + "px";
-});
+  promptEl.style.height =
+    Math.min(promptEl.scrollHeight, window.innerHeight * 0.3) + "px";
+};
+promptEl.addEventListener("input", autoresize);
 promptEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -55,40 +68,81 @@ composer.addEventListener("submit", async (e) => {
   const message = promptEl.value.trim();
   if (!message) return;
   promptEl.value = "";
-  promptEl.style.height = "auto";
-  appendTurn("user", message);
+  autoresize();
+  $("#empty-state")?.remove();
+  appendUserTurn(message);
   await runStream(message);
 });
 
 // --------------------------------------------------- turn-level helpers -
 
-function appendTurn(role, text = "") {
-  const tmpl = $("#tmpl-turn");
-  const node = tmpl.content.firstElementChild.cloneNode(true);
+function makeTurn(role) {
+  const node = $("#tmpl-turn").content.firstElementChild.cloneNode(true);
   node.classList.add(role);
-  node.querySelector(".role").textContent = role;
-  node.querySelector(".body").textContent = text;
-  transcript.appendChild(node);
-  node.scrollIntoView({ behavior: "smooth", block: "end" });
+  node.querySelector(".role").textContent =
+    role === "user" ? "You" : state.agent ?? "Assistant";
   return node;
 }
 
-function appendTool(name, args) {
-  const tmpl = $("#tmpl-tool");
-  const node = tmpl.content.firstElementChild.cloneNode(true);
-  node.querySelector(".tool-name").textContent = name;
-  node.querySelector(".tool-args").textContent = ` (${truncate(args, 60)})`;
+function appendUserTurn(text) {
+  const node = makeTurn("user");
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = text;
+  node.querySelector(".bubble").appendChild(body);
   transcript.appendChild(node);
+  scrollDown();
+}
+
+function startAssistantTurn() {
+  const node = makeTurn("assistant");
+  node.classList.add("streaming");
+  transcript.appendChild(node);
+  state.bubble = node.querySelector(".bubble");
+  state.body = null; // created lazily on first text_delta
+  state.toolNodes.clear();
+  scrollDown();
   return node;
+}
+
+function ensureBody() {
+  // Called by text_delta — if a MessageCompleted has cleared `body`,
+  // create a fresh body div inside the same bubble for the next message.
+  if (!state.body && state.bubble) {
+    const body = document.createElement("div");
+    body.className = "body";
+    state.bubble.appendChild(body);
+    state.body = body;
+  }
+  return state.body;
+}
+
+function appendTool(call) {
+  if (!state.bubble) return;
+  const node = $("#tmpl-tool").content.firstElementChild.cloneNode(true);
+  node.querySelector(".tool-name").textContent = call.name;
+  node.querySelector(".tool-args").textContent = formatArgs(call.arguments);
+  state.bubble.appendChild(node);
+  state.toolNodes.set(call.id, node);
+  // Tool nodes act as delimiters too — start a new body for any text after.
+  state.body = null;
+  scrollDown();
+}
+
+function updateToolResult(id, result, isError) {
+  const node = state.toolNodes.get(id);
+  if (!node) return;
+  node.querySelector(".tool-result").textContent = String(result);
+  if (isError) node.classList.add("error");
 }
 
 function appendApproval(call) {
-  const tmpl = $("#tmpl-approval");
-  const node = tmpl.content.firstElementChild.cloneNode(true);
+  if (!state.bubble) return;
+  const node = $("#tmpl-approval").content.firstElementChild.cloneNode(true);
   node.querySelector(".approval-name").textContent = call.name;
-  node.querySelector(".approval-args").textContent = call.arguments;
+  node.querySelector(".approval-args").textContent = formatArgs(call.arguments);
   const resolve = async (decision) => {
-    node.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    node.classList.add("resolved");
     try {
       await fetch("/api/chat/approve", {
         method: "POST",
@@ -102,17 +156,34 @@ function appendApproval(call) {
     } catch (err) {
       console.error(err);
     }
-    node.querySelector(".label").textContent = `decision · ${decision}`;
   };
   node.querySelector(".approve").addEventListener("click", () => resolve("approve"));
   node.querySelector(".decline").addEventListener("click", () => resolve("deny"));
-  transcript.appendChild(node);
-  return node;
+  state.bubble.appendChild(node);
+  state.body = null;
+  scrollDown();
 }
 
-function truncate(s, n) {
-  if (!s) return "";
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+function formatArgs(args) {
+  if (!args) return "()";
+  try {
+    const obj = JSON.parse(args);
+    const entries = Object.entries(obj);
+    if (entries.length === 0) return "()";
+    return (
+      "(" +
+      entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ") +
+      ")"
+    );
+  } catch {
+    return `(${args})`;
+  }
+}
+
+function scrollDown() {
+  requestAnimationFrame(() => {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  });
 }
 
 // ----------------------------------------------------------- streaming -
@@ -120,17 +191,15 @@ function truncate(s, n) {
 async function runStream(message) {
   state.streaming = true;
   sendBtn.disabled = true;
-
-  const assistant = appendTurn("assistant", "");
-  assistant.classList.add("streaming");
-  const body = assistant.querySelector(".body");
-
-  let buffer = "";
+  const turn = startAssistantTurn();
 
   try {
     const res = await fetch("/api/chat/stream", {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "text/event-stream" },
+      headers: {
+        "content-type": "application/json",
+        accept: "text/event-stream",
+      },
       body: JSON.stringify({
         message,
         agent: state.agent,
@@ -138,7 +207,7 @@ async function runStream(message) {
       }),
     });
     if (!res.ok || !res.body) {
-      body.textContent = `error: ${res.status}`;
+      ensureBody().textContent = `Error: ${res.status} ${res.statusText}`;
       return;
     }
 
@@ -149,22 +218,20 @@ async function runStream(message) {
       const { value, done } = await reader.read();
       if (done) break;
       raw += dec.decode(value, { stream: true });
-      // SSE: events separated by blank line
+      // Spec: events separated by blank line. Servers may use \r\n or \n.
+      raw = raw.replace(/\r\n/g, "\n");
       let idx;
       while ((idx = raw.indexOf("\n\n")) >= 0) {
         const chunk = raw.slice(0, idx);
         raw = raw.slice(idx + 2);
         const ev = parseSSE(chunk);
-        if (!ev) continue;
-        handleEvent(ev, { body, buffer });
-        // buffer is updated inside handleEvent through closure-by-ref; rebind
-        buffer = body.textContent;
+        if (ev) handleEvent(ev);
       }
     }
   } catch (err) {
-    body.textContent += `\n[error] ${err.message ?? err}`;
+    ensureBody().textContent += `\n[error] ${err.message ?? err}`;
   } finally {
-    assistant.classList.remove("streaming");
+    turn.classList.remove("streaming");
     state.streaming = false;
     sendBtn.disabled = false;
     promptEl.focus();
@@ -176,8 +243,11 @@ function parseSSE(chunk) {
   let event = "message";
   let data = "";
   for (const line of lines) {
+    if (line.startsWith(":")) continue; // comment / keepalive
     if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) data += line.slice(5).trimStart();
+    else if (line.startsWith("data:")) {
+      data += (data ? "\n" : "") + line.slice(5).replace(/^ /, "");
+    }
   }
   if (!data) return null;
   try {
@@ -188,35 +258,33 @@ function parseSSE(chunk) {
 }
 
 function handleEvent({ event, data }) {
-  const lastAssistant = transcript.querySelector(".turn.assistant.streaming .body");
-
   switch (event) {
     case "session":
       state.sessionId = data.session_id;
       break;
     case "text_delta":
-      if (lastAssistant) lastAssistant.textContent += data.delta;
+      ensureBody().textContent += data.delta;
+      scrollDown();
+      break;
+    case "message_completed":
+      // Next text_delta starts a fresh body inside the same bubble.
+      state.body = null;
       break;
     case "tool_call":
-      appendTool(data.name, data.arguments);
+      appendTool(data);
       break;
-    case "tool_result": {
-      const tools = transcript.querySelectorAll(".tool");
-      const tool = tools[tools.length - 1];
-      if (tool) tool.querySelector(".tool-result").textContent = data.result;
+    case "tool_result":
+      updateToolResult(data.id, data.result, data.is_error);
       break;
-    }
     case "approval_required":
       appendApproval(data);
       break;
     case "error":
-      if (lastAssistant) lastAssistant.textContent += `\n[error] ${data.message}`;
+      ensureBody().textContent += `\n[error] ${data.message}`;
       break;
     case "done":
-      // Final usage could be displayed; transcript already has streamed text.
       break;
   }
-  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
 loadAgents().then(() => promptEl.focus());

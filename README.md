@@ -2,559 +2,316 @@
 
 A lightweight, provider-neutral agent framework for Python.
 
+[简体中文](./README-zh.md)
+
+```python
+from lovia import Agent, Runner
+
+agent = Agent(name="Greeter", instructions="Reply in one short line.", model="gpt-4o-mini")
+result = await Runner.run(agent, "Say hi in three languages.")
+print(result.output)
+```
+
+lovia’s core is a small set of orthogonal pieces — an `Agent` config, a
+`Runner` that drives the loop, a `Provider` Protocol, and an Item-based
+transcript. The provider layer speaks OpenAI Chat Completions, the OpenAI
+Responses API, Anthropic, and anything OpenAI-compatible. Everything else —
+tools, structured output, sessions, handoffs, guardrails, approval, MCP,
+skills, memory, tracing — is opt-in.
+
+- **No DSL, no graph, no implicit globals.** Plain Python with type hints.
+- **Two required deps** in core: `httpx` and `pydantic`.
+- **Async-first** API; synchronous helpers where they pay for themselves.
+
+---
+
+## Install
+
+```bash
+pip install lovia                 # core
+pip install "lovia[mcp]"          # + Model Context Protocol client
+pip install "lovia[web]"          # + FastAPI / SSE + bundled chat UI
+pip install "lovia[dev]"          # + pytest, ruff, mypy
+```
+
+Requires Python 3.10+.
+
+---
+
+## Quickstart
+
+A complete agent with a tool, in one file:
+
 ```python
 import asyncio
 from lovia import Agent, Runner, tool
 
 @tool
-async def get_weather(city: str) -> str:
-    """Return the current weather for a city."""
-    return f"{city}: sunny, 22°C"
+def add(a: int, b: int) -> int:
+    """Add two integers."""
+    return a + b
 
 agent = Agent(
-    name="Assistant",
-    instructions="Use tools when helpful. Answer briefly.",
-    model="openai:gpt-4o-mini",
-    tools=[get_weather],
+    name="Calc",
+    instructions="Use the add tool when the user asks for arithmetic.",
+    model="gpt-4o-mini",
+    tools=[add],
 )
 
-result = asyncio.run(Runner.run(agent, "What's the weather in Lisbon?"))
-print(result.output)
+async def main() -> None:
+    result = await Runner.run(agent, "What is 17 + 25?")
+    print(result.output)
+
+asyncio.run(main())
 ```
 
-## Why
+`Runner.run` returns a `RunResult` with the final `output`, the new transcript
+`new_items`, token `usage`, and `turns`. For streaming, use
+`Runner.stream(agent, ...)` and iterate over events instead.
 
-Most agent frameworks either:
+---
 
-- Tie themselves to one vendor's API (so you cannot swap models without rewriting), or
-- Pile on so many abstractions that simple things stop being simple.
+## Core concepts
 
-**lovia** keeps the good ideas — declarative agents, tool calling, handoffs,
-sessions, skills, MCP — and throws out the rest. Core is under ~2000 lines.
-Hard dependencies are only `httpx` and `pydantic`.
+### Agent
 
-## Features
-
-- 🪶 **Tiny core, no magic.** One `Agent` dataclass, one `Runner`, async only.
-- 🔌 **Provider-neutral.** Built-in adapters for OpenAI Chat Completions,
-  OpenAI Responses (o-series, GPT-5 — reasoning items survive round trips),
-  and Anthropic Messages. Any OpenAI-compatible endpoint (DeepSeek, Ollama,
-  vLLM, Qwen, …) just needs a `base_url`. Pass a **list** of providers for
-  automatic fallback.
-- 🛠 **Tools from anywhere.** `@tool` on a function, pydantic / dataclass /
-  TypedDict / plain hints — all become JSON Schema automatically. Flat
-  policies (`retries`, `timeout`, `result_renderer`) plus a `wrap` escape
-  hatch for the rare custom cases.
-- 🧱 **Structured output.** Pass `output_type=YourModel`; uses native
-  `response_format` when available, falls back to a synthetic tool otherwise.
-  Plug in a custom `OutputRepairStrategy` for non-default retry behaviour.
-- 🖼 **Multimodal.** `TextBlock` / `ImageBlock` content; both OpenAI and
-  Anthropic adapters translate them transparently.
-- 🧠 **Reasoning tokens.** A `ReasoningDelta` event surfaces Anthropic thinking
-  blocks and DeepSeek / OpenAI reasoning models; the persisted `ReasoningItem`
-  keeps the trace alive across turns.
-- 🔁 **Streaming = events.** `run_stream` yields `TextDelta`,
-  `ToolCallStarted`, `ReasoningDelta`, `HandoffOccurred`, `RunCompleted`, … the
-  same events go to hooks for observability.
-- 🛡 **Production-ready safety nets.** `RunBudget` caps tokens / tool calls /
-  wall-clock; `CancelToken` cooperatively cancels; `RetryPolicy` retries
-  transient provider errors with backoff; `Guardrail`s veto inputs/outputs.
-- 💾 **Sessions + checkpoints.** `InMemorySession`/`SQLiteSession` for chat
-  history; `InMemoryCheckpointer`/`SQLiteCheckpointer` for per-turn snapshots
-  with `Runner.resume(...)`. Storage is **Item-based**, so reasoning traces
-  and server-side tool calls round-trip losslessly.
-- 🗣 **Handoffs & agent-as-tool.** Compose multi-agent systems without ceremony.
-- 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
-- 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
-- 🪝 **Hooks.** Subscribe to any `Event` type via `hooks.on(EventType)` —
-  decouples observability from event names.
-- 📡 **Tracing built in.** `ConsoleTracer` / `InMemoryTracer` give you
-  span trees out of the box; the `Tracer` Protocol is two methods, swap
-  in OpenTelemetry / Logfire with a thin adapter.
-- 🖥 **Web layer (optional).** `from lovia.web import serve`: FastAPI + SSE +
-  a bundled chat UI for any agent. Approval gates surface as buttons.
-
-## Install
-
-```bash
-pip install -e .
-# Optional: MCP support
-pip install -e .[mcp]
-```
-
-Requires Python 3.10+.
-
-## Quick tour
-
-### Streaming
+`Agent` is a dataclass — a piece of static configuration:
 
 ```python
-from lovia import Runner, events
-
-# Iterate the event stream as the run executes.
-async for ev in Runner.run_stream(agent, "Tell me a joke"):
-    if isinstance(ev, events.TextDelta):
-        print(ev.delta, end="", flush=True)
-
-# Or use ``run_streamed``, which returns a ``RunHandle`` that is both
-# async-iterable and awaitable — so you can stream events *and* get the
-# final ``RunResult`` from the same call.
-handle = Runner.run_streamed(agent, "Tell me a joke")
-async for ev in handle:
-    if isinstance(ev, events.TextDelta):
-        print(ev.delta, end="", flush=True)
-result = await handle.result()
+Agent(
+    name="Researcher",
+    instructions="...",         # str, or a function(ctx) -> str
+    model="gpt-4o-mini",        # provider:model, or just model (defaults to openai:)
+    tools=[...],                # list[Tool]
+    output_type=MyModel,        # optional pydantic model for structured output
+    handoffs=[...],             # other Agents this one can hand off to
+    input_guardrails=[...],     # validate input before the loop starts
+    output_guardrails=[...],    # validate final output before returning
+    hooks=...,                  # AgentHooks for observability
+    model_settings=ModelSettings(temperature=0.2, ...),
+)
 ```
 
-### Human-in-the-loop approval
+`Agent` is `Generic[TContext]`. Pass a `context=` to `Runner.run` and tools
+that take a typed `RunContext[TContext]` first parameter receive it.
 
-Tools declared with `needs_approval=True` pause the runner and emit an
-`ApprovalRequired` event. Resolve it however you like:
+### Runner
 
-```python
-from lovia import Agent, Runner, tool, events
+`Runner` is a stateless orchestrator. The two entry points:
 
-@tool(needs_approval=True)
-async def send_email(to: str, body: str) -> str: ...
+- `await Runner.run(agent, input, *, context=None, session=None, ...)` —
+  buffered; returns `RunResult`.
+- `Runner.stream(agent, input, ...)` returns a `RunHandle`. Iterate
+  `async for event in handle.events()` to receive structured events
+  (`TextDelta`, `ToolCallStarted`, `MessageCompleted`, …), and `await
+  handle.result()` for the final `RunResult`.
 
-# Option 1: decide while streaming.
-handle = Runner.run_streamed(agent, "email Alice")
-async for ev in handle:
-    if isinstance(ev, events.ApprovalRequired):
-        ev.approve()      # or ev.reject()
+### Tools
 
-# Option 2: a programmatic handler on the agent.
-async def policy(call, ctx):
-    return call.name != "drop_database"
-
-agent = Agent(name="ops", model=..., tools=[send_email], approval_handler=policy)
-
-# Option 3: resolve out-of-band by ToolCall id (e.g. from an HTTP handler).
-handle.approvals.approve(call_id)   # or .reject(call_id)
-```
-
-If nothing resolves the approval, the call is denied by default — runs never
-hang on an absent decision.
-
-### Typed dependencies (a.k.a. `RunContext`)
-
-Pass any object into a run via `context=` and tools receive it through a
-typed handle. The runner detects the handle by **type annotation**, not by
-parameter name:
+Define a tool with the `@tool` decorator. Type annotations become the JSON
+Schema; the docstring becomes the description.
 
 ```python
 from dataclasses import dataclass
-from lovia import Agent, Runner, RunContext, tool
+from lovia import RunContext, tool
 
 @dataclass
 class Deps:
-    db: Database
-    user_id: int
+    db: "Database"
 
 @tool
-async def lookup_orders(ctx: RunContext[Deps], status: str) -> list[str]:
-    # ctx.context is typed as Deps; auto-completion works.
-    return await ctx.context.db.orders(ctx.context.user_id, status=status)
-
-agent = Agent[Deps](name="ops", model="openai:gpt-4o-mini", tools=[lookup_orders])
-await Runner.run(agent, "show pending orders", context=Deps(db=..., user_id=42))
+async def lookup(ctx: RunContext[Deps], user_id: str) -> dict:
+    """Look up a user by id."""
+    return await ctx.context.db.get(user_id)
 ```
 
-Plain tools (no `RunContext` parameter) don't see the context at all — the
-model only ever sees parameters that aren't injected by the runner.
+Tool *policies* are flat fields on `@tool`:
+
+```python
+@tool(
+    needs_approval=True,         # gate behind ApprovalChannel
+    retries=2,                   # retry on tool exceptions
+    timeout=10.0,                # per-call timeout in seconds
+    result_renderer=lambda r: r.summary,  # how the result is shown to the model
+    wrap=my_middleware,          # escape hatch: (next, args, ctx) -> result
+)
+def risky(...): ...
+```
+
+For ad-hoc cases you can also construct `Tool(name=..., parameters=...,
+invoke=...)` directly.
+
+### Items: the transcript
+
+A run produces a stream of typed *items* — the canonical conversation
+record:
+
+- `InputMessageItem` — user / system input.
+- `MessageOutputItem` — assistant text.
+- `ReasoningItem` — model reasoning (OpenAI Responses, etc.).
+- `ToolCallItem` / `ToolCallOutputItem` — tool invocations and results.
+
+Items are dataclasses with stable `to_dict` / `from_dict` helpers, suitable
+for persistence. `result.messages` provides a Chat-style view derived from
+the items, if you want that.
+
+### Providers
+
+A `Provider` adapts a vendor API to lovia’s Item-based streaming protocol.
+The string passed to `Agent(model=...)` selects one:
+
+| Prefix | Adapter |
+| --- | --- |
+| *(none)* or `openai:` | OpenAI Chat Completions |
+| `openai-responses:` / `responses:` | OpenAI Responses API (reasoning items, server tools) |
+| `anthropic:` | Anthropic Messages |
+| Custom prefix | Anything you register |
+
+For OpenAI-compatible endpoints (DeepSeek, Ollama, vLLM, …) construct a
+provider explicitly:
+
+```python
+from lovia import OpenAIChatProvider
+
+provider = OpenAIChatProvider(
+    model="deepseek-chat",
+    base_url="https://api.deepseek.com/v1",
+    api_key=os.environ["DEEPSEEK_API_KEY"],
+)
+agent = Agent(name="...", model=provider)
+```
+
+Custom providers implement `Provider.stream(input: list[Item], ...) ->
+AsyncIterator[ItemDelta]`. That’s the entire contract.
 
 ### Structured output
 
-```python
-from pydantic import BaseModel
-from lovia import Agent, Runner
+Set `output_type=` to a Pydantic model and `result.output` is an instance of
+that model. lovia handles JSON Schema generation, prompt suffix, and a single
+repair round-trip if the model returns invalid JSON. Override the repair
+behaviour by passing an `OutputRepairStrategy`.
 
-class Weather(BaseModel):
-    city: str
-    temp_c: float
+### Sessions
 
-agent = Agent(name="W", model="openai:gpt-4o-mini", output_type=Weather)
-result = await Runner.run(agent, "weather in Tokyo")
-print(result.output.temp_c)  # typed!
-```
-
-If the model returns something that can't be parsed, lovia re-prompts it
-once to fix the output. Set `output_repair=False` on the agent to fail fast
-with `OutputValidationError` instead, or pass a custom
-`OutputRepairStrategy` for multi-attempt or localised repair prompts:
-
-```python
-from lovia import DefaultOutputRepair
-agent = Agent(..., output_repair=DefaultOutputRepair(max_attempts=3))
-```
-
-### Handoffs
-
-```python
-from lovia import Agent, Handoff, drop_stale_tool_calls
-
-billing = Agent(name="Billing", model="openai:gpt-4o-mini", instructions="...")
-support = Agent(name="Support", model="openai:gpt-4o-mini", instructions="...")
-
-triage = Agent(
-    name="Triage",
-    model="openai:gpt-4o-mini",
-    # Bare agents are fine; wrap in ``Handoff`` to customise.
-    handoffs=[
-        billing,
-        Handoff(target=support, input_filter=drop_stale_tool_calls),
-    ],
-)
-```
-
-### Sessions (multi-turn, multi-user)
+A `Session` persists transcript items across turns:
 
 ```python
 from lovia.stores import SQLiteSession
 
-session = SQLiteSession("./conversations.db")
-await Runner.run(agent, "Hi, I'm Mei",   session=session, session_id="user-mei")
-await Runner.run(agent, "What's my name?", session=session, session_id="user-mei")
+session = SQLiteSession(path="chat.db", session_id="user-42")
+await Runner.run(agent, "What did I ask earlier?", session=session)
 ```
 
-`session_id` is yours — use a user id, conversation id, or anything else.
+Built-in stores: `InMemorySession`, `SQLiteSession`. The `Session` Protocol
+is two methods (`load` / `append`) — plug in Redis, Postgres, etc., as you
+need.
 
-### The transcript: Items, not just messages
+### Checkpoints and resume
 
-A run returns a `RunResult` whose canonical transcript lives in `new_items`
-— a list of typed `Item` values (`InputMessageItem`, `MessageOutputItem`,
-`ReasoningItem`, `ToolCallItem`, `ToolCallOutputItem`, `HandoffCallItem`,
-…). Items preserve provider-specific richness — reasoning traces, encrypted
-o-series tokens, server-side tool calls — that the OpenAI Chat wire format
-flattens away. Sessions and checkpoints persist Items so round-tripping
-between providers stays lossless.
+`Runner.stream(..., checkpointer=...)` saves a `RunSnapshot` after each turn.
+Resume later with `Runner.resume(snapshot, ...)`. Useful for long runs and
+human-in-the-loop approval flows.
 
-```python
-from lovia import MessageOutputItem, ReasoningItem, ToolCallItem
+### Multi-agent: handoff + agent-as-tool
 
-result = await Runner.run(agent, "What's 2+2?")
-for it in result.new_items:
-    match it:
-        case ReasoningItem(content=trace):
-            ...                 # chain-of-thought
-        case ToolCallItem(name=name, arguments=args):
-            ...                 # the model asked to call ``name(args)``
-        case MessageOutputItem(content=text):
-            print(text)         # final answer
+Two orthogonal patterns, both first-class, no graph DSL:
 
-# ``result.messages`` is a derived OpenAI-Chat view, handy for printing.
-for m in result.messages:
-    print(m.role, m.text)
-```
+- **Handoff.** The current agent transfers control to another. Used for
+  triage / specialist routing.
+  ```python
+  triage = Agent(name="Triage", handoffs=[Handoff(refunds), Handoff(billing)])
+  ```
+- **Agent-as-tool.** Call another agent like a function:
+  ```python
+  summarizer = Agent(name="Summarizer", ...)
+  writer = Agent(name="Writer", tools=[agent_as_tool(summarizer, name="summarize")])
+  ```
 
-Hook subscribers receive Items the same way: `MessageCompleted.items` is
-the slice of Items produced by one assistant turn.
+### Hooks and events
 
-### Any OpenAI-compatible model
+Observe a run by subscribing to events or by attaching `AgentHooks` to the
+agent. The event stream is the same one streaming consumers read; hooks and
+tracers just listen on a separate channel.
 
 ```python
-from lovia import Agent, OpenAIChatProvider
-
-provider = OpenAIChatProvider(
-    model="deepseek-chat",
-    api_key=os.environ["DEEPSEEK_API_KEY"],
-    base_url="https://api.deepseek.com/v1",
-)
-agent = Agent(name="DS", model=provider, instructions="...")
-```
-
-### OpenAI Responses API (o-series + GPT-5)
-
-The Responses provider speaks OpenAI's newer `/v1/responses` endpoint
-and is the right adapter for reasoning models. It preserves
-`ReasoningItem`s end-to-end — including the opaque encrypted blob
-o-series models require on subsequent turns — and round-trips
-server-side tool calls (`web_search`, `file_search`,
-`code_interpreter`).
-
-```python
-from lovia import Agent
-from lovia.providers.base import ModelSettings
-
-agent = Agent(
-    name="reasoner",
-    model="openai-responses:o4-mini",
-    # Responses-specific knobs ride through ``settings.extra``.
-    settings=ModelSettings(extra={"reasoning": {"effort": "medium"}}),
-)
-```
-
-Pair it with a `Session` (or a `Checkpointer`) and reasoning items
-survive across turns automatically — no manual id wrangling. See
-`examples/17_responses_reasoning.py` for a full multi-turn demo.
-
-### Plug in a new provider
-
-Third-party providers can be registered under a custom vendor prefix and
-become usable from `"vendor:model"` strings:
-
-```python
-from lovia.providers import register_provider
-
-register_provider("gemini", lambda model: MyGeminiProvider(model=model))
-
-agent = Agent(name="G", model="gemini:gemini-1.5-pro", instructions="...")
-```
-
-The same mapping can be exposed declaratively as a `lovia.providers`
-entry-point group in your package metadata — `provider_from_string`
-discovers installed plugins lazily on first use.
-
-### Multimodal content
-
-```python
-from lovia import Agent, Runner, TextBlock, ImageBlock
-from lovia.messages import user
-
-msg = user([
-    TextBlock(text="What's in this picture?"),
-    ImageBlock(url="https://example.com/cat.jpg"),
-])
-result = await Runner.run(agent, [msg])
-```
-
-Image blocks accept either a `url` or base64 `data` + `media_type`; both
-OpenAI and Anthropic adapters translate them to vendor formats.
-
-### Budget, retry, cancel, provider fallback
-
-```python
-from lovia import Agent, Runner, RunBudget, RetryPolicy, CancelToken
-
-budget = RunBudget(max_output_tokens=10_000, max_tool_calls=50, max_seconds=300)
-retry  = RetryPolicy(max_attempts=3)
-cancel = CancelToken()
-
-# A list of providers turns into an automatic fallback chain.
-agent = Agent(
-    name="resilient",
-    model=["openai:gpt-4o-mini", "anthropic:claude-3-5-haiku-latest"],
-)
-
-result = await Runner.run(
-    agent, "summarise this 30-page doc...",
-    budget=budget, retry=retry, cancel_token=cancel,
-)
-```
-
-Cancel mid-run from a signal handler / UI thread: `cancel.cancel()`.
-
-### Guardrails
-
-```python
-from lovia import Agent, GuardrailTripped
-
-async def block_pii(messages, ctx):
-    if any("ssn" in (m.text or "").lower() for m in messages):
-        return "input contains PII"
-
-async def require_citation(output, ctx):
-    if "[source]" not in (output or ""):
-        return "answer must cite a source"
-
-agent = Agent(
-    name="careful",
-    model="openai:gpt-4o-mini",
-    input_guardrails=[block_pii],
-    output_guardrails=[require_citation],
-)
-```
-
-Either type of guardrail can return a reason string (or `True`) to veto;
-return `None`/`False` to allow. Sync and async guardrails both work.
-
-### Checkpoint & resume
-
-```python
-from lovia import Runner
-from lovia.stores import SQLiteCheckpointer  # also: InMemoryCheckpointer
-
-cp = SQLiteCheckpointer("./runs.sqlite")
-
-# Snapshots are written at the end of every turn.
-await Runner.run(agent, "long-running task...", checkpointer=cp, run_id="run-42")
-
-# Later — possibly in a different process — pick up where it left off.
-result = await Runner.resume(agent, checkpointer=cp, run_id="run-42")
-```
-
-The opaque `context` value is *not* snapshotted; re-supply it on `resume`.
-
-### Tool policies
-
-```python
-from lovia import tool
-
-# Per-tool retries + timeout, applied around each attempt.
-@tool(retries=3, timeout=10)
-async def search(query: str) -> list[str]: ...
-
-# Custom result rendering controls the string the model sees.
-@tool(result_renderer=lambda r, ctx: f"{len(r)} results")
-async def find(q: str) -> list[str]: ...
-
-# ``wrap`` is the single escape hatch for the rare case where the flat
-# fields aren't enough (caching, custom auth, mocking, ...). Retries and
-# timeout, when configured, are applied *around* wrap.
-async def cache(invoke, args, ctx):
-    if hit := CACHE.get(args["q"]):
-        return hit
-    out = await invoke(args, ctx)
-    CACHE[args["q"]] = out
-    return out
-
-@tool(wrap=cache)
-async def expensive_lookup(q: str) -> str: ...
-```
-
-Agent-wide defaults (`default_tool_retries`, `default_tool_timeout`) apply
-to any tool whose own field is left as `None`.
-
-### Observability
-
-Out of the box, attach a tracer to see the run / model_call / tool / handoff
-tree:
-
-```python
-import logging
-from lovia import Agent, ConsoleTracer
-
-logging.basicConfig(level=logging.INFO)
-agent = Agent(..., tracer=ConsoleTracer())
-# Logs lines like:
-#   run (212.3ms) agent='triage' turns=2 total_tokens=148
-#     model_call (95.1ms) model='openai:gpt-4o-mini' turn=1
-#     tool (1.2ms) name='add' call_id='c1'
-#     model_call (78.4ms) model='openai:gpt-4o-mini' turn=2
-```
-
-`InMemoryTracer` records spans in `tracer.spans` for tests. The `Tracer`
-Protocol is two methods (`span` + a `Span` with `set_attribute` /
-`record_exception`) — wire an OpenTelemetry / Logfire backend by writing a
-thin adapter.
-
-For finer-grained hooks (per-event callbacks instead of spans), build an
-event subscriber:
-
-```python
-from lovia import AgentHooks, events
+from lovia import AgentHooks, events as ev
 
 hooks = AgentHooks()
-
-@hooks.on(events.ToolCallStarted)
-async def starting(ev): print("→", ev.call.name)
-
-@hooks.on(events.ToolCallCompleted)
-async def done(ev): print("←", ev.call.name, "error" if ev.is_error else "ok")
-
-# A single handler may listen to several event types:
-@hooks.on((events.RunCompleted, events.ErrorOccurred))
-def at_end(ev): print("end:", type(ev).__name__)
-
+hooks.on(ev.ToolCallStarted, lambda e: print("tool:", e.call.name))
 agent = Agent(..., hooks=hooks)
 ```
 
-### Web (REST + chat UI)
+### Approval
 
-Optional. Installs FastAPI, uvicorn and `sse-starlette`:
+For human-in-the-loop tool gating, mark tools `needs_approval=True` and
+provide an `ApprovalChannel`. The run pauses on an `ApprovalRequired` event;
+respond via the channel to continue or deny.
 
-```bash
-pip install -e .[web]
-```
+### Safety nets
 
-Serve any agent over HTTP with a built-in chat page:
+- `RunBudget(max_turns=..., max_tokens=..., wall_clock=...)` — hard ceilings.
+- `RetryPolicy` — retries provider errors with backoff and optional fallback
+  providers.
+- `CancelToken` — cooperatively cancel an in-flight run.
+- `InputGuardrail` / `OutputGuardrail` — validators that trip with
+  `GuardrailTripped`.
 
-```python
-from lovia import Agent, tool
-from lovia.web import serve
+### Tracing
 
-@tool
-async def add(a: float, b: float) -> float: return a + b
-
-agent = Agent(name="lovia", model="gpt-4o-mini", tools=[add])
-serve(agent)                          # → http://127.0.0.1:8000
-```
-
-Or compose the FastAPI app yourself:
+`ConsoleTracer` and `InMemoryTracer` ship in core; `NoopTracer` is the
+default. Each run/turn/tool/handoff/model-call gets a span automatically.
 
 ```python
-from lovia.web import create_app
-app = create_app({"writer": a, "researcher": b})  # multi-agent
+from lovia import ConsoleTracer
+agent = Agent(..., tracer=ConsoleTracer())
 ```
 
-Endpoints: `GET /` (chat UI), `GET /api/agents`, `POST /api/chat`,
-`POST /api/chat/stream` (SSE), `POST /api/chat/approve`,
-`GET|DELETE /api/sessions/{id}`, `GET /healthz`, `GET /api/docs`.
-Approval-gated tools surface live in the UI with Allow/Deny buttons.
-The chat page is decoupled vanilla HTML/CSS/JS — no build step.
+For OpenTelemetry, write a thin `Tracer` adapter — the Protocol is three
+methods.
+
+### MCP, Skills, Memory
+
+- **MCP** (`lovia[mcp]`): connect to Model Context Protocol servers and
+  expose their tools to an agent.
+- **Skills**: lazy-loaded prompt fragments (`SKILL.md` + assets) discovered
+  from a directory, surfaced as a `SkillCatalog`.
+- **Memory**: a long-term retrieval Protocol, decoupled from `Session`. Core
+  ships the Protocol; bring your own backend.
+
+---
 
 ## Examples
 
-See [`examples/`](./examples) for runnable scripts covering every feature:
+All runnable from the repo root (most require an `OPENAI_API_KEY`):
 
-| File | What it shows |
+| File | Topic |
 | --- | --- |
-| `01_hello.py` | Minimal agent |
-| `02_tools.py` | Sync + async tools |
-| `03_streaming.py` | Consuming the event stream |
-| `04_structured_output.py` | `output_type=BaseModel` |
-| `05_handoff.py` | Triage → specialist handoffs |
-| `06_agent_as_tool.py` | An agent invoked as a tool |
-| `07_session.py` | `SQLiteSession` across turns |
-| `08_skills.py` | Lazy-loaded `SKILL.md` skills |
-| `09_compat_provider.py` | DeepSeek / Ollama via OpenAI-compat |
-| `10_hooks.py` | `AgentHooks` for observability |
-| `11_approval.py` | Human-in-the-loop tool approval |
-| `12_multimodal.py` | Sending an image with `ImageBlock` |
-| `13_budget_and_cancel.py` | `RunBudget`, `RetryPolicy`, `CancelToken` |
-| `14_guardrails.py` | Input + output guardrails |
-| `15_resume.py` | Checkpointing and resuming a run |
-| `16_web_serve.py` | `lovia.web.serve` — REST + SSE + chat UI |
-| `17_responses_reasoning.py` | OpenAI Responses API + persisted reasoning |
+| `01_hello.py` | The minimal agent. |
+| `02_tools.py` | Tool calling. |
+| `03_streaming.py` | Event-stream consumption. |
+| `04_structured_output.py` | Pydantic `output_type`. |
+| `05_handoff.py` | Triage to specialist agents. |
+| `06_agent_as_tool.py` | One agent invoking another as a tool. |
+| `07_session.py` | Multi-turn with `SQLiteSession`. |
+| `08_skills.py` | Filesystem-based skills. |
+| `09_compat_provider.py` | DeepSeek / Ollama / vLLM via OpenAI-compatible. |
+| `10_hooks.py` | Observability with `AgentHooks`. |
+| `11_approval.py` | Human-in-the-loop approval. |
+| `12_multimodal.py` | Image + text input. |
+| `13_budget_and_cancel.py` | Budgets, retries, cancellation, fallback. |
+| `14_guardrails.py` | Input / output guardrails. |
+| `15_resume.py` | Checkpoint and resume. |
+| `16_web_serve.py` | Bundled chat UI over SSE. |
+| `17_responses_reasoning.py` | OpenAI Responses with reasoning items. |
 
-## Public surface
-
-The complete API:
-
-```python
-from lovia import (
-    Agent, Runner, RunContext, RunResult, RunHandle,
-    tool, Tool, ToolResultRenderer,
-    Session, AgentHooks, ApprovalChannel,
-    ChatMessage, ToolCall, Usage,
-    TextBlock, ImageBlock, ContentBlock,
-    Item, ItemDelta,
-    InputMessageItem, MessageOutputItem, ReasoningItem,
-    ToolCallItem, ToolCallOutputItem,
-    HandoffCallItem, HandoffOutputItem, ServerToolCallItem,
-    TextDelta, ReasoningDelta, ToolCallDelta, UsageDelta, FinishDelta,
-    item_to_dict, item_from_dict, items_to_chat_messages,
-    Provider, OpenAIChatProvider, OpenAIResponsesProvider, ModelSettings,
-    RunBudget, RetryPolicy, CancelToken,
-    InputGuardrail, OutputGuardrail, GuardrailTripped,
-    Checkpointer, InMemoryCheckpointer, RunSnapshot,
-    Skill, SkillCatalog, Handoff, agent_as_tool, drop_stale_tool_calls,
-    OutputRepairStrategy, DefaultOutputRepair,
-    Tracer, ConsoleTracer, InMemoryTracer, NoopTracer,
-    Memory,
-    events,
-)
-from lovia.providers import register_provider, provider_from_string
-from lovia.stores import InMemorySession, SQLiteSession, SQLiteCheckpointer
-from lovia.web import serve, create_app   # optional, requires `lovia[web]`
-```
-
-That's it.
+---
 
 ## Status
 
-Early but usable. The shape of the public API is stable; internal modules may
-move around as we add features.
+Pre-1.0. The public surface listed in `lovia/__init__.py` is the API
+contract; everything else is internal and may change. The framework is
+unpublished and undergoing active design work; backwards-compat shims are
+not added for breaking changes during this phase.
 
 ## License
 

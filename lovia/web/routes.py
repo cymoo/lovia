@@ -17,7 +17,7 @@ from ..runner import Runner
 from ..session import Session
 from .approvals import ApprovalRegistry
 from .schemas import AgentInfo, ApprovalRequest, ChatRequest, ChatResponse, MessageOut
-from .sse import event_to_sse
+from .sse import _coerce, event_to_sse
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -95,9 +95,13 @@ def build_router(
                     payload = event_to_sse(ev)
                     if payload is not None:
                         yield payload
+                    # ApprovalRequired pauses the runner via the registry; the
+                    # client posts to /api/chat/approve to unblock it.
                     if isinstance(ev, events.ApprovalRequired):
                         await approvals.await_decision(sid, ev)
             finally:
+                # Default-deny anything still pending so the runner unblocks
+                # even if the client disconnected mid-decision.
                 await approvals.release(sid)
 
         return EventSourceResponse(gen())
@@ -130,11 +134,3 @@ def build_router(
         return {"ok": True}
 
     return router
-
-
-def _coerce(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)

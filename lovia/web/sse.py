@@ -26,6 +26,15 @@ def _msg_to_dict(msg: ChatMessage) -> dict[str, Any]:
     }
 
 
+def _coerce(value: Any) -> Any:
+    """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
     if isinstance(ev, events.TextDelta):
@@ -96,18 +105,10 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     return None
 
 
-def _coerce(value: Any) -> Any:
-    """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
-
-
 async def encode_stream(
     source: AsyncIterator[events.Event],
 ) -> AsyncIterator[dict[str, str]]:
+    """Adapt a lovia event stream into an SSE-ready dict iterator."""
     async for ev in source:
         payload = event_to_sse(ev)
         if payload is not None:

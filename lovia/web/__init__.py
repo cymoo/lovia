@@ -1,7 +1,8 @@
 """Optional web layer: serve any lovia agent over HTTP + SSE plus a chat UI.
 
 Install with ``pip install lovia[web]``. The module is fully decoupled from
-``lovia`` core — importing it pulls in FastAPI/uvicorn lazily.
+``lovia`` core: nothing in ``lovia`` imports ``lovia.web`` automatically, so
+agents that don't need HTTP keep their lightweight dependency footprint.
 
 Public surface::
 

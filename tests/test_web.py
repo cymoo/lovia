@@ -211,3 +211,83 @@ def test_unknown_approval_returns_404() -> None:
         json={"session_id": "nope", "call_id": "nope", "decision": "approve"},
     )
     assert r.status_code == 404
+
+
+# --------------------------------- ApprovalRegistry direct unit tests -----
+
+
+async def _make_approval_event(name: str = "do_it") -> object:
+    """Build a minimal ApprovalRequired event for registry testing."""
+    from lovia import events
+    from lovia.messages import ToolCall
+
+    loop = __import__("asyncio").get_running_loop()
+    decision_fut: __import__("asyncio").Future[bool] = loop.create_future()
+
+    class _Ev(events.ApprovalRequired):
+        def __init__(self) -> None:
+            super().__init__(call=ToolCall(id="c1", name=name, arguments={}))
+
+        def approve(self) -> None:  # type: ignore[override]
+            if not decision_fut.done():
+                decision_fut.set_result(True)
+
+        def reject(self) -> None:  # type: ignore[override]
+            if not decision_fut.done():
+                decision_fut.set_result(False)
+
+    return _Ev(), decision_fut
+
+
+async def test_approval_registry_resolves() -> None:
+    import asyncio
+
+    from lovia.web.approvals import ApprovalRegistry
+
+    reg = ApprovalRegistry()
+    ev, verdict = await _make_approval_event()
+
+    waiter = asyncio.create_task(reg.await_decision("s", ev))
+    await asyncio.sleep(0)  # let waiter register
+    assert await reg.resolve("s", "c1", True) is True
+    assert await waiter is True
+    assert verdict.result() is True
+
+
+async def test_approval_registry_cancellation_default_denies() -> None:
+    import asyncio
+
+    from lovia.web.approvals import ApprovalRegistry
+
+    reg = ApprovalRegistry()
+    ev, verdict = await _make_approval_event()
+
+    waiter = asyncio.create_task(reg.await_decision("s", ev))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    # The event must have been rejected so the runner doesn't hang.
+    assert verdict.result() is False
+
+
+async def test_approval_registry_release_default_denies() -> None:
+    import asyncio
+
+    from lovia.web.approvals import ApprovalRegistry
+
+    reg = ApprovalRegistry()
+    ev, verdict = await _make_approval_event()
+
+    waiter = asyncio.create_task(reg.await_decision("s", ev))
+    await asyncio.sleep(0)
+    await reg.release("s")
+    assert await waiter is False
+    assert verdict.result() is False
+
+
+async def test_approval_registry_resolve_unknown() -> None:
+    from lovia.web.approvals import ApprovalRegistry
+
+    reg = ApprovalRegistry()
+    assert await reg.resolve("nope", "nope", True) is False

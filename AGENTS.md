@@ -12,6 +12,8 @@ Instructions for AI coding assistants working on this repository.
 pip install -e .[dev]
 # Optional MCP support
 pip install -e .[mcp]
+# Optional web layer (FastAPI + chat UI)
+pip install -e .[web]
 ```
 
 Requires Python 3.10+.
@@ -44,7 +46,13 @@ lovia/
   mcp.py         # Optional MCP client (requires mcp package)
   providers/     # LLM provider adapters (OpenAI, Anthropic, …)
   stores/        # Session and memory store implementations
+  web/           # Optional FastAPI + SSE layer and bundled chat UI
+                 #   (decoupled from core; only loaded when lovia[web] is used)
 ```
+
+The `web/` module is fully decoupled from `lovia` core — nothing in `lovia`
+imports `lovia.web` automatically, so agents that don't need HTTP keep their
+lightweight dependency footprint.
 
 ## Conventions
 

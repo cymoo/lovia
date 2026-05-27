@@ -62,6 +62,8 @@ Hard dependencies are only `httpx` and `pydantic`.
 - 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
 - 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
 - 🪝 **Hooks.** Subclass `AgentHooks`, plug into Logfire / OTel / your logger.
+- 🖥 **Web layer (optional).** `from lovia.web import serve`: FastAPI + SSE +
+  a bundled chat UI for any agent. Approval gates surface as buttons.
 
 ## Install
 
@@ -293,6 +295,40 @@ class Logging(AgentHooks):
 agent = Agent(..., hooks=Logging())
 ```
 
+### Web (REST + chat UI)
+
+Optional. Installs FastAPI, uvicorn and `sse-starlette`:
+
+```bash
+pip install -e .[web]
+```
+
+Serve any agent over HTTP with a built-in chat page:
+
+```python
+from lovia import Agent, tool
+from lovia.web import serve
+
+@tool
+async def add(a: float, b: float) -> float: return a + b
+
+agent = Agent(name="lovia", model="gpt-4o-mini", tools=[add])
+serve(agent)                          # → http://127.0.0.1:8000
+```
+
+Or compose the FastAPI app yourself:
+
+```python
+from lovia.web import create_app
+app = create_app({"writer": a, "researcher": b})  # multi-agent
+```
+
+Endpoints: `GET /` (chat UI), `GET /api/agents`, `POST /api/chat`,
+`POST /api/chat/stream` (SSE), `POST /api/chat/approve`,
+`GET|DELETE /api/sessions/{id}`, `GET /healthz`, `GET /api/docs`.
+Approval-gated tools surface live in the UI with Allow/Deny buttons.
+The chat page is decoupled vanilla HTML/CSS/JS — no build step.
+
 ## Examples
 
 See [`examples/`](./examples) for runnable scripts covering every feature:
@@ -314,6 +350,7 @@ See [`examples/`](./examples) for runnable scripts covering every feature:
 | `13_budget_and_cancel.py` | `RunBudget`, `RetryPolicy`, `CancelToken` |
 | `14_guardrails.py` | Input + output guardrails |
 | `15_resume.py` | Checkpointing and resuming a run |
+| `16_web_serve.py` | `lovia.web.serve` — REST + SSE + chat UI |
 
 ## Public surface
 
@@ -334,6 +371,7 @@ from lovia import (
     events,
 )
 from lovia.stores import InMemorySession, SQLiteSession, SQLiteCheckpointer
+from lovia.web import serve, create_app   # optional, requires `lovia[web]`
 ```
 
 That's it.

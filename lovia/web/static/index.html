@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>lovia</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <span class="brand-name">lovia</span>
+        </div>
+        <div class="topbar-meta">
+          <span id="agent-label" class="agent-label">—</span>
+          <button id="reset" class="btn btn-ghost" type="button">
+            New chat
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page">
+      <section id="transcript" class="transcript" aria-live="polite">
+        <div class="empty-state" id="empty-state">
+          <h1>How can I help you today?</h1>
+          <p>Ask anything — I'll think it through and respond.</p>
+        </div>
+      </section>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="composer-inner">
+          <label class="vh" for="prompt">message</label>
+          <textarea
+            id="prompt"
+            name="prompt"
+            rows="1"
+            placeholder="Send a message…"
+            required
+          ></textarea>
+          <button id="send" class="btn btn-primary" type="submit" aria-label="Send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </div>
+        <p class="composer-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline</p>
+      </form>
+    </main>
+
+    <template id="tmpl-turn">
+      <article class="turn">
+        <div class="avatar" aria-hidden="true"></div>
+        <div class="bubble">
+          <div class="meta">
+            <span class="role"></span>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <template id="tmpl-tool">
+      <details class="tool">
+        <summary>
+          <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+          <span class="tool-label">Tool</span>
+          <span class="tool-name"></span>
+          <span class="tool-args"></span>
+        </summary>
+        <pre class="tool-result"></pre>
+      </details>
+    </template>
+
+    <template id="tmpl-approval">
+      <div class="approval">
+        <div class="approval-head">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 9v4"></path>
+            <path d="M12 17h.01"></path>
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          </svg>
+          <span>Awaiting your decision</span>
+        </div>
+        <div class="approval-body">
+          <div class="approval-call">
+            <code class="approval-name"></code>
+            <pre class="approval-args"></pre>
+          </div>
+        </div>
+        <div class="approval-actions">
+          <button type="button" class="btn btn-ghost decline">Deny</button>
+          <button type="button" class="btn btn-primary approve">Approve</button>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="/static/chat.js"></script>
+  </body>
+</html>

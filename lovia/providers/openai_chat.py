@@ -18,11 +18,13 @@ from ..content import ImageBlock, TextBlock
 from ..exceptions import ProviderError
 from ..items import (
     FinishDelta,
+    Item,
     ItemDelta,
     ReasoningDelta,
     TextDelta,
     ToolCallDelta,
     UsageDelta,
+    items_to_chat_messages,
 )
 from ..messages import ChatMessage, ToolCall, Usage
 from .base import ModelSettings
@@ -181,12 +183,17 @@ class OpenAIChatProvider:
 
     async def stream(
         self,
-        messages: list[ChatMessage],
+        input: list[Item],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
+        # Chat Completions speaks ChatMessage on the wire; flatten the
+        # vendor-neutral Item list to messages here. This is lossy for
+        # ReasoningItem ids and server-tool items, but Chat Completions
+        # cannot represent those anyway.
+        messages = items_to_chat_messages(input)
         payload = self._build_payload(
             messages, tools, response_format, settings, stream=True
         )

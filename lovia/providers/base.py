@@ -16,8 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from ..items import ItemDelta
-from ..messages import ChatMessage
+from ..items import Item, ItemDelta
 
 
 @dataclass
@@ -44,13 +43,21 @@ class ModelSettings:
 
 @runtime_checkable
 class Provider(Protocol):
-    """The minimal interface every LLM backend must implement."""
+    """The minimal interface every LLM backend must implement.
+
+    Providers consume :class:`Item` lists — the framework's vendor-neutral
+    transcript form — and emit :class:`ItemDelta` values as the model streams.
+    Chat-style adapters (OpenAI Chat, Anthropic) flatten incoming items to
+    their wire ``messages`` shape internally; richer endpoints (OpenAI
+    Responses) consume items directly so reasoning ids and server-side tool
+    calls survive the round trip.
+    """
 
     name: str
 
     def stream(
         self,
-        messages: list[ChatMessage],
+        input: list[Item],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,

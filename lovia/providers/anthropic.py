@@ -28,11 +28,13 @@ import httpx
 from ..exceptions import ProviderError
 from ..items import (
     FinishDelta,
+    Item,
     ItemDelta,
     ReasoningDelta,
     TextDelta,
     ToolCallDelta,
     UsageDelta,
+    items_to_chat_messages,
 )
 from ..messages import ChatMessage, Usage
 from .base import ModelSettings
@@ -132,13 +134,16 @@ class AnthropicProvider:
 
     async def stream(
         self,
-        messages: list[ChatMessage],
+        input: list[Item],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
         _ = response_format
+        # Anthropic Messages speaks ChatMessage on the wire; flatten Items
+        # via the standard helper before translating to Anthropic's shape.
+        messages = items_to_chat_messages(input)
         payload = self._build_payload(messages, tools, settings, stream=True)
 
         # Anthropic streams content blocks by index. We only need to remember

@@ -49,6 +49,16 @@ _BUILTIN["anthropic"] = _anthropic_factory
 _BUILTIN["claude"] = _anthropic_factory
 
 
+def _openai_responses_factory(model: str) -> Provider:
+    from .openai_responses import OpenAIResponsesProvider
+
+    return OpenAIResponsesProvider(model=model)
+
+
+_BUILTIN["openai-responses"] = _openai_responses_factory
+_BUILTIN["responses"] = _openai_responses_factory
+
+
 # Runtime registry (process-global). Third-party packages may add entries
 # either by calling :func:`register_provider` at import time or — better —
 # by declaring an entry point in the ``lovia.providers`` group, in which
@@ -107,11 +117,11 @@ def _load_entry_points() -> None:
 def provider_from_string(spec: str) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
-    Built-in prefixes: ``openai`` (alias ``oai``), ``anthropic`` (alias
-    ``claude``). Additional vendors can be plugged in via
-    :func:`register_provider` or the ``lovia.providers`` entry-point
-    group. A bare model name with no prefix defaults to OpenAI Chat
-    Completions.
+    Built-in prefixes: ``openai`` (alias ``oai``), ``openai-responses``
+    (alias ``responses``), ``anthropic`` (alias ``claude``). Additional
+    vendors can be plugged in via :func:`register_provider` or the
+    ``lovia.providers`` entry-point group. A bare model name with no
+    prefix defaults to OpenAI Chat Completions.
     """
     if ":" not in spec:
         return OpenAIChatProvider(model=spec)
@@ -124,7 +134,8 @@ def provider_from_string(spec: str) -> Provider:
     if vendor in _REGISTRY:
         return _REGISTRY[vendor](model)
     raise ValueError(
-        f"Unknown model spec: {spec!r}. Built-in prefixes: openai, anthropic. "
-        f"Register additional vendors via lovia.providers.register_provider "
-        f"or the 'lovia.providers' entry-point group."
+        f"Unknown model spec: {spec!r}. Built-in prefixes: openai, "
+        f"openai-responses, anthropic. Register additional vendors via "
+        f"lovia.providers.register_provider or the 'lovia.providers' "
+        f"entry-point group."
     )

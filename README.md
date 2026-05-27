@@ -36,10 +36,11 @@ Hard dependencies are only `httpx` and `pydantic`.
 ## Features
 
 - 🪶 **Tiny core, no magic.** One `Agent` dataclass, one `Runner`, async only.
-- 🔌 **Provider-neutral.** Built-in adapters for OpenAI Chat Completions and
-  Anthropic Messages. Any OpenAI-compatible endpoint (DeepSeek, Ollama, vLLM,
-  Qwen, …) just needs a `base_url`. Pass a **list** of providers for automatic
-  fallback.
+- 🔌 **Provider-neutral.** Built-in adapters for OpenAI Chat Completions,
+  OpenAI Responses (o-series, GPT-5 — reasoning items survive round trips),
+  and Anthropic Messages. Any OpenAI-compatible endpoint (DeepSeek, Ollama,
+  vLLM, Qwen, …) just needs a `base_url`. Pass a **list** of providers for
+  automatic fallback.
 - 🛠 **Tools from anywhere.** `@tool` on a function, pydantic / dataclass /
   TypedDict / plain hints — all become JSON Schema automatically. Flat
   policies (`retries`, `timeout`, `result_renderer`) plus a `wrap` escape
@@ -261,6 +262,31 @@ provider = OpenAIChatProvider(
 )
 agent = Agent(name="DS", model=provider, instructions="...")
 ```
+
+### OpenAI Responses API (o-series + GPT-5)
+
+The Responses provider speaks OpenAI's newer `/v1/responses` endpoint
+and is the right adapter for reasoning models. It preserves
+`ReasoningItem`s end-to-end — including the opaque encrypted blob
+o-series models require on subsequent turns — and round-trips
+server-side tool calls (`web_search`, `file_search`,
+`code_interpreter`).
+
+```python
+from lovia import Agent
+from lovia.providers.base import ModelSettings
+
+agent = Agent(
+    name="reasoner",
+    model="openai-responses:o4-mini",
+    # Responses-specific knobs ride through ``settings.extra``.
+    settings=ModelSettings(extra={"reasoning": {"effort": "medium"}}),
+)
+```
+
+Pair it with a `Session` (or a `Checkpointer`) and reasoning items
+survive across turns automatically — no manual id wrangling. See
+`examples/17_responses_reasoning.py` for a full multi-turn demo.
 
 ### Plug in a new provider
 
@@ -489,6 +515,7 @@ See [`examples/`](./examples) for runnable scripts covering every feature:
 | `14_guardrails.py` | Input + output guardrails |
 | `15_resume.py` | Checkpointing and resuming a run |
 | `16_web_serve.py` | `lovia.web.serve` — REST + SSE + chat UI |
+| `17_responses_reasoning.py` | OpenAI Responses API + persisted reasoning |
 
 ## Public surface
 
@@ -507,7 +534,7 @@ from lovia import (
     HandoffCallItem, HandoffOutputItem, ServerToolCallItem,
     TextDelta, ReasoningDelta, ToolCallDelta, UsageDelta, FinishDelta,
     item_to_dict, item_from_dict, items_to_chat_messages,
-    Provider, OpenAIChatProvider, ModelSettings,
+    Provider, OpenAIChatProvider, OpenAIResponsesProvider, ModelSettings,
     RunBudget, RetryPolicy, CancelToken,
     InputGuardrail, OutputGuardrail, GuardrailTripped,
     Checkpointer, InMemoryCheckpointer, RunSnapshot,

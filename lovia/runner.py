@@ -433,7 +433,7 @@ class _RunLoop:
                 providers = agent.resolve_providers()
                 state = _TurnState()
                 async for ev in self._run_model_turn(
-                    agent, providers, transcript, tools_by_name, output_spec, tracer, turns, state
+                    agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
                 ):
                     yield ev
                     await dispatch(agent.hooks, ev)
@@ -594,7 +594,7 @@ class _RunLoop:
         self,
         agent: Agent,
         providers: list[Provider],
-        transcript: list[ChatMessage],
+        input_items: list[Item],
         tools_by_name: dict[str, Tool],
         output_spec: OutputSpec | None,
         tracer: Tracer,
@@ -621,7 +621,7 @@ class _RunLoop:
         with tracer.span("model_call", model=model_label, turn=turn):
             async for delta in _stream_with_fallback(
                 providers,
-                transcript,
+                input_items,
                 tools=[t.openai_schema() for t in tools_by_name.values()] or None,
                 response_format=(
                     response_format_for(output_spec)
@@ -976,7 +976,7 @@ async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
 
 async def _stream_with_fallback(
     providers: list[Provider],
-    messages: list[ChatMessage],
+    input_items: list[Item],
     *,
     tools: list[dict[str, Any]] | None,
     response_format: dict[str, Any] | None,
@@ -1002,7 +1002,7 @@ async def _stream_with_fallback(
             committed = False
             try:
                 async for delta in provider.stream(
-                    messages,
+                    input_items,
                     tools=tools,
                     response_format=response_format,
                     settings=settings,

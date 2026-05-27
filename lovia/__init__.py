@@ -56,6 +56,7 @@ from .messages import (
     user,
 )
 from .providers import ModelSettings, OpenAIChatProvider, Provider, provider_from_string
+from .providers.openai_responses import OpenAIResponsesProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
@@ -118,6 +119,7 @@ __all__ = [
     "ModelSettings",
     "NoopTracer",
     "OpenAIChatProvider",
+    "OpenAIResponsesProvider",
     "OutputGuardrail",
     "OutputRepairStrategy",
     "DefaultOutputRepair",

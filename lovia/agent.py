@@ -89,6 +89,10 @@ class Agent(Generic[TContext]):
     approval_handler: ApprovalHandler | None = None
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)
     output_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    # Default policies applied to every tool whose own field is ``None``.
+    # Tools may still override either knob individually.
+    default_tool_retries: int = 1
+    default_tool_timeout: float | None = None
 
     def resolve_providers(self) -> list[Provider]:
         """Return the ordered fallback chain of providers for this agent.

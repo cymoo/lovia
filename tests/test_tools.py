@@ -1,7 +1,9 @@
-"""Tests for tool middleware (``before`` / ``after`` hooks) and context injection."""
+"""Tests for the flat tool policies (``retries`` / ``timeout`` / ``wrap`` /
+``result_renderer``) and RunContext annotation-based injection."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,77 +15,105 @@ from .scripted_provider import ScriptedProvider, call, text
 
 
 @pytest.mark.asyncio
-async def test_before_can_mutate_args() -> None:
+async def test_wrap_can_mutate_args_and_result() -> None:
     seen: dict[str, Any] = {}
 
-    async def before(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
-        return {"city": args["city"].lower()}
+    async def my_wrap(invoke, args, ctx):
+        # Normalize args before the call, transform the result after.
+        args = {"city": args["city"].lower()}
+        result = await invoke(args, ctx)
+        return f"[ok:{result}]"
 
-    @tool(before=before)
+    @tool(wrap=my_wrap)
     async def weather(city: str) -> str:
         seen["city"] = city
-        return f"It is sunny in {city}"
+        return f"sunny in {city}"
 
     provider = ScriptedProvider([call("weather", {"city": "SHANGHAI"}), text("done")])
     agent = Agent(name="a", model=provider, tools=[weather])
-    await Runner.run(agent, "hi")
+    result = await Runner.run(agent, "hi")
     assert seen["city"] == "shanghai"
-
-
-@pytest.mark.asyncio
-async def test_after_can_rewrite_result() -> None:
-    async def after(result: Any, ctx: Any) -> str:
-        return f"[redacted:{result.split()[-1]}]"
-
-    @tool(after=after)
-    async def weather(city: str) -> str:
-        return f"It is sunny in {city}"
-
-    provider = ScriptedProvider([call("weather", {"city": "tokyo"}), text("ok")])
-    agent = Agent(name="a", model=provider, tools=[weather])
-    result = await Runner.run(agent, "hi")
     last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
-    assert last_tool.content == "[redacted:tokyo]"
+    assert last_tool.content == "[ok:sunny in shanghai]"
 
 
 @pytest.mark.asyncio
-async def test_sync_middleware_supported() -> None:
-    def before(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
-        return {"n": args["n"] + 1}
+async def test_retries_then_success() -> None:
+    attempts = {"n": 0}
 
-    def after(result: Any, ctx: Any) -> str:
-        return f"=> {result}"
-
-    @tool(before=before, after=after)
-    async def inc(n: int) -> int:
-        return n * 10
-
-    provider = ScriptedProvider([call("inc", {"n": 4}), text("done")])
-    agent = Agent(name="a", model=provider, tools=[inc])
-    result = await Runner.run(agent, "hi")
-    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
-    assert last_tool.content == "=> 50"
-
-
-@pytest.mark.asyncio
-async def test_before_exception_propagates_as_tool_error() -> None:
-    async def before(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
-        raise ValueError("bad args")
-
-    ran = False
-
-    @tool(before=before)
-    async def t() -> str:
-        nonlocal ran
-        ran = True
+    @tool(retries=3)
+    async def flaky() -> str:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("nope")
         return "ok"
 
-    provider = ScriptedProvider([call("t", {}), text("done")])
-    agent = Agent(name="a", model=provider, tools=[t])
+    provider = ScriptedProvider([call("flaky", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[flaky])
     result = await Runner.run(agent, "go")
-    assert ran is False
+    assert attempts["n"] == 3
     last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
-    assert "bad args" in last_tool.content
+    assert last_tool.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_retries_exhausted_surfaces_as_tool_error() -> None:
+    @tool(retries=2)
+    async def always_fail() -> str:
+        raise RuntimeError("boom")
+
+    provider = ScriptedProvider([call("always_fail", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[always_fail])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert "Tool error" in last_tool.content and "boom" in last_tool.content
+
+
+@pytest.mark.asyncio
+async def test_timeout_triggers_tool_error() -> None:
+    @tool(timeout=0.05)
+    async def slow() -> str:
+        await asyncio.sleep(0.5)
+        return "never"
+
+    provider = ScriptedProvider([call("slow", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[slow])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert "Tool error" in last_tool.content
+
+
+@pytest.mark.asyncio
+async def test_result_renderer_controls_string_sent_to_model() -> None:
+    @tool(result_renderer=lambda r, ctx: f"<{r['n']}>")
+    async def make_obj() -> dict[str, int]:
+        return {"n": 42}
+
+    provider = ScriptedProvider([call("make_obj", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[make_obj])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "<42>"
+
+
+@pytest.mark.asyncio
+async def test_agent_default_tool_retries_apply_when_tool_unset() -> None:
+    attempts = {"n": 0}
+
+    @tool  # retries unset → inherit from agent default
+    async def flaky() -> str:
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise RuntimeError("nope")
+        return "ok"
+
+    provider = ScriptedProvider([call("flaky", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[flaky], default_tool_retries=3)
+    await Runner.run(agent, "go")
+    assert attempts["n"] == 2
+
+
+# ---- RunContext annotation injection (carried over from Phase 1) ----
 
 
 @dataclass
@@ -108,7 +138,7 @@ async def test_run_context_injected_by_annotation() -> None:
 
 @pytest.mark.asyncio
 async def test_param_named_ctx_without_annotation_is_a_regular_arg() -> None:
-    """Bare ``ctx: str`` (no RunContext annotation) is a normal LLM-visible arg."""
+    """Bare ``ctx: str`` (no RunContext annotation) is a normal LLM-supplied arg."""
 
     captured: dict[str, Any] = {}
 
@@ -117,7 +147,6 @@ async def test_param_named_ctx_without_annotation_is_a_regular_arg() -> None:
         captured["ctx"] = ctx
         return ctx
 
-    # Model supplies ``ctx`` as a regular argument; runner does not inject it.
     provider = ScriptedProvider([call("echo", {"ctx": "hello"}), text("done")])
     agent = Agent(name="a", model=provider, tools=[echo])
     await Runner.run(agent, "hi")

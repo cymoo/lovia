@@ -294,20 +294,35 @@ result = await Runner.resume(agent, checkpointer=cp, run_id="run-42")
 
 The opaque `context` value is *not* snapshotted; re-supply it on `resume`.
 
-### Tool middleware
+### Tool policies
 
 ```python
 from lovia import tool
 
-async def normalize(args, ctx):
-    return {**args, "city": args["city"].lower()}
+# Per-tool retries + timeout, applied around each attempt.
+@tool(retries=3, timeout=10)
+async def search(query: str) -> list[str]: ...
 
-async def redact(result, ctx):
-    return result.replace(SECRET, "***")
+# Custom result rendering controls the string the model sees.
+@tool(result_renderer=lambda r, ctx: f"{len(r)} results")
+async def find(q: str) -> list[str]: ...
 
-@tool(before=normalize, after=redact)
-async def weather(city: str) -> str: ...
+# ``wrap`` is the single escape hatch for the rare case where the flat
+# fields aren't enough (caching, custom auth, mocking, ...). Retries and
+# timeout, when configured, are applied *around* wrap.
+async def cache(invoke, args, ctx):
+    if hit := CACHE.get(args["q"]):
+        return hit
+    out = await invoke(args, ctx)
+    CACHE[args["q"]] = out
+    return out
+
+@tool(wrap=cache)
+async def expensive_lookup(q: str) -> str: ...
 ```
+
+Agent-wide defaults (`default_tool_retries`, `default_tool_timeout`) apply
+to any tool whose own field is left as `None`.
 
 ### Observability
 

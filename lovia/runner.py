@@ -43,7 +43,7 @@ from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
 from .session import Session
-from .tools import Tool, run_tool
+from .tools import Tool, render_tool_result, run_tool
 
 
 TContext = TypeVar("TContext")
@@ -518,7 +518,13 @@ class _RunLoop:
                     await dispatch(agent.hooks, events.ToolCallStarted(call=call))
 
                     try:
-                        result = await run_tool(tool, args, run_ctx)
+                        result = await run_tool(
+                            tool,
+                            args,
+                            run_ctx,
+                            default_retries=agent.default_tool_retries,
+                            default_timeout=agent.default_tool_timeout,
+                        )
                         is_error = False
                     except Exception as exc:
                         result = f"Tool error: {exc}"
@@ -533,7 +539,7 @@ class _RunLoop:
                             f" ({result.reason})" if result.reason else ""
                         )
                     else:
-                        result_text = _stringify_tool_result(result)
+                        result_text = await render_tool_result(tool, result, run_ctx)
 
                     transcript.append(tool_message(call.id, result_text))
                     yield events.ToolCallCompleted(
@@ -756,15 +762,6 @@ def _supports_json_schema(agent: Agent) -> bool:
     if isinstance(provider, OpenAIChatProvider):
         return provider.supports_json_schema
     return False
-
-
-def _stringify_tool_result(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    try:
-        return json.dumps(result, default=str, ensure_ascii=False)
-    except TypeError:
-        return str(result)
 
 
 async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:

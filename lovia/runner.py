@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Generic, TypeVar
 
 from . import events
 from .agent import Agent
+from .checkpointer import Checkpointer, RunSnapshot
 from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
 from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
@@ -151,6 +152,9 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunHandle[TOutput]":
         """Start a run and return a :class:`RunHandle`.
@@ -169,6 +173,9 @@ class Runner:
             budget=budget,
             cancel_token=cancel_token,
             retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=resume_from,
         )
         return RunHandle(loop.stream())
 
@@ -184,6 +191,9 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunResult[TOutput]":
         """Run ``agent`` to completion and return the final result."""
@@ -197,8 +207,45 @@ class Runner:
             budget=budget,
             cancel_token=cancel_token,
             retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=resume_from,
             _parent_usage=_parent_usage,
         ).result()
+
+    @staticmethod
+    async def resume(
+        agent: Agent[TContext, TOutput],
+        *,
+        checkpointer: Checkpointer,
+        run_id: str,
+        context: TContext | None = None,
+        max_turns: int = 20,
+        budget: RunBudget | None = None,
+        cancel_token: CancelToken | None = None,
+        retry: RetryPolicy | None = None,
+    ) -> "RunResult[TOutput]":
+        """Resume a previously checkpointed run to completion.
+
+        Loads the snapshot for ``run_id`` and continues the loop from the
+        saved transcript. The opaque ``context`` value is *not* snapshotted —
+        callers re-supply it here.
+        """
+        snapshot = await checkpointer.load(run_id)
+        if snapshot is None:
+            raise UserError(f"No snapshot found for run_id={run_id!r}")
+        return await Runner.run(
+            agent,
+            input=[],  # ignored when resume_from is provided
+            context=context,
+            max_turns=max_turns,
+            budget=budget,
+            cancel_token=cancel_token,
+            retry=retry,
+            checkpointer=checkpointer,
+            run_id=run_id,
+            resume_from=snapshot,
+        )
 
     @staticmethod
     async def run_stream(
@@ -249,6 +296,9 @@ class _RunLoop:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
+        checkpointer: Checkpointer | None = None,
+        run_id: str | None = None,
+        resume_from: RunSnapshot | None = None,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -262,13 +312,23 @@ class _RunLoop:
         self.budget = budget
         self.cancel_token = cancel_token
         self.retry = retry
+        self.checkpointer = checkpointer
+        self.run_id = run_id or (resume_from.run_id if resume_from else None)
+        self.resume_from = resume_from
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
 
         # 1. Build the initial conversation: system prompt + (session history) + input.
-        transcript = await self._build_initial_messages(agent)
+        if self.resume_from is not None:
+            # Resume: transcript = snapshot, skip session/input rebuild and
+            # input guardrails (already vetted on the original run).
+            transcript = list(self.resume_from.messages)
+        else:
+            transcript = await self._build_initial_messages(agent)
         run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
+        if self.resume_from is not None:
+            run_ctx.usage.add(self.resume_from.usage)
 
         # 2. Discover MCP tools (if any). Connections are kept open for the
         # whole run and closed in a finally block.
@@ -283,13 +343,14 @@ class _RunLoop:
         await dispatch(agent.hooks, ev_start)
         try:
             # Input guardrails run once on the fully-built initial transcript.
-            if agent.input_guardrails:
+            # Skip on resume — they already ran on the original input.
+            if agent.input_guardrails and self.resume_from is None:
                 await check_input_guardrails(
                     agent.input_guardrails, transcript, run_ctx
                 )
 
             output: Any = None
-            turns = 0
+            turns = self.resume_from.turns if self.resume_from is not None else 0
             output_repair_attempts = 0
             while True:
                 if turns >= self.max_turns:
@@ -368,6 +429,7 @@ class _RunLoop:
                     ev_end = events.TurnEnded(agent=agent, turn=turns)
                     yield ev_end
                     await dispatch(agent.hooks, ev_end)
+                    await self._snapshot(agent, transcript, run_ctx, turns)
                     break
 
                 # Process tool calls. May trigger a handoff, in which case we
@@ -417,7 +479,10 @@ class _RunLoop:
 
                         # If a programmatic handler is configured and the
                         # streaming consumer hasn't already resolved the
-                        # future, consult it.
+                        # future, consult it. The handler may return:
+                        #   * truthy / "allow" → approve
+                        #   * "ask" → defer to streaming consumer
+                        #   * falsy / "deny"  → reject
                         if agent.approval_handler is not None and not fut.done():
                             try:
                                 decision = agent.approval_handler(call, run_ctx)
@@ -428,7 +493,15 @@ class _RunLoop:
                                     agent.hooks, events.ErrorOccurred(error=exc)
                                 )
                                 decision = False
-                            if not fut.done():
+                            if isinstance(decision, str):
+                                token = decision.strip().lower()
+                                if token == "ask":
+                                    pass  # leave fut unresolved
+                                elif token in ("allow", "approve", "yes"):
+                                    fut.set_result(True)
+                                else:
+                                    fut.set_result(False)
+                            elif not fut.done():
                                 fut.set_result(bool(decision))
 
                         # No one resolved the future → default deny so the
@@ -486,6 +559,7 @@ class _RunLoop:
                 ev_te = events.TurnEnded(agent=agent, turn=turns)
                 yield ev_te
                 await dispatch(agent.hooks, ev_te)
+                await self._snapshot(agent, transcript, run_ctx, turns)
 
                 if final_via_tool is not None:
                     output = final_via_tool
@@ -633,6 +707,30 @@ class _RunLoop:
             tools.extend(server_tools)
             cleanup.append(server.aclose)
         return tools, cleanup
+
+    async def _snapshot(
+        self,
+        agent: Agent,
+        transcript: list[ChatMessage],
+        run_ctx: RunContext,
+        turns: int,
+    ) -> None:
+        """Persist a :class:`RunSnapshot` if a checkpointer is configured."""
+        if self.checkpointer is None or self.run_id is None:
+            return
+        snapshot = RunSnapshot(
+            run_id=self.run_id,
+            agent_name=agent.name,
+            messages=list(transcript),
+            usage=Usage(
+                input_tokens=run_ctx.usage.input_tokens,
+                output_tokens=run_ctx.usage.output_tokens,
+                cache_read_tokens=run_ctx.usage.cache_read_tokens,
+                cache_write_tokens=run_ctx.usage.cache_write_tokens,
+            ),
+            turns=turns,
+        )
+        await self.checkpointer.save(snapshot)
 
     async def _finalize_text_output(
         self,

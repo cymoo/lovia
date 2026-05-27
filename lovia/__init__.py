@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from . import events
 from .agent import Agent
+from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
 from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
     BudgetExceeded,
@@ -67,11 +68,13 @@ __all__ = [
     "BudgetExceeded",
     "CancelToken",
     "ChatMessage",
+    "Checkpointer",
     "ContentBlock",
     "GuardrailFn",
     "GuardrailTripped",
     "Handoff",
     "ImageBlock",
+    "InMemoryCheckpointer",
     "InputGuardrail",
     "LoviaError",
     "MaxTurnsExceeded",
@@ -87,6 +90,7 @@ __all__ = [
     "RunContext",
     "RunHandle",
     "RunResult",
+    "RunSnapshot",
     "Runner",
     "Session",
     "Skill",

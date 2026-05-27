@@ -18,15 +18,15 @@ _STATIC = Path(__file__).parent / "static"
 
 
 def _normalise(
-    agent_or_agents: "Agent[Any, Any] | Mapping[str, Agent[Any, Any]]",
-) -> dict[str, Agent[Any, Any]]:
+    agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
+) -> dict[str, Agent[Any]]:
     if isinstance(agent_or_agents, Mapping):
         return dict(agent_or_agents)
     return {agent_or_agents.name: agent_or_agents}
 
 
 def create_app(
-    agent_or_agents: "Agent[Any, Any] | Mapping[str, Agent[Any, Any]]",
+    agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
     session: Session | None = None,
     title: str = "lovia",
@@ -53,7 +53,7 @@ def create_app(
 
 
 def serve(
-    agent_or_agents: "Agent[Any, Any] | Mapping[str, Agent[Any, Any]]",
+    agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
     host: str = "127.0.0.1",
     port: int = 8000,

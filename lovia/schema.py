@@ -17,9 +17,47 @@ correct on tricky cases (``Optional``, ``Literal``, ``Union``, nested models).
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, get_type_hints
+from typing import Any, Callable, get_origin, get_type_hints
 
 from pydantic import BaseModel, TypeAdapter, create_model
+
+
+def _is_context_annotation(annotation: Any) -> bool:
+    """True if ``annotation`` is ``RunContext`` or ``RunContext[X]``.
+
+    Imported lazily to avoid a circular import (``run_context`` does not
+    depend on this module, but conceptually it lives "above" schema).
+    """
+    from .run_context import RunContext
+
+    origin = get_origin(annotation) or annotation
+    return origin is RunContext
+
+
+def _iter_arg_params(
+    fn: Callable[..., Any],
+) -> list[tuple[str, inspect.Parameter, Any]]:
+    """Yield ``(name, param, annotation)`` for each LLM-visible parameter.
+
+    Skips ``self``/``cls``, underscore-prefixed names, var-args, and any
+    parameter annotated as :class:`RunContext` (those are runner-injected).
+    """
+    sig = inspect.signature(fn)
+    hints = get_type_hints(fn, include_extras=False)
+    out: list[tuple[str, inspect.Parameter, Any]] = []
+    for name, param in sig.parameters.items():
+        if name.startswith("_") or name in ("self", "cls"):
+            continue
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        annotation = hints.get(name, str)
+        if _is_context_annotation(annotation):
+            continue
+        out.append((name, param, annotation))
+    return out
 
 
 def model_json_schema(tp: Any) -> dict[str, Any]:
@@ -40,23 +78,12 @@ def function_args_schema(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[s
     map them back to call arguments.
 
     Parameters whose name starts with an underscore, or that are annotated as
-    the special context type, are ignored - they are injected by the runner
-    rather than supplied by the model.
+    :class:`RunContext` (which the runner injects), are excluded from the
+    schema.
     """
-    sig = inspect.signature(fn)
-    hints = get_type_hints(fn, include_extras=False)
-
     fields: dict[str, Any] = {}
     param_names: list[str] = []
-    for name, param in sig.parameters.items():
-        if name.startswith("_") or name in ("self", "cls", "ctx", "context"):
-            continue
-        if param.kind in (
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            continue
-        annotation = hints.get(name, str)
+    for name, param, annotation in _iter_arg_params(fn):
         default = param.default if param.default is not inspect.Parameter.empty else ...
         fields[name] = (annotation, default)
         param_names.append(name)
@@ -79,18 +106,8 @@ def validate_args(fn: Callable[..., Any], data: dict[str, Any]) -> dict[str, Any
     Uses pydantic so that e.g. ``"3"`` becomes ``3`` when the annotation is
     ``int``. Returns the cleaned kwargs dict.
     """
-    sig = inspect.signature(fn)
-    hints = get_type_hints(fn, include_extras=False)
     fields: dict[str, Any] = {}
-    for name, param in sig.parameters.items():
-        if name.startswith("_") or name in ("self", "cls", "ctx", "context"):
-            continue
-        if param.kind in (
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            continue
-        annotation = hints.get(name, str)
+    for name, param, annotation in _iter_arg_params(fn):
         default = param.default if param.default is not inspect.Parameter.empty else ...
         fields[name] = (annotation, default)
     if not fields:

@@ -19,8 +19,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Generic, TypeVar
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, TypeVar
 
 from . import events
 from .agent import Agent
@@ -41,41 +41,31 @@ from .output import (
 from .providers.base import Provider, StreamChunk
 from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
+from .run_context import RunContext
 from .session import Session
 from .tools import Tool, run_tool
 
 
 TContext = TypeVar("TContext")
-TOutput = TypeVar("TOutput")
 
 
 @dataclass
-class RunContext(Generic[TContext]):
-    """The per-run state passed to tools and hooks.
+class RunResult:
+    """The terminal state of a completed run.
 
-    Tools that declare a ``ctx`` (or ``context``) parameter receive this
-    object. ``context`` is whatever opaque value the caller passed to
-    :meth:`Runner.run`; ``messages`` is the live, mutable transcript.
+    ``output`` is typed ``Any`` because the structured output type is a
+    runtime field on :class:`Agent`, not a static generic parameter — call
+    sites that know their output type can cast or annotate locally.
     """
 
-    context: TContext | None
-    messages: list[ChatMessage]
-    agent: Agent
-    usage: Usage = field(default_factory=Usage)
-
-
-@dataclass
-class RunResult(Generic[TOutput]):
-    """The terminal state of a completed run."""
-
-    output: TOutput
+    output: Any
     messages: list[ChatMessage]
     final_agent: Agent
     usage: Usage
     turns: int
 
 
-class RunHandle(Generic[TOutput]):
+class RunHandle:
     """Awaitable, async-iterable handle to a streamed run.
 
     Two equivalent ways to drive a run::
@@ -96,7 +86,7 @@ class RunHandle(Generic[TOutput]):
 
     def __init__(self, _stream: AsyncIterator[events.Event]) -> None:
         self._stream = _stream
-        self._result: "RunResult[TOutput] | None" = None
+        self._result: "RunResult | None" = None
         self._error: BaseException | None = None
         self._done = asyncio.Event()
         self._consumed = False
@@ -120,7 +110,7 @@ class RunHandle(Generic[TOutput]):
         else:
             self._done.set()
 
-    async def result(self) -> "RunResult[TOutput]":
+    async def result(self) -> "RunResult":
         """Return the final :class:`RunResult`, driving the stream if needed."""
         if not self._consumed:
             async for _ in self:
@@ -142,7 +132,7 @@ class Runner:
 
     @staticmethod
     def run_streamed(
-        agent: Agent[TContext, TOutput],
+        agent: Agent[TContext],
         input: "str | list[ChatMessage]",
         *,
         context: TContext | None = None,
@@ -156,7 +146,7 @@ class Runner:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
-    ) -> "RunHandle[TOutput]":
+    ) -> "RunHandle":
         """Start a run and return a :class:`RunHandle`.
 
         The handle is both awaitable (for the final :class:`RunResult`) and
@@ -181,7 +171,7 @@ class Runner:
 
     @staticmethod
     async def run(
-        agent: Agent[TContext, TOutput],
+        agent: Agent[TContext],
         input: "str | list[ChatMessage]",
         *,
         context: TContext | None = None,
@@ -195,7 +185,7 @@ class Runner:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
-    ) -> "RunResult[TOutput]":
+    ) -> "RunResult":
         """Run ``agent`` to completion and return the final result."""
         return await Runner.run_streamed(
             agent,
@@ -215,7 +205,7 @@ class Runner:
 
     @staticmethod
     async def resume(
-        agent: Agent[TContext, TOutput],
+        agent: Agent[TContext],
         *,
         checkpointer: Checkpointer,
         run_id: str,
@@ -224,7 +214,7 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
-    ) -> "RunResult[TOutput]":
+    ) -> "RunResult":
         """Resume a previously checkpointed run to completion.
 
         Loads the snapshot for ``run_id`` and continues the loop from the
@@ -249,7 +239,7 @@ class Runner:
 
     @staticmethod
     async def run_stream(
-        agent: Agent[TContext, TOutput],
+        agent: Agent[TContext],
         input: "str | list[ChatMessage]",
         *,
         context: TContext | None = None,

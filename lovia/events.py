@@ -123,4 +123,4 @@ class ErrorOccurred(Event):
 
 @dataclass
 class RunCompleted(Event):
-    result: "RunResult[Any]"
+    result: "RunResult"

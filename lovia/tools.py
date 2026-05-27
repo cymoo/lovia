@@ -19,12 +19,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, get_origin, get_type_hints
 
+from .run_context import RunContext
 from .schema import function_args_schema, validate_args
-
-if TYPE_CHECKING:
-    from .runner import RunContext
 
 
 # Predicate that may inspect the parsed arguments and current context to decide
@@ -62,8 +60,10 @@ class Tool:
     # caching, mocking, rate limiting, etc.
     before: ToolBefore | None = None
     after: ToolAfter | None = None
-    # When True the runner passes the RunContext as the first argument.
+    # When True the runner passes the RunContext as the first argument under
+    # the parameter name stored in ``_context_param``.
     _wants_context: bool = field(default=False, repr=False)
+    _context_param: str | None = field(default=None, repr=False)
 
     def requires_approval(self, args: dict[str, Any], ctx: "RunContext") -> bool:
         if callable(self.needs_approval) and not isinstance(self.needs_approval, bool):
@@ -109,8 +109,10 @@ def tool(
     """Decorate a function to turn it into a :class:`Tool`.
 
     The function may be sync or async; sync functions are run on a thread so
-    they don't block the event loop. The first parameter named ``ctx`` or
-    ``context`` (if present) receives the :class:`RunContext`.
+    they don't block the event loop. Tools opt in to receiving the
+    :class:`RunContext` by annotating their first parameter as
+    ``RunContext`` or ``RunContext[Deps]``. The parameter name does not
+    matter — only the annotation does.
 
     Examples::
 
@@ -120,8 +122,8 @@ def tool(
             return a + b
 
         @tool(name="search_web", needs_approval=True)
-        async def search(query: str) -> list[str]:
-            ...
+        async def search(ctx: RunContext[Deps], query: str) -> list[str]:
+            return await ctx.context.client.search(query)
     """
 
     def wrap(func: Callable[..., Any]) -> Tool:
@@ -130,16 +132,16 @@ def tool(
         parameters, _ = function_args_schema(func)
 
         sig = inspect.signature(func)
-        wants_context = any(p in sig.parameters for p in ("ctx", "context"))
+        context_param = _find_context_param(func, sig)
+        wants_context = context_param is not None
 
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
             cleaned = validate_args(func, args)
             kwargs = dict(cleaned)
-            if wants_context:
-                key = "ctx" if "ctx" in sig.parameters else "context"
-                kwargs[key] = ctx
+            if context_param is not None:
+                kwargs[context_param] = ctx
             if is_async:
                 return await func(**kwargs)
             # Offload sync work so we don't block the event loop.
@@ -154,8 +156,32 @@ def tool(
             before=before,
             after=after,
             _wants_context=wants_context,
+            _context_param=context_param,
         )
 
     if fn is None:
         return wrap
     return wrap(fn)
+
+
+def _find_context_param(func: Callable[..., Any], sig: inspect.Signature) -> str | None:
+    """Return the name of the parameter annotated as ``RunContext`` (or ``None``).
+
+    We resolve annotations lazily via ``get_type_hints`` so that ``from
+    __future__ import annotations`` (string-form annotations) works.
+    """
+    try:
+        hints = get_type_hints(func, include_extras=False)
+    except Exception:
+        # Unresolvable annotations (forward refs to missing names, etc.)
+        # silently fall through to "no context"; this matches how the rest
+        # of the framework treats schema introspection.
+        return None
+    for name in sig.parameters:
+        annotation = hints.get(name)
+        if annotation is None:
+            continue
+        origin = get_origin(annotation) or annotation
+        if origin is RunContext:
+            return name
+    return None

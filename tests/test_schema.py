@@ -5,6 +5,7 @@ from typing import TypedDict
 
 from pydantic import BaseModel
 
+from lovia import RunContext
 from lovia.schema import (
     coerce_output,
     function_args_schema,
@@ -47,13 +48,21 @@ def test_typeddict_schema() -> None:
     assert s["properties"]["temp_c"]["type"] == "number"
 
 
-def test_function_args_schema_ignores_ctx() -> None:
-    def fn(query: str, limit: int = 10, ctx=None) -> str:
+def test_function_args_schema_ignores_run_context() -> None:
+    def fn(ctx: RunContext, query: str, limit: int = 10) -> str:
         return ""
 
     schema, names = function_args_schema(fn)
     assert names == ["query", "limit"]
     assert "ctx" not in (schema.get("properties") or {})
+
+    # The exclusion is annotation-based: a param named "ctx" but NOT typed
+    # as RunContext is treated as a normal LLM-supplied arg.
+    def fn2(query: str, ctx: str = "") -> str:
+        return ""
+
+    schema2, names2 = function_args_schema(fn2)
+    assert names2 == ["query", "ctx"]
 
 
 def test_validate_args_coerces() -> None:

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, TypeVar
 
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
+from .run_context import RunContext
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -20,12 +21,10 @@ if TYPE_CHECKING:
     from .hooks import AgentHooks
     from .mcp import MCPServer
     from .messages import ToolCall
-    from .runner import RunContext
     from .skills import SkillCatalog
 
 
 TContext = TypeVar("TContext")
-TOutput = TypeVar("TOutput")
 
 
 # An instructions callable receives the optional user-supplied context and
@@ -41,8 +40,12 @@ ApprovalHandler = Callable[
 
 
 @dataclass
-class Agent(Generic[TContext, TOutput]):
+class Agent(Generic[TContext]):
     """Declarative description of an agent.
+
+    The generic parameter ``TContext`` is the type of the optional dependency
+    object passed to :meth:`Runner.run` as ``context=...``. Tools annotated
+    with ``RunContext[TContext]`` receive a typed context handle.
 
     Fields:
         name: Human-readable agent name; also used to derive handoff tool names.
@@ -125,6 +128,6 @@ class Agent(Generic[TContext, TOutput]):
         """Expose this agent as a :class:`Tool` callable by other agents."""
         return agent_as_tool(self, name=name, description=description)
 
-    def clone(self, **overrides: Any) -> "Agent[TContext, TOutput]":
+    def clone(self, **overrides: Any) -> "Agent[TContext]":
         """Return a copy of this agent with selected fields overridden."""
         return replace(self, **overrides)

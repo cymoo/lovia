@@ -124,6 +124,33 @@ agent = Agent(name="ops", model=..., tools=[send_email], approval_handler=policy
 If nothing resolves the approval, the call is denied by default — runs never
 hang on an absent decision.
 
+### Typed dependencies (a.k.a. `RunContext`)
+
+Pass any object into a run via `context=` and tools receive it through a
+typed handle. The runner detects the handle by **type annotation**, not by
+parameter name:
+
+```python
+from dataclasses import dataclass
+from lovia import Agent, Runner, RunContext, tool
+
+@dataclass
+class Deps:
+    db: Database
+    user_id: int
+
+@tool
+async def lookup_orders(ctx: RunContext[Deps], status: str) -> list[str]:
+    # ctx.context is typed as Deps; auto-completion works.
+    return await ctx.context.db.orders(ctx.context.user_id, status=status)
+
+agent = Agent[Deps](name="ops", model="openai:gpt-4o-mini", tools=[lookup_orders])
+await Runner.run(agent, "show pending orders", context=Deps(db=..., user_id=42))
+```
+
+Plain tools (no `RunContext` parameter) don't see the context at all — the
+model only ever sees parameters that aren't injected by the runner.
+
 ### Structured output
 
 ```python

@@ -1,12 +1,13 @@
-"""Tests for tool middleware (``before`` / ``after`` hooks)."""
+"""Tests for tool middleware (``before`` / ``after`` hooks) and context injection."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
-from lovia import Agent, Runner, tool
+from lovia import Agent, RunContext, Runner, tool
 
 from .scripted_provider import ScriptedProvider, call, text
 
@@ -83,3 +84,41 @@ async def test_before_exception_propagates_as_tool_error() -> None:
     assert ran is False
     last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
     assert "bad args" in last_tool.content
+
+
+@dataclass
+class _Deps:
+    user_id: int
+
+
+@pytest.mark.asyncio
+async def test_run_context_injected_by_annotation() -> None:
+    seen: dict[str, Any] = {}
+
+    @tool
+    async def whoami(ctx: RunContext[_Deps]) -> str:
+        seen["user_id"] = ctx.context.user_id if ctx.context else None
+        return "ok"
+
+    provider = ScriptedProvider([call("whoami", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[whoami])
+    await Runner.run(agent, "hi", context=_Deps(user_id=42))
+    assert seen["user_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_param_named_ctx_without_annotation_is_a_regular_arg() -> None:
+    """Bare ``ctx: str`` (no RunContext annotation) is a normal LLM-visible arg."""
+
+    captured: dict[str, Any] = {}
+
+    @tool
+    async def echo(ctx: str) -> str:
+        captured["ctx"] = ctx
+        return ctx
+
+    # Model supplies ``ctx`` as a regular argument; runner does not inject it.
+    provider = ScriptedProvider([call("echo", {"ctx": "hello"}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[echo])
+    await Runner.run(agent, "hi")
+    assert captured["ctx"] == "hello"

@@ -23,13 +23,13 @@ _STATIC = Path(__file__).parent / "static"
 
 
 def build_router(
-    agents: dict[str, Agent[Any, Any]],
+    agents: dict[str, Agent[Any]],
     session: Session,
     approvals: ApprovalRegistry,
 ) -> APIRouter:
     router = APIRouter()
 
-    def _pick(name: str | None) -> Agent[Any, Any]:
+    def _pick(name: str | None) -> Agent[Any]:
         if name is None:
             if len(agents) == 1:
                 return next(iter(agents.values()))

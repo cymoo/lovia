@@ -1,12 +1,13 @@
 """Stream events emitted by :meth:`Runner.run_stream`.
 
-Streaming and observability share the same event types. ``run`` consumes them
-internally and dispatches to hooks; ``run_stream`` yields them to the caller.
+Streaming and observability share the same event types. Events are pure
+data — control plumbing (approvals, cancellation) lives elsewhere. See
+:mod:`lovia.approvals` for the back-channel used by
+:class:`ApprovalRequired`.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,7 @@ from .messages import ChatMessage, ToolCall
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .approvals import ApprovalChannel
     from .runner import RunResult
 
 
@@ -87,33 +89,39 @@ class ApprovalRequired(Event):
     """Emitted before a tool that needs approval runs.
 
     A streaming consumer resolves the request by calling :meth:`approve` or
-    :meth:`reject` on the event (any time before its loop yields control back
-    to the runner). Alternatively, set ``Agent.approval_handler`` for a
-    programmatic decision.
+    :meth:`reject` on the event (any time before its loop yields control
+    back to the runner). Out-of-band callers can resolve by ``ToolCall.id``
+    via the :class:`~lovia.approvals.ApprovalChannel` accessible from
+    :attr:`RunHandle.approvals`. Setting ``Agent.approval_handler`` provides
+    a programmatic policy as a third option.
 
-    If neither path resolves the approval, the runner defaults to **deny**.
+    If none of those paths resolve the request, the runner defaults to
+    **deny** so the run cannot hang.
     """
 
     call: ToolCall
-    _future: "asyncio.Future[bool] | None" = field(default=None, repr=False)
+    # Back-channel reference. Kept private so events stay declarative —
+    # callers should prefer ``approve()`` / ``reject()`` on the event or
+    # the channel API on ``RunHandle.approvals``.
+    _channel: "ApprovalChannel | None" = field(default=None, repr=False)
 
     def approve(self) -> None:
         """Allow the tool call to proceed."""
-        self._resolve(True)
+        if self._channel is None:
+            raise RuntimeError(
+                "ApprovalRequired event has no channel attached. "
+                "This event was likely constructed outside the runner."
+            )
+        self._channel.approve(self.call.id)
 
     def reject(self) -> None:
         """Block the tool call; the model will see a denial message."""
-        self._resolve(False)
-
-    def _resolve(self, decision: bool) -> None:
-        if self._future is None:
+        if self._channel is None:
             raise RuntimeError(
-                "ApprovalRequired event has no future attached. "
+                "ApprovalRequired event has no channel attached. "
                 "This event was likely constructed outside the runner."
             )
-        if self._future.done():
-            return
-        self._future.set_result(decision)
+        self._channel.reject(self.call.id)
 
 
 @dataclass

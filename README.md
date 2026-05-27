@@ -119,6 +119,9 @@ async def policy(call, ctx):
     return call.name != "drop_database"
 
 agent = Agent(name="ops", model=..., tools=[send_email], approval_handler=policy)
+
+# Option 3: resolve out-of-band by ToolCall id (e.g. from an HTTP handler).
+handle.approvals.approve(call_id)   # or .reject(call_id)
 ```
 
 If nothing resolves the approval, the call is denied by default — runs never
@@ -347,18 +350,25 @@ Protocol is two methods (`span` + a `Span` with `set_attribute` /
 `record_exception`) — wire an OpenTelemetry / Logfire backend by writing a
 thin adapter.
 
-For finer-grained hooks (per-event callbacks instead of spans), pass an
-`AgentHooks` subclass:
+For finer-grained hooks (per-event callbacks instead of spans), build an
+event subscriber:
 
 ```python
-from lovia import AgentHooks
+from lovia import AgentHooks, events
 
-class Logging(AgentHooks):
-    async def on_tool_call_started(self, call): print("→", call.name)
-    async def on_tool_call_completed(self, call, result, is_error):
-        print("←", call.name, "error" if is_error else "ok")
+hooks = AgentHooks()
 
-agent = Agent(..., hooks=Logging())
+@hooks.on(events.ToolCallStarted)
+async def starting(ev): print("→", ev.call.name)
+
+@hooks.on(events.ToolCallCompleted)
+async def done(ev): print("←", ev.call.name, "error" if ev.is_error else "ok")
+
+# A single handler may listen to several event types:
+@hooks.on((events.RunCompleted, events.ErrorOccurred))
+def at_end(ev): print("end:", type(ev).__name__)
+
+agent = Agent(..., hooks=hooks)
 ```
 
 ### Web (REST + chat UI)

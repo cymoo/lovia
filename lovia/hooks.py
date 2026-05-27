@@ -1,75 +1,103 @@
-"""Lifecycle hooks for observability and side effects.
+"""Subscriber-style lifecycle hooks.
 
-A single :class:`AgentHooks` instance is attached to an :class:`Agent`. The
-runner dispatches every stream event to the corresponding ``on_*`` method, if
-defined. All methods are optional and default to no-ops, so users only
-implement what they care about.
+`AgentHooks` is a tiny event subscriber: callers attach handlers per event
+type with :meth:`on` (or :meth:`on_any`) and the runner dispatches every
+emitted event through :meth:`dispatch`.
+
+The previous design exposed one named ``on_*`` method per event type,
+which forced users to memorise a wide API and made it awkward to listen
+for several event types at once. The subscriber model keeps the surface
+small:
+
+* :meth:`on` (``event_type``) — register one handler for one event type
+  (or a tuple of types). Usable as a decorator.
+* :meth:`on_any` — register a catch-all handler.
+
+Handlers may be sync or async; the dispatcher awaits whichever is
+returned. Multiple handlers per event type are supported and called in
+registration order.
+
+Typical use::
+
+    hooks = AgentHooks()
+
+    @hooks.on(events.ToolCallStarted)
+    async def log_tool(ev):
+        print("→", ev.call.name)
+
+    @hooks.on((events.RunCompleted, events.ErrorOccurred))
+    def at_end(ev):
+        print("end:", type(ev).__name__)
+
+    agent = Agent(..., hooks=hooks)
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, Awaitable, Callable, TypeVar, Union
 
 from . import events
 
-if TYPE_CHECKING:
-    from .agent import Agent
-    from .messages import ChatMessage, ToolCall
-    from .runner import RunResult
+# A handler may be sync or async; both shapes are supported.
+Handler = Callable[[Any], Union[None, Awaitable[None]]]
+
+E = TypeVar("E", bound=events.Event)
 
 
 class AgentHooks:
-    """Base hook implementation. Override any subset of methods."""
+    """Collection of event subscribers."""
 
-    async def on_run_started(self, agent: "Agent") -> None: ...
+    def __init__(self) -> None:
+        # Mapping from event type → list of registered handlers. We keep
+        # one bucket per concrete event class; ``dispatch`` walks them and
+        # uses ``isinstance`` to support subclass matching.
+        self._listeners: dict[type, list[Handler]] = {}
+        self._any: list[Handler] = []
 
-    async def on_run_completed(self, result: "RunResult") -> None: ...
+    def on(
+        self,
+        event_type: "type[E] | tuple[type[E], ...]",
+    ) -> Callable[[Handler], Handler]:
+        """Register a handler for one event type or a tuple of types.
 
-    async def on_turn_started(self, agent: "Agent", turn: int) -> None: ...
+        Returns the original function so it can be used as a decorator.
+        """
+        types = event_type if isinstance(event_type, tuple) else (event_type,)
 
-    async def on_turn_ended(self, agent: "Agent", turn: int) -> None: ...
+        def decorator(fn: Handler) -> Handler:
+            for t in types:
+                self._listeners.setdefault(t, []).append(fn)
+            return fn
 
-    async def on_text_delta(self, delta: str) -> None: ...
+        return decorator
 
-    async def on_message(self, message: "ChatMessage") -> None: ...
+    def on_any(self, fn: Handler) -> Handler:
+        """Register a catch-all handler invoked for every event."""
+        self._any.append(fn)
+        return fn
 
-    async def on_tool_call_started(self, call: "ToolCall") -> None: ...
+    async def dispatch(self, event: events.Event) -> None:
+        """Invoke every matching handler for ``event``."""
+        # First the catch-alls so listeners that mutate state see events
+        # in the same order the runner emits them.
+        for fn in self._any:
+            await _maybe_await(fn(event))
+        for event_type, listeners in self._listeners.items():
+            if isinstance(event, event_type):
+                for fn in listeners:
+                    await _maybe_await(fn(event))
 
-    async def on_tool_call_completed(
-        self, call: "ToolCall", result: Any, is_error: bool
-    ) -> None: ...
 
-    async def on_handoff(self, from_agent: "Agent", to_agent: "Agent") -> None: ...
-
-    async def on_approval_required(self, call: "ToolCall") -> None: ...
-
-    async def on_error(self, error: BaseException) -> None: ...
+async def _maybe_await(result: Any) -> None:
+    """Await ``result`` if it looks awaitable, otherwise discard it."""
+    if result is None:
+        return
+    if hasattr(result, "__await__"):
+        await result
 
 
 async def dispatch(hooks: AgentHooks | None, event: events.Event) -> None:
-    """Route an event to the right ``AgentHooks`` method."""
+    """Convenience entry point used by the runner."""
     if hooks is None:
         return
-
-    if isinstance(event, events.RunStarted):
-        await hooks.on_run_started(event.agent)
-    elif isinstance(event, events.RunCompleted):
-        await hooks.on_run_completed(event.result)
-    elif isinstance(event, events.TurnStarted):
-        await hooks.on_turn_started(event.agent, event.turn)
-    elif isinstance(event, events.TurnEnded):
-        await hooks.on_turn_ended(event.agent, event.turn)
-    elif isinstance(event, events.TextDelta):
-        await hooks.on_text_delta(event.delta)
-    elif isinstance(event, events.MessageCompleted):
-        await hooks.on_message(event.message)
-    elif isinstance(event, events.ToolCallStarted):
-        await hooks.on_tool_call_started(event.call)
-    elif isinstance(event, events.ToolCallCompleted):
-        await hooks.on_tool_call_completed(event.call, event.result, event.is_error)
-    elif isinstance(event, events.HandoffOccurred):
-        await hooks.on_handoff(event.from_agent, event.to_agent)
-    elif isinstance(event, events.ApprovalRequired):
-        await hooks.on_approval_required(event.call)
-    elif isinstance(event, events.ErrorOccurred):
-        await hooks.on_error(event.error)
+    await hooks.dispatch(event)

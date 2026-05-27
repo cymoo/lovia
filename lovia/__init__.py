@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from . import events
 from .agent import Agent
+from .approvals import ApprovalChannel
 from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
 from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
@@ -65,6 +66,7 @@ from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 __all__ = [
     "Agent",
     "AgentHooks",
+    "ApprovalChannel",
     "AssistantMessage",
     "BudgetExceeded",
     "CancelToken",

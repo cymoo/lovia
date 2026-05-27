@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from lovia import Agent, AgentHooks, Runner, tool
+from lovia import Agent, AgentHooks, Runner, events, tool
 
 from dotenv import load_dotenv
 
@@ -23,15 +23,22 @@ async def now() -> str:
     return "2025-01-01T00:00:00Z"
 
 
-class PrintingHooks(AgentHooks):
-    async def on_tool_call_started(self, call) -> None:
-        print(f"[tool] -> {call.name}({call.arguments})")
+hooks = AgentHooks()
 
-    async def on_tool_call_completed(self, call, result, is_error) -> None:
-        print(f"[tool] <- {call.name}: {result}")
 
-    async def on_run_completed(self, result) -> None:
-        print(f"[done] usage={result.usage}")
+@hooks.on(events.ToolCallStarted)
+async def log_tool_started(ev: events.ToolCallStarted) -> None:
+    print(f"[tool] -> {ev.call.name}({ev.call.arguments})")
+
+
+@hooks.on(events.ToolCallCompleted)
+async def log_tool_completed(ev: events.ToolCallCompleted) -> None:
+    print(f"[tool] <- {ev.call.name}: {ev.result}")
+
+
+@hooks.on(events.RunCompleted)
+async def log_done(ev: events.RunCompleted) -> None:
+    print(f"[done] usage={ev.result.usage}")
 
 
 async def main() -> None:
@@ -40,7 +47,7 @@ async def main() -> None:
         instructions="Use the now tool to answer time questions.",
         model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
         tools=[now],
-        hooks=PrintingHooks(),
+        hooks=hooks,
     )
     result = await Runner.run(agent, "What time is it?")
     print(result.output)

@@ -42,6 +42,7 @@ from .providers.base import Provider, StreamChunk
 from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
+from .approvals import ApprovalChannel
 from .session import Session
 from .tools import Tool, render_tool_result, run_tool
 from .tracing import NoopTracer, Tracer
@@ -85,12 +86,17 @@ class RunHandle:
     :class:`RunResult` (or re-raises the same exception).
     """
 
-    def __init__(self, _stream: AsyncIterator[events.Event]) -> None:
+    def __init__(self, _stream: AsyncIterator[events.Event], approvals: "ApprovalChannel") -> None:
         self._stream = _stream
         self._result: "RunResult | None" = None
         self._error: BaseException | None = None
         self._done = asyncio.Event()
         self._consumed = False
+        #: Out-of-band channel for resolving :class:`events.ApprovalRequired`
+        #: by ``ToolCall.id``. Streaming consumers normally use the helpers
+        #: on the event directly; the channel is for resolving from a
+        #: different task (e.g. a UI-thread callback).
+        self.approvals = approvals
 
     def __aiter__(self) -> AsyncIterator[events.Event]:
         return self._iter()
@@ -168,7 +174,7 @@ class Runner:
             run_id=run_id,
             resume_from=resume_from,
         )
-        return RunHandle(loop.stream())
+        return RunHandle(loop.stream(), loop.approvals)
 
     @staticmethod
     async def run(
@@ -306,6 +312,7 @@ class _RunLoop:
         self.checkpointer = checkpointer
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
+        self.approvals = ApprovalChannel()
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
@@ -480,9 +487,8 @@ class _RunLoop:
 
                     # Approval gate.
                     if tool.requires_approval(args, run_ctx):
-                        loop = asyncio.get_running_loop()
-                        fut: "asyncio.Future[bool]" = loop.create_future()
-                        ev = events.ApprovalRequired(call=call, _future=fut)
+                        fut = self.approvals.register(call.id)
+                        ev = events.ApprovalRequired(call=call, _channel=self.approvals)
                         yield ev
                         await dispatch(agent.hooks, ev)
 
@@ -507,16 +513,16 @@ class _RunLoop:
                                 if token == "ask":
                                     pass  # leave fut unresolved
                                 elif token in ("allow", "approve", "yes"):
-                                    fut.set_result(True)
+                                    self.approvals.approve(call.id)
                                 else:
-                                    fut.set_result(False)
+                                    self.approvals.reject(call.id)
                             elif not fut.done():
-                                fut.set_result(bool(decision))
+                                self.approvals._resolve(call.id, bool(decision))
 
                         # No one resolved the future → default deny so the
                         # run cannot hang on an absent decision.
                         if not fut.done():
-                            fut.set_result(False)
+                            self.approvals.reject(call.id)
 
                         approved = fut.result()
                         if not approved:

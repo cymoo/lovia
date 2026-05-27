@@ -137,3 +137,21 @@ async def test_handler_literal_ask_defers_to_streaming_consumer() -> None:
             event.approve()
     result = await handle.result()
     assert result.output == "done"
+
+
+# ---------- Out-of-band ApprovalChannel ----------
+
+
+@pytest.mark.asyncio
+async def test_approval_channel_resolves_by_call_id() -> None:
+    """A caller outside the event stream can approve via handle.approvals."""
+    provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[sensitive])
+    handle = Runner.run_streamed(agent, "go")
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            # Resolve via the channel rather than ev.approve().
+            handle.approvals.approve(ev.call.id)
+    result = await handle.result()
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert tool_msg.content == "did it"

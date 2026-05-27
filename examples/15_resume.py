@@ -12,6 +12,7 @@ re-supply it on resume.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 
@@ -32,7 +33,7 @@ async def main() -> None:
     agent = Agent(
         name="researcher",
         instructions="Answer briefly using the lookup tool when helpful.",
-        model="openai:gpt-4o-mini",
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
         tools=[lookup],
     )
 

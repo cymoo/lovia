@@ -12,6 +12,7 @@ This example demonstrates four orthogonal reliability primitives:
 from __future__ import annotations
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 
@@ -39,8 +40,13 @@ async def main() -> None:
     agent = Agent(
         name="resilient",
         instructions="Answer concisely.",
-        # First provider tried; if it 5xx's persistently we fall through.
-        model=["openai:gpt-4o-mini", "anthropic:claude-3-5-haiku-latest"],
+        # ``model`` accepts a list of providers; the runner falls through on
+        # repeated provider errors. Here we just use one DeepSeek model, but
+        # you could add a second model name as a backup.
+        model=[
+            os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+            os.getenv("OPENAI_FALLBACK_MODEL", "deepseek-chat"),
+        ],
         tools=[slow_search],
     )
 

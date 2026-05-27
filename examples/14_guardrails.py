@@ -8,6 +8,7 @@ A guardrail is just an async (or sync) callable. Returning a reason string
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from dotenv import load_dotenv
@@ -40,7 +41,7 @@ async def main() -> None:
             "Answer questions concisely. Always include a '[source]' tag at "
             "the end of every factual answer."
         ),
-        model="openai:gpt-4o-mini",
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
         input_guardrails=[block_pii],
         output_guardrails=[require_citation],
     )

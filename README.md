@@ -38,17 +38,27 @@ Hard dependencies are only `httpx` and `pydantic`.
 - 🪶 **Tiny core, no magic.** One `Agent` dataclass, one `Runner`, async only.
 - 🔌 **Provider-neutral.** Built-in adapters for OpenAI Chat Completions and
   Anthropic Messages. Any OpenAI-compatible endpoint (DeepSeek, Ollama, vLLM,
-  Qwen, …) just needs a `base_url`.
+  Qwen, …) just needs a `base_url`. Pass a **list** of providers for automatic
+  fallback.
 - 🛠 **Tools from anywhere.** `@tool` on a function, pydantic / dataclass /
-  TypedDict / plain hints — all become JSON Schema automatically.
+  TypedDict / plain hints — all become JSON Schema automatically. Optional
+  `before` / `after` middleware lets you redact, transform, or audit calls.
 - 🧱 **Structured output.** Pass `output_type=YourModel`; uses native
   `response_format` when available, falls back to a synthetic tool otherwise.
-- 🔁 **Streaming = events.** `run_stream` yields `TextDelta`, `ToolCallStarted`,
-  `HandoffOccurred`, `RunCompleted`, … the same events go to hooks for
-  observability.
+- 🖼 **Multimodal.** `TextBlock` / `ImageBlock` content; both OpenAI and
+  Anthropic adapters translate them transparently.
+- 🧠 **Reasoning tokens.** A `ReasoningDelta` event surfaces Anthropic thinking
+  blocks and DeepSeek / OpenAI reasoning models.
+- 🔁 **Streaming = events.** `run_stream` yields `TextDelta`,
+  `ToolCallStarted`, `ReasoningDelta`, `HandoffOccurred`, `RunCompleted`, … the
+  same events go to hooks for observability.
+- 🛡 **Production-ready safety nets.** `RunBudget` caps tokens / tool calls /
+  wall-clock; `CancelToken` cooperatively cancels; `RetryPolicy` retries
+  transient provider errors with backoff; `Guardrail`s veto inputs/outputs.
+- 💾 **Sessions + checkpoints.** `InMemorySession`/`SQLiteSession` for chat
+  history; `InMemoryCheckpointer`/`SQLiteCheckpointer` for per-turn snapshots
+  with `Runner.resume(...)`.
 - 🗣 **Handoffs & agent-as-tool.** Compose multi-agent systems without ceremony.
-- 💾 **Sessions.** `InMemorySession` and `SQLiteSession`; plug your own
-  `Session` implementation for Redis, Postgres, …
 - 📚 **Skills.** Drop `SKILL.md` files in a directory; the agent lazy-loads them.
 - 🌐 **MCP client.** Stdio + Streamable-HTTP via the official `mcp` SDK (optional).
 - 🪝 **Hooks.** Subclass `AgentHooks`, plug into Logfire / OTel / your logger.
@@ -175,6 +185,101 @@ provider = OpenAIChatProvider(
 agent = Agent(name="DS", model=provider, instructions="...")
 ```
 
+### Multimodal content
+
+```python
+from lovia import Agent, Runner, TextBlock, ImageBlock
+from lovia.messages import user
+
+msg = user([
+    TextBlock(text="What's in this picture?"),
+    ImageBlock(url="https://example.com/cat.jpg"),
+])
+result = await Runner.run(agent, [msg])
+```
+
+Image blocks accept either a `url` or base64 `data` + `media_type`; both
+OpenAI and Anthropic adapters translate them to vendor formats.
+
+### Budget, retry, cancel, provider fallback
+
+```python
+from lovia import Agent, Runner, RunBudget, RetryPolicy, CancelToken
+
+budget = RunBudget(max_output_tokens=10_000, max_tool_calls=50, max_seconds=300)
+retry  = RetryPolicy(max_attempts=3)
+cancel = CancelToken()
+
+# A list of providers turns into an automatic fallback chain.
+agent = Agent(
+    name="resilient",
+    model=["openai:gpt-4o-mini", "anthropic:claude-3-5-haiku-latest"],
+)
+
+result = await Runner.run(
+    agent, "summarise this 30-page doc...",
+    budget=budget, retry=retry, cancel_token=cancel,
+)
+```
+
+Cancel mid-run from a signal handler / UI thread: `cancel.cancel()`.
+
+### Guardrails
+
+```python
+from lovia import Agent, GuardrailTripped
+
+async def block_pii(messages, ctx):
+    if any("ssn" in (m.text or "").lower() for m in messages):
+        return "input contains PII"
+
+async def require_citation(output, ctx):
+    if "[source]" not in (output or ""):
+        return "answer must cite a source"
+
+agent = Agent(
+    name="careful",
+    model="openai:gpt-4o-mini",
+    input_guardrails=[block_pii],
+    output_guardrails=[require_citation],
+)
+```
+
+Either type of guardrail can return a reason string (or `True`) to veto;
+return `None`/`False` to allow. Sync and async guardrails both work.
+
+### Checkpoint & resume
+
+```python
+from lovia import Runner
+from lovia.stores import SQLiteCheckpointer  # also: InMemoryCheckpointer
+
+cp = SQLiteCheckpointer("./runs.sqlite")
+
+# Snapshots are written at the end of every turn.
+await Runner.run(agent, "long-running task...", checkpointer=cp, run_id="run-42")
+
+# Later — possibly in a different process — pick up where it left off.
+result = await Runner.resume(agent, checkpointer=cp, run_id="run-42")
+```
+
+The opaque `context` value is *not* snapshotted; re-supply it on `resume`.
+
+### Tool middleware
+
+```python
+from lovia import tool
+
+async def normalize(args, ctx):
+    return {**args, "city": args["city"].lower()}
+
+async def redact(result, ctx):
+    return result.replace(SECRET, "***")
+
+@tool(before=normalize, after=redact)
+async def weather(city: str) -> str: ...
+```
+
 ### Observability
 
 ```python
@@ -205,6 +310,10 @@ See [`examples/`](./examples) for runnable scripts covering every feature:
 | `09_compat_provider.py` | DeepSeek / Ollama via OpenAI-compat |
 | `10_hooks.py` | `AgentHooks` for observability |
 | `11_approval.py` | Human-in-the-loop tool approval |
+| `12_multimodal.py` | Sending an image with `ImageBlock` |
+| `13_budget_and_cancel.py` | `RunBudget`, `RetryPolicy`, `CancelToken` |
+| `14_guardrails.py` | Input + output guardrails |
+| `15_resume.py` | Checkpointing and resuming a run |
 
 ## Public surface
 
@@ -216,11 +325,15 @@ from lovia import (
     tool, Tool,
     Session, AgentHooks,
     ChatMessage, ToolCall, Usage,
+    TextBlock, ImageBlock, ContentBlock,
     Provider, OpenAIChatProvider, ModelSettings,
+    RunBudget, RetryPolicy, CancelToken,
+    InputGuardrail, OutputGuardrail, GuardrailTripped,
+    Checkpointer, InMemoryCheckpointer, RunSnapshot,
     Skill, SkillCatalog, Handoff, agent_as_tool, drop_stale_tool_calls,
     events,
 )
-from lovia.stores import InMemorySession, SQLiteSession
+from lovia.stores import InMemorySession, SQLiteSession, SQLiteCheckpointer
 ```
 
 That's it.

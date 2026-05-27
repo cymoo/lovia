@@ -52,6 +52,20 @@ TContext = TypeVar("TContext")
 
 
 @dataclass
+class _TurnState:
+    """Mutable scratch space populated by phase helpers within one turn.
+
+    Async generators can't easily return a value, so the orchestrator passes
+    in a fresh ``_TurnState`` and reads the populated fields once the helper
+    finishes yielding events.
+    """
+
+    assistant: AssistantMessage | None = None
+    handoff_signal: "_HandoffSignal | None" = None
+    final_via_tool: Any = None
+
+
+@dataclass
 class RunResult:
     """The terminal state of a completed run.
 
@@ -381,32 +395,13 @@ class _RunLoop:
                 await dispatch(agent.hooks, ev_turn)
 
                 providers = agent.resolve_providers()
-                assistant = None
-                model_label = getattr(providers[0], "model", None) if providers else None
-                with tracer.span("model_call", model=model_label, turn=turns):
-                    async for chunk in _stream_with_fallback(
-                        providers,
-                        transcript,
-                        tools=[t.openai_schema() for t in tools_by_name.values()] or None,
-                        response_format=(
-                            response_format_for(output_spec)
-                            if output_spec and not output_spec.use_tool_fallback
-                            else None
-                        ),
-                        settings=agent.settings,
-                        retry=self.retry,
-                    ):
-                        if chunk.text_delta is not None:
-                            yield events.TextDelta(delta=chunk.text_delta)
-                            await dispatch(
-                                agent.hooks, events.TextDelta(delta=chunk.text_delta)
-                            )
-                        if chunk.reasoning_delta is not None:
-                            ev_r = events.ReasoningDelta(delta=chunk.reasoning_delta)
-                            yield ev_r
-                            await dispatch(agent.hooks, ev_r)
-                        if chunk.done is not None:
-                            assistant = chunk.done
+                state = _TurnState()
+                async for ev in self._run_model_turn(
+                    agent, providers, transcript, tools_by_name, output_spec, tracer, turns, state
+                ):
+                    yield ev
+                    await dispatch(agent.hooks, ev)
+                assistant = state.assistant
 
                 if assistant is None:
                     # Provider exited without emitting ``done`` - shouldn't
@@ -449,152 +444,33 @@ class _RunLoop:
                     break
 
                 # Process tool calls. May trigger a handoff, in which case we
-                # swap ``agent`` and continue the loop.
-                handoff_signal: _HandoffSignal | None = None
-                final_via_tool: Any = None
+                # swap ``agent`` and continue the loop. State is collected on
+                # ``state`` so the helper can report outcomes without leaking
+                # control flow back to the orchestrator.
                 for call in assistant.tool_calls:
-                    if self.cancel_token is not None:
-                        self.cancel_token.check()
-                    if self.budget is not None:
-                        self.budget.record_tool_call()
-                        self.budget.check(run_ctx.usage)
-
-                    if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
-                        # Synthetic final-output tool: parse, ack, terminate.
-                        final_via_tool = parse_output(output_spec, call.arguments)
-                        transcript.append(tool_message(call.id, "ok"))
-                        continue
-
-                    tool = tools_by_name.get(call.name)
-                    if tool is None:
-                        err = f"Tool {call.name!r} is not available."
-                        transcript.append(tool_message(call.id, err))
-                        yield events.ToolCallCompleted(
-                            call=call, result=err, is_error=True
-                        )
-                        await dispatch(
-                            agent.hooks,
-                            events.ToolCallCompleted(
-                                call=call, result=err, is_error=True
-                            ),
-                        )
-                        continue
-
-                    try:
-                        args = json.loads(call.arguments or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-
-                    # Approval gate.
-                    if tool.requires_approval(args, run_ctx):
-                        fut = self.approvals.register(call.id)
-                        ev = events.ApprovalRequired(call=call, _channel=self.approvals)
+                    async for ev in self._process_tool_call(
+                        call, agent, tools_by_name, run_ctx, tracer, output_spec, transcript, state
+                    ):
                         yield ev
                         await dispatch(agent.hooks, ev)
-
-                        # If a programmatic handler is configured and the
-                        # streaming consumer hasn't already resolved the
-                        # future, consult it. The handler may return:
-                        #   * truthy / "allow" → approve
-                        #   * "ask" → defer to streaming consumer
-                        #   * falsy / "deny"  → reject
-                        if agent.approval_handler is not None and not fut.done():
-                            try:
-                                decision = agent.approval_handler(call, run_ctx)
-                                if inspect.isawaitable(decision):
-                                    decision = await decision
-                            except Exception as exc:
-                                await dispatch(
-                                    agent.hooks, events.ErrorOccurred(error=exc)
-                                )
-                                decision = False
-                            if isinstance(decision, str):
-                                token = decision.strip().lower()
-                                if token == "ask":
-                                    pass  # leave fut unresolved
-                                elif token in ("allow", "approve", "yes"):
-                                    self.approvals.approve(call.id)
-                                else:
-                                    self.approvals.reject(call.id)
-                            elif not fut.done():
-                                self.approvals._resolve(call.id, bool(decision))
-
-                        # No one resolved the future → default deny so the
-                        # run cannot hang on an absent decision.
-                        if not fut.done():
-                            self.approvals.reject(call.id)
-
-                        approved = fut.result()
-                        if not approved:
-                            denial = f"Tool {call.name} was not approved."
-                            transcript.append(tool_message(call.id, denial))
-                            yield events.ToolCallCompleted(
-                                call=call, result=denial, is_error=True
-                            )
-                            await dispatch(
-                                agent.hooks,
-                                events.ToolCallCompleted(
-                                    call=call, result=denial, is_error=True
-                                ),
-                            )
-                            continue
-
-                    yield events.ToolCallStarted(call=call)
-                    await dispatch(agent.hooks, events.ToolCallStarted(call=call))
-
-                    try:
-                        with tracer.span("tool", name=tool.name, call_id=call.id):
-                            result = await run_tool(
-                                tool,
-                                args,
-                                run_ctx,
-                                default_retries=agent.default_tool_retries,
-                                default_timeout=agent.default_tool_timeout,
-                            )
-                        is_error = False
-                    except Exception as exc:
-                        result = f"Tool error: {exc}"
-                        is_error = True
-                        await dispatch(agent.hooks, events.ErrorOccurred(error=exc))
-
-                    if isinstance(result, _HandoffSignal):
-                        # Defer the actual swap until after we've recorded the
-                        # tool result, so the transcript stays consistent.
-                        handoff_signal = result
-                        result_text = f"Transferred to {result.target.name}" + (
-                            f" ({result.reason})" if result.reason else ""
-                        )
-                    else:
-                        result_text = await render_tool_result(tool, result, run_ctx)
-
-                    transcript.append(tool_message(call.id, result_text))
-                    yield events.ToolCallCompleted(
-                        call=call, result=result, is_error=is_error
-                    )
-                    await dispatch(
-                        agent.hooks,
-                        events.ToolCallCompleted(
-                            call=call, result=result, is_error=is_error
-                        ),
-                    )
 
                 ev_te = events.TurnEnded(agent=agent, turn=turns)
                 yield ev_te
                 await dispatch(agent.hooks, ev_te)
                 await self._snapshot(agent, transcript, run_ctx, turns)
 
-                if final_via_tool is not None:
-                    output = final_via_tool
+                if state.final_via_tool is not None:
+                    output = state.final_via_tool
                     break
 
-                if handoff_signal is not None:
+                if state.handoff_signal is not None:
                     prev_agent = agent
                     with tracer.span(
                         "handoff",
                         from_agent=prev_agent.name,
-                        to_agent=handoff_signal.target.name,
+                        to_agent=state.handoff_signal.target.name,
                     ):
-                        agent = handoff_signal.target
+                        agent = state.handoff_signal.target
                         run_ctx.agent = agent
                         output_spec = build_output_spec(
                             agent.output_type, _supports_json_schema(agent)
@@ -603,7 +479,7 @@ class _RunLoop:
                         # Update system prompt for the new agent and optionally
                         # filter the inherited transcript.
                         transcript[:] = await self._reset_for_handoff(
-                            transcript, agent, handoff_signal.handoff
+                            transcript, agent, state.handoff_signal.handoff
                         )
                     handoff_ev = events.HandoffOccurred(
                         from_agent=prev_agent, to_agent=agent
@@ -652,6 +528,176 @@ class _RunLoop:
                     pass
 
     # ------------------------------------------------------------------ helpers
+
+    async def _run_model_turn(
+        self,
+        agent: Agent,
+        providers: list[Provider],
+        transcript: list[ChatMessage],
+        tools_by_name: dict[str, Tool],
+        output_spec: OutputSpec | None,
+        tracer: Tracer,
+        turn: int,
+        state: _TurnState,
+    ) -> AsyncIterator[events.Event]:
+        """Stream one model call: yield deltas and capture the final message.
+
+        Yields :class:`events.TextDelta` and :class:`events.ReasoningDelta`
+        as the provider streams. Populates ``state.assistant`` with the
+        final :class:`AssistantMessage` once the stream completes.
+        """
+        model_label = getattr(providers[0], "model", None) if providers else None
+        with tracer.span("model_call", model=model_label, turn=turn):
+            async for chunk in _stream_with_fallback(
+                providers,
+                transcript,
+                tools=[t.openai_schema() for t in tools_by_name.values()] or None,
+                response_format=(
+                    response_format_for(output_spec)
+                    if output_spec and not output_spec.use_tool_fallback
+                    else None
+                ),
+                settings=agent.settings,
+                retry=self.retry,
+            ):
+                if chunk.text_delta is not None:
+                    yield events.TextDelta(delta=chunk.text_delta)
+                if chunk.reasoning_delta is not None:
+                    yield events.ReasoningDelta(delta=chunk.reasoning_delta)
+                if chunk.done is not None:
+                    state.assistant = chunk.done
+
+    async def _process_tool_call(
+        self,
+        call: Any,
+        agent: Agent,
+        tools_by_name: dict[str, Tool],
+        run_ctx: RunContext[Any],
+        tracer: Tracer,
+        output_spec: OutputSpec | None,
+        transcript: list[ChatMessage],
+        state: _TurnState,
+    ) -> AsyncIterator[events.Event]:
+        """Handle one tool call from the assistant.
+
+        Yields approval / start / completion events as appropriate, appends
+        the tool result to the transcript, and records handoff / final-output
+        outcomes on ``state``. The caller is responsible for forwarding
+        yielded events to hooks and to the outer stream.
+        """
+        # Pre-flight: cancellation and budget.
+        if self.cancel_token is not None:
+            self.cancel_token.check()
+        if self.budget is not None:
+            self.budget.record_tool_call()
+            self.budget.check(run_ctx.usage)
+
+        # Synthetic final-output tool: parse, ack, terminate.
+        if call.name == FINAL_OUTPUT_TOOL_NAME and output_spec is not None:
+            state.final_via_tool = parse_output(output_spec, call.arguments)
+            transcript.append(tool_message(call.id, "ok"))
+            return
+
+        tool = tools_by_name.get(call.name)
+        if tool is None:
+            err = f"Tool {call.name!r} is not available."
+            transcript.append(tool_message(call.id, err))
+            yield events.ToolCallCompleted(call=call, result=err, is_error=True)
+            return
+
+        try:
+            args = json.loads(call.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+
+        # Approval gate (only if the tool requested it).
+        if tool.requires_approval(args, run_ctx):
+            async for ev in self._await_approval(call, agent, run_ctx):
+                yield ev
+            approved = self.approvals.register(call.id).result()
+            if not approved:
+                denial = f"Tool {call.name} was not approved."
+                transcript.append(tool_message(call.id, denial))
+                yield events.ToolCallCompleted(call=call, result=denial, is_error=True)
+                return
+
+        yield events.ToolCallStarted(call=call)
+
+        try:
+            with tracer.span("tool", name=tool.name, call_id=call.id):
+                result = await run_tool(
+                    tool,
+                    args,
+                    run_ctx,
+                    default_retries=agent.default_tool_retries,
+                    default_timeout=agent.default_tool_timeout,
+                )
+            is_error = False
+        except Exception as exc:
+            result = f"Tool error: {exc}"
+            is_error = True
+            yield events.ErrorOccurred(error=exc)
+
+        if isinstance(result, _HandoffSignal):
+            # Defer the actual swap until after we've recorded the tool
+            # result, so the transcript stays consistent.
+            state.handoff_signal = result
+            result_text = f"Transferred to {result.target.name}" + (
+                f" ({result.reason})" if result.reason else ""
+            )
+        else:
+            result_text = await render_tool_result(tool, result, run_ctx)
+
+        transcript.append(tool_message(call.id, result_text))
+        yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
+
+    async def _await_approval(
+        self,
+        call: Any,
+        agent: Agent,
+        run_ctx: RunContext[Any],
+    ) -> AsyncIterator[events.Event]:
+        """Yield :class:`events.ApprovalRequired` and resolve the channel.
+
+        Three resolution paths race here:
+
+        1. A streaming consumer calls ``ev.approve()`` / ``ev.reject()``.
+        2. The agent's ``approval_handler`` returns a verdict.
+        3. An out-of-band caller resolves via ``RunHandle.approvals``.
+
+        If none of the above resolve the request, the runner falls back to
+        **deny** so the run cannot hang on an absent decision.
+        """
+        fut = self.approvals.register(call.id)
+        yield events.ApprovalRequired(call=call, _channel=self.approvals)
+
+        # If a programmatic handler is configured and no one has resolved
+        # the future yet, consult it. The handler may return:
+        #   * truthy / "allow" → approve
+        #   * "ask" → defer to streaming consumer / out-of-band caller
+        #   * falsy / "deny" → reject
+        if agent.approval_handler is not None and not fut.done():
+            try:
+                decision = agent.approval_handler(call, run_ctx)
+                if inspect.isawaitable(decision):
+                    decision = await decision
+            except Exception as exc:
+                yield events.ErrorOccurred(error=exc)
+                decision = False
+            if isinstance(decision, str):
+                token = decision.strip().lower()
+                if token == "ask":
+                    pass  # leave fut unresolved
+                elif token in ("allow", "approve", "yes"):
+                    self.approvals.approve(call.id)
+                else:
+                    self.approvals.reject(call.id)
+            elif not fut.done():
+                self.approvals._resolve(call.id, bool(decision))
+
+        # Default-deny if still unresolved.
+        if not fut.done():
+            self.approvals.reject(call.id)
 
     async def _build_initial_messages(self, agent: Agent) -> list[ChatMessage]:
         msgs: list[ChatMessage] = []

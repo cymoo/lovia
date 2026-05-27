@@ -223,6 +223,23 @@ provider = OpenAIChatProvider(
 agent = Agent(name="DS", model=provider, instructions="...")
 ```
 
+### Plug in a new provider
+
+Third-party providers can be registered under a custom vendor prefix and
+become usable from `"vendor:model"` strings:
+
+```python
+from lovia.providers import register_provider
+
+register_provider("gemini", lambda model: MyGeminiProvider(model=model))
+
+agent = Agent(name="G", model="gemini:gemini-1.5-pro", instructions="...")
+```
+
+The same mapping can be exposed declaratively as a `lovia.providers`
+entry-point group in your package metadata — `provider_from_string`
+discovers installed plugins lazily on first use.
+
 ### Multimodal content
 
 ```python

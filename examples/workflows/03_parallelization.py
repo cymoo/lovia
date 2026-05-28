@@ -192,7 +192,11 @@ async def voting_example() -> None:
         strict_task, lenient_task, neutral_task
     )
 
-    verdicts: list[ContentVerdict] = [strict_r.output, lenient_r.output, neutral_r.output]
+    verdicts: list[ContentVerdict] = [
+        strict_r.output,
+        lenient_r.output,
+        neutral_r.output,
+    ]
     judges = ["StrictJudge", "LenientJudge", "NeutralJudge"]
 
     print("\n--- Individual Verdicts ---")
@@ -207,6 +211,7 @@ async def voting_example() -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 async def main() -> None:
     await sectioning_example()

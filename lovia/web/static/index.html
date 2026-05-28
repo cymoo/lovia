@@ -13,25 +13,41 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="topbar-inner">
+    <aside class="sidebar sidebar-left" id="sidebar-sessions">
+      <div class="sidebar-head">
         <div class="brand">
           <span class="mark" aria-hidden="true"></span>
           <span class="brand-name">lovia</span>
         </div>
-        <div class="topbar-meta">
-          <span id="agent-label" class="agent-label">—</span>
-          <button id="reset" class="btn btn-ghost" type="button">
-            New chat
-          </button>
-        </div>
+        <button id="new-chat" class="btn btn-primary btn-sm" type="button" title="New chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
       </div>
-    </header>
+      <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
+      <div class="sidebar-foot">
+        <span id="agent-label" class="agent-label">—</span>
+      </div>
+    </aside>
 
     <main class="page">
+      <header class="topbar">
+        <h1 id="chat-title" class="chat-title">New chat</h1>
+        <div class="topbar-actions">
+          <button id="toggle-right" class="btn btn-ghost btn-sm" type="button" title="Workspace panel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <line x1="15" y1="3" x2="15" y2="21"></line>
+            </svg>
+          </button>
+        </div>
+      </header>
+
       <section id="transcript" class="transcript" aria-live="polite">
         <div class="empty-state" id="empty-state">
-          <h1>How can I help you today?</h1>
+          <h2>How can I help you today?</h2>
           <p>Ask anything — I'll think it through and respond.</p>
         </div>
       </section>
@@ -56,6 +72,30 @@
         <p class="composer-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline</p>
       </form>
     </main>
+
+    <aside class="sidebar sidebar-right" id="sidebar-right">
+      <div class="panel-tabs">
+        <button class="tab active" data-tab="files">Files</button>
+        <button class="tab" data-tab="audit">Audit</button>
+      </div>
+      <div class="panel" id="panel-files">
+        <div class="panel-empty">No workspace yet — start a chat that uses the sandbox.</div>
+      </div>
+      <div class="panel hidden" id="panel-audit">
+        <div class="panel-empty">No audited commands.</div>
+      </div>
+    </aside>
+
+    <!-- file viewer modal -->
+    <div id="file-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-head">
+          <code id="file-modal-path"></code>
+          <button id="file-modal-close" class="btn btn-ghost btn-sm" type="button">Close</button>
+        </div>
+        <pre id="file-modal-body"></pre>
+      </div>
+    </div>
 
     <template id="tmpl-turn">
       <article class="turn">

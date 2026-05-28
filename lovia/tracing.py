@@ -26,7 +26,9 @@ from typing import Any, ContextManager, Iterator, Protocol
 
 # Per-task indent depth, used by ConsoleTracer to render nesting. A contextvar
 # is the right tool because runs may be interleaved in the same event loop.
-_depth: contextvars.ContextVar[int] = contextvars.ContextVar("lovia_trace_depth", default=0)
+_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "lovia_trace_depth", default=0
+)
 
 
 class Span(Protocol):
@@ -123,7 +125,9 @@ class ConsoleTracer:
                 status = ""
                 if span.exception is not None:
                     status = f" ! {type(span.exception).__name__}: {span.exception}"
-                line = f"{prefix}{span.name} ({elapsed_ms:.1f}ms) {attrs}{status}".rstrip()
+                line = (
+                    f"{prefix}{span.name} ({elapsed_ms:.1f}ms) {attrs}{status}".rstrip()
+                )
                 self.logger.info(line)
 
 

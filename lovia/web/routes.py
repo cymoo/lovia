@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -21,22 +23,42 @@ from ..agent import Agent
 from ..context_policy import ContextPolicy
 from ..items import items_to_chat_messages
 from ..runner import Runner
-from ..session import Session
+from ..sandbox import AuditStream, SandboxProvider
 from .approvals import ApprovalRegistry
-from .schemas import AgentInfo, ApprovalRequest, ChatRequest, ChatResponse, MessageOut
+from .schemas import (
+    AgentInfo,
+    ApprovalRequest,
+    AuditEntry,
+    ChatRequest,
+    ChatResponse,
+    ChatSessionInfo,
+    FileEntry,
+    MessageOut,
+    RenameRequest,
+    SessionDetail,
+)
 from .sse import _coerce, event_to_sse
+from .store import ChatStore
+from .titles import generate_title
+
+log = logging.getLogger(__name__)
 
 _STATIC = Path(__file__).parent / "static"
 
 
 def build_router(
     agents: dict[str, Agent[Any]],
-    session: Session,
+    store: ChatStore,
     approvals: ApprovalRegistry,
     *,
     context_policy: ContextPolicy | None = None,
+    sandbox_provider: SandboxProvider | None = None,
+    audit_stream: AuditStream | None = None,
+    title_model: Any = None,
+    generate_titles: bool = True,
 ) -> APIRouter:
     router = APIRouter()
+    session = store.session
 
     def _pick(name: str | None) -> Agent[Any]:
         if name is None:
@@ -50,6 +72,19 @@ def build_router(
             raise HTTPException(status_code=404, detail=f"unknown agent {name!r}")
         return agents[name]
 
+    async def _schedule_title(
+        session_id: str, user_msg: str, output: Any, agent_name: str
+    ) -> None:
+        """Generate a title in the background; never propagate failures."""
+        model = title_model or agents[agent_name].model
+        try:
+            title = await generate_title(user_msg, output, model=model)
+            await store.set_title(session_id, title)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("title generation for %s failed: %s", session_id, exc)
+
+    # ---- static UI ------------------------------------------------------
+
     @router.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(_STATIC / "index.html")
@@ -57,6 +92,8 @@ def build_router(
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ---- agents ---------------------------------------------------------
 
     @router.get("/api/agents", response_model=list[AgentInfo])
     async def list_agents() -> list[AgentInfo]:
@@ -71,10 +108,14 @@ def build_router(
             for name, agent in agents.items()
         ]
 
+    # ---- chat -----------------------------------------------------------
+
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
         agent = _pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
+        is_new = (await store.get(sid)) is None
+        await store.upsert(sid, agent=agent.name)
         result = await Runner.run(
             agent,
             req.message,
@@ -82,6 +123,10 @@ def build_router(
             session_id=sid,
             context_policy=context_policy,
         )
+        if is_new and generate_titles:
+            asyncio.create_task(
+                _schedule_title(sid, req.message, result.output, agent.name)
+            )
         return ChatResponse(
             output=_coerce(result.output),
             session_id=sid,
@@ -96,6 +141,8 @@ def build_router(
     async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
         agent = _pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
+        is_new = (await store.get(sid)) is None
+        await store.upsert(sid, agent=agent.name)
 
         async def gen():
             handle = Runner.stream(
@@ -107,6 +154,7 @@ def build_router(
             )
             # Tell the client its session id up front so reconnects work.
             yield {"event": "session", "data": json.dumps({"session_id": sid})}
+            final_output: Any = None
             try:
                 async for ev in handle:
                     if await request.is_disconnected():
@@ -114,14 +162,26 @@ def build_router(
                     payload = event_to_sse(ev)
                     if payload is not None:
                         yield payload
-                    # ApprovalRequired pauses the runner via the registry; the
-                    # client posts to /api/chat/approve to unblock it.
+                    if isinstance(ev, events.RunCompleted):
+                        final_output = ev.result.output
                     if isinstance(ev, events.ApprovalRequired):
                         await approvals.await_decision(sid, ev)
             finally:
-                # Default-deny anything still pending so the runner unblocks
-                # even if the client disconnected mid-decision.
                 await approvals.release(sid)
+
+            if is_new and generate_titles:
+                # Stream a "title" event when ready so the client updates
+                # the sidebar without polling.
+                try:
+                    model = title_model or agent.model
+                    title = await generate_title(req.message, final_output, model=model)
+                    await store.set_title(sid, title)
+                    yield {
+                        "event": "title",
+                        "data": json.dumps({"session_id": sid, "title": title}),
+                    }
+                except Exception as exc:  # pragma: no cover - defensive
+                    log.warning("title gen failed for %s: %s", sid, exc)
 
         return EventSourceResponse(gen())
 
@@ -134,25 +194,123 @@ def build_router(
             raise HTTPException(status_code=404, detail="no pending approval matches")
         return {"ok": True}
 
-    @router.get("/api/sessions/{session_id}", response_model=list[MessageOut])
-    async def get_session(session_id: str) -> list[MessageOut]:
-        # Session storage is Item-based; flatten to ChatMessage for the UI
-        # which only cares about user-visible roles + tool results.
+    # ---- sessions -------------------------------------------------------
+
+    @router.get("/api/sessions", response_model=list[ChatSessionInfo])
+    async def list_sessions() -> list[ChatSessionInfo]:
+        return [ChatSessionInfo(**m.to_dict()) for m in await store.list()]
+
+    @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
+    async def get_session(session_id: str) -> SessionDetail:
+        meta = await store.get(session_id)
         items = await session.load(session_id)
         msgs = items_to_chat_messages(items)
-        return [
+        body = [
             MessageOut(
                 role=m.role,
                 content=m.text or m.content,
                 tool_call_id=m.tool_call_id,
                 name=m.name,
+                tool_calls=[
+                    {
+                        "id": c.id,
+                        "name": c.name,
+                        "arguments": c.arguments,
+                    }
+                    for c in m.tool_calls
+                ],
             )
             for m in msgs
         ]
+        if meta is None:
+            from time import time as _now
+
+            return SessionDetail(
+                id=session_id,
+                title=None,
+                agent=None,
+                created_at=_now(),
+                updated_at=_now(),
+                items=body,
+            )
+        return SessionDetail(**meta.to_dict(), items=body)
+
+    @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
+    async def rename_session(session_id: str, req: RenameRequest) -> ChatSessionInfo:
+        meta = await store.get(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        await store.set_title(session_id, req.title)
+        meta = await store.get(session_id)
+        assert meta is not None  # just updated
+        return ChatSessionInfo(**meta.to_dict())
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
-        await session.clear(session_id)
+        await store.delete(session_id)
+        # Best-effort: also tear down the sandbox bound to this session so
+        # we don't leak workspaces.
+        if sandbox_provider is not None:
+            sb = await sandbox_provider.get(session_id)
+            if sb is not None:
+                await sb.close()
         return {"ok": True}
+
+    # ---- audit ----------------------------------------------------------
+
+    @router.get("/api/sessions/{session_id}/audit", response_model=list[AuditEntry])
+    async def get_audit(session_id: str) -> list[AuditEntry]:
+        if audit_stream is None:
+            return []
+        return [
+            AuditEntry(
+                timestamp=r.timestamp,
+                agent_name=r.agent_name,
+                tool_name=r.tool_name,
+                command=r.command,
+                verdict=r.verdict,
+                reason=r.reason,
+            )
+            for r in audit_stream.history()
+            if r.session_id == session_id
+        ]
+
+    # ---- sandbox files --------------------------------------------------
+
+    @router.get("/api/sessions/{session_id}/files", response_model=list[FileEntry])
+    async def list_files(
+        session_id: str, path: str = ".", include_hidden: bool = False
+    ) -> list[FileEntry]:
+        if sandbox_provider is None:
+            raise HTTPException(status_code=404, detail="no sandbox configured")
+        sb = await sandbox_provider.get(session_id)
+        if sb is None:
+            return []
+        entries = await sb.ls(path, include_hidden=include_hidden)
+        return [
+            FileEntry(name=e.name, is_dir=e.is_dir, size=e.size, mtime=e.mtime)
+            for e in entries
+        ]
+
+    @router.get("/api/sessions/{session_id}/files/{path:path}")
+    async def read_file(session_id: str, path: str) -> dict[str, Any]:
+        if sandbox_provider is None:
+            raise HTTPException(status_code=404, detail="no sandbox configured")
+        sb = await sandbox_provider.get(session_id)
+        if sb is None:
+            raise HTTPException(status_code=404, detail="session has no workspace yet")
+        try:
+            data = await sb.read(path, max_bytes=256_000)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Detect binary by trying to decode; fall back to base64-ish marker.
+        try:
+            return {"path": path, "content": data.decode("utf-8"), "binary": False}
+        except UnicodeDecodeError:
+            return {
+                "path": path,
+                "content": f"[binary: {len(data)} bytes]",
+                "binary": True,
+            }
 
     return router

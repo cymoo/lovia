@@ -72,9 +72,16 @@ async def main() -> None:
     seeded: list = []
     for i in range(30):
         seeded.append(
-            InputMessageItem(role="user", content=f"User trivia round {i}: tell me a fact about pandas.")
+            InputMessageItem(
+                role="user",
+                content=f"User trivia round {i}: tell me a fact about pandas.",
+            )
         )
-        seeded.append(MessageOutputItem(content=f"Fact #{i}: pandas eat about 12kg of bamboo daily."))
+        seeded.append(
+            MessageOutputItem(
+                content=f"Fact #{i}: pandas eat about 12kg of bamboo daily."
+            )
+        )
     await session.append("u-mei", seeded)
 
     # Write-only archive: a one-liner persists the pre-compaction transcript.

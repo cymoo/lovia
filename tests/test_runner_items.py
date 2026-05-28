@@ -163,17 +163,15 @@ async def test_items_mirror_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> No
         value: int
 
     # First reply has invalid JSON, second is valid.
-    provider = ScriptedProvider(
-        [text("not json"), text(json.dumps({"value": 7}))]
-    )
-    agent = Agent(
-        name="t", instructions="x", model=provider, output_type=Out
-    )
+    provider = ScriptedProvider([text("not json"), text(json.dumps({"value": 7}))])
+    agent = Agent(name="t", instructions="x", model=provider, output_type=Out)
     result = await Runner.run(agent, "give me a number")
     assert isinstance(result.output, Out) and result.output.value == 7
     # Repair prompt appears as a user item between the two assistant items.
     user_items = [
-        i for i in result.new_items if isinstance(i, InputMessageItem) and i.role == "user"
+        i
+        for i in result.new_items
+        if isinstance(i, InputMessageItem) and i.role == "user"
     ]
     # original user + repair prompt = 2 user items
     assert len(user_items) == 2

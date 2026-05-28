@@ -54,6 +54,7 @@ the spring of hope, it was the winter of despair.
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class EvaluationResult(BaseModel):
     score: Literal["poor", "acceptable", "good", "excellent"]
     issues: list[str]
@@ -99,6 +100,7 @@ evaluator_agent = Agent(
 # Optimization loop
 # ---------------------------------------------------------------------------
 
+
 async def optimize_translation(source: str) -> str:
     feedback_context = ""
     current_translation = ""
@@ -127,7 +129,9 @@ async def optimize_translation(source: str) -> str:
         eval_result = await Runner.run(evaluator_agent, eval_prompt)
         evaluation: EvaluationResult = eval_result.output
 
-        print(f"\n[Evaluator] score={evaluation.score!r}  approved={evaluation.approved}")
+        print(
+            f"\n[Evaluator] score={evaluation.score!r}  approved={evaluation.approved}"
+        )
         if evaluation.issues:
             print("  Issues:", "; ".join(evaluation.issues))
         if evaluation.suggestions:

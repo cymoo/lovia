@@ -41,6 +41,7 @@ MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 # Output schemas
 # ---------------------------------------------------------------------------
 
+
 class Subtask(BaseModel):
     id: str
     title: str
@@ -108,6 +109,7 @@ synthesizer = Agent(
 # ---------------------------------------------------------------------------
 # Orchestration logic
 # ---------------------------------------------------------------------------
+
 
 async def run_worker(subtask: Subtask) -> WorkerResult:
     result = await Runner.run(worker, subtask.research_prompt)

@@ -15,10 +15,11 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ..agent import Agent
 from ..context_policy import ContextPolicy
+from ..sandbox import AuditStream, SandboxProvider
 from ..session import Session
-from ..stores import InMemorySession
 from .approvals import ApprovalRegistry
 from .routes import build_router
+from .store import ChatStore
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -34,27 +35,63 @@ def _normalise(
 def create_app(
     agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
+    db_path: str | Path | None = None,
     session: Session | None = None,
+    store: ChatStore | None = None,
+    sandbox_provider: SandboxProvider | None = None,
+    audit_stream: AuditStream | None = None,
     context_policy: ContextPolicy | None = None,
+    title_model: Any = None,
+    generate_titles: bool = True,
     title: str = "lovia",
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
-    Returns a plain ASGI app — run it with any ASGI server.
+    Storage precedence (highest first):
 
-    Pass ``context_policy`` (e.g. :class:`~lovia.SummarizingContextPolicy`)
-    to keep long-running sessions under the model's context window. The
-    same policy instance is shared across all routed agents — handoff is
-    transparent to the policy because it operates on the session
-    transcript, not on the agent.
+    * ``store`` — fully-formed :class:`ChatStore`.
+    * ``db_path`` — persist transcripts + metadata to a SQLite file.
+    * ``session`` — bring-your-own :class:`Session`; metadata kept in-memory.
+    * neither — pure in-memory chats (lost on restart). Backward-compatible
+      with the old signature.
+
+    Sandbox integration is optional but recommended:
+
+    * ``sandbox_provider`` — when set, the ``/api/sessions/.../files`` endpoint
+      lists / reads files in the per-session workspace, and deleting a chat
+      tears down the matching sandbox.
+    * ``audit_stream`` — when set, the ``/api/sessions/.../audit`` endpoint
+      returns the per-session audit history that the sandbox's ``run`` tool
+      published.
+
+    ``title_model`` overrides the model used to generate chat titles; defaults
+    to the first agent's own ``model``.
     """
     agents = _normalise(agent_or_agents)
-    sess: Session = session if session is not None else InMemorySession()
+
+    if store is not None:
+        chat_store = store
+    elif db_path is not None:
+        chat_store = ChatStore.sqlite(db_path)
+    elif session is not None:
+        chat_store = ChatStore(session, meta_path=":memory:")
+    else:
+        chat_store = ChatStore.in_memory()
+
     approvals = ApprovalRegistry()
 
     app = FastAPI(title=title, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.include_router(
-        build_router(agents, sess, approvals, context_policy=context_policy)
+        build_router(
+            agents,
+            chat_store,
+            approvals,
+            context_policy=context_policy,
+            sandbox_provider=sandbox_provider,
+            audit_stream=audit_stream,
+            title_model=title_model,
+            generate_titles=generate_titles,
+        )
     )
     app.mount(
         "/static", StaticFiles(directory=str(_STATIC), check_dir=False), name="static"
@@ -62,9 +99,12 @@ def create_app(
 
     # Stash for tests / introspection.
     app.state.agents = agents
-    app.state.session = sess
+    app.state.store = chat_store
+    app.state.session = chat_store.session
     app.state.approvals = approvals
     app.state.context_policy = context_policy
+    app.state.sandbox_provider = sandbox_provider
+    app.state.audit_stream = audit_stream
     return app
 
 
@@ -73,8 +113,14 @@ def serve(
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
+    db_path: str | Path | None = None,
     session: Session | None = None,
+    store: ChatStore | None = None,
+    sandbox_provider: SandboxProvider | None = None,
+    audit_stream: AuditStream | None = None,
     context_policy: ContextPolicy | None = None,
+    title_model: Any = None,
+    generate_titles: bool = True,
     title: str = "lovia",
     **uvicorn_kwargs: Any,
 ) -> None:
@@ -88,8 +134,14 @@ def serve(
 
     app = create_app(
         agent_or_agents,
+        db_path=db_path,
         session=session,
+        store=store,
+        sandbox_provider=sandbox_provider,
+        audit_stream=audit_stream,
         context_policy=context_policy,
+        title_model=title_model,
+        generate_titles=generate_titles,
         title=title,
     )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

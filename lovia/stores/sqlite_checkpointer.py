@@ -40,7 +40,7 @@ class SQLiteCheckpointer(SQLiteStore):
             )
             conn.commit()
         finally:
-            conn.close()
+            self._release(conn)
 
     async def load(self, run_id: str) -> RunSnapshot | None:
         return await self._run(lambda: self._load_sync(run_id))
@@ -55,7 +55,7 @@ class SQLiteCheckpointer(SQLiteStore):
                 return None
             return RunSnapshot.from_json(row["payload"])
         finally:
-            conn.close()
+            self._release(conn)
 
     async def delete(self, run_id: str) -> None:
         await self._run(lambda: self._delete_sync(run_id))
@@ -66,4 +66,4 @@ class SQLiteCheckpointer(SQLiteStore):
             conn.execute("DELETE FROM run_snapshots WHERE run_id = ?", (run_id,))
             conn.commit()
         finally:
-            conn.close()
+            self._release(conn)

@@ -237,17 +237,12 @@ Nothing is imported automatically — grab only what you need.
 
 ```python
 from lovia.builtins.http import http_fetch
-from lovia.builtins.fs import FileSystem
-from lovia.builtins.shell import Shell, allowlist
 from lovia.builtins.search import duckduckgo_search_tool
 from lovia.builtins.todo import TodoList, todo_tools
 from lovia.builtins.human import HumanChannel, ask_human
 from lovia.builtins.think import think
 from lovia.builtins.time import now
-from lovia.builtins.code import PythonRunner
 
-fs = FileSystem(root="/tmp/sandbox", writable=True)
-sh = Shell(cwd="/tmp", needs_approval=allowlist(["ls", "cat"]))
 todos = TodoList()
 channel = HumanChannel()
 
@@ -257,25 +252,126 @@ agent = Agent(
     model="openai:gpt-4o-mini",
     tools=[
         http_fetch, now, think,
-        *fs.tools(),
-        sh.tool(),
         duckduckgo_search_tool(),  # requires lovia[tools]
         *todo_tools(todos),
         ask_human(channel),
-        PythonRunner(needs_approval=False).tool(),
     ],
 )
 ```
-
-`Shell` and `PythonRunner` default to `needs_approval=True` for safety.
-The `allowlist(commands)` helper builds an approval predicate that auto-approves
-whitelisted commands and blocks everything else.
 
 Builtin convention: stateless helpers export ready-to-use `Tool` instances,
 pluggable backends use factories, stateful single-tool helpers expose `.tool()`,
 and stateful multi-tool helpers expose `.tools()`.
 
-Runnable demos for each tool live in [`examples/builtins/`](./examples/builtins/).
+Filesystem and shell tools live in `lovia.sandbox` (see next section) —
+they need a proper sandbox abstraction, not a thin one-off helper.
+
+Runnable demos live in [`examples/builtins/`](./examples/builtins/).
+
+---
+
+## Sandbox
+
+`lovia.sandbox` is the concise filesystem + process layer. One
+Protocol (`Sandbox`), one pool (`SandboxProvider`), one wiring call
+(`attach_sandbox`). Ships with a default in-process backend
+(`LocalSandbox`); swap in Docker / Firecracker by implementing the
+Protocol — agent code stays the same.
+
+```python
+from lovia import (
+    Agent, Runner,
+    LocalSandboxProvider, attach_sandbox, AuditStream,
+)
+from lovia.stores import InMemorySession
+
+base = Agent(name="coder", instructions="…", model="openai:gpt-4o-mini")
+
+async with LocalSandboxProvider() as provider:
+    audit = AuditStream()  # optional pub/sub for a UI
+    agent = attach_sandbox(base, provider, audit_stream=audit)
+
+    session = InMemorySession()  # from lovia.stores
+    await Runner.run(agent, "Create app.py and run it.", session=session, session_id="s1")
+    # Same session_id → same workspace on the next turn.
+    await Runner.run(agent, "Now add tests.", session=session, session_id="s1")
+```
+
+What you get for free:
+
+* **Path traversal guard** — symlink-aware, blocks `..`, `/etc/...`, etc.
+* **Dependency isolation by PATH/HOME** — each sandbox redirects `HOME`
+  and `TMPDIR` to a private subdir and prepends `<root>/.venv/bin` to
+  `PATH`. The framework does *not* manage that venv. When the LLM needs
+  Python deps it bootstraps one itself:
+  ```bash
+  python -m venv .venv && .venv/bin/pip install pandas
+  ```
+  From the next command onwards `python` and `pip` resolve to the venv
+  automatically — no special API, no auto-bootstrap, zero pollution of
+  the host environment.
+* **Audit policy** — `default_audit_policy()` blocks the obvious foot-guns
+  (`rm -rf /`, `mkfs`, `curl|sh`, fork bombs, …) *and* warns on bare
+  `pip install` / `npm install -g` so the LLM is nudged toward a venv.
+  Three-valued (`pass`/`warn`/`block`): warnings annotate stderr without
+  blocking, giving the model a chance to self-correct.
+* **Per-session lifecycle** — sandboxes are refcounted by `session_id`;
+  multi-turn runs reuse the same workspace (including any `.venv` the
+  model created) until the provider shuts down.
+* **Hidden-file filtering** — `ls`/`glob` skip dotfiles by default so
+  `**/*.py` doesn't drown in the LLM's own `.venv/`. Pass
+  `include_hidden=True` to look.
+* **Live audit stream** — subscribe via `AuditStream.subscribe()` for a
+  UI; history is kept for late-joining subscribers.
+* **Apply-patch tool** — tolerant unified-diff editor on top of read+write,
+  the cheapest way to let a model edit files.
+
+`LocalSandbox` is **not a security boundary** — `HOME`/`PATH` redirection
+keeps things tidy, not safe. For untrusted code use a container-backed
+`Sandbox` implementation.
+
+Runnable demos: [`examples/22_sandbox.py`](./examples/22_sandbox.py),
+[`examples/23_sandbox_session.py`](./examples/23_sandbox_session.py),
+[`examples/24_custom_sandbox.py`](./examples/24_custom_sandbox.py).
+
+---
+
+## Web UI
+
+`lovia.web` ships a small FastAPI app + bundled vanilla-JS chat UI. It's
+the same wiring you'd build yourself, but pre-assembled so you can ship a
+demo in three lines:
+
+```python
+from lovia import Agent
+from lovia.web import serve
+
+agent = Agent(name="assistant", instructions="…", model="openai:gpt-4o-mini")
+serve(agent, db_path="lovia.db")   # http://127.0.0.1:8000
+```
+
+What you get out of the box:
+
+* **Sidebar of chats** — every session lives in SQLite (`db_path`), so it
+  survives restarts, can be renamed, deleted, switched.
+* **Auto-generated titles** — after the first turn a tiny background
+  call asks the same model for a 3-6 word headline.
+* **Streaming transcript** with tool-call cards and approval prompts.
+* **Workspace panel + audit feed** — pass `sandbox_provider=` and
+  `audit_stream=` and the right-hand panel shows the per-session files
+  and every shell command's pass/warn/block verdict in real time.
+
+```python
+from lovia import LocalSandboxProvider, AuditStream, attach_sandbox
+
+provider = LocalSandboxProvider()
+audit = AuditStream()
+agent = attach_sandbox(base_agent, provider, audit_stream=audit)
+serve(agent, db_path="lovia.db", sandbox_provider=provider, audit_stream=audit)
+```
+
+See [`examples/25_web_sandbox.py`](./examples/25_web_sandbox.py) for the
+full wiring.
 
 ---
 
@@ -351,6 +447,10 @@ examples/
   19_dynamic_instructions.py   Dynamic system prompt
   20_builtins.py               Several builtins together
   21_dx.py                     Annotated schemas, run_sync
+  22_sandbox.py                Per-run LocalSandbox + sandbox_tools
+  23_sandbox_session.py        Multi-turn with LocalSandboxProvider
+  24_custom_sandbox.py         Implement Sandbox to plug Docker / firecracker
+  25_web_sandbox.py            Full web stack: persistent + sandbox + UI
   builtins/                    One focused demo per builtin
   workflows/                   Multi-agent workflow patterns
 ```

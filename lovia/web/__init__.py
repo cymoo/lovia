@@ -18,9 +18,10 @@ from __future__ import annotations
 
 try:
     from .app import create_app, serve
+    from .store import ChatMeta, ChatStore
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
-__all__ = ["create_app", "serve"]
+__all__ = ["ChatMeta", "ChatStore", "create_app", "serve"]

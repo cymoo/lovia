@@ -37,6 +37,7 @@ MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 # Output schemas
 # ---------------------------------------------------------------------------
 
+
 class Section(BaseModel):
     title: str
     key_points: list[str]
@@ -86,6 +87,7 @@ translator = Agent(
 # Gate: programmatic check between steps
 # ---------------------------------------------------------------------------
 
+
 def check_outline(outline: Outline) -> bool:
     """Return True only if the outline has enough substance to expand."""
     return len(outline.sections) >= 3
@@ -94,6 +96,7 @@ def check_outline(outline: Outline) -> bool:
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
+
 
 async def run_pipeline(topic: str) -> str:
     print(f"[Step 1] Generating outline for: {topic!r}")

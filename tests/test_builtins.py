@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import tempfile
-from pathlib import Path
 
 import pytest
 
-from lovia.builtins import code, fs, http, search, shell, think, time as time_b, todo
+from lovia.builtins import http, search, think, time as time_b, todo
 from lovia.builtins.human import HumanChannel, ask_human
-from lovia.exceptions import ToolError, UserError
+from lovia.exceptions import UserError
 from lovia.run_context import RunContext
 
 
@@ -50,86 +48,6 @@ async def test_sleep_is_capped() -> None:
 @pytest.mark.asyncio
 async def test_think_echoes() -> None:
     assert await think.think.invoke({"thought": "x"}, _ctx()) == "x"
-
-
-# ---------------------------------------------------------------- fs
-
-
-@pytest.mark.asyncio
-async def test_fs_read_and_sandbox() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / "a.txt").write_text("hello")
-        f = fs.FileSystem(root=tmp, writable=False)
-        tools = {t.name: t for t in f.tools()}
-        assert "write_file" not in tools
-        assert "hello" == await tools["read_file"].invoke({"path": "a.txt"}, _ctx())
-
-        with pytest.raises(ToolError):
-            await tools["read_file"].invoke({"path": "../etc/passwd"}, _ctx())
-
-
-@pytest.mark.asyncio
-async def test_fs_read_file_slice() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        (root / "a.txt").write_text("hello world")
-        f = fs.FileSystem(root=tmp, writable=False)
-        tools = {t.name: t for t in f.tools()}
-
-        assert (
-            await tools["read_file"].invoke(
-                {"path": "a.txt", "offset": 6, "length": 5}, _ctx()
-            )
-            == "world"
-        )
-
-
-@pytest.mark.asyncio
-async def test_fs_write_when_writable() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        f = fs.FileSystem(root=tmp, writable=True)
-        tools = {t.name: t for t in f.tools()}
-        await tools["write_file"].invoke({"path": "out.txt", "content": "hi"}, _ctx())
-        assert (Path(tmp) / "out.txt").read_text() == "hi"
-
-
-def test_fs_missing_root_raises_user_error() -> None:
-    with pytest.raises(UserError):
-        fs.FileSystem(root="/nonexistent/lovia/path/_x")
-
-
-# ---------------------------------------------------------------- shell
-
-
-@pytest.mark.asyncio
-async def test_shell_runs_safe_command() -> None:
-    sh = shell.Shell(needs_approval=False, timeout=5)
-    out = await sh.tool().invoke({"cmd": "echo hi"}, _ctx())
-    assert out["exit_code"] == 0
-    assert "hi" in out["stdout"]
-
-
-def test_shell_default_needs_approval() -> None:
-    sh = shell.Shell()
-    assert sh.tool().needs_approval is True
-
-
-def test_shell_allowlist_predicate() -> None:
-    pred = shell.allowlist(["ls", "echo"])
-    assert pred({"cmd": "echo hi"}, _ctx()) is False  # allowed
-    assert pred({"cmd": "rm -rf /"}, _ctx()) is True  # needs approval
-
-
-# ---------------------------------------------------------------- code
-
-
-@pytest.mark.asyncio
-async def test_python_runner_executes() -> None:
-    runner = code.PythonRunner(needs_approval=False, timeout=10)
-    out = await runner.tool().invoke({"code": "print(2 + 2)"}, _ctx())
-    assert out["exit_code"] == 0
-    assert "4" in out["stdout"]
 
 
 # ---------------------------------------------------------------- todo

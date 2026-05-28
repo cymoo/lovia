@@ -780,7 +780,12 @@ class _RunLoop:
             transcript = await self._build_initial_messages(agent)
             items_log = transcript_to_items(transcript)
 
-        run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
+        run_ctx = RunContext(
+            context=self.context,
+            messages=transcript,
+            agent=agent,
+            session_id=self.session_id,
+        )
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
 
@@ -1365,7 +1370,9 @@ def _agent_model_label(agent: Agent) -> str:
     if isinstance(m, list):
         labels = []
         for item in m:
-            labels.append(getattr(item, "model", None) or getattr(item, "name", repr(item)))
+            labels.append(
+                getattr(item, "model", None) or getattr(item, "name", repr(item))
+            )
         return ",".join(labels)
     return getattr(m, "model", None) or getattr(m, "name", None) or repr(m)
 
@@ -1440,8 +1447,7 @@ async def _stream_with_fallback(
                     )
                     delay *= 0.5 + _random.random()
                     logger.warning(
-                        "run.retry: provider=%s attempt=%d/%d "
-                        "delay=%.2fs error=%s(%s)",
+                        "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",
                         getattr(provider, "name", repr(provider)),
                         attempt,
                         max_attempts,

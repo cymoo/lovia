@@ -46,7 +46,7 @@ class SQLiteSession(SQLiteStore):
                 ).fetchall()
                 return [item_from_dict(json.loads(r[0])) for r in rows]
             finally:
-                conn.close()
+                self._release(conn)
 
         return await self._run(_impl)
 
@@ -60,7 +60,7 @@ class SQLiteSession(SQLiteStore):
                 )
                 conn.commit()
             finally:
-                conn.close()
+                self._release(conn)
 
         await self._run(_impl)
 
@@ -73,7 +73,7 @@ class SQLiteSession(SQLiteStore):
                 )
                 conn.commit()
             finally:
-                conn.close()
+                self._release(conn)
 
         await self._run(_impl)
 
@@ -103,6 +103,6 @@ class SQLiteSession(SQLiteStore):
                     conn.rollback()
                     raise
             finally:
-                conn.close()
+                self._release(conn)
 
         await self._run(_impl)

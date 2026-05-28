@@ -15,7 +15,7 @@ authors keep the entry-point lean while leaving room for richer assets:
 
 * ``references/`` — supplementary docs the model can pull as needed.
 * ``scripts/``    — runnable snippets (executed by an external tool, e.g.
-  the optional ``lovia.builtins.shell`` / ``code`` workers).
+  the sandbox ``run`` tool from :mod:`lovia.sandbox`).
 * ``assets/``     — templates, fixtures, etc.
 
 Two catalog modes:
@@ -141,9 +141,11 @@ class SkillCatalog:
             raw = manifest.read_text(encoding="utf-8")
             meta, body = _parse_frontmatter(raw)
             triggers_raw = meta.get("triggers", "")
-            triggers = [
-                t.strip() for t in triggers_raw.strip("[]").split(",") if t.strip()
-            ] if triggers_raw else []
+            triggers = (
+                [t.strip() for t in triggers_raw.strip("[]").split(",") if t.strip()]
+                if triggers_raw
+                else []
+            )
             skills.append(
                 Skill(
                     name=meta.get("name", entry.name),

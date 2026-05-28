@@ -42,9 +42,13 @@ class RunContext(Generic[TContext]):
             subsequent model turns — usually you want to read, not write.
         agent: The currently active agent (changes across handoffs).
         usage: Cumulative token usage for this run.
+        session_id: Stable conversation key when ``session=`` was passed to
+            :meth:`Runner.run`. ``None`` for one-shot runs. Tools that key
+            per-session resources (sandboxes, caches, memory) read it here.
     """
 
     context: TContext | None
     messages: list[ChatMessage]
     agent: "Agent"
     usage: Usage = field(default_factory=Usage)
+    session_id: str | None = None

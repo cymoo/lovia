@@ -38,6 +38,7 @@ MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 # Router
 # ---------------------------------------------------------------------------
 
+
 class RouteDecision(BaseModel):
     category: Literal["billing", "technical", "general"]
     reason: str
@@ -101,6 +102,7 @@ SPECIALIST_MAP = {
 # ---------------------------------------------------------------------------
 # Router orchestration
 # ---------------------------------------------------------------------------
+
 
 async def handle_message(message: str) -> None:
     print(f"Customer: {message}\n")

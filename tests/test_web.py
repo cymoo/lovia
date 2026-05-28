@@ -45,11 +45,17 @@ def _make_agent(script) -> Agent:
     return Agent(name="bot", model=ScriptedProvider(script))
 
 
+def _app(agent_or_agents, **kw):
+    """Convenience: tests don't need title-gen polluting their scripts."""
+    kw.setdefault("generate_titles", False)
+    return create_app(agent_or_agents, **kw)
+
+
 # ------------------------------------------------------------- basic shape -
 
 
 def test_healthz_and_index() -> None:
-    app = create_app(_make_agent([text("hi")]))
+    app = _app(_make_agent([text("hi")]))
     c = TestClient(app)
     assert c.get("/healthz").json() == {"status": "ok"}
     res = c.get("/")
@@ -63,7 +69,7 @@ def test_list_agents_single() -> None:
         model=ScriptedProvider([text("hi")]),
         instructions="be helpful",
     )
-    c = TestClient(create_app(agent))
+    c = TestClient(_app(agent))
     data = c.get("/api/agents").json()
     assert data == [{"name": "writer", "instructions": "be helpful", "tools": []}]
 
@@ -71,7 +77,7 @@ def test_list_agents_single() -> None:
 def test_list_agents_multi_and_pick() -> None:
     a = _make_agent([text("a")])
     b = _make_agent([text("b")])
-    app = create_app({"alpha": a, "beta": b})
+    app = _app({"alpha": a, "beta": b})
     c = TestClient(app)
     names = sorted(x["name"] for x in c.get("/api/agents").json())
     assert names == ["alpha", "beta"]
@@ -87,7 +93,7 @@ def test_list_agents_multi_and_pick() -> None:
 
 
 def test_chat_round_trip_and_usage() -> None:
-    c = TestClient(create_app(_make_agent([text("hello world")])))
+    c = TestClient(_app(_make_agent([text("hello world")])))
     res = c.post("/api/chat", json={"message": "hi"}).json()
     assert res["output"] == "hello world"
     assert res["usage"]["total_tokens"] == 2
@@ -96,23 +102,23 @@ def test_chat_round_trip_and_usage() -> None:
 
 def test_session_persists_across_calls() -> None:
     agent = _make_agent([text("first"), text("second")])
-    c = TestClient(create_app(agent))
+    c = TestClient(_app(agent))
     sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
     c.post("/api/chat", json={"message": "two", "session_id": sid})
-    transcript = c.get(f"/api/sessions/{sid}").json()
+    transcript = c.get(f"/api/sessions/{sid}").json()["items"]
     roles = [m["role"] for m in transcript]
     assert roles.count("user") == 2
     assert roles.count("assistant") == 2
 
     c.delete(f"/api/sessions/{sid}")
-    assert c.get(f"/api/sessions/{sid}").json() == []
+    assert c.get(f"/api/sessions/{sid}").json()["items"] == []
 
 
 # -------------------------------------------------------------- streaming -
 
 
 def test_stream_yields_session_text_and_done() -> None:
-    c = TestClient(create_app(_make_agent([text("yo")])))
+    c = TestClient(_app(_make_agent([text("yo")])))
     with c.stream("POST", "/api/chat/stream", json={"message": "hi"}) as res:
         body = "".join(res.iter_text())
     events = _parse_sse(body)
@@ -134,7 +140,7 @@ def test_stream_emits_tool_events() -> None:
         [call("weather", {"city": "paris"}, call_id="c1"), text("done")]
     )
     agent = Agent(name="bot", model=provider, tools=[weather])
-    c = TestClient(create_app(agent))
+    c = TestClient(_app(agent))
     with c.stream("POST", "/api/chat/stream", json={"message": "go"}) as res:
         events = _parse_sse("".join(res.iter_text()))
     kinds = [e[0] for e in events]
@@ -158,7 +164,7 @@ async def test_approval_flow_via_http() -> None:
 
     provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("ack")])
     agent = Agent(name="bot", model=provider, tools=[sensitive])
-    app = create_app(agent)
+    app = _app(agent)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         collected: list[str] = []
@@ -199,13 +205,13 @@ async def test_approval_flow_via_http() -> None:
         assert "approval_required" in kinds
         assert kinds[-1] == "done"
 
-        transcript = (await ac.get("/api/sessions/sess-1")).json()
+        transcript = (await ac.get("/api/sessions/sess-1")).json()["items"]
         tool_msg = next(m for m in transcript if m["role"] == "tool")
         assert tool_msg["content"] == "did it"
 
 
 def test_unknown_approval_returns_404() -> None:
-    c = TestClient(create_app(_make_agent([text("hi")])))
+    c = TestClient(_app(_make_agent([text("hi")])))
     r = c.post(
         "/api/chat/approve",
         json={"session_id": "nope", "call_id": "nope", "decision": "approve"},

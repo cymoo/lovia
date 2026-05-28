@@ -22,7 +22,9 @@ class LoviaError(Exception):
 
     hint: str | None
 
-    def __init__(self, message: str = "", *, hint: str | None = None, **extra: Any) -> None:
+    def __init__(
+        self, message: str = "", *, hint: str | None = None, **extra: Any
+    ) -> None:
         super().__init__(message)
         self.hint = hint
         for k, v in extra.items():

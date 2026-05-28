@@ -47,42 +47,46 @@ async def _collect(stream) -> list[ItemDelta]:
 
 @pytest.mark.asyncio
 async def test_responses_stream_parses_text_reasoning_and_function_call() -> None:
-    body = _sse([
-        {"type": "response.reasoning_summary_text.delta", "delta": "think"},
-        {"type": "response.reasoning_summary_text.delta", "delta": "ing"},
-        {"type": "response.output_text.delta", "delta": "hel"},
-        {"type": "response.output_text.delta", "delta": "lo"},
-        {
-            "type": "response.output_item.added",
-            "output_index": 1,
-            "item": {"type": "function_call", "call_id": "c1", "name": "do_thing"},
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "output_index": 1,
-            "delta": '{"x":',
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "output_index": 1,
-            "delta": "1}",
-        },
-        {
-            "type": "response.completed",
-            "response": {
-                "status": "completed",
-                "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+    body = _sse(
+        [
+            {"type": "response.reasoning_summary_text.delta", "delta": "think"},
+            {"type": "response.reasoning_summary_text.delta", "delta": "ing"},
+            {"type": "response.output_text.delta", "delta": "hel"},
+            {"type": "response.output_text.delta", "delta": "lo"},
+            {
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {"type": "function_call", "call_id": "c1", "name": "do_thing"},
             },
-        },
-    ])
+            {
+                "type": "response.function_call_arguments.delta",
+                "output_index": 1,
+                "delta": '{"x":',
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "output_index": 1,
+                "delta": "1}",
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 7,
+                        "total_tokens": 12,
+                    },
+                },
+            },
+        ]
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=body.encode())
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    provider = OpenAIResponsesProvider(
-        model="gpt-5", api_key="sk-test", client=client
-    )
+    provider = OpenAIResponsesProvider(model="gpt-5", api_key="sk-test", client=client)
 
     deltas = await _collect(
         provider.stream([InputMessageItem(role="user", content="hi")])

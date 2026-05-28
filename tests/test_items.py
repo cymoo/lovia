@@ -72,9 +72,7 @@ def test_item_from_dict_rejects_unknown_type() -> None:
 def test_item_from_dict_rejects_unknown_field() -> None:
     """Extra fields surface as TypeError rather than being silently dropped."""
     with pytest.raises(TypeError):
-        item_from_dict(
-            {"type": "message_output", "content": "hi", "mystery_field": 1}
-        )
+        item_from_dict({"type": "message_output", "content": "hi", "mystery_field": 1})
 
 
 def test_item_to_dict_preserves_type_discriminator() -> None:

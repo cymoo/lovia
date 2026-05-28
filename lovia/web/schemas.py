@@ -36,3 +36,41 @@ class MessageOut(BaseModel):
     content: Any
     tool_call_id: str | None = None
     name: str | None = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SessionDetail(BaseModel):
+    id: str
+    title: str | None = None
+    agent: str | None = None
+    created_at: float
+    updated_at: float
+    items: list[MessageOut] = Field(default_factory=list)
+
+
+class ChatSessionInfo(BaseModel):
+    id: str
+    title: str | None = None
+    agent: str | None = None
+    created_at: float
+    updated_at: float
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+
+class AuditEntry(BaseModel):
+    timestamp: float
+    agent_name: str
+    tool_name: str
+    command: str
+    verdict: Literal["pass", "warn", "block"]
+    reason: str = ""
+
+
+class FileEntry(BaseModel):
+    name: str
+    is_dir: bool
+    size: int | None = None
+    mtime: float | None = None

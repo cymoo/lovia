@@ -388,9 +388,7 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
         elif isinstance(it, ToolCallOutputItem):
             flush_assistant()
             out.append(
-                ChatMessage(
-                    role="tool", content=it.output, tool_call_id=it.call_id
-                )
+                ChatMessage(role="tool", content=it.output, tool_call_id=it.call_id)
             )
     flush_assistant()
     return out
@@ -469,9 +467,7 @@ def safe_window(
             tail_slice = [
                 it
                 for it in tail_slice
-                if not (
-                    isinstance(it, ToolCallOutputItem) and it.call_id in orphans
-                )
+                if not (isinstance(it, ToolCallOutputItem) and it.call_id in orphans)
             ]
             return head_items + tail_slice
         cut = new_cut

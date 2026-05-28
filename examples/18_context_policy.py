@@ -63,7 +63,7 @@ async def main() -> None:
     agent = Agent(
         name="companion",
         instructions="You are a helpful, concise companion.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         hooks=hooks,
     )
 

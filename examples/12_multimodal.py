@@ -22,7 +22,7 @@ async def main() -> None:
     agent = Agent(
         name="VisionBot",
         instructions="Describe what you see, briefly.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
     )
 
     msg = user(

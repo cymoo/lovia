@@ -43,7 +43,7 @@ def main() -> None:
             "You are a friendly assistant. Use tools when helpful. "
             "Keep replies short and conversational."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         tools=[add, send_email],
     )
     # Default policy: when the prompt approaches the model's context

@@ -6,6 +6,7 @@ tool the model must call to finish.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -16,6 +17,7 @@ from lovia import Agent, Runner
 from dotenv import load_dotenv
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 class WeatherReport(BaseModel):
@@ -28,7 +30,7 @@ async def main() -> None:
     agent = Agent(
         name="Weather",
         instructions="Report the weather using the provided structure.",
-        model="deepseek-v4-pro",
+        model=MODEL,
         output_type=WeatherReport,
     )
     result = await Runner.run(agent, "Make up a sunny report for Lisbon.")

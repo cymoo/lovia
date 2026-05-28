@@ -9,6 +9,7 @@ and passing it to ``web_search(impl=my_backend)``.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -18,13 +19,14 @@ from lovia import Agent, Runner
 from lovia.builtins.search import web_search
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
     agent = Agent(
         name="Researcher",
         instructions="Use web_search to find sources; cite the top result.",
-        model="openai:gpt-4o-mini",
+        model=MODEL,
         tools=[web_search()],
     )
     result = await Runner.run(agent, "Who wrote the SQLite engine?")

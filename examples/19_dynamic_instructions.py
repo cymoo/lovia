@@ -10,6 +10,7 @@ Run::
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from dotenv import load_dotenv
 from lovia import Agent, Runner
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 @dataclass
@@ -31,7 +33,7 @@ async def main() -> None:
     agent = Agent[Deps](
         name="Concierge",
         instructions="You are a friendly concierge.",
-        model="openai:gpt-4o-mini",
+        model=MODEL,
     )
 
     @agent.system_prompt

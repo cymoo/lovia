@@ -1,67 +1,120 @@
 # lovia
 
-一个轻量、provider 中立的 Python agent 框架。
+一个轻量、provider 中立的 Python Agent 框架。
 
 [English](./README.md)
 
 ```python
+import asyncio
 from lovia import Agent, Runner
 
-agent = Agent(name="Greeter", instructions="用一句话回复。", model="openai:gpt-4o-mini")
-print((await Runner.run(agent, "用三种语言打招呼。")).output)
+agent = Agent(
+    name="Assistant",
+    instructions="你是一个乐于助人的助手。",
+    model="openai:gpt-4o-mini",
+)
+result = asyncio.run(Runner.run(agent, "法国的首都是哪里？"))
+print(result.output)  # 巴黎
 ```
 
-- **不引入 DSL、图、全局状态** —— 纯 Python，类型清晰。
-- **核心仅两个依赖** —— `httpx` 与 `pydantic`，其它能力按需启用。
-- **Async 优先**，必要处提供 `run_sync` 同步入口。
-- **Provider 中立** —— OpenAI Chat & Responses、Anthropic，以及任何 OpenAI 兼容服务。
+**仅两个核心依赖**（`httpx`、`pydantic`）。无 DSL，无图，无全局状态。
+工具、会话、handoff、结构化输出、MCP、流式输出——全部按需启用。
 
 ---
 
 ## 安装
 
 ```bash
-pip install lovia                 # 核心
-pip install "lovia[mcp]"          # + MCP 客户端
-pip install "lovia[tools]"        # + web_search 的 DuckDuckGo 后端
-pip install "lovia[web]"          # + FastAPI / SSE + 自带聊天 UI
-pip install "lovia[dev]"          # + pytest, ruff, mypy
+pip install lovia
 ```
 
-Python 3.10+。
+可选扩展：
+
+```bash
+pip install "lovia[mcp]"    # Model Context Protocol 客户端
+pip install "lovia[tools]"  # web_search（DuckDuckGo 后端）
+pip install "lovia[web]"    # FastAPI + SSE 聊天服务器
+```
 
 ---
 
-## 快速上手
+## 工具
+
+用 `@tool` 把任意带类型注解的函数变成工具，同步和异步均可。
 
 ```python
-import asyncio
 from lovia import Agent, Runner, tool
 
 @tool
-def add(a: int, b: int) -> int:
-    """两数求和。"""
-    return a + b
+def calculate(expression: str) -> float:
+    """计算简单的数学表达式。"""
+    return eval(expression, {"__builtins__": {}})
 
 agent = Agent(
     name="Calc",
-    instructions="需要计算时调用工具。",
+    instructions="需要计算时调用 calculate()。",
     model="openai:gpt-4o-mini",
-    tools=[add],
+    tools=[calculate],
 )
-
-print(asyncio.run(Runner.run(agent, "17 + 25 等于多少？")).output)
+result = asyncio.run(Runner.run(agent, "1337 * 42 等于多少？"))
 ```
 
-同步入口（脚本 / notebook 友好）：
+用 `Annotated` 为每个参数添加描述：
 
 ```python
-result = Runner.run_sync(agent, "17 + 25?")
-# 或直接：
-result = agent.run_sync("17 + 25?")
+from typing import Annotated
+
+@tool
+def search(
+    query: Annotated[str, "搜索关键词。"],
+    limit: Annotated[int, "最多返回多少条，1-20。"] = 5,
+) -> list[str]: ...
 ```
 
-流式：
+---
+
+## 结构化输出
+
+将任意 Pydantic 模型作为 `output_type` 传入，结果会自动校验。
+`output_repair=True` 让模型在首次解析失败时自我修正。
+
+```python
+from pydantic import BaseModel
+from lovia import Agent, Runner
+
+class Review(BaseModel):
+    rating: int       # 1-5
+    summary: str
+    pros: list[str]
+    cons: list[str]
+
+agent = Agent(
+    name="Reviewer",
+    instructions="从用户文本中提取结构化评测。",
+    model="openai:gpt-4o-mini",
+    output_type=Review,
+    output_repair=True,
+)
+result = asyncio.run(Runner.run(agent, "电池续航很棒，但屏幕偏暗。"))
+print(result.output.rating)   # -> int
+```
+
+单次调用覆盖输出类型，不影响 Agent 定义：
+
+```python
+result = await Runner.run(agent, "用纯文本总结一下。", output_type=None)
+```
+
+---
+
+## 流式输出
+
+```python
+async for event in Runner.run_streamed(agent, "讲个笑话"):
+    print(event)
+```
+
+或直接从 agent 实例调用：
 
 ```python
 async for event in agent.stream("讲个笑话"):
@@ -70,180 +123,217 @@ async for event in agent.stream("讲个笑话"):
 
 ---
 
-## 核心概念
+## 动态 instructions
 
-### Agent
-
-```python
-agent = Agent(
-    name="Concierge",
-    instructions="简短回答。",        # str 或 (ctx) -> str | Awaitable[str]
-    model="openai:gpt-4o-mini",     # "provider:model" 或 Provider 实例
-    tools=[...],
-    output_type=MyPydanticModel,    # 任何 Pydantic 可校验的类型
-    handoffs=[other_agent],         # 转交给其它 agent
-)
-```
-
-### 动态 instructions
-
-用 `@agent.system_prompt` 在配置期追加片段，或在调用期通过
-`append_instructions=` 临时追加。两者都与静态 `instructions=` 自动拼接。
+用 `@agent.system_prompt` 在运行时注入上下文内容，多个片段与基础 `instructions` 自动拼接。
 
 ```python
-agent = Agent(name="Helper", instructions="你是一个乐于助人的助手。")
+agent = Agent(name="Support", instructions="你是客服机器人。", model="openai:gpt-4o-mini")
 
 @agent.system_prompt
-def add_user(ctx) -> str:
-    user = getattr(ctx.context, "user", None)
-    return f"用户名是 {user}。" if user else ""
+async def inject_user(ctx) -> str:
+    user = await db.get_user(ctx.context.user_id)
+    return f"用户名：{user.name}，套餐：{user.plan}。"
 
-await Runner.run(agent, "你好", append_instructions="请用俳句回复。")
-```
-
-### 单次覆盖 `output_type`
-
-Agent 上声明的 `output_type` 是默认值；`Runner.run`（以及 `agent.run`）
-可对单次调用覆盖之。传 `None` 表示退回纯文本。
-
-```python
-class Plan(BaseModel):
-    steps: list[str]
-
-agent = Agent(name="x", instructions="...", output_type=Plan)
-plan = (await Runner.run(agent, "规划旅程")).output           # -> Plan
-text = (await Runner.run(agent, "规划旅程", output_type=None)).output  # -> str
-```
-
-### 工具
-
-`@tool` 把带类型注解的函数变成工具。用 `Annotated[..., "描述"]` 或
-`Annotated[..., Field(description=...)]` 丰富 JSON Schema；
-`strict=True` 启用 OpenAI 严格模式。
-
-```python
-from typing import Annotated
-from lovia import tool
-
-@tool(strict=True)
-def search(
-    query: Annotated[str, "搜索关键词。"],
-    limit: Annotated[int, "返回数量。"] = 5,
-) -> list[str]: ...
-```
-
-### 友好错误
-
-所有框架异常都带可选 `.hint`；`OutputValidationError` 还会附上模型原文与
-目标 schema 名，方便快速定位：
-
-```
-OutputValidationError: 2 validation errors for Plan
-hint: 可考虑在 Runner.run 上设置 output_repair=True。
-raw : '{"steps": "buy ticket"}'
+# 单次追加临时上下文：
+result = await Runner.run(agent, "我需要帮助。", append_instructions="请用英文回复。")
 ```
 
 ---
 
-## 内置工具（按需启用）
+## Handoff（Agent 转交）
 
-全部位于 `lovia.builtins.*`，**不会**被顶层包自动导入。
+Agent 可以在对话中途将控制权交给另一个 Agent，Runner 自动跟随转交链。
 
-| 模块 | 内容 |
-| --- | --- |
-| `lovia.builtins.http`   | `http_fetch` —— `httpx` 的类型化封装 |
-| `lovia.builtins.time`   | `now`、`sleep` |
-| `lovia.builtins.think`  | `think` —— 思考草稿 |
-| `lovia.builtins.fs`     | `FileSystem(root, writable=False)` —— 沙箱化的读写 / 列表 / glob |
-| `lovia.builtins.shell`  | `Shell(cwd, needs_approval=True)`（含 `allowlist` 辅助） |
-| `lovia.builtins.code`   | `PythonRunner(needs_approval=True)` |
-| `lovia.builtins.search` | `web_search(impl=None)` + `WebSearch` Protocol + `DuckDuckGoSearch` |
-| `lovia.builtins.todo`   | `TodoList` + `todo_tools(state)` |
-| `lovia.builtins.human`  | `HumanChannel` + `ask_human(channel)` |
+```python
+billing = Agent(name="Billing", instructions="处理账单问题。", model="openai:gpt-4o-mini")
+support = Agent(
+    name="Support",
+    instructions="回答支持问题。账单问题转交给 Billing。",
+    model="openai:gpt-4o-mini",
+    handoffs=[billing],
+)
+result = await Runner.run(support, "我可以申请退款吗？")
+```
+
+---
+
+## 会话（持久化对话历史）
+
+通过 `session=` 参数跨调用保留对话历史，默认提供内存存储，可换为 Redis 或数据库。
+
+```python
+from lovia.stores import InMemorySessionStore
+
+session_store = InMemorySessionStore()
+
+result1 = await Runner.run(agent, "我叫 Alice。", session=session_store.session("u42"))
+result2 = await Runner.run(agent, "我叫什么？", session=session_store.session("u42"))
+# → "你叫 Alice。"
+```
+
+---
+
+## 人工审批
+
+用 `needs_approval=True` 标记敏感工具，需要人工确认后才能执行。
+
+```python
+from lovia import ApprovalChannel
+
+channel = ApprovalChannel()
+
+@tool(needs_approval=True)
+def send_email(to: str, body: str) -> str: ...
+
+# 在 UI 中调用 channel.approve(request_id) 或 channel.deny(request_id, reason)
+result = await Runner.run(agent, "给 alice@example.com 发一封欢迎邮件", approval_channel=channel)
+```
+
+---
+
+## 同步入口
+
+`Runner.run_sync` 和 `agent.run_sync` 封装了 `asyncio.run`，适合在脚本或无法 `await` 的场景使用。
+
+```python
+result = Runner.run_sync(agent, "2+2 等于多少？")
+print(result.output)
+```
+
+---
+
+## 内置工具
+
+`lovia.builtins` 提供开箱即用的实用工具，无需任何配置即可使用。
+**没有任何工具会被自动导入**，按需取用。
+
+```python
+from lovia.builtins.http import http_fetch
+from lovia.builtins.fs import FileSystem
+from lovia.builtins.shell import Shell, allowlist
+from lovia.builtins.search import web_search
+from lovia.builtins.todo import TodoList, todo_tools
+from lovia.builtins.human import HumanChannel, ask_human
+from lovia.builtins.think import think
+from lovia.builtins.time import now
+from lovia.builtins.code import PythonRunner
+
+fs = FileSystem(root="/tmp/sandbox", writable=True)
+sh = Shell(cwd="/tmp", needs_approval=allowlist(["ls", "cat"]))
+todos = TodoList()
+channel = HumanChannel()
+
+agent = Agent(
+    name="Worker",
+    instructions="规划、推理、执行。",
+    model="openai:gpt-4o-mini",
+    tools=[
+        http_fetch, now, think,
+        *fs.tools(),
+        sh.tool(),
+        web_search(),              # 需要 lovia[tools]
+        *todo_tools(todos),
+        ask_human(channel),
+        PythonRunner(needs_approval=False).tool(),
+    ],
+)
+```
+
+`Shell` 和 `PythonRunner` 默认 `needs_approval=True`。`allowlist(commands)` 可构建白名单审批谓词：命中的命令自动放行，其余需要确认。
 
 每个工具的可运行示例见 [`examples/builtins/`](./examples/builtins/)。
 
 ---
 
-## 结构化输出
+## Skills（技能包）
 
-```python
-from pydantic import BaseModel
-class Answer(BaseModel):
-    summary: str
-    confidence: float
+Skills 是以 Markdown 驱动的知识模块，存放在目录树中，让你无需膨胀 system prompt 就能组合领域知识。
 
-agent = Agent(name="x", instructions="...", output_type=Answer, output_repair=True)
 ```
-
-`output_repair=True` 会让模型在首次解析失败时自我修正，通常多一轮调用就能成功。
-
----
-
-## Skills（`SkillCatalog`）
-
-以 Markdown 驱动的指令包，可选 `references/`、`scripts/`、`assets/` 子目录。
-两种模式：
-
-- **lazy**（默认）—— 仅渲染索引，模型按需 `load_skill`。
-- **eager** —— 直接把所有 `SKILL.md` 内联进 system prompt。
+skills/
+  translation/
+    SKILL.md          # 名称、描述、使用说明
+    references/       # Agent 可读取的参考文件
+```
 
 ```python
 from lovia.skills import SkillCatalog
 
-catalog = SkillCatalog.from_dir("./skills")
+catalog = SkillCatalog.from_dir("./skills")  # 默认惰性加载
 agent = Agent(
-    name="Researcher",
-    instructions="...",
+    name="Expert",
+    instructions=catalog.render_catalog(),
+    model="openai:gpt-4o-mini",
     tools=catalog.tools(),
 )
 ```
 
-参见 `examples/08_skills.py`。
+惰性模式下 catalog 渲染为简洁索引，模型按需调用 `load_skill` 加载完整内容；
+`mode="eager"` 则将所有技能内容直接内联进 system prompt。
+
+---
+
+## 多 Provider
+
+`model=` 接受 `"provider:model"` 字符串或任意 `Provider` 实例。
+
+```python
+# OpenAI
+agent = Agent(model="openai:gpt-4o-mini", ...)
+# Anthropic
+agent = Agent(model="anthropic:claude-3-5-haiku-20241022", ...)
+# 任意 OpenAI 兼容接口（DeepSeek、Ollama、vLLM 等）
+from lovia import OpenAIChatProvider
+provider = OpenAIChatProvider(model="deepseek-chat", base_url="https://api.deepseek.com/v1", api_key="...")
+agent = Agent(model=provider, ...)
+```
 
 ---
 
 ## 示例
 
-| 文件 | 关注点 |
-| --- | --- |
-| `01_minimal.py`            | Hello world |
-| `02_tools.py`              | `@tool` 基础 |
-| `03_structured_output.py`  | Pydantic 输出 |
-| `04_streaming.py`          | 流式 token |
-| `05_handoff.py`            | Agent 之间转交 |
-| `06_guardrails.py`         | 输入 / 输出守卫 |
-| `07_approval.py`           | 人审介入 |
-| `08_skills.py`             | SkillCatalog |
-| `09_memory.py`             | 持久上下文 |
-| `10_sessions.py`           | 可插拔的会话存储 |
-| `11_mcp.py`                | Model Context Protocol |
-| `12_tracing.py`            | Hooks & tracing |
-| `13_anthropic.py`          | Anthropic provider |
-| `14_provider_swap.py`      | 单次调用切换 provider |
-| `15_context_policy.py`     | 长对话自动摘要 |
-| `16_web.py`                | FastAPI + SSE 聊天 UI |
-| `17_dynamic_provider.py`   | 按消息路由 provider |
-| `18_hooks.py`              | 生命周期 hooks |
-| `19_dynamic_instructions.py` | `@agent.system_prompt` + `append_instructions=` |
-| `20_builtins.py`           | 多个 `lovia.builtins.*` 组合 |
-| `21_dx.py`                 | `Annotated/Field`、`run_sync`、`Agent.run` |
-| `builtins/`                | 每个内置工具一个 demo |
+```
+examples/
+  01_hello.py                  最小 Agent
+  02_tools.py                  工具调用
+  03_streaming.py              流式输出
+  04_structured_output.py      Pydantic 结构化输出
+  05_handoff.py                Agent 间转交
+  06_agent_as_tool.py          子 Agent 作为工具
+  07_session.py                持久化会话
+  08_skills.py                 SkillCatalog
+  09_compat_provider.py        自定义 OpenAI 兼容 Provider
+  10_hooks.py                  生命周期 hooks / tracing
+  11_approval.py               人工审批
+  12_multimodal.py             图片输入
+  13_budget_and_cancel.py      Token 预算与取消
+  14_guardrails.py             输入/输出守卫
+  15_resume.py                 恢复中断的运行
+  16_web_serve.py              FastAPI + SSE 服务器
+  17_responses_reasoning.py    OpenAI Responses API + 推理模型
+  18_context_policy.py         长对话自动摘要
+  19_dynamic_instructions.py   动态 system prompt
+  20_builtins.py               多个内置工具组合
+  21_dx.py                     Annotated 参数、run_sync
+  builtins/                    每个内置工具一个专项 demo
+  workflows/                   多 Agent 工作流模式
+```
 
 ---
 
 ## 开发
 
 ```bash
-pip install -e .[dev]
-pytest               # 测试
-ruff check .         # lint
-ruff format .        # 格式化
-mypy lovia           # 类型检查
+git clone https://github.com/cymoo/lovia
+pip install -e ".[dev]"
+pytest          # 测试
+ruff check .    # lint
+mypy lovia      # 类型检查
 ```
 
-设计哲学与贡献约定见 [`AGENTS.md`](./AGENTS.md)。
+架构说明、设计哲学与提交约定见 [`AGENTS.md`](./AGENTS.md)。
 
-## 协议
+---
 
-MIT.
+MIT License

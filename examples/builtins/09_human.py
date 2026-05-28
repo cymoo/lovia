@@ -5,6 +5,7 @@ here we answer from the terminal.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -14,6 +15,7 @@ from lovia import Agent, Runner
 from lovia.builtins.human import HumanChannel, ask_human
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
@@ -32,7 +34,7 @@ async def main() -> None:
     agent = Agent(
         name="Concierge",
         instructions="Ask the human for any missing detail before answering.",
-        model="openai:gpt-4o-mini",
+        model=MODEL,
         tools=[ask_human(channel)],
     )
     result = await Runner.run(agent, "Book me a table somewhere nice tonight.")

@@ -142,13 +142,14 @@ async def test_web_search_with_custom_backend() -> None:
 
 
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Force the import to fail by clobbering the module name.
-    if "duckduckgo_search" in sys.modules:
-        monkeypatch.delitem(sys.modules, "duckduckgo_search")
+    # Force both ddgs and duckduckgo_search imports to fail.
+    for mod in ("ddgs", "duckduckgo_search"):
+        if mod in sys.modules:
+            monkeypatch.delitem(sys.modules, mod)
     monkeypatch.setattr(
         "builtins.__import__",
         lambda name, *a, **k: (_ for _ in ()).throw(ImportError(name))
-        if name == "duckduckgo_search"
+        if name in ("ddgs", "duckduckgo_search")
         else __import__(name, *a, **k),
     )
     ddg = search.DuckDuckGoSearch()

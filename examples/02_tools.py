@@ -1,6 +1,7 @@
 """Tool calling: the agent picks a tool, runs it, then summarizes the result."""
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -9,6 +10,7 @@ from lovia import Agent, Runner, tool
 from dotenv import load_dotenv
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 @tool
@@ -28,7 +30,7 @@ async def main() -> None:
     agent = Agent(
         name="Helper",
         instructions="Use tools when they help. Answer concisely.",
-        model="deepseek-v4-pro",
+        model=MODEL,
         tools=[get_weather, add],
     )
     result = await Runner.run(agent, "What's the weather in Tokyo, and what is 2+2?")

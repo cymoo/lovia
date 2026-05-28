@@ -45,7 +45,7 @@ async def main() -> None:
     agent = Agent(
         name="Clock",
         instructions="Use the now tool to answer time questions.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         tools=[now],
         hooks=hooks,
     )

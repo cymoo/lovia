@@ -5,6 +5,7 @@ its work; you can render the same ``TodoList`` for the user at any time.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -14,6 +15,7 @@ from lovia import Agent, Runner
 from lovia.builtins.todo import TodoList, todo_tools
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
@@ -24,7 +26,7 @@ async def main() -> None:
             "Break the user request into todos using add_todo, then "
             "mark each one done as you go."
         ),
-        model="openai:gpt-4o-mini",
+        model=MODEL,
         tools=todo_tools(todos),
     )
     result = await Runner.run(

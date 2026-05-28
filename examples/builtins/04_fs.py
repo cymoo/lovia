@@ -1,6 +1,7 @@
 """Sandboxed filesystem — every path resolves under ``root``."""
 
 from __future__ import annotations
+import os
 
 import asyncio
 import tempfile
@@ -12,6 +13,7 @@ from lovia import Agent, Runner
 from lovia.builtins.fs import FileSystem
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
@@ -22,7 +24,7 @@ async def main() -> None:
         agent = Agent(
             name="Files",
             instructions="Use the filesystem tools to inspect and edit files.",
-            model="openai:gpt-4o-mini",
+            model=MODEL,
             tools=fs.tools(),
         )
         result = await Runner.run(

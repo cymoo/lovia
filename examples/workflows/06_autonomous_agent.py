@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.getenv("DEFAULT_MODEL", "deepseek-v4-pro")
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 # ---------------------------------------------------------------------------

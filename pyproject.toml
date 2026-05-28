@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lovia"
-version = "0.2.0"
+version = "0.3.0"
 description = "A lightweight and elegant Agent framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -30,7 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 dotenv = ["python-dotenv>=1.0.0"]
-tools = ["duckduckgo-search>=6.0"]
+tools = ["ddgs>=7.0"]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",

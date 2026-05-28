@@ -33,7 +33,7 @@ async def main() -> None:
     agent = Agent(
         name="researcher",
         instructions="Answer briefly using the lookup tool when helpful.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         tools=[lookup],
     )
 

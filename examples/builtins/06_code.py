@@ -5,6 +5,7 @@ it run unattended (only in trusted contexts).
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -14,6 +15,7 @@ from lovia import Agent, Runner
 from lovia.builtins.code import PythonRunner
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
@@ -21,7 +23,7 @@ async def main() -> None:
     agent = Agent(
         name="Calc",
         instructions="Use python to compute when needed; print the answer.",
-        model="openai:gpt-4o-mini",
+        model=MODEL,
         tools=[py.tool()],
     )
     result = await Runner.run(agent, "What is the 20th Fibonacci number?")

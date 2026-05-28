@@ -44,7 +44,7 @@ async def main() -> None:
         # repeated provider errors. Here we just use one DeepSeek model, but
         # you could add a second model name as a backup.
         model=[
-            os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+            os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
             os.getenv("OPENAI_FALLBACK_MODEL", "deepseek-chat"),
         ],
         tools=[slow_search],

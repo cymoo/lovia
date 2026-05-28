@@ -1,6 +1,7 @@
 """Consume the event stream and print text deltas as they arrive."""
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -9,13 +10,14 @@ from dotenv import load_dotenv
 from lovia import Agent, Runner, events
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
     agent = Agent(
         name="Storyteller",
         instructions="You write short, vivid stories.",
-        model="deepseek-v4-pro",
+        model=MODEL,
     )
     # ``run_streamed`` returns a ``RunHandle`` that is both async-iterable
     # (yields events) and awaitable (resolves to the final ``RunResult``).

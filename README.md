@@ -5,63 +5,116 @@ A lightweight, provider-neutral agent framework for Python.
 [简体中文](./README-zh.md)
 
 ```python
+import asyncio
 from lovia import Agent, Runner
 
-agent = Agent(name="Greeter", instructions="Reply in one short line.", model="openai:gpt-4o-mini")
-print((await Runner.run(agent, "Say hi in three languages.")).output)
+agent = Agent(
+    name="Assistant",
+    instructions="You are a helpful assistant.",
+    model="openai:gpt-4o-mini",
+)
+result = asyncio.run(Runner.run(agent, "What is the capital of France?"))
+print(result.output)  # Paris
 ```
 
-- **No DSL, no graph, no implicit globals** — plain Python with type hints.
-- **Two deps in core** — `httpx` and `pydantic`. Everything else is opt-in.
-- **Async-first**, with `run_sync` helpers where they pay for themselves.
-- **Provider-neutral** — OpenAI Chat & Responses, Anthropic, anything OpenAI-compatible.
+**Two hard dependencies** (`httpx`, `pydantic`). No DSL, no graph, no global state.
+Every advanced feature — tools, sessions, handoffs, structured output, MCP, streaming — is opt-in.
 
 ---
 
 ## Install
 
 ```bash
-pip install lovia                 # core
-pip install "lovia[mcp]"          # + Model Context Protocol client
-pip install "lovia[tools]"        # + DuckDuckGo backend for web_search
-pip install "lovia[web]"          # + FastAPI + SSE + bundled chat UI
-pip install "lovia[dev]"          # + pytest, ruff, mypy
+pip install lovia
 ```
 
-Python 3.10+.
+Optional extras:
+
+```bash
+pip install "lovia[mcp]"    # Model Context Protocol client
+pip install "lovia[tools]"  # web_search with DuckDuckGo backend
+pip install "lovia[web]"    # FastAPI + SSE chat server
+```
 
 ---
 
-## Quickstart
+## Tools
+
+Any typed Python function becomes a tool with `@tool`. Sync and async both work.
 
 ```python
-import asyncio
 from lovia import Agent, Runner, tool
 
 @tool
-def add(a: int, b: int) -> int:
-    """Add two numbers."""
-    return a + b
+def calculate(expression: str) -> float:
+    """Evaluate a simple math expression."""
+    return eval(expression, {"__builtins__": {}})
 
 agent = Agent(
     name="Calc",
-    instructions="Use tools when you need to compute.",
+    instructions="Use calculate() for arithmetic.",
     model="openai:gpt-4o-mini",
-    tools=[add],
+    tools=[calculate],
 )
-
-print(asyncio.run(Runner.run(agent, "What is 17 + 25?")).output)
+result = asyncio.run(Runner.run(agent, "What is 1337 * 42?"))
 ```
 
-Sync entry-point (handy in scripts and notebooks):
+Use `Annotated` to add per-parameter descriptions to the JSON schema:
 
 ```python
-result = Runner.run_sync(agent, "What is 17 + 25?")
-# Or, equivalently, from the agent itself:
-result = agent.run_sync("What is 17 + 25?")
+from typing import Annotated
+
+@tool
+def search(
+    query: Annotated[str, "Keywords to search for."],
+    limit: Annotated[int, "Max results, 1-20."] = 5,
+) -> list[str]: ...
 ```
 
-Stream events as they arrive:
+---
+
+## Structured output
+
+Pass any Pydantic model as `output_type` and the result is validated automatically.
+`output_repair=True` lets the model self-correct if the first parse fails.
+
+```python
+from pydantic import BaseModel
+from lovia import Agent, Runner
+
+class Review(BaseModel):
+    rating: int       # 1-5
+    summary: str
+    pros: list[str]
+    cons: list[str]
+
+agent = Agent(
+    name="Reviewer",
+    instructions="Extract a structured review from the user text.",
+    model="openai:gpt-4o-mini",
+    output_type=Review,
+    output_repair=True,
+)
+result = asyncio.run(Runner.run(agent, "The battery lasts all day but the screen is dim."))
+print(result.output.rating)   # -> int
+```
+
+Override `output_type` for a single call without touching the agent:
+
+```python
+result = await Runner.run(agent, "Summarize in plain text.", output_type=None)
+```
+
+---
+
+## Streaming
+
+```python
+async for event in Runner.run_streamed(agent, "Tell me a joke"):
+    print(event)
+```
+
+Or directly from the agent instance:
 
 ```python
 async for event in agent.stream("Tell me a joke"):
@@ -70,185 +123,223 @@ async for event in agent.stream("Tell me a joke"):
 
 ---
 
-## Core concepts
+## Dynamic instructions
 
-### Agent
+Inject context-aware content at runtime with `@agent.system_prompt`.
+Multiple fragments compose with the base `instructions`.
 
 ```python
+agent = Agent(name="Support", instructions="You are a support bot.", model="openai:gpt-4o-mini")
+
+@agent.system_prompt
+async def inject_user(ctx) -> str:
+    user = await db.get_user(ctx.context.user_id)
+    return f"The user's name is {user.name}. Their plan is {user.plan}."
+
+# Append one-off context at call time:
+result = await Runner.run(agent, "I need help.", append_instructions="Reply in Spanish.")
+```
+
+---
+
+## Handoffs
+
+An agent can delegate to another agent mid-conversation.
+The Runner follows the chain automatically.
+
+```python
+billing = Agent(name="Billing", instructions="Handle billing questions.", model="openai:gpt-4o-mini")
+support = Agent(name="Support", instructions="Answer support questions. Hand off billing questions.", model="openai:gpt-4o-mini", handoffs=[billing])
+
+result = await Runner.run(support, "Can I get a refund?")
+```
+
+---
+
+## Sessions
+
+Persist conversation history across calls with a `session=` argument.
+The default in-memory store is a good starting point; swap in Redis or SQL as needed.
+
+```python
+from lovia.stores import InMemorySessionStore
+
+session_store = InMemorySessionStore()
+
+result1 = await Runner.run(agent, "My name is Alice.", session=session_store.session("u42"))
+result2 = await Runner.run(agent, "What is my name?", session=session_store.session("u42"))
+# → "Your name is Alice."
+```
+
+---
+
+## Approval (human in the loop)
+
+Mark sensitive tools with `needs_approval=True` to require human sign-off.
+
+```python
+from lovia import ApprovalChannel
+
+channel = ApprovalChannel()
+
+@tool(needs_approval=True)
+def send_email(to: str, body: str) -> str:
+    ...
+
+# In your UI, call channel.approve(request_id) or channel.deny(request_id, reason)
+result = await Runner.run(agent, "Send a welcome email to alice@example.com", approval_channel=channel)
+```
+
+---
+
+## Sync helpers
+
+`Runner.run_sync` and `agent.run_sync` are convenience wrappers around
+`asyncio.run`. Use them in scripts or wherever you can't `await`.
+
+```python
+result = Runner.run_sync(agent, "What is 2+2?")
+print(result.output)
+```
+
+---
+
+## Built-in tools
+
+`lovia.builtins` ships practical, framework-agnostic tools you can drop straight into any agent.
+Nothing is imported automatically — grab only what you need.
+
+```python
+from lovia.builtins.http import http_fetch
+from lovia.builtins.fs import FileSystem
+from lovia.builtins.shell import Shell, allowlist
+from lovia.builtins.search import web_search
+from lovia.builtins.todo import TodoList, todo_tools
+from lovia.builtins.human import HumanChannel, ask_human
+from lovia.builtins.think import think
+from lovia.builtins.time import now
+from lovia.builtins.code import PythonRunner
+
+fs = FileSystem(root="/tmp/sandbox", writable=True)
+sh = Shell(cwd="/tmp", needs_approval=allowlist(["ls", "cat"]))
+todos = TodoList()
+channel = HumanChannel()
+
 agent = Agent(
-    name="Concierge",
-    instructions="Be terse.",       # str or (ctx) -> str | Awaitable[str]
-    model="openai:gpt-4o-mini",     # "provider:model" or any Provider instance
-    tools=[...],
-    output_type=MyPydanticModel,    # optional — anything Pydantic can validate
-    handoffs=[other_agent],         # delegate to other agents
+    name="Worker",
+    instructions="Plan, reason, act.",
+    model="openai:gpt-4o-mini",
+    tools=[
+        http_fetch, now, think,
+        *fs.tools(),
+        sh.tool(),
+        web_search(),              # requires lovia[tools]
+        *todo_tools(todos),
+        ask_human(channel),
+        PythonRunner(needs_approval=False).tool(),
+    ],
 )
 ```
 
-### Dynamic instructions
+`Shell` and `PythonRunner` default to `needs_approval=True` for safety.
+The `allowlist(commands)` helper builds an approval predicate that auto-approves
+whitelisted commands and blocks everything else.
 
-Append fragments at config time with `@agent.system_prompt`, or at call
-time via `append_instructions=`. Both compose cleanly with the static
-`instructions=` base.
-
-```python
-agent = Agent(name="Helper", instructions="You are a helpful assistant.")
-
-@agent.system_prompt
-def add_user(ctx) -> str:
-    user = getattr(ctx.context, "user", None)
-    return f"The user's name is {user}." if user else ""
-
-await Runner.run(agent, "Hi", append_instructions="Reply in haiku.")
-```
-
-### Per-call `output_type` override
-
-The agent's declared `output_type` is the default — `Runner.run` (and
-`agent.run`) can override it on a single call. Pass `None` to reset to
-plain text.
-
-```python
-class Plan(BaseModel):
-    steps: list[str]
-
-agent = Agent(name="x", instructions="...", output_type=Plan)
-plan = (await Runner.run(agent, "Plan a trip")).output           # -> Plan
-text = (await Runner.run(agent, "Plan a trip", output_type=None)).output  # -> str
-```
-
-### Tools
-
-`@tool` turns a typed Python function into a tool. Use `Annotated[..., "desc"]`
-or `Annotated[..., Field(description=...)]` to enrich the JSON Schema. Pass
-`strict=True` for OpenAI strict-mode schemas.
-
-```python
-from typing import Annotated
-from lovia import tool
-
-@tool(strict=True)
-def search(
-    query: Annotated[str, "Search query."],
-    limit: Annotated[int, "Max results."] = 5,
-) -> list[str]: ...
-```
-
-### Friendly errors
-
-Every framework exception carries an optional `.hint`. `OutputValidationError`
-adds the raw model text and the failing schema name to make debugging fast:
-
-```
-OutputValidationError: 2 validation errors for Plan
-hint: Consider setting output_repair=True on Runner.run().
-raw : '{"steps": "buy ticket"}'
-```
+Runnable demos for each tool live in [`examples/builtins/`](./examples/builtins/).
 
 ---
 
-## Builtin tools (opt-in)
+## Skills
 
-Everything below lives under `lovia.builtins.*`. Nothing is imported from
-the top-level package automatically.
+Skills are Markdown-driven instruction packs stored in a directory tree.
+They let you compose domain knowledge without bloating the system prompt.
 
-| Module | What you get |
-| --- | --- |
-| `lovia.builtins.http`   | `http_fetch` — typed wrapper around `httpx` |
-| `lovia.builtins.time`   | `now`, `sleep` |
-| `lovia.builtins.think`  | `think` — scratchpad |
-| `lovia.builtins.fs`     | `FileSystem(root, writable=False)` — sandboxed `read_file`/`write_file`/`list_dir`/`glob` |
-| `lovia.builtins.shell`  | `Shell(cwd, needs_approval=True)` (+ `allowlist`) |
-| `lovia.builtins.code`   | `PythonRunner(needs_approval=True)` |
-| `lovia.builtins.search` | `web_search(impl=None)` + `WebSearch` Protocol + `DuckDuckGoSearch` |
-| `lovia.builtins.todo`   | `TodoList` + `todo_tools(state)` |
-| `lovia.builtins.human`  | `HumanChannel` + `ask_human(channel)` |
-
-Runnable examples for each live in [`examples/builtins/`](./examples/builtins/).
-
----
-
-## Structured output
-
-```python
-from pydantic import BaseModel
-class Answer(BaseModel):
-    summary: str
-    confidence: float
-
-agent = Agent(name="x", instructions="...", output_type=Answer, output_repair=True)
 ```
-
-`output_repair=True` asks the model to fix its own JSON if the first
-parse fails — usually one extra round-trip away from green.
-
----
-
-## Skills (`SkillCatalog`)
-
-Skills are Markdown-driven instruction packs with optional `references/`,
-`scripts/`, and `assets/` subdirectories. Modes:
-
-- **lazy** (default) — render only the index; the model loads bodies on demand via `load_skill`.
-- **eager** — inline every `SKILL.md` body into the system prompt.
+skills/
+  translation/
+    SKILL.md          # name, description, usage instructions
+    references/       # reference files the agent can read
+```
 
 ```python
 from lovia.skills import SkillCatalog
 
-catalog = SkillCatalog.from_dir("./skills")          # mode="lazy"
+catalog = SkillCatalog.from_dir("./skills")   # lazy by default
 agent = Agent(
-    name="Researcher",
-    instructions="...",
+    name="Expert",
+    instructions=catalog.render_catalog(),
+    model="openai:gpt-4o-mini",
     tools=catalog.tools(),
 )
-prompt = catalog.render_catalog()
 ```
 
-See `examples/08_skills.py`.
+In lazy mode the catalog renders as a compact index; the model calls
+`load_skill` to pull in a full skill body on demand. Switch to
+`mode="eager"` to inline all bodies up front.
+
+---
+
+## Multiple providers
+
+The `model=` field accepts any `"provider:model"` string or a `Provider` instance.
+
+```python
+# OpenAI
+agent = Agent(model="openai:gpt-4o-mini", ...)
+# Anthropic
+agent = Agent(model="anthropic:claude-3-5-haiku-20241022", ...)
+# Any OpenAI-compatible endpoint
+from lovia import OpenAIChatProvider
+provider = OpenAIChatProvider(model="deepseek-chat", base_url="https://api.deepseek.com/v1", api_key="...")
+agent = Agent(model=provider, ...)
+```
 
 ---
 
 ## Examples
 
-| File | Highlights |
-| --- | --- |
-| `01_minimal.py`            | Hello world |
-| `02_tools.py`              | `@tool` basics |
-| `03_structured_output.py`  | Pydantic outputs |
-| `04_streaming.py`          | Token streaming |
-| `05_handoff.py`            | Agent → agent |
-| `06_guardrails.py`         | Input / output guards |
-| `07_approval.py`           | Human-in-the-loop |
-| `08_skills.py`             | SkillCatalog |
-| `09_memory.py`             | Persistent context |
-| `10_sessions.py`           | Pluggable session stores |
-| `11_mcp.py`                | Model Context Protocol |
-| `12_tracing.py`            | Hooks & tracing |
-| `13_anthropic.py`          | Anthropic provider |
-| `14_provider_swap.py`      | Swap providers per call |
-| `15_context_policy.py`     | Auto-summarize long history |
-| `16_web.py`                | FastAPI + SSE chat UI |
-| `17_dynamic_provider.py`   | Route per-message |
-| `18_hooks.py`              | Lifecycle hooks |
-| `19_dynamic_instructions.py` | `@agent.system_prompt` + `append_instructions=` |
-| `20_builtins.py`           | A few `lovia.builtins.*` together |
-| `21_dx.py`                 | `Annotated`/`Field`, `run_sync`, `Agent.run` |
-| `builtins/`                | One demo per builtin tool |
+```
+examples/
+  01_hello.py                  Minimal agent
+  02_tools.py                  Tool calling
+  03_streaming.py              Streaming tokens
+  04_structured_output.py      Pydantic output
+  05_handoff.py                Agent-to-agent delegation
+  06_agent_as_tool.py          Sub-agent as a tool
+  07_session.py                Persistent sessions
+  08_skills.py                 SkillCatalog
+  09_compat_provider.py        Custom OpenAI-compatible provider
+  10_hooks.py                  Lifecycle hooks / tracing
+  11_approval.py               Human-in-the-loop approval
+  12_multimodal.py             Image input
+  13_budget_and_cancel.py      Token budget & cancellation
+  14_guardrails.py             Input/output guards
+  15_resume.py                 Resume interrupted runs
+  16_web_serve.py              FastAPI + SSE server
+  17_responses_reasoning.py    OpenAI Responses API + reasoning
+  18_context_policy.py         Auto-summarize long history
+  19_dynamic_instructions.py   Dynamic system prompt
+  20_builtins.py               Several builtins together
+  21_dx.py                     Annotated schemas, run_sync
+  builtins/                    One focused demo per builtin
+  workflows/                   Multi-agent workflow patterns
+```
 
 ---
 
 ## Development
 
 ```bash
-pip install -e .[dev]
-pytest               # tests
-ruff check .         # lint
-ruff format .        # format
-mypy lovia           # type-check
+git clone https://github.com/cymoo/lovia
+pip install -e ".[dev]"
+pytest          # run tests
+ruff check .    # lint
+mypy lovia      # type-check
 ```
 
-See [`AGENTS.md`](./AGENTS.md) for design philosophy and contribution conventions.
+See [`AGENTS.md`](./AGENTS.md) for architecture notes, design philosophy,
+and commit conventions.
 
-## License
+---
 
-MIT.
+MIT License

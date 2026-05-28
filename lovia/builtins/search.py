@@ -47,10 +47,13 @@ class DuckDuckGoSearch:
         self, query: str, *, max_results: int = 5
     ) -> list[SearchResult]:
         try:
-            from duckduckgo_search import DDGS  # type: ignore[import-not-found]
+            try:
+                from ddgs import DDGS  # type: ignore[import-not-found]
+            except ImportError:
+                from duckduckgo_search import DDGS  # type: ignore[import-not-found]
         except ImportError as exc:
             raise UserError(
-                "DuckDuckGoSearch requires the 'duckduckgo-search' package.",
+                "DuckDuckGoSearch requires the 'ddgs' package.",
                 hint="Install with: pip install 'lovia[tools]'",
             ) from exc
 

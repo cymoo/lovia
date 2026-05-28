@@ -10,6 +10,7 @@ Run::
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 import tempfile
@@ -25,6 +26,7 @@ from lovia.builtins.time import now
 from lovia.builtins.todo import TodoList, todo_tools
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 async def main() -> None:
@@ -39,7 +41,7 @@ async def main() -> None:
                 "You have shell, filesystem, http, time, think, and todo tools. "
                 "Plan steps with todos. Use 'think' to reason out loud."
             ),
-            model="openai:gpt-4o-mini",
+            model=MODEL,
             tools=[
                 http_fetch,
                 now,

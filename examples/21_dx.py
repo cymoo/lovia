@@ -6,6 +6,7 @@ Run::
 """
 
 from __future__ import annotations
+import os
 
 from typing import Annotated
 
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from lovia import Agent, tool
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 
 class Summary(BaseModel):
@@ -34,7 +36,7 @@ def main() -> None:
     agent = Agent(
         name="Summariser",
         instructions="You answer concisely.",
-        model="openai:gpt-4o-mini",
+        model=MODEL,
         tools=[shout],
     )
 

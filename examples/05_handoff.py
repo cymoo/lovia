@@ -6,6 +6,7 @@ the same loop, so the specialist sees the full transcript.
 """
 
 from __future__ import annotations
+import os
 
 import asyncio
 
@@ -14,17 +15,18 @@ from lovia import Agent, Runner
 from dotenv import load_dotenv
 
 load_dotenv()
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
 
 billing = Agent(
     name="Billing",
     instructions="You handle invoices, refunds, and subscription questions.",
-    model="deepseek-v4-pro",
+    model=MODEL,
 )
 
 support = Agent(
     name="Support",
     instructions="You debug product issues. Ask for reproduction steps.",
-    model="deepseek-v4-pro",
+    model=MODEL,
 )
 
 triage = Agent(
@@ -34,7 +36,7 @@ triage = Agent(
         "If they mention money, transfer to Billing. "
         "If they mention bugs or errors, transfer to Support."
     ),
-    model="deepseek-v4-pro",
+    model=MODEL,
     handoffs=[billing, support],
 )
 

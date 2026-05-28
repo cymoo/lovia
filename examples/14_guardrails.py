@@ -41,7 +41,7 @@ async def main() -> None:
             "Answer questions concisely. Always include a '[source]' tag at "
             "the end of every factual answer."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         input_guardrails=[block_pii],
         output_guardrails=[require_citation],
     )

@@ -305,6 +305,37 @@ async def test_summarizing_circuit_breaker():
     assert out is items
 
 
+async def test_summarizing_uses_current_items_when_last_prompt_is_stale():
+    """Regression: ``last_prompt_tokens`` is the *previous* turn's prompt
+    size — it does not include the assistant reply, tool results, or new
+    user message that have been appended since. The policy must therefore
+    fall back to the current items estimate when it is larger; otherwise a
+    big tool result silently overshoots the model's hard cap before the
+    next ``usage`` count arrives.
+    """
+    summarizer = _FakeSummarizer("compacted")
+    policy = SummarizingContextPolicy(
+        max_tokens=1_000,
+        compact_at_ratio=0.5,  # threshold = 500
+        keep_recent_messages=2,
+        summarizer=summarizer,
+    )
+    # 10 messages of ~400 chars each ≈ 1000 estimated tokens, well above
+    # threshold. ``last_prompt_tokens`` is stale and below threshold.
+    items = [_user("x" * 400) for _ in range(10)]
+    ctx = PolicyContext(
+        provider=_FakeProviderWithWindow(window=1_000),
+        model="fake-model",
+        last_prompt_tokens=100,  # stale: from a much earlier turn
+    )
+    out = await policy.apply(items, ctx=ctx)
+    assert out is not items, (
+        "expected compaction to trigger from current-items estimate "
+        "despite stale last_prompt_tokens"
+    )
+    assert summarizer.calls
+
+
 # ---------------------------------------------------------------------------
 # Runner integration
 # ---------------------------------------------------------------------------

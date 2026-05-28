@@ -23,6 +23,9 @@ Typical use::
 
 from __future__ import annotations
 
+import logging as _logging
+from typing import Any as _Any
+
 from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
@@ -98,6 +101,58 @@ from .items import (
 from .output import DefaultOutputRepair, OutputRepairStrategy
 from .tools import Tool, ToolPolicy, ToolResultRenderer, ToolWrap, WrapPolicy, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
+
+
+# ---------------------------------------------------------------------------
+# Logging setup
+#
+# Library best practice: attach a NullHandler so applications that don't
+# configure logging don't see ``No handlers could be found`` warnings, but
+# also don't get unsolicited output. Users opt in via ``logging.basicConfig``
+# or :func:`enable_logging`.
+# ---------------------------------------------------------------------------
+_logging.getLogger("lovia").addHandler(_logging.NullHandler())
+
+
+def enable_logging(
+    level: int | str = _logging.INFO,
+    *,
+    format: str = "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    datefmt: str = "%H:%M:%S",
+    stream: _Any = None,
+) -> _logging.Logger:
+    """Configure the ``lovia`` logger for quick interactive use.
+
+    Convenience for scripts and notebooks. Attaches a single
+    :class:`~logging.StreamHandler` to the ``lovia`` logger with a sensible
+    default format and sets its level. Idempotent — calling more than once
+    replaces the previously attached handler so log lines aren't duplicated.
+
+    For production deployments configure :mod:`logging` yourself; nothing in
+    ``lovia`` calls this function automatically.
+
+    Args:
+        level: Logger level (e.g. ``logging.DEBUG``, ``"INFO"``).
+        format: ``logging`` format string.
+        datefmt: ``logging`` date format string.
+        stream: Optional stream override (defaults to ``sys.stderr``).
+
+    Returns:
+        The configured ``lovia`` logger.
+    """
+    log = _logging.getLogger("lovia")
+    # Strip handlers we've previously attached so successive calls don't pile
+    # up duplicate StreamHandlers — but keep the NullHandler so logging stays
+    # well-behaved if the user later calls ``logging.disable`` etc.
+    for h in list(log.handlers):
+        if getattr(h, "_lovia_managed", False):
+            log.removeHandler(h)
+    handler = _logging.StreamHandler(stream)
+    handler.setFormatter(_logging.Formatter(format, datefmt=datefmt))
+    handler._lovia_managed = True  # type: ignore[attr-defined]
+    log.addHandler(handler)
+    log.setLevel(level)
+    return log
 
 __all__ = [
     "Agent",
@@ -178,6 +233,7 @@ __all__ = [
     "assistant",
     "assistant_to_items",
     "drop_stale_tool_calls",
+    "enable_logging",
     "events",
     "input_to_items",
     "item_from_dict",

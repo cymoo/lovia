@@ -33,6 +33,7 @@ Three orthogonal layers (don't conflate them):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
@@ -50,6 +51,9 @@ from .providers.base import (
     context_window as _provider_context_window,
     estimate_tokens as _estimate_tokens,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -410,16 +414,37 @@ class SummarizingContextPolicy:
         if threshold is None:
             # No window info → can't act proactively; only L2 (if enabled).
             return self._maybe_micro_compact(items)
-        tokens = ctx.last_prompt_tokens
-        if tokens is None:
-            tokens = _estimate_tokens(ctx.provider, items)
+        # ``last_prompt_tokens`` reflects the prompt size of the *previous*
+        # turn. Since then we've appended the assistant reply, tool outputs,
+        # and (often) a new user message, so it systematically under-counts.
+        # Always cross-check against an estimate of the current items_log
+        # and take the larger of the two — otherwise a single large tool
+        # result can push us past the model's hard cap before the next
+        # turn's usage number arrives. See the regression in
+        # ``test_summarizing_policy_uses_current_items_when_stale``.
+        estimate = _estimate_tokens(ctx.provider, items)
+        last = ctx.last_prompt_tokens or 0
+        tokens = max(estimate, last)
         if tokens < threshold:
             return self._maybe_micro_compact(items)
+        logger.info(
+            "context.compact.proactive: triggering compaction "
+            "(tokens≈%d, threshold=%d, items=%d, last_prompt=%s)",
+            tokens,
+            threshold,
+            len(items),
+            last or None,
+        )
         return await self._compact(items, ctx=ctx, reactive=False)
 
     async def apply_reactive(
         self, items: list[Item], *, ctx: PolicyContext
     ) -> list[Item]:
+        logger.warning(
+            "context.compact.reactive: provider reported overflow; "
+            "compacting (items=%d)",
+            len(items),
+        )
         return await self._compact(items, ctx=ctx, reactive=True)
 
     # -- internals ------------------------------------------------------------
@@ -442,11 +467,23 @@ class SummarizingContextPolicy:
         if self._breaker.tripped:
             # Don't keep hammering a broken summarizer; just return as-is and
             # let the caller surface the underlying overflow.
+            logger.warning(
+                "context.compact: circuit breaker tripped after %d "
+                "consecutive failures; skipping compaction",
+                self._breaker.count,
+            )
             return items
         try:
             summary = await self.summarizer.summarize(items, ctx=ctx)
-        except Exception:
+        except Exception as exc:
             self._breaker.record_failure()
+            logger.warning(
+                "context.compact: summarizer failed (%s: %s); failure %d/%d",
+                type(exc).__name__,
+                exc,
+                self._breaker.count,
+                self._breaker.max_failures,
+            )
             raise
         self._breaker.record_success()
 
@@ -461,6 +498,15 @@ class SummarizingContextPolicy:
             content=f"{_SUMMARY_PREFIX}{summary}{_SUMMARY_SUFFIX}",
         )
         new_items: list[Item] = [summary_item, *kept]
+        logger.info(
+            "context.compact.done: reactive=%s, items %d → %d, "
+            "kept_tail=%d, summary_chars=%d",
+            reactive,
+            len(items),
+            len(new_items),
+            tail,
+            len(summary),
+        )
 
         if self.archive is not None:
             try:
@@ -473,10 +519,14 @@ class SummarizingContextPolicy:
                         reactive=reactive,
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 # Archive is best-effort; don't let an audit-sink outage
                 # crash a live run.
-                pass
+                logger.warning(
+                    "context.archive: callback failed (%s: %s); ignoring",
+                    type(exc).__name__,
+                    exc,
+                )
         return new_items
 
     def _maybe_micro_compact(self, items: list[Item]) -> list[Item]:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, TypeVar
 
@@ -80,6 +81,26 @@ from .approvals import ApprovalChannel
 from .session import Session
 from .tools import Tool, render_tool_result, run_tool
 from .tracing import NoopTracer, Tracer
+
+
+logger = logging.getLogger(__name__)
+
+
+_LOG_REPR_MAX = 200
+
+
+def _truncate_repr(value: Any, max_len: int = _LOG_REPR_MAX) -> str:
+    """Render ``value`` for a single log line, clipping to ``max_len`` chars.
+
+    Used for tool args/results — we never want a 100KB blob in the log.
+    """
+    try:
+        s = value if isinstance(value, str) else repr(value)
+    except Exception:
+        s = "<unrepr>"
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + f"... <+{len(s) - max_len} chars>"
 
 
 TContext = TypeVar("TContext")
@@ -481,6 +502,13 @@ class _RunLoop:
         ev_start = events.RunStarted(agent=agent)
         yield ev_start
         await dispatch(agent.hooks, ev_start)
+        model_label = _agent_model_label(agent)
+        logger.info(
+            "run.start: agent=%r model=%s input=%s",
+            agent.name,
+            model_label,
+            _truncate_repr(_input_preview(self.user_input)),
+        )
         try:
             # Input guardrails run once on the fully-built initial transcript.
             # Skip on resume — they already ran on the original input.
@@ -494,6 +522,12 @@ class _RunLoop:
             output_repair_attempts = 0
             while True:
                 if turns >= self.max_turns:
+                    logger.warning(
+                        "run.max_turns: agent=%r turns=%d/%d",
+                        agent.name,
+                        turns,
+                        self.max_turns,
+                    )
                     raise MaxTurnsExceeded(
                         f"Run exceeded max_turns={self.max_turns} without producing output"
                     )
@@ -502,6 +536,11 @@ class _RunLoop:
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 turns += 1
+                logger.debug(
+                    "run.turn.start: agent=%r turn=%d",
+                    agent.name,
+                    turns,
+                )
                 ev_turn = events.TurnStarted(agent=agent, turn=turns)
                 yield ev_turn
                 await dispatch(agent.hooks, ev_turn)
@@ -551,13 +590,22 @@ class _RunLoop:
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
-                except ContextOverflowError:
+                except ContextOverflowError as overflow:
+                    logger.warning(
+                        "context.overflow: provider raised; invoking reactive "
+                        "context_policy.apply_reactive (%s)",
+                        overflow,
+                    )
                     items_before = items_log
                     new_items = await self.context_policy.apply_reactive(
                         items_before, ctx=policy_ctx
                     )
                     if new_items is items_before:
                         # Policy refused / couldn't shrink — surface original.
+                        logger.error(
+                            "context.overflow: policy could not shrink "
+                            "transcript; surfacing ContextOverflowError"
+                        )
                         raise
                     async for ev in self._on_context_compacted(
                         agent,
@@ -617,6 +665,14 @@ class _RunLoop:
                         )
                         if repair_prompt is not None and output_spec is not None:
                             output_repair_attempts += 1
+                            logger.warning(
+                                "run.output_repair: agent=%r attempt=%d "
+                                "schema=%s error=%s",
+                                agent.name,
+                                output_repair_attempts,
+                                exc.output_type_name,
+                                _truncate_repr(str(exc)),
+                            )
                             transcript.append(user(repair_prompt))
                             items_log.append(
                                 _InputMessageItem(role="user", content=repair_prompt)
@@ -662,6 +718,11 @@ class _RunLoop:
                     break
 
                 if state.handoff_signal is not None:
+                    logger.info(
+                        "run.handoff: %r → %r",
+                        agent.name,
+                        state.handoff_signal.target.name,
+                    )
                     (
                         agent,
                         output_spec,
@@ -692,6 +753,14 @@ class _RunLoop:
             done = events.RunCompleted(result=result)
             yield done
             await dispatch(agent.hooks, done)
+            logger.info(
+                "run.done: agent=%r turns=%d tokens=%d(in=%d out=%d)",
+                result.final_agent.name,
+                result.turns,
+                result.usage.total_tokens,
+                result.usage.input_tokens,
+                result.usage.output_tokens,
+            )
 
         finally:
             for cleanup in mcp_cleanup:
@@ -957,6 +1026,12 @@ class _RunLoop:
                 return
 
         yield events.ToolCallStarted(call=call)
+        logger.info(
+            "tool.start: %s call_id=%s args=%s",
+            tool.name,
+            call.id,
+            _truncate_repr(args),
+        )
 
         try:
             with tracer.span("tool", name=tool.name, call_id=call.id):
@@ -971,6 +1046,13 @@ class _RunLoop:
         except Exception as exc:
             result = f"Tool error: {exc}"
             is_error = True
+            logger.warning(
+                "tool.error: %s call_id=%s (%s: %s)",
+                tool.name,
+                call.id,
+                type(exc).__name__,
+                exc,
+            )
             yield events.ErrorOccurred(error=exc)
 
         if isinstance(result, _HandoffSignal):
@@ -997,6 +1079,13 @@ class _RunLoop:
                 is_error=is_error,
             )
         )
+        if not is_error:
+            logger.info(
+                "tool.done: %s call_id=%s result=%s",
+                tool.name,
+                call.id,
+                _truncate_repr(result_text),
+            )
         yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
 
     async def _await_approval(
@@ -1268,6 +1357,30 @@ def _supports_json_schema(agent: Agent) -> bool:
     return False
 
 
+def _agent_model_label(agent: Agent) -> str:
+    """Best-effort one-line description of the agent's model(s) for logging."""
+    m = agent.model
+    if isinstance(m, str):
+        return m
+    if isinstance(m, list):
+        labels = []
+        for item in m:
+            labels.append(getattr(item, "model", None) or getattr(item, "name", repr(item)))
+        return ",".join(labels)
+    return getattr(m, "model", None) or getattr(m, "name", None) or repr(m)
+
+
+def _input_preview(user_input: "str | list[ChatMessage]") -> str:
+    """First-line preview of the user input for logging."""
+    if isinstance(user_input, str):
+        return user_input
+    for msg in user_input:
+        if msg.role != "system":
+            content = msg.content
+            return content if isinstance(content, str) else repr(content)
+    return ""
+
+
 async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
     raise AssertionError("final_output tool must be intercepted by the runner")
 
@@ -1326,6 +1439,16 @@ async def _stream_with_fallback(
                         retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1))
                     )
                     delay *= 0.5 + _random.random()
+                    logger.warning(
+                        "run.retry: provider=%s attempt=%d/%d "
+                        "delay=%.2fs error=%s(%s)",
+                        getattr(provider, "name", repr(provider)),
+                        attempt,
+                        max_attempts,
+                        delay,
+                        type(exc).__name__,
+                        _truncate_repr(str(exc)),
+                    )
                     await retry.sleep(delay)
                     continue
                 break  # next provider

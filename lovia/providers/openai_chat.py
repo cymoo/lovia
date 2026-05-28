@@ -246,19 +246,36 @@ class OpenAIChatProvider:
 
 
 # OpenAI Chat returns 400 with ``code: context_length_exceeded`` (or a message
-# containing that phrase). We accept the substring match too because gateway
-# proxies sometimes drop the structured ``code`` field.
+# containing that phrase). We accept a broader set of substrings because gateway
+# proxies and OpenAI-compatible endpoints (DeepSeek, Qwen, modal-hosted models,
+# vLLM, ...) phrase the same condition differently. The cost of a false positive
+# is just an extra reactive compaction attempt, so we err on the side of
+# matching.
+_OVERFLOW_NEEDLES = (
+    "context_length_exceeded",
+    "context length",  # "the model's context length is only N"
+    "context window",  # some vendors
+    "prompt is too long",
+    "input is too long",
+    "input length",  # "maximum input length of N"
+    "reduce the length of the input",
+    "reduce the length of the messages",
+    "too many tokens",
+    "request too large",
+)
+
+
 def _is_context_overflow(status: int, body: str) -> bool:
     if status not in (400, 413):
         return False
     lowered = body.lower()
-    return (
-        "context_length_exceeded" in lowered
-        or "maximum context length" in lowered
-        or "prompt is too long" in lowered
-        or "string too long" in lowered
-        and "context" in lowered
-    )
+    if any(needle in lowered for needle in _OVERFLOW_NEEDLES):
+        return True
+    # ``"string too long"`` shows up in unrelated validation errors too;
+    # only treat it as overflow when the body also mentions context.
+    if "string too long" in lowered and "context" in lowered:
+        return True
+    return False
 
 
 # Conservative context-window table for the most common OpenAI / OpenAI-compatible

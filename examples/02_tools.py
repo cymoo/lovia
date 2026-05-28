@@ -5,12 +5,14 @@ import os
 
 import asyncio
 
-from lovia import Agent, Runner, tool
+from lovia import Agent, Runner, tool, enable_logging
 
 from dotenv import load_dotenv
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+
+enable_logging()  # Logs all tool calls and their results to the console.
 
 
 @tool

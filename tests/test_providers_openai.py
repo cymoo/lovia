@@ -14,7 +14,7 @@ def test_reasoning_delta_event_emitted_by_runner() -> None:
     agent = Agent(name="a", model=provider)
 
     async def go() -> tuple[str, str]:
-        handle = Runner.run_streamed(agent, "hi")
+        handle = Runner.stream(agent, "hi")
         text_d: list[str] = []
         reasoning_d: list[str] = []
         async for ev in handle:

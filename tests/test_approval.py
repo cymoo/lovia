@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lovia import Agent, Runner, events, tool
+from lovia.approvals import ApprovalChannel
 
 from .scripted_provider import ScriptedProvider, call, text
 
@@ -22,7 +23,7 @@ async def sensitive() -> str:
 async def test_streaming_approve_allows_tool() -> None:
     provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("done")])
     agent = Agent(name="t", model=provider, tools=[sensitive])
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     async for ev in handle:
         if isinstance(ev, events.ApprovalRequired):
             ev.approve()
@@ -37,7 +38,7 @@ async def test_streaming_reject_blocks_tool() -> None:
         [call("sensitive", {}, call_id="c1"), text("understood")]
     )
     agent = Agent(name="t", model=provider, tools=[sensitive])
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     async for ev in handle:
         if isinstance(ev, events.ApprovalRequired):
             ev.reject()
@@ -131,7 +132,7 @@ async def test_handler_literal_ask_defers_to_streaming_consumer() -> None:
         tools=[dangerous],
         approval_handler=lambda c, ctx: "ask",
     )
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     async for event in handle:
         if isinstance(event, events.ApprovalRequired):
             event.approve()
@@ -147,7 +148,7 @@ async def test_approval_channel_resolves_by_call_id() -> None:
     """A caller outside the event stream can approve via handle.approvals."""
     provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("done")])
     agent = Agent(name="t", model=provider, tools=[sensitive])
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     async for ev in handle:
         if isinstance(ev, events.ApprovalRequired):
             # Resolve via the channel rather than ev.approve().
@@ -155,3 +156,17 @@ async def test_approval_channel_resolves_by_call_id() -> None:
     result = await handle.result()
     tool_msg = next(m for m in result.messages if m.role == "tool")
     assert tool_msg.content == "did it"
+
+
+@pytest.mark.asyncio
+async def test_approval_channel_supports_scopes() -> None:
+    channel = ApprovalChannel()
+    fut_a = channel.register("c1", scope="a")
+    fut_b = channel.register("c1", scope="b")
+
+    assert channel.resolve("c1", True, scope="a") is True
+    assert fut_a.result() is True
+    assert not fut_b.done()
+
+    channel.release(scope="b")
+    assert fut_b.result() is False

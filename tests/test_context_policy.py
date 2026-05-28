@@ -17,7 +17,7 @@ from lovia import (
     ToolCallOutputItem,
     safe_window,
 )
-from lovia.context_policy import PolicyContext
+from lovia.context_policy import PolicyContext, extract_compaction_summary
 from lovia.events import ContextCompacted
 from lovia.stores.memory import InMemorySession
 
@@ -56,6 +56,22 @@ def test_safe_window_with_head_and_tail():
     items = [_user(f"m{i}") for i in range(10)]
     got = safe_window(items, head=2, tail=3)
     assert [it.content for it in got] == ["m0", "m1", "m7", "m8", "m9"]
+
+
+def test_extract_compaction_summary() -> None:
+    items = [
+        InputMessageItem(
+            role="system",
+            content=(
+                "[Conversation summary — prior turns compacted]\n\n"
+                "Important state.\n\n"
+                "[End summary]"
+            ),
+        )
+    ]
+
+    assert extract_compaction_summary(items) == "Important state."
+    assert extract_compaction_summary([_user("plain")]) is None
 
 
 def test_safe_window_pulls_orphan_tool_call_into_tail():
@@ -360,9 +376,7 @@ async def test_runner_emits_context_compacted_event():
         model=provider,
     )
     events_seen: list = []
-    async for ev in Runner.run_stream(
-        agent, "go", context_policy=policy
-    ):
+    async for ev in Runner.stream(agent, "go", context_policy=policy):
         events_seen.append(ev)
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1

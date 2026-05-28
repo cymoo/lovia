@@ -71,6 +71,26 @@ def search(
 ) -> list[str]: ...
 ```
 
+Simple execution policies stay as decorator kwargs:
+
+```python
+@tool(timeout=5, retries=2, needs_approval=True)
+async def send_email(to: str, body: str) -> str: ...
+```
+
+For advanced cases, pass composable `policies`; simple kwargs still work.
+
+```python
+from lovia import RunContext
+
+async def redact(next_tool, args, ctx):
+    result = await next_tool(args, ctx)
+    return str(result).replace(ctx.context.api_key, "[redacted]")
+
+@tool(policies=[redact])
+async def call_api(ctx: RunContext, path: str) -> str: ...
+```
+
 ---
 
 ## Structured output
@@ -102,7 +122,7 @@ print(result.output.rating)   # -> int
 Override `output_type` for a single call without touching the agent:
 
 ```python
-result = await Runner.run(agent, "Summarize in plain text.", output_type=None)
+result = await Runner.run(agent, "Summarize in plain text.", output_type=str)
 ```
 
 ---
@@ -110,7 +130,7 @@ result = await Runner.run(agent, "Summarize in plain text.", output_type=None)
 ## Streaming
 
 ```python
-async for event in Runner.run_streamed(agent, "Tell me a joke"):
+async for event in Runner.stream(agent, "Tell me a joke"):
     print(event)
 ```
 
@@ -138,6 +158,12 @@ async def inject_user(ctx) -> str:
 
 # Append one-off context at call time:
 result = await Runner.run(agent, "I need help.", append_instructions="Reply in Spanish.")
+```
+
+Prefer functional configuration when cloning reusable agents:
+
+```python
+agent = agent.with_system_prompt(inject_user)
 ```
 
 ---
@@ -213,7 +239,7 @@ Nothing is imported automatically — grab only what you need.
 from lovia.builtins.http import http_fetch
 from lovia.builtins.fs import FileSystem
 from lovia.builtins.shell import Shell, allowlist
-from lovia.builtins.search import web_search
+from lovia.builtins.search import duckduckgo_search_tool
 from lovia.builtins.todo import TodoList, todo_tools
 from lovia.builtins.human import HumanChannel, ask_human
 from lovia.builtins.think import think
@@ -233,7 +259,7 @@ agent = Agent(
         http_fetch, now, think,
         *fs.tools(),
         sh.tool(),
-        web_search(),              # requires lovia[tools]
+        duckduckgo_search_tool(),  # requires lovia[tools]
         *todo_tools(todos),
         ask_human(channel),
         PythonRunner(needs_approval=False).tool(),
@@ -244,6 +270,10 @@ agent = Agent(
 `Shell` and `PythonRunner` default to `needs_approval=True` for safety.
 The `allowlist(commands)` helper builds an approval predicate that auto-approves
 whitelisted commands and blocks everything else.
+
+Builtin convention: stateless helpers export ready-to-use `Tool` instances,
+pluggable backends use factories, stateful single-tool helpers expose `.tool()`,
+and stateful multi-tool helpers expose `.tools()`.
 
 Runnable demos for each tool live in [`examples/builtins/`](./examples/builtins/).
 

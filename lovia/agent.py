@@ -5,9 +5,9 @@ It contains no runtime state: every call to :func:`Runner.run` reads from it
 but never mutates it. This makes agents safe to share across requests and
 trivial to clone for per-request tweaks.
 
-The one exception to "no runtime state" is the ``_fragments`` list populated
+The one exception to "no runtime state" is the ``_fragments`` tuple populated
 by the :meth:`system_prompt` decorator — but it's still configuration, not
-session data, and is copied by :meth:`clone`.
+session data, and clone operations copy it immutably.
 """
 
 from __future__ import annotations
@@ -118,9 +118,9 @@ class Agent(Generic[TContext]):
     memory: "Memory | None" = None
     # Dynamic system-prompt fragments registered via @agent.system_prompt.
     # Rendered in registration order and appended after ``instructions``.
-    # Not a public field — use the decorator or ``add_system_prompt`` instead.
-    _fragments: list[InstructionsFn] = field(
-        default_factory=list, repr=False, compare=False
+    # Not a public field — use the decorator or ``with_system_prompt`` instead.
+    _fragments: tuple[InstructionsFn, ...] = field(
+        default_factory=tuple, repr=False, compare=False
     )
 
     def resolve_providers(self) -> list[Provider]:
@@ -162,8 +162,14 @@ class Agent(Generic[TContext]):
             async def add_user_tier(ctx) -> str:
                 return f"User tier: {ctx.context.tier}"
         """
-        self._fragments.append(fn)
+        self._fragments = (*self._fragments, fn)
         return fn
+
+    def with_system_prompt(self, fn: InstructionsFn) -> "Agent[TContext]":
+        """Return a clone with one additional dynamic system-prompt fragment."""
+        new = self.clone()
+        new._fragments = (*self._fragments, fn)
+        return new
 
     async def render_instructions(
         self, context: Any, *, extra: "str | InstructionsFn | None" = None
@@ -213,11 +219,11 @@ class Agent(Generic[TContext]):
         """Return a copy of this agent with selected fields overridden.
 
         Dynamic system-prompt fragments registered on the source agent are
-        copied so the clone inherits them; modifying one list does not affect
-        the other.
+        copied immutably so the clone inherits them without sharing mutable
+        prompt state.
         """
         new = replace(self, **overrides)
-        new._fragments = list(self._fragments)
+        new._fragments = self._fragments
         return new
 
     # ------------------------------------------------------------------ #
@@ -249,7 +255,7 @@ class Agent(Generic[TContext]):
         input: "str | list[ChatMessage]",
         **kwargs: Any,
     ) -> "RunHandle":
-        """Shortcut for ``Runner.run_streamed(self, input, **kwargs)``."""
+        """Shortcut for ``Runner.stream(self, input, **kwargs)``."""
         from .runner import Runner
 
-        return Runner.run_streamed(self, input, **kwargs)
+        return Runner.stream(self, input, **kwargs)

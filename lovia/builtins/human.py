@@ -28,6 +28,8 @@ from typing import Annotated
 from ..exceptions import ToolError
 from ..tools import Tool, tool
 
+__all__ = ["HumanChannel", "HumanQuestion", "ask_human"]
+
 
 @dataclass
 class HumanQuestion:

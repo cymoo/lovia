@@ -20,6 +20,8 @@ from typing import Annotated
 from ..exceptions import ToolError, UserError
 from ..tools import Tool, tool
 
+__all__ = ["FileSystem"]
+
 
 @dataclass
 class FileSystem:
@@ -66,16 +68,27 @@ class FileSystem:
         @tool
         def read_file(
             path: Annotated[str, "Relative path under the sandbox root."],
+            offset: Annotated[int, "Byte offset to start reading from."] = 0,
+            length: Annotated[int | None, "Maximum bytes to read."] = None,
         ) -> str:
             """Read a UTF-8 text file inside the sandbox."""
             p = resolve(path)
             if not p.is_file():
                 raise ToolError(f"Not a file: {path}")
-            data = p.read_bytes()
+            if offset < 0:
+                raise ToolError("offset must be >= 0")
+            if length is not None and length < 0:
+                raise ToolError("length must be >= 0")
+            with p.open("rb") as fh:
+                fh.seek(offset)
+                data = fh.read() if length is None else fh.read(length)
             if len(data) > max_bytes:
                 raise ToolError(
                     f"File too large ({len(data)} > {max_bytes} bytes).",
-                    hint="Increase FileSystem(max_bytes=...) or read a slice externally.",
+                    hint=(
+                        "Increase FileSystem(max_bytes=...) or pass "
+                        "offset/length to read a smaller slice."
+                    ),
                 )
             return data.decode("utf-8", errors="replace")
 

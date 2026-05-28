@@ -14,17 +14,17 @@ from __future__ import annotations
 import asyncio
 
 from .. import events
+from ..approvals import ApprovalChannel
 
 
 class ApprovalRegistry:
-    """Process-local registry of pending approval futures.
+    """Session-scoped adapter around :class:`lovia.ApprovalChannel`.
 
-    Keyed by ``(session_id, call_id)``.
+    Keyed by ``(session_id, call_id)`` for HTTP resolution.
     """
 
     def __init__(self) -> None:
-        self._pending: dict[tuple[str, str], asyncio.Future[bool]] = {}
-        self._lock = asyncio.Lock()
+        self._channel = ApprovalChannel()
 
     async def await_decision(
         self, session_id: str, ev: events.ApprovalRequired
@@ -35,11 +35,7 @@ class ApprovalRegistry:
         reject) before returning, even on cancellation, so the runner never
         hangs waiting for a verdict.
         """
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[bool] = loop.create_future()
-        key = (session_id, ev.call.id)
-        async with self._lock:
-            self._pending[key] = fut
+        fut = self._channel.register(ev.call.id, scope=session_id)
 
         decision = False
         try:
@@ -49,8 +45,7 @@ class ApprovalRegistry:
             ev.reject()
             raise
         finally:
-            async with self._lock:
-                self._pending.pop(key, None)
+            self._channel.discard(ev.call.id, scope=session_id)
 
         if decision:
             ev.approve()
@@ -60,14 +55,7 @@ class ApprovalRegistry:
 
     async def resolve(self, session_id: str, call_id: str, decision: bool) -> bool:
         """Resolve a pending approval. Returns ``False`` if no match."""
-        async with self._lock:
-            fut = self._pending.get((session_id, call_id))
-            if fut is None or fut.done():
-                return False
-            # Hold the lock while completing the future to avoid racing
-            # release() / cancellation, which may also try to resolve it.
-            fut.set_result(decision)
-            return True
+        return self._channel.resolve(call_id, decision, scope=session_id)
 
     async def release(self, session_id: str) -> None:
         """Default-deny any approvals still pending for ``session_id``.
@@ -75,7 +63,4 @@ class ApprovalRegistry:
         Called from the SSE handler's ``finally`` block so an early disconnect
         doesn't leave the runner blocked.
         """
-        async with self._lock:
-            for key, fut in list(self._pending.items()):
-                if key[0] == session_id and not fut.done():
-                    fut.set_result(False)
+        self._channel.release(scope=session_id, decision=False)

@@ -1,4 +1,4 @@
-"""Stream events emitted by :meth:`Runner.run_stream`.
+"""Stream events emitted by :meth:`Runner.stream`.
 
 Streaming and observability share the same event types. Events are pure
 data — control plumbing (approvals, cancellation) lives elsewhere. See
@@ -26,31 +26,71 @@ class Event:
 
 
 @dataclass
-class RunStarted(Event):
+class RunEvent(Event):
+    """Base class for run-level lifecycle events."""
+
+
+@dataclass
+class TurnEvent(Event):
+    """Base class for per-turn lifecycle events."""
+
+
+@dataclass
+class DeltaEvent(Event):
+    """Base class for streamed model deltas."""
+
+
+@dataclass
+class MessageEvent(Event):
+    """Base class for completed assistant-message events."""
+
+
+@dataclass
+class ToolEvent(Event):
+    """Base class for tool-call and approval events."""
+
+
+@dataclass
+class TransitionEvent(Event):
+    """Base class for agent-transition events."""
+
+
+@dataclass
+class ErrorEvent(Event):
+    """Base class for error events."""
+
+
+@dataclass
+class ContextEvent(Event):
+    """Base class for context-management events."""
+
+
+@dataclass
+class RunStarted(RunEvent):
     agent: "Agent"
 
 
 @dataclass
-class TurnStarted(Event):
+class TurnStarted(TurnEvent):
     agent: "Agent"
     turn: int
 
 
 @dataclass
-class TurnEnded(Event):
+class TurnEnded(TurnEvent):
     agent: "Agent"
     turn: int
 
 
 @dataclass
-class TextDelta(Event):
+class TextDelta(DeltaEvent):
     """A partial assistant text fragment emitted during streaming."""
 
     delta: str
 
 
 @dataclass
-class ReasoningDelta(Event):
+class ReasoningDelta(DeltaEvent):
     """A partial chain-of-thought fragment from providers that expose it.
 
     Surface in your UI as collapsed/secondary text — these fragments are not
@@ -61,7 +101,7 @@ class ReasoningDelta(Event):
 
 
 @dataclass
-class MessageCompleted(Event):
+class MessageCompleted(MessageEvent):
     """One assistant turn fully assembled.
 
     ``items`` is the slice of new :class:`Item` values produced by that
@@ -74,25 +114,25 @@ class MessageCompleted(Event):
 
 
 @dataclass
-class ToolCallStarted(Event):
+class ToolCallStarted(ToolEvent):
     call: ToolCall
 
 
 @dataclass
-class ToolCallCompleted(Event):
+class ToolCallCompleted(ToolEvent):
     call: ToolCall
     result: Any
     is_error: bool = False
 
 
 @dataclass
-class HandoffOccurred(Event):
+class HandoffOccurred(TransitionEvent):
     from_agent: "Agent"
     to_agent: "Agent"
 
 
 @dataclass
-class ApprovalRequired(Event):
+class ApprovalRequired(ToolEvent):
     """Emitted before a tool that needs approval runs.
 
     A streaming consumer resolves the request by calling :meth:`approve` or
@@ -132,17 +172,17 @@ class ApprovalRequired(Event):
 
 
 @dataclass
-class ErrorOccurred(Event):
+class ErrorOccurred(ErrorEvent):
     error: BaseException
 
 
 @dataclass
-class RunCompleted(Event):
+class RunCompleted(RunEvent):
     result: "RunResult"
 
 
 @dataclass
-class ContextCompacted(Event):
+class ContextCompacted(ContextEvent):
     """Emitted when :class:`~lovia.ContextPolicy` rewrote the transcript.
 
     ``items_before`` is the full transcript that existed before compaction;

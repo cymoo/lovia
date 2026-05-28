@@ -19,6 +19,8 @@ from typing import Annotated, Literal
 from ..exceptions import ToolError
 from ..tools import Tool, tool
 
+__all__ = ["Status", "Todo", "TodoList", "todo_tools"]
+
 
 Status = Literal["pending", "in_progress", "done", "blocked"]
 
@@ -67,7 +69,12 @@ class TodoList:
     def render(self) -> str:
         if not self.items:
             return "(no todos)"
-        marker = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "blocked": "[!]"}
+        marker = {
+            "pending": "[ ]",
+            "in_progress": "[~]",
+            "done": "[x]",
+            "blocked": "[!]",
+        }
         return "\n".join(
             f"{marker[t.status]} {t.id} {t.title}" + (f"  — {t.note}" if t.note else "")
             for t in self.items

@@ -6,11 +6,10 @@ driver through :func:`asyncio.to_thread` to avoid adding a dependency.
 
 from __future__ import annotations
 
-import asyncio
-import sqlite3
 from pathlib import Path
 
 from ..checkpointer import RunSnapshot
+from ._sqlite import SQLiteStore
 
 
 _SCHEMA = """
@@ -22,26 +21,14 @@ CREATE TABLE IF NOT EXISTS run_snapshots (
 """
 
 
-class SQLiteCheckpointer:
+class SQLiteCheckpointer(SQLiteStore):
     """Persist :class:`RunSnapshot` instances to a SQLite database."""
 
     def __init__(self, path: str | Path) -> None:
-        self._path = str(path)
-        self._lock = asyncio.Lock()
-        self._initialized = False
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        if not self._initialized:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-            self._initialized = True
-        return conn
+        super().__init__(path, _SCHEMA)
 
     async def save(self, snapshot: RunSnapshot) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._save_sync, snapshot)
+        await self._run(lambda: self._save_sync(snapshot))
 
     def _save_sync(self, snapshot: RunSnapshot) -> None:
         conn = self._connect()
@@ -56,8 +43,7 @@ class SQLiteCheckpointer:
             conn.close()
 
     async def load(self, run_id: str) -> RunSnapshot | None:
-        async with self._lock:
-            return await asyncio.to_thread(self._load_sync, run_id)
+        return await self._run(lambda: self._load_sync(run_id))
 
     def _load_sync(self, run_id: str) -> RunSnapshot | None:
         conn = self._connect()
@@ -72,8 +58,7 @@ class SQLiteCheckpointer:
             conn.close()
 
     async def delete(self, run_id: str) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._delete_sync, run_id)
+        await self._run(lambda: self._delete_sync(run_id))
 
     def _delete_sync(self, run_id: str) -> None:
         conn = self._connect()

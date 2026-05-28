@@ -14,6 +14,8 @@ import httpx
 
 from ..tools import tool
 
+__all__ = ["http_fetch"]
+
 
 @tool
 async def http_fetch(
@@ -30,9 +32,7 @@ async def http_fetch(
     REST API calls, or scraping a single page.
     """
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.request(
-            method.upper(), url, headers=headers, json=body
-        )
+        resp = await client.request(method.upper(), url, headers=headers, json=body)
     parsed: Any = None
     try:
         parsed = resp.json()

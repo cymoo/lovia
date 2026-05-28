@@ -10,8 +10,8 @@ orchestrates:
 * Handling structured output, multi-agent handoffs, human approval, and
   event hooks.
 
-Public surface area is small: :meth:`Runner.run`, :meth:`Runner.run_streamed`,
-and :meth:`Runner.run_stream`.
+Public surface area is small: :meth:`Runner.run`, :meth:`Runner.stream`, and
+:meth:`Runner.run_sync`.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from .context_policy import (
     ContextPolicy,
     NoopContextPolicy,
     PolicyContext,
+    extract_compaction_summary,
 )
 from .exceptions import (
     ContextOverflowError,
@@ -53,7 +54,15 @@ from .items import (
 )
 from .items import InputMessageItem as _InputMessageItem
 from .items import ToolCallOutputItem as _ToolCallOutputItem
-from .messages import AssistantMessage, ChatMessage, ToolCall, Usage, system, tool_message, user
+from .messages import (
+    AssistantMessage,
+    ChatMessage,
+    ToolCall,
+    Usage,
+    system,
+    tool_message,
+    user,
+)
 from .output import (
     FINAL_OUTPUT_TOOL_NAME,
     DefaultOutputRepair,
@@ -76,18 +85,6 @@ from .tracing import NoopTracer, Tracer
 TContext = TypeVar("TContext")
 
 
-class _Unset:
-    """Sentinel: distinguish "not passed" from ``None`` for override params."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        return "UNSET"
-
-
-_UNSET: Any = _Unset()
-
-
 @dataclass
 class _TurnState:
     """Mutable scratch space populated by phase helpers within one turn.
@@ -100,6 +97,18 @@ class _TurnState:
     assistant: AssistantMessage | None = None
     handoff_signal: "_HandoffSignal | None" = None
     final_via_tool: Any = None
+
+
+@dataclass
+class _BootstrapState:
+    transcript: list[ChatMessage]
+    items_log: list[Item]
+    run_ctx: RunContext[Any]
+    mcp_tools: list[Tool]
+    mcp_cleanup: list[Any]
+    output_spec: OutputSpec | None
+    tools_by_name: dict[str, Tool]
+    turns: int
 
 
 @dataclass
@@ -139,20 +148,22 @@ class RunHandle:
     Two equivalent ways to drive a run::
 
         # 1. Iterate the event stream and inspect the result at the end.
-        handle = Runner.run_streamed(agent, "hi")
+        handle = Runner.stream(agent, "hi")
         async for event in handle:
             ...
         result = await handle.result()
 
         # 2. Just await it; events are consumed internally.
-        result = await Runner.run_streamed(agent, "hi")
+        result = await Runner.stream(agent, "hi")
 
     Iteration is single-shot: a handle can be consumed exactly once. After
     iteration finishes (or an exception escapes), :meth:`result` returns the
     :class:`RunResult` (or re-raises the same exception).
     """
 
-    def __init__(self, _stream: AsyncIterator[events.Event], approvals: "ApprovalChannel") -> None:
+    def __init__(
+        self, _stream: AsyncIterator[events.Event], approvals: "ApprovalChannel"
+    ) -> None:
         self._stream = _stream
         self._result: "RunResult | None" = None
         self._error: BaseException | None = None
@@ -204,7 +215,7 @@ class Runner:
     """Stateless orchestrator. All entry points are class/static methods."""
 
     @staticmethod
-    def run_streamed(
+    def stream(
         agent: Agent[TContext],
         input: "str | list[ChatMessage]",
         *,
@@ -220,7 +231,7 @@ class Runner:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         append_instructions: "str | None" = None,
-        output_type: Any = _UNSET,
+        output_type: Any | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunHandle":
         """Start a run and return a :class:`RunHandle`.
@@ -235,11 +246,11 @@ class Runner:
           fragments. Useful for one-off "be concise" / "answer in Spanish"
           tweaks without cloning the agent.
         * ``output_type`` — override the agent's structured output type for
-          this run only. The sentinel default keeps the agent's value;
-          passing ``None`` resets to ``str`` (free-form text); any other
-          type fully overrides parsing, the prompt suffix, and the
-          synthetic ``final_output`` tool schema. The override applies to
-          the initial agent only and does **not** propagate across handoffs.
+          this run only. ``None`` keeps the agent's value; pass ``str`` to
+          force free-form text, or any other type to override parsing, the
+          prompt suffix, and the synthetic ``final_output`` tool schema. The
+          override applies to the initial agent only and does **not**
+          propagate across handoffs.
         """
         loop = _RunLoop(
             initial_agent=agent,
@@ -258,6 +269,7 @@ class Runner:
             resume_from=resume_from,
             append_instructions=append_instructions,
             output_type_override=output_type,
+            has_output_type_override=output_type is not None,
         )
         return RunHandle(loop.stream(), loop.approvals)
 
@@ -278,15 +290,15 @@ class Runner:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         append_instructions: "str | None" = None,
-        output_type: Any = _UNSET,
+        output_type: Any | None = None,
         _parent_usage: Usage | None = None,
     ) -> "RunResult":
         """Run ``agent`` to completion and return the final result.
 
-        See :meth:`run_streamed` for the meaning of ``append_instructions``
-        and ``output_type``.
+        See :meth:`stream` for the meaning of ``append_instructions`` and
+        ``output_type``.
         """
-        return await Runner.run_streamed(
+        return await Runner.stream(
             agent,
             input,
             context=context,
@@ -362,39 +374,6 @@ class Runner:
             resume_from=snapshot,
         )
 
-    @staticmethod
-    async def run_stream(
-        agent: Agent[TContext],
-        input: "str | list[ChatMessage]",
-        *,
-        context: TContext | None = None,
-        session: Session | None = None,
-        session_id: str | None = None,
-        max_turns: int = 20,
-        budget: RunBudget | None = None,
-        cancel_token: CancelToken | None = None,
-        retry: RetryPolicy | None = None,
-        context_policy: ContextPolicy | None = None,
-        append_instructions: "str | None" = None,
-        output_type: Any = _UNSET,
-    ) -> AsyncIterator[events.Event]:
-        """Run ``agent`` and yield :class:`Event` instances as they happen."""
-        async for event in Runner.run_streamed(
-            agent,
-            input,
-            context=context,
-            session=session,
-            session_id=session_id,
-            max_turns=max_turns,
-            budget=budget,
-            cancel_token=cancel_token,
-            retry=retry,
-            context_policy=context_policy,
-            append_instructions=append_instructions,
-            output_type=output_type,
-        ):
-            yield event
-
 
 class _RunLoop:
     """The actual event-producing async iterator.
@@ -422,7 +401,8 @@ class _RunLoop:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         append_instructions: "str | None" = None,
-        output_type_override: Any = _UNSET,
+        output_type_override: Any | None = None,
+        has_output_type_override: bool = False,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -448,11 +428,13 @@ class _RunLoop:
         # Applied once on the initial transcript; not re-applied across
         # handoffs (the new agent uses its own instructions verbatim).
         self.append_instructions = append_instructions
-        # ``_UNSET`` means "use the agent's output_type"; ``None`` means
-        # "force str"; any other value overrides. Override applies to the
-        # initial agent only — handoffs revert to the target agent's
-        # declared output_type.
+        # ``has_output_type_override`` keeps the public API explicit:
+        # ``output_type=None`` means "use the agent default", while
+        # ``output_type=str`` means "force free-form text". The override
+        # applies to the initial agent only — handoffs revert to the target
+        # agent's declared output_type.
         self.output_type_override = output_type_override
+        self.has_output_type_override = has_output_type_override
         self._override_consumed = False
 
     def _resolve_output_type(self, agent: Agent) -> Any:
@@ -463,11 +445,10 @@ class _RunLoop:
         once a handoff has occurred), we revert to the target's declared
         ``output_type``.
         """
-        if self._override_consumed or self.output_type_override is _UNSET:
+        if self._override_consumed or not self.has_output_type_override:
             return agent.output_type
         self._override_consumed = True
-        ot = self.output_type_override
-        return str if ot is None else ot
+        return self.output_type_override
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
@@ -488,29 +469,14 @@ class _RunLoop:
         tracer: Tracer,
         run_span: Any,
     ) -> AsyncIterator[events.Event]:
-        # 1. Build the initial conversation: system prompt + (session history) + input.
-        if self.resume_from is not None:
-            # Resume: rebuild transcript from the snapshot's items.
-            items_log: list[Item] = list(self.resume_from.items)
-            transcript = items_to_chat_messages(items_log)
-        else:
-            transcript = await self._build_initial_messages(agent)
-            # Mirror the transcript as Items. Stays in lockstep with
-            # ``transcript`` for the whole run — invariant verified by tests.
-            items_log = transcript_to_items(transcript)
-        run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
-        if self.resume_from is not None:
-            run_ctx.usage.add(self.resume_from.usage)
-
-        # 2. Discover MCP tools (if any). Connections are kept open for the
-        # whole run and closed in a finally block.
-        mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
-
-        # 3. Resolve output strategy and base tool list.
-        output_spec = build_output_spec(
-            self._resolve_output_type(agent), _supports_json_schema(agent)
-        )
-        tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+        bootstrap = await self._bootstrap_phase(agent)
+        transcript = bootstrap.transcript
+        items_log = bootstrap.items_log
+        run_ctx = bootstrap.run_ctx
+        mcp_tools = bootstrap.mcp_tools
+        mcp_cleanup = bootstrap.mcp_cleanup
+        output_spec = bootstrap.output_spec
+        tools_by_name = bootstrap.tools_by_name
 
         ev_start = events.RunStarted(agent=agent)
         yield ev_start
@@ -524,7 +490,7 @@ class _RunLoop:
                 )
 
             output: Any = None
-            turns = self.resume_from.turns if self.resume_from is not None else 0
+            turns = bootstrap.turns
             output_repair_attempts = 0
             while True:
                 if turns >= self.max_turns:
@@ -554,11 +520,17 @@ class _RunLoop:
                     session_id=self.session_id,
                 )
                 items_before = items_log
-                new_items = await self.context_policy.apply(items_before, ctx=policy_ctx)
+                new_items = await self.context_policy.apply(
+                    items_before, ctx=policy_ctx
+                )
                 if new_items is not items_before:
                     async for ev in self._on_context_compacted(
-                        agent, items_before, new_items, reactive=False,
-                        transcript=transcript, items_log=items_log,
+                        agent,
+                        items_before,
+                        new_items,
+                        reactive=False,
+                        transcript=transcript,
+                        items_log=items_log,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -568,7 +540,14 @@ class _RunLoop:
                 # then retry the turn exactly once. A second overflow propagates.
                 try:
                     async for ev in self._run_model_turn(
-                        agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
+                        agent,
+                        providers,
+                        items_log,
+                        tools_by_name,
+                        output_spec,
+                        tracer,
+                        turns,
+                        state,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -581,14 +560,25 @@ class _RunLoop:
                         # Policy refused / couldn't shrink — surface original.
                         raise
                     async for ev in self._on_context_compacted(
-                        agent, items_before, new_items, reactive=True,
-                        transcript=transcript, items_log=items_log,
+                        agent,
+                        items_before,
+                        new_items,
+                        reactive=True,
+                        transcript=transcript,
+                        items_log=items_log,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
                     state = _TurnState()
                     async for ev in self._run_model_turn(
-                        agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
+                        agent,
+                        providers,
+                        items_log,
+                        tools_by_name,
+                        output_spec,
+                        tracer,
+                        turns,
+                        state,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -649,8 +639,15 @@ class _RunLoop:
                 # control flow back to the orchestrator.
                 for call in assistant.tool_calls:
                     async for ev in self._process_tool_call(
-                        call, agent, tools_by_name, run_ctx, tracer, output_spec,
-                        transcript, items_log, state,
+                        call,
+                        agent,
+                        tools_by_name,
+                        run_ctx,
+                        tracer,
+                        output_spec,
+                        transcript,
+                        items_log,
+                        state,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -665,65 +662,36 @@ class _RunLoop:
                     break
 
                 if state.handoff_signal is not None:
-                    prev_agent = agent
-                    with tracer.span(
-                        "handoff",
-                        from_agent=prev_agent.name,
-                        to_agent=state.handoff_signal.target.name,
-                    ):
-                        agent = state.handoff_signal.target
-                        run_ctx.agent = agent
-                        output_spec = build_output_spec(
-                            self._resolve_output_type(agent), _supports_json_schema(agent)
-                        )
-                        tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
-                        # Update system prompt for the new agent and optionally
-                        # filter the inherited transcript.
-                        transcript[:] = await self._reset_for_handoff(
-                            transcript, agent, state.handoff_signal.handoff
-                        )
-                        # Mirror the reset on items_log so the invariant
-                        # ``items_to_chat_messages(items_log) ≈ transcript``
-                        # keeps holding after handoffs.
-                        items_log[:] = transcript_to_items(transcript)
-                    handoff_ev = events.HandoffOccurred(
-                        from_agent=prev_agent, to_agent=agent
+                    (
+                        agent,
+                        output_spec,
+                        tools_by_name,
+                        handoff_ev,
+                    ) = await self._handoff_phase(
+                        agent,
+                        state,
+                        run_ctx,
+                        tracer,
+                        transcript,
+                        items_log,
+                        mcp_tools,
                     )
                     yield handoff_ev
                     await dispatch(agent.hooks, handoff_ev)
 
-            # Final bookkeeping.
-            if output_spec is not None and output is None:
-                # Should not happen, but be explicit.
-                raise UserError(
-                    f"Agent {agent.name!r} ended without producing structured output"
-                )
-
-            # Output guardrails: last gate before the result is returned.
-            if agent.output_guardrails:
-                await check_output_guardrails(agent.output_guardrails, output, run_ctx)
-
-            result = RunResult(
-                output=output,
-                new_items=items_log,
-                final_agent=agent,
-                usage=run_ctx.usage,
-                turns=turns,
+            result = await self._finalize_phase(
+                agent,
+                items_log,
+                run_ctx,
+                turns,
+                output,
+                output_spec,
+                run_span,
             )
-
-            if self.session is not None:
-                await self._persist_session(items_log)
-
-            # Propagate usage into a parent run (e.g. agent_as_tool) so token
-            # accounting accumulates across nested invocations.
-            if self.parent_usage is not None:
-                self.parent_usage.add(run_ctx.usage)
 
             done = events.RunCompleted(result=result)
             yield done
             await dispatch(agent.hooks, done)
-            run_span.set_attribute("turns", turns)
-            run_span.set_attribute("total_tokens", run_ctx.usage.total_tokens)
 
         finally:
             for cleanup in mcp_cleanup:
@@ -733,6 +701,108 @@ class _RunLoop:
                     pass
 
     # ------------------------------------------------------------------ helpers
+
+    async def _bootstrap_phase(self, agent: Agent) -> _BootstrapState:
+        """Initialize transcript, MCP tools, output spec, and run context."""
+        if self.resume_from is not None:
+            items_log: list[Item] = list(self.resume_from.items)
+            transcript = items_to_chat_messages(items_log)
+        else:
+            transcript = await self._build_initial_messages(agent)
+            items_log = transcript_to_items(transcript)
+
+        run_ctx = RunContext(context=self.context, messages=transcript, agent=agent)
+        if self.resume_from is not None:
+            run_ctx.usage.add(self.resume_from.usage)
+
+        mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
+        output_spec = build_output_spec(
+            self._resolve_output_type(agent), _supports_json_schema(agent)
+        )
+        tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+        turns = self.resume_from.turns if self.resume_from is not None else 0
+        return _BootstrapState(
+            transcript=transcript,
+            items_log=items_log,
+            run_ctx=run_ctx,
+            mcp_tools=mcp_tools,
+            mcp_cleanup=mcp_cleanup,
+            output_spec=output_spec,
+            tools_by_name=tools_by_name,
+            turns=turns,
+        )
+
+    async def _handoff_phase(
+        self,
+        agent: Agent,
+        state: _TurnState,
+        run_ctx: RunContext[Any],
+        tracer: Tracer,
+        transcript: list[ChatMessage],
+        items_log: list[Item],
+        mcp_tools: list[Tool],
+    ) -> tuple[Agent, OutputSpec | None, dict[str, Tool], events.HandoffOccurred]:
+        """Switch active agent and rebuild agent-specific run state."""
+        assert state.handoff_signal is not None
+        prev_agent = agent
+        with tracer.span(
+            "handoff",
+            from_agent=prev_agent.name,
+            to_agent=state.handoff_signal.target.name,
+        ):
+            agent = state.handoff_signal.target
+            run_ctx.agent = agent
+            output_spec = build_output_spec(
+                self._resolve_output_type(agent), _supports_json_schema(agent)
+            )
+            tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+            transcript[:] = await self._reset_for_handoff(
+                transcript, agent, state.handoff_signal.handoff
+            )
+            items_log[:] = transcript_to_items(transcript)
+        return (
+            agent,
+            output_spec,
+            tools_by_name,
+            events.HandoffOccurred(from_agent=prev_agent, to_agent=agent),
+        )
+
+    async def _finalize_phase(
+        self,
+        agent: Agent,
+        items_log: list[Item],
+        run_ctx: RunContext[Any],
+        turns: int,
+        output: Any,
+        output_spec: OutputSpec | None,
+        run_span: Any,
+    ) -> RunResult:
+        """Run final guardrails, persistence, usage propagation, and result build."""
+        if output_spec is not None and output is None:
+            raise UserError(
+                f"Agent {agent.name!r} ended without producing structured output"
+            )
+
+        if agent.output_guardrails:
+            await check_output_guardrails(agent.output_guardrails, output, run_ctx)
+
+        result = RunResult(
+            output=output,
+            new_items=items_log,
+            final_agent=agent,
+            usage=run_ctx.usage,
+            turns=turns,
+        )
+
+        if self.session is not None:
+            await self._persist_session(items_log)
+
+        if self.parent_usage is not None:
+            self.parent_usage.add(run_ctx.usage)
+
+        run_span.set_attribute("turns", turns)
+        run_span.set_attribute("total_tokens", run_ctx.usage.total_tokens)
+        return result
 
     def _build_repair_prompt(
         self, agent: Agent, exc: OutputValidationError, attempt: int
@@ -995,9 +1065,7 @@ class _RunLoop:
             msgs.extend(self.user_input)
         return msgs
 
-    async def _system_prompt(
-        self, agent: Agent, *, extra: "str | None" = None
-    ) -> str:
+    async def _system_prompt(self, agent: Agent, *, extra: "str | None" = None) -> str:
         text = await agent.render_instructions(self.context, extra=extra)
         if agent.skills is not None:
             text = f"{text}\n\n{agent.skills.render_catalog()}".strip()
@@ -1162,7 +1230,7 @@ class _RunLoop:
         # the compacted version (the whole point of permanent compaction).
         if self.session is not None and self.session_id is not None:
             await self._persist_session(items_log)
-        summary = _extract_summary(items_after)
+        summary = extract_compaction_summary(items_after)
         ev = events.ContextCompacted(
             session_id=self.session_id,
             items_before=snapshot_before,
@@ -1198,35 +1266,6 @@ def _supports_json_schema(agent: Agent) -> bool:
     if isinstance(provider, OpenAIChatProvider):
         return provider.supports_json_schema
     return False
-
-
-# The marker SummarizingContextPolicy wraps its summary text in, mirrored here
-# so the runner can surface the raw summary on ``ContextCompacted`` events
-# without coupling to context_policy internals at import time.
-_SUMMARY_OPEN = "[Conversation summary — prior turns compacted]"
-_SUMMARY_CLOSE = "[End summary]"
-
-
-def _extract_summary(items: list[Item]) -> str | None:
-    """Best-effort extraction of summary text from a compacted item list.
-
-    Returns ``None`` for structural-only compaction (no LLM summary
-    produced) so the event payload reflects what actually happened.
-    """
-    if not items:
-        return None
-    head = items[0]
-    if not isinstance(head, _InputMessageItem):
-        return None
-    content = head.content
-    if not isinstance(content, str):
-        return None
-    if _SUMMARY_OPEN not in content:
-        return None
-    body = content.split(_SUMMARY_OPEN, 1)[1]
-    if _SUMMARY_CLOSE in body:
-        body = body.rsplit(_SUMMARY_CLOSE, 1)[0]
-    return body.strip()
 
 
 async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:

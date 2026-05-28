@@ -71,6 +71,26 @@ def search(
 ) -> list[str]: ...
 ```
 
+简单执行策略仍然用装饰器参数：
+
+```python
+@tool(timeout=5, retries=2, needs_approval=True)
+async def send_email(to: str, body: str) -> str: ...
+```
+
+高级场景可以传入可组合的 `policies`，同时保留简单参数：
+
+```python
+from lovia import RunContext
+
+async def redact(next_tool, args, ctx):
+    result = await next_tool(args, ctx)
+    return str(result).replace(ctx.context.api_key, "[redacted]")
+
+@tool(policies=[redact])
+async def call_api(ctx: RunContext, path: str) -> str: ...
+```
+
 ---
 
 ## 结构化输出
@@ -102,7 +122,7 @@ print(result.output.rating)   # -> int
 单次调用覆盖输出类型，不影响 Agent 定义：
 
 ```python
-result = await Runner.run(agent, "用纯文本总结一下。", output_type=None)
+result = await Runner.run(agent, "用纯文本总结一下。", output_type=str)
 ```
 
 ---
@@ -110,7 +130,7 @@ result = await Runner.run(agent, "用纯文本总结一下。", output_type=None
 ## 流式输出
 
 ```python
-async for event in Runner.run_streamed(agent, "讲个笑话"):
+async for event in Runner.stream(agent, "讲个笑话"):
     print(event)
 ```
 
@@ -137,6 +157,12 @@ async def inject_user(ctx) -> str:
 
 # 单次追加临时上下文：
 result = await Runner.run(agent, "我需要帮助。", append_instructions="请用英文回复。")
+```
+
+如果要构造可复用 Agent，优先使用函数式配置：
+
+```python
+agent = agent.with_system_prompt(inject_user)
 ```
 
 ---
@@ -212,7 +238,7 @@ print(result.output)
 from lovia.builtins.http import http_fetch
 from lovia.builtins.fs import FileSystem
 from lovia.builtins.shell import Shell, allowlist
-from lovia.builtins.search import web_search
+from lovia.builtins.search import duckduckgo_search_tool
 from lovia.builtins.todo import TodoList, todo_tools
 from lovia.builtins.human import HumanChannel, ask_human
 from lovia.builtins.think import think
@@ -232,7 +258,7 @@ agent = Agent(
         http_fetch, now, think,
         *fs.tools(),
         sh.tool(),
-        web_search(),              # 需要 lovia[tools]
+        duckduckgo_search_tool(),  # 需要 lovia[tools]
         *todo_tools(todos),
         ask_human(channel),
         PythonRunner(needs_approval=False).tool(),
@@ -241,6 +267,8 @@ agent = Agent(
 ```
 
 `Shell` 和 `PythonRunner` 默认 `needs_approval=True`。`allowlist(commands)` 可构建白名单审批谓词：命中的命令自动放行，其余需要确认。
+
+内置工具约定：无状态工具导出可直接使用的 `Tool`；可插拔后端使用 factory；有状态单工具对象提供 `.tool()`；有状态多工具对象提供 `.tools()`。
 
 每个工具的可运行示例见 [`examples/builtins/`](./examples/builtins/)。
 

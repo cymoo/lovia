@@ -21,13 +21,11 @@ import asyncio
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any
 
-from ..run_context import RunContext
-from ..tools import Tool, tool
+from ..tools import ApprovalPredicate, Tool, tool
 
-
-ApprovalPredicate = Callable[[dict[str, Any], RunContext], bool]
+__all__ = ["ApprovalPredicate", "PythonRunner"]
 
 
 @dataclass

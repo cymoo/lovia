@@ -11,12 +11,11 @@ insertion order (one row per :class:`Item`). Loading deserializes them via
 
 from __future__ import annotations
 
-import asyncio
 import json
-import sqlite3
 from pathlib import Path
 
 from ..items import Item, item_from_dict, item_to_dict
+from ._sqlite import SQLiteStore
 
 
 _SCHEMA = """
@@ -31,38 +30,16 @@ CREATE INDEX IF NOT EXISTS idx_session_items_sid
 """
 
 
-class _SQLiteBase:
-    """Shared connection/lock plumbing."""
+class SQLiteSession(SQLiteStore):
+    """A :class:`Session` persisted to a SQLite file."""
 
     def __init__(self, path: str | Path) -> None:
-        self._path = str(path)
-        self._lock = asyncio.Lock()
-        self._initialized = False
-
-    async def _connect(self) -> sqlite3.Connection:
-        # ``check_same_thread=False`` is safe here because the lock serializes
-        # all access from a single asyncio loop.
-        conn = sqlite3.connect(self._path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        if not self._initialized:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-            self._initialized = True
-        return conn
-
-    async def _run(self, fn):  # type: ignore[no-untyped-def]
-        async with self._lock:
-            return await asyncio.to_thread(fn)
-
-
-class SQLiteSession(_SQLiteBase):
-    """A :class:`Session` persisted to a SQLite file."""
+        super().__init__(path, _SCHEMA)
 
     async def load(self, session_id: str) -> list[Item]:
         def _impl() -> list[Item]:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
+            conn = self._connect()
             try:
-                conn.executescript(_SCHEMA)
                 rows = conn.execute(
                     "SELECT payload FROM session_items WHERE session_id = ? ORDER BY id ASC",
                     (session_id,),
@@ -75,9 +52,8 @@ class SQLiteSession(_SQLiteBase):
 
     async def append(self, session_id: str, items: list[Item]) -> None:
         def _impl() -> None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
+            conn = self._connect()
             try:
-                conn.executescript(_SCHEMA)
                 conn.executemany(
                     "INSERT INTO session_items (session_id, payload) VALUES (?, ?)",
                     [(session_id, json.dumps(item_to_dict(it))) for it in items],
@@ -90,9 +66,8 @@ class SQLiteSession(_SQLiteBase):
 
     async def clear(self, session_id: str) -> None:
         def _impl() -> None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
+            conn = self._connect()
             try:
-                conn.executescript(_SCHEMA)
                 conn.execute(
                     "DELETE FROM session_items WHERE session_id = ?", (session_id,)
                 )
@@ -104,9 +79,8 @@ class SQLiteSession(_SQLiteBase):
 
     async def replace(self, session_id: str, items: list[Item]) -> None:
         def _impl() -> None:
-            conn = sqlite3.connect(self._path, check_same_thread=False)
+            conn = self._connect()
             try:
-                conn.executescript(_SCHEMA)
                 # Single transaction: delete existing rows, then insert the
                 # new transcript. On error we rollback so the old transcript
                 # survives intact.
@@ -119,7 +93,10 @@ class SQLiteSession(_SQLiteBase):
                     if items:
                         conn.executemany(
                             "INSERT INTO session_items (session_id, payload) VALUES (?, ?)",
-                            [(session_id, json.dumps(item_to_dict(it))) for it in items],
+                            [
+                                (session_id, json.dumps(item_to_dict(it)))
+                                for it in items
+                            ],
                         )
                     conn.commit()
                 except Exception:

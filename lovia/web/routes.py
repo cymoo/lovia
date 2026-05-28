@@ -7,9 +7,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
-from sse_starlette.sse import EventSourceResponse
+try:
+    from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import FileResponse
+    from sse_starlette.sse import EventSourceResponse
+except ImportError as exc:  # pragma: no cover - depends on optional env
+    from ._deps import raise_missing_web_extra
+
+    raise_missing_web_extra(exc)
 
 from .. import events
 from ..agent import Agent
@@ -93,7 +98,7 @@ def build_router(
         sid = req.session_id or uuid.uuid4().hex
 
         async def gen():
-            handle = Runner.run_streamed(
+            handle = Runner.stream(
                 agent,
                 req.message,
                 session=session,

@@ -25,7 +25,6 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from ..exceptions import ContextOverflowError, ProviderError
 from ..items import (
     FinishDelta,
     Item,
@@ -37,6 +36,13 @@ from ..items import (
     items_to_chat_messages,
 )
 from ..messages import ChatMessage, Usage
+from ._content import (
+    content_to_anthropic_blocks as _content_to_anthropic_blocks,
+    openai_tool_to_anthropic as _openai_tool_to_anthropic,
+    text_only as _text_only,
+)
+from ._http import raise_for_provider_status
+from ._sse import iter_sse_json
 from .base import ModelSettings
 
 
@@ -163,23 +169,14 @@ class AnthropicProvider:
             headers=self._headers(),
             json=payload,
         ) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                text = body.decode(errors="replace")
-                if _is_context_overflow(response.status_code, text):
-                    raise ContextOverflowError(
-                        f"Anthropic: prompt exceeds the model's context window: {text}"
-                    )
-                raise ProviderError(
-                    f"Anthropic stream returned HTTP {response.status_code}: {text}"
-                )
-            async for line in response.aiter_lines():
-                if not line.startswith("data:"):
-                    continue
-                try:
-                    event = json.loads(line[len("data:") :].strip())
-                except json.JSONDecodeError:
-                    continue
+            await raise_for_provider_status(
+                response,
+                vendor="anthropic",
+                model=self.model,
+                label="Anthropic",
+                is_context_overflow=_is_context_overflow,
+            )
+            async for event in iter_sse_json(response):
                 etype = event.get("type")
 
                 if etype == "content_block_start":
@@ -321,56 +318,6 @@ def _to_anthropic_messages(
     else:
         system_blocks = None
     return system_blocks, out
-
-
-def _text_only(content: "str | list[Any] | None") -> str:
-    """Flatten a content value to a plain string for fields that don't accept blocks."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    for block in content:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            parts.append(text)
-    return "".join(parts)
-
-
-def _content_to_anthropic_blocks(
-    content: "str | list[Any]",
-) -> list[dict[str, Any]]:
-    """Convert internal content into Anthropic content blocks."""
-    from ..content import ImageBlock, TextBlock
-
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    out: list[dict[str, Any]] = []
-    for block in content:
-        if isinstance(block, TextBlock):
-            out.append({"type": "text", "text": block.text})
-        elif isinstance(block, ImageBlock):
-            if block.url is not None:
-                source: dict[str, Any] = {"type": "url", "url": block.url}
-            else:
-                source = {
-                    "type": "base64",
-                    "media_type": block.mime_type,
-                    "data": block.data,
-                }
-            out.append({"type": "image", "source": source})
-        else:  # pragma: no cover
-            raise TypeError(f"Unsupported content block: {block!r}")
-    return out
-
-
-def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
-    fn = tool.get("function") or {}
-    return {
-        "name": fn.get("name", ""),
-        "description": fn.get("description", ""),
-        "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
-    }
 
 
 # Anthropic returns 400 with ``invalid_request_error`` and a message like

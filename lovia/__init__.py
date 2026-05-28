@@ -96,7 +96,7 @@ from .items import (
     transcript_to_items,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
-from .tools import Tool, ToolResultRenderer, tool
+from .tools import Tool, ToolPolicy, ToolResultRenderer, ToolWrap, WrapPolicy, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 __all__ = [
@@ -165,12 +165,15 @@ __all__ = [
     "ToolCallItem",
     "ToolCallOutputItem",
     "ToolError",
+    "ToolPolicy",
     "ToolResultRenderer",
+    "ToolWrap",
     "Tracer",
     "Usage",
     "UsageDelta",
     "FinishDelta",
     "UserError",
+    "WrapPolicy",
     "agent_as_tool",
     "assistant",
     "assistant_to_items",

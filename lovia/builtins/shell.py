@@ -20,13 +20,12 @@ from __future__ import annotations
 import asyncio
 import shlex
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any
 
 from ..run_context import RunContext
-from ..tools import Tool, tool
+from ..tools import ApprovalPredicate, Tool, tool
 
-
-ApprovalPredicate = Callable[[dict[str, Any], RunContext], bool]
+__all__ = ["ApprovalPredicate", "Shell", "allowlist"]
 
 
 @dataclass
@@ -42,9 +41,7 @@ class Shell:
 
         @tool(name=self.name, needs_approval=self.needs_approval, timeout=timeout + 5)
         async def _shell(
-            cmd: Annotated[
-                str, "Command to run via /bin/sh -c (single string)."
-            ],
+            cmd: Annotated[str, "Command to run via /bin/sh -c (single string)."],
         ) -> dict[str, Any]:
             """Execute ``cmd`` and return ``{exit_code, stdout, stderr}``."""
             proc = await asyncio.create_subprocess_shell(

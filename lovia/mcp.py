@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .exceptions import UserError
-from .tools import Tool
+from .run_context import RunContext
+from .tools import ApprovalPredicate, Tool, ToolResultRenderer
 
 
 @dataclass
@@ -29,12 +30,22 @@ class MCPServer:
     """Base class for MCP servers. Use one of the concrete subclasses."""
 
     name: str | None = None
+    needs_approval: bool | ApprovalPredicate = False
+    retries: int | None = None
+    timeout: float | None = None
+    result_renderer: ToolResultRenderer | None = None
     # Filled in on connect; kept here so aclose can dispose them.
     _client: Any = field(default=None, repr=False, init=False)
     _exit_stack: Any = field(default=None, repr=False, init=False)
 
     async def connect(self) -> list[Tool]:  # pragma: no cover - overridden
         raise NotImplementedError
+
+    async def __aenter__(self) -> list[Tool]:
+        return await self.connect()
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.aclose()
 
     async def aclose(self) -> None:
         if self._exit_stack is not None:
@@ -75,7 +86,14 @@ class MCPServerStdio(MCPServer):
             raise
         self._exit_stack = stack
         self._client = session
-        return await _list_remote_tools(session, prefix=self.name)
+        return await _list_remote_tools(
+            session,
+            prefix=self.name,
+            needs_approval=self.needs_approval,
+            retries=self.retries,
+            timeout=self.timeout,
+            result_renderer=self.result_renderer,
+        )
 
 
 @dataclass
@@ -88,9 +106,14 @@ class MCPServerStreamableHTTP(MCPServer):
     async def connect(self) -> list[Tool]:
         try:
             from contextlib import AsyncExitStack
+            from importlib import import_module
 
             from mcp import ClientSession
-            from mcp.client.streamable_http import streamablehttp_client
+
+            streamable_http = import_module("mcp.client.streamable_http")
+            streamable_http_client = getattr(
+                streamable_http, "streamable_http_client", None
+            ) or getattr(streamable_http, "streamablehttp_client")
         except ImportError as exc:  # pragma: no cover - import guard
             raise UserError(
                 "MCP HTTP support requires the optional 'mcp' package. Install with: pip install mcp"
@@ -99,9 +122,9 @@ class MCPServerStreamableHTTP(MCPServer):
         stack = AsyncExitStack()
         try:
             ctx = await stack.enter_async_context(
-                streamablehttp_client(self.url, headers=self.headers)
+                streamable_http_client(self.url, headers=self.headers)
             )
-            # streamablehttp_client yields (read, write, _get_session_id) in
+            # streamable_http_client yields (read, write, _get_session_id) in
             # recent versions; older versions yielded just (read, write).
             read, write = ctx[0], ctx[1]
             session = await stack.enter_async_context(ClientSession(read, write))
@@ -111,10 +134,44 @@ class MCPServerStreamableHTTP(MCPServer):
             raise
         self._exit_stack = stack
         self._client = session
-        return await _list_remote_tools(session, prefix=self.name)
+        return await _list_remote_tools(
+            session,
+            prefix=self.name,
+            needs_approval=self.needs_approval,
+            retries=self.retries,
+            timeout=self.timeout,
+            result_renderer=self.result_renderer,
+        )
 
 
-async def _list_remote_tools(session: Any, *, prefix: str | None) -> list[Tool]:
+def _make_invoke(session: Any, tool_name: str):
+    async def invoke(args: dict[str, Any], ctx: RunContext[Any]) -> Any:
+        _ = ctx
+        result = await session.call_tool(tool_name, args)
+        # MCP returns ``content`` as a list of typed blocks; flatten the
+        # text bits into a single string for the model.
+        parts: list[str] = []
+        for block in getattr(result, "content", []) or []:
+            if getattr(block, "type", None) == "text":
+                parts.append(block.text)
+            else:
+                parts.append(
+                    json.dumps(getattr(block, "model_dump", lambda: str(block))())
+                )
+        return "\n".join(parts)
+
+    return invoke
+
+
+async def _list_remote_tools(
+    session: Any,
+    *,
+    prefix: str | None,
+    needs_approval: bool | ApprovalPredicate = False,
+    retries: int | None = None,
+    timeout: float | None = None,
+    result_renderer: ToolResultRenderer | None = None,
+) -> list[Tool]:
     """Translate the MCP ``list_tools`` result into lovia :class:`Tool`s."""
     listing = await session.list_tools()
     tools: list[Tool] = []
@@ -122,26 +179,16 @@ async def _list_remote_tools(session: Any, *, prefix: str | None) -> list[Tool]:
         name = f"{prefix}__{entry.name}" if prefix else entry.name
         parameters = entry.inputSchema or {"type": "object", "properties": {}}
 
-        async def invoke(args: dict[str, Any], ctx: Any, _name=entry.name) -> Any:
-            result = await session.call_tool(_name, args)
-            # MCP returns ``content`` as a list of typed blocks; flatten the
-            # text bits into a single string for the model.
-            parts: list[str] = []
-            for block in getattr(result, "content", []) or []:
-                if getattr(block, "type", None) == "text":
-                    parts.append(block.text)
-                else:
-                    parts.append(
-                        json.dumps(getattr(block, "model_dump", lambda: str(block))())
-                    )
-            return "\n".join(parts)
-
         tools.append(
             Tool(
                 name=name,
                 description=entry.description or "",
                 parameters=parameters,
-                invoke=invoke,
+                invoke=_make_invoke(session, entry.name),
+                needs_approval=needs_approval,
+                retries=retries,
+                timeout=timeout,
+                result_renderer=result_renderer,
             )
         )
     return tools

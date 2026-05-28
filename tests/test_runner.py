@@ -136,7 +136,7 @@ async def test_streaming_yields_deltas_and_completion() -> None:
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider)
     seen: list[type] = []
-    async for ev in Runner.run_stream(agent, "go"):
+    async for ev in Runner.stream(agent, "go"):
         seen.append(type(ev))
     assert events.RunStarted in seen
     assert events.TextDelta in seen
@@ -144,21 +144,36 @@ async def test_streaming_yields_deltas_and_completion() -> None:
     assert events.RunCompleted in seen
 
 
+async def test_event_category_bases() -> None:
+    provider = ScriptedProvider([call("add", {"a": 2, "b": 3}), text("done")])
+    agent = Agent(name="t", model=provider, tools=[add])
+
+    tool_events: list[events.ToolEvent] = []
+    async for ev in Runner.stream(agent, "go"):
+        if isinstance(ev, events.ToolEvent):
+            tool_events.append(ev)
+
+    assert [type(ev) for ev in tool_events] == [
+        events.ToolCallStarted,
+        events.ToolCallCompleted,
+    ]
+
+
 # --------------------------------------------------------------------- B1 ----
 
 
-async def test_run_streamed_handle_is_awaitable() -> None:
+async def test_stream_handle_is_awaitable() -> None:
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider)
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     result = await handle
     assert result.output == "hi"
 
 
-async def test_run_streamed_handle_is_iterable_then_result() -> None:
+async def test_stream_handle_is_iterable_then_result() -> None:
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider)
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     seen: list[type] = []
     async for ev in handle:
         seen.append(type(ev))
@@ -168,10 +183,10 @@ async def test_run_streamed_handle_is_iterable_then_result() -> None:
     assert result.output == "hi"
 
 
-async def test_run_streamed_handle_double_iteration_raises() -> None:
+async def test_stream_handle_double_iteration_raises() -> None:
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider)
-    handle = Runner.run_streamed(agent, "go")
+    handle = Runner.stream(agent, "go")
     async for _ in handle:
         pass
     with pytest.raises(RuntimeError):

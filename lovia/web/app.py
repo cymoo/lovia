@@ -5,8 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+try:
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+except ImportError as exc:  # pragma: no cover - depends on optional env
+    from ._deps import raise_missing_web_extra
+
+    raise_missing_web_extra(exc)
 
 from ..agent import Agent
 from ..context_policy import ContextPolicy
@@ -74,7 +79,12 @@ def serve(
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking)."""
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover - depends on optional env
+        from ._deps import raise_missing_web_extra
+
+        raise_missing_web_extra(exc)
 
     app = create_app(
         agent_or_agents,

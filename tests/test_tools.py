@@ -38,6 +38,30 @@ async def test_wrap_can_mutate_args_and_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_policies_compose_in_order() -> None:
+    seen: dict[str, Any] = {}
+
+    async def normalize(invoke, args, ctx):
+        return await invoke({"city": args["city"].lower()}, ctx)
+
+    async def tag(invoke, args, ctx):
+        return f"tag:{await invoke(args, ctx)}"
+
+    @tool(policies=[tag, normalize])
+    async def weather(city: str) -> str:
+        seen["city"] = city
+        return f"sunny in {city}"
+
+    provider = ScriptedProvider([call("weather", {"city": "PARIS"}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[weather])
+    result = await Runner.run(agent, "hi")
+
+    assert seen["city"] == "paris"
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "tag:sunny in paris"
+
+
+@pytest.mark.asyncio
 async def test_retries_then_success() -> None:
     attempts = {"n": 0}
 

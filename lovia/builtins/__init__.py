@@ -11,9 +11,8 @@ Convention: stateful helpers are classes that expose ``.tool()`` (single
 tool) or ``.tools()`` (multiple tools). Stateless helpers are module-level
 :class:`~lovia.tools.Tool` instances.
 
-A few submodules pull additional third-party libraries (e.g.
-``duckduckgo-search`` for :mod:`lovia.builtins.search`). Install them via
-the optional extra::
+A few submodules pull additional third-party libraries (e.g. ``ddgs`` for
+:mod:`lovia.builtins.search`). Install them via the optional extra::
 
     pip install "lovia[tools]"
 """

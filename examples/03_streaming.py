@@ -19,9 +19,9 @@ async def main() -> None:
         instructions="You write short, vivid stories.",
         model=MODEL,
     )
-    # ``run_streamed`` returns a ``RunHandle`` that is both async-iterable
+    # ``stream`` returns a ``RunHandle`` that is both async-iterable
     # (yields events) and awaitable (resolves to the final ``RunResult``).
-    handle = Runner.run_streamed(agent, "Tell me a 4-sentence story about a fox.")
+    handle = Runner.stream(agent, "Tell me a 4-sentence story about a fox.")
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
             print(ev.delta, end="", flush=True)

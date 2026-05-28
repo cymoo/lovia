@@ -8,14 +8,11 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, AsyncIterator
 
 import httpx
 
-from ..content import ImageBlock, TextBlock
-from ..exceptions import ContextOverflowError, ProviderError
 from ..items import (
     FinishDelta,
     Item,
@@ -27,6 +24,9 @@ from ..items import (
     items_to_chat_messages,
 )
 from ..messages import ChatMessage, ToolCall, Usage
+from ._content import content_to_openai_chat as _content_to_openai
+from ._http import raise_for_provider_status
+from ._sse import iter_sse_json
 from .base import ModelSettings
 
 
@@ -38,28 +38,6 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 #
 # Kept here — not on ``ChatMessage`` itself — so the core message type stays
 # vendor-neutral. Other providers translate their own way.
-
-
-def _content_to_openai(
-    content: "str | list[Any]",
-) -> "str | list[dict[str, Any]]":
-    if isinstance(content, str):
-        return content
-    parts: list[dict[str, Any]] = []
-    for block in content:
-        if isinstance(block, TextBlock):
-            parts.append({"type": "text", "text": block.text})
-        elif isinstance(block, ImageBlock):
-            if block.url is not None:
-                image_url: dict[str, Any] = {"url": block.url}
-            else:
-                image_url = {"url": f"data:{block.mime_type};base64,{block.data}"}
-            if block.detail is not None:
-                image_url["detail"] = block.detail
-            parts.append({"type": "image_url", "image_url": image_url})
-        else:  # pragma: no cover - exhaustiveness guard
-            raise TypeError(f"Unsupported content block: {block!r}")
-    return parts
 
 
 def _tool_call_to_openai(tc: ToolCall) -> dict[str, Any]:
@@ -212,27 +190,14 @@ class OpenAIChatProvider:
             headers=self._headers(),
             json=payload,
         ) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                body_text = body.decode(errors="replace")
-                if _is_context_overflow(response.status_code, body_text):
-                    raise ContextOverflowError(
-                        f"OpenAI Chat: prompt exceeds the model's context window: {body_text}"
-                    )
-                raise ProviderError(
-                    f"OpenAI stream returned HTTP {response.status_code}: {body_text}"
-                )
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data_str = line[len("data:") :].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    event = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-
+            await raise_for_provider_status(
+                response,
+                vendor="openai",
+                model=self.model,
+                label="OpenAI Chat",
+                is_context_overflow=_is_context_overflow,
+            )
+            async for event in iter_sse_json(response):
                 if "usage" in event and event["usage"]:
                     u = event["usage"]
                     usage.input_tokens = u.get("prompt_tokens", 0)

@@ -16,6 +16,11 @@ Public surface::
 
 from __future__ import annotations
 
-from .app import create_app, serve
+try:
+    from .app import create_app, serve
+except ImportError as exc:  # pragma: no cover - depends on optional env
+    from ._deps import raise_missing_web_extra
+
+    raise_missing_web_extra(exc)
 
 __all__ = ["create_app", "serve"]

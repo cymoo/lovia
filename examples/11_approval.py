@@ -35,7 +35,7 @@ async def main() -> None:
         tools=[send_email],
     )
 
-    handle = Runner.run_streamed(
+    handle = Runner.stream(
         agent, "Email alice@example.com a one-line hello from lovia."
     )
     async for ev in handle:

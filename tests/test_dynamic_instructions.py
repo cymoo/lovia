@@ -90,6 +90,19 @@ async def test_clone_copies_fragments_independently() -> None:
     assert await twin.render_instructions(None) == "BASE\n\nF1\n\nF2"
 
 
+@pytest.mark.asyncio
+async def test_with_system_prompt_returns_clone() -> None:
+    agent = Agent(name="a", instructions="BASE")
+
+    def frag(ctx) -> str:  # type: ignore[no-untyped-def]
+        return "FRAG"
+
+    twin = agent.with_system_prompt(frag)
+
+    assert await agent.render_instructions(None) == "BASE"
+    assert await twin.render_instructions(None) == "BASE\n\nFRAG"
+
+
 class _Out(BaseModel):
     answer: str
 
@@ -105,17 +118,17 @@ async def test_runner_output_type_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_output_type_none_resets_to_str() -> None:
-    """``output_type=None`` forces free-form text even if agent declares a model."""
+async def test_runner_output_type_str_forces_text() -> None:
+    """``output_type=str`` forces free-form text even if agent declares a model."""
     provider = ScriptedProvider([text("hello")])
     agent = Agent(name="a", model=provider, output_type=_Out)
-    result = await Runner.run(agent, "hi", output_type=None)
+    result = await Runner.run(agent, "hi", output_type=str)
     assert result.output == "hello"
 
 
 @pytest.mark.asyncio
-async def test_runner_output_type_unset_uses_agent_default() -> None:
+async def test_runner_output_type_none_uses_agent_default() -> None:
     provider = ScriptedProvider([text('{"answer": "ok"}')])
     agent = Agent(name="a", model=provider, output_type=_Out)
-    result = await Runner.run(agent, "hi")
+    result = await Runner.run(agent, "hi", output_type=None)
     assert isinstance(result.output, _Out)

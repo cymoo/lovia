@@ -28,14 +28,12 @@ Notes / limitations:
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, AsyncIterator
 
 import httpx
 
-from ..content import ImageBlock, TextBlock
-from ..exceptions import ContextOverflowError, ProviderError
+from ..exceptions import ProviderError
 from ..items import (
     FinishDelta,
     InputMessageItem,
@@ -51,6 +49,12 @@ from ..items import (
     UsageDelta,
 )
 from ..messages import Usage
+from ._content import (
+    content_to_responses_input as _content_to_input_blocks,
+    openai_chat_tool_to_responses as _openai_chat_tool_to_responses,
+)
+from ._http import raise_for_provider_status
+from ._sse import iter_sse_json
 from .base import ModelSettings
 
 
@@ -62,29 +66,6 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 #
 # The Responses API takes a typed list of items, very close to lovia's
 # Item model — the per-type shape just differs in field names.
-
-
-def _content_to_input_blocks(content: str | list[Any]) -> list[dict[str, Any]]:
-    """Turn user/system content into Responses ``input_text`` / ``input_image`` blocks."""
-    if isinstance(content, str):
-        return [{"type": "input_text", "text": content}]
-    out: list[dict[str, Any]] = []
-    for block in content:
-        if isinstance(block, TextBlock):
-            out.append({"type": "input_text", "text": block.text})
-        elif isinstance(block, ImageBlock):
-            url = (
-                block.url
-                if block.url is not None
-                else f"data:{block.mime_type};base64,{block.data}"
-            )
-            entry: dict[str, Any] = {"type": "input_image", "image_url": url}
-            if block.detail is not None:
-                entry["detail"] = block.detail
-            out.append(entry)
-        else:  # pragma: no cover - exhaustiveness guard
-            raise TypeError(f"Unsupported content block: {block!r}")
-    return out
 
 
 def _items_to_responses_input(items: list[Item]) -> list[dict[str, Any]]:
@@ -139,25 +120,6 @@ def _items_to_responses_input(items: list[Item]) -> list[dict[str, Any]]:
     return out
 
 
-def _openai_chat_tool_to_responses(tool: dict[str, Any]) -> dict[str, Any]:
-    """Flatten an OpenAI Chat tool schema to the Responses tool shape.
-
-    Chat: ``{type:"function", function:{name, description, parameters}}``
-    Responses: ``{type:"function", name, description, parameters}``
-    """
-    if tool.get("type") != "function":
-        # Built-in tools (web_search, file_search, code_interpreter) are
-        # already in the Responses format.
-        return tool
-    fn = tool.get("function", {})
-    out: dict[str, Any] = {"type": "function", "name": fn["name"]}
-    if "description" in fn:
-        out["description"] = fn["description"]
-    if "parameters" in fn:
-        out["parameters"] = fn["parameters"]
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Provider
 
@@ -180,9 +142,7 @@ class OpenAIResponsesProvider:
     ) -> None:
         self.model = model
         self.base_url = (
-            base_url
-            or os.environ.get("OPENAI_BASE_URL")
-            or _DEFAULT_BASE_URL
+            base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client or httpx.AsyncClient(timeout=timeout)
@@ -231,7 +191,9 @@ class OpenAIResponsesProvider:
             # Responses uses ``text.format`` rather than ``response_format``.
             fmt = response_format
             if fmt.get("type") == "json_schema" and "json_schema" in fmt:
-                payload["text"] = {"format": {"type": "json_schema", **fmt["json_schema"]}}
+                payload["text"] = {
+                    "format": {"type": "json_schema", **fmt["json_schema"]}
+                }
             else:
                 payload["text"] = {"format": fmt}
         if settings is not None:
@@ -274,32 +236,18 @@ class OpenAIResponsesProvider:
             headers=self._headers(),
             json=payload,
         ) as response:
-            if response.status_code >= 400:
-                body = await response.aread()
-                text = body.decode(errors="replace")
-                # Reuse the chat-completions overflow detector — the Responses
-                # API surfaces the same ``context_length_exceeded`` signal.
-                from .openai_chat import _is_context_overflow
+            # Reuse the chat-completions overflow detector — the Responses
+            # API surfaces the same ``context_length_exceeded`` signal.
+            from .openai_chat import _is_context_overflow
 
-                if _is_context_overflow(response.status_code, text):
-                    raise ContextOverflowError(
-                        f"OpenAI Responses: prompt exceeds the model's context window: {text}"
-                    )
-                raise ProviderError(
-                    f"OpenAI Responses stream returned HTTP {response.status_code}: "
-                    f"{text}"
-                )
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    evt = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
+            await raise_for_provider_status(
+                response,
+                vendor="openai",
+                model=self.model,
+                label="OpenAI Responses",
+                is_context_overflow=_is_context_overflow,
+            )
+            async for evt in iter_sse_json(response):
                 etype = evt.get("type", "")
 
                 if etype == "response.output_text.delta":
@@ -343,7 +291,12 @@ class OpenAIResponsesProvider:
                         or evt.get("message")
                         or "Responses API error"
                     )
-                    raise ProviderError(f"OpenAI Responses error: {msg}")
+                    raise ProviderError(
+                        f"OpenAI Responses error: {msg}",
+                        vendor="openai",
+                        model=self.model,
+                        retryable=False,
+                    )
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=finish_reason or "stop")

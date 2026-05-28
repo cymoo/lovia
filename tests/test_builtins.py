@@ -33,7 +33,9 @@ def test_http_tool_metadata() -> None:
 @pytest.mark.asyncio
 async def test_now_returns_iso() -> None:
     result = await time_b.now.invoke({}, _ctx())
-    assert "T" in result and (result.endswith("+00:00") or "+" in result or "-" in result[10:])
+    assert "T" in result and (
+        result.endswith("+00:00") or "+" in result or "-" in result[10:]
+    )
 
 
 @pytest.mark.asyncio
@@ -65,6 +67,22 @@ async def test_fs_read_and_sandbox() -> None:
 
         with pytest.raises(ToolError):
             await tools["read_file"].invoke({"path": "../etc/passwd"}, _ctx())
+
+
+@pytest.mark.asyncio
+async def test_fs_read_file_slice() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "a.txt").write_text("hello world")
+        f = fs.FileSystem(root=tmp, writable=False)
+        tools = {t.name: t for t in f.tools()}
+
+        assert (
+            await tools["read_file"].invoke(
+                {"path": "a.txt", "offset": 6, "length": 5}, _ctx()
+            )
+            == "world"
+        )
 
 
 @pytest.mark.asyncio
@@ -148,13 +166,14 @@ def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) 
             monkeypatch.delitem(sys.modules, mod)
     monkeypatch.setattr(
         "builtins.__import__",
-        lambda name, *a, **k: (_ for _ in ()).throw(ImportError(name))
-        if name in ("ddgs", "duckduckgo_search")
-        else __import__(name, *a, **k),
+        lambda name, *a, **k: (
+            (_ for _ in ()).throw(ImportError(name))
+            if name in ("ddgs", "duckduckgo_search")
+            else __import__(name, *a, **k)
+        ),
     )
-    ddg = search.DuckDuckGoSearch()
     with pytest.raises(UserError) as exc_info:
-        asyncio.run(ddg.search("x"))
+        search.duckduckgo_search_tool()
     assert "lovia[tools]" in str(exc_info.value)
 
 

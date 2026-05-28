@@ -62,6 +62,7 @@ __all__ = [
     "SummarizingContextPolicy",
     "Summarizer",
     "DEFAULT_SUMMARY_PROMPT",
+    "extract_compaction_summary",
 ]
 
 
@@ -159,9 +160,7 @@ class ContextPolicy(Protocol):
       :class:`~lovia.ContextOverflowError` (last-resort compaction).
     """
 
-    async def apply(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]: ...
+    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]: ...
 
     async def apply_reactive(
         self, items: list[Item], *, ctx: PolicyContext
@@ -177,9 +176,7 @@ class Summarizer(Protocol):
     summarization implement this protocol directly.
     """
 
-    async def summarize(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> str: ...
+    async def summarize(self, items: list[Item], *, ctx: PolicyContext) -> str: ...
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +194,7 @@ class NoopContextPolicy:
 
     name = "noop"
 
-    async def apply(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]:
+    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]:
         return items
 
     async def apply_reactive(
@@ -239,9 +234,7 @@ class ProviderSummarizer:
         self.prompt = prompt
         self.settings = settings or ModelSettings(temperature=0)
 
-    async def summarize(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> str:
+    async def summarize(self, items: list[Item], *, ctx: PolicyContext) -> str:
         provider = self.provider or ctx.provider
         # Flatten the transcript into a single user message — we don't want
         # the summarizer to "continue" the conversation, just describe it.
@@ -278,7 +271,11 @@ def _transcript_to_text(items: list[Item]) -> str:
     for it in items:
         if isinstance(it, InputMessageItem):
             role = it.role
-            content = it.content if isinstance(it.content, str) else _blocks_to_text(it.content)
+            content = (
+                it.content
+                if isinstance(it.content, str)
+                else _blocks_to_text(it.content)
+            )
             out.append(f"[{role}] {content}")
         elif isinstance(it, MessageOutputItem):
             out.append(f"[assistant] {it.content}")
@@ -309,6 +306,26 @@ def _blocks_to_text(blocks: Any) -> str:
 
 _SUMMARY_PREFIX = "[Conversation summary — prior turns compacted]\n\n"
 _SUMMARY_SUFFIX = "\n\n[End summary]"
+_SUMMARY_OPEN = "[Conversation summary — prior turns compacted]"
+_SUMMARY_CLOSE = "[End summary]"
+
+
+def extract_compaction_summary(items: list[Item]) -> str | None:
+    """Return the raw summary text from a compacted item list, if present."""
+    if not items:
+        return None
+    head = items[0]
+    if not isinstance(head, InputMessageItem):
+        return None
+    content = head.content
+    if not isinstance(content, str):
+        return None
+    if _SUMMARY_OPEN not in content:
+        return None
+    body = content.split(_SUMMARY_OPEN, 1)[1]
+    if _SUMMARY_CLOSE in body:
+        body = body.rsplit(_SUMMARY_CLOSE, 1)[0]
+    return body.strip()
 
 
 @dataclass
@@ -378,15 +395,17 @@ class SummarizingContextPolicy:
         self.keep_recent_messages = keep_recent_messages
         self.keep_recent_tool_results = keep_recent_tool_results
         self.reactive_keep_recent_messages = reactive_keep_recent_messages
-        self.summarizer: Summarizer = summarizer or ProviderSummarizer(prompt=summary_prompt)
+        self.summarizer: Summarizer = summarizer or ProviderSummarizer(
+            prompt=summary_prompt
+        )
         self.archive = archive
-        self._breaker = _CompactionConsecutiveFailures(max_failures=max_consecutive_failures)
+        self._breaker = _CompactionConsecutiveFailures(
+            max_failures=max_consecutive_failures
+        )
 
     # -- entry points ---------------------------------------------------------
 
-    async def apply(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]:
+    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]:
         threshold = self._threshold(ctx)
         if threshold is None:
             # No window info → can't act proactively; only L2 (if enabled).

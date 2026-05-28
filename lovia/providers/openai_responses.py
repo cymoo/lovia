@@ -35,7 +35,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..content import ImageBlock, TextBlock
-from ..exceptions import ProviderError
+from ..exceptions import ContextOverflowError, ProviderError
 from ..items import (
     FinishDelta,
     InputMessageItem,
@@ -199,6 +199,13 @@ class OpenAIResponsesProvider:
         headers.update(self._extra_headers)
         return headers
 
+    def context_window(self, model: str) -> int | None:
+        # Reuse the chat-completions table — the same model identifiers are
+        # accepted by the Responses API.
+        from .openai_chat import _OPENAI_CONTEXT_WINDOWS
+
+        return _OPENAI_CONTEXT_WINDOWS.get(model)
+
     def _build_payload(
         self,
         items: list[Item],
@@ -269,9 +276,18 @@ class OpenAIResponsesProvider:
         ) as response:
             if response.status_code >= 400:
                 body = await response.aread()
+                text = body.decode(errors="replace")
+                # Reuse the chat-completions overflow detector — the Responses
+                # API surfaces the same ``context_length_exceeded`` signal.
+                from .openai_chat import _is_context_overflow
+
+                if _is_context_overflow(response.status_code, text):
+                    raise ContextOverflowError(
+                        f"OpenAI Responses: prompt exceeds the model's context window: {text}"
+                    )
                 raise ProviderError(
                     f"OpenAI Responses stream returned HTTP {response.status_code}: "
-                    f"{body.decode(errors='replace')}"
+                    f"{text}"
                 )
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):

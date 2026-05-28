@@ -13,6 +13,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .. import events
 from ..agent import Agent
+from ..context_policy import ContextPolicy
 from ..items import items_to_chat_messages
 from ..runner import Runner
 from ..session import Session
@@ -27,6 +28,8 @@ def build_router(
     agents: dict[str, Agent[Any]],
     session: Session,
     approvals: ApprovalRegistry,
+    *,
+    context_policy: ContextPolicy | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -67,7 +70,13 @@ def build_router(
     async def chat(req: ChatRequest) -> ChatResponse:
         agent = _pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
-        result = await Runner.run(agent, req.message, session=session, session_id=sid)
+        result = await Runner.run(
+            agent,
+            req.message,
+            session=session,
+            session_id=sid,
+            context_policy=context_policy,
+        )
         return ChatResponse(
             output=_coerce(result.output),
             session_id=sid,
@@ -85,7 +94,11 @@ def build_router(
 
         async def gen():
             handle = Runner.run_streamed(
-                agent, req.message, session=session, session_id=sid
+                agent,
+                req.message,
+                session=session,
+                session_id=sid,
+                context_policy=context_policy,
             )
             # Tell the client its session id up front so reconnects work.
             yield {"event": "session", "data": json.dumps({"session_id": sid})}

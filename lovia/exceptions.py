@@ -49,3 +49,14 @@ class RunCancelled(LoviaError):
 
 class GuardrailTripped(LoviaError):
     """Raised when an input or output :class:`~lovia.Guardrail` rejects a value."""
+
+
+class ContextOverflowError(LoviaError):
+    """Raised when a provider reports the prompt exceeds the model's context window.
+
+    Provider adapters translate vendor-specific signals (HTTP 400 with
+    ``context_length_exceeded``, "prompt is too long", etc.) into this
+    framework-level error so the :class:`~lovia.Runner` can react with a
+    single ``except`` clause. The original exception is preserved via
+    ``raise ... from exc`` so users keep full debugging context.
+    """

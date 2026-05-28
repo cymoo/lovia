@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from ..content import ImageBlock, TextBlock
-from ..exceptions import ProviderError
+from ..exceptions import ContextOverflowError, ProviderError
 from ..items import (
     FinishDelta,
     Item,
@@ -214,8 +214,13 @@ class OpenAIChatProvider:
         ) as response:
             if response.status_code >= 400:
                 body = await response.aread()
+                body_text = body.decode(errors="replace")
+                if _is_context_overflow(response.status_code, body_text):
+                    raise ContextOverflowError(
+                        f"OpenAI Chat: prompt exceeds the model's context window: {body_text}"
+                    )
                 raise ProviderError(
-                    f"OpenAI stream returned HTTP {response.status_code}: {body.decode(errors='replace')}"
+                    f"OpenAI stream returned HTTP {response.status_code}: {body_text}"
                 )
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data:"):
@@ -268,3 +273,44 @@ class OpenAIChatProvider:
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=finish_reason)
+
+    # ----- ContextPolicy hooks ------------------------------------------------
+
+    def context_window(self, model: str) -> int | None:
+        return _OPENAI_CONTEXT_WINDOWS.get(model)
+
+
+# OpenAI Chat returns 400 with ``code: context_length_exceeded`` (or a message
+# containing that phrase). We accept the substring match too because gateway
+# proxies sometimes drop the structured ``code`` field.
+def _is_context_overflow(status: int, body: str) -> bool:
+    if status not in (400, 413):
+        return False
+    lowered = body.lower()
+    return (
+        "context_length_exceeded" in lowered
+        or "maximum context length" in lowered
+        or "prompt is too long" in lowered
+        or "string too long" in lowered
+        and "context" in lowered
+    )
+
+
+# Conservative context-window table for the most common OpenAI / OpenAI-compatible
+# models. Used by ``ContextPolicy`` to size proactive compaction. Unknown models
+# fall back to reactive overflow handling — keeping this short on purpose.
+_OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4.1": 1_000_000,
+    "gpt-4.1-mini": 1_000_000,
+    "gpt-4.1-nano": 1_000_000,
+    "gpt-5": 400_000,
+    "gpt-5-mini": 400_000,
+    "o1": 200_000,
+    "o1-mini": 128_000,
+    "o3": 200_000,
+    "o3-mini": 200_000,
+    "o4-mini": 200_000,
+}

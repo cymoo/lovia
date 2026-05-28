@@ -32,4 +32,14 @@ class Session(Protocol):
 
     async def append(self, session_id: str, items: list[Item]) -> None: ...
 
+    async def replace(self, session_id: str, items: list[Item]) -> None:
+        """Atomically replace the transcript for ``session_id``.
+
+        Called by :class:`~lovia.ContextPolicy` implementations after
+        compaction so the rewritten (typically shorter) item list becomes
+        the new source of truth. Implementations should make this
+        transactional — partial replacement leaves a corrupt transcript.
+        """
+        ...
+
     async def clear(self, session_id: str) -> None: ...

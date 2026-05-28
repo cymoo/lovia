@@ -27,6 +27,10 @@ class InMemorySession:
         async with self._lock:
             self._data[session_id].extend(items)
 
+    async def replace(self, session_id: str, items: list[Item]) -> None:
+        async with self._lock:
+            self._data[session_id] = list(items)
+
     async def clear(self, session_id: str) -> None:
         async with self._lock:
             self._data.pop(session_id, None)

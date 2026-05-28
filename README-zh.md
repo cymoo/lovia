@@ -265,6 +265,43 @@ agent = Agent(..., tracer=ConsoleTracer())
 - **Memory**：长期检索 Protocol，与 `Session` 解耦。核心只提供协议，后端
   自带。
 
+### ContextPolicy：多轮会话不崩
+
+长会话迟早会撞上模型的上下文窗口。`ContextPolicy` 在每次 LLM 调用前重写
+transcript，把过老的内容摘要掉，让对话可以无限继续下去。
+
+- **默认**：不传 `context_policy` 时行为不变，零开销。
+- **开箱即用**：`SummarizingContextPolicy` 提供两层兜底——一旦预估 prompt
+  超过 `compact_at_ratio * max_tokens`（默认 0.8）就让 LLM 生成摘要；如果
+  provider 已经返回 `ContextOverflowError`（HTTP 400 "prompt is too long" 等），
+  policy 会被反应式触发、用更激进的 tail 重压一次再重试一次。
+- **三层正交**：
+  - `Session`：活跃 transcript（压缩后写回）
+  - `archive` 回调：压缩前的全量快照，仅用于审计/回放
+  - `Memory`：跨会话的语义知识，在 `ContextCompacted` 事件里手动联动
+
+```python
+from lovia import (
+    Agent, Runner, SummarizingContextPolicy, ProviderSummarizer
+)
+
+policy = SummarizingContextPolicy(
+    # 不传 max_tokens 时回落到 provider.context_window(model)；都拿不到就
+    # 只走反应式 413 兜底。
+    keep_recent_messages=10,
+    # 想省钱可指定独立的小模型做摘要：
+    summarizer=ProviderSummarizer(provider=OpenAIChatProvider("gpt-4o-mini")),
+    # 一行 lambda 备份全量历史：
+    archive=lambda ev: open(f"archive/{ev.session_id}.jsonl", "a").write(...),
+)
+
+await Runner.run(agent, "...", session=sess, session_id="u1",
+                 context_policy=policy)
+```
+
+如果需要不同策略，实现 `ContextPolicy` 协议（两个方法：`apply` 和
+`apply_reactive`）即可。
+
 ---
 
 ## 示例
@@ -290,6 +327,7 @@ agent = Agent(..., tracer=ConsoleTracer())
 | `15_resume.py` | Checkpoint 与恢复。 |
 | `16_web_serve.py` | 通过 SSE 暴露内置聊天 UI。 |
 | `17_responses_reasoning.py` | OpenAI Responses + reasoning items。 |
+| `18_context_policy.py` | 长会话用 `SummarizingContextPolicy` 自动压缩。 |
 
 ---
 

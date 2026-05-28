@@ -30,6 +30,7 @@ from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
 from .content import ContentBlock, ImageBlock, TextBlock
 from .exceptions import (
     BudgetExceeded,
+    ContextOverflowError,
     GuardrailTripped,
     LoviaError,
     MaxTurnsExceeded,
@@ -38,6 +39,17 @@ from .exceptions import (
     RunCancelled,
     ToolError,
     UserError,
+)
+from .context_policy import (
+    ArchiveCallback,
+    ArchiveEvent,
+    ContextPolicy,
+    DEFAULT_SUMMARY_PROMPT,
+    NoopContextPolicy,
+    PolicyContext,
+    ProviderSummarizer,
+    Summarizer,
+    SummarizingContextPolicy,
 )
 from .guardrails import (
     GuardrailFn,
@@ -80,6 +92,7 @@ from .items import (
     item_from_dict,
     item_to_dict,
     items_to_chat_messages,
+    safe_window,
     transcript_to_items,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
@@ -90,6 +103,8 @@ __all__ = [
     "Agent",
     "AgentHooks",
     "ApprovalChannel",
+    "ArchiveCallback",
+    "ArchiveEvent",
     "AssistantMessage",
     "BudgetExceeded",
     "CancelToken",
@@ -97,6 +112,9 @@ __all__ = [
     "Checkpointer",
     "ConsoleTracer",
     "ContentBlock",
+    "ContextOverflowError",
+    "ContextPolicy",
+    "DEFAULT_SUMMARY_PROMPT",
     "GuardrailFn",
     "GuardrailTripped",
     "Handoff",
@@ -112,6 +130,7 @@ __all__ = [
     "Memory",
     "MessageOutputItem",
     "ModelSettings",
+    "NoopContextPolicy",
     "NoopTracer",
     "OpenAIChatProvider",
     "OpenAIResponsesProvider",
@@ -119,8 +138,10 @@ __all__ = [
     "OutputRepairStrategy",
     "DefaultOutputRepair",
     "OutputValidationError",
+    "PolicyContext",
     "Provider",
     "ProviderError",
+    "ProviderSummarizer",
     "ReasoningDelta",
     "ReasoningItem",
     "RetryPolicy",
@@ -134,6 +155,8 @@ __all__ = [
     "Session",
     "Skill",
     "SkillCatalog",
+    "Summarizer",
+    "SummarizingContextPolicy",
     "TextBlock",
     "TextDelta",
     "Tool",
@@ -158,6 +181,7 @@ __all__ = [
     "item_to_dict",
     "items_to_chat_messages",
     "provider_from_string",
+    "safe_window",
     "transcript_to_items",
     "system",
     "tool",

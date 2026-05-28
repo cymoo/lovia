@@ -9,14 +9,27 @@ Providers yield a stream of :class:`ItemDelta` values
 :class:`UsageDelta` / :class:`FinishDelta`) — the runner assembles them into
 :class:`Item`\\ s and the final assistant turn. There is no non-streaming
 ``generate`` method; non-streaming clients can still buffer the stream.
+
+Providers MAY additionally implement two optional methods used by
+:class:`~lovia.ContextPolicy`:
+
+* ``estimate_tokens(items) -> int`` — approximate prompt size; the framework
+  falls back to a chars/4 heuristic via :func:`estimate_tokens` below.
+* ``context_window(model) -> int | None`` — the maximum prompt+output tokens
+  the named model accepts; ``None`` (or absent method) means "unknown".
+
+Neither method is required by the Protocol so existing adapters keep working;
+:func:`estimate_tokens` and :func:`context_window` below dispatch to the
+adapter when available and fall back otherwise.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from ..items import Item, ItemDelta
+from ..items import Item, ItemDelta, item_to_dict
 
 
 @dataclass
@@ -63,3 +76,44 @@ class Provider(Protocol):
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]: ...
+
+
+# ---------------------------------------------------------------------------
+# Context-window helpers used by ContextPolicy
+# ---------------------------------------------------------------------------
+
+
+def estimate_tokens(provider: Any, items: list[Item]) -> int:
+    """Approximate the prompt size of ``items`` for ``provider``.
+
+    If the provider exposes an ``estimate_tokens(items) -> int`` method we
+    defer to it (vendors who ship a tokenizer should override). Otherwise
+    we fall back to a deliberately rough chars / 4 heuristic on the JSON
+    serialization — enough to drive a "compact at 80% of the window"
+    policy without pulling in tiktoken as a hard dependency.
+    """
+    fn = getattr(provider, "estimate_tokens", None)
+    if callable(fn):
+        return int(fn(items))
+    # ``item_to_dict`` is cheap and already used by sessions; reusing it
+    # here keeps the estimate consistent with what gets persisted.
+    chars = sum(len(json.dumps(item_to_dict(it), ensure_ascii=False)) for it in items)
+    # //4 is the textbook GPT heuristic; close enough for thresholding.
+    return chars // 4
+
+
+def context_window(provider: Any, model: str | None) -> int | None:
+    """Return the prompt+output token cap for ``model`` on ``provider``.
+
+    Returns ``None`` when the provider doesn't expose the information (no
+    ``context_window`` method, or the method returns ``None``). Callers
+    treat ``None`` as "skip proactive compaction; rely on the reactive
+    overflow path instead".
+    """
+    if model is None:
+        return None
+    fn = getattr(provider, "context_window", None)
+    if callable(fn):
+        result = fn(model)
+        return int(result) if result is not None else None
+    return None

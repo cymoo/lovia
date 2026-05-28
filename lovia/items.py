@@ -394,3 +394,90 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
             )
     flush_assistant()
     return out
+
+
+# ---------------------------------------------------------------------------
+# Pair-aware slicing for context compaction
+# ---------------------------------------------------------------------------
+
+
+def safe_window(
+    items: list[Item],
+    *,
+    head: int = 0,
+    tail: int,
+) -> list[Item]:
+    """Return ``items[:head] + items[-tail:]`` adjusted to keep tool pairs intact.
+
+    Used by :class:`~lovia.ContextPolicy` implementations to drop a chunk
+    from the middle of a transcript without leaving orphan
+    :class:`ToolCallOutputItem`\\ s whose corresponding :class:`ToolCallItem`
+    was sliced away — providers reject such payloads (OpenAI: "tool message
+    refers to unknown tool_call_id"; Anthropic: missing ``tool_use``).
+
+    If a kept output's call lives inside the dropped middle, the cut is
+    walked backward until the call is included (i.e. the tail grows). If
+    the matching call cannot be found anywhere, the orphan output is
+    dropped instead. ``head`` items are always preserved as-is.
+
+    Edge cases:
+    * ``tail <= 0``         → returns ``items[:head]`` (drop everything else)
+    * ``head + tail >= n``  → returns ``list(items)`` (nothing to drop)
+    """
+    n = len(items)
+    if tail <= 0:
+        return list(items[:head])
+    if head < 0:
+        head = 0
+    if head + tail >= n:
+        return list(items)
+
+    head_items = list(items[:head])
+    head_call_ids: set[str] = {
+        it.call_id for it in head_items if isinstance(it, ToolCallItem)
+    }
+
+    cut = n - tail
+    # Iterate to a fixed point: each expansion of `cut` may pull in more
+    # ToolCallOutputItems whose calls are still earlier. In practice this
+    # converges in 1–2 passes because tool calls don't nest.
+    for _ in range(n):
+        tail_slice = items[cut:]
+        tail_call_ids = {
+            it.call_id for it in tail_slice if isinstance(it, ToolCallItem)
+        }
+        orphans = {
+            it.call_id
+            for it in tail_slice
+            if isinstance(it, ToolCallOutputItem)
+            and it.call_id not in tail_call_ids
+            and it.call_id not in head_call_ids
+        }
+        if not orphans:
+            break
+        new_cut = cut
+        for i in range(cut - 1, head - 1, -1):
+            it = items[i]
+            if isinstance(it, ToolCallItem) and it.call_id in orphans:
+                new_cut = i
+                orphans.discard(it.call_id)
+                if not orphans:
+                    break
+        if new_cut == cut:
+            # Remaining orphans have no matching call anywhere reachable;
+            # drop those outputs to keep the payload valid.
+            tail_slice = [
+                it
+                for it in tail_slice
+                if not (
+                    isinstance(it, ToolCallOutputItem) and it.call_id in orphans
+                )
+            ]
+            return head_items + tail_slice
+        cut = new_cut
+
+    # If the expansion swallowed the head boundary, fall back to the
+    # whole transcript rather than emit duplicates.
+    if cut <= head:
+        return list(items)
+    return head_items + list(items[cut:])

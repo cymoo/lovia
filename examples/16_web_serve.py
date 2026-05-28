@@ -7,7 +7,9 @@ Run::
     # open http://127.0.0.1:8000
 
 Demonstrates the optional ``lovia.web`` layer: REST endpoints, SSE streaming,
-human-in-the-loop approval, and the bundled refined-minimal chat page.
+human-in-the-loop approval, the bundled refined-minimal chat page, and
+``SummarizingContextPolicy`` so a long chat session never crashes the
+provider with a context-window overflow.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, tool
+from lovia import Agent, SummarizingContextPolicy, tool
 from lovia.web import serve
 
 load_dotenv()
@@ -44,7 +46,13 @@ def main() -> None:
         model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
         tools=[add, send_email],
     )
-    serve(agent, host="127.0.0.1", port=8000)
+    # Default policy: when the prompt approaches the model's context
+    # window, summarize older turns and keep the last 10. ``max_tokens=None``
+    # tells the policy to ask the provider for the active model's window —
+    # falling back to the reactive overflow path for unknown models so the
+    # server never crashes a long-running chat session.
+    policy = SummarizingContextPolicy(keep_recent_messages=10)
+    serve(agent, host="127.0.0.1", port=8000, context_policy=policy)
 
 
 if __name__ == "__main__":

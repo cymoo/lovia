@@ -25,7 +25,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from ..exceptions import ProviderError
+from ..exceptions import ContextOverflowError, ProviderError
 from ..items import (
     FinishDelta,
     Item,
@@ -73,6 +73,9 @@ class AnthropicProvider:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def context_window(self, model: str) -> int | None:
+        return _ANTHROPIC_CONTEXT_WINDOWS.get(model)
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -162,8 +165,13 @@ class AnthropicProvider:
         ) as response:
             if response.status_code >= 400:
                 body = await response.aread()
+                text = body.decode(errors="replace")
+                if _is_context_overflow(response.status_code, text):
+                    raise ContextOverflowError(
+                        f"Anthropic: prompt exceeds the model's context window: {text}"
+                    )
                 raise ProviderError(
-                    f"Anthropic stream returned HTTP {response.status_code}: {body.decode(errors='replace')}"
+                    f"Anthropic stream returned HTTP {response.status_code}: {text}"
                 )
             async for line in response.aiter_lines():
                 if not line.startswith("data:"):
@@ -363,3 +371,37 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
         "description": fn.get("description", ""),
         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
     }
+
+
+# Anthropic returns 400 with ``invalid_request_error`` and a message like
+# "prompt is too long". Some gateway proxies relabel the status; we accept any
+# 4xx whose body matches one of the known phrases.
+def _is_context_overflow(status: int, body: str) -> bool:
+    if status < 400 or status >= 500:
+        return False
+    lowered = body.lower()
+    return (
+        "prompt is too long" in lowered
+        or "input is too long" in lowered
+        or "context window" in lowered
+        or "max_tokens_to_sample" in lowered
+        and "exceeds" in lowered
+    )
+
+
+# Conservative table of known model context windows. Unknown models fall back
+# to reactive overflow handling.
+_ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
+    "claude-3-5-sonnet-latest": 200_000,
+    "claude-3-5-sonnet-20241022": 200_000,
+    "claude-3-5-haiku-latest": 200_000,
+    "claude-3-5-haiku-20241022": 200_000,
+    "claude-3-opus-latest": 200_000,
+    "claude-3-opus-20240229": 200_000,
+    "claude-3-sonnet-20240229": 200_000,
+    "claude-3-haiku-20240307": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-sonnet-4-20250514": 200_000,
+    "claude-opus-4-20250514": 200_000,
+    "claude-opus-4-5": 200_000,
+}

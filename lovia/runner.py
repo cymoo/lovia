@@ -25,7 +25,17 @@ from typing import Any, AsyncIterator, TypeVar
 from . import events
 from .agent import Agent
 from .checkpointer import Checkpointer, RunSnapshot
-from .exceptions import MaxTurnsExceeded, OutputValidationError, UserError
+from .context_policy import (
+    ContextPolicy,
+    NoopContextPolicy,
+    PolicyContext,
+)
+from .exceptions import (
+    ContextOverflowError,
+    MaxTurnsExceeded,
+    OutputValidationError,
+    UserError,
+)
 from .guardrails import check_input_guardrails, check_output_guardrails
 from .handoff import Handoff, _HandoffSignal, build_handoff_tool
 from .hooks import dispatch
@@ -194,6 +204,7 @@ class Runner:
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
         checkpointer: Checkpointer | None = None,
+        context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
@@ -215,6 +226,7 @@ class Runner:
             cancel_token=cancel_token,
             retry=retry,
             checkpointer=checkpointer,
+            context_policy=context_policy,
             run_id=run_id,
             resume_from=resume_from,
         )
@@ -233,6 +245,7 @@ class Runner:
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
         checkpointer: Checkpointer | None = None,
+        context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         _parent_usage: Usage | None = None,
@@ -249,6 +262,7 @@ class Runner:
             cancel_token=cancel_token,
             retry=retry,
             checkpointer=checkpointer,
+            context_policy=context_policy,
             run_id=run_id,
             resume_from=resume_from,
             _parent_usage=_parent_usage,
@@ -300,6 +314,7 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
+        context_policy: ContextPolicy | None = None,
     ) -> AsyncIterator[events.Event]:
         """Run ``agent`` and yield :class:`Event` instances as they happen."""
         async for event in Runner.run_streamed(
@@ -312,6 +327,7 @@ class Runner:
             budget=budget,
             cancel_token=cancel_token,
             retry=retry,
+            context_policy=context_policy,
         ):
             yield event
 
@@ -338,6 +354,7 @@ class _RunLoop:
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
         checkpointer: Checkpointer | None = None,
+        context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
     ) -> None:
@@ -354,6 +371,10 @@ class _RunLoop:
         self.cancel_token = cancel_token
         self.retry = retry
         self.checkpointer = checkpointer
+        self.context_policy: ContextPolicy = context_policy or NoopContextPolicy()
+        # Tracks the prompt-token count from the previous turn so
+        # ContextPolicy can prefer real usage over heuristic estimates.
+        self._last_prompt_tokens: int | None = None
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.approvals = ApprovalChannel()
@@ -429,11 +450,56 @@ class _RunLoop:
 
                 providers = agent.resolve_providers()
                 state = _TurnState()
-                async for ev in self._run_model_turn(
-                    agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
-                ):
-                    yield ev
-                    await dispatch(agent.hooks, ev)
+
+                # ContextPolicy: rewrite the transcript before the model
+                # call. Identity check skips the no-op path.
+                primary_provider = providers[0] if providers else None
+                policy_model = getattr(primary_provider, "model", None)
+                policy_ctx = PolicyContext(
+                    provider=primary_provider,
+                    model=policy_model,
+                    last_prompt_tokens=self._last_prompt_tokens,
+                    session_id=self.session_id,
+                )
+                items_before = items_log
+                new_items = await self.context_policy.apply(items_before, ctx=policy_ctx)
+                if new_items is not items_before:
+                    async for ev in self._on_context_compacted(
+                        agent, items_before, new_items, reactive=False,
+                        transcript=transcript, items_log=items_log,
+                    ):
+                        yield ev
+                        await dispatch(agent.hooks, ev)
+                    # _on_context_compacted mutates items_log/transcript in place
+                # Reactive path: provider may report ContextOverflowError mid-stream.
+                # Catch it, ask the policy for its more aggressive compaction,
+                # then retry the turn exactly once. A second overflow propagates.
+                try:
+                    async for ev in self._run_model_turn(
+                        agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
+                    ):
+                        yield ev
+                        await dispatch(agent.hooks, ev)
+                except ContextOverflowError:
+                    items_before = items_log
+                    new_items = await self.context_policy.apply_reactive(
+                        items_before, ctx=policy_ctx
+                    )
+                    if new_items is items_before:
+                        # Policy refused / couldn't shrink — surface original.
+                        raise
+                    async for ev in self._on_context_compacted(
+                        agent, items_before, new_items, reactive=True,
+                        transcript=transcript, items_log=items_log,
+                    ):
+                        yield ev
+                        await dispatch(agent.hooks, ev)
+                    state = _TurnState()
+                    async for ev in self._run_model_turn(
+                        agent, providers, items_log, tools_by_name, output_spec, tracer, turns, state
+                    ):
+                        yield ev
+                        await dispatch(agent.hooks, ev)
                 assistant = state.assistant
 
                 if assistant is None:
@@ -442,6 +508,11 @@ class _RunLoop:
                     raise RuntimeError("Provider stream ended without final message")
 
                 run_ctx.usage.add(assistant.usage)
+                # Remember the real prompt-token count so the next turn's
+                # ContextPolicy can size compaction against actual usage
+                # rather than the chars/4 heuristic.
+                if assistant.usage and assistant.usage.input_tokens:
+                    self._last_prompt_tokens = assistant.usage.input_tokens
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 msg = assistant.to_chat_message()
@@ -949,8 +1020,71 @@ class _RunLoop:
             for it in items_log
             if not (isinstance(it, _InputMessageItem) and it.role == "system")
         ]
-        await self.session.clear(self.session_id)
-        await self.session.append(self.session_id, body)
+        # Prefer the atomic ``replace`` when available (added with
+        # ContextPolicy in lovia 0.x); fall back to clear+append otherwise
+        # so external session implementations keep working unchanged.
+        replace = getattr(self.session, "replace", None)
+        if callable(replace):
+            await replace(self.session_id, body)
+        else:
+            await self.session.clear(self.session_id)
+            await self.session.append(self.session_id, body)
+
+    async def _on_context_compacted(
+        self,
+        agent: Agent,
+        items_before: list[Item],
+        items_after: list[Item],
+        *,
+        reactive: bool,
+        transcript: list[ChatMessage],
+        items_log: list[Item],
+    ) -> AsyncIterator[events.Event]:
+        """Persist a compacted transcript and emit ``ContextCompacted``.
+
+        Mutates ``items_log`` and ``transcript`` in place so the existing
+        loop continues to operate on the rewritten conversation. Tries to
+        recover a summary string by inspecting the new head item — the
+        :class:`SummarizingContextPolicy` always emits a single
+        :class:`InputMessageItem` with the agreed prefix, so we strip the
+        marker rather than asking the policy to return a richer object.
+        """
+        snapshot_before = list(items_before)
+        items_log[:] = items_after
+        # Keep the wire-format mirror in lockstep.
+        transcript[:] = items_to_chat_messages(items_log)
+        # Re-prepend the system prompt that ``_build_initial_messages`` put
+        # at the start of the original transcript — it's not stored in
+        # ``items_log`` for some shapes, and the agent expects it back.
+        await self._reinstate_system_prompt(agent, transcript)
+        # Persist the rewritten transcript so a crash + restart picks up
+        # the compacted version (the whole point of permanent compaction).
+        if self.session is not None and self.session_id is not None:
+            await self._persist_session(items_log)
+        summary = _extract_summary(items_after)
+        ev = events.ContextCompacted(
+            session_id=self.session_id,
+            items_before=snapshot_before,
+            items_after=list(items_after),
+            summary=summary,
+            reactive=reactive,
+        )
+        yield ev
+
+    async def _reinstate_system_prompt(
+        self, agent: Agent, transcript: list[ChatMessage]
+    ) -> None:
+        """Ensure the agent's system prompt is the first message after a rewrite.
+
+        Compaction operates on ``items_log`` which may or may not start with
+        a system message; provider adapters expect one, so we re-render and
+        prepend if missing.
+        """
+        if transcript and transcript[0].role == "system":
+            return
+        system_text = await self._system_prompt(agent)
+        if system_text:
+            transcript.insert(0, system(system_text))
 
     async def _emit(self, event: events.Event, agent: Agent) -> None:
         # Hooks-only dispatch. Used for events the loop itself yields elsewhere.
@@ -963,6 +1097,35 @@ def _supports_json_schema(agent: Agent) -> bool:
     if isinstance(provider, OpenAIChatProvider):
         return provider.supports_json_schema
     return False
+
+
+# The marker SummarizingContextPolicy wraps its summary text in, mirrored here
+# so the runner can surface the raw summary on ``ContextCompacted`` events
+# without coupling to context_policy internals at import time.
+_SUMMARY_OPEN = "[Conversation summary — prior turns compacted]"
+_SUMMARY_CLOSE = "[End summary]"
+
+
+def _extract_summary(items: list[Item]) -> str | None:
+    """Best-effort extraction of summary text from a compacted item list.
+
+    Returns ``None`` for structural-only compaction (no LLM summary
+    produced) so the event payload reflects what actually happened.
+    """
+    if not items:
+        return None
+    head = items[0]
+    if not isinstance(head, _InputMessageItem):
+        return None
+    content = head.content
+    if not isinstance(content, str):
+        return None
+    if _SUMMARY_OPEN not in content:
+        return None
+    body = content.split(_SUMMARY_OPEN, 1)[1]
+    if _SUMMARY_CLOSE in body:
+        body = body.rsplit(_SUMMARY_CLOSE, 1)[0]
+    return body.strip()
 
 
 async def _unreachable_invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
@@ -1008,6 +1171,13 @@ async def _stream_with_fallback(
             except BaseException as exc:
                 last_exc = exc
                 if committed:
+                    raise
+                # ContextOverflowError must surface to the runner's reactive
+                # compaction loop; falling back to another provider is
+                # pointless because the prompt size hasn't changed.
+                from .exceptions import ContextOverflowError as _COE
+
+                if isinstance(exc, _COE):
                     raise
                 if retry is not None and attempt < max_attempts and retry.retry_on(exc):
                     import random as _random

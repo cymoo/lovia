@@ -278,6 +278,55 @@ methods.
 - **Memory**: a long-term retrieval Protocol, decoupled from `Session`. Core
   ships the Protocol; bring your own backend.
 
+### ContextPolicy: surviving long conversations
+
+Long chats eventually hit the model's context window. A `ContextPolicy`
+rewrites the transcript before every model call so the conversation can
+keep going forever instead of crashing the provider.
+
+- **Default**: omit `context_policy=` and behavior is unchanged — zero
+  overhead.
+- **Out of the box**: `SummarizingContextPolicy` provides two layers of
+  defense. Once the estimated prompt crosses
+  `compact_at_ratio * max_tokens` (default 0.8) it asks an LLM to
+  summarize and trims to the last few turns. If the provider still
+  raises `ContextOverflowError` (HTTP 400 "prompt is too long" and
+  friends), the runner triggers the policy's more aggressive
+  reactive path and retries the turn once.
+- **Three orthogonal layers** (don't conflate them):
+  - `Session` — active transcript, rewritten in place after compaction
+  - `archive` callback — write-only snapshot of the pre-compaction
+    transcript, for audit / replay
+  - `Memory` — long-term semantic store, wired up via the
+    `ContextCompacted` event in your hooks
+
+```python
+from lovia import (
+    Agent, Runner, SummarizingContextPolicy, ProviderSummarizer,
+    OpenAIChatProvider,
+)
+
+policy = SummarizingContextPolicy(
+    # When max_tokens is None, we ask the provider for the model's
+    # window. When that's also unknown, only the reactive overflow path
+    # remains — which still keeps the run from crashing.
+    keep_recent_messages=10,
+    # Use a cheaper model for summarization to save cost:
+    summarizer=ProviderSummarizer(provider=OpenAIChatProvider("gpt-4o-mini")),
+    # Optional one-liner full-history backup:
+    archive=lambda ev: open(f"archive/{ev.session_id}.jsonl", "a").write(...),
+)
+
+await Runner.run(
+    agent, "...", session=sess, session_id="u1",
+    context_policy=policy,
+)
+```
+
+Implementing the `ContextPolicy` protocol (`apply` + `apply_reactive`)
+lets you swap in any strategy: sliding window, token-budgeted RAG,
+domain-specific rules, etc.
+
 ---
 
 ## Examples
@@ -303,6 +352,7 @@ All runnable from the repo root (most require an `OPENAI_API_KEY`):
 | `15_resume.py` | Checkpoint and resume. |
 | `16_web_serve.py` | Bundled chat UI over SSE. |
 | `17_responses_reasoning.py` | OpenAI Responses with reasoning items. |
+| `18_context_policy.py` | Long sessions with `SummarizingContextPolicy`. |
 
 ---
 

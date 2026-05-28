@@ -101,3 +101,31 @@ class SQLiteSession(_SQLiteBase):
                 conn.close()
 
         await self._run(_impl)
+
+    async def replace(self, session_id: str, items: list[Item]) -> None:
+        def _impl() -> None:
+            conn = sqlite3.connect(self._path, check_same_thread=False)
+            try:
+                conn.executescript(_SCHEMA)
+                # Single transaction: delete existing rows, then insert the
+                # new transcript. On error we rollback so the old transcript
+                # survives intact.
+                try:
+                    conn.execute("BEGIN")
+                    conn.execute(
+                        "DELETE FROM session_items WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    if items:
+                        conn.executemany(
+                            "INSERT INTO session_items (session_id, payload) VALUES (?, ?)",
+                            [(session_id, json.dumps(item_to_dict(it))) for it in items],
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            finally:
+                conn.close()
+
+        await self._run(_impl)

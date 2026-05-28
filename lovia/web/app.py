@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from ..agent import Agent
+from ..context_policy import ContextPolicy
 from ..session import Session
 from ..stores import InMemorySession
 from .approvals import ApprovalRegistry
@@ -29,18 +30,27 @@ def create_app(
     agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
     session: Session | None = None,
+    context_policy: ContextPolicy | None = None,
     title: str = "lovia",
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
     Returns a plain ASGI app — run it with any ASGI server.
+
+    Pass ``context_policy`` (e.g. :class:`~lovia.SummarizingContextPolicy`)
+    to keep long-running sessions under the model's context window. The
+    same policy instance is shared across all routed agents — handoff is
+    transparent to the policy because it operates on the session
+    transcript, not on the agent.
     """
     agents = _normalise(agent_or_agents)
     sess: Session = session if session is not None else InMemorySession()
     approvals = ApprovalRegistry()
 
     app = FastAPI(title=title, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    app.include_router(build_router(agents, sess, approvals))
+    app.include_router(
+        build_router(agents, sess, approvals, context_policy=context_policy)
+    )
     app.mount(
         "/static", StaticFiles(directory=str(_STATIC), check_dir=False), name="static"
     )
@@ -49,6 +59,7 @@ def create_app(
     app.state.agents = agents
     app.state.session = sess
     app.state.approvals = approvals
+    app.state.context_policy = context_policy
     return app
 
 
@@ -58,11 +69,17 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8000,
     session: Session | None = None,
+    context_policy: ContextPolicy | None = None,
     title: str = "lovia",
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking)."""
     import uvicorn
 
-    app = create_app(agent_or_agents, session=session, title=title)
+    app = create_app(
+        agent_or_agents,
+        session=session,
+        context_policy=context_policy,
+        title=title,
+    )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

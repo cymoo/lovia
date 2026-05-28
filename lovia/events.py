@@ -139,3 +139,25 @@ class ErrorOccurred(Event):
 @dataclass
 class RunCompleted(Event):
     result: "RunResult"
+
+
+@dataclass
+class ContextCompacted(Event):
+    """Emitted when :class:`~lovia.ContextPolicy` rewrote the transcript.
+
+    ``items_before`` is the full transcript that existed before compaction;
+    ``items_after`` is the trimmed transcript the runner will use going
+    forward (and that has been written back to the session). ``summary``
+    is the model-produced summary text when the policy used LLM
+    summarization, or ``None`` for purely structural compaction.
+
+    ``reactive`` is ``True`` when the compaction was triggered by a
+    :class:`~lovia.ContextOverflowError` from the provider rather than by
+    the proactive token threshold.
+    """
+
+    session_id: str | None
+    items_before: list[Item]
+    items_after: list[Item]
+    summary: str | None = None
+    reactive: bool = False

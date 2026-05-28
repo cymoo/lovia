@@ -40,6 +40,7 @@ lovia/
   handoff.py     # Handoff between agents
   hooks.py       # AgentHooks base class
   session.py     # Session protocol
+  context_policy.py # ContextPolicy — keeps long conversations under the model's window
   skills.py      # Skill / SkillCatalog (SKILL.md lazy loading)
   schema.py      # JSON Schema generation from Python types
   exceptions.py  # Framework exceptions

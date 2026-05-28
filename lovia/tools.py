@@ -179,6 +179,7 @@ def tool(
     timeout: float | None = None,
     result_renderer: ToolResultRenderer | None = None,
     wrap: ToolWrap | None = None,
+    strict: bool = False,
 ) -> Any:
     """Decorate a function to turn it into a :class:`Tool`.
 
@@ -187,6 +188,14 @@ def tool(
     :class:`RunContext` by annotating their first parameter as
     ``RunContext`` or ``RunContext[Deps]``. The parameter name does not
     matter — only the annotation does.
+
+    Parameter metadata may be carried via :data:`typing.Annotated`. Both
+    ``Annotated[str, "the query"]`` (bare string description) and
+    ``Annotated[int, Field(ge=0)]`` (full pydantic ``Field``) are recognised.
+
+    When ``strict=True`` the generated JSON Schema is marked
+    ``additionalProperties: False`` and every argument becomes required —
+    matching OpenAI's strict-mode requirements.
 
     Examples::
 
@@ -203,7 +212,7 @@ def tool(
     def make(func: Callable[..., Any]) -> Tool:
         tool_name = name or func.__name__
         tool_desc = description or (inspect.getdoc(func) or "").strip()
-        parameters, _ = function_args_schema(func)
+        parameters, _ = function_args_schema(func, strict=strict)
 
         sig = inspect.signature(func)
         context_param = _find_context_param(func, sig)

@@ -76,6 +76,18 @@ from .tracing import NoopTracer, Tracer
 TContext = TypeVar("TContext")
 
 
+class _Unset:
+    """Sentinel: distinguish "not passed" from ``None`` for override params."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return "UNSET"
+
+
+_UNSET: Any = _Unset()
+
+
 @dataclass
 class _TurnState:
     """Mutable scratch space populated by phase helpers within one turn.
@@ -207,12 +219,27 @@ class Runner:
         context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
+        append_instructions: "str | None" = None,
+        output_type: Any = _UNSET,
         _parent_usage: Usage | None = None,
     ) -> "RunHandle":
         """Start a run and return a :class:`RunHandle`.
 
         The handle is both awaitable (for the final :class:`RunResult`) and
         async-iterable (for the event stream). See :class:`RunHandle`.
+
+        Per-call overrides:
+
+        * ``append_instructions`` — extra text (or callable returning text)
+          appended after the agent's instructions and any registered
+          fragments. Useful for one-off "be concise" / "answer in Spanish"
+          tweaks without cloning the agent.
+        * ``output_type`` — override the agent's structured output type for
+          this run only. The sentinel default keeps the agent's value;
+          passing ``None`` resets to ``str`` (free-form text); any other
+          type fully overrides parsing, the prompt suffix, and the
+          synthetic ``final_output`` tool schema. The override applies to
+          the initial agent only and does **not** propagate across handoffs.
         """
         loop = _RunLoop(
             initial_agent=agent,
@@ -229,6 +256,8 @@ class Runner:
             context_policy=context_policy,
             run_id=run_id,
             resume_from=resume_from,
+            append_instructions=append_instructions,
+            output_type_override=output_type,
         )
         return RunHandle(loop.stream(), loop.approvals)
 
@@ -248,9 +277,15 @@ class Runner:
         context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
+        append_instructions: "str | None" = None,
+        output_type: Any = _UNSET,
         _parent_usage: Usage | None = None,
     ) -> "RunResult":
-        """Run ``agent`` to completion and return the final result."""
+        """Run ``agent`` to completion and return the final result.
+
+        See :meth:`run_streamed` for the meaning of ``append_instructions``
+        and ``output_type``.
+        """
         return await Runner.run_streamed(
             agent,
             input,
@@ -265,8 +300,33 @@ class Runner:
             context_policy=context_policy,
             run_id=run_id,
             resume_from=resume_from,
+            append_instructions=append_instructions,
+            output_type=output_type,
             _parent_usage=_parent_usage,
         ).result()
+
+    @staticmethod
+    def run_sync(
+        agent: Agent[TContext],
+        input: "str | list[ChatMessage]",
+        **kwargs: Any,
+    ) -> "RunResult":
+        """Synchronous wrapper around :meth:`run`.
+
+        Convenience for scripts and REPLs. Raises :class:`UserError` if a
+        running event loop is detected (use :meth:`run` directly from
+        async code instead).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise UserError(
+                "Runner.run_sync() cannot be called from a running event loop",
+                hint="Use `await Runner.run(...)` from async code.",
+            )
+        return asyncio.run(Runner.run(agent, input, **kwargs))
 
     @staticmethod
     async def resume(
@@ -315,6 +375,8 @@ class Runner:
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
         context_policy: ContextPolicy | None = None,
+        append_instructions: "str | None" = None,
+        output_type: Any = _UNSET,
     ) -> AsyncIterator[events.Event]:
         """Run ``agent`` and yield :class:`Event` instances as they happen."""
         async for event in Runner.run_streamed(
@@ -328,6 +390,8 @@ class Runner:
             cancel_token=cancel_token,
             retry=retry,
             context_policy=context_policy,
+            append_instructions=append_instructions,
+            output_type=output_type,
         ):
             yield event
 
@@ -357,6 +421,8 @@ class _RunLoop:
         context_policy: ContextPolicy | None = None,
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
+        append_instructions: "str | None" = None,
+        output_type_override: Any = _UNSET,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -378,6 +444,30 @@ class _RunLoop:
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.approvals = ApprovalChannel()
+        # Per-call addendum appended to the initial agent's system prompt.
+        # Applied once on the initial transcript; not re-applied across
+        # handoffs (the new agent uses its own instructions verbatim).
+        self.append_instructions = append_instructions
+        # ``_UNSET`` means "use the agent's output_type"; ``None`` means
+        # "force str"; any other value overrides. Override applies to the
+        # initial agent only — handoffs revert to the target agent's
+        # declared output_type.
+        self.output_type_override = output_type_override
+        self._override_consumed = False
+
+    def _resolve_output_type(self, agent: Agent) -> Any:
+        """Return the output type to use for ``agent``.
+
+        The Runner-level override applies only to the initial agent. After
+        the first call (i.e. once we've moved past the initial agent or
+        once a handoff has occurred), we revert to the target's declared
+        ``output_type``.
+        """
+        if self._override_consumed or self.output_type_override is _UNSET:
+            return agent.output_type
+        self._override_consumed = True
+        ot = self.output_type_override
+        return str if ot is None else ot
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.agent
@@ -417,7 +507,9 @@ class _RunLoop:
         mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
 
         # 3. Resolve output strategy and base tool list.
-        output_spec = build_output_spec(agent.output_type, _supports_json_schema(agent))
+        output_spec = build_output_spec(
+            self._resolve_output_type(agent), _supports_json_schema(agent)
+        )
         tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
 
         ev_start = events.RunStarted(agent=agent)
@@ -582,7 +674,7 @@ class _RunLoop:
                         agent = state.handoff_signal.target
                         run_ctx.agent = agent
                         output_spec = build_output_spec(
-                            agent.output_type, _supports_json_schema(agent)
+                            self._resolve_output_type(agent), _supports_json_schema(agent)
                         )
                         tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
                         # Update system prompt for the new agent and optionally
@@ -887,7 +979,7 @@ class _RunLoop:
 
     async def _build_initial_messages(self, agent: Agent) -> list[ChatMessage]:
         msgs: list[ChatMessage] = []
-        system_text = await self._system_prompt(agent)
+        system_text = await self._system_prompt(agent, extra=self.append_instructions)
         if system_text:
             msgs.append(system(system_text))
 
@@ -903,8 +995,10 @@ class _RunLoop:
             msgs.extend(self.user_input)
         return msgs
 
-    async def _system_prompt(self, agent: Agent) -> str:
-        text = await agent.render_instructions(self.context)
+    async def _system_prompt(
+        self, agent: Agent, *, extra: "str | None" = None
+    ) -> str:
+        text = await agent.render_instructions(self.context, extra=extra)
         if agent.skills is not None:
             text = f"{text}\n\n{agent.skills.render_catalog()}".strip()
         return text
@@ -1007,7 +1101,14 @@ class _RunLoop:
         # cases, the remaining text content should parse as JSON describing the
         # target type. Any failure here surfaces as ``OutputValidationError``
         # and may be repaired in the main loop if the agent opts in.
-        return parse_output(output_spec, loads_lenient(assistant.content or ""))
+        try:
+            return parse_output(output_spec, loads_lenient(assistant.content or ""))
+        except OutputValidationError as exc:
+            if exc.output_type_name is None:
+                exc.output_type_name = getattr(
+                    output_spec.output_type, "__name__", str(output_spec.output_type)
+                )
+            raise
 
     async def _persist_session(self, items_log: list[Item]) -> None:
         # Replace stored transcript with the latest (simple and predictable).

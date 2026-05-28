@@ -4,6 +4,10 @@ An :class:`Agent` is a **declarative** specification of an LLM-driven actor.
 It contains no runtime state: every call to :func:`Runner.run` reads from it
 but never mutates it. This makes agents safe to share across requests and
 trivial to clone for per-request tweaks.
+
+The one exception to "no runtime state" is the ``_fragments`` list populated
+by the :meth:`system_prompt` decorator — but it's still configuration, not
+session data, and is copied by :meth:`clone`.
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ if TYPE_CHECKING:
     from .hooks import AgentHooks
     from .mcp import MCPServer
     from .memory import Memory
-    from .messages import ToolCall
+    from .messages import ChatMessage, ToolCall
     from .output import OutputRepairStrategy
+    from .runner import RunHandle, RunResult
     from .skills import SkillCatalog
     from .tools import ToolResultRenderer
     from .tracing import Tracer
@@ -53,14 +58,16 @@ class Agent(Generic[TContext]):
 
     Fields:
         name: Human-readable agent name; also used to derive handoff tool names.
-        instructions: A static system prompt, or a callable that receives the
-            run ``context`` and returns one (sync or async).
+        instructions: A static base system prompt, or a callable that
+            receives the run ``context`` and returns one (sync or async).
+            Additional dynamic fragments can be registered with the
+            :meth:`system_prompt` decorator and appended at render time.
         model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-4o-mini"``)
             or a pre-built :class:`Provider` instance.
         tools: Tools the agent may call.
         output_type: Pydantic model, dataclass, TypedDict, or builtin type that
             describes the structured final output. ``str`` (the default) means
-            free-form text.
+            free-form text. :meth:`Runner.run` may override this per call.
         output_repair: When ``True`` (the default), and the model produces an
             output that fails to parse against ``output_type``, the runner
             asks the model once to fix it. Set to ``False`` to fail fast with
@@ -109,6 +116,12 @@ class Agent(Generic[TContext]):
     # ``None`` the runner uses a no-op tracer, so instrumentation is free.
     tracer: "Tracer | None" = None
     memory: "Memory | None" = None
+    # Dynamic system-prompt fragments registered via @agent.system_prompt.
+    # Rendered in registration order and appended after ``instructions``.
+    # Not a public field — use the decorator or ``add_system_prompt`` instead.
+    _fragments: list[InstructionsFn] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
     def resolve_providers(self) -> list[Provider]:
         """Return the ordered fallback chain of providers for this agent.
@@ -129,15 +142,63 @@ class Agent(Generic[TContext]):
         """Return the primary provider (first entry of the fallback chain)."""
         return self.resolve_providers()[0]
 
-    async def render_instructions(self, context: Any) -> str:
-        """Materialize the system prompt for a given run."""
-        instr = self.instructions
-        if callable(instr):
-            result = instr(context)
-            if hasattr(result, "__await__"):
-                return await result  # type: ignore[no-any-return]
-            return str(result)
-        return str(instr)
+    # ------------------------------------------------------------------ #
+    # Dynamic system-prompt fragments
+    # ------------------------------------------------------------------ #
+
+    def system_prompt(self, fn: InstructionsFn) -> InstructionsFn:
+        """Register a dynamic system-prompt fragment.
+
+        The decorated callable receives the run context and returns (or
+        awaits) a string. All fragments are concatenated to ``instructions``
+        at render time, in registration order, separated by blank lines.
+        Returning an empty string skips the fragment.
+
+        Example::
+
+            agent = Agent(name="x", instructions="You are helpful.")
+
+            @agent.system_prompt
+            async def add_user_tier(ctx) -> str:
+                return f"User tier: {ctx.context.tier}"
+        """
+        self._fragments.append(fn)
+        return fn
+
+    async def render_instructions(
+        self, context: Any, *, extra: "str | InstructionsFn | None" = None
+    ) -> str:
+        """Materialize the system prompt for a given run.
+
+        Concatenates: the base ``instructions`` (str or callable), every
+        fragment registered via :meth:`system_prompt`, and finally ``extra``
+        (a per-call addendum supplied by the runner). Empty results are
+        skipped so users can return ``""`` to opt out conditionally.
+        """
+        parts: list[str] = []
+
+        async def render(item: "str | InstructionsFn | None") -> str:
+            if item is None:
+                return ""
+            if callable(item):
+                result = item(context)
+                if hasattr(result, "__await__"):
+                    return str(await result)  # type: ignore[arg-type]
+                return str(result)
+            return str(item)
+
+        base = await render(self.instructions)
+        if base:
+            parts.append(base)
+        for frag in self._fragments:
+            text = await render(frag)
+            if text:
+                parts.append(text)
+        if extra is not None:
+            extra_text = await render(extra)
+            if extra_text:
+                parts.append(extra_text)
+        return "\n\n".join(parts)
 
     def as_tool(
         self,
@@ -149,5 +210,46 @@ class Agent(Generic[TContext]):
         return agent_as_tool(self, name=name, description=description)
 
     def clone(self, **overrides: Any) -> "Agent[TContext]":
-        """Return a copy of this agent with selected fields overridden."""
-        return replace(self, **overrides)
+        """Return a copy of this agent with selected fields overridden.
+
+        Dynamic system-prompt fragments registered on the source agent are
+        copied so the clone inherits them; modifying one list does not affect
+        the other.
+        """
+        new = replace(self, **overrides)
+        new._fragments = list(self._fragments)
+        return new
+
+    # ------------------------------------------------------------------ #
+    # Convenience instance methods — thin wrappers over Runner
+    # ------------------------------------------------------------------ #
+
+    async def run(
+        self,
+        input: "str | list[ChatMessage]",
+        **kwargs: Any,
+    ) -> "RunResult":
+        """Shortcut for ``Runner.run(self, input, **kwargs)``."""
+        from .runner import Runner
+
+        return await Runner.run(self, input, **kwargs)
+
+    def run_sync(
+        self,
+        input: "str | list[ChatMessage]",
+        **kwargs: Any,
+    ) -> "RunResult":
+        """Synchronous shortcut for ``Runner.run_sync(self, input, **kwargs)``."""
+        from .runner import Runner
+
+        return Runner.run_sync(self, input, **kwargs)
+
+    def stream(
+        self,
+        input: "str | list[ChatMessage]",
+        **kwargs: Any,
+    ) -> "RunHandle":
+        """Shortcut for ``Runner.run_streamed(self, input, **kwargs)``."""
+        from .runner import Runner
+
+        return Runner.run_streamed(self, input, **kwargs)

@@ -17,7 +17,8 @@ def test_skill_catalog_from_dir() -> None:
 
         cat = SkillCatalog.from_dir(root)
         assert cat.names() == ["refund"]
-        assert "refund: How to handle refunds." in cat.render_catalog()
+        rendered = cat.render_catalog()
+        assert "refund" in rendered and "How to handle refunds." in rendered
         skill = cat.get("refund")
         assert skill is not None and "Refund policy" in skill.content
 

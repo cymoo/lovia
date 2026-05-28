@@ -12,14 +12,22 @@ Chat Completions ``tools`` and ``response_format`` payloads. We rely on
 pydantic for the heavy lifting (it already handles dataclasses, TypedDicts,
 and primitive type adapters), which keeps this file short while staying
 correct on tricky cases (``Optional``, ``Literal``, ``Union``, nested models).
+
+Parameter annotations may be wrapped in :data:`typing.Annotated` to carry
+extra metadata. Two forms are recognised:
+
+* ``Annotated[T, pydantic.Field(description=..., ge=..., ...)]`` — pydantic
+  handles the JSON Schema enrichment automatically.
+* ``Annotated[T, "free-text description"]`` — bare strings are converted to
+  ``Field(description=...)`` so users don't need to import pydantic.
 """
 
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, get_origin, get_type_hints
+from typing import Annotated, Any, Callable, get_args, get_origin, get_type_hints
 
-from pydantic import BaseModel, TypeAdapter, create_model
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 
 
 def _is_context_annotation(annotation: Any) -> bool:
@@ -30,8 +38,31 @@ def _is_context_annotation(annotation: Any) -> bool:
     """
     from .run_context import RunContext
 
+    # Unwrap Annotated[T, ...] for the context check; the marker matters,
+    # not the metadata.
+    if get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
     origin = get_origin(annotation) or annotation
     return origin is RunContext
+
+
+def _normalize_annotation(annotation: Any) -> Any:
+    """Convert ``Annotated[T, "desc"]`` to ``Annotated[T, Field(description=...)]``.
+
+    Bare string metadata is treated as a description so users can write
+    ``query: Annotated[str, "the search query"]`` without importing pydantic.
+    Existing ``Field(...)`` metadata is left intact.
+    """
+    if get_origin(annotation) is not Annotated:
+        return annotation
+    base, *meta = get_args(annotation)
+    new_meta: list[Any] = []
+    for item in meta:
+        if isinstance(item, str):
+            new_meta.append(Field(description=item))
+        else:
+            new_meta.append(item)
+    return Annotated[(base, *new_meta)]  # type: ignore[valid-type]
 
 
 def _iter_arg_params(
@@ -43,7 +74,7 @@ def _iter_arg_params(
     parameter annotated as :class:`RunContext` (those are runner-injected).
     """
     sig = inspect.signature(fn)
-    hints = get_type_hints(fn, include_extras=False)
+    hints = get_type_hints(fn, include_extras=True)
     out: list[tuple[str, inspect.Parameter, Any]] = []
     for name, param in sig.parameters.items():
         if name.startswith("_") or name in ("self", "cls"):
@@ -56,7 +87,7 @@ def _iter_arg_params(
         annotation = hints.get(name, str)
         if _is_context_annotation(annotation):
             continue
-        out.append((name, param, annotation))
+        out.append((name, param, _normalize_annotation(annotation)))
     return out
 
 
@@ -71,7 +102,11 @@ def model_json_schema(tp: Any) -> dict[str, Any]:
     return _strip_titles(TypeAdapter(tp).json_schema())
 
 
-def function_args_schema(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[str]]:
+def function_args_schema(
+    fn: Callable[..., Any],
+    *,
+    strict: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
     """Build a JSON Schema for a function's keyword arguments.
 
     Returns ``(schema, param_names)`` so the runner can validate inputs and
@@ -79,7 +114,9 @@ def function_args_schema(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[s
 
     Parameters whose name starts with an underscore, or that are annotated as
     :class:`RunContext` (which the runner injects), are excluded from the
-    schema.
+    schema. When ``strict=True`` the resulting object enforces
+    ``additionalProperties: False`` and marks every field as required
+    (matching OpenAI's strict-mode requirements).
     """
     fields: dict[str, Any] = {}
     param_names: list[str] = []
@@ -97,6 +134,9 @@ def function_args_schema(fn: Callable[..., Any]) -> tuple[dict[str, Any], list[s
     Model = create_model(f"{fn.__name__.title()}Args", **fields)  # type: ignore[call-overload]
     schema = _strip_titles(Model.model_json_schema())
     schema.setdefault("additionalProperties", False)
+    if strict:
+        schema["additionalProperties"] = False
+        schema["required"] = list(param_names)
     return schema, param_names
 
 

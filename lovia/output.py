@@ -111,9 +111,19 @@ def parse_output(spec: OutputSpec, payload: str | dict[str, Any]) -> Any:
     try:
         return coerce_output(spec.output_type, payload)
     except Exception as exc:  # pydantic raises various subclasses
-        raise OutputValidationError(
-            f"Failed to parse output as {spec.output_type.__name__}: {exc}"
-        ) from exc
+        type_name = getattr(spec.output_type, "__name__", str(spec.output_type))
+        raw = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+        snippet = (raw[:200] + "…") if len(raw) > 200 else raw
+        err = OutputValidationError(
+            f"Failed to parse output as {type_name}: {exc}",
+            hint=(
+                "Set output_repair=True on the Agent (default) to let the model "
+                "auto-correct, or pass an OutputRepairStrategy for custom retries."
+            ),
+            raw=snippet,
+            output_type_name=type_name,
+        )
+        raise err from exc
 
 
 def loads_lenient(text: str) -> Any:
@@ -121,4 +131,12 @@ def loads_lenient(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise OutputValidationError(f"Model output is not valid JSON: {exc}") from exc
+        snippet = (text[:200] + "…") if len(text) > 200 else text
+        raise OutputValidationError(
+            f"Model output is not valid JSON: {exc}",
+            hint=(
+                "Set output_repair=True on the Agent (default) to let the model "
+                "auto-correct, or pass an OutputRepairStrategy for custom retries."
+            ),
+            raw=snippet,
+        ) from exc

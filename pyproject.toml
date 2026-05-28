@@ -30,6 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0"]
 dotenv = ["python-dotenv>=1.0.0"]
+tools = ["duckduckgo-search>=6.0"]
 web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",

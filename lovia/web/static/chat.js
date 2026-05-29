@@ -104,6 +104,12 @@ function renderSessions() {
     item.append(main, menu);
     sessionsList.appendChild(item);
   }
+
+  // Keep the header in sync: if the active session now has a title, show it.
+  if (state.sessionId) {
+    const active = state.sessions.find((s) => s.id === state.sessionId);
+    if (active?.title) chatTitleEl.textContent = active.title;
+  }
 }
 
 async function renameSession(s) {
@@ -401,16 +407,20 @@ async function runStream(message) {
     let raw = "";
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
-      raw += dec.decode(value, { stream: true });
-      raw = raw.replace(/\r\n/g, "\n");
-      let idx;
-      while ((idx = raw.indexOf("\n\n")) >= 0) {
-        const chunk = raw.slice(0, idx);
-        raw = raw.slice(idx + 2);
-        const ev = parseSSE(chunk);
-        if (ev) handleEvent(ev);
+      // Process bytes before checking done — some browsers deliver the final
+      // chunk together with done: true (spec-violating but observed in practice).
+      if (value?.length) {
+        raw += dec.decode(value, { stream: !done });
+        raw = raw.replace(/\r\n/g, "\n");
+        let idx;
+        while ((idx = raw.indexOf("\n\n")) >= 0) {
+          const chunk = raw.slice(0, idx);
+          raw = raw.slice(idx + 2);
+          const ev = parseSSE(chunk);
+          if (ev) handleEvent(ev);
+        }
       }
+      if (done) break;
     }
   } catch (err) {
     ensureBody().textContent += `\n[error] ${err.message ?? err}`;
@@ -421,6 +431,9 @@ async function runStream(message) {
     promptEl.focus();
     refreshPanels();
     loadSessions();
+    // Background title generation may not be done yet; poll once more shortly.
+    const sid = state.sessionId;
+    setTimeout(() => { if (state.sessionId === sid) loadSessions(); }, 3000);
   }
 }
 

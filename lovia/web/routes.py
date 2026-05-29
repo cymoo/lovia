@@ -170,18 +170,13 @@ def build_router(
                 await approvals.release(sid)
 
             if is_new and generate_titles:
-                # Stream a "title" event when ready so the client updates
-                # the sidebar without polling.
-                try:
-                    model = title_model or agent.model
-                    title = await generate_title(req.message, final_output, model=model)
-                    await store.set_title(sid, title)
-                    yield {
-                        "event": "title",
-                        "data": json.dumps({"session_id": sid, "title": title}),
-                    }
-                except Exception as exc:  # pragma: no cover - defensive
-                    log.warning("title gen failed for %s: %s", sid, exc)
+                # Schedule title generation as a background task so it is not
+                # affected by SSE connection cancellation (e.g. the client
+                # navigates away while the LLM is still thinking).  The client
+                # picks up the stored title via the delayed loadSessions() poll.
+                asyncio.create_task(
+                    _schedule_title(sid, req.message, final_output, agent.name)
+                )
 
         return EventSourceResponse(gen())
 

@@ -19,7 +19,6 @@ import inspect
 import json
 from dataclasses import dataclass, field
 from typing import (
-    Annotated,
     Any,
     Awaitable,
     Callable,
@@ -28,7 +27,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
@@ -332,293 +331,13 @@ def _find_context_param(func: Callable[..., Any], sig: inspect.Signature) -> str
     return None
 
 
-from ..sandbox.errors import PermissionDeniedError, SandboxError  # noqa: E402
-from ..sandbox.local import LocalSandboxSession  # noqa: E402
-from ..sandbox.protocol import SandboxSession  # noqa: E402
-from ..sandbox.types import EditResult, SandboxMode  # noqa: E402
-
-
-def _sandbox_session(
-    *,
-    root: str | None = None,
-    session: SandboxSession | None = None,
-) -> SandboxSession:
-    if session is not None:
-        return session
-    return LocalSandboxSession(root=root or ".")
-
-
-def _deny_tool(name: str, message: str) -> Tool:
-    @tool(name=name, description=message)
-    async def _denied() -> dict[str, object]:
-        raise PermissionDeniedError(message)
-
-    return _denied
-
-
-async def _edit_exact(
-    session: SandboxSession,
-    path: str,
-    old: str,
-    new: str,
-) -> EditResult:
-    if old == "":
-        return EditResult(
-            ok=False,
-            path=path,
-            message="old must not be empty; read the file and provide an exact span",
-        )
-    current = await session.read_text(path)
-    text = current.content
-    if current.truncated:
-        return EditResult(
-            ok=False,
-            path=current.path,
-            message="file content was truncated; read a narrower range before editing",
-        )
-    count = text.count(old)
-    if count == 0:
-        return EditResult(
-            ok=False,
-            path=current.path,
-            message="old text not found; read the file again and retry with exact text",
-        )
-    if count > 1:
-        return EditResult(
-            ok=False,
-            path=current.path,
-            replacements=count,
-            message="old text matched multiple times; include more surrounding context",
-        )
-    if old == new:
-        return EditResult(ok=True, path=current.path, replacements=1, changed=False)
-    updated = text.replace(old, new, 1)
-    await session.write_text(current.path, updated)
-    return EditResult(ok=True, path=current.path, replacements=1, changed=True)
-
-
-def read_file(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-) -> Tool:
-    """Create a ``read_file`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="read_file",
-        description=(
-            "Read a UTF-8 text file from the sandbox. Paths must be relative to "
-            "the sandbox root. Use start/end line numbers for large files."
-        ),
-    )
-    async def _read_file(
-        path: Annotated[str, "Sandbox-relative file path."],
-        start: Annotated[
-            int | None,
-            Field(default=None, ge=1, description="1-based start line."),
-        ] = None,
-        end: Annotated[
-            int | None,
-            Field(default=None, ge=1, description="1-based inclusive end line."),
-        ] = None,
-    ) -> object:
-        return await sandbox.read_text(path, start=start, end=end)
-
-    return _read_file
-
-
-def write_file(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-) -> Tool:
-    """Create a ``write_file`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="write_file",
-        description=(
-            "Write a UTF-8 file inside the sandbox. Prefer edit_file for "
-            "targeted changes; use write_file for new files or full rewrites."
-        ),
-    )
-    async def _write_file(
-        path: Annotated[str, "Sandbox-relative file path."],
-        content: Annotated[str, "Full file content to write."],
-        create_only: Annotated[
-            bool,
-            Field(
-                default=False, description="If true, do not overwrite an existing file."
-            ),
-        ] = False,
-    ) -> object:
-        return await sandbox.write_text(path, content, create_only=create_only)
-
-    return _write_file
-
-
-def edit_file(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-) -> Tool:
-    """Create an ``edit_file`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="edit_file",
-        description=(
-            "Replace exactly one occurrence of old text in a sandbox file. "
-            "If no match or multiple matches are found, read the file and retry "
-            "with a more precise old span."
-        ),
-    )
-    async def _edit_file(
-        path: Annotated[str, "Sandbox-relative file path."],
-        old: Annotated[str, "Exact text to replace."],
-        new: Annotated[str, "Replacement text."],
-    ) -> object:
-        return await _edit_exact(sandbox, path, old, new)
-
-    return _edit_file
-
-
-def list_dir(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-) -> Tool:
-    """Create a ``list_dir`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="list_dir",
-        description="List direct children of a sandbox directory.",
-    )
-    async def _list_dir(
-        path: Annotated[str, "Sandbox-relative directory path."] = ".",
-        include_hidden: Annotated[
-            bool, Field(default=False, description="Include dotfiles/directories.")
-        ] = False,
-        max_results: Annotated[
-            int, Field(default=1_000, ge=1, description="Maximum entries.")
-        ] = 1_000,
-    ) -> object:
-        return await sandbox.list_dir(
-            path, include_hidden=include_hidden, max_results=max_results
-        )
-
-    return _list_dir
-
-
-def glob(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-) -> Tool:
-    """Create a ``glob`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="glob",
-        description=(
-            "Find sandbox paths matching a glob pattern. Hidden paths are "
-            "skipped by default."
-        ),
-    )
-    async def _glob(
-        pattern: Annotated[str, "Glob pattern relative to the sandbox root."],
-        include_hidden: Annotated[
-            bool, Field(default=False, description="Include dotfiles/directories.")
-        ] = False,
-        max_results: Annotated[
-            int, Field(default=1_000, ge=1, description="Maximum results.")
-        ] = 1_000,
-    ) -> list[str]:
-        return await sandbox.glob(
-            pattern, include_hidden=include_hidden, max_results=max_results
-        )
-
-    return _glob
-
-
-def shell(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-    needs_approval: bool = False,
-) -> Tool:
-    """Create a one-shot ``shell`` tool."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-
-    @tool(
-        name="shell",
-        description=(
-            "Run a one-shot non-interactive shell command in the sandbox. "
-            "cwd must be relative to the sandbox root. Local sandboxes are not "
-            "a hard security boundary; approved commands run as the host user."
-        ),
-        needs_approval=needs_approval,
-    )
-    async def _shell(
-        command: Annotated[str, "Shell command to run."],
-        cwd: Annotated[str, "Sandbox-relative working directory."] = ".",
-        timeout: Annotated[
-            float | None,
-            Field(default=None, description="Override timeout in seconds."),
-        ] = None,
-        reason: Annotated[
-            str | None,
-            Field(default=None, description="Optional reason shown in approval UI."),
-        ] = None,
-    ) -> object:
-        _ = reason
-        return await sandbox.run(command, cwd=cwd, timeout=timeout)
-
-    return _shell
-
-
-def coding_tools(
-    root: str | None = None,
-    *,
-    session: SandboxSession | None = None,
-    mode: SandboxMode = "coding",
-) -> list[Tool]:
-    """Return the standard coding tools bound to ``root`` or ``session``."""
-
-    sandbox = _sandbox_session(root=root, session=session)
-    if mode == "readonly":
-        return [
-            read_file(session=sandbox),
-            list_dir(session=sandbox),
-            glob(session=sandbox),
-        ]
-    if mode == "trusted":
-        shell_needs_approval = False
-    elif mode == "coding":
-        shell_needs_approval = True
-    else:
-        raise SandboxError(f"Unknown sandbox mode: {mode!r}")
-    return [
-        read_file(session=sandbox),
-        write_file(session=sandbox),
-        edit_file(session=sandbox),
-        list_dir(session=sandbox),
-        glob(session=sandbox),
-        shell(session=sandbox, needs_approval=shell_needs_approval),
-    ]
-
-
+from .coding_tools import coding_tools  # noqa: E402
+from .edit_file import edit_file  # noqa: E402
+from .glob import glob  # noqa: E402
 from .http import http_fetch  # noqa: E402
 from .human import HumanChannel, HumanQuestion, ask_human  # noqa: E402
-from . import http, human, search, think as think_module, time, todo  # noqa: E402
+from .list_dir import list_dir  # noqa: E402
+from .read_file import read_file  # noqa: E402
 from .search import (  # noqa: E402
     DuckDuckGoSearch,
     SearchResult,
@@ -626,12 +345,11 @@ from .search import (  # noqa: E402
     duckduckgo_search_tool,
     web_search,
 )
+from .shell import shell  # noqa: E402
 from .think import think  # noqa: E402
 from .time import now, sleep  # noqa: E402
 from .todo import Status, Todo, TodoList, todo_tools  # noqa: E402
-
-think_tool = think
-think = think_module
+from .write_file import write_file  # noqa: E402
 
 __all__ = [
     "ApprovalPredicate",
@@ -656,22 +374,16 @@ __all__ = [
     "duckduckgo_search_tool",
     "edit_file",
     "glob",
-    "http",
     "http_fetch",
-    "human",
     "list_dir",
     "now",
     "read_file",
     "render_tool_result",
     "run_tool",
-    "search",
     "shell",
     "sleep",
     "think",
-    "think_tool",
     "tool",
-    "time",
-    "todo",
     "todo_tools",
     "web_search",
     "write_file",

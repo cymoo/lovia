@@ -37,7 +37,6 @@ def create_app(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    audit_stream: Any | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
@@ -52,11 +51,6 @@ def create_app(
     * ``session`` — bring-your-own :class:`Session`; metadata kept in-memory.
     * neither — pure in-memory chats (lost on restart). Backward-compatible
       with the old signature.
-
-    Audit integration is optional:
-
-    * ``audit_stream`` — when set, the ``/api/sessions/.../audit`` endpoint
-      returns the per-session audit history published by external tool layers.
 
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
@@ -81,9 +75,9 @@ def create_app(
             chat_store,
             approvals,
             context_policy=context_policy,
-            audit_stream=audit_stream,
             title_model=title_model,
             generate_titles=generate_titles,
+            title=title,
         )
     )
     app.mount(
@@ -96,7 +90,6 @@ def create_app(
     app.state.session = chat_store.session
     app.state.approvals = approvals
     app.state.context_policy = context_policy
-    app.state.audit_stream = audit_stream
     return app
 
 
@@ -108,7 +101,6 @@ def serve(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    audit_stream: Any | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
@@ -128,7 +120,6 @@ def serve(
         db_path=db_path,
         session=session,
         store=store,
-        audit_stream=audit_stream,
         context_policy=context_policy,
         title_model=title_model,
         generate_titles=generate_titles,

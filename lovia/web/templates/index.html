@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <span class="brand-name">{{ title }}</span>
+        </div>
+        <button id="new-chat" class="btn btn-primary btn-sm" type="button" title="New chat">
+          +
+        </button>
+      </div>
+      <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
+      <div class="sidebar-foot">
+        <span id="agent-label" class="agent-label">-</span>
+      </div>
+    </aside>
+
+    <main class="page">
+      <header class="topbar">
+        <h1 id="chat-title" class="chat-title">New chat</h1>
+      </header>
+
+      <section id="transcript" class="transcript" aria-live="polite">
+        <div class="empty-state" id="empty-state">
+          <h2>How can I help?</h2>
+          <p>Ask a question, approve tools when needed, and keep the thread.</p>
+        </div>
+      </section>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="composer-inner">
+          <label class="vh" for="prompt">message</label>
+          <textarea
+            id="prompt"
+            name="prompt"
+            rows="1"
+            placeholder="Send a message..."
+            required
+          ></textarea>
+          <button id="send" class="btn btn-primary" type="submit" aria-label="Send">
+            Send
+          </button>
+        </div>
+        <p class="composer-hint">Enter to send · Shift+Enter for newline</p>
+      </form>
+    </main>
+
+    <template id="tmpl-turn">
+      <article class="turn">
+        <div class="avatar" aria-hidden="true"></div>
+        <div class="bubble">
+          <div class="meta">
+            <span class="role"></span>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <template id="tmpl-tool">
+      <details class="tool">
+        <summary>
+          <span class="tool-label">Tool</span>
+          <span class="tool-name"></span>
+          <span class="tool-args"></span>
+        </summary>
+        <pre class="tool-result"></pre>
+      </details>
+    </template>
+
+    <template id="tmpl-approval">
+      <div class="approval">
+        <div class="approval-head">Awaiting your decision</div>
+        <div class="approval-call">
+          <code class="approval-name"></code>
+          <pre class="approval-args"></pre>
+        </div>
+        <div class="approval-actions">
+          <button type="button" class="btn btn-ghost decline">Deny</button>
+          <button type="button" class="btn btn-primary approve">Approve</button>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="{{ url_for('static', path='chat.js') }}"></script>
+  </body>
+</html>

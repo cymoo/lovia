@@ -6,11 +6,13 @@ import os
 import asyncio
 
 from dotenv import load_dotenv
+from rich.console import Console
 
 from lovia import Agent, Runner, events
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+console = Console()
 
 
 async def main() -> None:
@@ -24,9 +26,11 @@ async def main() -> None:
     handle = Runner.stream(agent, "Tell me a 4-sentence story about a fox.")
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
-            print(ev.delta, end="", flush=True)
+            console.print(ev.delta, end="", soft_wrap=True, markup=False)
     result = await handle.result()
-    print(f"\n\n[done, turns={result.turns}, tokens={result.usage.output_tokens}]")
+    console.print(
+        f"\n[dim]done · turns={result.turns} · output tokens={result.usage.output_tokens}[/dim]"
+    )
 
 
 if __name__ == "__main__":

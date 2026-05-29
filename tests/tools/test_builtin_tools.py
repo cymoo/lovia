@@ -7,8 +7,12 @@ import sys
 
 import pytest
 
-from lovia.tools import http, search, think, time as time_b, todo
+from lovia.tools.http import http_fetch
 from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools.search import SearchResult, duckduckgo_search_tool, web_search
+from lovia.tools.think import think
+from lovia.tools.time import now, sleep
+from lovia.tools.todo import TodoList, todo_tools
 from lovia.exceptions import UserError
 from lovia.run_context import RunContext
 
@@ -21,8 +25,8 @@ def _ctx() -> RunContext:
 
 
 def test_http_tool_metadata() -> None:
-    assert http.http_fetch.name == "http_fetch"
-    assert "url" in http.http_fetch.parameters["properties"]
+    assert http_fetch.name == "http_fetch"
+    assert "url" in http_fetch.parameters["properties"]
 
 
 # ---------------------------------------------------------------- time
@@ -30,7 +34,7 @@ def test_http_tool_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_now_returns_iso() -> None:
-    result = await time_b.now.invoke({}, _ctx())
+    result = await now.invoke({}, _ctx())
     assert "T" in result and (
         result.endswith("+00:00") or "+" in result or "-" in result[10:]
     )
@@ -38,7 +42,7 @@ async def test_now_returns_iso() -> None:
 
 @pytest.mark.asyncio
 async def test_sleep_is_capped() -> None:
-    out = await time_b.sleep.invoke({"seconds": 0.01}, _ctx())
+    out = await sleep.invoke({"seconds": 0.01}, _ctx())
     assert "slept" in out
 
 
@@ -47,7 +51,7 @@ async def test_sleep_is_capped() -> None:
 
 @pytest.mark.asyncio
 async def test_think_echoes() -> None:
-    assert await think.think.invoke({"thought": "x"}, _ctx()) == "x"
+    assert await think.invoke({"thought": "x"}, _ctx()) == "x"
 
 
 # ---------------------------------------------------------------- todo
@@ -55,8 +59,8 @@ async def test_think_echoes() -> None:
 
 @pytest.mark.asyncio
 async def test_todo_lifecycle() -> None:
-    todos = todo.TodoList()
-    tools = {t.name: t for t in todo.todo_tools(todos)}
+    todos = TodoList()
+    tools = {t.name: t for t in todo_tools(todos)}
     tid = await tools["add_todo"].invoke({"title": "do it"}, _ctx())
     await tools["update_todo"].invoke({"id": tid, "status": "done"}, _ctx())
     rendered = await tools["list_todos"].invoke({}, _ctx())
@@ -70,9 +74,9 @@ async def test_todo_lifecycle() -> None:
 async def test_web_search_with_custom_backend() -> None:
     class Stub:
         async def search(self, query: str, *, max_results: int = 5):  # type: ignore[no-untyped-def]
-            return [search.SearchResult(title="t", url="https://x", snippet="s")]
+            return [SearchResult(title="t", url="https://x", snippet="s")]
 
-    s = search.web_search(Stub())
+    s = web_search(Stub())
     out = await s.invoke({"query": "x"}, _ctx())
     assert out == [{"title": "t", "url": "https://x", "snippet": "s"}]
 
@@ -91,7 +95,7 @@ def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) 
         ),
     )
     with pytest.raises(UserError) as exc_info:
-        search.duckduckgo_search_tool()
+        duckduckgo_search_tool()
     assert "lovia[tools]" in str(exc_info.value)
 
 

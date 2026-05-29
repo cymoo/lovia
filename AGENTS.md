@@ -33,7 +33,7 @@ Requires Python 3.10+.
 lovia/
   agent.py       # Agent dataclass (the main user-facing config)
   runner.py      # Runner — orchestrates the agent loop
-  tools.py       # @tool decorator and Tool type
+  tools/         # @tool decorator, Tool type, and opt-in tool factories
   messages.py    # ChatMessage, ToolCall, Usage types
   events.py      # Streaming event types
   output.py      # Structured output handling
@@ -49,8 +49,6 @@ lovia/
   stores/        # Session and memory store implementations
   sandbox/       # Filesystem + process sandbox (Sandbox.local,
                  #   SandboxBackend/SandboxSession protocols)
-  tools/         # @tool/Tool plus opt-in tools (http, search, todo, human,
-                 #   think, time, filesystem, shell)
   web/           # Optional FastAPI + SSE layer and bundled chat UI
                  #   (decoupled from core; only loaded when lovia[web] is used)
 ```
@@ -80,7 +78,7 @@ lovia is built around four words. When in doubt, optimise for the one earlier in
 1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools/`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
 2. **Lightweight (轻量).** Core has exactly two hard dependencies: `httpx` and `pydantic`. Every other capability — MCP, web UI, DuckDuckGo, etc. — is an opt-in extra and only imported when the user asks for it. `import lovia` must stay cheap.
 3. **Extensible (易扩展).** Public surfaces are dataclasses, Protocols, and `@decorator` hooks — not subclasses you must inherit from. Providers, sessions, memory stores, web-search backends, and hooks are all Protocol-based; users plug in their own implementations without monkey-patching.
-4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, todo, human-in-the-loop, think, time, filesystem, shell), and `lovia.sandbox.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Users either grab them as-is or copy the pattern.
+4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, todo, human-in-the-loop, think, time, filesystem, shell), and `lovia.sandbox.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
 
 A few corollaries that follow from these:
 

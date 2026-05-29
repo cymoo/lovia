@@ -25,6 +25,14 @@ class ChatResponse(BaseModel):
     usage: dict[str, int]
 
 
+class MarkdownRequest(BaseModel):
+    text: str = Field(max_length=200_000)
+
+
+class MarkdownResponse(BaseModel):
+    html: str
+
+
 class ApprovalRequest(BaseModel):
     session_id: str
     call_id: str
@@ -58,12 +66,3 @@ class ChatSessionInfo(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
-
-
-class AuditEntry(BaseModel):
-    timestamp: float
-    agent_name: str
-    tool_name: str
-    command: str
-    verdict: Literal["pass", "warn", "block"]
-    reason: str = ""

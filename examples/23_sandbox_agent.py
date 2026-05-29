@@ -11,13 +11,15 @@ import asyncio
 import os
 
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.panel import Panel
 
 from lovia import Agent, Runner, events
 from lovia.sandbox import Sandbox
 
 load_dotenv()
-
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+console = Console()
 
 
 async def main() -> None:
@@ -32,19 +34,26 @@ async def main() -> None:
     )
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
-            print(ev.delta, end="", flush=True)
+            console.print(ev.delta, end="", soft_wrap=True, markup=False)
         elif isinstance(ev, events.ToolCallStarted):
-            print(f"\n[tool] {ev.call.name}({ev.call.arguments})", flush=True)
+            console.print(f"\n[cyan]tool[/cyan] {ev.call.name}({ev.call.arguments})")
         elif isinstance(ev, events.ToolCallCompleted):
             status = "error" if ev.is_error else "done"
-            print(f"[tool:{status}] {ev.call.name}", flush=True)
+            style = "red" if ev.is_error else "green"
+            console.print(f"[{style}]tool:{status}[/{style}] {ev.call.name}")
         elif isinstance(ev, events.ApprovalRequired):
-            print(f"\n[approval needed] {ev.call.name}({ev.call.arguments})")
-            answer = input("approve? [y/N] ").strip().lower()
+            console.print(
+                Panel(
+                    f"{ev.call.name}({ev.call.arguments})",
+                    title="Approval needed",
+                    border_style="yellow",
+                )
+            )
+            answer = console.input("approve? [y/N] ").strip().lower()
             ev.approve() if answer == "y" else ev.reject()
 
     result = await handle.result()
-    print(f"\n\n[done, turns={result.turns}]")
+    console.print(f"\n[dim]done · turns={result.turns}[/dim]")
 
 
 if __name__ == "__main__":

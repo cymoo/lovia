@@ -7,6 +7,7 @@ import pytest
 from lovia import Agent, RunContext
 from lovia.sandbox import PathOutsideSandboxError
 from lovia.tools import coding_tools
+from lovia.tools.read_file import read_file
 
 from tests.scripted_provider import ScriptedProvider
 
@@ -128,3 +129,16 @@ def test_tool_results_render_as_json_for_models(tmp_path) -> None:
     schemas = {t.name: t.openai_schema() for t in tools}
     assert "read_file" in schemas
     json.dumps(schemas)
+
+
+def test_split_tool_modules_keep_factory_exports(tmp_path) -> None:
+    import importlib
+
+    import lovia.tools
+
+    read_file_module = importlib.import_module("lovia.tools.read_file")
+
+    assert callable(read_file)
+    assert callable(read_file_module.read_file)
+    assert callable(lovia.tools.read_file)
+    assert lovia.tools.read_file(root=str(tmp_path)).name == "read_file"

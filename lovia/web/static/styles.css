@@ -27,7 +27,6 @@
   --shadow-lg: 0 10px 30px -10px rgba(28, 25, 23, 0.12),
     0 4px 10px -6px rgba(28, 25, 23, 0.08);
   --sidebar-w: 260px;
-  --right-w: 320px;
 }
 
 * { box-sizing: border-box; }
@@ -43,8 +42,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   height: 100vh;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr var(--right-w);
-  grid-template-areas: "left main right";
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-areas: "left main";
   overflow: hidden;
 }
 
@@ -61,13 +60,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   min-width: 0;
   overflow: hidden;
 }
-.sidebar-left { grid-area: left; }
-.sidebar-right {
-  grid-area: right;
-  border-right: none;
-  border-left: 1px solid var(--border);
-}
-.sidebar-right.collapsed { display: none; }
+.sidebar { grid-area: left; }
 
 .sidebar-head {
   display: flex;
@@ -213,9 +206,26 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .turn .bubble { flex: 1; min-width: 0; }
 .turn .meta { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .turn .body {
-  white-space: pre-wrap;
   word-wrap: break-word;
   color: var(--ink);
+}
+.turn .body > :first-child { margin-top: 0; }
+.turn .body > :last-child { margin-bottom: 0; }
+.turn .body pre {
+  overflow-x: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.turn .body code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+.turn .body :not(pre) > code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 .turn.assistant.streaming .body::after {
   content: "▍";
@@ -371,111 +381,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .btn-sm { padding: 6px 10px; font-size: 13px; }
 #send { padding: 8px 10px; }
 
-/* ===================================================== right panel: tabs */
-.panel-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-}
-.tab {
-  flex: 1;
-  padding: 12px 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--muted);
-  border-bottom: 2px solid transparent;
-}
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-.panel {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-}
-.panel-empty {
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-  padding: 32px 12px;
-}
-
-/* files */
-.file-row {
-  display: grid;
-  grid-template-columns: 22px 1fr auto;
-  gap: 8px;
-  width: 100%;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: 6px;
-  text-align: left;
-  font-size: 13px;
-  color: var(--ink-2);
-}
-.file-row:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
-.file-row:disabled { cursor: default; color: var(--muted); }
-.file-name {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.file-size { font-size: 11px; color: var(--muted); }
-.file-icon { text-align: center; }
-
-/* audit */
-.audit-row {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  background: var(--surface);
-}
-.audit-head {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 11px;
-  margin-bottom: 6px;
-}
-.audit-badge {
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-weight: 600;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-}
-.audit-rule {
-  font-family: var(--mono);
-  color: var(--muted);
-}
-.audit-time { margin-left: auto; color: var(--muted); }
-.audit-cmd {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  color: var(--ink);
-  max-height: 6em;
-  overflow-y: auto;
-}
-.audit-reason {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 4px;
-}
-.decision-pass { border-left: 3px solid var(--ok); }
-.decision-pass .audit-badge { background: #dcfce7; color: var(--ok); }
-.decision-warn { border-left: 3px solid var(--warn); }
-.decision-warn .audit-badge { background: var(--warn-soft); color: var(--warn); }
-.decision-block { border-left: 3px solid var(--danger); }
-.decision-block .audit-badge { background: #fee2e2; color: var(--danger); }
-
-
 /* ==================================================== responsive collapse */
 @media (max-width: 1080px) {
   body { grid-template-columns: var(--sidebar-w) 1fr; }
-  .sidebar-right { display: none; }
 }
 @media (max-width: 720px) {
   body { grid-template-columns: 1fr; }
-  .sidebar-left { display: none; }
+  .sidebar { display: none; }
 }

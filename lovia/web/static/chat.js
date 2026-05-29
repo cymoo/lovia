@@ -12,9 +12,6 @@ const agentLabel = $("#agent-label");
 const newChatBtn = $("#new-chat");
 const sessionsList = $("#sessions-list");
 const chatTitleEl = $("#chat-title");
-const toggleRight = $("#toggle-right");
-const sidebarRight = $("#sidebar-right");
-const panelAudit = $("#panel-audit");
 
 const state = {
   sessionId: null,
@@ -25,7 +22,6 @@ const state = {
   bubble: null,
   body: null,
   toolNodes: new Map(),
-  panelTimer: null,
 };
 
 // --------------------------------------------------------------- agents -
@@ -149,12 +145,11 @@ async function switchSession(id) {
     if (!res.ok) throw new Error(res.statusText);
     const data = await res.json();
     chatTitleEl.textContent = data.title || "New chat";
-    renderHistory(data.items || []);
+    await renderHistory(data.items || []);
   } catch (err) {
     transcript.innerHTML = `<div class="empty-state"><h2>Couldn't load chat</h2><p>${err.message ?? err}</p></div>`;
   }
   renderSessions();
-  refreshPanels();
 }
 
 function clearChat() {
@@ -165,10 +160,9 @@ function clearChat() {
   chatTitleEl.textContent = "New chat";
   transcript.innerHTML = `
     <div class="empty-state" id="empty-state">
-      <h2>How can I help you today?</h2>
-      <p>Ask anything — I'll think it through and respond.</p>
+      <h2>How can I help?</h2>
+      <p>Ask a question, approve tools when needed, and keep the thread.</p>
     </div>`;
-  refreshPanels();
 }
 
 newChatBtn.addEventListener("click", () => {
@@ -178,7 +172,7 @@ newChatBtn.addEventListener("click", () => {
 
 // ------------------------------------------------ history rendering ----
 
-function renderHistory(items) {
+async function renderHistory(items) {
   transcript.innerHTML = "";
   state.bubble = null;
   state.body = null;
@@ -207,14 +201,13 @@ function renderHistory(items) {
         body.className = "body";
         body.textContent = text;
         currentBubble.appendChild(body);
+        await renderMarkdownElement(body);
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
-          if (result !== undefined) {
-            node.querySelector(".tool-result").textContent = result;
-          }
+          if (result !== undefined) node.querySelector(".tool-result").textContent = result;
           currentBubble.appendChild(node);
         }
       }
@@ -415,7 +408,7 @@ async function runStream(message) {
           const chunk = raw.slice(0, idx);
           raw = raw.slice(idx + 2);
           const ev = parseSSE(chunk);
-          if (ev) handleEvent(ev);
+          if (ev) await handleEvent(ev);
         }
       }
       if (done) break;
@@ -427,7 +420,6 @@ async function runStream(message) {
     state.streaming = false;
     sendBtn.disabled = false;
     promptEl.focus();
-    refreshPanels();
     loadSessions();
     // Background title generation may not be done yet; poll once more shortly.
     const sid = state.sessionId;
@@ -454,7 +446,7 @@ function parseSSE(chunk) {
   }
 }
 
-function handleEvent({ event, data }) {
+async function handleEvent({ event, data }) {
   switch (event) {
     case "session":
       state.sessionId = data.session_id;
@@ -464,16 +456,14 @@ function handleEvent({ event, data }) {
       scrollDown();
       break;
     case "message_completed":
+      if (state.body) await renderMarkdownElement(state.body);
       state.body = null;
       break;
     case "tool_call":
       appendTool(data);
-      // A tool call usually means new audit entries.
-      schedulePanelRefresh();
       break;
     case "tool_result":
       updateToolResult(data.id, data.result, data.is_error);
-      schedulePanelRefresh();
       break;
     case "approval_required":
       appendApproval(data);
@@ -492,79 +482,24 @@ function handleEvent({ event, data }) {
   }
 }
 
-// --------------------------------------------------- right panel: audit
+// ----------------------------------------------------------- markdown -
 
-function schedulePanelRefresh() {
-  if (state.panelTimer) return;
-  state.panelTimer = setTimeout(() => {
-    state.panelTimer = null;
-    refreshPanels();
-  }, 400);
-}
-
-async function refreshPanels() {
-  if (!state.sessionId) {
-    panelAudit.innerHTML = '<div class="panel-empty">No audited commands.</div>';
-    return;
-  }
-  await refreshAudit();
-}
-
-async function refreshAudit() {
+async function renderMarkdownElement(el) {
+  const text = el.textContent || "";
+  if (!text.trim()) return;
   try {
-    const res = await fetch(`/api/sessions/${state.sessionId}/audit`);
-    if (!res.ok) {
-      panelAudit.innerHTML = '<div class="panel-empty">No audit log.</div>';
-      return;
-    }
-    const entries = await res.json();
-    renderAudit(entries);
-  } catch {
-    panelAudit.innerHTML = '<div class="panel-empty">Audit unavailable.</div>';
+    const res = await fetch("/api/markdown", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    el.innerHTML = data.html;
+  } catch (err) {
+    console.error("markdown:", err);
   }
 }
-
-function renderAudit(entries) {
-  if (!entries.length) {
-    panelAudit.innerHTML = '<div class="panel-empty">No audited commands.</div>';
-    return;
-  }
-  panelAudit.innerHTML = "";
-  for (const e of [...entries].reverse()) {
-    const row = document.createElement("div");
-    row.className = `audit-row decision-${e.verdict}`;
-    row.innerHTML = `
-      <div class="audit-head">
-        <span class="audit-badge"></span>
-        <span class="audit-rule"></span>
-        <span class="audit-time"></span>
-      </div>
-      <pre class="audit-cmd"></pre>
-      <div class="audit-reason"></div>`;
-    row.querySelector(".audit-badge").textContent = e.verdict.toUpperCase();
-    row.querySelector(".audit-rule").textContent = e.tool_name || "—";
-    row.querySelector(".audit-time").textContent = formatTime(e.timestamp);
-    row.querySelector(".audit-cmd").textContent = e.command;
-    const reason = row.querySelector(".audit-reason");
-    if (e.reason) reason.textContent = e.reason;
-    else reason.remove();
-    panelAudit.appendChild(row);
-  }
-}
-
-// ---------------------------------------------------- panel tab toggle -
-
-$$(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    $$(".tab").forEach((t) => t.classList.toggle("active", t === tab));
-    const name = tab.dataset.tab;
-    panelAudit.classList.toggle("hidden", name !== "audit");
-  });
-});
-
-toggleRight.addEventListener("click", () => {
-  sidebarRight.classList.toggle("collapsed");
-});
 
 // ----------------------------------------------------------- utilities -
 

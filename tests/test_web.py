@@ -74,6 +74,19 @@ def test_list_agents_single() -> None:
     assert data == [{"name": "writer", "instructions": "be helpful", "tools": []}]
 
 
+def test_markdown_endpoint_renders_and_escapes_html() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))
+    res = c.post(
+        "/api/markdown",
+        json={"text": "**bold**\n\n<script>alert(1)</script>"},
+    )
+    assert res.status_code == 200
+    html = res.json()["html"]
+    assert "<strong>bold</strong>" in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
 def test_list_agents_multi_and_pick() -> None:
     a = _make_agent([text("a")])
     b = _make_agent([text("b")])

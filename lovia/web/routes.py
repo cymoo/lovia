@@ -11,7 +11,7 @@ from typing import Any
 
 try:
     from fastapi import APIRouter, HTTPException, Request
-    from fastapi.responses import FileResponse
+    from fastapi.templating import Jinja2Templates
     from sse_starlette.sse import EventSourceResponse
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -27,21 +27,23 @@ from .approvals import ApprovalRegistry
 from .schemas import (
     AgentInfo,
     ApprovalRequest,
-    AuditEntry,
     ChatRequest,
     ChatResponse,
     ChatSessionInfo,
+    MarkdownRequest,
+    MarkdownResponse,
     MessageOut,
     RenameRequest,
     SessionDetail,
 )
+from .markdown import render_markdown
 from .sse import _coerce, event_to_sse
 from .store import ChatStore
 from .titles import generate_title
 
 log = logging.getLogger(__name__)
 
-_STATIC = Path(__file__).parent / "static"
+_TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 def build_router(
@@ -50,9 +52,9 @@ def build_router(
     approvals: ApprovalRegistry,
     *,
     context_policy: ContextPolicy | None = None,
-    audit_stream: Any | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
+    title: str = "lovia",
 ) -> APIRouter:
     router = APIRouter()
     session = store.session
@@ -83,8 +85,8 @@ def build_router(
     # ---- static UI ------------------------------------------------------
 
     @router.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(_STATIC / "index.html")
+    async def index(request: Request) -> Any:
+        return _TEMPLATES.TemplateResponse(request, "index.html", {"title": title})
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -104,6 +106,10 @@ def build_router(
             )
             for name, agent in agents.items()
         ]
+
+    @router.post("/api/markdown", response_model=MarkdownResponse)
+    async def markdown(req: MarkdownRequest) -> MarkdownResponse:
+        return MarkdownResponse(html=render_markdown(req.text))
 
     # ---- chat -----------------------------------------------------------
 
@@ -241,24 +247,5 @@ def build_router(
     async def delete_session(session_id: str) -> dict[str, bool]:
         await store.delete(session_id)
         return {"ok": True}
-
-    # ---- audit ----------------------------------------------------------
-
-    @router.get("/api/sessions/{session_id}/audit", response_model=list[AuditEntry])
-    async def get_audit(session_id: str) -> list[AuditEntry]:
-        if audit_stream is None:
-            return []
-        return [
-            AuditEntry(
-                timestamp=r.timestamp,
-                agent_name=r.agent_name,
-                tool_name=r.tool_name,
-                command=r.command,
-                verdict=r.verdict,
-                reason=r.reason,
-            )
-            for r in audit_stream.history()
-            if r.session_id == session_id
-        ]
 
     return router

@@ -1,6 +1,6 @@
 # `lovia.tools` examples
 
-One self-contained snippet per built-in. Each is a runnable Python file
+One self-contained snippet per tool. Each is a runnable Python file
 that depends only on a model API key (most use OpenAI by default).
 
 | File | Tool |

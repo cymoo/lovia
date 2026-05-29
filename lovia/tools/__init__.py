@@ -32,7 +32,6 @@ from pydantic import BaseModel
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
-
 # Predicate that may inspect the parsed arguments and current context to decide
 # whether a tool invocation needs human approval.
 ApprovalPredicate = Callable[[dict[str, Any], "RunContext"], bool]
@@ -346,7 +345,6 @@ from .search import (  # noqa: E402
     web_search,
 )
 from .shell import shell  # noqa: E402
-from .think import think  # noqa: E402
 from .time import now, sleep  # noqa: E402
 from .todo import Status, Todo, TodoList, todo_tools  # noqa: E402
 from .write_file import write_file  # noqa: E402

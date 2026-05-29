@@ -361,7 +361,6 @@ from lovia.tools.search import duckduckgo_search_tool
 from lovia.tools.todo import TodoList, todo_tools
 from lovia.tools.human import HumanChannel, ask_human
 from lovia.tools.time import now
-from lovia.tools.think import think
 
 todos = TodoList()
 agent = Agent(
@@ -372,7 +371,6 @@ agent = Agent(
         duckduckgo_search_tool(),
         *todo_tools(todos),
         now,
-        think,
     ],
 )
 ```

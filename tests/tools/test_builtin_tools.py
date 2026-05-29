@@ -10,7 +10,6 @@ import pytest
 from lovia.tools.http import http_fetch
 from lovia.tools.human import HumanChannel, ask_human
 from lovia.tools.search import SearchResult, duckduckgo_search_tool, web_search
-from lovia.tools.think import think
 from lovia.tools.time import now, sleep
 from lovia.tools.todo import TodoList, todo_tools
 from lovia.exceptions import UserError
@@ -44,14 +43,6 @@ async def test_now_returns_iso() -> None:
 async def test_sleep_is_capped() -> None:
     out = await sleep.invoke({"seconds": 0.01}, _ctx())
     assert "slept" in out
-
-
-# ---------------------------------------------------------------- think
-
-
-@pytest.mark.asyncio
-async def test_think_echoes() -> None:
-    assert await think.invoke({"thought": "x"}, _ctx()) == "x"
 
 
 # ---------------------------------------------------------------- todo

@@ -1,12 +1,16 @@
 # lovia
 
-轻量、异步优先的 Python Agent 框架。核心只有两个依赖：`httpx` 和 `pydantic`。
+一个不挡路的 Python Agent 框架。
 
 ```bash
 pip install lovia
 ```
 
 ```python
+# 在环境变量或 .env 中配置一次：
+# OPENAI_BASE_URL=https://api.deepseek.com
+# OPENAI_API_KEY=sk-your-key
+
 import asyncio
 from lovia import Agent, Runner, tool
 
@@ -21,7 +25,7 @@ async def main() -> None:
     agent = Agent(
         name="calc",
         instructions="简短回答，需要时调用工具。",
-        model="openai:deepseek-v4-pro",
+        model="deepseek-v4-pro",
         tools=[add],
     )
     result = await Runner.run(agent, "2 + 3 等于几？")
@@ -33,9 +37,21 @@ asyncio.run(main())
 
 ---
 
+## 为什么是 lovia？
+
+LLM Agent 框架不少，lovia 的取舍如下：
+
+- 🪶 **概念极简** — Agent、Runner、tool，整个心智模型一页纸讲完。
+- 🔌 **模型中立** — OpenAI、Anthropic、任何 OpenAI 兼容接口，一行代码切换。
+- 🧩 **扩展无需继承** — 全程 Protocol 和 dataclass，自定义 session store、memory 或 provider，不用动框架内部。
+- ✂️ **默认极轻** — 只有 `httpx` 和 `pydantic` 是必须的，Web UI、MCP、搜索和编排全是可选项。
+- 🛡️ **生产级原语** — 护栏、审批门控、生命周期钩子、沙箱化的文件/Shell 工具——需要时都在，用不到时不存在。
+
+---
+
 ## 定义 Agent
 
-`Agent` 是一个普通的 dataclass，不需要继承任何基类：
+`Agent` 是普通的 dataclass，不需要继承任何基类：
 
 ```python
 from lovia import Agent
@@ -43,7 +59,7 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="回答要简洁、有说服力。",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
 )
 ```
 
@@ -51,17 +67,17 @@ agent = Agent(
 
 ```python
 @agent.system_prompt
-async def inject_user_tier(ctx) -> str:
+async def add_context(ctx) -> str:
     return f"用户等级：{ctx.context['tier']}"
 ```
 
-需要变体？克隆一份，原始 agent 不受影响：
+需要临时变体？克隆一份，原始 agent 不受影响：
 
 ```python
 strict = agent.clone(instructions="必须引用来源。", output_type=Report)
 ```
 
-## 运行 Agent
+## Runner
 
 ```python
 from lovia import Runner
@@ -70,7 +86,7 @@ result = await Runner.run(agent, "写一段 release note。")
 print(result.output)
 ```
 
-流式输出会返回类型化事件：
+流式输出实时返回类型化事件：
 
 ```python
 from lovia import events
@@ -83,7 +99,7 @@ async for ev in handle:
 result = await handle.result()
 ```
 
-脚本场景可以用同步包装器：
+脚本场景用同步包装器：
 
 ```python
 result = Runner.run_sync(agent, "帮我总结一下。")
@@ -91,7 +107,8 @@ result = Runner.run_sync(agent, "帮我总结一下。")
 
 ## 工具
 
-任意带类型注解的 Python 函数都可以变成工具：
+任意带类型注解的 Python 函数都能成为工具。lovia 会自动从类型注解、docstring 和
+`Annotated`/`Field` 元数据生成 JSON Schema：
 
 ```python
 from typing import Annotated
@@ -114,8 +131,6 @@ async def search_docs(
     ...
 ```
 
-lovia 会从类型注解、docstring 和 `Annotated`/`Field` 元数据自动生成 JSON Schema。
-
 ### 工具审批
 
 敏感工具可以要求在执行前得到明确批准：
@@ -136,43 +151,65 @@ agent = Agent(
 )
 ```
 
-流式模式下 Runner 会发出 `ApprovalRequired` 事件，由你的 UI 或 CLI 来决定：
+流式模式下 Runner 发出 `ApprovalRequired` 事件，由你的 UI 来决定：
 
 ```python
 async for ev in handle:
     if isinstance(ev, events.ApprovalRequired):
-        ev.approve()   # 或 ev.deny("不允许此操作")
+        ev.approve()   # 或 ev.deny("原因")
+```
+
+## 结构化输出
+
+传入 Pydantic 模型即可得到校验后的类型化输出：
+
+```python
+from pydantic import BaseModel
+
+
+class Summary(BaseModel):
+    title: str
+    bullets: list[str]
+
+
+agent = Agent(
+    name="summarizer",
+    model="deepseek-v4-pro",
+    output_type=Summary,
+)
+result = await Runner.run(agent, "用三条要点总结 lovia。")
+print(result.output.title)
+```
+
+每次调用可以临时覆盖输出类型，不影响 agent 配置：
+
+```python
+result = await Runner.run(agent, "给我一个 JSON 摘要。", output_type=Summary)
 ```
 
 ## 多 Agent：Handoff 与组合
 
 ### Handoff（移交控制权）
 
-分诊 agent 把请求路由到专项 agent：
-
-```python
-from lovia import Agent
-from lovia.handoff import Handoff
-
-billing = Agent(name="billing", instructions="处理账单问题。", model="openai:deepseek-v4-pro")
-support = Agent(name="support", instructions="处理技术故障。", model="openai:deepseek-v4-pro")
-
-triage = Agent(
-    name="triage",
-    instructions="把问题路由到合适的专项 agent。",
-    model="openai:deepseek-v4-pro",
-    handoffs=[billing, support],
-)
-
-result = await Runner.run(triage, "我被重复扣款了。")
-```
-
-Handoff 时对话历史是共享的。可以用 `input_filter` 在新 agent 接手前清理过期的工具调用：
+分诊 agent 把请求无缝路由到专项 agent：
 
 ```python
 from lovia.handoff import Handoff, drop_stale_tool_calls
 
-Handoff(target=billing, input_filter=drop_stale_tool_calls)
+billing = Agent(name="billing", instructions="处理账单问题。", model="deepseek-v4-pro")
+support = Agent(name="support", instructions="处理技术故障。", model="deepseek-v4-pro")
+
+triage = Agent(
+    name="triage",
+    instructions="把问题路由到合适的专项 agent。",
+    model="deepseek-v4-pro",
+    handoffs=[
+        Handoff(target=billing, input_filter=drop_stale_tool_calls),
+        Handoff(target=support, input_filter=drop_stale_tool_calls),
+    ],
+)
+
+result = await Runner.run(triage, "我被重复扣款了。")
 ```
 
 ### Agent 作为工具
@@ -180,27 +217,27 @@ Handoff(target=billing, input_filter=drop_stale_tool_calls)
 把 agent 包装成工具，让父级 agent 把子任务委托出去：
 
 ```python
-summarizer = Agent(name="summarizer", instructions="总结文本。", model="openai:deepseek-v4-pro")
+summarizer = Agent(name="summarizer", instructions="总结文本。", model="deepseek-v4-pro")
 
 orchestrator = Agent(
     name="orchestrator",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[summarizer.as_tool(description="总结一段文本。")],
 )
 ```
 
-子 agent 在独立的子循环中运行，输出作为工具调用结果返回给父级。
+子 agent 在独立子循环中运行，最终输出作为工具调用结果返回。
 
-## Human in the loop（人工介入）
+## Human in the loop
 
 ### 审批门控
 
-给工具设置 `needs_approval=True`，Runner 会暂停执行，直到审批通过或被拒绝。
-审批可以由流式消费者、Web handler 或 agent 上的 `approval_handler` 来决定。
+给工具设置 `needs_approval=True`，Runner 会暂停执行，直到审批通过或被拒绝——
+由流式消费者、Web handler 或 agent 的 `approval_handler` 来决定。
 
 ### 主动提问
 
-`ask_human` 让模型在需要时主动向操作员请求输入：
+`ask_human` 让模型在需要时显式向操作员请求输入：
 
 ```python
 from lovia.tools.human import HumanChannel, ask_human
@@ -208,18 +245,18 @@ from lovia.tools.human import HumanChannel, ask_human
 channel = HumanChannel()
 agent = Agent(
     name="assistant",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[ask_human(channel)],
 )
 
-# 在你的 UI 或驱动循环中响应问题：
+# 在你的 UI 或事件循环中响应：
 for q in channel.pending:
     channel.answer(q.id, "请选择方案 A。")
 ```
 
 ## Hooks（生命周期钩子）
 
-`AgentHooks` 是一个事件订阅器，在 Agent 运行的各阶段触发：
+`AgentHooks` 在运行各阶段触发，适合日志、监控、调试：
 
 ```python
 from lovia.hooks import AgentHooks
@@ -242,7 +279,7 @@ Handler 可以是同步或异步函数，两者都支持。
 
 ## Guardrails（护栏）
 
-在运行开始前（input）或结束后（output）执行检查的异步函数：
+在运行前（input）或结束后（output）执行检查的异步函数：
 
 ```python
 from lovia.exceptions import GuardrailTripped
@@ -261,45 +298,17 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     input_guardrails=[no_pii],
     output_guardrails=[must_cite],
 )
 ```
 
-返回 `None`（或 `False`）表示检查通过。
+返回 `None` 或 `False` 表示检查通过。
 
-## 结构化输出
+## 会话与记忆
 
-传入 Pydantic 模型即可得到校验后的类型化输出：
-
-```python
-from pydantic import BaseModel
-
-
-class Summary(BaseModel):
-    title: str
-    bullets: list[str]
-
-
-agent = Agent(
-    name="summarizer",
-    model="openai:deepseek-v4-pro",
-    output_type=Summary,
-)
-result = await Runner.run(agent, "用三条要点总结 lovia。")
-print(result.output.title)
-```
-
-每次调用可以临时覆盖输出类型，不影响 agent 配置：
-
-```python
-result = await Runner.run(agent, "给我一个 JSON 摘要。", output_type=Summary)
-```
-
-## 会话与长对话
-
-会话可以跨多次调用保留对话上下文：
+跨多次调用保留对话上下文：
 
 ```python
 from lovia.stores import SQLiteSession
@@ -309,7 +318,7 @@ await Runner.run(agent, "我的项目叫 Atlas。", session=session, session_id=
 await Runner.run(agent, "我的项目叫什么？",  session=session, session_id="u1")
 ```
 
-长对话接近模型窗口上限时，context policy 会自动压缩旧消息：
+长对话接近上下文窗口上限时，context policy 会自动压缩旧消息：
 
 ```python
 from lovia import SummarizingContextPolicy
@@ -320,7 +329,7 @@ result = await Runner.run(agent, "继续。", context_policy=policy)
 
 ## Skills（技能库）
 
-Skill 是文件驱动的提示片段，按需加载——适合不需要一直占用上下文窗口的大型领域知识：
+按需加载的文件驱动提示片段——适合不需要一直占用上下文窗口的大型领域知识：
 
 ```python
 from lovia.skills import SkillCatalog
@@ -329,13 +338,13 @@ catalog = SkillCatalog("skills/", mode="lazy")   # 或 mode="eager"
 
 agent = Agent(
     name="support",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     skills=catalog,
 )
 ```
 
 每个 skill 是一个目录，包含带 YAML frontmatter 的 `SKILL.md`。
-lazy 模式下模型按需调用 `load_skill(name)`；eager 模式下所有 skill 在启动时内联进系统提示。
+`lazy` 模式下模型按需调用 `load_skill(name)`；`eager` 模式下所有 skill 在启动时内联。
 
 ## 内置工具
 
@@ -352,7 +361,7 @@ from lovia.tools.think import think
 todos = TodoList()
 agent = Agent(
     name="assistant",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[
         http_fetch,
         duckduckgo_search_tool(),
@@ -376,19 +385,19 @@ from lovia.sandbox import Sandbox
 agent = Agent(
     name="coder",
     instructions="做精准、有限的代码修改。",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     sandbox=Sandbox.local(".", mode="coding"),
 )
 ```
 
 | 模式 | 可用工具 |
 | --- | --- |
-| `"readonly"` | read_file、list_dir、glob |
-| `"coding"` | read_file、write_file、edit_file、list_dir、glob + shell（需审批） |
+| `"readonly"` | read\_file、list\_dir、glob |
+| `"coding"` | read\_file、write\_file、edit\_file、list\_dir、glob + shell（需审批） |
 | `"trusted"` | 以上全部，shell 无需审批 |
 
-本地 sandbox 只接受相对路径，会拒绝绝对路径、`..` 逃逸和符号链接逃逸。
-注意：本地 shell 仍以当前系统用户执行，这是一个便利边界，不是强安全沙箱。
+本地 sandbox 只接受相对路径，拒绝绝对路径、`..` 逃逸和符号链接逃逸。
+注意：本地 shell 仍以当前系统用户执行，这是便利边界，不是强安全沙箱。
 
 也可以直接使用工具 factory：
 
@@ -397,14 +406,14 @@ from lovia.tools import coding_tools
 
 agent = Agent(
     name="coder",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=coding_tools(root=".", mode="coding"),
 )
 ```
 
 ## Web UI
 
-内置一个克制的 FastAPI 应用，用一行代码启动聊天界面：
+一行代码启动带流式输出的聊天界面：
 
 ```bash
 pip install "lovia[web]"
@@ -432,8 +441,8 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `examples/11_approval.py` | 工具审批 |
 | `examples/16_web_serve.py` | Web UI |
 | `examples/22_sandbox.py` | 直接使用 sandbox session |
-| `examples/23_sandbox_agent.py` | 带 sandbox 的 coding agent |
-| `examples/24_prefect.py` | Prefect flow 集成 |
+| `examples/23_sandbox_agent.py` | Coding Agent |
+| `examples/24_prefect.py` | Prefect 工作流 |
 | `examples/tools/` | 各工具专项示例 |
 | `examples/workflows/` | 常见工作流模式 |
 
@@ -441,10 +450,11 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 ```bash
 pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-mypy lovia
-pytest -q
+
+ruff check .          # lint
+ruff format .         # 格式化
+mypy lovia            # 类型检查
+pytest -q             # 运行测试
 ```
 
 ## 安装 extras
@@ -458,4 +468,3 @@ pytest -q
 | Prefect 工作流 | `pip install "lovia[prefect]"` |
 | 运行所有示例 | `pip install "lovia[examples,web]"` |
 | 开发 / CI | `pip install -e ".[dev]"` |
-

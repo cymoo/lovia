@@ -1,13 +1,16 @@
 # lovia
 
-A lightweight, async-first agent framework for Python.  
-Core has exactly two dependencies: `httpx` and `pydantic`.
+A Python agent framework that stays out of your way.
 
 ```bash
 pip install lovia
 ```
 
 ```python
+# Set once in your environment (or .env):
+# OPENAI_BASE_URL=https://api.deepseek.com
+# OPENAI_API_KEY=sk-your-key
+
 import asyncio
 from lovia import Agent, Runner, tool
 
@@ -22,7 +25,7 @@ async def main() -> None:
     agent = Agent(
         name="calc",
         instructions="Answer briefly. Use tools when needed.",
-        model="openai:deepseek-v4-pro",
+        model="deepseek-v4-pro",
         tools=[add],
     )
     result = await Runner.run(agent, "What is 2 + 3?")
@@ -31,6 +34,18 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+---
+
+## Why lovia?
+
+The LLM agent space is crowded. lovia makes a specific set of trade-offs:
+
+- 🪶 **Minimal concepts** — Agent, Runner, tool. The whole mental model fits on one page.
+- 🔌 **Provider-neutral** — OpenAI, Anthropic, any OpenAI-compatible endpoint. Swap with one line.
+- 🧩 **Extend without subclassing** — Protocols and dataclasses throughout. Plug in your own session store, memory backend, or provider without touching framework internals.
+- ✂️ **Thin by default** — Only `httpx` and `pydantic` are required. Web UI, MCP, search, and orchestration stay optional.
+- 🛡️ **Production primitives** — Guardrails, approval gates, lifecycle hooks, sandboxed file/shell tools — available when you need them, invisible when you don't.
 
 ---
 
@@ -44,25 +59,25 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="Write concise, concrete answers.",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
 )
 ```
 
-Dynamic system-prompt fragments can be added at run time:
+Dynamic system-prompt fragments can be injected at run time:
 
 ```python
 @agent.system_prompt
-async def inject_user_tier(ctx) -> str:
+async def add_context(ctx) -> str:
     return f"User tier: {ctx.context['tier']}"
 ```
 
-Need a variant? Clone without touching the original:
+Need a one-off variant? Clone without mutating the original:
 
 ```python
 strict = agent.clone(instructions="Always cite sources.", output_type=Report)
 ```
 
-## Running agents
+## Runner
 
 ```python
 from lovia import Runner
@@ -71,7 +86,7 @@ result = await Runner.run(agent, "Draft a release note.")
 print(result.output)
 ```
 
-Streaming delivers typed events:
+Streaming delivers typed events as they arrive:
 
 ```python
 from lovia import events
@@ -92,7 +107,8 @@ result = Runner.run_sync(agent, "Summarize this.")
 
 ## Tools
 
-Any typed Python function becomes a tool:
+Any typed Python function becomes a tool. lovia generates JSON Schema from
+type hints, docstrings, and `Annotated`/`Field` metadata automatically:
 
 ```python
 from typing import Annotated
@@ -115,11 +131,9 @@ async def search_docs(
     ...
 ```
 
-lovia generates JSON Schema from type hints, docstrings, and `Annotated`/`Field` metadata.
-
 ### Tool approval
 
-Sensitive tools can require explicit approval before they run:
+Flag sensitive tools to require explicit sign-off before they run:
 
 ```python
 @tool(needs_approval=True)
@@ -137,45 +151,65 @@ agent = Agent(
 )
 ```
 
-In streaming mode the runner emits `ApprovalRequired`; your UI or CLI
-resolves it:
+In streaming mode the runner emits `ApprovalRequired`; your UI resolves it:
 
 ```python
 async for ev in handle:
     if isinstance(ev, events.ApprovalRequired):
-        ev.approve()   # or ev.deny("not allowed")
+        ev.approve()   # or ev.deny("reason")
+```
+
+## Structured output
+
+Pass a Pydantic model to get validated, typed output:
+
+```python
+from pydantic import BaseModel
+
+
+class Summary(BaseModel):
+    title: str
+    bullets: list[str]
+
+
+agent = Agent(
+    name="summarizer",
+    model="deepseek-v4-pro",
+    output_type=Summary,
+)
+result = await Runner.run(agent, "Summarize lovia in three bullets.")
+print(result.output.title)
+```
+
+Override the type per call without changing the agent:
+
+```python
+result = await Runner.run(agent, "Give me a JSON summary.", output_type=Summary)
 ```
 
 ## Multi-agent: handoff and composition
 
 ### Handoff
 
-The triage agent routes requests to specialist agents:
-
-```python
-from lovia import Agent
-from lovia.handoff import Handoff
-
-billing = Agent(name="billing", instructions="Handle billing questions.", model="openai:deepseek-v4-pro")
-support = Agent(name="support", instructions="Handle technical issues.", model="openai:deepseek-v4-pro")
-
-triage = Agent(
-    name="triage",
-    instructions="Route to the right specialist.",
-    model="openai:deepseek-v4-pro",
-    handoffs=[billing, support],
-)
-
-result = await Runner.run(triage, "I was charged twice.")
-```
-
-On handoff, conversation history is shared. Use `input_filter` to strip
-stale tool calls before the new agent sees the transcript:
+The triage agent routes requests to specialist agents seamlessly:
 
 ```python
 from lovia.handoff import Handoff, drop_stale_tool_calls
 
-Handoff(target=billing, input_filter=drop_stale_tool_calls)
+billing = Agent(name="billing", instructions="Handle billing questions.", model="deepseek-v4-pro")
+support = Agent(name="support", instructions="Handle technical issues.", model="deepseek-v4-pro")
+
+triage = Agent(
+    name="triage",
+    instructions="Route to the right specialist.",
+    model="deepseek-v4-pro",
+    handoffs=[
+        Handoff(target=billing, input_filter=drop_stale_tool_calls),
+        Handoff(target=support, input_filter=drop_stale_tool_calls),
+    ],
+)
+
+result = await Runner.run(triage, "I was charged twice.")
 ```
 
 ### Agent as tool
@@ -183,24 +217,24 @@ Handoff(target=billing, input_filter=drop_stale_tool_calls)
 Wrap an agent so a parent can delegate sub-tasks to it:
 
 ```python
-summarizer = Agent(name="summarizer", instructions="Summarize text.", model="openai:deepseek-v4-pro")
+summarizer = Agent(name="summarizer", instructions="Summarize text.", model="deepseek-v4-pro")
 
 orchestrator = Agent(
     name="orchestrator",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[summarizer.as_tool(description="Summarize a passage of text.")],
 )
 ```
 
-The sub-agent runs in an isolated loop; its output is returned as the tool result.
+The sub-agent runs in an isolated loop; its final output is returned as the tool result.
 
 ## Human in the loop
 
 ### Approval gates
 
-Set `needs_approval=True` on any tool. The runner pauses until the call
-is approved or denied — by your streaming consumer, a web handler, or the
-`approval_handler` on the agent.
+Set `needs_approval=True` on any tool. The runner pauses until the call is
+approved or denied — by your streaming consumer, a web handler, or the agent's
+`approval_handler`.
 
 ### Asking the human a question
 
@@ -212,24 +246,18 @@ from lovia.tools.human import HumanChannel, ask_human
 channel = HumanChannel()
 agent = Agent(
     name="assistant",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[ask_human(channel)],
 )
 
-# In your driver / UI:
-async def ui_loop():
-    handle = Runner.stream(agent, "I need clarification.")
-    async for ev in handle:
-        ...
-
-# Elsewhere in your event loop — resolve pending questions:
+# From your UI or event loop — resolve pending questions:
 for q in channel.pending:
     channel.answer(q.id, "Please proceed with option A.")
 ```
 
 ## Hooks
 
-`AgentHooks` is a subscriber that fires on lifecycle events:
+`AgentHooks` fires on lifecycle events — logging, metrics, debugging:
 
 ```python
 from lovia.hooks import AgentHooks
@@ -248,12 +276,11 @@ def at_end(ev):
 agent = Agent(..., hooks=hooks)
 ```
 
-Handlers may be sync or async; both are supported.
+Handlers may be sync or async; both work.
 
 ## Guardrails
 
-Async callables that veto a run before it starts (input) or after it
-finishes (output):
+Async callables that veto a run before it starts or after it finishes:
 
 ```python
 from lovia.exceptions import GuardrailTripped
@@ -267,48 +294,20 @@ async def no_pii(messages, ctx):
 
 async def must_cite(output, ctx):
     if "source:" not in output.lower():
-        return "Response must include a source citation."  # truthy = violation
+        return "Response must include a source citation."  # truthy string = violation
 
 
 agent = Agent(
     name="researcher",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     input_guardrails=[no_pii],
     output_guardrails=[must_cite],
 )
 ```
 
-Returning `None` (or `False`) means the check passed.
+Returning `None` or `False` means the check passed.
 
-## Structured output
-
-Pass any Pydantic model to get validated, typed output:
-
-```python
-from pydantic import BaseModel
-
-
-class Summary(BaseModel):
-    title: str
-    bullets: list[str]
-
-
-agent = Agent(
-    name="summarizer",
-    model="openai:deepseek-v4-pro",
-    output_type=Summary,
-)
-result = await Runner.run(agent, "Summarize lovia in three bullets.")
-print(result.output.title)
-```
-
-Override the type per call without changing the agent:
-
-```python
-result = await Runner.run(agent, "Give me a JSON summary.", output_type=Summary)
-```
-
-## Sessions and long conversations
+## Sessions and memory
 
 Persist transcript state across multiple calls:
 
@@ -320,8 +319,8 @@ await Runner.run(agent, "My project is called Atlas.", session=session, session_
 await Runner.run(agent, "What is my project called?",  session=session, session_id="u1")
 ```
 
-For long-running chats, a context policy trims old messages before the
-model's window fills up:
+For long-running conversations, a context policy compresses old messages before
+the model's context window fills up:
 
 ```python
 from lovia import SummarizingContextPolicy
@@ -332,8 +331,8 @@ result = await Runner.run(agent, "Continue.", context_policy=policy)
 
 ## Skills
 
-Skills are file-backed prompt fragments loaded on demand — good for large
-domain knowledge that shouldn't always occupy the context window:
+File-backed prompt fragments loaded on demand — ideal for large domain knowledge
+that shouldn't always occupy the context window:
 
 ```python
 from lovia.skills import SkillCatalog
@@ -342,18 +341,19 @@ catalog = SkillCatalog("skills/", mode="lazy")   # or mode="eager"
 
 agent = Agent(
     name="support",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     skills=catalog,
 )
 ```
 
 Each skill is a directory with a `SKILL.md` (YAML frontmatter + body).
-In lazy mode, the model calls `load_skill(name)` when needed; in eager
-mode all skill bodies are inlined at startup.
+In `lazy` mode the model calls `load_skill(name)` when needed; in `eager` mode
+all skill bodies are inlined at startup.
 
 ## Built-in tools
 
-Practical tools live under `lovia.tools` — nothing is imported automatically:
+Practical tools live under `lovia.tools` — nothing is imported automatically,
+pick what you need:
 
 ```python
 from lovia.tools.http import http_fetch
@@ -366,7 +366,7 @@ from lovia.tools.think import think
 todos = TodoList()
 agent = Agent(
     name="assistant",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=[
         http_fetch,
         duckduckgo_search_tool(),
@@ -381,7 +381,7 @@ Focused examples are in [`examples/tools/`](./examples/tools/).
 
 ## Sandbox and coding agent
 
-For a coding agent, attach a sandbox instead of manually wiring each tool:
+Attach a sandbox to a coding agent — no need to wire each tool manually:
 
 ```python
 from lovia import Agent
@@ -390,37 +390,36 @@ from lovia.sandbox import Sandbox
 agent = Agent(
     name="coder",
     instructions="Make small, targeted edits.",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     sandbox=Sandbox.local(".", mode="coding"),
 )
 ```
 
 | Mode | Tools exposed |
 | --- | --- |
-| `"readonly"` | read_file, list_dir, glob |
-| `"coding"` | read_file, write_file, edit_file, list_dir, glob + shell (approval required) |
+| `"readonly"` | read\_file, list\_dir, glob |
+| `"coding"` | read\_file, write\_file, edit\_file, list\_dir, glob + shell (approval required) |
 | `"trusted"` | all of the above, shell without approval |
 
 Local sandbox paths are root-relative. Absolute paths, `..` escapes, and
-symlink escapes are rejected. The local shell still runs as the host user
-— this is a convenience boundary, not a hard security sandbox.
+symlink escapes are rejected. The local shell still runs as the host user —
+this is a convenience boundary, not a hard security sandbox.
 
-You can also use the tool factories directly:
+Or use the tool factories directly:
 
 ```python
 from lovia.tools import coding_tools
 
 agent = Agent(
     name="coder",
-    model="openai:deepseek-v4-pro",
+    model="deepseek-v4-pro",
     tools=coding_tools(root=".", mode="coding"),
 )
 ```
 
 ## Web UI
 
-A minimal FastAPI app with streaming, sessions, markdown rendering, and
-approval support:
+A minimal FastAPI app with streaming, sessions, markdown rendering, and approval:
 
 ```bash
 pip install "lovia[web]"
@@ -440,17 +439,17 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 
 | File | What it shows |
 | --- | --- |
-| `examples/01_hello.py` | minimal agent run |
+| `examples/01_hello.py` | minimal agent |
 | `examples/02_tools.py` | custom `@tool` |
-| `examples/03_streaming.py` | streaming output with Rich |
+| `examples/03_streaming.py` | streaming with Rich |
 | `examples/04_structured_output.py` | Pydantic output |
 | `examples/05_handoff.py` | agent handoff |
 | `examples/08_skills.py` | skill catalog |
 | `examples/11_approval.py` | tool approval |
 | `examples/16_web_serve.py` | web UI |
 | `examples/22_sandbox.py` | direct sandbox session |
-| `examples/23_sandbox_agent.py` | coding agent with sandbox |
-| `examples/24_prefect.py` | Prefect flow integration |
+| `examples/23_sandbox_agent.py` | coding agent |
+| `examples/24_prefect.py` | Prefect workflow |
 | `examples/tools/` | focused tool demos |
 | `examples/workflows/` | workflow patterns |
 
@@ -458,10 +457,11 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 
 ```bash
 pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-mypy lovia
-pytest -q
+
+ruff check .          # lint
+ruff format .         # format
+mypy lovia            # type-check
+pytest -q             # run tests
 ```
 
 ## Install extras
@@ -475,4 +475,3 @@ pytest -q
 | Prefect workflows | `pip install "lovia[prefect]"` |
 | Run all examples | `pip install "lovia[examples,web]"` |
 | Dev / CI | `pip install -e ".[dev]"` |
-

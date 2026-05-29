@@ -24,6 +24,10 @@ env/
 .coverage
 htmlcov/
 
+# Temporary files
+tmp/
+.cache/
+
 # Type checking
 .mypy_cache/
 .ruff_cache/

@@ -31,35 +31,46 @@ Requires Python 3.10+.
 
 ```
 lovia/
-  agent.py       # Agent dataclass (the main user-facing config)
-  runner.py      # Runner — orchestrates the agent loop
-  tools/         # @tool decorator, Tool type, and opt-in tool factories
-  messages.py    # ChatMessage, ToolCall, Usage types
-  events.py      # Streaming event types
-  output.py      # Structured output handling
-  handoff.py     # Handoff between agents
-  hooks.py       # AgentHooks base class
-  session.py     # Session protocol
+  agent.py          # Agent dataclass — main user-facing config
+  runner.py         # Runner — orchestrates the agent loop
+  tools/            # @tool decorator, Tool type, and opt-in tool factories
+    __init__.py     #   core Tool/tool API + public re-exports
+    read_file.py    #   sandbox-backed file tools (read, write, edit, list, glob, shell)
+    write_file.py
+    edit_file.py
+    list_dir.py
+    glob.py
+    shell.py
+    coding_tools.py #   coding_tools() convenience factory
+    http.py         #   http_fetch
+    search.py       #   duckduckgo_search_tool  (requires lovia[tools])
+    todo.py         #   TodoList + todo_tools
+    human.py        #   HumanChannel + ask_human
+    think.py        #   think
+    time.py         #   now
+  messages.py       # ChatMessage, ToolCall, Usage types
+  events.py         # Streaming event types
+  output.py         # Structured output handling
+  handoff.py        # Handoff + agent_as_tool
+  hooks.py          # AgentHooks subscriber
+  guardrails.py     # input/output guardrail protocol
+  session.py        # Session protocol
   context_policy.py # ContextPolicy — keeps long conversations under the model's window
-  skills.py      # Skill / SkillCatalog (SKILL.md, lazy/eager modes, references/scripts/assets)
-  schema.py      # JSON Schema generation from Python types (incl. Annotated/Field metadata)
-  exceptions.py  # Framework exceptions (carry an optional ``.hint``)
-  mcp.py         # Optional MCP client (requires mcp package)
-  providers/     # LLM provider adapters (OpenAI, Anthropic, …)
-  stores/        # Session and memory store implementations
-  sandbox/       # Filesystem + process sandbox (Sandbox.local,
-                 #   SandboxBackend/SandboxSession protocols)
-  web/           # Optional FastAPI + SSE layer and bundled chat UI
-                 #   (decoupled from core; only loaded when lovia[web] is used)
+  skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
+  schema.py         # JSON Schema generation from Python types
+  exceptions.py     # Framework exceptions (carry an optional .hint)
+  mcp.py            # Optional MCP client (requires mcp package)
+  providers/        # LLM provider adapters (OpenAI, Anthropic, …)
+  stores/           # Session and memory store implementations
+  sandbox/          # Filesystem + process sandbox (Sandbox.local,
+                    #   SandboxBackend/SandboxSession protocols)
+  web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
+                    #   (decoupled from core; only loaded when lovia[web] is used)
 ```
 
-The codebase is three layers — **core** (everything outside `sandbox/` and
-`web/`), **sandbox** (production fs+exec), **web** (HTTP/SSE/UI) — each
-strictly downstream of the previous. Core never imports sandbox or web.
-
-The `web/` module is fully decoupled from `lovia` core — nothing in `lovia`
-imports `lovia.web` automatically, so agents that don't need HTTP keep their
-lightweight dependency footprint.
+Three layers, each strictly downstream of the previous: **core** (everything
+outside `sandbox/` and `web/`), **sandbox** (fs + exec), **web** (HTTP/SSE/UI).
+Core never imports sandbox or web.
 
 ## Conventions
 
@@ -89,39 +100,5 @@ A few corollaries that follow from these:
 
 ## Git commit convention
 
-We follow [Conventional Commits](https://www.conventionalcommits.org/) with a small set of types:
-
-| Type | Use for |
-| --- | --- |
-| `feat`     | New user-visible capability |
-| `fix`      | Bug fix |
-| `docs`     | Docs / examples / README only |
-| `refactor` | Internal change with no behaviour delta |
-| `perf`     | Performance improvement |
-| `test`     | Tests only |
-| `chore`    | Build, deps, tooling |
-| `revert`   | Reverts a previous commit |
-
-Format:
-
-```
-<type>(<optional-scope>): <imperative summary, ≤72 chars>
-
-<body — what & why, wrapped at ~72 cols>
-
-<footer — BREAKING CHANGE: …, Refs: #123, …>
-```
-
-Examples:
-
-```
-feat(runner): per-call output_type override
-fix(skills): reject path traversal in read_skill_file
-docs: rewrite README around tools and DX
-```
-
-Co-author trailers are appreciated; AI-assisted commits should end with:
-
-```
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-```
+Follow [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): imperative summary`.
+Common types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`.

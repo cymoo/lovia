@@ -1368,10 +1368,10 @@ def _agent_model_label(agent: Agent) -> str:
     if isinstance(m, str):
         return m
     if isinstance(m, list):
-        labels = []
+        labels: list[str] = []
         for item in m:
             labels.append(
-                getattr(item, "model", None) or getattr(item, "name", repr(item))
+                str(getattr(item, "model", None) or getattr(item, "name", repr(item)))
             )
         return ",".join(labels)
     return getattr(m, "model", None) or getattr(m, "name", None) or repr(m)

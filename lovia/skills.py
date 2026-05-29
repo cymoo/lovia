@@ -15,7 +15,7 @@ authors keep the entry-point lean while leaving room for richer assets:
 
 * ``references/`` — supplementary docs the model can pull as needed.
 * ``scripts/``    — runnable snippets (executed by an external tool, e.g.
-  the sandbox ``run`` tool from :mod:`lovia.sandbox`).
+  the ``bash`` tool from :mod:`lovia.workspace`).
 * ``assets/``     — templates, fixtures, etc.
 
 Two catalog modes:

@@ -263,76 +263,67 @@ Builtin convention: stateless helpers export ready-to-use `Tool` instances,
 pluggable backends use factories, stateful single-tool helpers expose `.tool()`,
 and stateful multi-tool helpers expose `.tools()`.
 
-Filesystem and shell tools live in `lovia.sandbox` (see next section) —
-they need a proper sandbox abstraction, not a thin one-off helper.
+Filesystem and shell tools live in `lovia.workspace` (see next section).
 
 Runnable demos live in [`examples/builtins/`](./examples/builtins/).
 
 ---
 
-## Sandbox
+## Workspace tools
 
-`lovia.sandbox` is the concise filesystem + process layer. One
-Protocol (`Sandbox`), one pool (`SandboxProvider`), one wiring call
-(`attach_sandbox`). Ships with a default in-process backend
-(`LocalSandbox`); swap in Docker / Firecracker by implementing the
-Protocol — agent code stays the same.
+`lovia.workspace` is the concise filesystem + process layer for coding
+agents. Import only what you need: each helper is an individual Tool
+factory, and an optional `Workspace` object lets multiple tools share the
+same root.
 
 ```python
-from lovia import (
-    Agent, Runner,
-    LocalSandboxProvider, attach_sandbox, AuditStream,
+from lovia import Agent, Runner
+from lovia.workspace import Workspace, bash, edit_file, glob, list_dir, read_file, write_file
+
+ws = Workspace(root=".")
+
+agent = Agent(
+    name="coder",
+    instructions="You are a focused coding agent.",
+    model="openai:gpt-4o-mini",
+    tools=[
+        bash(ws),
+        read_file(ws),
+        write_file(ws),
+        edit_file(ws),
+        glob(ws),
+        list_dir(ws),
+    ],
 )
-from lovia.stores import InMemorySession
 
-base = Agent(name="coder", instructions="…", model="openai:gpt-4o-mini")
-
-async with LocalSandboxProvider() as provider:
-    audit = AuditStream()  # optional pub/sub for a UI
-    agent = attach_sandbox(base, provider, audit_stream=audit)
-
-    session = InMemorySession()  # from lovia.stores
-    await Runner.run(agent, "Create app.py and run it.", session=session, session_id="s1")
-    # Same session_id → same workspace on the next turn.
-    await Runner.run(agent, "Now add tests.", session=session, session_id="s1")
+await Runner.run(agent, "Create app.py and run it.")
 ```
 
 What you get for free:
 
 * **Path traversal guard** — symlink-aware, blocks `..`, `/etc/...`, etc.
-* **Dependency isolation by PATH/HOME** — each sandbox redirects `HOME`
-  and `TMPDIR` to a private subdir and prepends `<root>/.venv/bin` to
-  `PATH`. The framework does *not* manage that venv. When the LLM needs
-  Python deps it bootstraps one itself:
-  ```bash
-  python -m venv .venv && .venv/bin/pip install pandas
-  ```
-  From the next command onwards `python` and `pip` resolve to the venv
-  automatically — no special API, no auto-bootstrap, zero pollution of
-  the host environment.
-* **Audit policy** — `default_audit_policy()` blocks the obvious foot-guns
-  (`rm -rf /`, `mkfs`, `curl|sh`, fork bombs, …) *and* warns on bare
-  `pip install` / `npm install -g` so the LLM is nudged toward a venv.
-  Three-valued (`pass`/`warn`/`block`): warnings annotate stderr without
-  blocking, giving the model a chance to self-correct.
-* **Per-session lifecycle** — sandboxes are refcounted by `session_id`;
-  multi-turn runs reuse the same workspace (including any `.venv` the
-  model created) until the provider shuts down.
-* **Hidden-file filtering** — `ls`/`glob` skip dotfiles by default so
-  `**/*.py` doesn't drown in the LLM's own `.venv/`. Pass
-  `include_hidden=True` to look.
-* **Live audit stream** — subscribe via `AuditStream.subscribe()` for a
-  UI; history is kept for late-joining subscribers.
-* **Apply-patch tool** — tolerant unified-diff editor on top of read+write,
-  the cheapest way to let a model edit files.
+  Tools accept workspace-relative paths and `/workspace/...` logical paths.
+* **Simple atomic tools** — `read_file`, `write_file`, `edit_file`,
+  `glob`, `list_dir`, and `bash` are separate factories, not one big bundle.
+* **Exact edits** — `edit_file` replaces exact `old_text` with `new_text`;
+  if the text is missing or ambiguous, it fails without writing so the
+  model can re-read and retry.
+* **Structured command results** — `bash` returns `exit_code`, `stdout`,
+  `stderr`, `timed_out`, and `truncated`.
+* **Adaptive Python hygiene** — local workspaces keep host `HOME`/`TMPDIR`
+  so git/gh/ssh keep working, but Python toolchain commands (`python`,
+  `pip`, `pytest`, `mypy`, `ruff`, `uv`, `poetry`, …) lazily create and
+  prefer a managed venv under the user cache directory, outside the project
+  tree.
+* **Audit policy** — `bash` enables `default_audit_policy()` by default to
+  block obvious foot-guns (`rm -rf /`, `mkfs`, `curl|sh`, fork bombs, …).
+* **Hidden-file filtering** — `glob` and `list_dir` skip dotfiles by default.
+  Pass `include_hidden=True` to look.
 
-`LocalSandbox` is **not a security boundary** — `HOME`/`PATH` redirection
-keeps things tidy, not safe. For untrusted code use a container-backed
-`Sandbox` implementation.
-
-Runnable demos: [`examples/22_sandbox.py`](./examples/22_sandbox.py),
-[`examples/23_sandbox_session.py`](./examples/23_sandbox_session.py),
-[`examples/24_custom_sandbox.py`](./examples/24_custom_sandbox.py).
+`Workspace(root=".")` is **not a security boundary**. It confines lovia's
+file APIs to a root, but commands run as the host user and writes modify
+real files. Future Docker / remote implementations can plug in by
+implementing the `WorkspaceBackend` Protocol.
 
 ---
 
@@ -357,21 +348,9 @@ What you get out of the box:
 * **Auto-generated titles** — after the first turn a tiny background
   call asks the same model for a 3-6 word headline.
 * **Streaming transcript** with tool-call cards and approval prompts.
-* **Workspace panel + audit feed** — pass `sandbox_provider=` and
-  `audit_stream=` and the right-hand panel shows the per-session files
-  and every shell command's pass/warn/block verdict in real time.
-
-```python
-from lovia import LocalSandboxProvider, AuditStream, attach_sandbox
-
-provider = LocalSandboxProvider()
-audit = AuditStream()
-agent = attach_sandbox(base_agent, provider, audit_stream=audit)
-serve(agent, db_path="lovia.db", sandbox_provider=provider, audit_stream=audit)
-```
-
-See [`examples/25_web_sandbox.py`](./examples/25_web_sandbox.py) for the
-full wiring.
+* **Tool-call cards and approval prompts** — UI primitives for real agent
+  work, without coupling the core framework to a particular workspace
+  backend.
 
 ---
 
@@ -447,10 +426,9 @@ examples/
   19_dynamic_instructions.py   Dynamic system prompt
   20_builtins.py               Several builtins together
   21_dx.py                     Annotated schemas, run_sync
-  22_sandbox.py                Per-run LocalSandbox + sandbox_tools
-  23_sandbox_session.py        Multi-turn with LocalSandboxProvider
-  24_custom_sandbox.py         Implement Sandbox to plug Docker / firecracker
-  25_web_sandbox.py            Full web stack: persistent + sandbox + UI
+  22_workspace.py              Local Workspace + code tools
+  23_workspace_agent.py        Multi-turn coding with shared Workspace tools
+  24_custom_workspace.py       Implement WorkspaceBackend for custom runners
   builtins/                    One focused demo per builtin
   workflows/                   Multi-agent workflow patterns
 ```

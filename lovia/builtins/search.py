@@ -55,17 +55,24 @@ class DuckDuckGoSearch:
     """Default backend using ``duckduckgo-search`` (install with ``lovia[tools]``)."""
 
     def __init__(self) -> None:
+        ddgs_cls: Any
         try:
             try:
-                from ddgs import DDGS  # type: ignore[import-not-found]
+                from ddgs import DDGS as ddgs_impl  # type: ignore[import-not-found]
+
+                ddgs_cls = ddgs_impl
             except ImportError:
-                from duckduckgo_search import DDGS  # type: ignore[import-not-found]
+                from duckduckgo_search import (  # type: ignore[import-not-found]
+                    DDGS as duckduckgo_impl,
+                )
+
+                ddgs_cls = duckduckgo_impl
         except ImportError as exc:
             raise UserError(
                 "DuckDuckGoSearch requires the 'ddgs' package.",
                 hint="Install with: pip install 'lovia[tools]'",
             ) from exc
-        self._ddgs_cls = DDGS
+        self._ddgs_cls = ddgs_cls
 
     async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
 

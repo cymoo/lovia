@@ -12,10 +12,8 @@ that depends only on a model API key (most use OpenAI by default).
 | `08_todo.py`   | `lovia.builtins.todo.TodoList` + `todo_tools` |
 | `09_human.py`  | `lovia.builtins.human.HumanChannel` + `ask_human` |
 
-For filesystem and shell tools, see `examples/22_sandbox.py` and
-`examples/23_sandbox_session.py` — these use :mod:`lovia.sandbox` which
-provides a real sandbox abstraction with audit policies and process
-isolation hooks.
+For filesystem and shell tools, see `examples/22_workspace.py` and
+`examples/23_workspace_agent.py` — these use :mod:`lovia.workspace`.
 
 Run any of them with::
 

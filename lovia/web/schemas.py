@@ -67,10 +67,3 @@ class AuditEntry(BaseModel):
     command: str
     verdict: Literal["pass", "warn", "block"]
     reason: str = ""
-
-
-class FileEntry(BaseModel):
-    name: str
-    is_dir: bool
-    size: int | None = None
-    mtime: float | None = None

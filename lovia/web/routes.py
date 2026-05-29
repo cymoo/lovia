@@ -23,8 +23,8 @@ from ..agent import Agent
 from ..context_policy import ContextPolicy
 from ..items import items_to_chat_messages
 from ..runner import Runner
-from ..sandbox import AuditStream, SandboxProvider
 from .approvals import ApprovalRegistry
+from ..workspace import AuditStream
 from .schemas import (
     AgentInfo,
     ApprovalRequest,
@@ -32,7 +32,6 @@ from .schemas import (
     ChatRequest,
     ChatResponse,
     ChatSessionInfo,
-    FileEntry,
     MessageOut,
     RenameRequest,
     SessionDetail,
@@ -52,7 +51,6 @@ def build_router(
     approvals: ApprovalRegistry,
     *,
     context_policy: ContextPolicy | None = None,
-    sandbox_provider: SandboxProvider | None = None,
     audit_stream: AuditStream | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
@@ -243,12 +241,6 @@ def build_router(
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
         await store.delete(session_id)
-        # Best-effort: also tear down the sandbox bound to this session so
-        # we don't leak workspaces.
-        if sandbox_provider is not None:
-            sb = await sandbox_provider.get(session_id)
-            if sb is not None:
-                await sb.close()
         return {"ok": True}
 
     # ---- audit ----------------------------------------------------------
@@ -269,43 +261,5 @@ def build_router(
             for r in audit_stream.history()
             if r.session_id == session_id
         ]
-
-    # ---- sandbox files --------------------------------------------------
-
-    @router.get("/api/sessions/{session_id}/files", response_model=list[FileEntry])
-    async def list_files(
-        session_id: str, path: str = ".", include_hidden: bool = False
-    ) -> list[FileEntry]:
-        if sandbox_provider is None:
-            raise HTTPException(status_code=404, detail="no sandbox configured")
-        sb = await sandbox_provider.get(session_id)
-        if sb is None:
-            return []
-        entries = await sb.ls(path, include_hidden=include_hidden)
-        return [
-            FileEntry(name=e.name, is_dir=e.is_dir, size=e.size, mtime=e.mtime)
-            for e in entries
-        ]
-
-    @router.get("/api/sessions/{session_id}/files/{path:path}")
-    async def read_file(session_id: str, path: str) -> dict[str, Any]:
-        if sandbox_provider is None:
-            raise HTTPException(status_code=404, detail="no sandbox configured")
-        sb = await sandbox_provider.get(session_id)
-        if sb is None:
-            raise HTTPException(status_code=404, detail="session has no workspace yet")
-        try:
-            data = await sb.read(path, max_bytes=256_000)
-        except Exception as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # Detect binary by trying to decode; fall back to base64-ish marker.
-        try:
-            return {"path": path, "content": data.decode("utf-8"), "binary": False}
-        except UnicodeDecodeError:
-            return {
-                "path": path,
-                "content": f"[binary: {len(data)} bytes]",
-                "binary": True,
-            }
 
     return router

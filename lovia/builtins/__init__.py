@@ -7,9 +7,9 @@ Pick the ones you need::
     from lovia.builtins.search import web_search
     from lovia.builtins.todo import TodoList
 
-Filesystem and shell tools live in :mod:`lovia.sandbox` instead — they are
-backed by a real sandbox abstraction (path traversal guard, audit policy,
-process isolation hook) and ship as ``sandbox_tools()``.
+Filesystem and shell tools live in :mod:`lovia.workspace` instead. They are
+opt-in Tool factories backed by a workspace boundary with path traversal
+guards and command audit policies.
 
 A few submodules pull additional third-party libraries (e.g. ``ddgs`` for
 :mod:`lovia.builtins.search`). Install them via the optional extra::

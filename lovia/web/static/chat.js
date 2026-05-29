@@ -14,9 +14,7 @@ const sessionsList = $("#sessions-list");
 const chatTitleEl = $("#chat-title");
 const toggleRight = $("#toggle-right");
 const sidebarRight = $("#sidebar-right");
-const panelFiles = $("#panel-files");
 const panelAudit = $("#panel-audit");
-const fileModal = $("#file-modal");
 
 const state = {
   sessionId: null,
@@ -470,7 +468,7 @@ function handleEvent({ event, data }) {
       break;
     case "tool_call":
       appendTool(data);
-      // A tool call usually means new files / audit entries.
+      // A tool call usually means new audit entries.
       schedulePanelRefresh();
       break;
     case "tool_result":
@@ -494,7 +492,7 @@ function handleEvent({ event, data }) {
   }
 }
 
-// ---------------------------------------------- right panel: files/audit
+// --------------------------------------------------- right panel: audit
 
 function schedulePanelRefresh() {
   if (state.panelTimer) return;
@@ -506,69 +504,11 @@ function schedulePanelRefresh() {
 
 async function refreshPanels() {
   if (!state.sessionId) {
-    panelFiles.innerHTML = '<div class="panel-empty">No workspace yet.</div>';
     panelAudit.innerHTML = '<div class="panel-empty">No audited commands.</div>';
     return;
   }
-  await Promise.all([refreshFiles(), refreshAudit()]);
+  await refreshAudit();
 }
-
-async function refreshFiles() {
-  try {
-    const res = await fetch(`/api/sessions/${state.sessionId}/files`);
-    if (!res.ok) {
-      panelFiles.innerHTML = '<div class="panel-empty">No workspace.</div>';
-      return;
-    }
-    const entries = await res.json();
-    renderFiles(entries);
-  } catch (err) {
-    panelFiles.innerHTML = `<div class="panel-empty">Files unavailable</div>`;
-  }
-}
-
-function renderFiles(entries) {
-  if (!entries.length) {
-    panelFiles.innerHTML = '<div class="panel-empty">Empty workspace.</div>';
-    return;
-  }
-  panelFiles.innerHTML = "";
-  for (const e of entries) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "file-row";
-    row.disabled = e.is_dir;
-    row.innerHTML = `
-      <span class="file-icon">${e.is_dir ? "📁" : "📄"}</span>
-      <span class="file-name"></span>
-      <span class="file-size">${e.is_dir ? "" : formatBytes(e.size)}</span>`;
-    row.querySelector(".file-name").textContent = e.name;
-    row.addEventListener("click", () => openFile(e.name));
-    panelFiles.appendChild(row);
-  }
-}
-
-async function openFile(name) {
-  try {
-    const res = await fetch(
-      `/api/sessions/${state.sessionId}/files/${encodeURIComponent(name)}`
-    );
-    if (!res.ok) throw new Error(res.statusText);
-    const data = await res.json();
-    $("#file-modal-path").textContent = data.path;
-    $("#file-modal-body").textContent = data.content;
-    fileModal.classList.remove("hidden");
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-$("#file-modal-close").addEventListener("click", () => {
-  fileModal.classList.add("hidden");
-});
-fileModal.addEventListener("click", (e) => {
-  if (e.target === fileModal) fileModal.classList.add("hidden");
-});
 
 async function refreshAudit() {
   try {
@@ -618,7 +558,6 @@ $$(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     $$(".tab").forEach((t) => t.classList.toggle("active", t === tab));
     const name = tab.dataset.tab;
-    panelFiles.classList.toggle("hidden", name !== "files");
     panelAudit.classList.toggle("hidden", name !== "audit");
   });
 });
@@ -640,13 +579,6 @@ function formatTime(ts) {
   return same
     ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : d.toLocaleDateString();
-}
-
-function formatBytes(n) {
-  if (n == null) return "";
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 // ------------------------------------------------------------- bootstrap

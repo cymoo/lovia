@@ -15,8 +15,8 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ..agent import Agent
 from ..context_policy import ContextPolicy
-from ..sandbox import AuditStream, SandboxProvider
 from ..session import Session
+from ..workspace import AuditStream
 from .approvals import ApprovalRegistry
 from .routes import build_router
 from .store import ChatStore
@@ -38,7 +38,6 @@ def create_app(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    sandbox_provider: SandboxProvider | None = None,
     audit_stream: AuditStream | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
@@ -55,13 +54,10 @@ def create_app(
     * neither — pure in-memory chats (lost on restart). Backward-compatible
       with the old signature.
 
-    Sandbox integration is optional but recommended:
+    Audit integration is optional:
 
-    * ``sandbox_provider`` — when set, the ``/api/sessions/.../files`` endpoint
-      lists / reads files in the per-session workspace, and deleting a chat
-      tears down the matching sandbox.
     * ``audit_stream`` — when set, the ``/api/sessions/.../audit`` endpoint
-      returns the per-session audit history that the sandbox's ``run`` tool
+      returns the per-session audit history that workspace ``bash`` tools
       published.
 
     ``title_model`` overrides the model used to generate chat titles; defaults
@@ -87,7 +83,6 @@ def create_app(
             chat_store,
             approvals,
             context_policy=context_policy,
-            sandbox_provider=sandbox_provider,
             audit_stream=audit_stream,
             title_model=title_model,
             generate_titles=generate_titles,
@@ -103,7 +98,6 @@ def create_app(
     app.state.session = chat_store.session
     app.state.approvals = approvals
     app.state.context_policy = context_policy
-    app.state.sandbox_provider = sandbox_provider
     app.state.audit_stream = audit_stream
     return app
 
@@ -116,7 +110,6 @@ def serve(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    sandbox_provider: SandboxProvider | None = None,
     audit_stream: AuditStream | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
@@ -137,7 +130,6 @@ def serve(
         db_path=db_path,
         session=session,
         store=store,
-        sandbox_provider=sandbox_provider,
         audit_stream=audit_stream,
         context_policy=context_policy,
         title_model=title_model,

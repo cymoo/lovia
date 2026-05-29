@@ -75,27 +75,12 @@
 
     <aside class="sidebar sidebar-right" id="sidebar-right">
       <div class="panel-tabs">
-        <button class="tab active" data-tab="files">Files</button>
-        <button class="tab" data-tab="audit">Audit</button>
+        <button class="tab active" data-tab="audit">Audit</button>
       </div>
-      <div class="panel" id="panel-files">
-        <div class="panel-empty">No workspace yet — start a chat that uses the sandbox.</div>
-      </div>
-      <div class="panel hidden" id="panel-audit">
+      <div class="panel" id="panel-audit">
         <div class="panel-empty">No audited commands.</div>
       </div>
     </aside>
-
-    <!-- file viewer modal -->
-    <div id="file-modal" class="modal hidden" aria-hidden="true">
-      <div class="modal-card">
-        <div class="modal-head">
-          <code id="file-modal-path"></code>
-          <button id="file-modal-close" class="btn btn-ghost btn-sm" type="button">Close</button>
-        </div>
-        <pre id="file-modal-body"></pre>
-      </div>
-    </div>
 
     <template id="tmpl-turn">
       <article class="turn">

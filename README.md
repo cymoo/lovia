@@ -230,18 +230,18 @@ print(result.output)
 
 ---
 
-## Built-in tools
+## Tools
 
-`lovia.builtins` ships practical, framework-agnostic tools you can drop straight into any agent.
+`lovia.tools` ships practical, framework-agnostic tools you can drop straight into any agent.
 Nothing is imported automatically — grab only what you need.
 
 ```python
-from lovia.builtins.http import http_fetch
-from lovia.builtins.search import duckduckgo_search_tool
-from lovia.builtins.todo import TodoList, todo_tools
-from lovia.builtins.human import HumanChannel, ask_human
-from lovia.builtins.think import think
-from lovia.builtins.time import now
+from lovia.tools.http import http_fetch
+from lovia.tools.search import duckduckgo_search_tool
+from lovia.tools.todo import TodoList, todo_tools
+from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools.think import think
+from lovia.tools.time import now
 
 todos = TodoList()
 channel = HumanChannel()
@@ -259,71 +259,72 @@ agent = Agent(
 )
 ```
 
-Builtin convention: stateless helpers export ready-to-use `Tool` instances,
+Tool convention: stateless helpers export ready-to-use `Tool` instances,
 pluggable backends use factories, stateful single-tool helpers expose `.tool()`,
 and stateful multi-tool helpers expose `.tools()`.
 
-Filesystem and shell tools live in `lovia.workspace` (see next section).
+Filesystem and shell tools use the same `lovia.tools` namespace, either through
+`Agent(sandbox=...)` or direct factories like `coding_tools(root=".")`.
 
-Runnable demos live in [`examples/builtins/`](./examples/builtins/).
+Runnable demos live in [`examples/tools/`](./examples/tools/).
 
 ---
 
-## Workspace tools
+## Sandbox tools
 
-`lovia.workspace` is the concise filesystem + process layer for coding
-agents. Import only what you need: each helper is an individual Tool
-factory, and an optional `Workspace` object lets multiple tools share the
-same root.
+`lovia.sandbox` is the concise filesystem + process layer for coding agents.
+Give the agent a sandbox once and Lovia injects the standard file and shell
+tools for that boundary.
 
 ```python
 from lovia import Agent, Runner
-from lovia.workspace import Workspace, bash, edit_file, glob, list_dir, read_file, write_file
-
-ws = Workspace(root=".")
+from lovia.sandbox import Sandbox
 
 agent = Agent(
     name="coder",
     instructions="You are a focused coding agent.",
     model="openai:gpt-4o-mini",
-    tools=[
-        bash(ws),
-        read_file(ws),
-        write_file(ws),
-        edit_file(ws),
-        glob(ws),
-        list_dir(ws),
-    ],
+    sandbox=Sandbox.local("."),
 )
 
 await Runner.run(agent, "Create app.py and run it.")
 ```
 
+If you are already running inside Docker or another controlled environment,
+use the same tool implementations directly:
+
+```python
+from lovia.tools import coding_tools
+
+agent = Agent(
+    name="coder",
+    model="openai:gpt-4o-mini",
+    tools=coding_tools(root="."),
+)
+```
+
 What you get for free:
 
 * **Path traversal guard** — symlink-aware, blocks `..`, `/etc/...`, etc.
-  Tools accept workspace-relative paths and `/workspace/...` logical paths.
+  File tools accept sandbox-relative paths only.
 * **Simple atomic tools** — `read_file`, `write_file`, `edit_file`,
-  `glob`, `list_dir`, and `bash` are separate factories, not one big bundle.
+  `glob`, `list_dir`, and `shell` are implemented once and can be used through
+  either `Agent(sandbox=...)` or `coding_tools(root=...)`.
 * **Exact edits** — `edit_file` replaces exact `old_text` with `new_text`;
   if the text is missing or ambiguous, it fails without writing so the
   model can re-read and retry.
-* **Structured command results** — `bash` returns `exit_code`, `stdout`,
+* **Structured command results** — `shell` returns `exit_code`, `stdout`,
   `stderr`, `timed_out`, and `truncated`.
-* **Adaptive Python hygiene** — local workspaces keep host `HOME`/`TMPDIR`
-  so git/gh/ssh keep working, but Python toolchain commands (`python`,
-  `pip`, `pytest`, `mypy`, `ruff`, `uv`, `poetry`, …) lazily create and
-  prefer a managed venv under the user cache directory, outside the project
-  tree.
-* **Audit policy** — `bash` enables `default_audit_policy()` by default to
-  block obvious foot-guns (`rm -rf /`, `mkfs`, `curl|sh`, fork bombs, …).
+* **Approval-aware shell** — `mode="coding"` allows file edits but routes
+  shell commands through Lovia's existing approval flow. Use `mode="trusted"`
+  for fully automated local runs.
 * **Hidden-file filtering** — `glob` and `list_dir` skip dotfiles by default.
   Pass `include_hidden=True` to look.
 
-`Workspace(root=".")` is **not a security boundary**. It confines lovia's
-file APIs to a root, but commands run as the host user and writes modify
-real files. Future Docker / remote implementations can plug in by
-implementing the `WorkspaceBackend` Protocol.
+`Sandbox.local(".")` is **not a security boundary**. It confines Lovia's file
+APIs to a root and gates shell by policy, but approved commands run as the host
+user and writes modify real files. Future Docker / remote implementations can
+plug in by implementing the `SandboxBackend` Protocol.
 
 ---
 
@@ -349,8 +350,7 @@ What you get out of the box:
   call asks the same model for a 3-6 word headline.
 * **Streaming transcript** with tool-call cards and approval prompts.
 * **Tool-call cards and approval prompts** — UI primitives for real agent
-  work, without coupling the core framework to a particular workspace
-  backend.
+  work, without coupling the core framework to a particular sandbox backend.
 
 ---
 
@@ -424,12 +424,11 @@ examples/
   17_responses_reasoning.py    OpenAI Responses API + reasoning
   18_context_policy.py         Auto-summarize long history
   19_dynamic_instructions.py   Dynamic system prompt
-  20_builtins.py               Several builtins together
+  20_builtins.py               Several built-in tools together
   21_dx.py                     Annotated schemas, run_sync
-  22_workspace.py              Local Workspace + code tools
-  23_workspace_agent.py        Multi-turn coding with shared Workspace tools
-  24_custom_workspace.py       Implement WorkspaceBackend for custom runners
-  builtins/                    One focused demo per builtin
+  22_sandbox.py                Local Sandbox + code tools
+  23_sandbox_agent.py          Coding agent with Sandbox.local
+  tools/                       One focused demo per tool
   workflows/                   Multi-agent workflow patterns
 ```
 

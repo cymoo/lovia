@@ -736,6 +736,7 @@ class _RunLoop:
                         transcript,
                         items_log,
                         mcp_tools,
+                        mcp_cleanup,
                     )
                     yield handoff_ev
                     await dispatch(agent.hooks, handoff_ev)
@@ -789,11 +790,24 @@ class _RunLoop:
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
 
-        mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
-        output_spec = build_output_spec(
-            self._resolve_output_type(agent), _supports_json_schema(agent)
-        )
-        tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+        mcp_cleanup: list[Any] = []
+        try:
+            mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
+            sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
+            mcp_cleanup.extend(sandbox_cleanup)
+            output_spec = build_output_spec(
+                self._resolve_output_type(agent), _supports_json_schema(agent)
+            )
+            tools_by_name = self._collect_tools(
+                agent, mcp_tools, sandbox_tools, output_spec
+            )
+        except Exception:
+            for cleanup in mcp_cleanup:
+                try:
+                    await cleanup()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            raise
         turns = self.resume_from.turns if self.resume_from is not None else 0
         return _BootstrapState(
             transcript=transcript,
@@ -815,6 +829,7 @@ class _RunLoop:
         transcript: list[ChatMessage],
         items_log: list[Item],
         mcp_tools: list[Tool],
+        cleanup: list[Any],
     ) -> tuple[Agent, OutputSpec | None, dict[str, Tool], events.HandoffOccurred]:
         """Switch active agent and rebuild agent-specific run state."""
         assert state.handoff_signal is not None
@@ -829,7 +844,11 @@ class _RunLoop:
             output_spec = build_output_spec(
                 self._resolve_output_type(agent), _supports_json_schema(agent)
             )
-            tools_by_name = self._collect_tools(agent, mcp_tools, output_spec)
+            sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
+            cleanup.extend(sandbox_cleanup)
+            tools_by_name = self._collect_tools(
+                agent, mcp_tools, sandbox_tools, output_spec
+            )
             transcript[:] = await self._reset_for_handoff(
                 transcript, agent, state.handoff_signal.handoff
             )
@@ -1161,6 +1180,10 @@ class _RunLoop:
 
     async def _system_prompt(self, agent: Agent, *, extra: "str | None" = None) -> str:
         text = await agent.render_instructions(self.context, extra=extra)
+        if agent.sandbox is not None:
+            sandbox_instructions = agent.sandbox.instructions()
+            if sandbox_instructions:
+                text = f"{text}\n\n{sandbox_instructions}".strip()
         if agent.skills is not None:
             text = f"{text}\n\n{agent.skills.render_catalog()}".strip()
         return text
@@ -1192,29 +1215,44 @@ class _RunLoop:
         self,
         agent: Agent,
         mcp_tools: list[Tool],
+        sandbox_tools: list[Tool],
         output_spec: OutputSpec | None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
+
+        def add_tool(source: str, t: Tool) -> None:
+            if t.name in tools:
+                raise UserError(
+                    f"Tool name conflict for {t.name!r} from {source}.",
+                    hint="Rename one tool or remove the duplicate.",
+                )
+            tools[t.name] = t
+
         for t in agent.tools:
-            tools[t.name] = t
+            add_tool("agent.tools", t)
+        for t in sandbox_tools:
+            add_tool("agent.sandbox", t)
         for t in mcp_tools:
-            tools[t.name] = t
+            add_tool("mcp", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             tool = build_handoff_tool(handoff_obj)
-            tools[tool.name] = tool
+            add_tool("handoff", tool)
         if agent.skills is not None:
             for t in agent.skills.tools():
-                tools[t.name] = t
+                add_tool("skills", t)
         if output_spec is not None and output_spec.use_tool_fallback:
             # Insert the synthetic ``final_output`` tool. Note we don't register
             # it as a real :class:`Tool` because the runner intercepts the call
             # by name; we only need its schema to be advertised to the model.
-            tools[FINAL_OUTPUT_TOOL_NAME] = Tool(
-                name=FINAL_OUTPUT_TOOL_NAME,
-                description="Call once with the final answer.",
-                parameters=output_spec.schema,
-                invoke=_unreachable_invoke,
+            add_tool(
+                "output",
+                Tool(
+                    name=FINAL_OUTPUT_TOOL_NAME,
+                    description="Call once with the final answer.",
+                    parameters=output_spec.schema,
+                    invoke=_unreachable_invoke,
+                ),
             )
         return tools
 
@@ -1225,6 +1263,24 @@ class _RunLoop:
             server_tools = await server.connect()
             tools.extend(server_tools)
             cleanup.append(server.aclose)
+        return tools, cleanup
+
+    async def _connect_sandbox(self, agent: Agent) -> tuple[list[Tool], list[Any]]:
+        if agent.sandbox is None:
+            return [], []
+        session = await agent.sandbox.open()
+        cleanup: list[Any] = []
+        if agent.sandbox.close_on_run:
+            cleanup.append(session.close)
+        try:
+            tools = agent.sandbox.tools(session)
+        except Exception:
+            for close in cleanup:
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            raise
         return tools, cleanup
 
     async def _snapshot(

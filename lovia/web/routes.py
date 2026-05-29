@@ -24,7 +24,6 @@ from ..context_policy import ContextPolicy
 from ..items import items_to_chat_messages
 from ..runner import Runner
 from .approvals import ApprovalRegistry
-from ..workspace import AuditStream
 from .schemas import (
     AgentInfo,
     ApprovalRequest,
@@ -51,7 +50,7 @@ def build_router(
     approvals: ApprovalRegistry,
     *,
     context_policy: ContextPolicy | None = None,
-    audit_stream: AuditStream | None = None,
+    audit_stream: Any | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
 ) -> APIRouter:

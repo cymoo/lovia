@@ -1,4 +1,4 @@
-"""Tests for the lovia.builtins.* submodules."""
+"""Tests for the bundled lovia.tools.* submodules."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-from lovia.builtins import http, search, think, time as time_b, todo
-from lovia.builtins.human import HumanChannel, ask_human
+from lovia.tools import http, search, think, time as time_b, todo
+from lovia.tools.human import HumanChannel, ask_human
 from lovia.exceptions import UserError
 from lovia.run_context import RunContext
 

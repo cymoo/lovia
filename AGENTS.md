@@ -47,12 +47,10 @@ lovia/
   mcp.py         # Optional MCP client (requires mcp package)
   providers/     # LLM provider adapters (OpenAI, Anthropic, …)
   stores/        # Session and memory store implementations
-  sandbox/       # Filesystem + process sandbox (LocalSandbox + provider pool,
-                 #   Protocol-based for Docker/VM extensibility, audit policy,
-                 #   apply_patch, lifecycle hook, attach_sandbox wiring helper)
-  builtins/      # Opt-in built-in tools (http, search, todo, human, think, time)
-                 #   Nothing here is imported by ``import lovia``; pick what you need.
-                 #   Filesystem and shell tools live in ``sandbox/`` instead.
+  sandbox/       # Filesystem + process sandbox (Sandbox.local,
+                 #   SandboxBackend/SandboxSession protocols)
+  tools/         # @tool/Tool plus opt-in tools (http, search, todo, human,
+                 #   think, time, filesystem, shell)
   web/           # Optional FastAPI + SSE layer and bundled chat UI
                  #   (decoupled from core; only loaded when lovia[web] is used)
 ```
@@ -79,10 +77,10 @@ lightweight dependency footprint.
 
 lovia is built around four words. When in doubt, optimise for the one earlier in the list.
 
-1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools.py`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
+1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools/`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
 2. **Lightweight (轻量).** Core has exactly two hard dependencies: `httpx` and `pydantic`. Every other capability — MCP, web UI, DuckDuckGo, etc. — is an opt-in extra and only imported when the user asks for it. `import lovia` must stay cheap.
 3. **Extensible (易扩展).** Public surfaces are dataclasses, Protocols, and `@decorator` hooks — not subclasses you must inherit from. Providers, sessions, memory stores, web-search backends, and hooks are all Protocol-based; users plug in their own implementations without monkey-patching.
-4. **General-purpose (通用).** `lovia.builtins.*` ships practical, framework-agnostic tools (http, search, todo, human-in-the-loop, think, time) and `lovia.sandbox.*` ships the filesystem + process layer (LocalSandbox, audit policies, attach_sandbox) so a real agent can be assembled in minutes — but nothing in core depends on them. Users either grab them as-is or copy the pattern.
+4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, todo, human-in-the-loop, think, time, filesystem, shell), and `lovia.sandbox.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Users either grab them as-is or copy the pattern.
 
 A few corollaries that follow from these:
 
@@ -121,7 +119,7 @@ Examples:
 ```
 feat(runner): per-call output_type override
 fix(skills): reject path traversal in read_skill_file
-docs: rewrite README around builtins and DX
+docs: rewrite README around tools and DX
 ```
 
 Co-author trailers are appreciated; AI-assisted commits should end with:

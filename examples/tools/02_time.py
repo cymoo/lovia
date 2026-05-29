@@ -8,7 +8,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner
-from lovia.builtins.time import now, sleep
+from lovia.tools.time import now, sleep
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")

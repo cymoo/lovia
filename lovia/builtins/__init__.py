@@ -1,18 +1,11 @@
-"""Optional, opt-in built-in tools.
+"""Backward-compatible aliases for tools now living under :mod:`lovia.tools`.
 
-Nothing here is imported automatically — every submodule is loaded on demand.
-Pick the ones you need::
-
-    from lovia.builtins.http import http_fetch
-    from lovia.builtins.search import web_search
-    from lovia.builtins.todo import TodoList
-
-Filesystem and shell tools live in :mod:`lovia.workspace` instead. They are
-opt-in Tool factories backed by a workspace boundary with path traversal
-guards and command audit policies.
-
-A few submodules pull additional third-party libraries (e.g. ``ddgs`` for
-:mod:`lovia.builtins.search`). Install them via the optional extra::
-
-    pip install "lovia[tools]"
+Prefer imports such as ``from lovia.tools.http import http_fetch``. This package
+remains as a thin compatibility layer for existing code.
 """
+
+from __future__ import annotations
+
+from ..tools import http, human, search, think, time, todo
+
+__all__ = ["http", "human", "search", "think", "time", "todo"]

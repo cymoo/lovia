@@ -12,7 +12,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner
-from lovia.builtins.human import HumanChannel, ask_human
+from lovia.tools.human import HumanChannel, ask_human
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")

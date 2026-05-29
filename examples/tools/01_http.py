@@ -7,8 +7,8 @@ import asyncio
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner
-from lovia.builtins.http import http_fetch
+from lovia import Agent, Runner, events
+from lovia.tools.http import http_fetch
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
@@ -21,10 +21,16 @@ async def main() -> None:
         model=MODEL,
         tools=[http_fetch],
     )
-    result = await Runner.run(
+    handle = Runner.stream(
         agent, "Fetch https://httpbin.org/json and tell me what's inside."
     )
-    print(result.output)
+    async for ev in handle:
+        if isinstance(ev, events.TextDelta):
+            print(ev.delta, end="", flush=True)
+        elif isinstance(ev, events.ToolCallStarted):
+            print(f"\n[tool] {ev.call.name}", flush=True)
+    result = await handle.result()
+    print(f"\n\n[done, turns={result.turns}]")
 
 
 if __name__ == "__main__":

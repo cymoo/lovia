@@ -16,7 +16,6 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ..agent import Agent
 from ..context_policy import ContextPolicy
 from ..session import Session
-from ..workspace import AuditStream
 from .approvals import ApprovalRegistry
 from .routes import build_router
 from .store import ChatStore
@@ -38,7 +37,7 @@ def create_app(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    audit_stream: AuditStream | None = None,
+    audit_stream: Any | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
     generate_titles: bool = True,
@@ -57,8 +56,7 @@ def create_app(
     Audit integration is optional:
 
     * ``audit_stream`` — when set, the ``/api/sessions/.../audit`` endpoint
-      returns the per-session audit history that workspace ``bash`` tools
-      published.
+      returns the per-session audit history published by external tool layers.
 
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
@@ -110,7 +108,7 @@ def serve(
     db_path: str | Path | None = None,
     session: Session | None = None,
     store: ChatStore | None = None,
-    audit_stream: AuditStream | None = None,
+    audit_stream: Any | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: Any = None,
     generate_titles: bool = True,

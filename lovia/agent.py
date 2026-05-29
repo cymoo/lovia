@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from .output import OutputRepairStrategy
     from .runner import RunHandle, RunResult
     from .skills import SkillCatalog
+    from .sandbox import SandboxLike
     from .tools import ToolResultRenderer
     from .tracing import Tracer
 
@@ -78,6 +79,8 @@ class Agent(Generic[TContext]):
         skills: Optional :class:`SkillCatalog` exposing on-demand documents.
         mcp_servers: MCP client connections whose tools will be merged at run
             time.
+        sandbox: Optional filesystem/process environment whose default tools
+            are merged at run time.
         hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
         approval_handler: Optional async callable consulted whenever a tool
             with ``needs_approval`` is about to run. Returns ``True`` to allow,
@@ -100,6 +103,7 @@ class Agent(Generic[TContext]):
     settings: ModelSettings = field(default_factory=ModelSettings)
     skills: "SkillCatalog | None" = None
     mcp_servers: list["MCPServer"] = field(default_factory=list)
+    sandbox: "SandboxLike | None" = None
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)

@@ -229,18 +229,18 @@ print(result.output)
 
 ---
 
-## 内置工具
+## Tools（工具）
 
-`lovia.builtins` 提供开箱即用的实用工具，无需任何配置即可使用。
+`lovia.tools` 提供开箱即用的实用工具，无需任何配置即可使用。
 **没有任何工具会被自动导入**，按需取用。
 
 ```python
-from lovia.builtins.http import http_fetch
-from lovia.builtins.search import duckduckgo_search_tool
-from lovia.builtins.todo import TodoList, todo_tools
-from lovia.builtins.human import HumanChannel, ask_human
-from lovia.builtins.think import think
-from lovia.builtins.time import now
+from lovia.tools.http import http_fetch
+from lovia.tools.search import duckduckgo_search_tool
+from lovia.tools.todo import TodoList, todo_tools
+from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools.think import think
+from lovia.tools.time import now
 
 todos = TodoList()
 channel = HumanChannel()
@@ -258,71 +258,54 @@ agent = Agent(
 )
 ```
 
-内置工具约定：无状态工具导出可直接使用的 `Tool`；可插拔后端使用 factory；有状态单工具对象提供 `.tool()`；有状态多工具对象提供 `.tools()`。
+工具约定：无状态工具导出可直接使用的 `Tool`；可插拔后端使用 factory；有状态单工具对象提供 `.tool()`；有状态多工具对象提供 `.tools()`。
 
-文件系统、Shell 等"重型"工具不在 builtins 里——它们由下一节的 `lovia.sandbox` 统一提供，自带路径越权保护与审计策略。
+文件系统、Shell 等工具也在同一个 `lovia.tools` 命名空间里；可以由 `Agent(sandbox=...)` 自动注入，也可以用 `coding_tools(root=".")` 直接创建。
 
-每个工具的可运行示例见 [`examples/builtins/`](./examples/builtins/)。
+每个工具的可运行示例见 [`examples/tools/`](./examples/tools/)。
 
 ---
 
 ## Sandbox（沙箱）
 
-`lovia.sandbox` 是简洁的文件系统 + 进程层。一个 Protocol（`Sandbox`）、
-一个池（`SandboxProvider`）、一行接线（`attach_sandbox`）即可。默认随包
-携带 `LocalSandbox`（进程内）；要切换 Docker / Firecracker，只需实现
-Protocol——Agent 代码完全不动。
+`lovia.sandbox` 是简洁的文件系统 + 进程层。给 Agent 一个 sandbox，Lovia
+会自动注入常用的文件和 Shell 工具；如果你已经在 Docker 或其他受控环境中
+运行，也可以直接使用同一套 `lovia.tools` 工具。
 
 ```python
-from lovia import (
-    Agent, Runner,
-    LocalSandboxProvider, attach_sandbox, AuditStream,
+from lovia import Agent, Runner
+from lovia.sandbox import Sandbox
+
+agent = Agent(
+    name="coder",
+    instructions="You are a focused coding agent.",
+    model="openai:gpt-4o-mini",
+    sandbox=Sandbox.local("."),
 )
-from lovia.stores import InMemorySession
 
-base = Agent(name="coder", instructions="…", model="openai:gpt-4o-mini")
-
-async with LocalSandboxProvider() as provider:
-    audit = AuditStream()  # 可选：给 UI 订阅
-    agent = attach_sandbox(base, provider, audit_stream=audit)
-
-    session = InMemorySession()  # from lovia.stores
-    await Runner.run(agent, "创建 app.py 并运行。", session=session, session_id="s1")
-    # 相同 session_id → 下一轮复用同一工作区。
-    await Runner.run(agent, "现在补一组测试。", session=session, session_id="s1")
+await Runner.run(agent, "创建 app.py 并运行。")
 ```
 
 开箱即得：
 
-* **路径越权保护**——符号链接感知，拦截 `..`、`/etc/...` 等。
-* **基于 PATH/HOME 的依赖隔离**——每个沙箱把 `HOME` 和 `TMPDIR` 重定向到
-  私有子目录，并将 `<root>/.venv/bin` 前置到 `PATH`。框架**不**管理这个
-  venv：当大模型需要 Python 依赖时，它自己启动一个：
-  ```bash
-  python -m venv .venv && .venv/bin/pip install pandas
-  ```
-  此后的命令会自动把 `python` / `pip` 解析到这个 venv。无需任何特殊 API、
-  无自动 bootstrap、不污染宿主环境。
-* **审计策略**——`default_audit_policy()` 拦截显而易见的危险命令
-  （`rm -rf /`、`mkfs`、`curl|sh`、fork bomb 等），并对裸的
-  `pip install` / `npm install -g` 发出 `warn`，引导大模型走 venv。
-  三态判定（`pass`/`warn`/`block`）：警告会注入 stderr 而不阻断，
-  让模型有机会在下一轮自我修正。
-* **按 session 生命周期**——沙箱按 `session_id` 引用计数；多轮对话
-  天然复用同一工作区（包括模型自己建的 `.venv`），直到 provider 关闭。
-* **隐藏文件过滤**——`ls`/`glob` 默认跳过点开头条目，`**/*.py` 不会被
-  模型自己的 `.venv/` 淹没。需要时传 `include_hidden=True`。
-* **实时审计流**——`AuditStream.subscribe()` 给 UI 订阅，历史会保留以
-  服务后加入者。
-* **apply_patch 工具**——容错的 unified-diff 编辑器，给模型改文件的
-  最小代价方案。
+* **路径越权保护**——符号链接感知，文件工具只接受 root 内相对路径。
+* **简单原子工具**——`read_file`、`write_file`、`edit_file`、`glob`、
+  `list_dir`、`shell` 实现一次，既可由 `Agent(sandbox=...)` 自动注入，
+  也可通过 `lovia.tools.coding_tools(root=".")` 直接使用。
+* **精确编辑**——`edit_file` 用 `old`/`new` 替换唯一匹配；缺失或多重匹配
+  会返回可恢复失败，方便模型重读后重试。
+* **结构化命令结果**——`shell` 返回 `exit_code`、`stdout`、`stderr`、
+  `timed_out`、`truncated`。
+* **审批感知 Shell**——默认 `mode="coding"` 允许文件读写，但 Shell 命令走
+  Lovia 现有审批流；自动化场景可显式使用 `mode="trusted"`。
+* **隐藏文件过滤**——`list_dir`/`glob` 默认跳过点开头条目。
 
-`LocalSandbox` **不是**安全边界——`HOME`/`PATH` 重定向只是保持整洁，不保证
-安全。执行不可信代码请用基于容器的实现。
+`Sandbox.local(".")` **不是**安全边界。它限制 Lovia 文件工具的根目录，并按
+策略控制 Shell；但批准后的命令仍以宿主用户执行，写入也会修改真实文件。
+需要强隔离时，后续可通过实现 `SandboxBackend` 接入 Docker / remote 后端。
 
 可运行示例：[`examples/22_sandbox.py`](./examples/22_sandbox.py)、
-[`examples/23_sandbox_session.py`](./examples/23_sandbox_session.py)、
-[`examples/24_custom_sandbox.py`](./examples/24_custom_sandbox.py)。
+[`examples/23_sandbox_agent.py`](./examples/23_sandbox_agent.py)。
 
 ---
 
@@ -396,7 +379,7 @@ examples/
   19_dynamic_instructions.py   动态 system prompt
   20_builtins.py               多个内置工具组合
   21_dx.py                     Annotated 参数、run_sync
-  builtins/                    每个内置工具一个专项 demo
+  tools/                       每个工具一个专项 demo
   workflows/                   多 Agent 工作流模式
 ```
 

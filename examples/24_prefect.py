@@ -11,6 +11,10 @@ from __future__ import annotations
 import asyncio
 import os
 
+# Disable Prefect telemetry before importing prefect to avoid SQLite heartbeat errors.
+os.environ.setdefault("DO_NOT_TRACK", "1")
+os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
+
 from dotenv import load_dotenv
 from prefect import flow, task
 from rich.console import Console

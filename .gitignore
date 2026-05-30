@@ -28,6 +28,14 @@ htmlcov/
 tmp/
 .cache/
 
+# Test database files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Type checking
 .mypy_cache/
 .ruff_cache/

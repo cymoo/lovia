@@ -41,6 +41,30 @@ def _items_to_dict(items: list[Item]) -> dict[str, Any]:
     }
 
 
+def _format_result(value: Any) -> str:
+    """Format a tool result as a human-readable string for the web UI.
+
+    Pydantic models are rendered as ``key: value`` lines so that actual
+    newlines inside string fields (e.g. ``CommandResult.stdout``) survive
+    JSON round-tripping and display correctly in the browser's ``<pre>``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "model_dump"):
+        lines: list[str] = []
+        for k, v in value.model_dump().items():
+            if isinstance(v, str):
+                lines.append(f"{k}:\n{v.rstrip()}" if "\n" in v else f"{k}: {v}")
+            else:
+                lines.append(f"{k}: {v}")
+        return "\n".join(lines)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, ensure_ascii=False)
+    return str(value)
+
+
 def _coerce(value: Any) -> Any:
     """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
     if hasattr(value, "model_dump"):
@@ -75,7 +99,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
                 {
                     "id": ev.call.id,
                     "name": ev.call.name,
-                    "result": str(ev.result),
+                    "result": _format_result(ev.result),
                     "is_error": ev.is_error,
                 }
             ),

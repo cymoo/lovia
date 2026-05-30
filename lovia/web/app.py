@@ -14,13 +14,15 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ..agent import Agent
-from ..context_policy import ContextPolicy
+from ..context_policy import ContextPolicy, SummarizingContextPolicy
 from ..session import Session
 from .approvals import ApprovalRegistry
 from .routes import build_router
 from .store import ChatStore
 
 _STATIC = Path(__file__).parent / "static"
+
+_DEFAULT_MAX_TOKENS = 65_536  # 64K
 
 
 def _normalise(
@@ -29,6 +31,13 @@ def _normalise(
     if isinstance(agent_or_agents, Mapping):
         return dict(agent_or_agents)
     return {agent_or_agents.name: agent_or_agents}
+
+
+def _default_db_path(agents: dict[str, Agent[Any]]) -> Path:
+    """Derive a SQLite filename from the first agent's name."""
+    name = next(iter(agents), "lovia")
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+    return Path(f"{safe}.db")
 
 
 def create_app(
@@ -49,11 +58,13 @@ def create_app(
     * ``store`` — fully-formed :class:`ChatStore`.
     * ``db_path`` — persist transcripts + metadata to a SQLite file.
     * ``session`` — bring-your-own :class:`Session`; metadata kept in-memory.
-    * neither — pure in-memory chats (lost on restart). Backward-compatible
-      with the old signature.
+    * neither — default: SQLite file named ``<agent_name>.db``.
 
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
+
+    ``context_policy`` defaults to :class:`SummarizingContextPolicy` with a
+    64 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
     """
     agents = _normalise(agent_or_agents)
 
@@ -64,7 +75,11 @@ def create_app(
     elif session is not None:
         chat_store = ChatStore(session, meta_path=":memory:")
     else:
-        chat_store = ChatStore.in_memory()
+        chat_store = ChatStore.sqlite(_default_db_path(agents))
+
+    effective_policy: ContextPolicy = context_policy or SummarizingContextPolicy(
+        max_tokens=_DEFAULT_MAX_TOKENS
+    )
 
     approvals = ApprovalRegistry()
 
@@ -74,7 +89,7 @@ def create_app(
             agents,
             chat_store,
             approvals,
-            context_policy=context_policy,
+            context_policy=effective_policy,
             title_model=title_model,
             generate_titles=generate_titles,
             title=title,
@@ -89,7 +104,7 @@ def create_app(
     app.state.store = chat_store
     app.state.session = chat_store.session
     app.state.approvals = approvals
-    app.state.context_policy = context_policy
+    app.state.context_policy = effective_policy
     return app
 
 

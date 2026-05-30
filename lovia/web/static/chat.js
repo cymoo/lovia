@@ -21,8 +21,30 @@ const state = {
   streaming: false,
   bubble: null,
   body: null,
+  rawText: "",       // accumulated markdown text for the current body
   toolNodes: new Map(),
 };
+
+// --------------------------------------------------------------- markdown -
+
+marked.setOptions({ gfm: true, breaks: false });
+
+function renderMarkdown(text) {
+  if (!text.trim()) return "";
+  const html = marked.parse(text);
+  return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : html;
+}
+
+// Streaming render: debounce so we don't re-render on every single token.
+let _renderTimer = null;
+function scheduleRender() {
+  clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(flushRender, 60);
+}
+function flushRender() {
+  if (!state.body || !state.rawText) return;
+  state.body.innerHTML = renderMarkdown(state.rawText);
+}
 
 // --------------------------------------------------------------- agents -
 
@@ -145,7 +167,7 @@ async function switchSession(id) {
     if (!res.ok) throw new Error(res.statusText);
     const data = await res.json();
     chatTitleEl.textContent = data.title || "New chat";
-    await renderHistory(data.items || []);
+    renderHistory(data.items || []);
   } catch (err) {
     transcript.innerHTML = `<div class="empty-state"><h2>Couldn't load chat</h2><p>${err.message ?? err}</p></div>`;
   }
@@ -156,6 +178,7 @@ function clearChat() {
   state.sessionId = null;
   state.bubble = null;
   state.body = null;
+  state.rawText = "";
   state.toolNodes.clear();
   chatTitleEl.textContent = "New chat";
   transcript.innerHTML = `
@@ -172,10 +195,11 @@ newChatBtn.addEventListener("click", () => {
 
 // ------------------------------------------------ history rendering ----
 
-async function renderHistory(items) {
+function renderHistory(items) {
   transcript.innerHTML = "";
   state.bubble = null;
   state.body = null;
+  state.rawText = "";
   state.toolNodes.clear();
 
   const pendingResults = new Map(); // call_id → result text
@@ -193,15 +217,13 @@ async function renderHistory(items) {
       currentBubble = null;
       appendUserTurn(contentText(it.content));
     } else if (it.role === "assistant") {
-      // Each assistant message creates (or continues) the bubble.
       if (!currentBubble) currentBubble = startAssistantTurn().bubble;
       const text = contentText(it.content);
       if (text) {
         const body = document.createElement("div");
         body.className = "body";
-        body.textContent = text;
+        body.innerHTML = renderMarkdown(text);
         currentBubble.appendChild(body);
-        await renderMarkdownElement(body);
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
@@ -217,6 +239,7 @@ async function renderHistory(items) {
   $$(".turn.streaming").forEach((n) => n.classList.remove("streaming"));
   state.bubble = null;
   state.body = null;
+  state.rawText = "";
   scrollDown();
 }
 
@@ -282,6 +305,7 @@ function startAssistantTurn() {
   transcript.appendChild(node);
   state.bubble = node.querySelector(".bubble");
   state.body = null;
+  state.rawText = "";
   state.toolNodes.clear();
   scrollDown();
   return { node, bubble: state.bubble };
@@ -293,6 +317,7 @@ function ensureBody() {
     body.className = "body";
     state.bubble.appendChild(body);
     state.body = body;
+    state.rawText = "";
   }
   return state.body;
 }
@@ -310,6 +335,7 @@ function appendTool(call) {
   state.bubble.appendChild(node);
   state.toolNodes.set(call.id, node);
   state.body = null;
+  state.rawText = "";
   scrollDown();
 }
 
@@ -345,6 +371,7 @@ function appendApproval(call) {
   node.querySelector(".decline").addEventListener("click", () => resolve("deny"));
   state.bubble.appendChild(node);
   state.body = null;
+  state.rawText = "";
   scrollDown();
 }
 
@@ -416,6 +443,9 @@ async function runStream(message) {
   } catch (err) {
     ensureBody().textContent += `\n[error] ${err.message ?? err}`;
   } finally {
+    // Flush any pending debounced render before removing the streaming class.
+    clearTimeout(_renderTimer);
+    if (state.body && state.rawText) flushRender();
     turn.classList.remove("streaming");
     state.streaming = false;
     sendBtn.disabled = false;
@@ -452,12 +482,17 @@ async function handleEvent({ event, data }) {
       state.sessionId = data.session_id;
       break;
     case "text_delta":
-      ensureBody().textContent += data.delta;
+      ensureBody();
+      state.rawText += data.delta;
+      scheduleRender();
       scrollDown();
       break;
     case "message_completed":
-      if (state.body) await renderMarkdownElement(state.body);
+      // Cancel debounced render and do a final synchronous render.
+      clearTimeout(_renderTimer);
+      if (state.body && state.rawText) flushRender();
       state.body = null;
+      state.rawText = "";
       break;
     case "tool_call":
       appendTool(data);
@@ -475,29 +510,12 @@ async function handleEvent({ event, data }) {
       }
       break;
     case "error":
-      ensureBody().textContent += `\n[error] ${data.message}`;
+      ensureBody();
+      state.rawText += `\n[error] ${data.message}`;
+      flushRender();
       break;
     case "done":
       break;
-  }
-}
-
-// ----------------------------------------------------------- markdown -
-
-async function renderMarkdownElement(el) {
-  const text = el.textContent || "";
-  if (!text.trim()) return;
-  try {
-    const res = await fetch("/api/markdown", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    el.innerHTML = data.html;
-  } catch (err) {
-    console.error("markdown:", err);
   }
 }
 

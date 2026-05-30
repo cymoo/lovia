@@ -9,7 +9,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-_MARKDOWN = MarkdownIt("commonmark", {"html": False, "linkify": False})
+_MARKDOWN = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable("table")
 
 
 def render_markdown(text: str) -> str:

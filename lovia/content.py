@@ -72,6 +72,7 @@ ContentBlock = Union[TextBlock, ImageBlock]
 """Discriminated union of all content block types."""
 
 
+# TODO: likely useless
 def normalize_content(
     content: "str | ContentBlock | list[ContentBlock] | None",
 ) -> "str | list[ContentBlock] | None":

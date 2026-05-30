@@ -99,6 +99,7 @@ def openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# TODO: likely useless
 def openai_chat_tool_to_responses(tool: dict[str, Any]) -> dict[str, Any]:
     """Flatten an OpenAI Chat function tool schema to Responses format."""
     if tool.get("type") != "function":

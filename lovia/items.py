@@ -198,6 +198,10 @@ def item_to_dict(item: Item) -> dict[str, Any]:
 
     Handles :class:`InputMessageItem` specially because ``ContentBlock``
     dataclasses also need their ``type`` discriminator preserved.
+    :class:`ToolCallOutputItem` is handled specially because its ``raw``
+    field may hold arbitrary Python objects (e.g. Pydantic models) that are
+    not JSON-serializable; ``raw`` is never restored on deserialization so it
+    is always omitted here.
     ``dataclasses.asdict`` does the right thing for everything else.
     """
     if isinstance(item, InputMessageItem):
@@ -205,6 +209,14 @@ def item_to_dict(item: Item) -> dict[str, Any]:
             "type": item.type,
             "role": item.role,
             "content": _content_to_dict(item.content),
+        }
+    if isinstance(item, ToolCallOutputItem):
+        return {
+            "type": item.type,
+            "call_id": item.call_id,
+            "output": item.output,
+            "is_error": item.is_error,
+            "raw": None,
         }
     return asdict(item)
 

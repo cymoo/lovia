@@ -19,6 +19,7 @@ import os
 from dotenv import load_dotenv
 
 from lovia import Agent, SummarizingContextPolicy, tool
+from lovia.sandbox.sandbox import Sandbox
 from lovia.web import serve
 
 load_dotenv()
@@ -45,13 +46,15 @@ def main() -> None:
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
         tools=[add, send_email],
+        sandbox=Sandbox.local(".", mode="trusted"),
     )
     # Default policy: when the prompt approaches the model's context
     # window, summarize older turns and keep the last 10. ``max_tokens=None``
     # tells the policy to ask the provider for the active model's window —
     # falling back to the reactive overflow path for unknown models so the
     # server never crashes a long-running chat session.
-    policy = SummarizingContextPolicy(keep_recent_messages=10)
+    # policy = SummarizingContextPolicy(keep_recent_messages=10)
+    policy = SummarizingContextPolicy(max_tokens=200_000)
     serve(agent, host="127.0.0.1", port=8000, context_policy=policy)
 
 

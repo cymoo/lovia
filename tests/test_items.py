@@ -37,7 +37,7 @@ from lovia import (
         ReasoningItem(content="thinking..."),
         ReasoningItem(content="opaque", id="r_42"),
         ToolCallItem(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
-        ToolCallOutputItem(call_id="c1", output="3", raw=3),
+        ToolCallOutputItem(call_id="c1", output="3"),
         ToolCallOutputItem(call_id="c2", output="boom", is_error=True),
     ],
 )

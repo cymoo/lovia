@@ -102,7 +102,6 @@ from .output import DefaultOutputRepair, OutputRepairStrategy
 from .tools import Tool, ToolPolicy, ToolResultRenderer, ToolWrap, WrapPolicy, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
-
 # ---------------------------------------------------------------------------
 # Logging setup
 #
@@ -248,4 +247,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.5.2"
+__version__ = "0.5.4"

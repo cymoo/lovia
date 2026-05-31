@@ -72,7 +72,7 @@ async def test_coding_mode_shell_uses_existing_approval_flow(tmp_path) -> None:
     result = await handle.result()
     assert saw_approval is True
     tool_msg = next(m for m in result.messages if m.role == "tool")
-    assert '"stdout":"hi\\n"' in tool_msg.content
+    assert '"stdout": "hi\\n"' in tool_msg.content
 
 
 @pytest.mark.asyncio

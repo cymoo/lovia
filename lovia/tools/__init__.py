@@ -132,16 +132,26 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def _to_jsonable(value: Any) -> Any:
+    """Recursively convert Pydantic models and dataclasses to JSON-safe types."""
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    if isinstance(value, list):
+        return [_to_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    return value
+
+
 def default_result_renderer(result: Any) -> str:
     """Render a tool result as the string the model will see."""
     if isinstance(result, str):
         return result
-    if isinstance(result, BaseModel):
-        return result.model_dump_json()
-    if dataclasses.is_dataclass(result) and not isinstance(result, type):
-        result = dataclasses.asdict(result)
+    result = _to_jsonable(result)
     try:
-        return json.dumps(result, default=str, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False)
     except TypeError:
         return str(result)
 

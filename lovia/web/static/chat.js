@@ -276,6 +276,7 @@ composer.addEventListener("submit", async (e) => {
   if (!message) return;
   promptEl.value = "";
   autoresize();
+  _userScrolled = false;
   $("#empty-state")?.remove();
   appendUserTurn(message);
   await runStream(message);
@@ -391,7 +392,20 @@ function formatArgs(args) {
   }
 }
 
+// Auto-scroll: disabled when the user has scrolled up, re-enabled when they
+// return to the bottom.
+let _userScrolled = false;
+
+function _isAtBottom() {
+  return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 50;
+}
+
+transcript.addEventListener("scroll", () => {
+  _userScrolled = !_isAtBottom();
+}, { passive: true });
+
 function scrollDown() {
+  if (_userScrolled) return;
   requestAnimationFrame(() => {
     transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
   });

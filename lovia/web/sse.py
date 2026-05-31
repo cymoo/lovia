@@ -7,8 +7,19 @@ correct keep-alive and disconnect semantics.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any, AsyncIterator
+
+from pydantic import BaseModel
+
+class _ModelEncoder(json.JSONEncoder):
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, BaseModel):
+            return obj.model_dump()
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
+        return super().default(obj)
 
 from .. import events
 from ..items import Item, MessageOutputItem, ReasoningItem, ToolCallItem
@@ -61,7 +72,7 @@ def _format_result(value: Any) -> str:
                 lines.append(f"{k}: {v}")
         return "\n".join(lines)
     if isinstance(value, (dict, list)):
-        return json.dumps(value, indent=2, ensure_ascii=False)
+        return json.dumps(value, indent=2, ensure_ascii=False, cls=_ModelEncoder)
     return str(value)
 
 

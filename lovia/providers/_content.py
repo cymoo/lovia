@@ -92,14 +92,16 @@ def text_only(content: str | list[Any] | None) -> str:
 def openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
     """Convert an OpenAI Chat function tool schema to Anthropic's shape."""
     fn = tool.get("function") or {}
-    return {
+    out = {
         "name": fn.get("name", ""),
         "description": fn.get("description", ""),
         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
     }
+    if "strict" in fn:
+        out["strict"] = fn["strict"]
+    return out
 
 
-# TODO: likely useless
 def openai_chat_tool_to_responses(tool: dict[str, Any]) -> dict[str, Any]:
     """Flatten an OpenAI Chat function tool schema to Responses format."""
     if tool.get("type") != "function":

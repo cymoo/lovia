@@ -69,3 +69,22 @@ async def test_iter_sse_json_skips_noise_and_stops_on_done() -> None:
     events = [event async for event in iter_sse_json(response)]
 
     assert events == [{"type": "one"}, {"type": "two"}]
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_json_joins_multiline_data_and_flushes_eof() -> None:
+    response = httpx.Response(
+        200,
+        content=(
+            b"event: message\n"
+            b'data: {"type":\n'
+            b'data: "one"}\n\n'
+            b"data: []\n\n"
+            b'data: {"type": "tail"}\n'
+        ),
+        request=httpx.Request("POST", "https://provider.test/v1"),
+    )
+
+    events = [event async for event in iter_sse_json(response)]
+
+    assert events == [{"type": "one"}, {"type": "tail"}]

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lovia"
-version = "0.5.4"
+version = "0.5.5"
 description = "A lightweight and elegant Agent framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -69,4 +69,3 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/cymoo/lovia"
 Repository = "https://github.com/cymoo/lovia"
-

@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from ..exceptions import ProviderError
 from ..items import (
     FinishDelta,
     Item,
@@ -65,6 +66,7 @@ class AnthropicProvider:
         timeout: float = 60.0,
         anthropic_version: str = _DEFAULT_VERSION,
         default_max_tokens: int = 4096,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -75,6 +77,7 @@ class AnthropicProvider:
         self._owns_client = client is None
         self._version = anthropic_version
         self._default_max_tokens = default_max_tokens
+        self._extra_headers = dict(default_headers or {})
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -90,17 +93,23 @@ class AnthropicProvider:
         }
         if self._api_key:
             headers["x-api-key"] = self._api_key
+        for key, value in self._extra_headers.items():
+            if key.lower() == "x-api-key" and self._api_key:
+                continue
+            headers[key] = value
         return headers
 
     def _build_payload(
         self,
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None,
         settings: ModelSettings | None,
         stream: bool,
     ) -> dict[str, Any]:
         system_blocks, anthropic_messages = _to_anthropic_messages(messages)
         cache_system = bool(settings and settings.cache_system)
+        extra = settings.extra if settings is not None else {}
         if cache_system and system_blocks:
             # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
             system_blocks[-1] = {
@@ -113,7 +122,7 @@ class AnthropicProvider:
             "messages": anthropic_messages,
             "max_tokens": (
                 settings.max_tokens
-                if settings and settings.max_tokens
+                if settings and settings.max_tokens is not None
                 else self._default_max_tokens
             ),
         }
@@ -129,6 +138,20 @@ class AnthropicProvider:
                     "cache_control": {"type": "ephemeral"},
                 }
             payload["tools"] = anthropic_tools
+        if response_format is not None:
+            output_config = _response_format_to_output_config(response_format)
+            if output_config is not None:
+                payload["output_config"] = output_config
+        if (
+            tools
+            and settings is not None
+            and settings.parallel_tool_calls is False
+            and "tool_choice" not in extra
+        ):
+            payload["tool_choice"] = {
+                "type": "auto",
+                "disable_parallel_tool_use": True,
+            }
         if stream:
             payload["stream"] = True
         if settings is not None:
@@ -138,7 +161,9 @@ class AnthropicProvider:
                 payload["top_p"] = settings.top_p
             if settings.stop is not None:
                 payload["stop_sequences"] = settings.stop
-            payload.update(settings.extra)
+            # Provider-specific extras intentionally win over adapter defaults
+            # such as output_config/tool_choice.
+            payload.update(extra)
         return payload
 
     async def stream(
@@ -149,11 +174,12 @@ class AnthropicProvider:
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
-        _ = response_format
         # Anthropic Messages speaks ChatMessage on the wire; flatten Items
         # via the standard helper before translating to Anthropic's shape.
         messages = items_to_chat_messages(input)
-        payload = self._build_payload(messages, tools, settings, stream=True)
+        payload = self._build_payload(
+            messages, tools, response_format, settings, stream=True
+        )
 
         # Anthropic streams content blocks by index. We only need to remember
         # id/name per block so we can echo them on every argument delta.
@@ -230,6 +256,19 @@ class AnthropicProvider:
                         usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
                 elif etype == "message_stop":
                     break
+                elif etype == "error":
+                    error = event.get("error") or {}
+                    msg = (
+                        error.get("message")
+                        or event.get("message")
+                        or "Anthropic error"
+                    )
+                    raise ProviderError(
+                        f"Anthropic stream error: {msg}",
+                        vendor="anthropic",
+                        model=self.model,
+                        retryable=_is_stream_error_retryable(error),
+                    )
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=_normalize_stop_reason(stop_reason))
@@ -245,6 +284,31 @@ def _normalize_stop_reason(reason: str | None) -> str | None:
         "max_tokens": "length",
         "tool_use": "tool_calls",
     }.get(reason, reason)
+
+
+def _response_format_to_output_config(
+    response_format: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Map supported OpenAI response_format shapes to Anthropic output_config."""
+    if response_format.get("type") != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return {"format": {"type": "json_schema", "schema": schema}}
+
+
+def _is_stream_error_retryable(error: dict[str, Any]) -> bool:
+    error_type = str(error.get("type") or "").lower()
+    message = str(error.get("message") or "").lower()
+    text = f"{error_type} {message}"
+    return any(
+        needle in text
+        for needle in ("overloaded", "rate", "timeout", "temporar", "server")
+    )
 
 
 def _to_anthropic_messages(
@@ -336,9 +400,23 @@ def _is_context_overflow(status: int, body: str) -> bool:
     )
 
 
-# Conservative table of known model context windows. Unknown models fall back
-# to reactive overflow handling.
+# Context-window table for current Anthropic Claude API model IDs and aliases.
+# Unknown models fall back to reactive overflow handling.
 _ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
+    "claude-opus-4-8": 1_000_000,
+    "claude-opus-4-7": 1_000_000,
+    "claude-opus-4-6": 1_000_000,
+    "claude-opus-4-5": 200_000,
+    "claude-opus-4-5-20251101": 200_000,
+    "claude-opus-4-1": 200_000,
+    "claude-opus-4-1-20250805": 200_000,
+    "claude-opus-4-0": 200_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-sonnet-4-5-20250929": 200_000,
+    "claude-sonnet-4-0": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-haiku-4-5-20251001": 200_000,
     "claude-3-5-sonnet-latest": 200_000,
     "claude-3-5-sonnet-20241022": 200_000,
     "claude-3-5-haiku-latest": 200_000,
@@ -347,8 +425,6 @@ _ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-opus-20240229": 200_000,
     "claude-3-sonnet-20240229": 200_000,
     "claude-3-haiku-20240307": 200_000,
-    "claude-sonnet-4-5": 200_000,
     "claude-sonnet-4-20250514": 200_000,
     "claude-opus-4-20250514": 200_000,
-    "claude-opus-4-5": 200_000,
 }

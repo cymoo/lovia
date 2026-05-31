@@ -1,0 +1,391 @@
+"""Tests for the Anthropic provider adapter."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from typing import Any
+
+import httpx
+import pytest
+
+from lovia import ImageBlock, TextBlock
+from lovia.exceptions import ContextOverflowError, ProviderError
+from lovia.items import (
+    FinishDelta,
+    InputMessageItem,
+    ItemDelta,
+    ReasoningDelta,
+    TextDelta,
+    ToolCallDelta,
+    UsageDelta,
+)
+from lovia.messages import ChatMessage, ToolCall
+from lovia.providers.anthropic import (
+    AnthropicProvider,
+    _is_context_overflow,
+    _normalize_stop_reason,
+    _openai_tool_to_anthropic,
+    _to_anthropic_messages,
+)
+from lovia.providers.base import ModelSettings
+
+
+def _sse(events: list[dict[str, Any]]) -> bytes:
+    lines: list[str] = []
+    for evt in events:
+        lines.append(f"event: {evt['type']}")
+        lines.append(f"data: {json.dumps(evt)}")
+        lines.append("")
+    return ("\n".join(lines) + "\n").encode()
+
+
+async def _collect(stream: Any) -> list[ItemDelta]:
+    out: list[ItemDelta] = []
+    async for delta in stream:
+        out.append(delta)
+    return out
+
+
+def _deltas(deltas: list[ItemDelta], cls: type[Any]) -> Iterator[Any]:
+    return (delta for delta in deltas if isinstance(delta, cls))
+
+
+def test_message_translation_extracts_system_and_tool_blocks() -> None:
+    msgs = [
+        ChatMessage(role="system", content="be terse"),
+        ChatMessage(role="system", content=[TextBlock("second")]),
+        ChatMessage(role="user", content="hi"),
+        ChatMessage(
+            role="assistant",
+            content="working",
+            reasoning_content="thinking",
+            tool_calls=[ToolCall(id="c1", name="add", arguments='{"a":1,"b":2}')],
+        ),
+        ChatMessage(role="tool", content="3", tool_call_id="c1"),
+        ChatMessage(role="user", content=None),
+    ]
+
+    system, out = _to_anthropic_messages(msgs)
+
+    assert system == [{"type": "text", "text": "be terse\n\nsecond"}]
+    assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+    assistant_blocks = out[1]["content"]
+    assert assistant_blocks[0] == {"type": "thinking", "thinking": "thinking"}
+    assert assistant_blocks[1] == {"type": "text", "text": "working"}
+    assert assistant_blocks[2]["type"] == "tool_use"
+    assert assistant_blocks[2]["input"] == {"a": 1, "b": 2}
+    assert out[2]["content"][0] == {
+        "type": "tool_result",
+        "tool_use_id": "c1",
+        "content": "3",
+    }
+    assert out[3] == {"role": "user", "content": ""}
+
+
+def test_message_translation_wraps_invalid_tool_arguments() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[ToolCall(id="c1", name="broken", arguments="{bad")],
+            )
+        ]
+    )
+
+    assert out[0]["content"][0]["input"] == {"_raw": "{bad"}
+
+
+def test_tool_schema_translation_preserves_strict() -> None:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "add",
+            "description": "sum",
+            "parameters": {"type": "object", "properties": {"a": {"type": "integer"}}},
+            "strict": True,
+        },
+    }
+
+    out = _openai_tool_to_anthropic(schema)
+
+    assert out["name"] == "add"
+    assert out["description"] == "sum"
+    assert out["input_schema"]["properties"]["a"]["type"] == "integer"
+    assert out["strict"] is True
+
+
+def test_translates_image_blocks_with_url_and_base64() -> None:
+    msgs = [
+        ChatMessage(
+            role="user",
+            content=[
+                TextBlock("describe"),
+                ImageBlock(url="https://x/y.png"),
+                ImageBlock(data="ZmFrZQ==", mime_type="image/png"),
+            ],
+        )
+    ]
+
+    _, out = _to_anthropic_messages(msgs)
+
+    parts = out[0]["content"]
+    assert parts[0] == {"type": "text", "text": "describe"}
+    assert parts[1] == {
+        "type": "image",
+        "source": {"type": "url", "url": "https://x/y.png"},
+    }
+    assert parts[2]["type"] == "image"
+    assert parts[2]["source"]["type"] == "base64"
+    assert parts[2]["source"]["media_type"] == "image/png"
+
+
+def test_build_payload_maps_settings_cache_and_structured_output() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        messages=[
+            ChatMessage(role="system", content="be terse"),
+            ChatMessage(role="user", content="hi"),
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {"type": "object"}},
+            }
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "Answer", "schema": {"type": "object"}},
+        },
+        settings=ModelSettings(
+            temperature=0,
+            top_p=0.8,
+            max_tokens=0,
+            stop=["END"],
+            parallel_tool_calls=False,
+            cache_system=True,
+        ),
+        stream=False,
+    )
+
+    assert payload["max_tokens"] == 0
+    assert payload["temperature"] == 0
+    assert payload["top_p"] == 0.8
+    assert payload["stop_sequences"] == ["END"]
+    assert payload["system"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert payload["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert payload["output_config"] == {
+        "format": {"type": "json_schema", "schema": {"type": "object"}}
+    }
+    assert payload["tool_choice"] == {
+        "type": "auto",
+        "disable_parallel_tool_use": True,
+    }
+
+
+def test_build_payload_extra_overrides_adapter_defaults() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        messages=[ChatMessage(role="user", content="hi")],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {"type": "object"}},
+            }
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "Answer", "schema": {"type": "object"}},
+        },
+        settings=ModelSettings(
+            parallel_tool_calls=False,
+            extra={
+                "output_config": {"format": {"type": "json_schema", "schema": {}}},
+                "tool_choice": {"type": "none"},
+            },
+        ),
+        stream=True,
+    )
+
+    assert payload["output_config"] == {"format": {"type": "json_schema", "schema": {}}}
+    assert payload["tool_choice"] == {"type": "none"}
+    assert payload["stream"] is True
+
+
+def test_response_format_ignores_unsupported_openai_shapes() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        messages=[ChatMessage(role="user", content="hi")],
+        tools=None,
+        response_format={"type": "json_object"},
+        settings=ModelSettings(),
+        stream=False,
+    )
+
+    assert "output_config" not in payload
+
+
+def test_headers_include_extra_headers_without_overriding_explicit_api_key() -> None:
+    provider = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="real-key",
+        default_headers={
+            "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+            "x-api-key": "wrong-key",
+        },
+    )
+
+    headers = provider._headers()
+
+    assert headers["x-api-key"] == "real-key"
+    assert headers["anthropic-beta"] == "fine-grained-tool-streaming-2025-05-14"
+
+
+@pytest.mark.asyncio
+async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
+    body = _sse(
+        [
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "cache_creation_input_tokens": 2,
+                        "cache_read_input_tokens": 3,
+                    }
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "hi"},
+            },
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "thinking"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "thinking_delta", "thinking": "think"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "signature_delta", "signature": "sig"},
+            },
+            {
+                "type": "content_block_start",
+                "index": 2,
+                "content_block": {"type": "tool_use", "id": "c1", "name": "lookup"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {"type": "input_json_delta", "partial_json": '{"q":'},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {"type": "input_json_delta", "partial_json": '"x"}'},
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {
+                    "output_tokens": 8,
+                    "cache_creation_input_tokens": 4,
+                    "cache_read_input_tokens": 5,
+                },
+            },
+            {"type": "message_stop"},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(
+        provider.stream([InputMessageItem(role="user", content="hi")])
+    )
+
+    assert "".join(delta.text for delta in _deltas(deltas, TextDelta)) == "hi"
+    assert "".join(delta.text for delta in _deltas(deltas, ReasoningDelta)) == "think"
+    tool_deltas = list(_deltas(deltas, ToolCallDelta))
+    assert [delta.arguments for delta in tool_deltas] == ["", '{"q":', '"x"}']
+    assert all(
+        delta.call_id == "c1" and delta.name == "lookup" for delta in tool_deltas
+    )
+    usage = next(_deltas(deltas, UsageDelta)).usage
+    assert usage.input_tokens == 10
+    assert usage.output_tokens == 8
+    assert usage.cache_write_tokens == 4
+    assert usage.cache_read_tokens == 5
+    assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_stream_error_raises_provider_error() -> None:
+    body = _sse(
+        [
+            {
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "try later"},
+            }
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+
+    assert exc_info.value.vendor == "anthropic"
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_http_context_overflow_is_classified() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, content=b"prompt is too long")
+        )
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    with pytest.raises(ContextOverflowError):
+        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+
+
+def test_stop_reason_and_context_overflow_helpers() -> None:
+    assert _normalize_stop_reason("end_turn") == "stop"
+    assert _normalize_stop_reason("max_tokens") == "length"
+    assert _normalize_stop_reason("unknown") == "unknown"
+    assert _is_context_overflow(400, "input is too long")
+    assert _is_context_overflow(413, "context window exceeded")
+    assert not _is_context_overflow(500, "prompt is too long")
+    assert not _is_context_overflow(400, "invalid api key")
+
+
+def test_context_window_includes_current_claude_aliases() -> None:
+    provider = AnthropicProvider(model="claude-opus-4-8", api_key="x")
+
+    assert provider.context_window("claude-opus-4-8") == 1_000_000
+    assert provider.context_window("claude-opus-4-7") == 1_000_000
+    assert provider.context_window("claude-opus-4-6") == 1_000_000
+    assert provider.context_window("claude-sonnet-4-6") == 1_000_000
+    assert provider.context_window("claude-haiku-4-5") == 200_000

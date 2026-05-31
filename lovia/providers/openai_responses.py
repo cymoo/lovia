@@ -146,11 +146,16 @@ class OpenAIResponsesProvider:
         ).rstrip("/")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client or httpx.AsyncClient(timeout=timeout)
+        self._owns_client = client is None
         self._extra_headers = dict(extra_headers or {})
         # ``store=False`` is the default because lovia already owns the
         # transcript via the Session/Checkpointer stack. Flip it to ``True``
         # if you want to drive conversations purely via ``previous_response_id``.
         self.store = store
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -227,6 +232,7 @@ class OpenAIResponsesProvider:
         # call so we can echo (call_id, name) on every argument delta.
         fn_call_ids: dict[int, str] = {}
         fn_call_names: dict[int, str] = {}
+        fn_call_arguments: dict[int, str] = {}
         usage = Usage()
         finish_reason: str | None = None
 
@@ -267,21 +273,68 @@ class OpenAIResponsesProvider:
                         idx = evt.get("output_index", 0)
                         fn_call_ids[idx] = item.get("call_id", "")
                         fn_call_names[idx] = item.get("name", "")
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=fn_call_ids[idx],
+                            name=fn_call_names[idx],
+                            arguments="",
+                        )
                 elif etype == "response.function_call_arguments.delta":
                     idx = evt.get("output_index", 0)
                     chunk = evt.get("delta", "")
+                    fn_call_arguments[idx] = fn_call_arguments.get(idx, "") + chunk
                     yield ToolCallDelta(
                         index=idx,
                         call_id=fn_call_ids.get(idx, ""),
                         name=fn_call_names.get(idx, ""),
                         arguments=chunk,
                     )
+                elif etype == "response.function_call_arguments.done":
+                    idx = evt.get("output_index", 0)
+                    args = evt.get("arguments", "")
+                    seen = fn_call_arguments.get(idx, "")
+                    if args and args != seen:
+                        chunk = args[len(seen) :] if args.startswith(seen) else args
+                        fn_call_arguments[idx] = seen + chunk
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=fn_call_ids.get(idx, ""),
+                            name=fn_call_names.get(idx, ""),
+                            arguments=chunk,
+                        )
+                elif etype == "response.output_item.done":
+                    item = evt.get("item") or {}
+                    if item.get("type") == "function_call":
+                        idx = evt.get("output_index", 0)
+                        if idx not in fn_call_ids:
+                            fn_call_ids[idx] = item.get("call_id", "")
+                            fn_call_names[idx] = item.get("name", "")
+                            yield ToolCallDelta(
+                                index=idx,
+                                call_id=fn_call_ids[idx],
+                                name=fn_call_names[idx],
+                                arguments="",
+                            )
+                        args = item.get("arguments", "")
+                        seen = fn_call_arguments.get(idx, "")
+                        if args and args != seen:
+                            chunk = args[len(seen) :] if args.startswith(seen) else args
+                            fn_call_arguments[idx] = seen + chunk
+                            yield ToolCallDelta(
+                                index=idx,
+                                call_id=fn_call_ids.get(idx, ""),
+                                name=fn_call_names.get(idx, ""),
+                                arguments=chunk,
+                            )
                 elif etype == "response.completed":
                     resp = evt.get("response") or {}
                     u = resp.get("usage") or {}
                     usage = Usage(
                         input_tokens=u.get("input_tokens", 0),
                         output_tokens=u.get("output_tokens", 0),
+                        cache_read_tokens=(u.get("input_tokens_details") or {}).get(
+                            "cached_tokens", 0
+                        ),
                     )
                     # ``status`` is the closest analogue to a finish reason.
                     finish_reason = resp.get("status") or "completed"
@@ -295,8 +348,20 @@ class OpenAIResponsesProvider:
                         f"OpenAI Responses error: {msg}",
                         vendor="openai",
                         model=self.model,
-                        retryable=False,
+                        retryable=_is_stream_error_retryable(evt),
                     )
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=finish_reason or "stop")
+
+
+def _is_stream_error_retryable(event: dict[str, Any]) -> bool:
+    error = event.get("error") or {}
+    error_type = str(error.get("type") or event.get("type") or "").lower()
+    code = str(error.get("code") or event.get("code") or "").lower()
+    message = str(error.get("message") or event.get("message") or "").lower()
+    text = " ".join((error_type, code, message))
+    return any(
+        needle in text
+        for needle in ("rate", "timeout", "overloaded", "server", "temporar")
+    )

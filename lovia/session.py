@@ -4,11 +4,10 @@ A :class:`Session` stores the conversation history for a multi-turn chat. It
 is an intentionally minimal async protocol; concrete implementations live in
 :mod:`lovia.stores`.
 
-The runner accepts an optional ``Session``; if provided, it loads the prior
-items, converts them to the wire format for the model, and appends the new
-items produced by the run when it finishes. Application code controls the
-``session_id`` so multi-user systems just key sessions by user / conversation
-id.
+The runner accepts an optional ``Session``; if provided, it loads prior items,
+keeps them as the canonical provider input, and persists the updated item list
+when the run finishes. Application code controls the ``session_id`` so
+multi-user systems just key sessions by user / conversation id.
 
 Why :class:`Item` and not :class:`ChatMessage`?
 The Item form is richer (it preserves reasoning, server-side tool calls,

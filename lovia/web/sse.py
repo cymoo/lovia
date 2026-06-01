@@ -13,6 +13,10 @@ from typing import Any, AsyncIterator
 
 from pydantic import BaseModel
 
+from .. import events
+from ..items import Item, MessageOutputItem, ReasoningItem, ToolCallItem
+
+
 class _ModelEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> Any:
         if isinstance(obj, BaseModel):
@@ -20,9 +24,6 @@ class _ModelEncoder(json.JSONEncoder):
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             return dataclasses.asdict(obj)
         return super().default(obj)
-
-from .. import events
-from ..items import Item, MessageOutputItem, ReasoningItem, ToolCallItem
 
 
 def _items_to_dict(items: list[Item]) -> dict[str, Any]:

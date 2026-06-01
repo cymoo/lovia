@@ -44,7 +44,7 @@ def main() -> None:
             "You are a friendly assistant. Use tools when helpful. "
             "Keep replies short and conversational. Ask for clarification if the question is ambiguous."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[add, send_email],
         sandbox=Sandbox.local(".", mode="trusted"),
     )

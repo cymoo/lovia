@@ -22,8 +22,8 @@ Notes / limitations:
   ``code_interpreter``) are not surfaced as distinct items yet — they
   are best invoked through the Responses-native flow once the type
   family grows a dedicated server-tool delta.
-* ``previous_response_id`` (for stateful conversations stored on
-  OpenAI's side) can be passed through :attr:`ModelSettings.extra`.
+* ``previous_response_id`` (for stateful conversations stored on OpenAI's
+  side) can be passed through ``provider_options["openai-responses"]``.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from ..items import (
     FinishDelta,
     InputMessageItem,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
     MessageOutputItem,
     ReasoningDelta,
@@ -55,7 +56,7 @@ from ._content import (
 )
 from ._http import raise_for_provider_status
 from ._sse import iter_sse_json
-from .base import ModelSettings
+from .base import ModelSettings, provider_options
 
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -90,15 +91,14 @@ def _items_to_responses_input(items: list[Item]) -> list[dict[str, Any]]:
                 entry["id"] = it.id
             out.append(entry)
         elif isinstance(it, ReasoningItem):
-            # Pass through verbatim. ``content`` for o-series Responses is
-            # the opaque encrypted blob; for other providers it's plain text
-            # which the Responses API will reject — callers must only feed
-            # reasoning items that originated from Responses.
+            if it.provider != "openai-responses":
+                continue
             entry = {"type": "reasoning", "summary": []}
             if it.id:
                 entry["id"] = it.id
-            if it.content:
-                entry["encrypted_content"] = it.content
+            encrypted = it.metadata.get("encrypted_content")
+            if isinstance(encrypted, str) and encrypted:
+                entry["encrypted_content"] = encrypted
             out.append(entry)
         elif isinstance(it, ToolCallItem):
             out.append(
@@ -128,6 +128,7 @@ class OpenAIResponsesProvider:
     """OpenAI Responses API adapter."""
 
     name = "openai-responses"
+    supports_json_schema = True
 
     def __init__(
         self,
@@ -210,9 +211,7 @@ class OpenAIResponsesProvider:
                 payload["max_output_tokens"] = settings.max_tokens
             if settings.parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = settings.parallel_tool_calls
-            # Anything else (reasoning effort, previous_response_id, ...)
-            # rides through ``extra``.
-            payload.update(settings.extra)
+            payload.update(provider_options(settings, self.name, "responses"))
         return payload
 
     async def stream(
@@ -233,6 +232,7 @@ class OpenAIResponsesProvider:
         fn_call_ids: dict[int, str] = {}
         fn_call_names: dict[int, str] = {}
         fn_call_arguments: dict[int, str] = {}
+        reasoning_text: dict[int, list[str]] = {}
         usage = Usage()
         finish_reason: str | None = None
 
@@ -266,6 +266,8 @@ class OpenAIResponsesProvider:
                 ):
                     chunk = evt.get("delta", "")
                     if chunk:
+                        idx = evt.get("output_index", 0)
+                        reasoning_text.setdefault(idx, []).append(chunk)
                         yield ReasoningDelta(text=chunk)
                 elif etype == "response.output_item.added":
                     item = evt.get("item") or {}
@@ -326,6 +328,43 @@ class OpenAIResponsesProvider:
                                 name=fn_call_names.get(idx, ""),
                                 arguments=chunk,
                             )
+                        yield ItemCompletedDelta(
+                            ToolCallItem(
+                                call_id=item.get("call_id", fn_call_ids.get(idx, "")),
+                                name=item.get("name", fn_call_names.get(idx, "")),
+                                arguments=(
+                                    item.get("arguments")
+                                    or fn_call_arguments.get(idx)
+                                    or "{}"
+                                ),
+                            )
+                        )
+                    elif item.get("type") == "message":
+                        content = _message_output_text(item)
+                        if content:
+                            yield ItemCompletedDelta(
+                                MessageOutputItem(
+                                    id=item.get("id"),
+                                    content=content,
+                                )
+                            )
+                    elif item.get("type") == "reasoning":
+                        idx = evt.get("output_index", 0)
+                        metadata: dict[str, Any] = {}
+                        encrypted = item.get("encrypted_content")
+                        if isinstance(encrypted, str) and encrypted:
+                            metadata["encrypted_content"] = encrypted
+                        content = _reasoning_text(item) or "".join(
+                            reasoning_text.get(idx, [])
+                        )
+                        yield ItemCompletedDelta(
+                            ReasoningItem(
+                                id=item.get("id"),
+                                content=content,
+                                provider=self.name,
+                                metadata=metadata,
+                            )
+                        )
                 elif etype == "response.completed":
                     resp = evt.get("response") or {}
                     u = resp.get("usage") or {}
@@ -353,6 +392,25 @@ class OpenAIResponsesProvider:
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=finish_reason or "stop")
+
+
+def _message_output_text(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for block in item.get("content") or []:
+        if block.get("type") in ("output_text", "text"):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+def _reasoning_text(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for summary in item.get("summary") or []:
+        text = summary.get("text") if isinstance(summary, dict) else None
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts)
 
 
 def _is_stream_error_retryable(event: dict[str, Any]) -> bool:

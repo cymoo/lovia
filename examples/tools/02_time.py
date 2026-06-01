@@ -11,7 +11,7 @@ from lovia import Agent, Runner
 from lovia.tools.time import now, sleep
 
 load_dotenv()
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
 
 
 async def main() -> None:

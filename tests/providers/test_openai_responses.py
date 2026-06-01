@@ -12,6 +12,7 @@ import pytest
 from lovia.exceptions import ContextOverflowError, ProviderError
 from lovia.items import (
     FinishDelta,
+    ItemCompletedDelta,
     InputMessageItem,
     ItemDelta,
     MessageOutputItem,
@@ -56,7 +57,13 @@ def test_items_to_responses_input_preserves_all_item_shapes() -> None:
         InputMessageItem(role="system", content="be concise"),
         InputMessageItem(role="user", content="2+2?"),
         MessageOutputItem(id="msg_1", content="4"),
-        ReasoningItem(id="rs_1", content="enc-blob"),
+        ReasoningItem(
+            id="rs_1",
+            content="summary",
+            provider="openai-responses",
+            metadata={"encrypted_content": "enc-blob"},
+        ),
+        ReasoningItem(id="other", content="ignored", provider="anthropic"),
         ToolCallItem(call_id="call_1", name="lookup", arguments='{"q":"x"}'),
         ToolCallOutputItem(call_id="call_1", output="ok"),
     ]
@@ -144,7 +151,7 @@ def test_build_payload_maps_settings_tools_and_structured_output() -> None:
             top_p=0.5,
             max_tokens=100,
             parallel_tool_calls=False,
-            extra={"previous_response_id": "resp_1"},
+            provider_options={"openai-responses": {"previous_response_id": "resp_1"}},
         ),
         stream=True,
     )
@@ -182,6 +189,25 @@ async def test_responses_stream_parses_text_reasoning_tool_usage_and_finish() ->
             {"type": "response.reasoning_text.delta", "delta": "ing"},
             {"type": "response.output_text.delta", "delta": "hel"},
             {"type": "response.output_text.delta", "delta": "lo"},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"text": "thinking"}],
+                    "encrypted_content": "enc",
+                },
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 2,
+                "item": {
+                    "type": "message",
+                    "id": "msg_1",
+                    "content": [{"type": "output_text", "text": "hello"}],
+                },
+            },
             {
                 "type": "response.output_item.added",
                 "output_index": 1,
@@ -233,6 +259,16 @@ async def test_responses_stream_parses_text_reasoning_tool_usage_and_finish() ->
     assert usage.input_tokens == 5
     assert usage.output_tokens == 7
     assert usage.cache_read_tokens == 3
+    completed_items = [delta.item for delta in _deltas(deltas, ItemCompletedDelta)]
+    assert completed_items[:2] == [
+        ReasoningItem(
+            id="rs_1",
+            content="thinking",
+            provider="openai-responses",
+            metadata={"encrypted_content": "enc"},
+        ),
+        MessageOutputItem(id="msg_1", content="hello"),
+    ]
     assert next(_deltas(deltas, FinishDelta)).reason == "completed"
 
 

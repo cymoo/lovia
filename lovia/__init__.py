@@ -12,7 +12,7 @@ Typical use::
     agent = Agent(
         name="calc",
         instructions="You are a helpful calculator.",
-        model="openai:gpt-4o-mini",
+        model="openai:gpt-5.4",
         tools=[add],
     )
 
@@ -81,6 +81,7 @@ from .items import (
     FinishDelta,
     InputMessageItem,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
     MessageOutputItem,
     ReasoningDelta,
@@ -179,6 +180,7 @@ __all__ = [
     "InputGuardrail",
     "InputMessageItem",
     "Item",
+    "ItemCompletedDelta",
     "ItemDelta",
     "LoviaError",
     "MaxTurnsExceeded",
@@ -247,4 +249,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.5.6"
+__version__ = "0.5.7"

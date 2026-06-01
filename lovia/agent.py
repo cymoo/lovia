@@ -63,7 +63,7 @@ class Agent(Generic[TContext]):
             receives the run ``context`` and returns one (sync or async).
             Additional dynamic fragments can be registered with the
             :meth:`system_prompt` decorator and appended at render time.
-        model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-4o-mini"``)
+        model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.4"``)
             or a pre-built :class:`Provider` instance.
         tools: Tools the agent may call.
         output_type: Pydantic model, dataclass, TypedDict, or builtin type that
@@ -91,7 +91,7 @@ class Agent(Generic[TContext]):
 
     name: str
     instructions: "str | InstructionsFn" = ""
-    model: "str | Provider | list[str | Provider]" = "openai:gpt-4o-mini"
+    model: "str | Provider | list[str | Provider]" = "openai:gpt-5.4"
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
     # When ``True`` (default), a failed structured-output parse triggers one

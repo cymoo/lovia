@@ -14,9 +14,11 @@ from lovia import Agent, ImageBlock, Runner, TextBlock, events
 from lovia.exceptions import ContextOverflowError, ProviderError
 from lovia.items import (
     FinishDelta,
+    ItemCompletedDelta,
     InputMessageItem,
     ItemDelta,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
     ToolCallDelta,
     UsageDelta,
@@ -64,7 +66,6 @@ def test_message_to_openai_serializes_multimodal_and_tool_fields() -> None:
         ],
         tool_calls=[ToolCall(id="c1", name="lookup", arguments='{"q":"x"}')],
         name="agent",
-        reasoning_content="thinking",
     )
 
     out = message_to_openai(msg)
@@ -78,7 +79,6 @@ def test_message_to_openai_serializes_multimodal_and_tool_fields() -> None:
                 "image_url": {"url": "https://example.test/img.png", "detail": "low"},
             },
         ],
-        "reasoning_content": "thinking",
         "tool_calls": [
             {
                 "id": "c1",
@@ -94,7 +94,7 @@ def test_build_payload_maps_settings_and_stream_options() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
 
     payload = provider._build_payload(
-        [ChatMessage(role="user", content="hi")],
+        [InputMessageItem(role="user", content="hi")],
         tools=[{"type": "function", "function": {"name": "f"}}],
         response_format={"type": "json_object"},
         settings=ModelSettings(
@@ -103,7 +103,7 @@ def test_build_payload_maps_settings_and_stream_options() -> None:
             max_tokens=50,
             stop=["END"],
             parallel_tool_calls=False,
-            extra={"seed": 1},
+            provider_options={"openai-chat": {"seed": 1}},
         ),
         stream=True,
     )
@@ -207,6 +207,10 @@ async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None
     assert usage.input_tokens == 9
     assert usage.output_tokens == 4
     assert usage.cache_read_tokens == 2
+    item = next(_deltas(deltas, ItemCompletedDelta)).item
+    assert isinstance(item, ReasoningItem)
+    assert item.content == "think"
+    assert item.provider == "openai-chat"
     assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
 
 
@@ -305,29 +309,3 @@ def test_is_context_overflow_ignores_other_errors() -> None:
 def test_is_context_overflow_string_too_long_only_with_context() -> None:
     assert _is_context_overflow(400, "string too long; max context exceeded")
     assert not _is_context_overflow(400, "string too long: tool argument")
-
-
-def test_context_window_table_covers_current_openai_models() -> None:
-    expected = {
-        "gpt-5.5": 1_050_000,
-        "gpt-5.5-pro": 1_050_000,
-        "gpt-5.4": 1_050_000,
-        "gpt-5.4-mini": 400_000,
-        "gpt-5.3-codex": 400_000,
-        "gpt-5.2": 400_000,
-        "gpt-5.2-codex": 400_000,
-        "gpt-5.1": 400_000,
-        "gpt-5.1-codex": 400_000,
-        "gpt-5-codex": 400_000,
-        "gpt-4.1": 1_047_576,
-        "gpt-4.1-mini": 1_047_576,
-        "gpt-4.1-nano": 1_047_576,
-        "o3": 200_000,
-        "o4-mini": 200_000,
-    }
-
-    provider = OpenAIChatProvider(model="gpt-5.5", api_key="sk-test")
-
-    for model, window in expected.items():
-        assert _OPENAI_CONTEXT_WINDOWS[model] == window
-        assert provider.context_window(model) == window

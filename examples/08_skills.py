@@ -41,7 +41,7 @@ async def main() -> None:
         agent = Agent(
             name="SupportBot",
             instructions="Help the customer. Load skills when relevant.",
-            model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+            model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
             skills=SkillCatalog.from_dir(root),
         )
         result = await Runner.run(agent, "Can I get a refund 5 days after purchase?")

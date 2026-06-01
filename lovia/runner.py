@@ -44,12 +44,15 @@ from .hooks import dispatch
 from .items import (
     FinishDelta,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
+    MessageOutputItem,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
     ToolCallDelta,
+    ToolCallItem,
     UsageDelta,
-    assistant_to_items,
     items_to_chat_messages,
     transcript_to_items,
 )
@@ -74,7 +77,6 @@ from .output import (
     response_format_for,
 )
 from .providers.base import Provider
-from .providers.openai_chat import OpenAIChatProvider
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
 from .approvals import ApprovalChannel
@@ -116,6 +118,7 @@ class _TurnState:
     """
 
     assistant: AssistantMessage | None = None
+    turn_items: list[Item] | None = None
     handoff_signal: "_HandoffSignal | None" = None
     final_via_tool: Any = None
 
@@ -645,9 +648,9 @@ class _RunLoop:
                     self._last_prompt_tokens = assistant.usage.input_tokens
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
+                turn_items = state.turn_items or []
                 msg = assistant.to_chat_message()
                 transcript.append(msg)
-                turn_items = assistant_to_items(assistant)
                 items_log.extend(turn_items)
                 ev_msg = events.MessageCompleted(items=turn_items)
                 yield ev_msg
@@ -776,10 +779,9 @@ class _RunLoop:
         """Initialize transcript, MCP tools, output spec, and run context."""
         if self.resume_from is not None:
             items_log: list[Item] = list(self.resume_from.items)
-            transcript = items_to_chat_messages(items_log)
         else:
-            transcript = await self._build_initial_messages(agent)
-            items_log = transcript_to_items(transcript)
+            items_log = await self._build_initial_items(agent)
+        transcript = items_to_chat_messages(items_log)
 
         run_ctx = RunContext(
             context=self.context,
@@ -935,6 +937,7 @@ class _RunLoop:
         # Incremental state assembled from the provider's delta stream.
         text_buf: list[str] = []
         reasoning_buf: list[str] = []
+        completed_items: list[Item] = []
         # index -> {id, name, arguments}. We use a dict (not list) because
         # providers can emit deltas for indices out of order.
         tc_slots: dict[int, dict[str, str]] = {}
@@ -974,17 +977,31 @@ class _RunLoop:
                     usage = delta.usage
                 elif isinstance(delta, FinishDelta):
                     finish_reason = delta.reason
+                elif isinstance(delta, ItemCompletedDelta):
+                    completed_items.append(delta.item)
 
+        turn_items = _assemble_turn_items(
+            text="".join(text_buf) or None,
+            reasoning="".join(reasoning_buf) or None,
+            tool_slots=tc_slots,
+            completed_items=completed_items,
+        )
         state.assistant = AssistantMessage(
-            content="".join(text_buf) or None,
-            reasoning_content="".join(reasoning_buf) or None,
+            content="".join(
+                item.content
+                for item in turn_items
+                if isinstance(item, MessageOutputItem)
+            )
+            or None,
             tool_calls=[
-                ToolCall(id=s["id"], name=s["name"], arguments=s["arguments"] or "{}")
-                for _, s in sorted(tc_slots.items())
+                ToolCall(id=item.call_id, name=item.name, arguments=item.arguments)
+                for item in turn_items
+                if isinstance(item, ToolCallItem)
             ],
             usage=usage,
             finish_reason=finish_reason,
         )
+        state.turn_items = turn_items
 
     async def _process_tool_call(
         self,
@@ -1160,23 +1177,21 @@ class _RunLoop:
         if not fut.done():
             self.approvals.reject(call.id)
 
-    async def _build_initial_messages(self, agent: Agent) -> list[ChatMessage]:
-        msgs: list[ChatMessage] = []
+    async def _build_initial_items(self, agent: Agent) -> list[Item]:
+        items: list[Item] = []
         system_text = await self._system_prompt(agent, extra=self.append_instructions)
         if system_text:
-            msgs.append(system(system_text))
+            items.append(_InputMessageItem(role="system", content=system_text))
 
         if self.session is not None:
-            # Session stores Items (the canonical form); flatten to wire
-            # format for the in-flight transcript.
             history_items = await self.session.load(self.session_id)  # type: ignore[arg-type]
-            msgs.extend(items_to_chat_messages(history_items))
+            items.extend(history_items)
 
         if isinstance(self.user_input, str):
-            msgs.append(user(self.user_input))
+            items.append(_InputMessageItem(role="user", content=self.user_input))
         else:
-            msgs.extend(self.user_input)
-        return msgs
+            items.extend(transcript_to_items(self.user_input))
+        return items
 
     async def _system_prompt(self, agent: Agent, *, extra: "str | None" = None) -> str:
         text = await agent.render_instructions(self.context, extra=extra)
@@ -1372,9 +1387,8 @@ class _RunLoop:
         items_log[:] = items_after
         # Keep the wire-format mirror in lockstep.
         transcript[:] = items_to_chat_messages(items_log)
-        # Re-prepend the system prompt that ``_build_initial_messages`` put
-        # at the start of the original transcript — it's not stored in
-        # ``items_log`` for some shapes, and the agent expects it back.
+        # Re-prepend the system prompt when compaction returns a transcript
+        # shape that omitted it.
         await self._reinstate_system_prompt(agent, transcript)
         # Persist the rewritten transcript so a crash + restart picks up
         # the compacted version (the whole point of permanent compaction).
@@ -1413,9 +1427,49 @@ class _RunLoop:
 def _supports_json_schema(agent: Agent) -> bool:
     """Whether the agent's provider can use OpenAI-style ``response_format``."""
     provider = agent.resolve_provider() if isinstance(agent.model, str) else agent.model
-    if isinstance(provider, OpenAIChatProvider):
-        return provider.supports_json_schema
-    return False
+    if isinstance(provider, list):
+        return all(bool(getattr(p, "supports_json_schema", False)) for p in provider)
+    return bool(getattr(provider, "supports_json_schema", False))
+
+
+def _assemble_turn_items(
+    *,
+    text: str | None,
+    reasoning: str | None,
+    tool_slots: dict[int, dict[str, str]],
+    completed_items: list[Item],
+) -> list[Item]:
+    """Use provider-completed items when available, with delta fallback."""
+
+    has_reasoning = any(isinstance(item, ReasoningItem) for item in completed_items)
+    has_message = any(isinstance(item, MessageOutputItem) for item in completed_items)
+    has_tool_call = any(isinstance(item, ToolCallItem) for item in completed_items)
+
+    out: list[Item] = []
+    if has_reasoning:
+        out.extend(item for item in completed_items if isinstance(item, ReasoningItem))
+    elif reasoning:
+        out.append(ReasoningItem(content=reasoning))
+
+    if has_message:
+        out.extend(
+            item for item in completed_items if isinstance(item, MessageOutputItem)
+        )
+    elif text:
+        out.append(MessageOutputItem(content=text))
+
+    if has_tool_call:
+        out.extend(item for item in completed_items if isinstance(item, ToolCallItem))
+    else:
+        out.extend(
+            ToolCallItem(
+                call_id=s["id"],
+                name=s["name"],
+                arguments=s["arguments"] or "{}",
+            )
+            for _, s in sorted(tool_slots.items())
+        )
+    return out
 
 
 def _agent_model_label(agent: Agent) -> str:

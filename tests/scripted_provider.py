@@ -13,8 +13,10 @@ from typing import Any, AsyncIterator
 from lovia.items import (
     FinishDelta,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
     ToolCallDelta,
     UsageDelta,
@@ -28,6 +30,7 @@ class ScriptedProvider:
     """Replay a list of pre-canned :class:`AssistantMessage` answers."""
 
     name = "scripted"
+    supports_json_schema = False
 
     def __init__(self, script: list[AssistantMessage]) -> None:
         # ``calls`` records the flattened ChatMessage form received on each
@@ -54,9 +57,13 @@ class ScriptedProvider:
     ) -> AsyncIterator[ItemDelta]:
         msg = self._pop(input)
         # Reasoning streams first (matches Anthropic / Responses ordering).
-        if msg.reasoning_content:
-            for ch in msg.reasoning_content:
+        reasoning = getattr(msg, "_scripted_reasoning_content", None)
+        if reasoning:
+            for ch in reasoning:
                 yield ReasoningDelta(text=ch)
+            yield ItemCompletedDelta(
+                ReasoningItem(content=reasoning, provider=self.name)
+            )
         # Text streams character-by-character so consumers see multiple deltas.
         if msg.content:
             for ch in msg.content:
@@ -71,11 +78,13 @@ class ScriptedProvider:
 
 
 def text(content: str, *, reasoning: str | None = None) -> AssistantMessage:
-    return AssistantMessage(
+    msg = AssistantMessage(
         content=content,
-        reasoning_content=reasoning,
         usage=Usage(input_tokens=1, output_tokens=1),
     )
+    if reasoning is not None:
+        setattr(msg, "_scripted_reasoning_content", reasoning)
+    return msg
 
 
 def call(

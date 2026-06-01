@@ -41,7 +41,7 @@ async def main() -> None:
             "Answer questions concisely. Always include a '[source]' tag at "
             "the end of every factual answer."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         input_guardrails=[block_pii],
         output_guardrails=[require_citation],
     )

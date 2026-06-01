@@ -13,14 +13,18 @@ from lovia import ImageBlock, TextBlock
 from lovia.exceptions import ContextOverflowError, ProviderError
 from lovia.items import (
     FinishDelta,
+    ItemCompletedDelta,
     InputMessageItem,
     ItemDelta,
+    MessageOutputItem,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
     ToolCallDelta,
+    ToolCallItem,
+    ToolCallOutputItem,
     UsageDelta,
 )
-from lovia.messages import ChatMessage, ToolCall
 from lovia.providers.anthropic import (
     AnthropicProvider,
     _is_context_overflow,
@@ -52,26 +56,31 @@ def _deltas(deltas: list[ItemDelta], cls: type[Any]) -> Iterator[Any]:
 
 
 def test_message_translation_extracts_system_and_tool_blocks() -> None:
-    msgs = [
-        ChatMessage(role="system", content="be terse"),
-        ChatMessage(role="system", content=[TextBlock("second")]),
-        ChatMessage(role="user", content="hi"),
-        ChatMessage(
-            role="assistant",
-            content="working",
-            reasoning_content="thinking",
-            tool_calls=[ToolCall(id="c1", name="add", arguments='{"a":1,"b":2}')],
+    items = [
+        InputMessageItem(role="system", content="be terse"),
+        InputMessageItem(role="system", content=[TextBlock("second")]),
+        InputMessageItem(role="user", content="hi"),
+        ReasoningItem(
+            content="thinking",
+            provider="anthropic",
+            metadata={"signature": "sig"},
         ),
-        ChatMessage(role="tool", content="3", tool_call_id="c1"),
-        ChatMessage(role="user", content=None),
+        MessageOutputItem(content="working"),
+        ToolCallItem(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
+        ToolCallOutputItem(call_id="c1", output="3"),
+        InputMessageItem(role="user", content=""),
     ]
 
-    system, out = _to_anthropic_messages(msgs)
+    system, out = _to_anthropic_messages(items)
 
     assert system == [{"type": "text", "text": "be terse\n\nsecond"}]
     assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
     assistant_blocks = out[1]["content"]
-    assert assistant_blocks[0] == {"type": "thinking", "thinking": "thinking"}
+    assert assistant_blocks[0] == {
+        "type": "thinking",
+        "thinking": "thinking",
+        "signature": "sig",
+    }
     assert assistant_blocks[1] == {"type": "text", "text": "working"}
     assert assistant_blocks[2]["type"] == "tool_use"
     assert assistant_blocks[2]["input"] == {"a": 1, "b": 2}
@@ -80,18 +89,12 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
         "tool_use_id": "c1",
         "content": "3",
     }
-    assert out[3] == {"role": "user", "content": ""}
+    assert out[3] == {"role": "user", "content": [{"type": "text", "text": ""}]}
 
 
 def test_message_translation_wraps_invalid_tool_arguments() -> None:
     _, out = _to_anthropic_messages(
-        [
-            ChatMessage(
-                role="assistant",
-                content=None,
-                tool_calls=[ToolCall(id="c1", name="broken", arguments="{bad")],
-            )
-        ]
+        [ToolCallItem(call_id="c1", name="broken", arguments="{bad")]
     )
 
     assert out[0]["content"][0]["input"] == {"_raw": "{bad"}
@@ -118,7 +121,7 @@ def test_tool_schema_translation_preserves_strict() -> None:
 
 def test_translates_image_blocks_with_url_and_base64() -> None:
     msgs = [
-        ChatMessage(
+        InputMessageItem(
             role="user",
             content=[
                 TextBlock("describe"),
@@ -145,9 +148,9 @@ def test_build_payload_maps_settings_cache_and_structured_output() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        messages=[
-            ChatMessage(role="system", content="be terse"),
-            ChatMessage(role="user", content="hi"),
+        items=[
+            InputMessageItem(role="system", content="be terse"),
+            InputMessageItem(role="user", content="hi"),
         ],
         tools=[
             {
@@ -165,7 +168,7 @@ def test_build_payload_maps_settings_cache_and_structured_output() -> None:
             max_tokens=0,
             stop=["END"],
             parallel_tool_calls=False,
-            cache_system=True,
+            provider_options={"anthropic": {"cache_system": True}},
         ),
         stream=False,
     )
@@ -189,7 +192,7 @@ def test_build_payload_extra_overrides_adapter_defaults() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        messages=[ChatMessage(role="user", content="hi")],
+        items=[InputMessageItem(role="user", content="hi")],
         tools=[
             {
                 "type": "function",
@@ -202,9 +205,11 @@ def test_build_payload_extra_overrides_adapter_defaults() -> None:
         },
         settings=ModelSettings(
             parallel_tool_calls=False,
-            extra={
-                "output_config": {"format": {"type": "json_schema", "schema": {}}},
-                "tool_choice": {"type": "none"},
+            provider_options={
+                "anthropic": {
+                    "output_config": {"format": {"type": "json_schema", "schema": {}}},
+                    "tool_choice": {"type": "none"},
+                }
             },
         ),
         stream=True,
@@ -219,7 +224,7 @@ def test_response_format_ignores_unsupported_openai_shapes() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        messages=[ChatMessage(role="user", content="hi")],
+        items=[InputMessageItem(role="user", content="hi")],
         tools=None,
         response_format={"type": "json_object"},
         settings=ModelSettings(),
@@ -270,6 +275,7 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
                 "index": 0,
                 "delta": {"type": "text_delta", "text": "hi"},
             },
+            {"type": "content_block_stop", "index": 0},
             {
                 "type": "content_block_start",
                 "index": 1,
@@ -285,6 +291,7 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
                 "index": 1,
                 "delta": {"type": "signature_delta", "signature": "sig"},
             },
+            {"type": "content_block_stop", "index": 1},
             {
                 "type": "content_block_start",
                 "index": 2,
@@ -300,6 +307,7 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
                 "index": 2,
                 "delta": {"type": "input_json_delta", "partial_json": '"x"}'},
             },
+            {"type": "content_block_stop", "index": 2},
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": "tool_use"},
@@ -333,6 +341,18 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
     assert usage.output_tokens == 8
     assert usage.cache_write_tokens == 4
     assert usage.cache_read_tokens == 5
+    completed_items = [delta.item for delta in _deltas(deltas, ItemCompletedDelta)]
+    assert completed_items[0] == MessageOutputItem(content="hi")
+    assert completed_items[1] == ReasoningItem(
+        content="think",
+        provider="anthropic",
+        metadata={"signature": "sig"},
+    )
+    assert completed_items[2] == ToolCallItem(
+        call_id="c1",
+        name="lookup",
+        arguments='{"q":"x"}',
+    )
     assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
 
 
@@ -385,7 +405,6 @@ def test_context_window_includes_current_claude_aliases() -> None:
     provider = AnthropicProvider(model="claude-opus-4-8", api_key="x")
 
     assert provider.context_window("claude-opus-4-8") == 1_000_000
-    assert provider.context_window("claude-opus-4-7") == 1_000_000
-    assert provider.context_window("claude-opus-4-6") == 1_000_000
     assert provider.context_window("claude-sonnet-4-6") == 1_000_000
     assert provider.context_window("claude-haiku-4-5") == 200_000
+    assert provider.context_window("claude-sonnet-4-5-20250929") is None

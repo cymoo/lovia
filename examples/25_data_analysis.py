@@ -26,7 +26,7 @@ from lovia import Agent, Runner, events
 from lovia.sandbox import Sandbox
 
 load_dotenv()
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
 console = Console()
 
 # ── database setup ────────────────────────────────────────────────────────────

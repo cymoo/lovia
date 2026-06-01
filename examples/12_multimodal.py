@@ -22,7 +22,7 @@ async def main() -> None:
     agent = Agent(
         name="VisionBot",
         instructions="Describe what you see, briefly.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
     )
 
     msg = user(

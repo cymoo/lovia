@@ -16,19 +16,23 @@ import httpx
 from ..items import (
     FinishDelta,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
+    InputMessageItem,
+    MessageOutputItem,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
+    ToolCallItem,
     ToolCallDelta,
+    ToolCallOutputItem,
     UsageDelta,
-    items_to_chat_messages,
 )
 from ..messages import ChatMessage, ToolCall, Usage
 from ._content import content_to_openai_chat as _content_to_openai
 from ._http import raise_for_provider_status
 from ._sse import iter_sse_json
-from .base import ModelSettings
-
+from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
@@ -53,8 +57,6 @@ def message_to_openai(msg: ChatMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": msg.role}
     if msg.content is not None:
         out["content"] = _content_to_openai(msg.content)
-    if msg.reasoning_content is not None and msg.role == "assistant":
-        out["reasoning_content"] = msg.reasoning_content
     if msg.tool_calls:
         out["tool_calls"] = [_tool_call_to_openai(tc) for tc in msg.tool_calls]
     if msg.tool_call_id is not None:
@@ -64,11 +66,77 @@ def message_to_openai(msg: ChatMessage) -> dict[str, Any]:
     return out
 
 
+def _assistant_to_openai(
+    content: str | None,
+    tool_calls: list[ToolCall],
+    reasoning_content: str | None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {"role": "assistant"}
+    if content is not None:
+        out["content"] = content
+    if reasoning_content is not None:
+        out["reasoning_content"] = reasoning_content
+    if tool_calls:
+        out["tool_calls"] = [_tool_call_to_openai(tc) for tc in tool_calls]
+    return out
+
+
+def items_to_openai_messages(
+    items: list[Item],
+    *,
+    reasoning_provider: str = "openai-chat",
+) -> list[dict[str, Any]]:
+    """Serialize Items to OpenAI Chat messages, preserving scoped reasoning."""
+
+    out: list[dict[str, Any]] = []
+    pending_reasoning: str | None = None
+    pending_content: str | None = None
+    pending_calls: list[ToolCall] = []
+
+    def flush_assistant() -> None:
+        nonlocal pending_reasoning, pending_content, pending_calls
+        if pending_content is None and not pending_calls and pending_reasoning is None:
+            return
+        out.append(
+            _assistant_to_openai(pending_content, pending_calls, pending_reasoning)
+        )
+        pending_reasoning = None
+        pending_content = None
+        pending_calls = []
+
+    for item in items:
+        if isinstance(item, InputMessageItem):
+            flush_assistant()
+            out.append(message_to_openai(ChatMessage(item.role, item.content)))
+        elif isinstance(item, ReasoningItem):
+            if item.provider == reasoning_provider:
+                pending_reasoning = (pending_reasoning or "") + item.content
+        elif isinstance(item, MessageOutputItem):
+            pending_content = (pending_content or "") + item.content
+        elif isinstance(item, ToolCallItem):
+            pending_calls.append(
+                ToolCall(id=item.call_id, name=item.name, arguments=item.arguments)
+            )
+        elif isinstance(item, ToolCallOutputItem):
+            flush_assistant()
+            out.append(
+                message_to_openai(
+                    ChatMessage(
+                        role="tool",
+                        content=item.output,
+                        tool_call_id=item.call_id,
+                    )
+                )
+            )
+    flush_assistant()
+    return out
+
+
 class OpenAIChatProvider:
     """OpenAI Chat Completions API adapter.
 
     Args:
-        model: The model identifier sent to the API (e.g. ``"gpt-4o-mini"``).
+        model: The model identifier sent to the API (e.g. ``"gpt-5.4"``).
         api_key: API key. Defaults to ``$OPENAI_API_KEY``.
         base_url: Override to target an OpenAI-compatible endpoint.
         client: Optional pre-built :class:`httpx.AsyncClient`. If omitted we
@@ -127,7 +195,7 @@ class OpenAIChatProvider:
 
     def _build_payload(
         self,
-        messages: list[ChatMessage],
+        input: list[Item],
         tools: list[dict[str, Any]] | None,
         response_format: dict[str, Any] | None,
         settings: ModelSettings | None,
@@ -135,7 +203,7 @@ class OpenAIChatProvider:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [message_to_openai(m) for m in messages],
+            "messages": items_to_openai_messages(input, reasoning_provider=self.name),
             "stream": stream,
         }
         if tools:
@@ -153,7 +221,7 @@ class OpenAIChatProvider:
                 payload["stop"] = settings.stop
             if settings.parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = settings.parallel_tool_calls
-            payload.update(settings.extra)
+            payload.update(provider_options(settings, self.name, "openai"))
         if stream:
             # Asking for usage in the stream requires opt-in.
             payload.setdefault("stream_options", {"include_usage": True})
@@ -167,13 +235,8 @@ class OpenAIChatProvider:
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
-        # Chat Completions speaks ChatMessage on the wire; flatten the
-        # vendor-neutral Item list to messages here. This is lossy for
-        # ReasoningItem ids and server-tool items, but Chat Completions
-        # cannot represent those anyway.
-        messages = items_to_chat_messages(input)
         payload = self._build_payload(
-            messages, tools, response_format, settings, stream=True
+            input, tools, response_format, settings, stream=True
         )
 
         # We only need to remember the per-index tool-call id+name so we can
@@ -183,6 +246,7 @@ class OpenAIChatProvider:
         tool_call_names: dict[int, str] = {}
         usage = Usage()
         finish_reason: str | None = None
+        reasoning_parts: list[str] = []
 
         async with self._client.stream(
             "POST",
@@ -215,6 +279,7 @@ class OpenAIChatProvider:
                     yield TextDelta(text=text)
 
                 if reasoning := delta.get("reasoning_content"):
+                    reasoning_parts.append(reasoning)
                     yield ReasoningDelta(text=reasoning)
 
                 for tc in delta.get("tool_calls") or []:
@@ -236,6 +301,13 @@ class OpenAIChatProvider:
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
 
+        if reasoning_parts:
+            yield ItemCompletedDelta(
+                ReasoningItem(
+                    content="".join(reasoning_parts),
+                    provider=self.name,
+                )
+            )
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=finish_reason)
 
@@ -278,62 +350,16 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return False
 
 
-# Context-window table for current OpenAI models and common pinned snapshots.
-# Used by ``ContextPolicy`` to size proactive compaction. Unknown models fall
-# back to reactive overflow handling.
+# Context-window table for recent, commonly used OpenAI GPT model aliases. Keep
+# this intentionally small: date-pinned snapshots, o-series, retired models, and
+# niche aliases can fall back to reactive overflow handling.
 _OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
-    "gpt-4o": 128_000,
-    "gpt-4o-2024-05-13": 128_000,
-    "gpt-4o-2024-08-06": 128_000,
-    "gpt-4o-2024-11-20": 128_000,
-    "gpt-4o-mini": 128_000,
-    "gpt-4o-mini-2024-07-18": 128_000,
-    "gpt-4.5-preview": 128_000,
-    "gpt-4.5-preview-2025-02-27": 128_000,
-    "gpt-4-turbo": 128_000,
     "gpt-4.1": 1_047_576,
-    "gpt-4.1-2025-04-14": 1_047_576,
-    "gpt-4.1-mini": 1_047_576,
-    "gpt-4.1-mini-2025-04-14": 1_047_576,
-    "gpt-4.1-nano": 1_047_576,
-    "gpt-4.1-nano-2025-04-14": 1_047_576,
-    "gpt-5.5": 1_050_000,
-    "gpt-5.5-2026-04-23": 1_050_000,
-    "gpt-5.5-pro": 1_050_000,
-    "gpt-5.5-pro-2026-04-23": 1_050_000,
-    "gpt-5.4": 1_050_000,
-    "gpt-5.4-2026-03-05": 1_050_000,
-    "gpt-5.4-pro": 1_050_000,
-    "gpt-5.4-pro-2026-03-05": 1_050_000,
-    "gpt-5.4-mini": 400_000,
-    "gpt-5.4-mini-2026-03-17": 400_000,
-    "gpt-5.4-nano": 400_000,
-    "gpt-5.4-nano-2026-03-17": 400_000,
-    "gpt-5.3-codex": 400_000,
-    "gpt-5.2": 400_000,
-    "gpt-5.2-2025-12-11": 400_000,
-    "gpt-5.2-pro": 400_000,
-    "gpt-5.2-codex": 400_000,
-    "gpt-5.1": 400_000,
-    "gpt-5.1-2025-11-13": 400_000,
-    "gpt-5.1-codex": 400_000,
     "gpt-5": 400_000,
-    "gpt-5-2025-08-07": 400_000,
-    "gpt-5-codex": 400_000,
-    "gpt-5-mini": 400_000,
-    "gpt-5-mini-2025-08-07": 400_000,
-    "gpt-5-nano": 400_000,
-    "gpt-5-nano-2025-08-07": 400_000,
-    "o1": 200_000,
-    "o1-2024-12-17": 200_000,
-    "o1-preview": 200_000,
-    "o1-preview-2024-09-12": 200_000,
-    "o1-mini": 128_000,
-    "o3": 200_000,
-    "o3-2025-04-16": 200_000,
-    "o3-pro": 200_000,
-    "o3-mini": 200_000,
-    "o3-mini-2025-01-31": 200_000,
-    "o4-mini": 200_000,
-    "o4-mini-2025-04-16": 200_000,
+    "gpt-5.5": 1_050_000,
+    "gpt-5.5-pro": 1_050_000,
+    "gpt-5.4": 1_050_000,
+    "gpt-5.4-mini": 400_000,
+    "gpt-5.2": 400_000,
+    "gpt-5.2-pro": 400_000,
 }

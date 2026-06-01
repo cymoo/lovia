@@ -13,6 +13,7 @@ handoff transcript reset, resume from snapshot).
 from __future__ import annotations
 
 import json
+from typing import Any, AsyncIterator
 
 import pytest
 
@@ -24,13 +25,19 @@ from lovia import (
     tool,
 )
 from lovia.items import (
+    FinishDelta,
     InputMessageItem,
+    Item,
+    ItemDelta,
     MessageOutputItem,
     ReasoningItem,
+    TextDelta,
     ToolCallItem,
     ToolCallOutputItem,
+    UsageDelta,
 )
-from lovia.messages import ChatMessage
+from lovia.messages import ChatMessage, Usage
+from lovia.stores import InMemorySession
 
 from .scripted_provider import ScriptedProvider, call, text
 
@@ -207,6 +214,49 @@ async def test_items_mirror_resume_from_snapshot() -> None:
     )
     # Snapshot contributed 4 items; the assistant turn adds 1.
     assert len(result.new_items) == 5
+
+
+async def test_session_history_preserves_reasoning_items_for_provider_replay() -> None:
+    class RecordingProvider:
+        name = "recording"
+        model = "recording-model"
+        supports_json_schema = False
+
+        def __init__(self) -> None:
+            self.calls: list[list[Item]] = []
+
+        async def stream(
+            self,
+            input: list[Item],
+            **_: Any,
+        ) -> AsyncIterator[ItemDelta]:
+            self.calls.append(list(input))
+            yield TextDelta(text="ok")
+            yield UsageDelta(usage=Usage(input_tokens=1, output_tokens=1))
+            yield FinishDelta(reason="stop")
+
+    session = InMemorySession()
+    reasoning = ReasoningItem(
+        id="rs_1",
+        content="summary",
+        provider="openai-responses",
+        metadata={"encrypted_content": "enc"},
+    )
+    await session.append(
+        "chat",
+        [
+            InputMessageItem(role="user", content="old question"),
+            reasoning,
+            MessageOutputItem(content="old answer"),
+        ],
+    )
+    provider = RecordingProvider()
+    agent = Agent(name="t", instructions="be helpful", model=provider)
+
+    result = await Runner.run(agent, "new question", session=session, session_id="chat")
+
+    assert result.output == "ok"
+    assert reasoning in provider.calls[0]
 
 
 async def test_items_message_output_item_preserves_content() -> None:

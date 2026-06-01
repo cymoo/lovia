@@ -1,8 +1,7 @@
 """Anthropic Messages API provider.
 
-Translates lovia's OpenAI-shaped internal message format into the Anthropic
-Messages API and back. We talk HTTP directly so the ``anthropic`` SDK is not
-required.
+Translates lovia Items into the Anthropic Messages API and back. We talk HTTP
+directly so the ``anthropic`` SDK is not required.
 
 Conversions worth noting:
 
@@ -28,15 +27,20 @@ import httpx
 from ..exceptions import ProviderError
 from ..items import (
     FinishDelta,
+    InputMessageItem,
     Item,
+    ItemCompletedDelta,
     ItemDelta,
+    MessageOutputItem,
     ReasoningDelta,
+    ReasoningItem,
     TextDelta,
     ToolCallDelta,
+    ToolCallItem,
+    ToolCallOutputItem,
     UsageDelta,
-    items_to_chat_messages,
 )
-from ..messages import ChatMessage, Usage
+from ..messages import Usage
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
@@ -44,8 +48,7 @@ from ._content import (
 )
 from ._http import raise_for_provider_status
 from ._sse import iter_sse_json
-from .base import ModelSettings
-
+from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 _DEFAULT_VERSION = "2023-06-01"
@@ -55,6 +58,7 @@ class AnthropicProvider:
     """Anthropic Messages API adapter."""
 
     name = "anthropic"
+    supports_json_schema = True
 
     def __init__(
         self,
@@ -101,15 +105,19 @@ class AnthropicProvider:
 
     def _build_payload(
         self,
-        messages: list[ChatMessage],
+        items: list[Item],
         tools: list[dict[str, Any]] | None,
         response_format: dict[str, Any] | None,
         settings: ModelSettings | None,
         stream: bool,
     ) -> dict[str, Any]:
-        system_blocks, anthropic_messages = _to_anthropic_messages(messages)
-        cache_system = bool(settings and settings.cache_system)
-        extra = settings.extra if settings is not None else {}
+        system_blocks, anthropic_messages = _to_anthropic_messages(items)
+        extra = (
+            provider_options(settings, self.name, "claude")
+            if settings is not None
+            else {}
+        )
+        cache_system = bool(extra.pop("cache_system", False))
         if cache_system and system_blocks:
             # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
             system_blocks[-1] = {
@@ -174,11 +182,8 @@ class AnthropicProvider:
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
-        # Anthropic Messages speaks ChatMessage on the wire; flatten Items
-        # via the standard helper before translating to Anthropic's shape.
-        messages = items_to_chat_messages(input)
         payload = self._build_payload(
-            messages, tools, response_format, settings, stream=True
+            input, tools, response_format, settings, stream=True
         )
 
         # Anthropic streams content blocks by index. We only need to remember
@@ -186,6 +191,10 @@ class AnthropicProvider:
         block_kinds: dict[int, str] = {}
         tool_call_ids: dict[int, str] = {}
         tool_call_names: dict[int, str] = {}
+        tool_call_arguments: dict[int, str] = {}
+        text_blocks: dict[int, list[str]] = {}
+        thinking_blocks: dict[int, list[str]] = {}
+        thinking_signatures: dict[int, str] = {}
         usage = Usage()
         stop_reason: str | None = None
 
@@ -212,27 +221,79 @@ class AnthropicProvider:
                     if block.get("type") == "tool_use":
                         tool_call_ids[idx] = block.get("id", "")
                         tool_call_names[idx] = block.get("name", "")
+                        initial_args = (
+                            json.dumps(block["input"]) if block.get("input") else ""
+                        )
+                        tool_call_arguments[idx] = initial_args
                         yield ToolCallDelta(
                             index=idx,
                             call_id=tool_call_ids[idx],
                             name=tool_call_names[idx],
-                            arguments="",
+                            arguments=initial_args,
                         )
+                    elif block.get("type") == "text":
+                        text = block.get("text", "")
+                        text_blocks.setdefault(idx, []).append(text)
+                        if text:
+                            yield TextDelta(text=text)
+                    elif block.get("type") == "thinking":
+                        thinking = block.get("thinking", "")
+                        thinking_blocks.setdefault(idx, []).append(thinking)
+                        if thinking:
+                            yield ReasoningDelta(text=thinking)
+                        if signature := block.get("signature"):
+                            thinking_signatures[idx] = signature
                 elif etype == "content_block_delta":
                     idx = event.get("index", 0)
                     delta = event.get("delta") or {}
                     dtype = delta.get("type")
                     if dtype == "text_delta":
-                        yield TextDelta(text=delta.get("text", ""))
+                        text = delta.get("text", "")
+                        text_blocks.setdefault(idx, []).append(text)
+                        yield TextDelta(text=text)
                     elif dtype == "thinking_delta":
-                        yield ReasoningDelta(text=delta.get("thinking", ""))
+                        thinking = delta.get("thinking", "")
+                        thinking_blocks.setdefault(idx, []).append(thinking)
+                        yield ReasoningDelta(text=thinking)
+                    elif dtype == "signature_delta":
+                        if signature := delta.get("signature"):
+                            thinking_signatures[idx] = signature
                     elif dtype == "input_json_delta":
                         partial = delta.get("partial_json", "")
+                        tool_call_arguments[idx] = (
+                            tool_call_arguments.get(idx, "") + partial
+                        )
                         yield ToolCallDelta(
                             index=idx,
                             call_id=tool_call_ids.get(idx, ""),
                             name=tool_call_names.get(idx, ""),
                             arguments=partial,
+                        )
+                elif etype == "content_block_stop":
+                    idx = event.get("index", 0)
+                    kind = block_kinds.get(idx)
+                    if kind == "text":
+                        content = "".join(text_blocks.get(idx, []))
+                        if content:
+                            yield ItemCompletedDelta(MessageOutputItem(content=content))
+                    elif kind == "thinking":
+                        metadata: dict[str, Any] = {}
+                        if signature := thinking_signatures.get(idx):
+                            metadata["signature"] = signature
+                        yield ItemCompletedDelta(
+                            ReasoningItem(
+                                content="".join(thinking_blocks.get(idx, [])),
+                                provider=self.name,
+                                metadata=metadata,
+                            )
+                        )
+                    elif kind == "tool_use":
+                        yield ItemCompletedDelta(
+                            ToolCallItem(
+                                call_id=tool_call_ids.get(idx, ""),
+                                name=tool_call_names.get(idx, ""),
+                                arguments=tool_call_arguments.get(idx) or "{}",
+                            )
                         )
                 elif etype == "message_delta":
                     stop_reason = (event.get("delta") or {}).get(
@@ -312,9 +373,9 @@ def _is_stream_error_retryable(error: dict[str, Any]) -> bool:
 
 
 def _to_anthropic_messages(
-    messages: list[ChatMessage],
+    items: list[Item],
 ) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]]:
-    """Translate internal messages into Anthropic's API shape.
+    """Translate Items into Anthropic's API shape.
 
     Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
     ``None`` or a list of text blocks suitable for the Anthropic ``system``
@@ -322,60 +383,73 @@ def _to_anthropic_messages(
     """
     system_parts: list[str] = []
     out: list[dict[str, Any]] = []
+    pending_blocks: list[dict[str, Any]] = []
 
-    for msg in messages:
-        if msg.role == "system":
-            if msg.content:
-                system_parts.append(_text_only(msg.content))
+    def flush_assistant() -> None:
+        nonlocal pending_blocks
+        if not pending_blocks:
+            return
+        out.append({"role": "assistant", "content": pending_blocks})
+        pending_blocks = []
+
+    for item in items:
+        if isinstance(item, InputMessageItem) and item.role == "system":
+            if item.content:
+                system_parts.append(_text_only(item.content))
             continue
 
-        if msg.role == "tool":
+        if isinstance(item, ToolCallOutputItem):
+            flush_assistant()
             out.append(
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": msg.tool_call_id,
-                            "content": _text_only(msg.content) or "",
+                            "tool_use_id": item.call_id,
+                            "content": item.output,
                         }
                     ],
                 }
             )
             continue
 
-        if msg.role == "assistant":
-            blocks: list[dict[str, Any]] = []
-            # Anthropic requires thinking blocks to appear *before* text/tool_use
-            # when echoing back extended-thinking responses.
-            if msg.reasoning_content:
-                blocks.append({"type": "thinking", "thinking": msg.reasoning_content})
-            if msg.content:
-                blocks.extend(_content_to_anthropic_blocks(msg.content))
-            for tc in msg.tool_calls:
-                try:
-                    parsed = json.loads(tc.arguments or "{}")
-                except json.JSONDecodeError:
-                    parsed = {"_raw": tc.arguments}
-                blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": parsed,
-                    }
-                )
-            out.append({"role": "assistant", "content": blocks or ""})
+        if isinstance(item, ReasoningItem):
+            if item.provider != "anthropic":
+                continue
+            block = {"type": "thinking", "thinking": item.content}
+            signature = item.metadata.get("signature")
+            if isinstance(signature, str) and signature:
+                block["signature"] = signature
+            pending_blocks.append(block)
             continue
 
-        # user — may carry images via ContentBlock list
-        if msg.content is None:
-            out.append({"role": "user", "content": ""})
-        else:
+        if isinstance(item, MessageOutputItem):
+            pending_blocks.extend(_content_to_anthropic_blocks(item.content))
+            continue
+
+        if isinstance(item, ToolCallItem):
+            try:
+                parsed = json.loads(item.arguments or "{}")
+            except json.JSONDecodeError:
+                parsed = {"_raw": item.arguments}
+            pending_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": item.call_id,
+                    "name": item.name,
+                    "input": parsed,
+                }
+            )
+            continue
+
+        if isinstance(item, InputMessageItem):
+            flush_assistant()
             out.append(
-                {"role": "user", "content": _content_to_anthropic_blocks(msg.content)}
+                {"role": "user", "content": _content_to_anthropic_blocks(item.content)}
             )
 
+    flush_assistant()
     system_blocks: list[dict[str, Any]] | None
     if system_parts:
         system_blocks = [{"type": "text", "text": "\n\n".join(system_parts)}]
@@ -400,31 +474,13 @@ def _is_context_overflow(status: int, body: str) -> bool:
     )
 
 
-# Context-window table for current Anthropic Claude API model IDs and aliases.
-# Unknown models fall back to reactive overflow handling.
+# Context-window table for recent, commonly used Anthropic aliases. Date-pinned
+# snapshots and retired Claude 3.x/older 4.x aliases fall back to reactive
+# overflow handling.
 _ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-opus-4-8": 1_000_000,
     "claude-opus-4-7": 1_000_000,
-    "claude-opus-4-6": 1_000_000,
-    "claude-opus-4-5": 200_000,
-    "claude-opus-4-5-20251101": 200_000,
-    "claude-opus-4-1": 200_000,
-    "claude-opus-4-1-20250805": 200_000,
-    "claude-opus-4-0": 200_000,
     "claude-sonnet-4-6": 1_000_000,
-    "claude-sonnet-4-5": 200_000,
-    "claude-sonnet-4-5-20250929": 200_000,
-    "claude-sonnet-4-0": 200_000,
+    "claude-sonnet-4-5": 1_000_000,
     "claude-haiku-4-5": 200_000,
-    "claude-haiku-4-5-20251001": 200_000,
-    "claude-3-5-sonnet-latest": 200_000,
-    "claude-3-5-sonnet-20241022": 200_000,
-    "claude-3-5-haiku-latest": 200_000,
-    "claude-3-5-haiku-20241022": 200_000,
-    "claude-3-opus-latest": 200_000,
-    "claude-3-opus-20240229": 200_000,
-    "claude-3-sonnet-20240229": 200_000,
-    "claude-3-haiku-20240307": 200_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "claude-opus-4-20250514": 200_000,
 }

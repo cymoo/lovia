@@ -31,7 +31,7 @@ async def main() -> None:
     agent = Agent(
         name="Assistant",
         instructions="Help the user with email tasks. Always call send_email for outgoing messages.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[send_email],
     )
 

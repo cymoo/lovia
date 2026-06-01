@@ -41,7 +41,7 @@ def _openai_chat_model() -> str:
     _require_live()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY is not configured")
-    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
+    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.4")
 
 
 def _openai_responses_model() -> str:

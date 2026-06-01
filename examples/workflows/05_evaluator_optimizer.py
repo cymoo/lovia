@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
 
 MAX_ITERATIONS = 4
 
@@ -141,9 +141,10 @@ async def optimize_translation(source: str) -> str:
             print("\n✓ Translation approved by the evaluator.")
             break
 
-        feedback_context = (
-            "Issues found:\n" + "\n".join(f"- {i}" for i in evaluation.issues) + "\n\n"
-            "Suggestions:\n" + "\n".join(f"- {s}" for s in evaluation.suggestions)
+        feedback_context = "Issues found:\n" + "\n".join(
+            f"- {i}" for i in evaluation.issues
+        ) + "\n\n" "Suggestions:\n" + "\n".join(
+            f"- {s}" for s in evaluation.suggestions
         )
     else:
         print(f"\n⚠ Reached maximum iterations ({MAX_ITERATIONS}).")

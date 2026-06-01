@@ -2,7 +2,7 @@
 
 Importing :func:`provider_from_string` lets users write::
 
-    Agent(model="openai:gpt-4o-mini", ...)
+    Agent(model="openai:gpt-5.4", ...)
     Agent(model="anthropic:claude-3-5-sonnet-latest", ...)
 
 while still allowing them to pass a :class:`Provider` instance directly.
@@ -14,15 +14,18 @@ Third-party packages can register additional vendor prefixes through the
 
 from __future__ import annotations
 
+from importlib.metadata import EntryPoint
 from typing import Callable
 
 from .base import ModelSettings, Provider
 from .openai_chat import OpenAIChatProvider
+from .openai_responses import OpenAIResponsesProvider
 
 __all__ = [
     "ModelSettings",
     "Provider",
     "OpenAIChatProvider",
+    "OpenAIResponsesProvider",
     "provider_from_string",
     "register_provider",
 ]
@@ -34,6 +37,7 @@ ProviderFactory = Callable[[str], Provider]
 
 _BUILTIN: dict[str, ProviderFactory] = {
     "openai": lambda model: OpenAIChatProvider(model=model),
+    "openai-chat": lambda model: OpenAIChatProvider(model=model),
     "oai": lambda model: OpenAIChatProvider(model=model),
 }
 
@@ -50,8 +54,6 @@ _BUILTIN["claude"] = _anthropic_factory
 
 
 def _openai_responses_factory(model: str) -> Provider:
-    from .openai_responses import OpenAIResponsesProvider
-
     return OpenAIResponsesProvider(model=model)
 
 
@@ -65,7 +67,7 @@ _BUILTIN["responses"] = _openai_responses_factory
 # case discovery happens lazily on the first :func:`provider_from_string`
 # call.
 _REGISTRY: dict[str, ProviderFactory] = {}
-_entry_points_loaded = False
+_ENTRY_POINTS: dict[str, EntryPoint] | None = None
 
 
 def register_provider(prefix: str, factory: ProviderFactory) -> None:
@@ -78,50 +80,56 @@ def register_provider(prefix: str, factory: ProviderFactory) -> None:
     _REGISTRY[prefix.lower()] = factory
 
 
-def _load_entry_points() -> None:
-    """Discover providers exposed via the ``lovia.providers`` entry point.
+def _entry_points() -> dict[str, EntryPoint]:
+    """Return provider entry points keyed by lower-case prefix."""
 
-    Each entry point's name becomes the vendor prefix; the loaded object
-    must be either a :class:`Provider` subclass (constructed as
-    ``cls(model=model)``) or a callable matching :data:`ProviderFactory`.
-    Failures are swallowed silently — a broken third-party plugin should
-    not break model resolution for unrelated prefixes.
-    """
-    global _entry_points_loaded
-    if _entry_points_loaded:
-        return
-    _entry_points_loaded = True
-    try:
-        from importlib.metadata import entry_points
-    except ImportError:  # pragma: no cover - Python <3.10 doesn't ship here
-        return
+    global _ENTRY_POINTS
+    if _ENTRY_POINTS is not None:
+        return _ENTRY_POINTS
+    from importlib.metadata import entry_points
+
     try:
         eps = entry_points(group="lovia.providers")
     except Exception:  # pragma: no cover - defensive
-        return
-    for ep in eps:
-        try:
-            obj = ep.load()
-        except Exception:  # pragma: no cover - broken plugin, skip
-            continue
-        if isinstance(obj, type):
-            # A concrete Provider class — instantiate with ``model=...``.
-            def _factory(model: str, _cls: type = obj) -> Provider:
-                return _cls(model=model)  # type: ignore[no-any-return]
+        _ENTRY_POINTS = {}
+        return _ENTRY_POINTS
+    _ENTRY_POINTS = {ep.name.lower(): ep for ep in eps}
+    return _ENTRY_POINTS
 
-            _REGISTRY.setdefault(ep.name.lower(), _factory)
-        elif callable(obj):
-            _REGISTRY.setdefault(ep.name.lower(), obj)
+
+def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
+    ep = _entry_points().get(vendor)
+    if ep is None:
+        return None
+    try:
+        obj = ep.load()
+    except Exception as exc:
+        raise ValueError(
+            f"Provider plugin {vendor!r} failed to load from entry point "
+            f"{ep.value!r}: {exc}"
+        ) from exc
+    if isinstance(obj, type):
+
+        def _factory(model: str, _cls: type = obj) -> Provider:
+            return _cls(model=model)  # type: ignore[no-any-return]
+
+        return _factory
+    if callable(obj):
+        return obj
+    raise ValueError(
+        f"Provider plugin {vendor!r} must be a provider class or callable factory"
+    )
 
 
 def provider_from_string(spec: str) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
-    Built-in prefixes: ``openai`` (alias ``oai``), ``openai-responses``
-    (alias ``responses``), ``anthropic`` (alias ``claude``). Additional
+    Built-in prefixes: ``openai`` (aliases ``openai-chat``, ``oai``),
+    ``openai-responses`` (alias ``responses``), ``anthropic`` (alias
+    ``claude``). Additional
     vendors can be plugged in via :func:`register_provider` or the
-    ``lovia.providers`` entry-point group. A bare model name with no
-    prefix defaults to OpenAI Chat Completions.
+    ``lovia.providers`` entry-point group. A bare model name defaults to
+    OpenAI Chat Completions.
     """
     if ":" not in spec:
         return OpenAIChatProvider(model=spec)
@@ -129,10 +137,12 @@ def provider_from_string(spec: str) -> Provider:
     vendor = vendor.lower()
     if vendor in _BUILTIN:
         return _BUILTIN[vendor](model)
-    # Lazily import third-party plugins on first miss.
-    _load_entry_points()
     if vendor in _REGISTRY:
         return _REGISTRY[vendor](model)
+    factory = _factory_from_entry_point(vendor)
+    if factory is not None:
+        _REGISTRY[vendor] = factory
+        return factory(model)
     raise ValueError(
         f"Unknown model spec: {spec!r}. Built-in prefixes: openai, "
         f"openai-responses, anthropic. Register additional vendors via "

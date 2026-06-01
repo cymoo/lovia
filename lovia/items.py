@@ -12,14 +12,15 @@ per tool call) and we want minimal overhead and easy ``match`` ergonomics.
 ``item_to_dict`` / ``item_from_dict`` handle (de)serialization for sessions and
 checkpoints; the ``type`` field acts as the discriminator.
 
-Streaming providers don't emit whole Items per chunk — they emit
-:class:`ItemDelta` values (``TextDelta`` / ``ReasoningDelta`` /
-``ToolCallDelta``) that the runner assembles into Items at end-of-turn.
+Streaming providers usually emit display deltas that the runner assembles into
+Items at end-of-turn. Providers can also emit :class:`ItemCompletedDelta` when
+the final provider-native item carries ids or metadata that would otherwise be
+lost.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Union
 
 from .content import ContentBlock, ImageBlock, TextBlock
@@ -62,16 +63,18 @@ class MessageOutputItem:
 
 @dataclass
 class ReasoningItem:
-    """Chain-of-thought output that the model wants echoed in subsequent turns.
+    """Provider-scoped reasoning state that may need replay on later turns.
 
-    ``content`` may be plain text (DeepSeek thinking, Anthropic extended
-    thinking) or an opaque encrypted blob (OpenAI o-series via Responses).
-    Either way the runner must preserve it verbatim and replay it back to
-    the provider; treating it as opaque keeps providers honest.
+    ``content`` is the display/search text, when the provider exposes one.
+    Provider-private replay data (Anthropic signatures, OpenAI encrypted
+    reasoning, etc.) lives in ``metadata`` and is only interpreted by the
+    provider that wrote it.
     """
 
     content: str
     id: str | None = None
+    provider: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     type: Literal["reasoning"] = "reasoning"
 
 
@@ -175,7 +178,22 @@ class FinishDelta:
     type: Literal["finish_delta"] = "finish_delta"
 
 
-ItemDelta = Union[TextDelta, ReasoningDelta, ToolCallDelta, UsageDelta, FinishDelta]
+@dataclass
+class ItemCompletedDelta:
+    """A provider-native final item with ids/metadata preserved."""
+
+    item: Item
+    type: Literal["item_completed_delta"] = "item_completed_delta"
+
+
+ItemDelta = Union[
+    TextDelta,
+    ReasoningDelta,
+    ToolCallDelta,
+    UsageDelta,
+    FinishDelta,
+    ItemCompletedDelta,
+]
 """Discriminated union of streaming deltas a provider may yield."""
 
 
@@ -288,14 +306,11 @@ def _content_from_dict(
 def assistant_to_items(am: AssistantMessage) -> list[Item]:
     """Split an :class:`AssistantMessage` into its component Items.
 
-    Order matches the conceptual emission order: reasoning first (it logically
-    precedes the visible answer), then the message body, then any tool calls.
+    Order matches the conceptual emission order: message body, then tool calls.
     Empty / absent fields are skipped — a tool-only turn produces just the
     ``ToolCallItem``\\ s with no preceding message item.
     """
     out: list[Item] = []
-    if am.reasoning_content:
-        out.append(ReasoningItem(content=am.reasoning_content))
     if am.content:
         out.append(MessageOutputItem(content=am.content))
     for tc in am.tool_calls:
@@ -331,8 +346,6 @@ def transcript_to_items(messages: list[ChatMessage]) -> list[Item]:
             content = m.content if m.content is not None else ""
             out.append(InputMessageItem(role=m.role, content=content))  # type: ignore[arg-type]
         elif m.role == "assistant":
-            if m.reasoning_content:
-                out.append(ReasoningItem(content=m.reasoning_content))
             if m.content:
                 # ``content`` may be a list[ContentBlock]; flatten to text for
                 # the MessageOutputItem (richer shapes are 9d territory).
@@ -360,28 +373,26 @@ def transcript_to_items(messages: list[ChatMessage]) -> list[Item]:
 def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
     """Inverse of :func:`transcript_to_items`.
 
-    Groups consecutive assistant-side items (reasoning + message + tool calls)
-    into one :class:`ChatMessage`, matching how the runner appends them.
+    Groups consecutive assistant-side message/tool-call items into one
+    :class:`ChatMessage`. Reasoning items are intentionally skipped because
+    chat messages are a lossy, provider-neutral view.
     """
     out: list[ChatMessage] = []
     # Buffer for the in-progress assistant message.
-    pending_reasoning: str | None = None
     pending_content: str | None = None
     pending_calls: list[ToolCall] = []
 
     def flush_assistant() -> None:
-        nonlocal pending_reasoning, pending_content, pending_calls
-        if pending_content is None and not pending_calls and pending_reasoning is None:
+        nonlocal pending_content, pending_calls
+        if pending_content is None and not pending_calls:
             return
         out.append(
             ChatMessage(
                 role="assistant",
                 content=pending_content,
                 tool_calls=pending_calls,
-                reasoning_content=pending_reasoning,
             )
         )
-        pending_reasoning = None
         pending_content = None
         pending_calls = []
 
@@ -390,7 +401,7 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
             flush_assistant()
             out.append(ChatMessage(role=it.role, content=it.content))
         elif isinstance(it, ReasoningItem):
-            pending_reasoning = it.content
+            continue
         elif isinstance(it, MessageOutputItem):
             pending_content = it.content
         elif isinstance(it, ToolCallItem):

@@ -9,9 +9,8 @@ Chat Completions adapter:
   subsequent turns of the same conversation. Sessions store it
   automatically.
 * **Server-side tools.** Tools like ``web_search``, ``file_search`` and
-  ``code_interpreter`` execute on OpenAI's side; you opt in by adding
-  the tool dict to ``model_settings.extra["tools"]`` (per OpenAI's
-  Responses tool format).
+  ``code_interpreter`` execute on OpenAI's side; you opt in through
+  provider-scoped options using OpenAI's Responses tool format.
 
 Requires ``OPENAI_API_KEY`` in the environment. Pick any o-series or
 GPT-5 model (e.g. ``o4-mini``, ``gpt-5``).
@@ -37,9 +36,11 @@ async def main() -> None:
         instructions="Think carefully, then answer concisely.",
         # The ``openai-responses:`` prefix routes through the Responses API.
         model=f"openai-responses:{os.getenv('OPENAI_RESPONSES_MODEL', 'o4-mini')}",
-        # ``reasoning.effort`` is a Responses-specific knob — pass it via
-        # ``settings.extra`` and it rides straight through to the request.
-        settings=ModelSettings(extra={"reasoning": {"effort": "medium"}}),
+        # ``reasoning.effort`` is Responses-specific, so keep it scoped to
+        # the Responses adapter.
+        settings=ModelSettings(
+            provider_options={"openai-responses": {"reasoning": {"effort": "medium"}}}
+        ),
     )
 
     # A session keeps the reasoning items around so the second turn can

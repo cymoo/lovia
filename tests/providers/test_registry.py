@@ -21,6 +21,13 @@ def test_unknown_prefix_raises_with_actionable_message() -> None:
     assert "register_provider" in msg or "entry-point" in msg
 
 
+def test_bare_model_defaults_to_openai_chat() -> None:
+    provider = provider_from_string("gpt-5")
+
+    assert provider.name == "openai-chat"
+    assert provider.model == "gpt-5"
+
+
 def test_register_provider_with_factory() -> None:
     register_provider("fakeco", lambda model: _FakeProvider(model))
     p = provider_from_string("fakeco:fake-model-1")
@@ -52,4 +59,44 @@ def test_builtin_openai_routes_to_factory() -> None:
     from lovia.providers import _BUILTIN
 
     assert "openai" in _BUILTIN
+    assert "openai-chat" in _BUILTIN
     assert "anthropic" in _BUILTIN
+
+
+def test_entry_point_loading_is_targeted_and_reports_target_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata
+    import lovia.providers as providers
+
+    class _FakeEntryPoint:
+        def __init__(self, name: str, value: str, fail: bool = False) -> None:
+            self.name = name
+            self.value = value
+            self.fail = fail
+            self.loaded = False
+
+        def load(self) -> object:
+            self.loaded = True
+            if self.fail:
+                raise RuntimeError("boom")
+            return lambda model: _FakeProvider(f"{self.name}:{model}")
+
+    broken = _FakeEntryPoint("broken", "pkg:broken", fail=True)
+    other = _FakeEntryPoint("other", "pkg:other")
+    monkeypatch.setattr(
+        importlib.metadata,
+        "entry_points",
+        lambda group: [broken, other],
+    )
+    monkeypatch.setattr(providers, "_ENTRY_POINTS", None)
+
+    p = provider_from_string("other:model")
+
+    assert isinstance(p, _FakeProvider)
+    assert p.model == "other:model"
+    assert other.loaded is True
+    assert broken.loaded is False
+
+    with pytest.raises(ValueError, match="failed to load"):
+        provider_from_string("broken:model")

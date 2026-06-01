@@ -124,8 +124,8 @@ def test_user_helper_accepts_single_block() -> None:
     assert msg.content[0].text == "hi"
 
 
-def test_assistant_message_to_chat_message_preserves_reasoning() -> None:
-    am = AssistantMessage(content="answer", reasoning_content="thinking")
+def test_assistant_message_to_chat_message_is_chat_compatible_view() -> None:
+    am = AssistantMessage(content="answer")
     chat = am.to_chat_message()
     assert chat.content == "answer"
-    assert chat.reasoning_content == "thinking"
+    assert not hasattr(chat, "reasoning_content")

@@ -63,7 +63,7 @@ async def main() -> None:
     agent = Agent(
         name="companion",
         instructions="You are a helpful, concise companion.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini"),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         hooks=hooks,
     )
 

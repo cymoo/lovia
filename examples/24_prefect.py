@@ -23,7 +23,7 @@ from rich.panel import Panel
 from lovia import Agent, Runner
 
 load_dotenv()
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-4o-mini")
+MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
 console = Console()
 
 

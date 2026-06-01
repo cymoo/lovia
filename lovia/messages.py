@@ -1,8 +1,8 @@
-"""Internal message representation.
+"""Chat-compatible message representation.
 
-The schema is intentionally isomorphic to the OpenAI Chat Completions wire
-format. This keeps the OpenAI adapter trivial and gives every other provider a
-single, well-understood target to translate to and from.
+The schema intentionally models the portable subset of chat transcripts.
+Provider-native state such as reasoning ids, signatures, or encrypted blobs
+lives in :mod:`lovia.items`, not here.
 
 All messages carry a ``role`` and ``content``; assistant messages may also
 carry ``tool_calls``; tool messages carry the ``tool_call_id`` they answer.
@@ -38,10 +38,7 @@ class ChatMessage:
     :class:`ContentBlock`\\ s (for multimodal input like images), or ``None``
     when the assistant only emitted tool calls. ``tool_calls`` is only
     meaningful when ``role == "assistant"``; ``tool_call_id`` only when
-    ``role == "tool"``. ``reasoning_content`` carries chain-of-thought text
-    from providers that expose it (e.g. DeepSeek thinking, Anthropic
-    extended thinking, OpenAI o-series) and must be echoed back verbatim in
-    subsequent turns.
+    ``role == "tool"``.
     """
 
     role: Role
@@ -49,7 +46,6 @@ class ChatMessage:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None  # optional: agent/tool display name
-    reasoning_content: str | None = None
 
     @property
     def text(self) -> str:
@@ -83,25 +79,18 @@ class Usage:
 
 @dataclass
 class AssistantMessage:
-    """A model response returned by :class:`Provider.generate`.
-
-    Streaming providers assemble this from chunks before returning it.
-    ``reasoning_content`` is preserved when the provider returns chain-of-thought
-    text that must be echoed back in subsequent requests.
-    """
+    """Chat-compatible view of one assistant turn."""
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     finish_reason: str | None = None
-    reasoning_content: str | None = None
 
     def to_chat_message(self) -> ChatMessage:
         return ChatMessage(
             role="assistant",
             content=self.content,
             tool_calls=list(self.tool_calls),
-            reasoning_content=self.reasoning_content,
         )
 
 

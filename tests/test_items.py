@@ -6,6 +6,7 @@ import pytest
 
 from lovia import (
     FinishDelta,
+    FileBlock,
     ImageBlock,
     InputMessageItem,
     MessageOutputItem,
@@ -30,7 +31,11 @@ from lovia import (
         InputMessageItem(role="user", content="hello"),
         InputMessageItem(
             role="user",
-            content=[TextBlock(text="caption:"), ImageBlock(url="https://x/i.png")],
+            content=[
+                TextBlock(text="caption:"),
+                ImageBlock(url="https://x/i.png"),
+                FileBlock.from_url("https://x/doc.pdf", filename="doc.pdf"),
+            ],
         ),
         MessageOutputItem(content="hi there"),
         MessageOutputItem(content="with id", id="msg_123"),
@@ -62,6 +67,27 @@ def test_input_message_image_block_roundtrip() -> None:
     assert block.data == "aGVsbG8="
     assert block.mime_type == "image/png"
     assert block.detail == "high"
+
+
+def test_input_message_file_block_roundtrip() -> None:
+    item = InputMessageItem(
+        role="user",
+        content=[
+            FileBlock(
+                data="cGRm",
+                mime_type="application/pdf",
+                filename="doc.pdf",
+            )
+        ],
+    )
+    restored = item_from_dict(item_to_dict(item))
+    assert isinstance(restored, InputMessageItem)
+    assert isinstance(restored.content, list)
+    block = restored.content[0]
+    assert isinstance(block, FileBlock)
+    assert block.data == "cGRm"
+    assert block.mime_type == "application/pdf"
+    assert block.filename == "doc.pdf"
 
 
 def test_item_from_dict_rejects_unknown_type() -> None:

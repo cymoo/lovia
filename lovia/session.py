@@ -11,9 +11,8 @@ multi-user systems just key sessions by user / conversation id.
 
 Why :class:`Item` and not :class:`ChatMessage`?
 The Item form is richer (it preserves reasoning, server-side tool calls,
-and provider-specific metadata) and round-trips losslessly to the OpenAI
-Responses API. Adapters that only speak Chat Completions can still flatten
-items via :func:`lovia.items.items_to_chat_messages`.
+and provider-specific metadata). Chat-style adapters can still flatten items
+via :func:`lovia.items.items_to_chat_messages`.
 """
 
 from __future__ import annotations

@@ -11,9 +11,9 @@ carry ``tool_calls``; tool messages carry the ``tool_call_id`` they answer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
-from .content import ContentBlock, TextBlock, text_of
+from .content import ContentBlock, FileBlock, ImageBlock, TextBlock, text_of
 
 
 Role = Literal["system", "user", "assistant", "tool"]
@@ -35,8 +35,8 @@ class ChatMessage:
     """One message in a conversation.
 
     ``content`` may be a plain string (the common case), a list of typed
-    :class:`ContentBlock`\\ s (for multimodal input like images), or ``None``
-    when the assistant only emitted tool calls. ``tool_calls`` is only
+    :class:`ContentBlock`\\ s (for multimodal input like images or files), or
+    ``None`` when the assistant only emitted tool calls. ``tool_calls`` is only
     meaningful when ``role == "assistant"``; ``tool_call_id`` only when
     ``role == "tool"``.
     """
@@ -104,16 +104,9 @@ def user(
     """Build a user message from a string, a single block, or a block list."""
     if isinstance(content, str):
         return ChatMessage(role="user", content=content)
-    if isinstance(content, (TextBlock,)) or _is_image_block(content):
-        return ChatMessage(role="user", content=[content])  # type: ignore[list-item]
+    if isinstance(content, (TextBlock, ImageBlock, FileBlock)):
+        return ChatMessage(role="user", content=[content])
     return ChatMessage(role="user", content=list(content))  # type: ignore[arg-type]
-
-
-def _is_image_block(value: Any) -> bool:
-    # Late import to avoid a hard cycle; ImageBlock lives in content.py.
-    from .content import ImageBlock
-
-    return isinstance(value, ImageBlock)
 
 
 def assistant(text: str) -> ChatMessage:

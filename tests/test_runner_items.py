@@ -239,7 +239,7 @@ async def test_session_history_preserves_reasoning_items_for_provider_replay() -
     reasoning = ReasoningItem(
         id="rs_1",
         content="summary",
-        provider="openai-responses",
+        provider="reasoning-provider",
         metadata={"encrypted_content": "enc"},
     )
     await session.append(

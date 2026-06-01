@@ -144,9 +144,8 @@ class RunResult:
     sites that know their output type can cast or annotate locally.
 
     The transcript lives in ``new_items`` (the canonical Item-list form
-    consumed by other agents, Session storage, and the Responses API).
-    ``messages`` is a derived view in OpenAI Chat wire format, convenient
-    for printing or forwarding to legacy clients.
+    consumed by other agents and Session storage). ``messages`` is a derived
+    chat-format view, convenient for printing or forwarding to clients.
     """
 
     output: Any

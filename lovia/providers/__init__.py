@@ -18,14 +18,14 @@ from importlib.metadata import EntryPoint
 from typing import Callable
 
 from .base import ModelSettings, Provider
+from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
-from .openai_responses import OpenAIResponsesProvider
 
 __all__ = [
     "ModelSettings",
     "Provider",
+    "AnthropicProvider",
     "OpenAIChatProvider",
-    "OpenAIResponsesProvider",
     "provider_from_string",
     "register_provider",
 ]
@@ -36,29 +36,12 @@ __all__ = [
 ProviderFactory = Callable[[str], Provider]
 
 _BUILTIN: dict[str, ProviderFactory] = {
+    "anthropic": lambda model: AnthropicProvider(model=model),
+    "claude": lambda model: AnthropicProvider(model=model),
     "openai": lambda model: OpenAIChatProvider(model=model),
     "openai-chat": lambda model: OpenAIChatProvider(model=model),
     "oai": lambda model: OpenAIChatProvider(model=model),
 }
-
-
-def _anthropic_factory(model: str) -> Provider:
-    # Imported lazily to avoid the httpx-only install pulling Anthropic in.
-    from .anthropic import AnthropicProvider
-
-    return AnthropicProvider(model=model)
-
-
-_BUILTIN["anthropic"] = _anthropic_factory
-_BUILTIN["claude"] = _anthropic_factory
-
-
-def _openai_responses_factory(model: str) -> Provider:
-    return OpenAIResponsesProvider(model=model)
-
-
-_BUILTIN["openai-responses"] = _openai_responses_factory
-_BUILTIN["responses"] = _openai_responses_factory
 
 
 # Runtime registry (process-global). Third-party packages may add entries
@@ -124,10 +107,9 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
 def provider_from_string(spec: str) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
-    Built-in prefixes: ``openai`` (aliases ``openai-chat``, ``oai``),
-    ``openai-responses`` (alias ``responses``), ``anthropic`` (alias
-    ``claude``). Additional
-    vendors can be plugged in via :func:`register_provider` or the
+    Built-in prefixes: ``openai`` (aliases ``openai-chat``, ``oai``) and
+    ``anthropic`` (alias ``claude``). Additional vendors can be plugged in via
+    :func:`register_provider` or the
     ``lovia.providers`` entry-point group. A bare model name defaults to
     OpenAI Chat Completions.
     """
@@ -145,7 +127,7 @@ def provider_from_string(spec: str) -> Provider:
         return factory(model)
     raise ValueError(
         f"Unknown model spec: {spec!r}. Built-in prefixes: openai, "
-        f"openai-responses, anthropic. Register additional vendors via "
+        f"anthropic. Register additional vendors via "
         f"lovia.providers.register_provider or the 'lovia.providers' "
         f"entry-point group."
     )

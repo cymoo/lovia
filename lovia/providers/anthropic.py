@@ -5,8 +5,8 @@ directly so the ``anthropic`` SDK is not required.
 
 Conversions worth noting:
 
-* The Anthropic API takes a separate ``system`` parameter (a string), not a
-  message with role ``system``. We extract the first system message.
+* The Anthropic API takes a separate ``system`` parameter, not messages with
+  role ``system``. We merge system messages into that parameter.
 * ``tool`` role messages become ``user`` messages whose content is a list
   containing a ``tool_result`` block keyed by ``tool_use_id``.
 * Assistant tool calls become ``tool_use`` content blocks; we generate the
@@ -21,10 +21,11 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
-from ..exceptions import ProviderError
+from ..exceptions import ProviderError, UserError
 from ..items import (
     FinishDelta,
     InputMessageItem,
@@ -46,7 +47,7 @@ from ._content import (
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
-from ._http import raise_for_provider_status
+from ._http import raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -71,24 +72,46 @@ class AnthropicProvider:
         anthropic_version: str = _DEFAULT_VERSION,
         default_max_tokens: int = 4096,
         default_headers: dict[str, str] | None = None,
+        trust_env: bool = False,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self._client = client or httpx.AsyncClient(timeout=timeout)
+        self._client = client
         self._owns_client = client is None
+        self._timeout = timeout
         self._version = anthropic_version
         self._default_max_tokens = default_max_tokens
         self._extra_headers = dict(default_headers or {})
+        self._trust_env = trust_env
 
     async def aclose(self) -> None:
-        if self._owns_client:
+        if self._owns_client and self._client is not None:
             await self._client.aclose()
+            self._client = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                trust_env=self._trust_env,
+            )
+        return self._client
 
     def context_window(self, model: str) -> int | None:
         return _ANTHROPIC_CONTEXT_WINDOWS.get(model)
+
+    def _using_official_endpoint(self) -> bool:
+        return urlparse(self.base_url).hostname == "api.anthropic.com"
+
+    def _check_ready(self) -> None:
+        if self._using_official_endpoint() and not self._api_key:
+            raise UserError(
+                "Anthropic provider requires an API key for api.anthropic.com",
+                hint="Set ANTHROPIC_API_KEY or pass api_key=...; use base_url=... for compatible gateways that do not need one.",
+            )
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -185,6 +208,7 @@ class AnthropicProvider:
         payload = self._build_payload(
             input, tools, response_format, settings, stream=True
         )
+        self._check_ready()
 
         # Anthropic streams content blocks by index. We only need to remember
         # id/name per block so we can echo them on every argument delta.
@@ -198,138 +222,154 @@ class AnthropicProvider:
         usage = Usage()
         stop_reason: str | None = None
 
-        async with self._client.stream(
-            "POST",
-            f"{self.base_url}/messages",
-            headers=self._headers(),
-            json=payload,
-        ) as response:
-            await raise_for_provider_status(
-                response,
+        try:
+            async with self._http().stream(
+                "POST",
+                f"{self.base_url}/messages",
+                headers=self._headers(),
+                json=payload,
+            ) as response:
+                await raise_for_provider_status(
+                    response,
+                    vendor="anthropic",
+                    model=self.model,
+                    label="Anthropic",
+                    is_context_overflow=_is_context_overflow,
+                )
+                async for event in iter_sse_json(response):
+                    etype = event.get("type")
+
+                    if etype == "content_block_start":
+                        idx = event.get("index", 0)
+                        block = event.get("content_block") or {}
+                        block_kinds[idx] = block.get("type", "")
+                        if block.get("type") == "tool_use":
+                            tool_call_ids[idx] = block.get("id", "")
+                            tool_call_names[idx] = block.get("name", "")
+                            initial_args = (
+                                json.dumps(block["input"]) if block.get("input") else ""
+                            )
+                            tool_call_arguments[idx] = initial_args
+                            yield ToolCallDelta(
+                                index=idx,
+                                call_id=tool_call_ids[idx],
+                                name=tool_call_names[idx],
+                                arguments=initial_args,
+                            )
+                        elif block.get("type") == "text":
+                            text = block.get("text", "")
+                            text_blocks.setdefault(idx, []).append(text)
+                            if text:
+                                yield TextDelta(text=text)
+                        elif block.get("type") == "thinking":
+                            thinking = block.get("thinking", "")
+                            thinking_blocks.setdefault(idx, []).append(thinking)
+                            if thinking:
+                                yield ReasoningDelta(text=thinking)
+                            if signature := block.get("signature"):
+                                thinking_signatures[idx] = signature
+                    elif etype == "content_block_delta":
+                        idx = event.get("index", 0)
+                        delta = event.get("delta") or {}
+                        dtype = delta.get("type")
+                        if dtype == "text_delta":
+                            text = delta.get("text", "")
+                            text_blocks.setdefault(idx, []).append(text)
+                            yield TextDelta(text=text)
+                        elif dtype == "thinking_delta":
+                            thinking = delta.get("thinking", "")
+                            thinking_blocks.setdefault(idx, []).append(thinking)
+                            yield ReasoningDelta(text=thinking)
+                        elif dtype == "signature_delta":
+                            if signature := delta.get("signature"):
+                                thinking_signatures[idx] = signature
+                        elif dtype == "input_json_delta":
+                            partial = delta.get("partial_json", "")
+                            tool_call_arguments[idx] = (
+                                tool_call_arguments.get(idx, "") + partial
+                            )
+                            yield ToolCallDelta(
+                                index=idx,
+                                call_id=tool_call_ids.get(idx, ""),
+                                name=tool_call_names.get(idx, ""),
+                                arguments=partial,
+                            )
+                    elif etype == "content_block_stop":
+                        idx = event.get("index", 0)
+                        kind = block_kinds.get(idx)
+                        if kind == "text":
+                            content = "".join(text_blocks.get(idx, []))
+                            if content:
+                                yield ItemCompletedDelta(
+                                    MessageOutputItem(content=content)
+                                )
+                        elif kind == "thinking":
+                            metadata: dict[str, Any] = {}
+                            if signature := thinking_signatures.get(idx):
+                                metadata["signature"] = signature
+                            yield ItemCompletedDelta(
+                                ReasoningItem(
+                                    content="".join(thinking_blocks.get(idx, [])),
+                                    provider=self.name,
+                                    metadata=metadata,
+                                )
+                            )
+                        elif kind == "tool_use":
+                            yield ItemCompletedDelta(
+                                ToolCallItem(
+                                    call_id=tool_call_ids.get(idx, ""),
+                                    name=tool_call_names.get(idx, ""),
+                                    arguments=tool_call_arguments.get(idx) or "{}",
+                                )
+                            )
+                    elif etype == "message_delta":
+                        stop_reason = (event.get("delta") or {}).get(
+                            "stop_reason"
+                        ) or stop_reason
+                        if u := event.get("usage"):
+                            usage.output_tokens = u.get(
+                                "output_tokens", usage.output_tokens
+                            )
+                            if "cache_creation_input_tokens" in u:
+                                usage.cache_write_tokens = u[
+                                    "cache_creation_input_tokens"
+                                ]
+                            if "cache_read_input_tokens" in u:
+                                usage.cache_read_tokens = u["cache_read_input_tokens"]
+                    elif etype == "message_start":
+                        if u := (event.get("message") or {}).get("usage"):
+                            usage.input_tokens = u.get("input_tokens", 0)
+                            usage.output_tokens = u.get("output_tokens", 0)
+                            usage.cache_write_tokens = u.get(
+                                "cache_creation_input_tokens", 0
+                            )
+                            usage.cache_read_tokens = u.get(
+                                "cache_read_input_tokens", 0
+                            )
+                    elif etype == "message_stop":
+                        break
+                    elif etype == "error":
+                        error = event.get("error") or {}
+                        msg = (
+                            error.get("message")
+                            or event.get("message")
+                            or "Anthropic error"
+                        )
+                        raise ProviderError(
+                            f"Anthropic stream error: {msg}",
+                            vendor="anthropic",
+                            model=self.model,
+                            retryable=_is_stream_error_retryable(error),
+                        )
+        except ProviderError:
+            raise
+        except httpx.TransportError as exc:
+            raise_for_transport_error(
+                exc,
                 vendor="anthropic",
                 model=self.model,
                 label="Anthropic",
-                is_context_overflow=_is_context_overflow,
             )
-            async for event in iter_sse_json(response):
-                etype = event.get("type")
-
-                if etype == "content_block_start":
-                    idx = event.get("index", 0)
-                    block = event.get("content_block") or {}
-                    block_kinds[idx] = block.get("type", "")
-                    if block.get("type") == "tool_use":
-                        tool_call_ids[idx] = block.get("id", "")
-                        tool_call_names[idx] = block.get("name", "")
-                        initial_args = (
-                            json.dumps(block["input"]) if block.get("input") else ""
-                        )
-                        tool_call_arguments[idx] = initial_args
-                        yield ToolCallDelta(
-                            index=idx,
-                            call_id=tool_call_ids[idx],
-                            name=tool_call_names[idx],
-                            arguments=initial_args,
-                        )
-                    elif block.get("type") == "text":
-                        text = block.get("text", "")
-                        text_blocks.setdefault(idx, []).append(text)
-                        if text:
-                            yield TextDelta(text=text)
-                    elif block.get("type") == "thinking":
-                        thinking = block.get("thinking", "")
-                        thinking_blocks.setdefault(idx, []).append(thinking)
-                        if thinking:
-                            yield ReasoningDelta(text=thinking)
-                        if signature := block.get("signature"):
-                            thinking_signatures[idx] = signature
-                elif etype == "content_block_delta":
-                    idx = event.get("index", 0)
-                    delta = event.get("delta") or {}
-                    dtype = delta.get("type")
-                    if dtype == "text_delta":
-                        text = delta.get("text", "")
-                        text_blocks.setdefault(idx, []).append(text)
-                        yield TextDelta(text=text)
-                    elif dtype == "thinking_delta":
-                        thinking = delta.get("thinking", "")
-                        thinking_blocks.setdefault(idx, []).append(thinking)
-                        yield ReasoningDelta(text=thinking)
-                    elif dtype == "signature_delta":
-                        if signature := delta.get("signature"):
-                            thinking_signatures[idx] = signature
-                    elif dtype == "input_json_delta":
-                        partial = delta.get("partial_json", "")
-                        tool_call_arguments[idx] = (
-                            tool_call_arguments.get(idx, "") + partial
-                        )
-                        yield ToolCallDelta(
-                            index=idx,
-                            call_id=tool_call_ids.get(idx, ""),
-                            name=tool_call_names.get(idx, ""),
-                            arguments=partial,
-                        )
-                elif etype == "content_block_stop":
-                    idx = event.get("index", 0)
-                    kind = block_kinds.get(idx)
-                    if kind == "text":
-                        content = "".join(text_blocks.get(idx, []))
-                        if content:
-                            yield ItemCompletedDelta(MessageOutputItem(content=content))
-                    elif kind == "thinking":
-                        metadata: dict[str, Any] = {}
-                        if signature := thinking_signatures.get(idx):
-                            metadata["signature"] = signature
-                        yield ItemCompletedDelta(
-                            ReasoningItem(
-                                content="".join(thinking_blocks.get(idx, [])),
-                                provider=self.name,
-                                metadata=metadata,
-                            )
-                        )
-                    elif kind == "tool_use":
-                        yield ItemCompletedDelta(
-                            ToolCallItem(
-                                call_id=tool_call_ids.get(idx, ""),
-                                name=tool_call_names.get(idx, ""),
-                                arguments=tool_call_arguments.get(idx) or "{}",
-                            )
-                        )
-                elif etype == "message_delta":
-                    stop_reason = (event.get("delta") or {}).get(
-                        "stop_reason"
-                    ) or stop_reason
-                    if u := event.get("usage"):
-                        usage.output_tokens = u.get(
-                            "output_tokens", usage.output_tokens
-                        )
-                        if "cache_creation_input_tokens" in u:
-                            usage.cache_write_tokens = u["cache_creation_input_tokens"]
-                        if "cache_read_input_tokens" in u:
-                            usage.cache_read_tokens = u["cache_read_input_tokens"]
-                elif etype == "message_start":
-                    if u := (event.get("message") or {}).get("usage"):
-                        usage.input_tokens = u.get("input_tokens", 0)
-                        usage.output_tokens = u.get("output_tokens", 0)
-                        usage.cache_write_tokens = u.get(
-                            "cache_creation_input_tokens", 0
-                        )
-                        usage.cache_read_tokens = u.get("cache_read_input_tokens", 0)
-                elif etype == "message_stop":
-                    break
-                elif etype == "error":
-                    error = event.get("error") or {}
-                    msg = (
-                        error.get("message")
-                        or event.get("message")
-                        or "Anthropic error"
-                    )
-                    raise ProviderError(
-                        f"Anthropic stream error: {msg}",
-                        vendor="anthropic",
-                        model=self.model,
-                        retryable=_is_stream_error_retryable(error),
-                    )
 
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=_normalize_stop_reason(stop_reason))

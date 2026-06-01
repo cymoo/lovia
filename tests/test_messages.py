@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from lovia import ImageBlock, TextBlock, user
+from lovia import FileBlock, ImageBlock, TextBlock, user
 from lovia.content import normalize_content, text_of
 from lovia.messages import AssistantMessage, ChatMessage, Usage
 from lovia.providers.openai_chat import message_to_openai
 
 
-# ---------- TextBlock / ImageBlock ----------
+# ---------- TextBlock / ImageBlock / FileBlock ----------
 
 
 def test_text_block_serializes_to_openai_parts() -> None:
@@ -42,6 +44,34 @@ def test_image_block_base64_requires_mime_type() -> None:
         ImageBlock(data="ZmFrZQ==")
 
 
+def test_file_block_from_path_infers_mime_type_and_filename(tmp_path: Any) -> None:
+    path = tmp_path / "doc.pdf"
+    path.write_bytes(b"pdf")
+
+    block = FileBlock.from_path(path)
+
+    assert block.data == "cGRm"
+    assert block.mime_type == "application/pdf"
+    assert block.filename == "doc.pdf"
+
+
+def test_file_block_requires_exactly_one_source() -> None:
+    with pytest.raises(ValueError):
+        FileBlock()
+    with pytest.raises(ValueError):
+        FileBlock(url="https://x/doc.pdf", data="cGRm", mime_type="application/pdf")
+
+
+def test_file_block_base64_requires_mime_type() -> None:
+    with pytest.raises(ValueError):
+        FileBlock(data="cGRm")
+
+
+def test_file_block_rejects_invalid_base64_data() -> None:
+    with pytest.raises(ValueError, match="valid base64"):
+        FileBlock(data="not base64", mime_type="application/pdf")
+
+
 # ---------- normalize_content / text_of ----------
 
 
@@ -59,9 +89,15 @@ def test_normalize_content_returns_none_for_none() -> None:
 
 
 def test_text_of_includes_image_placeholder() -> None:
-    content = [TextBlock("alpha "), ImageBlock(url="x"), TextBlock("beta")]
+    content = [
+        TextBlock("alpha "),
+        ImageBlock(url="x"),
+        FileBlock.from_url("https://x/doc.pdf", filename="doc.pdf"),
+        TextBlock("beta"),
+    ]
     out = text_of(content)
     assert "alpha" in out and "beta" in out and "[image]" in out
+    assert "[file:doc.pdf]" in out
 
 
 def test_text_of_returns_empty_for_none() -> None:

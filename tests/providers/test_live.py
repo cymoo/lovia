@@ -44,18 +44,6 @@ def _openai_chat_model() -> str:
     return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.4")
 
 
-def _openai_responses_model() -> str:
-    _require_live()
-    if not os.getenv("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY is not configured")
-    model_name = os.getenv("OPENAI_RESPONSES_DEFAULT_MODEL") or os.getenv(
-        "OPENAI_RESPONSES_MODEL"
-    )
-    if not model_name:
-        pytest.skip("OPENAI_RESPONSES_DEFAULT_MODEL is not configured")
-    return model_name
-
-
 def _anthropic_model() -> str:
     _require_live()
     if not os.getenv("ANTHROPIC_API_KEY"):
@@ -132,38 +120,6 @@ async def test_openai_chat_live_tool_call() -> None:
     result = await Runner.run(agent, "Use the tool to add 2 and 3, then answer.")
 
     assert "5" in str(result.output)
-
-
-@pytest.mark.asyncio
-async def test_openai_responses_live_round_trip() -> None:
-    model_name = _openai_responses_model()
-    agent = Agent(
-        name="probe",
-        model=f"openai-responses:{model_name}",
-        instructions="Answer in one short sentence.",
-    )
-
-    result = await Runner.run(agent, "Say hi.")
-
-    assert isinstance(result.output, str)
-    assert result.output
-    assert result.usage.output_tokens > 0
-
-
-@pytest.mark.asyncio
-async def test_openai_responses_live_structured_output() -> None:
-    model_name = _openai_responses_model()
-    agent = Agent(
-        name="probe",
-        model=f"openai-responses:{model_name}",
-        instructions="Return the requested structured answer.",
-        output_type=TinyAnswer,
-    )
-
-    result = await Runner.run(agent, "Set answer to ok.")
-
-    assert isinstance(result.output, TinyAnswer)
-    assert result.output.answer
 
 
 @pytest.mark.asyncio

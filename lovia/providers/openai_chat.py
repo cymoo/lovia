@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import os
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
+from ..exceptions import ProviderError, UserError
 from ..items import (
     FinishDelta,
     Item,
@@ -30,7 +32,7 @@ from ..items import (
 )
 from ..messages import ChatMessage, ToolCall, Usage
 from ._content import content_to_openai_chat as _content_to_openai
-from ._http import raise_for_provider_status
+from ._http import raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -144,6 +146,11 @@ class OpenAIChatProvider:
         timeout: Request timeout in seconds.
         default_headers: Extra headers merged into every request (useful for
             providers that require custom auth headers).
+        trust_env: Whether the provider-created HTTP client should honor proxy
+            and certificate environment variables. Defaults to ``False`` so an
+            ambient proxy setting cannot make the provider require optional
+            dependencies such as SOCKS support. Pass a custom client for more
+            advanced transport configuration.
     """
 
     name = "openai-chat"
@@ -158,16 +165,19 @@ class OpenAIChatProvider:
         timeout: float = 60.0,
         default_headers: dict[str, str] | None = None,
         supports_json_schema: bool | None = None,
+        trust_env: bool = False,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self._client = client or httpx.AsyncClient(timeout=timeout)
+        self._client = client
         self._owns_client = client is None
-        self._extra_headers = default_headers or {}
+        self._timeout = timeout
+        self._extra_headers = dict(default_headers or {})
         self._supports_json_schema = supports_json_schema
+        self._trust_env = trust_env
 
     @property
     def supports_json_schema(self) -> bool:
@@ -178,19 +188,39 @@ class OpenAIChatProvider:
         """
         if self._supports_json_schema is not None:
             return self._supports_json_schema
-        from urllib.parse import urlparse
-
         return urlparse(self.base_url).hostname == "api.openai.com"
 
+    def _using_official_endpoint(self) -> bool:
+        return urlparse(self.base_url).hostname == "api.openai.com"
+
+    def _check_ready(self) -> None:
+        if self._using_official_endpoint() and not self._api_key:
+            raise UserError(
+                "OpenAI Chat provider requires an API key for api.openai.com",
+                hint="Set OPENAI_API_KEY or pass api_key=...; use base_url=... for OpenAI-compatible endpoints that do not need one.",
+            )
+
     async def aclose(self) -> None:
-        if self._owns_client:
+        if self._owns_client and self._client is not None:
             await self._client.aclose()
+            self._client = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                trust_env=self._trust_env,
+            )
+        return self._client
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        headers.update(self._extra_headers)
+        for key, value in self._extra_headers.items():
+            if key.lower() == "authorization" and self._api_key:
+                continue
+            headers[key] = value
         return headers
 
     def _build_payload(
@@ -238,6 +268,7 @@ class OpenAIChatProvider:
         payload = self._build_payload(
             input, tools, response_format, settings, stream=True
         )
+        self._check_ready()
 
         # We only need to remember the per-index tool-call id+name so we can
         # echo them on every argument delta — the runner does the final
@@ -248,58 +279,68 @@ class OpenAIChatProvider:
         finish_reason: str | None = None
         reasoning_parts: list[str] = []
 
-        async with self._client.stream(
-            "POST",
-            f"{self.base_url}/chat/completions",
-            headers=self._headers(),
-            json=payload,
-        ) as response:
-            await raise_for_provider_status(
-                response,
+        try:
+            async with self._http().stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+            ) as response:
+                await raise_for_provider_status(
+                    response,
+                    vendor="openai",
+                    model=self.model,
+                    label="OpenAI Chat",
+                    is_context_overflow=_is_context_overflow,
+                )
+                async for event in iter_sse_json(response):
+                    if "usage" in event and event["usage"]:
+                        u = event["usage"]
+                        usage.input_tokens = u.get("prompt_tokens", 0)
+                        usage.output_tokens = u.get("completion_tokens", 0)
+                        pdetails = u.get("prompt_tokens_details") or {}
+                        usage.cache_read_tokens = pdetails.get("cached_tokens", 0)
+
+                    choices = event.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") or {}
+
+                    if text := delta.get("content"):
+                        yield TextDelta(text=text)
+
+                    if reasoning := delta.get("reasoning_content"):
+                        reasoning_parts.append(reasoning)
+                        yield ReasoningDelta(text=reasoning)
+
+                    for tc in delta.get("tool_calls") or []:
+                        idx = tc.get("index", 0)
+                        if tc.get("id"):
+                            tool_call_ids[idx] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            tool_call_names[idx] = fn["name"]
+                        # Echo the id/name we've seen so far on every delta so
+                        # downstream consumers don't need to track them.
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=tool_call_ids.get(idx, ""),
+                            name=tool_call_names.get(idx, ""),
+                            arguments=fn.get("arguments", ""),
+                        )
+
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+        except ProviderError:
+            raise
+        except httpx.TransportError as exc:
+            raise_for_transport_error(
+                exc,
                 vendor="openai",
                 model=self.model,
                 label="OpenAI Chat",
-                is_context_overflow=_is_context_overflow,
             )
-            async for event in iter_sse_json(response):
-                if "usage" in event and event["usage"]:
-                    u = event["usage"]
-                    usage.input_tokens = u.get("prompt_tokens", 0)
-                    usage.output_tokens = u.get("completion_tokens", 0)
-                    pdetails = u.get("prompt_tokens_details") or {}
-                    usage.cache_read_tokens = pdetails.get("cached_tokens", 0)
-
-                choices = event.get("choices") or []
-                if not choices:
-                    continue
-                choice = choices[0]
-                delta = choice.get("delta") or {}
-
-                if text := delta.get("content"):
-                    yield TextDelta(text=text)
-
-                if reasoning := delta.get("reasoning_content"):
-                    reasoning_parts.append(reasoning)
-                    yield ReasoningDelta(text=reasoning)
-
-                for tc in delta.get("tool_calls") or []:
-                    idx = tc.get("index", 0)
-                    if tc.get("id"):
-                        tool_call_ids[idx] = tc["id"]
-                    fn = tc.get("function") or {}
-                    if fn.get("name"):
-                        tool_call_names[idx] = fn["name"]
-                    # Echo the id/name we've seen so far on every delta so
-                    # downstream consumers don't need to track them.
-                    yield ToolCallDelta(
-                        index=idx,
-                        call_id=tool_call_ids.get(idx, ""),
-                        name=tool_call_names.get(idx, ""),
-                        arguments=fn.get("arguments", ""),
-                    )
-
-                if choice.get("finish_reason"):
-                    finish_reason = choice["finish_reason"]
 
         if reasoning_parts:
             yield ItemCompletedDelta(

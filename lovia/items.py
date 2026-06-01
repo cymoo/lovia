@@ -3,8 +3,8 @@
 `Item` is what lovia uses internally to represent the transcript and what the
 public API surfaces in ``RunResult.new_items``, hooks, and events. Each Item is
 a small typed record; provider adapters translate between Items and their wire
-format (OpenAI Chat ``messages``, OpenAI Responses ``input``/``output``,
-Anthropic Messages, …) so the runner core stays provider-agnostic.
+format (OpenAI Chat ``messages``, Anthropic Messages, ...) so the runner core
+stays provider-agnostic.
 
 Items are deliberately implemented as plain ``dataclass``\\ es rather than
 Pydantic models — they sit on the hot path (one per assistant token batch, one
@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Union
 
-from .content import ContentBlock, ImageBlock, TextBlock
+from .content import ContentBlock, FileBlock, ImageBlock, TextBlock
 from .messages import AssistantMessage, ChatMessage, ToolCall, Usage
 
 
@@ -51,9 +51,8 @@ class InputMessageItem:
 class MessageOutputItem:
     """A textual assistant response.
 
-    ``id`` is set when the provider assigns a stable identifier (OpenAI
-    Responses API returns one per output item); it is ``None`` for Chat
-    Completions and most other providers.
+    ``id`` is set when the provider assigns a stable identifier; it is ``None``
+    for Chat Completions and most other providers.
     """
 
     content: str
@@ -66,9 +65,8 @@ class ReasoningItem:
     """Provider-scoped reasoning state that may need replay on later turns.
 
     ``content`` is the display/search text, when the provider exposes one.
-    Provider-private replay data (Anthropic signatures, OpenAI encrypted
-    reasoning, etc.) lives in ``metadata`` and is only interpreted by the
-    provider that wrote it.
+    Provider-private replay data (signatures, encrypted reasoning, etc.) lives
+    in ``metadata`` and is only interpreted by the provider that wrote it.
     """
 
     content: str
@@ -119,8 +117,7 @@ Item = Union[
 
 Handoffs reuse :class:`ToolCallItem` / :class:`ToolCallOutputItem`; we
 add specialised types only when a provider exposes a structurally
-distinct concept that we cannot lossily flatten (e.g. server-side
-tools on OpenAI Responses — coming in a future release).
+distinct concept that we cannot lossily flatten.
 """
 
 
@@ -150,9 +147,9 @@ class ToolCallDelta:
     """Incremental tool call.
 
     Providers stream tool calls one fragment at a time. ``index`` identifies
-    which parallel call the fragment belongs to (OpenAI Chat indexes them;
-    Responses gives stable IDs). ``call_id`` / ``name`` are typically set on
-    the first chunk; subsequent chunks only carry ``arguments``.
+    which parallel call the fragment belongs to. ``call_id`` / ``name`` are
+    typically set on the first chunk; subsequent chunks only carry
+    ``arguments``.
     """
 
     index: int
@@ -286,6 +283,15 @@ def _content_from_dict(
                     data=raw.get("data"),
                     mime_type=raw.get("mime_type"),
                     detail=raw.get("detail"),
+                )
+            )
+        elif t == "file":
+            blocks.append(
+                FileBlock(
+                    url=raw.get("url"),
+                    data=raw.get("data"),
+                    mime_type=raw.get("mime_type"),
+                    filename=raw.get("filename"),
                 )
             )
         else:

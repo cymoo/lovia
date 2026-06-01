@@ -117,15 +117,22 @@ class _FailingProvider:
 
     name = "failing"
 
-    def __init__(self, fail_times: int, answer: AssistantMessage) -> None:
+    def __init__(
+        self,
+        fail_times: int,
+        answer: AssistantMessage,
+        *,
+        retryable: bool | None = None,
+    ) -> None:
         self.fail_times = fail_times
         self.answer = answer
+        self.retryable = retryable
         self.attempts = 0
 
     async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ItemDelta]:
         self.attempts += 1
         if self.attempts <= self.fail_times:
-            raise ProviderError(f"boom #{self.attempts}")
+            raise ProviderError(f"boom #{self.attempts}", retryable=self.retryable)
         # Successful path: emit the canned answer as a minimal delta sequence.
         if self.answer.content:
             yield TextDelta(text=self.answer.content)
@@ -156,6 +163,19 @@ async def test_retry_gives_up_after_max_attempts() -> None:
     with pytest.raises(ProviderError):
         await Runner.run(agent, "hi", retry=retry)
     assert provider.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_explicit_non_retryable_error() -> None:
+    provider = _FailingProvider(fail_times=99, answer=text("never"), retryable=False)
+    agent = Agent(name="a", model=provider)
+    retry = RetryPolicy(
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
+
+    with pytest.raises(ProviderError):
+        await Runner.run(agent, "hi", retry=retry)
+    assert provider.attempts == 1
 
 
 @pytest.mark.asyncio

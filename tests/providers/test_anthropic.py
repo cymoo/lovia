@@ -9,8 +9,8 @@ from typing import Any
 import httpx
 import pytest
 
-from lovia import ImageBlock, TextBlock
-from lovia.exceptions import ContextOverflowError, ProviderError
+from lovia import FileBlock, ImageBlock, TextBlock
+from lovia.exceptions import ContextOverflowError, ProviderError, UserError
 from lovia.items import (
     FinishDelta,
     ItemCompletedDelta,
@@ -144,6 +144,113 @@ def test_translates_image_blocks_with_url_and_base64() -> None:
     assert parts[2]["source"]["media_type"] == "image/png"
 
 
+def test_translates_file_blocks_with_url_and_base64() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[
+                FileBlock.from_url("https://x/doc.pdf", filename="remote.pdf"),
+                FileBlock(data="cGRm", mime_type="application/pdf", filename="doc.pdf"),
+            ],
+        )
+    ]
+
+    _, out = _to_anthropic_messages(msgs)
+
+    assert out[0]["content"] == [
+        {
+            "type": "document",
+            "source": {"type": "url", "url": "https://x/doc.pdf"},
+            "title": "remote.pdf",
+        },
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": "cGRm",
+            },
+            "title": "doc.pdf",
+        },
+    ]
+
+
+def test_translates_file_url_without_mime_type() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[FileBlock.from_url("https://x/doc.pdf")],
+        )
+    ]
+
+    _, out = _to_anthropic_messages(msgs)
+
+    assert out[0]["content"] == [
+        {
+            "type": "document",
+            "source": {"type": "url", "url": "https://x/doc.pdf"},
+        }
+    ]
+
+
+def test_translates_text_file_block_as_plain_text_document() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[FileBlock.from_bytes(b"hello", mime_type="text/plain")],
+        )
+    ]
+
+    _, out = _to_anthropic_messages(msgs)
+
+    assert out[0]["content"] == [
+        {
+            "type": "document",
+            "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": "hello",
+            },
+        }
+    ]
+
+
+def test_rejects_unsupported_anthropic_file_mime_type() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[FileBlock(data="eA==", mime_type="application/octet-stream")],
+        )
+    ]
+
+    with pytest.raises(UserError, match="support application/pdf or text/plain"):
+        _to_anthropic_messages(msgs)
+
+
+def test_rejects_text_file_block_with_invalid_utf8() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[FileBlock.from_base64("//4=", mime_type="text/plain")],
+        )
+    ]
+
+    with pytest.raises(UserError, match="valid UTF-8"):
+        _to_anthropic_messages(msgs)
+
+
+def test_rejects_non_pdf_anthropic_file_urls() -> None:
+    msgs = [
+        InputMessageItem(
+            role="user",
+            content=[FileBlock.from_url("https://x/doc.txt", mime_type="text/plain")],
+        )
+    ]
+
+    with pytest.raises(UserError, match="document URLs require application/pdf"):
+        _to_anthropic_messages(msgs)
+
+
 def test_build_payload_maps_settings_cache_and_structured_output() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
@@ -248,6 +355,15 @@ def test_headers_include_extra_headers_without_overriding_explicit_api_key() -> 
 
     assert headers["x-api-key"] == "real-key"
     assert headers["anthropic-beta"] == "fine-grained-tool-streaming-2025-05-14"
+
+
+@pytest.mark.asyncio
+async def test_created_client_ignores_ambient_socks_proxy(monkeypatch: Any) -> None:
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7897")
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    provider._http()
+    await provider.aclose()
 
 
 @pytest.mark.asyncio
@@ -369,6 +485,32 @@ async def test_stream_error_raises_provider_error() -> None:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
     )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+
+    assert exc_info.value.vendor == "anthropic"
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_missing_official_api_key_raises_user_error(monkeypatch: Any) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    provider = AnthropicProvider(
+        model="claude-haiku-4-5", base_url="https://api.anthropic.com/v1"
+    )
+
+    with pytest.raises(UserError, match="requires an API key"):
+        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+
+
+@pytest.mark.asyncio
+async def test_transport_errors_are_classified() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
 
     with pytest.raises(ProviderError) as exc_info:

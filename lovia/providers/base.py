@@ -63,9 +63,8 @@ class Provider(Protocol):
     Providers consume :class:`Item` lists — the framework's vendor-neutral
     transcript form — and emit :class:`ItemDelta` values as the model streams.
     Chat-style adapters (OpenAI Chat, Anthropic) flatten incoming items to
-    their wire ``messages`` shape internally; richer endpoints (OpenAI
-    Responses) consume items directly so reasoning ids and server-side tool
-    calls survive the round trip.
+    their wire ``messages`` shape internally while preserving richer state in
+    ``ItemCompletedDelta`` values when a provider exposes it.
     """
 
     @property

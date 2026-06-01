@@ -30,7 +30,7 @@ from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
 from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
-from .content import ContentBlock, ImageBlock, TextBlock
+from .content import ContentBlock, FileBlock, ImageBlock, TextBlock
 from .exceptions import (
     BudgetExceeded,
     ContextOverflowError,
@@ -70,8 +70,13 @@ from .messages import (
     system,
     user,
 )
-from .providers import ModelSettings, OpenAIChatProvider, Provider, provider_from_string
-from .providers.openai_responses import OpenAIResponsesProvider
+from .providers import (
+    AnthropicProvider,
+    ModelSettings,
+    OpenAIChatProvider,
+    Provider,
+    provider_from_string,
+)
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runner import RunContext, RunHandle, Runner, RunResult
 from .session import Session
@@ -158,6 +163,7 @@ def enable_logging(
 __all__ = [
     "Agent",
     "AgentHooks",
+    "AnthropicProvider",
     "ApprovalChannel",
     "ArchiveCallback",
     "ArchiveEvent",
@@ -190,10 +196,10 @@ __all__ = [
     "NoopContextPolicy",
     "NoopTracer",
     "OpenAIChatProvider",
-    "OpenAIResponsesProvider",
     "OutputGuardrail",
     "OutputRepairStrategy",
     "DefaultOutputRepair",
+    "FileBlock",
     "OutputValidationError",
     "PolicyContext",
     "Provider",
@@ -249,4 +255,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.5.7"
+__version__ = "0.5.8"

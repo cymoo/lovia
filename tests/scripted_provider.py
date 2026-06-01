@@ -56,7 +56,7 @@ class ScriptedProvider:
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ItemDelta]:
         msg = self._pop(input)
-        # Reasoning streams first (matches Anthropic / Responses ordering).
+        # Reasoning streams first (matches Anthropic ordering).
         reasoning = getattr(msg, "_scripted_reasoning_content", None)
         if reasoning:
             for ch in reasoning:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 
 import pytest
 
@@ -118,7 +120,10 @@ async def test_shell_timeout_returns_timed_out(tmp_path) -> None:
     result = await _invoke(
         tools,
         "shell",
-        {"command": "python -c 'import time; time.sleep(1)'", "timeout": 0.01},
+        {
+            "command": f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(1)'",
+            "timeout": 0.01,
+        },
     )
 
     assert result.timed_out is True

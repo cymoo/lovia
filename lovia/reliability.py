@@ -106,15 +106,17 @@ class CancelToken:
             raise RunCancelled(msg)
 
 
-# A predicate deciding whether an exception is worth retrying. Defaults to
-# treating any ProviderError as transient.
+# A predicate deciding whether an exception is worth retrying. Provider
+# adapters mark deterministic failures as ``retryable=False``.
 RetryPredicate = Callable[[BaseException], bool]
 
 
 def _default_retry_on(exc: BaseException) -> bool:
     from .exceptions import ProviderError
 
-    return isinstance(exc, ProviderError)
+    return (
+        isinstance(exc, ProviderError) and getattr(exc, "retryable", None) is not False
+    )
 
 
 @dataclass

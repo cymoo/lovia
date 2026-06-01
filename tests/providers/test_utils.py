@@ -34,6 +34,26 @@ async def test_provider_http_error_populates_metadata() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_http_error_marks_non_retryable_statuses() -> None:
+    response = httpx.Response(
+        401,
+        content=b"bad key",
+        request=httpx.Request("POST", "https://provider.test/v1"),
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await raise_for_provider_status(
+            response,
+            vendor="fake",
+            model="m1",
+            label="Fake",
+            is_context_overflow=lambda status, body: False,
+        )
+
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
 async def test_provider_http_error_detects_context_overflow() -> None:
     response = httpx.Response(
         400,

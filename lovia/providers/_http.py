@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import NoReturn
 
 import httpx
 
@@ -40,3 +41,21 @@ async def raise_for_provider_status(
         retryable=is_retryable_status(response.status_code),
         body=text,
     )
+
+
+def raise_for_transport_error(
+    exc: httpx.TransportError,
+    *,
+    vendor: str,
+    model: str | None,
+    label: str,
+) -> NoReturn:
+    """Translate network-layer failures into structured provider errors."""
+    retryable = isinstance(exc, httpx.TimeoutException | httpx.NetworkError)
+    raise ProviderError(
+        f"{label} stream failed before the provider returned a complete response: {exc}",
+        vendor=vendor,
+        model=model,
+        retryable=retryable,
+        hint="Check network connectivity, proxy settings, provider base_url, and retry policy.",
+    ) from exc

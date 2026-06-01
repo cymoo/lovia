@@ -53,7 +53,7 @@ async def main() -> None:
     # picks up after the last turn — usually a no-op if the run completed,
     # but illustrative.)
     snap = await cp.load(run_id)
-    print(f"snapshot: {len(snap.items)} items, {snap.turns} turns")
+    print(f"snapshot: {len(snap.entries)} entries, {snap.turns} turns")
 
     resumed = await Runner.resume(agent, checkpointer=cp, run_id=run_id)
     print("resumed output:", resumed.output)

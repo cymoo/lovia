@@ -10,28 +10,28 @@ from typing import Any
 import httpx
 import pytest
 
-from lovia import Agent, FileBlock, ImageBlock, Runner, TextBlock, events
+from lovia import Agent, FilePart, ImagePart, Runner, TextPart, events
 from lovia.exceptions import ContextOverflowError, ProviderError, UserError
-from lovia.items import (
+from lovia.transcript import (
     FinishDelta,
-    ItemCompletedDelta,
-    InputMessageItem,
-    ItemDelta,
-    MessageOutputItem,
+    EntryCompletedDelta,
+    InputEntry,
+    ModelDelta,
+    AssistantTextEntry,
     ReasoningDelta,
-    ReasoningItem,
+    ReasoningEntry,
     TextDelta,
-    ToolCallItem,
+    ToolCallEntry,
     ToolCallDelta,
-    ToolCallOutputItem,
+    ToolResultEntry,
     UsageDelta,
 )
-from lovia.messages import ChatMessage, ToolCall
+from lovia.messages import Message, ToolCall
 from lovia.providers.base import ModelSettings
 from lovia.providers.openai_chat import (
     OpenAIChatProvider,
     _is_context_overflow,
-    items_to_openai_messages,
+    entries_to_openai_messages,
     message_to_openai,
 )
 
@@ -49,23 +49,23 @@ def _sse(events: list[dict[str, Any]]) -> bytes:
     return "\n".join(lines).encode()
 
 
-async def _collect(stream: Any) -> list[ItemDelta]:
-    out: list[ItemDelta] = []
+async def _collect(stream: Any) -> list[ModelDelta]:
+    out: list[ModelDelta] = []
     async for delta in stream:
         out.append(delta)
     return out
 
 
-def _deltas(deltas: list[ItemDelta], cls: type[Any]) -> Iterator[Any]:
+def _deltas(deltas: list[ModelDelta], cls: type[Any]) -> Iterator[Any]:
     return (delta for delta in deltas if isinstance(delta, cls))
 
 
 def test_message_to_openai_serializes_multimodal_and_tool_fields() -> None:
-    msg = ChatMessage(
+    msg = Message(
         role="assistant",
         content=[
-            TextBlock("look"),
-            ImageBlock(url="https://example.test/img.png", detail="low"),
+            TextPart("look"),
+            ImagePart(url="https://example.test/img.png", detail="low"),
         ],
         tool_calls=[ToolCall(id="c1", name="lookup", arguments='{"q":"x"}')],
         name="agent",
@@ -94,11 +94,11 @@ def test_message_to_openai_serializes_multimodal_and_tool_fields() -> None:
 
 
 def test_message_to_openai_serializes_inline_file_blocks() -> None:
-    msg = ChatMessage(
+    msg = Message(
         role="user",
         content=[
-            TextBlock("summarize"),
-            FileBlock(data="cGRm", mime_type="application/pdf", filename="doc.pdf"),
+            TextPart("summarize"),
+            FilePart(data="cGRm", mime_type="application/pdf", filename="doc.pdf"),
         ],
     )
 
@@ -111,7 +111,7 @@ def test_message_to_openai_serializes_inline_file_blocks() -> None:
 
 
 def test_message_to_openai_serializes_tool_result_messages() -> None:
-    msg = ChatMessage(role="tool", content="42", tool_call_id="call_1", name="ignored")
+    msg = Message(role="tool", content="42", tool_call_id="call_1", name="ignored")
 
     assert message_to_openai(msg) == {
         "role": "tool",
@@ -121,27 +121,27 @@ def test_message_to_openai_serializes_tool_result_messages() -> None:
 
 
 def test_message_to_openai_rejects_file_url_blocks() -> None:
-    msg = ChatMessage(
+    msg = Message(
         role="user",
-        content=[FileBlock.from_url("https://example.test/doc.pdf")],
+        content=[FilePart.from_url("https://example.test/doc.pdf")],
     )
 
-    with pytest.raises(UserError, match="does not support FileBlock URL"):
+    with pytest.raises(UserError, match="does not support FilePart URL"):
         message_to_openai(msg)
 
 
-def test_items_to_openai_messages_flushes_assistant_items_in_order() -> None:
-    out = items_to_openai_messages(
+def test_entries_to_openai_messages_flushes_assistant_entries_in_order() -> None:
+    out = entries_to_openai_messages(
         [
-            InputMessageItem(role="user", content="first"),
-            ReasoningItem(content="ignored", provider="other-provider"),
-            ReasoningItem(content="think", provider="openai-chat"),
-            MessageOutputItem(content="hel"),
-            MessageOutputItem(content="lo"),
-            ToolCallItem(call_id="call_1", name="add", arguments='{"a":1}'),
-            ToolCallOutputItem(call_id="call_1", output="1"),
-            MessageOutputItem(content="done"),
-            InputMessageItem(role="user", content="next"),
+            InputEntry(role="user", content="first"),
+            ReasoningEntry(content="ignored", provider="other-provider"),
+            ReasoningEntry(content="think", provider="openai-chat"),
+            AssistantTextEntry(content="hel"),
+            AssistantTextEntry(content="lo"),
+            ToolCallEntry(call_id="call_1", name="add", arguments='{"a":1}'),
+            ToolResultEntry(call_id="call_1", output="1"),
+            AssistantTextEntry(content="done"),
+            InputEntry(role="user", content="next"),
         ]
     )
 
@@ -169,7 +169,7 @@ def test_build_payload_maps_settings_and_stream_options() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
 
     payload = provider._build_payload(
-        [InputMessageItem(role="user", content="hi")],
+        [InputEntry(role="user", content="hi")],
         tools=[{"type": "function", "function": {"name": "f"}}],
         response_format={"type": "json_object"},
         settings=ModelSettings(
@@ -287,7 +287,7 @@ async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None
 
     deltas = await _collect(
         provider.stream(
-            [InputMessageItem(role="user", content="hi")],
+            [InputEntry(role="user", content="hi")],
             settings=ModelSettings(max_tokens=10),
         )
     )
@@ -304,10 +304,10 @@ async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None
     assert usage.input_tokens == 9
     assert usage.output_tokens == 4
     assert usage.cache_read_tokens == 2
-    item = next(_deltas(deltas, ItemCompletedDelta)).item
-    assert isinstance(item, ReasoningItem)
-    assert item.content == "think"
-    assert item.provider == "openai-chat"
+    entry = next(_deltas(deltas, EntryCompletedDelta)).entry
+    assert isinstance(entry, ReasoningEntry)
+    assert entry.content == "think"
+    assert entry.provider == "openai-chat"
     assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
 
 
@@ -321,7 +321,7 @@ async def test_chat_http_errors_are_classified() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
 
     with pytest.raises(ProviderError) as exc_info:
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert exc_info.value.vendor == "openai"
     assert exc_info.value.retryable is True
@@ -335,7 +335,7 @@ async def test_chat_missing_official_api_key_raises_user_error(
     provider = OpenAIChatProvider(model="gpt-5", base_url="https://api.openai.com/v1")
 
     with pytest.raises(UserError, match="requires an API key"):
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
 @pytest.mark.asyncio
@@ -347,7 +347,7 @@ async def test_chat_transport_errors_are_classified() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
 
     with pytest.raises(ProviderError) as exc_info:
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert exc_info.value.vendor == "openai"
     assert exc_info.value.retryable is True
@@ -366,7 +366,7 @@ async def test_chat_context_overflow_is_classified() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
 
     with pytest.raises(ContextOverflowError):
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
 def test_supports_json_schema_defaults_to_official_openai_only() -> None:

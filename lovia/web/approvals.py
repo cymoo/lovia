@@ -26,6 +26,10 @@ class ApprovalRegistry:
     def __init__(self) -> None:
         self._channel = ApprovalChannel()
 
+    def register(self, session_id: str, ev: events.ApprovalRequired) -> None:
+        """Make an approval visible to out-of-band HTTP resolvers."""
+        self._channel.register(ev.call.id, scope=session_id)
+
     async def await_decision(
         self, session_id: str, ev: events.ApprovalRequired
     ) -> bool:

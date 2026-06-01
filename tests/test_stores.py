@@ -3,17 +3,17 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from lovia import InputMessageItem, MessageOutputItem
+from lovia import InputEntry, AssistantTextEntry
 from lovia.stores import InMemorySession, SQLiteSession
 
 
 async def test_in_memory_session() -> None:
     s = InMemorySession()
-    await s.append("u1", [InputMessageItem(role="user", content="hi")])
-    items = await s.load("u1")
-    assert len(items) == 1
-    assert isinstance(items[0], InputMessageItem)
-    assert items[0].content == "hi"
+    await s.append("u1", [InputEntry(role="user", content="hi")])
+    entries = await s.load("u1")
+    assert len(entries) == 1
+    assert isinstance(entries[0], InputEntry)
+    assert entries[0].content == "hi"
     await s.clear("u1")
     assert await s.load("u1") == []
 
@@ -25,14 +25,14 @@ async def test_sqlite_session_round_trip() -> None:
         await s.append(
             "u1",
             [
-                InputMessageItem(role="user", content="hi"),
-                MessageOutputItem(content="hello"),
+                InputEntry(role="user", content="hi"),
+                AssistantTextEntry(content="hello"),
             ],
         )
-        items = await s.load("u1")
-        assert [type(it).__name__ for it in items] == [
-            "InputMessageItem",
-            "MessageOutputItem",
+        entries = await s.load("u1")
+        assert [type(it).__name__ for it in entries] == [
+            "InputEntry",
+            "AssistantTextEntry",
         ]
-        assert items[0].content == "hi"  # type: ignore[union-attr]
-        assert items[1].content == "hello"  # type: ignore[union-attr]
+        assert entries[0].content == "hi"  # type: ignore[union-attr]
+        assert entries[1].content == "hello"  # type: ignore[union-attr]

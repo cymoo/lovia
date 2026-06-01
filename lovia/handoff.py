@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from .messages import ChatMessage
+from .messages import Message
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class _HandoffSignal:
 # transferred. Receives the body of the transcript (everything except the
 # leading system prompt, which is re-rendered by the new agent) and returns a
 # possibly-filtered version.
-HandoffInputFilter = Callable[[list[ChatMessage]], list[ChatMessage]]
+HandoffInputFilter = Callable[[list[Message]], list[Message]]
 
 
 @dataclass
@@ -70,7 +70,7 @@ class Handoff:
     input_filter: HandoffInputFilter | None = None
 
 
-def drop_stale_tool_calls(messages: list[ChatMessage]) -> list[ChatMessage]:
+def drop_stale_tool_calls(messages: list[Message]) -> list[Message]:
     """Strip tool calls and tool responses from a transcript.
 
     A safe default ``input_filter`` for handoffs: keeps user messages,
@@ -78,14 +78,14 @@ def drop_stale_tool_calls(messages: list[ChatMessage]) -> list[ChatMessage]:
     tools the new agent may not have registered. Assistant turns that only
     carried tool calls (no text content) are dropped entirely.
     """
-    out: list[ChatMessage] = []
+    out: list[Message] = []
     for m in messages:
         if m.role == "tool":
             continue
         if m.role == "assistant" and m.tool_calls:
             if m.content:
                 # Preserve text but drop the dangling tool_calls.
-                out.append(ChatMessage(role="assistant", content=m.content))
+                out.append(Message(role="assistant", content=m.content))
             continue
         out.append(m)
     return out

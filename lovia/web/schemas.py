@@ -53,7 +53,7 @@ class SessionDetail(BaseModel):
     agent: str | None = None
     created_at: float
     updated_at: float
-    items: list[MessageOut] = Field(default_factory=list)
+    entries: list[MessageOut] = Field(default_factory=list)
 
 
 class ChatSessionInfo(BaseModel):

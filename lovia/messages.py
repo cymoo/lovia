@@ -2,7 +2,7 @@
 
 The schema intentionally models the portable subset of chat transcripts.
 Provider-native state such as reasoning ids, signatures, or encrypted blobs
-lives in :mod:`lovia.items`, not here.
+lives in :mod:`lovia.transcript`, not here.
 
 All messages carry a ``role`` and ``content``; assistant messages may also
 carry ``tool_calls``; tool messages carry the ``tool_call_id`` they answer.
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .content import ContentBlock, FileBlock, ImageBlock, TextBlock, text_of
+from .content import ContentPart, FilePart, ImagePart, TextPart, text_of
 
 
 Role = Literal["system", "user", "assistant", "tool"]
@@ -31,18 +31,18 @@ class ToolCall:
 
 
 @dataclass
-class ChatMessage:
+class Message:
     """One message in a conversation.
 
     ``content`` may be a plain string (the common case), a list of typed
-    :class:`ContentBlock`\\ s (for multimodal input like images or files), or
+    :class:`ContentPart`\\ s (for multimodal input like images or files), or
     ``None`` when the assistant only emitted tool calls. ``tool_calls`` is only
     meaningful when ``role == "assistant"``; ``tool_call_id`` only when
     ``role == "tool"``.
     """
 
     role: Role
-    content: "str | list[ContentBlock] | None" = None
+    content: "str | list[ContentPart] | None" = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None  # optional: agent/tool display name
@@ -78,40 +78,53 @@ class Usage:
 
 
 @dataclass
-class AssistantMessage:
-    """Chat-compatible view of one assistant turn."""
+class AssistantTurn:
+    """Provider-agnostic result of one assistant turn."""
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     finish_reason: str | None = None
 
-    def to_chat_message(self) -> ChatMessage:
-        return ChatMessage(
+    def to_message(self) -> Message:
+        return Message(
             role="assistant",
             content=self.content,
             tool_calls=list(self.tool_calls),
         )
 
 
-def system(text: str) -> ChatMessage:
-    return ChatMessage(role="system", content=text)
+def system(text: str) -> Message:
+    return Message(role="system", content=text)
 
 
 def user(
-    content: "str | ContentBlock | list[ContentBlock]",
-) -> ChatMessage:
-    """Build a user message from a string, a single block, or a block list."""
+    content: "str | ContentPart | list[ContentPart]",
+) -> Message:
+    """Build a user message from a string, a single part, or a part list."""
     if isinstance(content, str):
-        return ChatMessage(role="user", content=content)
-    if isinstance(content, (TextBlock, ImageBlock, FileBlock)):
-        return ChatMessage(role="user", content=[content])
-    return ChatMessage(role="user", content=list(content))  # type: ignore[arg-type]
+        return Message(role="user", content=content)
+    if isinstance(content, (TextPart, ImagePart, FilePart)):
+        return Message(role="user", content=[content])
+    return Message(role="user", content=list(content))  # type: ignore[arg-type]
 
 
-def assistant(text: str) -> ChatMessage:
-    return ChatMessage(role="assistant", content=text)
+def assistant(text: str) -> Message:
+    return Message(role="assistant", content=text)
 
 
-def tool_message(call_id: str, content: str) -> ChatMessage:
-    return ChatMessage(role="tool", content=content, tool_call_id=call_id)
+def tool_message(call_id: str, content: str) -> Message:
+    return Message(role="tool", content=content, tool_call_id=call_id)
+
+
+__all__ = [
+    "AssistantTurn",
+    "Message",
+    "Role",
+    "ToolCall",
+    "Usage",
+    "assistant",
+    "system",
+    "tool_message",
+    "user",
+]

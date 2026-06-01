@@ -1,7 +1,7 @@
 """Chat store: a Session impl + a metadata table for the web UI.
 
 The :class:`Session` Protocol only knows about ``load/append/clear`` for
-transcript items — it has no concept of "list all my chats" or "what's the
+transcript entries — it has no concept of "list all my chats" or "what's the
 title of this one". The web layer needs both, so we add a *parallel*
 metadata table (``chat_sessions``) alongside whatever ``Session`` backend
 is used for transcript storage.

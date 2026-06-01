@@ -1,21 +1,21 @@
-"""Run items: a discriminated union of everything that can appear in a transcript.
+"""Transcript entries: the canonical records that make up a run transcript.
 
-`Item` is what lovia uses internally to represent the transcript and what the
-public API surfaces in ``RunResult.new_items``, hooks, and events. Each Item is
-a small typed record; provider adapters translate between Items and their wire
-format (OpenAI Chat ``messages``, Anthropic Messages, ...) so the runner core
-stays provider-agnostic.
+``TranscriptEntry`` is what lovia uses internally to represent the transcript
+and what the public API surfaces in ``RunResult.entries``, hooks, and events.
+Each entry is a small typed record; provider adapters translate between
+entries and their wire format (OpenAI Chat ``messages``, Anthropic Messages,
+...) so the runner core stays provider-agnostic.
 
-Items are deliberately implemented as plain ``dataclass``\\ es rather than
+Entries are deliberately implemented as plain ``dataclass``\\ es rather than
 Pydantic models — they sit on the hot path (one per assistant token batch, one
 per tool call) and we want minimal overhead and easy ``match`` ergonomics.
-``item_to_dict`` / ``item_from_dict`` handle (de)serialization for sessions and
+``entry_to_dict`` / ``entry_from_dict`` handle (de)serialization for sessions and
 checkpoints; the ``type`` field acts as the discriminator.
 
 Streaming providers usually emit display deltas that the runner assembles into
-Items at end-of-turn. Providers can also emit :class:`ItemCompletedDelta` when
-the final provider-native item carries ids or metadata that would otherwise be
-lost.
+entries at end-of-turn. Providers can also emit
+:class:`EntryCompletedDelta` when the final provider-native entry carries ids
+or metadata that would otherwise be lost.
 """
 
 from __future__ import annotations
@@ -23,32 +23,32 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Union
 
-from .content import ContentBlock, FileBlock, ImageBlock, TextBlock
-from .messages import AssistantMessage, ChatMessage, ToolCall, Usage
+from .content import ContentPart, FilePart, ImagePart, TextPart
+from .messages import AssistantTurn, Message, ToolCall, Usage
 
 
 # ---------------------------------------------------------------------------
-# Conversation items
+# Transcript entries
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class InputMessageItem:
+class InputEntry:
     """A ``system`` or ``user`` message contributed by the caller.
 
     Shape is identical for both roles, so we use a single class with a
     ``role`` field instead of two near-duplicates. ``content`` follows the
-    same convention as :class:`ChatMessage`: a plain string for the common
-    case, or a list of typed :class:`ContentBlock`\\ s for multimodal input.
+    same convention as :class:`Message`: a plain string for the common
+    case, or a list of typed :class:`ContentPart`\\ s for multimodal input.
     """
 
     role: Literal["system", "user"]
-    content: str | list[ContentBlock]
-    type: Literal["input_message"] = "input_message"
+    content: str | list[ContentPart]
+    type: Literal["input"] = "input"
 
 
 @dataclass
-class MessageOutputItem:
+class AssistantTextEntry:
     """A textual assistant response.
 
     ``id`` is set when the provider assigns a stable identifier; it is ``None``
@@ -57,11 +57,11 @@ class MessageOutputItem:
 
     content: str
     id: str | None = None
-    type: Literal["message_output"] = "message_output"
+    type: Literal["assistant_text"] = "assistant_text"
 
 
 @dataclass
-class ReasoningItem:
+class ReasoningEntry:
     """Provider-scoped reasoning state that may need replay on later turns.
 
     ``content`` is the display/search text, when the provider exposes one.
@@ -77,7 +77,7 @@ class ReasoningItem:
 
 
 @dataclass
-class ToolCallItem:
+class ToolCallEntry:
     """A function-tool call the model wants to invoke.
 
     ``arguments`` is the raw JSON string as emitted by the model — we keep
@@ -91,8 +91,8 @@ class ToolCallItem:
 
 
 @dataclass
-class ToolCallOutputItem:
-    """The (already-rendered) result of executing a :class:`ToolCallItem`.
+class ToolResultEntry:
+    """The (already-rendered) result of executing a :class:`ToolCallEntry`.
 
     ``output`` is the string the model will see. ``raw`` preserves the
     Python-side return value when the tool returned something structured
@@ -103,19 +103,19 @@ class ToolCallOutputItem:
     output: str
     raw: Any = None
     is_error: bool = False
-    type: Literal["tool_call_output"] = "tool_call_output"
+    type: Literal["tool_result"] = "tool_result"
 
 
-Item = Union[
-    InputMessageItem,
-    MessageOutputItem,
-    ReasoningItem,
-    ToolCallItem,
-    ToolCallOutputItem,
+TranscriptEntry = Union[
+    InputEntry,
+    AssistantTextEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    ToolResultEntry,
 ]
-"""Discriminated union of every item kind that can appear in a transcript.
+"""Discriminated union of every entry kind that can appear in a transcript.
 
-Handoffs reuse :class:`ToolCallItem` / :class:`ToolCallOutputItem`; we
+Handoffs reuse :class:`ToolCallEntry` / :class:`ToolResultEntry`; we
 add specialised types only when a provider exposes a structurally
 distinct concept that we cannot lossily flatten.
 """
@@ -176,20 +176,20 @@ class FinishDelta:
 
 
 @dataclass
-class ItemCompletedDelta:
-    """A provider-native final item with ids/metadata preserved."""
+class EntryCompletedDelta:
+    """A provider-native final transcript entry with ids/metadata preserved."""
 
-    item: Item
-    type: Literal["item_completed_delta"] = "item_completed_delta"
+    entry: TranscriptEntry
+    type: Literal["entry_completed_delta"] = "entry_completed_delta"
 
 
-ItemDelta = Union[
+ModelDelta = Union[
     TextDelta,
     ReasoningDelta,
     ToolCallDelta,
     UsageDelta,
     FinishDelta,
-    ItemCompletedDelta,
+    EntryCompletedDelta,
 ]
 """Discriminated union of streaming deltas a provider may yield."""
 
@@ -199,56 +199,56 @@ ItemDelta = Union[
 # ---------------------------------------------------------------------------
 
 
-_ITEM_TYPES: dict[str, type[Any]] = {
-    "input_message": InputMessageItem,
-    "message_output": MessageOutputItem,
-    "reasoning": ReasoningItem,
-    "tool_call": ToolCallItem,
-    "tool_call_output": ToolCallOutputItem,
+_ENTRY_TYPES: dict[str, type[Any]] = {
+    "input": InputEntry,
+    "assistant_text": AssistantTextEntry,
+    "reasoning": ReasoningEntry,
+    "tool_call": ToolCallEntry,
+    "tool_result": ToolResultEntry,
 }
 
 
-def item_to_dict(item: Item) -> dict[str, Any]:
-    """Serialize an Item to a JSON-safe ``dict``.
+def entry_to_dict(entry: TranscriptEntry) -> dict[str, Any]:
+    """Serialize a :class:`TranscriptEntry` to a JSON-safe ``dict``.
 
-    Handles :class:`InputMessageItem` specially because ``ContentBlock``
+    Handles :class:`InputEntry` specially because ``ContentPart``
     dataclasses also need their ``type`` discriminator preserved.
-    :class:`ToolCallOutputItem` is handled specially because its ``raw``
+    :class:`ToolResultEntry` is handled specially because its ``raw``
     field may hold arbitrary Python objects (e.g. Pydantic models) that are
     not JSON-serializable; ``raw`` is never restored on deserialization so it
     is always omitted here.
     ``dataclasses.asdict`` does the right thing for everything else.
     """
-    if isinstance(item, InputMessageItem):
+    if isinstance(entry, InputEntry):
         return {
-            "type": item.type,
-            "role": item.role,
-            "content": _content_to_dict(item.content),
+            "type": entry.type,
+            "role": entry.role,
+            "content": _content_to_dict(entry.content),
         }
-    if isinstance(item, ToolCallOutputItem):
+    if isinstance(entry, ToolResultEntry):
         return {
-            "type": item.type,
-            "call_id": item.call_id,
-            "output": item.output,
-            "is_error": item.is_error,
+            "type": entry.type,
+            "call_id": entry.call_id,
+            "output": entry.output,
+            "is_error": entry.is_error,
             "raw": None,
         }
-    return asdict(item)
+    return asdict(entry)
 
 
-def item_from_dict(data: dict[str, Any]) -> Item:
-    """Deserialize an Item produced by :func:`item_to_dict`.
+def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
+    """Deserialize a :class:`TranscriptEntry` produced by :func:`entry_to_dict`.
 
     Raises ``ValueError`` on unknown discriminator — callers are expected
     to have a stable schema (we don't silently drop unknown fields, since
-    that's how reasoning items get lost).
+    that's how reasoning entries get lost).
     """
     type_ = data.get("type")
-    if type_ not in _ITEM_TYPES:
-        raise ValueError(f"Unknown item type: {type_!r}")
-    cls = _ITEM_TYPES[type_]
-    if cls is InputMessageItem:
-        return InputMessageItem(
+    if type_ not in _ENTRY_TYPES:
+        raise ValueError(f"Unknown entry type: {type_!r}")
+    cls = _ENTRY_TYPES[type_]
+    if cls is InputEntry:
+        return InputEntry(
             role=data["role"],
             content=_content_from_dict(data["content"]),
         )
@@ -259,26 +259,26 @@ def item_from_dict(data: dict[str, Any]) -> Item:
 
 
 def _content_to_dict(
-    content: str | list[ContentBlock],
+    content: str | list[ContentPart],
 ) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
-    return [asdict(block) for block in content]
+    return [asdict(part) for part in content]
 
 
 def _content_from_dict(
     content: str | list[dict[str, Any]],
-) -> str | list[ContentBlock]:
+) -> str | list[ContentPart]:
     if isinstance(content, str):
         return content
-    blocks: list[ContentBlock] = []
+    parts: list[ContentPart] = []
     for raw in content:
         t = raw.get("type")
         if t == "text":
-            blocks.append(TextBlock(text=raw["text"]))
+            parts.append(TextPart(text=raw["text"]))
         elif t == "image":
-            blocks.append(
-                ImageBlock(
+            parts.append(
+                ImagePart(
                     url=raw.get("url"),
                     data=raw.get("data"),
                     mime_type=raw.get("mime_type"),
@@ -286,8 +286,8 @@ def _content_from_dict(
                 )
             )
         elif t == "file":
-            blocks.append(
-                FileBlock(
+            parts.append(
+                FilePart(
                     url=raw.get("url"),
                     data=raw.get("data"),
                     mime_type=raw.get("mime_type"),
@@ -295,95 +295,92 @@ def _content_from_dict(
                 )
             )
         else:
-            raise ValueError(f"Unknown content block type: {t!r}")
-    return blocks
+            raise ValueError(f"Unknown content part type: {t!r}")
+    return parts
 
 
 # ---------------------------------------------------------------------------
-# ChatMessage ↔ Item conversions (Phase 9b boundary)
-#
-# These helpers let the runner pivot to Items internally while providers and
-# the persisted transcript continue to speak ChatMessage. They are also what
-# 9c / 9d will repurpose when the wire boundary moves: the conversion logic
-# below becomes the inverse of what each provider adapter ends up doing.
+# Message ↔ TranscriptEntry conversions
+# Message is a lossy, chat-provider-shaped view; TranscriptEntry is the
+# canonical run history.
 # ---------------------------------------------------------------------------
 
 
-def assistant_to_items(am: AssistantMessage) -> list[Item]:
-    """Split an :class:`AssistantMessage` into its component Items.
+def assistant_to_entries(am: AssistantTurn) -> list[TranscriptEntry]:
+    """Split an :class:`AssistantTurn` into transcript entries.
 
     Order matches the conceptual emission order: message body, then tool calls.
     Empty / absent fields are skipped — a tool-only turn produces just the
-    ``ToolCallItem``\\ s with no preceding message item.
+    ``ToolCallEntry``\\ s with no preceding assistant text entry.
     """
-    out: list[Item] = []
+    out: list[TranscriptEntry] = []
     if am.content:
-        out.append(MessageOutputItem(content=am.content))
+        out.append(AssistantTextEntry(content=am.content))
     for tc in am.tool_calls:
-        out.append(ToolCallItem(call_id=tc.id, name=tc.name, arguments=tc.arguments))
+        out.append(ToolCallEntry(call_id=tc.id, name=tc.name, arguments=tc.arguments))
     return out
 
 
-def input_to_items(messages: list[ChatMessage]) -> list[Item]:
-    """Translate a system/user message prefix to :class:`InputMessageItem`\\ s.
+def input_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
+    """Translate a system/user message prefix to :class:`InputEntry`\\ s.
 
     Only ``system`` and ``user`` roles are accepted — the runner uses this to
-    seed ``items_log`` with the initial transcript. Assistant / tool messages
-    in a snapshot are handled by :func:`transcript_to_items` instead.
+    seed ``entries_log`` with the initial transcript. Assistant / tool messages
+    in a snapshot are handled by :func:`messages_to_entries` instead.
     """
-    out: list[Item] = []
+    out: list[TranscriptEntry] = []
     for m in messages:
         if m.role not in ("system", "user"):
-            raise ValueError(f"input_to_items: unexpected role {m.role!r}")
+            raise ValueError(f"input_to_entries: unexpected role {m.role!r}")
         content = m.content if m.content is not None else ""
-        out.append(InputMessageItem(role=m.role, content=content))  # type: ignore[arg-type]
+        out.append(InputEntry(role=m.role, content=content))  # type: ignore[arg-type]
     return out
 
 
-def transcript_to_items(messages: list[ChatMessage]) -> list[Item]:
-    """Translate a full transcript (any roles) back to Items.
+def messages_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
+    """Translate a chat-format transcript (any roles) back to entries.
 
     Used when resuming from a snapshot. ``tool`` messages have no ``raw``
-    return value to recover, so ``ToolCallOutputItem.raw`` is left ``None``.
+    return value to recover, so ``ToolResultEntry.raw`` is left ``None``.
     """
-    out: list[Item] = []
+    out: list[TranscriptEntry] = []
     for m in messages:
         if m.role in ("system", "user"):
             content = m.content if m.content is not None else ""
-            out.append(InputMessageItem(role=m.role, content=content))  # type: ignore[arg-type]
+            out.append(InputEntry(role=m.role, content=content))  # type: ignore[arg-type]
         elif m.role == "assistant":
             if m.content:
-                # ``content`` may be a list[ContentBlock]; flatten to text for
-                # the MessageOutputItem (richer shapes are 9d territory).
+                # ``content`` may be a list[ContentPart]; flatten to text for
+                # the AssistantTextEntry (richer shapes are 9d territory).
                 from .content import text_of
 
-                out.append(MessageOutputItem(content=text_of(m.content)))
+                out.append(AssistantTextEntry(content=text_of(m.content)))
             for tc in m.tool_calls:
                 out.append(
-                    ToolCallItem(call_id=tc.id, name=tc.name, arguments=tc.arguments)
+                    ToolCallEntry(call_id=tc.id, name=tc.name, arguments=tc.arguments)
                 )
         elif m.role == "tool":
             from .content import text_of
 
             out.append(
-                ToolCallOutputItem(
+                ToolResultEntry(
                     call_id=m.tool_call_id or "",
                     output=text_of(m.content),
                 )
             )
         else:  # pragma: no cover - defensive
-            raise ValueError(f"transcript_to_items: unknown role {m.role!r}")
+            raise ValueError(f"messages_to_entries: unknown role {m.role!r}")
     return out
 
 
-def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
-    """Inverse of :func:`transcript_to_items`.
+def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
+    """Inverse of :func:`messages_to_entries`.
 
-    Groups consecutive assistant-side message/tool-call items into one
-    :class:`ChatMessage`. Reasoning items are intentionally skipped because
+    Groups consecutive assistant-side text/tool-call entries into one
+    :class:`Message`. Reasoning entries are intentionally skipped because
     chat messages are a lossy, provider-neutral view.
     """
-    out: list[ChatMessage] = []
+    out: list[Message] = []
     # Buffer for the in-progress assistant message.
     pending_content: str | None = None
     pending_calls: list[ToolCall] = []
@@ -393,7 +390,7 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
         if pending_content is None and not pending_calls:
             return
         out.append(
-            ChatMessage(
+            Message(
                 role="assistant",
                 content=pending_content,
                 tool_calls=pending_calls,
@@ -402,23 +399,21 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
         pending_content = None
         pending_calls = []
 
-    for it in items:
-        if isinstance(it, InputMessageItem):
+    for it in entries:
+        if isinstance(it, InputEntry):
             flush_assistant()
-            out.append(ChatMessage(role=it.role, content=it.content))
-        elif isinstance(it, ReasoningItem):
+            out.append(Message(role=it.role, content=it.content))
+        elif isinstance(it, ReasoningEntry):
             continue
-        elif isinstance(it, MessageOutputItem):
+        elif isinstance(it, AssistantTextEntry):
             pending_content = it.content
-        elif isinstance(it, ToolCallItem):
+        elif isinstance(it, ToolCallEntry):
             pending_calls.append(
                 ToolCall(id=it.call_id, name=it.name, arguments=it.arguments)
             )
-        elif isinstance(it, ToolCallOutputItem):
+        elif isinstance(it, ToolResultEntry):
             flush_assistant()
-            out.append(
-                ChatMessage(role="tool", content=it.output, tool_call_id=it.call_id)
-            )
+            out.append(Message(role="tool", content=it.output, tool_call_id=it.call_id))
     flush_assistant()
     return out
 
@@ -429,54 +424,54 @@ def items_to_chat_messages(items: list[Item]) -> list[ChatMessage]:
 
 
 def safe_window(
-    items: list[Item],
+    entries: list[TranscriptEntry],
     *,
     head: int = 0,
     tail: int,
-) -> list[Item]:
-    """Return ``items[:head] + items[-tail:]`` adjusted to keep tool pairs intact.
+) -> list[TranscriptEntry]:
+    """Return ``entries[:head] + entries[-tail:]`` adjusted to keep tool pairs intact.
 
     Used by :class:`~lovia.ContextPolicy` implementations to drop a chunk
     from the middle of a transcript without leaving orphan
-    :class:`ToolCallOutputItem`\\ s whose corresponding :class:`ToolCallItem`
+    :class:`ToolResultEntry`\\ s whose corresponding :class:`ToolCallEntry`
     was sliced away — providers reject such payloads (OpenAI: "tool message
     refers to unknown tool_call_id"; Anthropic: missing ``tool_use``).
 
     If a kept output's call lives inside the dropped middle, the cut is
     walked backward until the call is included (i.e. the tail grows). If
     the matching call cannot be found anywhere, the orphan output is
-    dropped instead. ``head`` items are always preserved as-is.
+    dropped instead. ``head`` entries are always preserved as-is.
 
     Edge cases:
-    * ``tail <= 0``         → returns ``items[:head]`` (drop everything else)
-    * ``head + tail >= n``  → returns ``list(items)`` (nothing to drop)
+    * ``tail <= 0``         → returns ``entries[:head]`` (drop everything else)
+    * ``head + tail >= n``  → returns ``list(entries)`` (nothing to drop)
     """
-    n = len(items)
+    n = len(entries)
     if tail <= 0:
-        return list(items[:head])
+        return list(entries[:head])
     if head < 0:
         head = 0
     if head + tail >= n:
-        return list(items)
+        return list(entries)
 
-    head_items = list(items[:head])
+    head_entries = list(entries[:head])
     head_call_ids: set[str] = {
-        it.call_id for it in head_items if isinstance(it, ToolCallItem)
+        it.call_id for it in head_entries if isinstance(it, ToolCallEntry)
     }
 
     cut = n - tail
     # Iterate to a fixed point: each expansion of `cut` may pull in more
-    # ToolCallOutputItems whose calls are still earlier. In practice this
+    # ToolResultEntrys whose calls are still earlier. In practice this
     # converges in 1–2 passes because tool calls don't nest.
     for _ in range(n):
-        tail_slice = items[cut:]
+        tail_slice = entries[cut:]
         tail_call_ids = {
-            it.call_id for it in tail_slice if isinstance(it, ToolCallItem)
+            it.call_id for it in tail_slice if isinstance(it, ToolCallEntry)
         }
         orphans = {
             it.call_id
             for it in tail_slice
-            if isinstance(it, ToolCallOutputItem)
+            if isinstance(it, ToolResultEntry)
             and it.call_id not in tail_call_ids
             and it.call_id not in head_call_ids
         }
@@ -484,8 +479,8 @@ def safe_window(
             break
         new_cut = cut
         for i in range(cut - 1, head - 1, -1):
-            it = items[i]
-            if isinstance(it, ToolCallItem) and it.call_id in orphans:
+            it = entries[i]
+            if isinstance(it, ToolCallEntry) and it.call_id in orphans:
                 new_cut = i
                 orphans.discard(it.call_id)
                 if not orphans:
@@ -496,13 +491,36 @@ def safe_window(
             tail_slice = [
                 it
                 for it in tail_slice
-                if not (isinstance(it, ToolCallOutputItem) and it.call_id in orphans)
+                if not (isinstance(it, ToolResultEntry) and it.call_id in orphans)
             ]
-            return head_items + tail_slice
+            return head_entries + tail_slice
         cut = new_cut
 
     # If the expansion swallowed the head boundary, fall back to the
     # whole transcript rather than emit duplicates.
     if cut <= head:
-        return list(items)
-    return head_items + list(items[cut:])
+        return list(entries)
+    return head_entries + list(entries[cut:])
+
+
+__all__ = [
+    "AssistantTextEntry",
+    "EntryCompletedDelta",
+    "FinishDelta",
+    "InputEntry",
+    "ModelDelta",
+    "ReasoningDelta",
+    "ReasoningEntry",
+    "TextDelta",
+    "ToolCallDelta",
+    "ToolCallEntry",
+    "ToolResultEntry",
+    "TranscriptEntry",
+    "assistant_to_entries",
+    "messages_to_entries",
+    "entries_to_messages",
+    "entry_from_dict",
+    "entry_to_dict",
+    "input_to_entries",
+    "safe_window",
+]

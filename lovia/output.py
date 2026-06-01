@@ -9,8 +9,8 @@ Two strategies are used:
   parameters match the requested type; the model is instructed to call it
   exactly once, and its arguments become the structured output.
 
-This module exposes helpers for both strategies; the runner picks one in
-``_resolve_output_strategy``.
+This module keeps the structured-output decision in one place; the runner only
+needs to know whether a run has a ``StructuredOutput`` policy.
 """
 
 from __future__ import annotations
@@ -59,8 +59,8 @@ class DefaultOutputRepair:
 
 
 @dataclass
-class OutputSpec:
-    """How the runner should obtain structured output for a given run."""
+class StructuredOutput:
+    """How the runner should obtain a typed final result for one run."""
 
     output_type: type
     # When True, ``final_output`` is injected as a tool the model must call.
@@ -69,21 +69,21 @@ class OutputSpec:
     schema: dict[str, Any]
 
 
-def build_output_spec(
+def resolve_structured_output(
     output_type: type, supports_response_format: bool
-) -> OutputSpec | None:
-    """Return an :class:`OutputSpec` or ``None`` for plain text output."""
+) -> StructuredOutput | None:
+    """Return the structured-output policy, or ``None`` for plain text."""
     if output_type is str:
         return None
     schema = model_json_schema(output_type)
-    return OutputSpec(
+    return StructuredOutput(
         output_type=output_type,
         use_tool_fallback=not supports_response_format,
         schema=schema,
     )
 
 
-def response_format_for(spec: OutputSpec) -> dict[str, Any]:
+def response_format_for(spec: StructuredOutput) -> dict[str, Any]:
     """Build the OpenAI ``response_format`` payload for native JSON Schema."""
     return {
         "type": "json_schema",
@@ -95,19 +95,9 @@ def response_format_for(spec: OutputSpec) -> dict[str, Any]:
     }
 
 
-def final_output_tool_schema(spec: OutputSpec) -> dict[str, Any]:
-    """Build a tool schema describing the synthetic ``final_output`` tool."""
-    return {
-        "type": "function",
-        "function": {
-            "name": FINAL_OUTPUT_TOOL_NAME,
-            "description": "Call this once with the final structured answer to complete the task.",
-            "parameters": spec.schema,
-        },
-    }
-
-
-def parse_output(spec: OutputSpec, payload: str | dict[str, Any]) -> Any:
+def parse_structured_output(
+    spec: StructuredOutput, payload: str | dict[str, Any]
+) -> Any:
     try:
         return coerce_output(spec.output_type, payload)
     except Exception as exc:  # pydantic raises various subclasses

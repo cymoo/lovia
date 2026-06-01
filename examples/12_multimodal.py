@@ -1,6 +1,6 @@
 """Multimodal input: send an image alongside text.
 
-Both OpenAI and Anthropic adapters translate :class:`ImageBlock` to the
+Both OpenAI and Anthropic adapters translate :class:`ImagePart` to the
 vendor's native image format. Images may be given as a URL or as base64
 data + media type.
 """
@@ -12,7 +12,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, ImageBlock, Runner, TextBlock
+from lovia import Agent, ImagePart, Runner, TextPart
 from lovia.messages import user
 
 load_dotenv()
@@ -27,8 +27,8 @@ async def main() -> None:
 
     msg = user(
         [
-            TextBlock(text="What's in this picture? One sentence."),
-            ImageBlock(
+            TextPart(text="What's in this picture? One sentence."),
+            ImagePart(
                 url="https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
             ),
         ]

@@ -11,13 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .items import Item
+from .transcript import TranscriptEntry
 from .messages import ToolCall
 
 if TYPE_CHECKING:
     from .agent import Agent
     from .approvals import ApprovalChannel
-    from .runner import RunResult
+    from .runtime.result import RunResult
 
 
 @dataclass
@@ -104,13 +104,13 @@ class ReasoningDelta(DeltaEvent):
 class MessageCompleted(MessageEvent):
     """One assistant turn fully assembled.
 
-    ``items`` is the slice of new :class:`Item` values produced by that
-    turn — typically a :class:`ReasoningItem`, a :class:`MessageOutputItem`,
-    and any :class:`ToolCallItem`\\ s the model requested. Subscribers can
-    pattern-match on the concrete item types.
+    ``entries`` is the slice of new :class:`TranscriptEntry` values produced by that
+    turn — typically a :class:`ReasoningEntry`, a :class:`AssistantTextEntry`,
+    and any :class:`ToolCallEntry`\\ s the model requested. Subscribers can
+    pattern-match on the concrete entry types.
     """
 
-    items: list[Item]
+    entries: list[TranscriptEntry]
 
 
 @dataclass
@@ -185,8 +185,8 @@ class RunCompleted(RunEvent):
 class ContextCompacted(ContextEvent):
     """Emitted when :class:`~lovia.ContextPolicy` rewrote the transcript.
 
-    ``items_before`` is the full transcript that existed before compaction;
-    ``items_after`` is the trimmed transcript the runner will use going
+    ``entries_before`` is the full transcript that existed before compaction;
+    ``entries_after`` is the trimmed transcript the runner will use going
     forward (and that has been written back to the session). ``summary``
     is the model-produced summary text when the policy used LLM
     summarization, or ``None`` for purely structural compaction.
@@ -197,7 +197,7 @@ class ContextCompacted(ContextEvent):
     """
 
     session_id: str | None
-    items_before: list[Item]
-    items_after: list[Item]
+    entries_before: list[TranscriptEntry]
+    entries_after: list[TranscriptEntry]
     summary: str | None = None
     reactive: bool = False

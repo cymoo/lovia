@@ -18,20 +18,20 @@ from lovia import (
     Runner,
     tool,
 )
-from lovia.items import (
+from lovia.transcript import (
     FinishDelta,
-    ItemDelta,
+    ModelDelta,
     TextDelta,
     UsageDelta,
 )
-from lovia.messages import AssistantMessage, Usage
+from lovia.messages import AssistantTurn, Usage
 from lovia.reliability import RunBudget as _RunBudget  # noqa: F401  (re-export sanity)
 
 from .scripted_provider import ScriptedProvider, call, text
 
 
-def _heavy_response(tokens: int) -> AssistantMessage:
-    return AssistantMessage(
+def _heavy_response(tokens: int) -> AssistantTurn:
+    return AssistantTurn(
         content="x" * tokens,
         usage=Usage(input_tokens=tokens, output_tokens=tokens),
     )
@@ -120,7 +120,7 @@ class _FailingProvider:
     def __init__(
         self,
         fail_times: int,
-        answer: AssistantMessage,
+        answer: AssistantTurn,
         *,
         retryable: bool | None = None,
     ) -> None:
@@ -129,7 +129,7 @@ class _FailingProvider:
         self.retryable = retryable
         self.attempts = 0
 
-    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ItemDelta]:
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ModelDelta]:
         self.attempts += 1
         if self.attempts <= self.fail_times:
             raise ProviderError(f"boom #{self.attempts}", retryable=self.retryable)

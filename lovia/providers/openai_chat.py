@@ -15,22 +15,22 @@ from urllib.parse import urlparse
 import httpx
 
 from ..exceptions import ProviderError, UserError
-from ..items import (
+from ..transcript import (
     FinishDelta,
-    Item,
-    ItemCompletedDelta,
-    ItemDelta,
-    InputMessageItem,
-    MessageOutputItem,
+    TranscriptEntry,
+    EntryCompletedDelta,
+    ModelDelta,
+    InputEntry,
+    AssistantTextEntry,
     ReasoningDelta,
-    ReasoningItem,
+    ReasoningEntry,
     TextDelta,
-    ToolCallItem,
+    ToolCallEntry,
     ToolCallDelta,
-    ToolCallOutputItem,
+    ToolResultEntry,
     UsageDelta,
 )
-from ..messages import ChatMessage, ToolCall, Usage
+from ..messages import Message, ToolCall, Usage
 from ._content import content_to_openai_chat as _content_to_openai
 from ._http import raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
@@ -42,7 +42,7 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # ---------------------------------------------------------------------------
 # Wire-format serialization (OpenAI Chat Completions schema)
 #
-# Kept here — not on ``ChatMessage`` itself — so the core message type stays
+# Kept here — not on ``Message`` itself — so the core message type stays
 # vendor-neutral. Other providers translate their own way.
 
 
@@ -54,8 +54,8 @@ def _tool_call_to_openai(tc: ToolCall) -> dict[str, Any]:
     }
 
 
-def message_to_openai(msg: ChatMessage) -> dict[str, Any]:
-    """Serialize a :class:`ChatMessage` to the OpenAI Chat Completions wire format."""
+def message_to_openai(msg: Message) -> dict[str, Any]:
+    """Serialize a :class:`Message` to the OpenAI Chat Completions wire format."""
     out: dict[str, Any] = {"role": msg.role}
     if msg.content is not None:
         out["content"] = _content_to_openai(msg.content)
@@ -83,12 +83,12 @@ def _assistant_to_openai(
     return out
 
 
-def items_to_openai_messages(
-    items: list[Item],
+def entries_to_openai_messages(
+    entries: list[TranscriptEntry],
     *,
     reasoning_provider: str = "openai-chat",
 ) -> list[dict[str, Any]]:
-    """Serialize Items to OpenAI Chat messages, preserving scoped reasoning."""
+    """Serialize transcript entries to OpenAI Chat messages."""
 
     out: list[dict[str, Any]] = []
     pending_reasoning: str | None = None
@@ -106,27 +106,27 @@ def items_to_openai_messages(
         pending_content = None
         pending_calls = []
 
-    for item in items:
-        if isinstance(item, InputMessageItem):
+    for entry in entries:
+        if isinstance(entry, InputEntry):
             flush_assistant()
-            out.append(message_to_openai(ChatMessage(item.role, item.content)))
-        elif isinstance(item, ReasoningItem):
-            if item.provider == reasoning_provider:
-                pending_reasoning = (pending_reasoning or "") + item.content
-        elif isinstance(item, MessageOutputItem):
-            pending_content = (pending_content or "") + item.content
-        elif isinstance(item, ToolCallItem):
+            out.append(message_to_openai(Message(entry.role, entry.content)))
+        elif isinstance(entry, ReasoningEntry):
+            if entry.provider == reasoning_provider:
+                pending_reasoning = (pending_reasoning or "") + entry.content
+        elif isinstance(entry, AssistantTextEntry):
+            pending_content = (pending_content or "") + entry.content
+        elif isinstance(entry, ToolCallEntry):
             pending_calls.append(
-                ToolCall(id=item.call_id, name=item.name, arguments=item.arguments)
+                ToolCall(id=entry.call_id, name=entry.name, arguments=entry.arguments)
             )
-        elif isinstance(item, ToolCallOutputItem):
+        elif isinstance(entry, ToolResultEntry):
             flush_assistant()
             out.append(
                 message_to_openai(
-                    ChatMessage(
+                    Message(
                         role="tool",
-                        content=item.output,
-                        tool_call_id=item.call_id,
+                        content=entry.output,
+                        tool_call_id=entry.call_id,
                     )
                 )
             )
@@ -225,7 +225,7 @@ class OpenAIChatProvider:
 
     def _build_payload(
         self,
-        input: list[Item],
+        entries: list[TranscriptEntry],
         tools: list[dict[str, Any]] | None,
         response_format: dict[str, Any] | None,
         settings: ModelSettings | None,
@@ -233,7 +233,9 @@ class OpenAIChatProvider:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": items_to_openai_messages(input, reasoning_provider=self.name),
+            "messages": entries_to_openai_messages(
+                entries, reasoning_provider=self.name
+            ),
             "stream": stream,
         }
         if tools:
@@ -259,14 +261,14 @@ class OpenAIChatProvider:
 
     async def stream(
         self,
-        input: list[Item],
+        entries: list[TranscriptEntry],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[ItemDelta]:
+    ) -> AsyncIterator[ModelDelta]:
         payload = self._build_payload(
-            input, tools, response_format, settings, stream=True
+            entries, tools, response_format, settings, stream=True
         )
         self._check_ready()
 
@@ -343,8 +345,8 @@ class OpenAIChatProvider:
             )
 
         if reasoning_parts:
-            yield ItemCompletedDelta(
-                ReasoningItem(
+            yield EntryCompletedDelta(
+                ReasoningEntry(
                     content="".join(reasoning_parts),
                     provider=self.name,
                 )

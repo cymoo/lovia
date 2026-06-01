@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from .messages import ChatMessage, Usage
+from .messages import Message, Usage
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -48,7 +48,7 @@ class RunContext(Generic[TContext]):
     """
 
     context: TContext | None
-    messages: list[ChatMessage]
+    messages: list[Message]
     agent: "Agent"
     usage: Usage = field(default_factory=Usage)
     session_id: str | None = None

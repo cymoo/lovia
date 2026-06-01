@@ -14,7 +14,12 @@ from typing import Any, AsyncIterator
 from pydantic import BaseModel
 
 from .. import events
-from ..items import Item, MessageOutputItem, ReasoningItem, ToolCallItem
+from ..transcript import (
+    AssistantTextEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    TranscriptEntry,
+)
 
 
 class _ModelEncoder(json.JSONEncoder):
@@ -26,8 +31,8 @@ class _ModelEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def _items_to_dict(items: list[Item]) -> dict[str, Any]:
-    """Flatten the items emitted in one assistant turn into a wire shape.
+def _entries_to_dict(entries: list[TranscriptEntry]) -> dict[str, Any]:
+    """Flatten the entries emitted in one assistant turn into a wire shape.
 
     The web UI only needs the user-facing pieces: assistant text, the
     reasoning trace, and any tool calls the model requested.
@@ -35,13 +40,13 @@ def _items_to_dict(items: list[Item]) -> dict[str, Any]:
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
     tool_calls: list[dict[str, str]] = []
-    for it in items:
-        if isinstance(it, MessageOutputItem):
+    for it in entries:
+        if isinstance(it, AssistantTextEntry):
             if isinstance(it.content, str):
                 text_parts.append(it.content)
-        elif isinstance(it, ReasoningItem):
+        elif isinstance(it, ReasoningEntry):
             reasoning_parts.append(it.content)
-        elif isinstance(it, ToolCallItem):
+        elif isinstance(it, ToolCallEntry):
             tool_calls.append(
                 {"id": it.call_id, "name": it.name, "arguments": it.arguments}
             )
@@ -95,7 +100,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     if isinstance(ev, events.MessageCompleted):
         return {
             "event": "message_completed",
-            "data": json.dumps({"message": _items_to_dict(ev.items)}),
+            "data": json.dumps({"message": _entries_to_dict(ev.entries)}),
         }
     if isinstance(ev, events.ToolCallStarted):
         return {

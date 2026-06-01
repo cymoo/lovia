@@ -8,13 +8,13 @@ from lovia import (
     Agent,
     ArchiveEvent,
     ContextOverflowError,
-    InputMessageItem,
-    MessageOutputItem,
+    InputEntry,
+    AssistantTextEntry,
     NoopContextPolicy,
     Runner,
     SummarizingContextPolicy,
-    ToolCallItem,
-    ToolCallOutputItem,
+    ToolCallEntry,
+    ToolResultEntry,
     safe_window,
 )
 from lovia.context_policy import PolicyContext, extract_compaction_summary
@@ -29,38 +29,38 @@ from .scripted_provider import ScriptedProvider, text
 # ---------------------------------------------------------------------------
 
 
-def _user(s: str) -> InputMessageItem:
-    return InputMessageItem(role="user", content=s)
+def _user(s: str) -> InputEntry:
+    return InputEntry(role="user", content=s)
 
 
-def _call(call_id: str, name: str = "f") -> ToolCallItem:
-    return ToolCallItem(call_id=call_id, name=name, arguments="{}")
+def _call(call_id: str, name: str = "f") -> ToolCallEntry:
+    return ToolCallEntry(call_id=call_id, name=name, arguments="{}")
 
 
-def _out(call_id: str, content: str = "ok") -> ToolCallOutputItem:
-    return ToolCallOutputItem(call_id=call_id, output=content)
+def _out(call_id: str, content: str = "ok") -> ToolResultEntry:
+    return ToolResultEntry(call_id=call_id, output=content)
 
 
 def test_safe_window_simple_slice():
-    items = [_user(f"m{i}") for i in range(10)]
-    got = safe_window(items, tail=3)
+    entries = [_user(f"m{i}") for i in range(10)]
+    got = safe_window(entries, tail=3)
     assert [it.content for it in got] == ["m7", "m8", "m9"]
 
 
 def test_safe_window_returns_full_when_tail_exceeds_length():
-    items = [_user("a"), _user("b")]
-    assert safe_window(items, tail=5) == items
+    entries = [_user("a"), _user("b")]
+    assert safe_window(entries, tail=5) == entries
 
 
 def test_safe_window_with_head_and_tail():
-    items = [_user(f"m{i}") for i in range(10)]
-    got = safe_window(items, head=2, tail=3)
+    entries = [_user(f"m{i}") for i in range(10)]
+    got = safe_window(entries, head=2, tail=3)
     assert [it.content for it in got] == ["m0", "m1", "m7", "m8", "m9"]
 
 
 def test_extract_compaction_summary() -> None:
-    items = [
-        InputMessageItem(
+    entries = [
+        InputEntry(
             role="system",
             content=(
                 "[Conversation summary — prior turns compacted]\n\n"
@@ -70,13 +70,13 @@ def test_extract_compaction_summary() -> None:
         )
     ]
 
-    assert extract_compaction_summary(items) == "Important state."
+    assert extract_compaction_summary(entries) == "Important state."
     assert extract_compaction_summary([_user("plain")]) is None
 
 
 def test_safe_window_pulls_orphan_tool_call_into_tail():
-    """Tail starts on a tool_call_output whose call is in the dropped middle."""
-    items = [
+    """Tail starts on a tool_result whose call is in the dropped middle."""
+    entries = [
         _user("u0"),
         _user("u1"),
         _call("c1"),
@@ -85,20 +85,20 @@ def test_safe_window_pulls_orphan_tool_call_into_tail():
     ]
     # Tail=2 would slice [_out("c1"), _user("u2")] which is invalid; the
     # helper must expand to also include the matching tool_call.
-    got = safe_window(items, tail=2)
-    assert got == items[2:]
+    got = safe_window(entries, tail=2)
+    assert got == entries[2:]
 
 
 def test_safe_window_drops_orphan_when_call_missing():
     """No matching tool_call exists anywhere → drop the orphan output."""
-    items = [_user("u0"), _out("missing", "result"), _user("u1")]
-    got = safe_window(items, tail=2)
+    entries = [_user("u0"), _out("missing", "result"), _user("u1")]
+    got = safe_window(entries, tail=2)
     assert got == [_user("u1")]
 
 
 def test_safe_window_pair_in_head_does_not_pull_back():
-    items = [_call("c1"), _user("u0"), _user("u1"), _out("c1")]
-    got = safe_window(items, head=1, tail=1)
+    entries = [_call("c1"), _user("u0"), _user("u1"), _out("c1")]
+    got = safe_window(entries, head=1, tail=1)
     # head keeps the call; tail kept the output; no expansion needed.
     assert got == [_call("c1"), _out("c1")]
 
@@ -110,13 +110,13 @@ def test_safe_window_pair_in_head_does_not_pull_back():
 
 async def test_noop_policy_returns_same_list_object():
     policy = NoopContextPolicy()
-    items = [_user("hi")]
-    out = await policy.apply(items, ctx=PolicyContext(provider=None, model=None))
-    assert out is items
+    entries = [_user("hi")]
+    out = await policy.apply(entries, ctx=PolicyContext(provider=None, model=None))
+    assert out is entries
     out2 = await policy.apply_reactive(
-        items, ctx=PolicyContext(provider=None, model=None)
+        entries, ctx=PolicyContext(provider=None, model=None)
     )
-    assert out2 is items
+    assert out2 is entries
 
 
 # ---------------------------------------------------------------------------
@@ -129,13 +129,13 @@ class _FakeSummarizer:
         self.text = text
         self.calls: list[list] = []
 
-    async def summarize(self, items, *, ctx):
-        self.calls.append(list(items))
+    async def summarize(self, entries, *, ctx):
+        self.calls.append(list(entries))
         return self.text
 
 
 class _FailingSummarizer:
-    async def summarize(self, items, *, ctx):
+    async def summarize(self, entries, *, ctx):
         raise RuntimeError("boom")
 
 
@@ -159,14 +159,14 @@ async def test_summarizing_skips_when_under_threshold():
         compact_at_ratio=0.8,
         summarizer=summarizer,
     )
-    items = [_user("short")]
+    entries = [_user("short")]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(),
         model="fake-model",
         last_prompt_tokens=100,
     )
-    out = await policy.apply(items, ctx=ctx)
-    assert out is items
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is entries
     assert summarizer.calls == []
 
 
@@ -184,20 +184,20 @@ async def test_summarizing_compacts_when_over_threshold():
         summarizer=summarizer,
         archive=archive,
     )
-    items = [_user(f"m{i}") for i in range(10)]
+    entries = [_user(f"m{i}") for i in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
         last_prompt_tokens=900,  # over threshold
         session_id="sess-1",
     )
-    out = await policy.apply(items, ctx=ctx)
-    assert out is not items
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is not entries
     head = out[0]
-    assert isinstance(head, InputMessageItem)
+    assert isinstance(head, InputEntry)
     assert "Goal: ship feature." in head.content
     # keep_recent_messages=2 → summary + last 2 originals
-    assert out[1:] == items[-2:]
+    assert out[1:] == entries[-2:]
     # Archive received the full before snapshot.
     assert len(archived) == 1
     assert archived[0].session_id == "sess-1"
@@ -212,14 +212,14 @@ async def test_summarizing_falls_back_to_provider_context_window():
         compact_at_ratio=0.5,
         summarizer=summarizer,
     )
-    items = [_user("x" * 100) for _ in range(10)]
+    entries = [_user("x" * 100) for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
         last_prompt_tokens=600,
     )
-    out = await policy.apply(items, ctx=ctx)
-    assert out is not items
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is not entries
     assert summarizer.calls  # summarizer was invoked
 
 
@@ -229,15 +229,15 @@ async def test_summarizing_skips_when_no_window_info_available():
         max_tokens=None,
         summarizer=summarizer,
     )
-    items = [_user("x") for _ in range(10)]
+    entries = [_user("x") for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=None),
         model="unknown-model",
         last_prompt_tokens=999_999,
     )
-    out = await policy.apply(items, ctx=ctx)
+    out = await policy.apply(entries, ctx=ctx)
     # Without window info, proactive compaction is disabled.
-    assert out is items
+    assert out is entries
     assert summarizer.calls == []
 
 
@@ -248,12 +248,12 @@ async def test_summarizing_reactive_always_compacts():
         summarizer=summarizer,
         reactive_keep_recent_messages=1,
     )
-    items = [_user(f"m{i}") for i in range(5)]
+    entries = [_user(f"m{i}") for i in range(5)]
     ctx = PolicyContext(provider=None, model=None)
-    out = await policy.apply_reactive(items, ctx=ctx)
-    assert out is not items
+    out = await policy.apply_reactive(entries, ctx=ctx)
+    assert out is not entries
     assert len(out) == 2  # summary + 1 tail
-    assert isinstance(out[0], InputMessageItem)
+    assert isinstance(out[0], InputEntry)
     assert "Reactive summary." in out[0].content
 
 
@@ -264,7 +264,7 @@ async def test_summarizing_micro_compact_replaces_old_outputs():
         keep_recent_tool_results=1,
         summarizer=summarizer,
     )
-    items = [
+    entries = [
         _call("c1"),
         _out("c1", "first-result " * 50),
         _call("c2"),
@@ -273,8 +273,8 @@ async def test_summarizing_micro_compact_replaces_old_outputs():
         _out("c3", "third-result " * 50),
     ]
     ctx = PolicyContext(provider=_FakeProviderWithWindow(), model="fake-model")
-    out = await policy.apply(items, ctx=ctx)
-    assert out is not items
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is not entries
     # First two outputs replaced, last one preserved.
     assert "compacted" in out[1].output.lower()
     assert "compacted" in out[3].output.lower()
@@ -289,7 +289,7 @@ async def test_summarizing_circuit_breaker():
         summarizer=failing,
         max_consecutive_failures=2,
     )
-    items = [_user("x" * 1000)]
+    entries = [_user("x" * 1000)]
     ctx = PolicyContext(
         provider=None,
         model=None,
@@ -297,19 +297,19 @@ async def test_summarizing_circuit_breaker():
     )
     # First two attempts propagate the underlying error.
     with pytest.raises(RuntimeError, match="boom"):
-        await policy.apply(items, ctx=ctx)
+        await policy.apply(entries, ctx=ctx)
     with pytest.raises(RuntimeError, match="boom"):
-        await policy.apply(items, ctx=ctx)
-    # Third call: breaker tripped → returns items unchanged, no exception.
-    out = await policy.apply(items, ctx=ctx)
-    assert out is items
+        await policy.apply(entries, ctx=ctx)
+    # Third call: breaker tripped → returns entries unchanged, no exception.
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is entries
 
 
-async def test_summarizing_uses_current_items_when_last_prompt_is_stale():
+async def test_summarizing_uses_current_entries_when_last_prompt_is_stale():
     """Regression: ``last_prompt_tokens`` is the *previous* turn's prompt
     size — it does not include the assistant reply, tool results, or new
     user message that have been appended since. The policy must therefore
-    fall back to the current items estimate when it is larger; otherwise a
+    fall back to the current entries estimate when it is larger; otherwise a
     big tool result silently overshoots the model's hard cap before the
     next ``usage`` count arrives.
     """
@@ -322,15 +322,15 @@ async def test_summarizing_uses_current_items_when_last_prompt_is_stale():
     )
     # 10 messages of ~400 chars each ≈ 1000 estimated tokens, well above
     # threshold. ``last_prompt_tokens`` is stale and below threshold.
-    items = [_user("x" * 400) for _ in range(10)]
+    entries = [_user("x" * 400) for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
         last_prompt_tokens=100,  # stale: from a much earlier turn
     )
-    out = await policy.apply(items, ctx=ctx)
-    assert out is not items, (
-        "expected compaction to trigger from current-items estimate "
+    out = await policy.apply(entries, ctx=ctx)
+    assert out is not entries, (
+        "expected compaction to trigger from current-entries estimate "
         "despite stale last_prompt_tokens"
     )
     assert summarizer.calls
@@ -354,13 +354,13 @@ class _OverflowOnceProvider:
     def context_window(self, model: str) -> int | None:
         return 10_000_000  # never trigger proactive path
 
-    async def stream(self, input, *, tools=None, response_format=None, settings=None):
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
         self.stream_count += 1
-        self.last_input_lengths.append(len(input))
+        self.last_input_lengths.append(len(entries))
         if self.stream_count == 1:
             raise ContextOverflowError("simulated overflow")
         # Yield a normal assistant reply.
-        from lovia.items import FinishDelta, TextDelta, UsageDelta
+        from lovia.transcript import FinishDelta, TextDelta, UsageDelta
         from lovia.messages import Usage
 
         yield TextDelta(text="hello after compaction")
@@ -441,11 +441,11 @@ async def test_runner_session_replace_after_compaction():
         session_id="s1",
     )
     persisted = await sess.load("s1")
-    # The first item should be the summary marker, not the original "first".
-    assert isinstance(persisted[0], InputMessageItem)
+    # The first entry should be the summary marker, not the original "first".
+    assert isinstance(persisted[0], InputEntry)
     assert "Conversation summary" in persisted[0].content
     # The final assistant reply must also be persisted.
     assert any(
-        isinstance(it, MessageOutputItem) and "hello after compaction" in it.content
+        isinstance(it, AssistantTextEntry) and "hello after compaction" in it.content
         for it in persisted
     )

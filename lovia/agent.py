@@ -25,9 +25,9 @@ if TYPE_CHECKING:
     from .hooks import AgentHooks
     from .mcp import MCPServer
     from .memory import Memory
-    from .messages import ChatMessage, ToolCall
+    from .messages import Message, ToolCall
     from .output import OutputRepairStrategy
-    from .runner import RunHandle, RunResult
+    from .runtime.result import RunHandle, RunResult
     from .skills import SkillCatalog
     from .sandbox import SandboxLike
     from .tools import ToolResultRenderer
@@ -133,14 +133,14 @@ class Agent(Generic[TContext]):
         When ``model`` is a single value the chain has length 1. When it is a
         list, each entry is resolved and the runner tries them in order.
         """
-        items: list[Any]
+        models: list[Any]
         if isinstance(self.model, list):
-            items = list(self.model)
+            models = list(self.model)
         else:
-            items = [self.model]
-        if not items:
+            models = [self.model]
+        if not models:
             raise ValueError("Agent.model must not be empty")
-        return [provider_from_string(m) if isinstance(m, str) else m for m in items]
+        return [provider_from_string(m) if isinstance(m, str) else m for m in models]
 
     def resolve_provider(self) -> Provider:
         """Return the primary provider (first entry of the fallback chain)."""
@@ -187,15 +187,15 @@ class Agent(Generic[TContext]):
         """
         parts: list[str] = []
 
-        async def render(item: "str | InstructionsFn | None") -> str:
-            if item is None:
+        async def render(fragment: "str | InstructionsFn | None") -> str:
+            if fragment is None:
                 return ""
-            if callable(item):
-                result = item(context)
+            if callable(fragment):
+                result = fragment(context)
                 if hasattr(result, "__await__"):
                     return str(await result)  # type: ignore[arg-type]
                 return str(result)
-            return str(item)
+            return str(fragment)
 
         base = await render(self.instructions)
         if base:
@@ -236,7 +236,7 @@ class Agent(Generic[TContext]):
 
     async def run(
         self,
-        input: "str | list[ChatMessage]",
+        input: "str | list[Message]",
         **kwargs: Any,
     ) -> "RunResult":
         """Shortcut for ``Runner.run(self, input, **kwargs)``."""
@@ -246,7 +246,7 @@ class Agent(Generic[TContext]):
 
     def run_sync(
         self,
-        input: "str | list[ChatMessage]",
+        input: "str | list[Message]",
         **kwargs: Any,
     ) -> "RunResult":
         """Synchronous shortcut for ``Runner.run_sync(self, input, **kwargs)``."""
@@ -256,7 +256,7 @@ class Agent(Generic[TContext]):
 
     def stream(
         self,
-        input: "str | list[ChatMessage]",
+        input: "str | list[Message]",
         **kwargs: Any,
     ) -> "RunHandle":
         """Shortcut for ``Runner.stream(self, input, **kwargs)``."""

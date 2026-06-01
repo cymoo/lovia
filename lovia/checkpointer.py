@@ -1,7 +1,7 @@
 """Run checkpointing — pause a run mid-flight and resume it later.
 
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
-serialize after each turn: the transcript (as :class:`Item` list), the
+serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
 active agent's name, the accumulated usage, and the turn counter. The
 opaque ``RunContext.context`` value is *not* snapshotted — callers
 re-supply it on resume.
@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from .items import Item, item_from_dict, item_to_dict
+from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict
 from .messages import Usage
 
 
@@ -28,7 +28,7 @@ class RunSnapshot:
 
     run_id: str
     agent_name: str
-    items: list[Item]
+    entries: list[TranscriptEntry]
     usage: Usage
     turns: int
     updated_at: float = field(default_factory=time.time)
@@ -39,7 +39,7 @@ class RunSnapshot:
         return {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
-            "items": [item_to_dict(it) for it in self.items],
+            "entries": [entry_to_dict(entry) for entry in self.entries],
             "usage": {
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,
@@ -55,7 +55,7 @@ class RunSnapshot:
         return cls(
             run_id=data["run_id"],
             agent_name=data["agent_name"],
-            items=[item_from_dict(d) for d in data["items"]],
+            entries=[entry_from_dict(d) for d in data["entries"]],
             usage=Usage(**data.get("usage", {})),
             turns=data.get("turns", 0),
             updated_at=data.get("updated_at", time.time()),

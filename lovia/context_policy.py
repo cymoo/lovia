@@ -16,7 +16,7 @@ counterpart) so users can swap in their own strategy. Core ships:
   :class:`~lovia.ContextOverflowError`.
 
 The policy is **stateless with respect to persistence**: it returns a
-rewritten item list and (optionally) invokes the user-supplied ``archive``
+rewritten entry list and (optionally) invokes the user-supplied ``archive``
 hook. The :class:`~lovia.Runner` is responsible for writing the result back
 to the :class:`~lovia.Session` and dispatching the
 :class:`~lovia.events.ContextCompacted` event.
@@ -37,13 +37,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
-from .items import (
-    InputMessageItem,
-    Item,
-    MessageOutputItem,
-    ReasoningItem,
-    ToolCallItem,
-    ToolCallOutputItem,
+from .transcript import (
+    InputEntry,
+    TranscriptEntry,
+    AssistantTextEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    ToolResultEntry,
     safe_window,
 )
 from .providers.base import (
@@ -108,7 +108,7 @@ class PolicyContext:
     Attributes:
         provider: The :class:`~lovia.Provider` the runner is about to call.
             Policies may consult ``provider.context_window(model)`` and
-            ``provider.estimate_tokens(items)`` via the helpers in
+            ``provider.estimate_tokens(entries)`` via the helpers in
             :mod:`lovia.providers.base`.
         model: The model identifier (``provider.model``) used to look up the
             context window. ``None`` when the provider doesn't expose one.
@@ -134,8 +134,8 @@ class ArchiveEvent:
     """
 
     session_id: str | None
-    items_before: list[Item]
-    items_after: list[Item]
+    entries_before: list[TranscriptEntry]
+    entries_after: list[TranscriptEntry]
     summary: str | None
     reactive: bool = False
 
@@ -150,9 +150,9 @@ ArchiveCallback = Callable[[ArchiveEvent], Awaitable[None]]
 
 @runtime_checkable
 class ContextPolicy(Protocol):
-    """Strategy that decides what items the model sees on each turn.
+    """Strategy that decides what entries the model sees on each turn.
 
-    Implementations are pure transformations: take the current item list,
+    Implementations are pure transformations: take the current entry list,
     return a (possibly trimmed) list. Returning the same list object signals
     "no change" — the runner uses identity to decide whether to persist back
     to the :class:`~lovia.Session`.
@@ -164,11 +164,13 @@ class ContextPolicy(Protocol):
       :class:`~lovia.ContextOverflowError` (last-resort compaction).
     """
 
-    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]: ...
+    async def apply(
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]: ...
 
     async def apply_reactive(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]: ...
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]: ...
 
 
 @runtime_checkable
@@ -180,7 +182,9 @@ class Summarizer(Protocol):
     summarization implement this protocol directly.
     """
 
-    async def summarize(self, items: list[Item], *, ctx: PolicyContext) -> str: ...
+    async def summarize(
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> str: ...
 
 
 # ---------------------------------------------------------------------------
@@ -198,13 +202,15 @@ class NoopContextPolicy:
 
     name = "noop"
 
-    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]:
-        return items
+    async def apply(
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]:
+        return entries
 
     async def apply_reactive(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]:
-        return items
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]:
+        return entries
 
 
 # ---------------------------------------------------------------------------
@@ -238,14 +244,16 @@ class ProviderSummarizer:
         self.prompt = prompt
         self.settings = settings or ModelSettings(temperature=0)
 
-    async def summarize(self, items: list[Item], *, ctx: PolicyContext) -> str:
+    async def summarize(
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> str:
         provider = self.provider or ctx.provider
         # Flatten the transcript into a single user message — we don't want
         # the summarizer to "continue" the conversation, just describe it.
-        transcript_text = _transcript_to_text(items)
-        input_items: list[Item] = [
-            InputMessageItem(role="system", content=self.prompt),
-            InputMessageItem(
+        transcript_text = _transcript_to_text(entries)
+        input_entries: list[TranscriptEntry] = [
+            InputEntry(role="system", content=self.prompt),
+            InputEntry(
                 role="user",
                 content=(
                     "Summarize the following agent transcript per the rules above. "
@@ -255,7 +263,7 @@ class ProviderSummarizer:
             ),
         ]
         chunks: list[str] = []
-        async for delta in provider.stream(input_items, settings=self.settings):
+        async for delta in provider.stream(input_entries, settings=self.settings):
             text = getattr(delta, "text", None)
             # Only collect plain text deltas — usage/finish/tool deltas are
             # not relevant for the summary body.
@@ -269,38 +277,38 @@ class ProviderSummarizer:
         return summary
 
 
-def _transcript_to_text(items: list[Item]) -> str:
-    """Best-effort flat rendering of items for the summarizer prompt."""
+def _transcript_to_text(entries: list[TranscriptEntry]) -> str:
+    """Best-effort flat rendering of entries for the summarizer prompt."""
     out: list[str] = []
-    for it in items:
-        if isinstance(it, InputMessageItem):
+    for it in entries:
+        if isinstance(it, InputEntry):
             role = it.role
             content = (
                 it.content
                 if isinstance(it.content, str)
-                else _blocks_to_text(it.content)
+                else _parts_to_text(it.content)
             )
             out.append(f"[{role}] {content}")
-        elif isinstance(it, MessageOutputItem):
+        elif isinstance(it, AssistantTextEntry):
             out.append(f"[assistant] {it.content}")
-        elif isinstance(it, ReasoningItem):
+        elif isinstance(it, ReasoningEntry):
             # Skip reasoning — it's noisy and providers don't always echo it.
             continue
-        elif isinstance(it, ToolCallItem):
+        elif isinstance(it, ToolCallEntry):
             out.append(f"[tool_call:{it.name}] {it.arguments}")
-        elif isinstance(it, ToolCallOutputItem):
+        elif isinstance(it, ToolResultEntry):
             out.append(f"[tool_result] {it.output}")
     return "\n".join(out)
 
 
-def _blocks_to_text(blocks: Any) -> str:
+def _parts_to_text(parts: Any) -> str:
     try:
         # Reuse the framework's helper rather than re-implementing it.
         from .content import text_of
 
-        return text_of(blocks)
+        return text_of(parts)
     except Exception:  # pragma: no cover - defensive
-        return str(blocks)
+        return str(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -314,12 +322,12 @@ _SUMMARY_OPEN = "[Conversation summary — prior turns compacted]"
 _SUMMARY_CLOSE = "[End summary]"
 
 
-def extract_compaction_summary(items: list[Item]) -> str | None:
-    """Return the raw summary text from a compacted item list, if present."""
-    if not items:
+def extract_compaction_summary(entries: list[TranscriptEntry]) -> str | None:
+    """Return the raw summary text from a compacted entry list, if present."""
+    if not entries:
         return None
-    head = items[0]
-    if not isinstance(head, InputMessageItem):
+    head = entries[0]
+    if not isinstance(head, InputEntry):
         return None
     content = head.content
     if not isinstance(content, str):
@@ -365,7 +373,7 @@ class SummarizingContextPolicy:
        (placeholders for old tool results when
        ``keep_recent_tool_results`` is set), then return.
     4. If at/over threshold: ask the summarizer to produce a summary,
-       then return ``[summary_item, *safe_window(items, tail=keep_recent_messages)]``.
+       then return ``[summary_entry, *safe_window(entries, tail=keep_recent_messages)]``.
 
     On :meth:`apply_reactive` the same compaction runs with a more
     aggressive tail (``reactive_keep_recent_messages``, default 5).
@@ -409,43 +417,45 @@ class SummarizingContextPolicy:
 
     # -- entry points ---------------------------------------------------------
 
-    async def apply(self, items: list[Item], *, ctx: PolicyContext) -> list[Item]:
+    async def apply(
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]:
         threshold = self._threshold(ctx)
         if threshold is None:
             # No window info → can't act proactively; only L2 (if enabled).
-            return self._maybe_micro_compact(items)
+            return self._maybe_micro_compact(entries)
         # ``last_prompt_tokens`` reflects the prompt size of the *previous*
         # turn. Since then we've appended the assistant reply, tool outputs,
         # and (often) a new user message, so it systematically under-counts.
-        # Always cross-check against an estimate of the current items_log
+        # Always cross-check against an estimate of the current transcript
         # and take the larger of the two — otherwise a single large tool
         # result can push us past the model's hard cap before the next
         # turn's usage number arrives. See the regression in
-        # ``test_summarizing_policy_uses_current_items_when_stale``.
-        estimate = _estimate_tokens(ctx.provider, items)
+        # ``test_summarizing_policy_uses_current_entries_when_stale``.
+        estimate = _estimate_tokens(ctx.provider, entries)
         last = ctx.last_prompt_tokens or 0
         tokens = max(estimate, last)
         if tokens < threshold:
-            return self._maybe_micro_compact(items)
+            return self._maybe_micro_compact(entries)
         logger.info(
             "context.compact.proactive: triggering compaction "
-            "(tokens≈%d, threshold=%d, items=%d, last_prompt=%s)",
+            "(tokens≈%d, threshold=%d, entries=%d, last_prompt=%s)",
             tokens,
             threshold,
-            len(items),
+            len(entries),
             last or None,
         )
-        return await self._compact(items, ctx=ctx, reactive=False)
+        return await self._compact(entries, ctx=ctx, reactive=False)
 
     async def apply_reactive(
-        self, items: list[Item], *, ctx: PolicyContext
-    ) -> list[Item]:
+        self, entries: list[TranscriptEntry], *, ctx: PolicyContext
+    ) -> list[TranscriptEntry]:
         logger.warning(
             "context.compact.reactive: provider reported overflow; "
-            "compacting (items=%d)",
-            len(items),
+            "compacting (entries=%d)",
+            len(entries),
         )
-        return await self._compact(items, ctx=ctx, reactive=True)
+        return await self._compact(entries, ctx=ctx, reactive=True)
 
     # -- internals ------------------------------------------------------------
 
@@ -459,11 +469,11 @@ class SummarizingContextPolicy:
 
     async def _compact(
         self,
-        items: list[Item],
+        entries: list[TranscriptEntry],
         *,
         ctx: PolicyContext,
         reactive: bool,
-    ) -> list[Item]:
+    ) -> list[TranscriptEntry]:
         if self._breaker.tripped:
             # Don't keep hammering a broken summarizer; just return as-is and
             # let the caller surface the underlying overflow.
@@ -472,9 +482,9 @@ class SummarizingContextPolicy:
                 "consecutive failures; skipping compaction",
                 self._breaker.count,
             )
-            return items
+            return entries
         try:
-            summary = await self.summarizer.summarize(items, ctx=ctx)
+            summary = await self.summarizer.summarize(entries, ctx=ctx)
         except Exception as exc:
             self._breaker.record_failure()
             logger.warning(
@@ -492,18 +502,18 @@ class SummarizingContextPolicy:
             if reactive
             else self.keep_recent_messages
         )
-        kept = safe_window(items, tail=tail)
-        summary_item = InputMessageItem(
+        kept = safe_window(entries, tail=tail)
+        summary_entry = InputEntry(
             role="user",
             content=f"{_SUMMARY_PREFIX}{summary}{_SUMMARY_SUFFIX}",
         )
-        new_items: list[Item] = [summary_item, *kept]
+        new_entries: list[TranscriptEntry] = [summary_entry, *kept]
         logger.info(
-            "context.compact.done: reactive=%s, items %d → %d, "
+            "context.compact.done: reactive=%s, entries %d → %d, "
             "kept_tail=%d, summary_chars=%d",
             reactive,
-            len(items),
-            len(new_items),
+            len(entries),
+            len(new_entries),
             tail,
             len(summary),
         )
@@ -513,8 +523,8 @@ class SummarizingContextPolicy:
                 await self.archive(
                     ArchiveEvent(
                         session_id=ctx.session_id,
-                        items_before=list(items),
-                        items_after=list(new_items),
+                        entries_before=list(entries),
+                        entries_after=list(new_entries),
                         summary=summary,
                         reactive=reactive,
                     )
@@ -527,10 +537,12 @@ class SummarizingContextPolicy:
                     type(exc).__name__,
                     exc,
                 )
-        return new_items
+        return new_entries
 
-    def _maybe_micro_compact(self, items: list[Item]) -> list[Item]:
-        """L2: replace older ``ToolCallOutputItem`` payloads with a placeholder.
+    def _maybe_micro_compact(
+        self, entries: list[TranscriptEntry]
+    ) -> list[TranscriptEntry]:
+        """L2: replace older ``ToolResultEntry`` payloads with a placeholder.
 
         Only runs when ``keep_recent_tool_results`` is set. Returns the same
         list object when nothing changes so the runner's identity check
@@ -538,28 +550,28 @@ class SummarizingContextPolicy:
         """
         n = self.keep_recent_tool_results
         if n is None:
-            return items
+            return entries
         outputs = [
-            (i, it) for i, it in enumerate(items) if isinstance(it, ToolCallOutputItem)
+            (i, it) for i, it in enumerate(entries) if isinstance(it, ToolResultEntry)
         ]
         if len(outputs) <= n:
-            return items
+            return entries
         to_compact = outputs[:-n]
         changed = False
-        new_items = list(items)
+        new_entries = list(entries)
         for idx, it in to_compact:
             # Skip already-compacted entries and short outputs that aren't
             # worth replacing.
             if len(it.output) <= 120 or it.output.startswith(_MICRO_PLACEHOLDER):
                 continue
-            new_items[idx] = ToolCallOutputItem(
+            new_entries[idx] = ToolResultEntry(
                 call_id=it.call_id,
                 output=_MICRO_PLACEHOLDER,
                 raw=None,
                 is_error=it.is_error,
             )
             changed = True
-        return new_items if changed else items
+        return new_entries if changed else entries
 
 
 _MICRO_PLACEHOLDER = "[Earlier tool result compacted. Re-run the tool if you need it.]"

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent, tool  # noqa: E402
 from lovia.web import create_app  # noqa: E402
+from lovia.web.store import ChatStore  # noqa: E402
 
 from .scripted_provider import ScriptedProvider, call, text  # noqa: E402
 
@@ -48,6 +49,7 @@ def _make_agent(script) -> Agent:
 def _app(agent_or_agents, **kw):
     """Convenience: tests don't need title-gen polluting their scripts."""
     kw.setdefault("generate_titles", False)
+    kw.setdefault("store", ChatStore.in_memory())
     return create_app(agent_or_agents, **kw)
 
 
@@ -118,13 +120,13 @@ def test_session_persists_across_calls() -> None:
     c = TestClient(_app(agent))
     sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
     c.post("/api/chat", json={"message": "two", "session_id": sid})
-    transcript = c.get(f"/api/sessions/{sid}").json()["items"]
+    transcript = c.get(f"/api/sessions/{sid}").json()["entries"]
     roles = [m["role"] for m in transcript]
     assert roles.count("user") == 2
     assert roles.count("assistant") == 2
 
     c.delete(f"/api/sessions/{sid}")
-    assert c.get(f"/api/sessions/{sid}").json()["items"] == []
+    assert c.get(f"/api/sessions/{sid}").json()["entries"] == []
 
 
 # -------------------------------------------------------------- streaming -
@@ -218,7 +220,7 @@ async def test_approval_flow_via_http() -> None:
         assert "approval_required" in kinds
         assert kinds[-1] == "done"
 
-        transcript = (await ac.get("/api/sessions/sess-1")).json()["items"]
+        transcript = (await ac.get("/api/sessions/sess-1")).json()["entries"]
         tool_msg = next(m for m in transcript if m["role"] == "tool")
         assert tool_msg["content"] == "did it"
 

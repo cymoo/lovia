@@ -9,20 +9,20 @@ from typing import Any
 import httpx
 import pytest
 
-from lovia import FileBlock, ImageBlock, TextBlock
+from lovia import FilePart, ImagePart, TextPart
 from lovia.exceptions import ContextOverflowError, ProviderError, UserError
-from lovia.items import (
+from lovia.transcript import (
     FinishDelta,
-    ItemCompletedDelta,
-    InputMessageItem,
-    ItemDelta,
-    MessageOutputItem,
+    EntryCompletedDelta,
+    InputEntry,
+    ModelDelta,
+    AssistantTextEntry,
     ReasoningDelta,
-    ReasoningItem,
+    ReasoningEntry,
     TextDelta,
     ToolCallDelta,
-    ToolCallItem,
-    ToolCallOutputItem,
+    ToolCallEntry,
+    ToolResultEntry,
     UsageDelta,
 )
 from lovia.providers.anthropic import (
@@ -44,34 +44,34 @@ def _sse(events: list[dict[str, Any]]) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
-async def _collect(stream: Any) -> list[ItemDelta]:
-    out: list[ItemDelta] = []
+async def _collect(stream: Any) -> list[ModelDelta]:
+    out: list[ModelDelta] = []
     async for delta in stream:
         out.append(delta)
     return out
 
 
-def _deltas(deltas: list[ItemDelta], cls: type[Any]) -> Iterator[Any]:
+def _deltas(deltas: list[ModelDelta], cls: type[Any]) -> Iterator[Any]:
     return (delta for delta in deltas if isinstance(delta, cls))
 
 
 def test_message_translation_extracts_system_and_tool_blocks() -> None:
-    items = [
-        InputMessageItem(role="system", content="be terse"),
-        InputMessageItem(role="system", content=[TextBlock("second")]),
-        InputMessageItem(role="user", content="hi"),
-        ReasoningItem(
+    entries = [
+        InputEntry(role="system", content="be terse"),
+        InputEntry(role="system", content=[TextPart("second")]),
+        InputEntry(role="user", content="hi"),
+        ReasoningEntry(
             content="thinking",
             provider="anthropic",
             metadata={"signature": "sig"},
         ),
-        MessageOutputItem(content="working"),
-        ToolCallItem(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
-        ToolCallOutputItem(call_id="c1", output="3"),
-        InputMessageItem(role="user", content=""),
+        AssistantTextEntry(content="working"),
+        ToolCallEntry(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
+        ToolResultEntry(call_id="c1", output="3"),
+        InputEntry(role="user", content=""),
     ]
 
-    system, out = _to_anthropic_messages(items)
+    system, out = _to_anthropic_messages(entries)
 
     assert system == [{"type": "text", "text": "be terse\n\nsecond"}]
     assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
@@ -94,7 +94,7 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
 
 def test_message_translation_wraps_invalid_tool_arguments() -> None:
     _, out = _to_anthropic_messages(
-        [ToolCallItem(call_id="c1", name="broken", arguments="{bad")]
+        [ToolCallEntry(call_id="c1", name="broken", arguments="{bad")]
     )
 
     assert out[0]["content"][0]["input"] == {"_raw": "{bad"}
@@ -121,12 +121,12 @@ def test_tool_schema_translation_preserves_strict() -> None:
 
 def test_translates_image_blocks_with_url_and_base64() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
             content=[
-                TextBlock("describe"),
-                ImageBlock(url="https://x/y.png"),
-                ImageBlock(data="ZmFrZQ==", mime_type="image/png"),
+                TextPart("describe"),
+                ImagePart(url="https://x/y.png"),
+                ImagePart(data="ZmFrZQ==", mime_type="image/png"),
             ],
         )
     ]
@@ -146,11 +146,11 @@ def test_translates_image_blocks_with_url_and_base64() -> None:
 
 def test_translates_file_blocks_with_url_and_base64() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
             content=[
-                FileBlock.from_url("https://x/doc.pdf", filename="remote.pdf"),
-                FileBlock(data="cGRm", mime_type="application/pdf", filename="doc.pdf"),
+                FilePart.from_url("https://x/doc.pdf", filename="remote.pdf"),
+                FilePart(data="cGRm", mime_type="application/pdf", filename="doc.pdf"),
             ],
         )
     ]
@@ -177,9 +177,9 @@ def test_translates_file_blocks_with_url_and_base64() -> None:
 
 def test_translates_file_url_without_mime_type() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
-            content=[FileBlock.from_url("https://x/doc.pdf")],
+            content=[FilePart.from_url("https://x/doc.pdf")],
         )
     ]
 
@@ -195,9 +195,9 @@ def test_translates_file_url_without_mime_type() -> None:
 
 def test_translates_text_file_block_as_plain_text_document() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
-            content=[FileBlock.from_bytes(b"hello", mime_type="text/plain")],
+            content=[FilePart.from_bytes(b"hello", mime_type="text/plain")],
         )
     ]
 
@@ -217,9 +217,9 @@ def test_translates_text_file_block_as_plain_text_document() -> None:
 
 def test_rejects_unsupported_anthropic_file_mime_type() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
-            content=[FileBlock(data="eA==", mime_type="application/octet-stream")],
+            content=[FilePart(data="eA==", mime_type="application/octet-stream")],
         )
     ]
 
@@ -229,9 +229,9 @@ def test_rejects_unsupported_anthropic_file_mime_type() -> None:
 
 def test_rejects_text_file_block_with_invalid_utf8() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
-            content=[FileBlock.from_base64("//4=", mime_type="text/plain")],
+            content=[FilePart.from_base64("//4=", mime_type="text/plain")],
         )
     ]
 
@@ -241,9 +241,9 @@ def test_rejects_text_file_block_with_invalid_utf8() -> None:
 
 def test_rejects_non_pdf_anthropic_file_urls() -> None:
     msgs = [
-        InputMessageItem(
+        InputEntry(
             role="user",
-            content=[FileBlock.from_url("https://x/doc.txt", mime_type="text/plain")],
+            content=[FilePart.from_url("https://x/doc.txt", mime_type="text/plain")],
         )
     ]
 
@@ -255,9 +255,9 @@ def test_build_payload_maps_settings_cache_and_structured_output() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        items=[
-            InputMessageItem(role="system", content="be terse"),
-            InputMessageItem(role="user", content="hi"),
+        entries=[
+            InputEntry(role="system", content="be terse"),
+            InputEntry(role="user", content="hi"),
         ],
         tools=[
             {
@@ -299,7 +299,7 @@ def test_build_payload_extra_overrides_adapter_defaults() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        items=[InputMessageItem(role="user", content="hi")],
+        entries=[InputEntry(role="user", content="hi")],
         tools=[
             {
                 "type": "function",
@@ -331,7 +331,7 @@ def test_response_format_ignores_unsupported_openai_shapes() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
     payload = provider._build_payload(
-        items=[InputMessageItem(role="user", content="hi")],
+        entries=[InputEntry(role="user", content="hi")],
         tools=None,
         response_format={"type": "json_object"},
         settings=ModelSettings(),
@@ -441,9 +441,7 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
     )
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
 
-    deltas = await _collect(
-        provider.stream([InputMessageItem(role="user", content="hi")])
-    )
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert "".join(delta.text for delta in _deltas(deltas, TextDelta)) == "hi"
     assert "".join(delta.text for delta in _deltas(deltas, ReasoningDelta)) == "think"
@@ -457,14 +455,14 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
     assert usage.output_tokens == 8
     assert usage.cache_write_tokens == 4
     assert usage.cache_read_tokens == 5
-    completed_items = [delta.item for delta in _deltas(deltas, ItemCompletedDelta)]
-    assert completed_items[0] == MessageOutputItem(content="hi")
-    assert completed_items[1] == ReasoningItem(
+    completed_entries = [delta.entry for delta in _deltas(deltas, EntryCompletedDelta)]
+    assert completed_entries[0] == AssistantTextEntry(content="hi")
+    assert completed_entries[1] == ReasoningEntry(
         content="think",
         provider="anthropic",
         metadata={"signature": "sig"},
     )
-    assert completed_items[2] == ToolCallItem(
+    assert completed_entries[2] == ToolCallEntry(
         call_id="c1",
         name="lookup",
         arguments='{"q":"x"}',
@@ -488,7 +486,7 @@ async def test_stream_error_raises_provider_error() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
 
     with pytest.raises(ProviderError) as exc_info:
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert exc_info.value.vendor == "anthropic"
     assert exc_info.value.retryable is True
@@ -502,7 +500,7 @@ async def test_missing_official_api_key_raises_user_error(monkeypatch: Any) -> N
     )
 
     with pytest.raises(UserError, match="requires an API key"):
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
 @pytest.mark.asyncio
@@ -514,7 +512,7 @@ async def test_transport_errors_are_classified() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
 
     with pytest.raises(ProviderError) as exc_info:
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert exc_info.value.vendor == "anthropic"
     assert exc_info.value.retryable is True
@@ -530,7 +528,7 @@ async def test_http_context_overflow_is_classified() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
 
     with pytest.raises(ContextOverflowError):
-        await _collect(provider.stream([InputMessageItem(role="user", content="hi")]))
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
 def test_stop_reason_and_context_overflow_helpers() -> None:

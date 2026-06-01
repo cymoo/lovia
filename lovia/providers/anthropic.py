@@ -1,7 +1,7 @@
 """Anthropic Messages API provider.
 
-Translates lovia Items into the Anthropic Messages API and back. We talk HTTP
-directly so the ``anthropic`` SDK is not required.
+Translates lovia transcript entries into the Anthropic Messages API and back.
+We talk HTTP directly so the ``anthropic`` SDK is not required.
 
 Conversions worth noting:
 
@@ -12,7 +12,7 @@ Conversions worth noting:
 * Assistant tool calls become ``tool_use`` content blocks; we generate the
   ``id`` mapping on the fly.
 * Streaming uses Anthropic's SSE event types (``content_block_delta``,
-  ``message_delta``, ...) which we translate into :class:`ItemDelta` values
+  ``message_delta``, ...) which we translate into :class:`ModelDelta` values
   consumed by the runner.
 """
 
@@ -26,19 +26,19 @@ from urllib.parse import urlparse
 import httpx
 
 from ..exceptions import ProviderError, UserError
-from ..items import (
+from ..transcript import (
     FinishDelta,
-    InputMessageItem,
-    Item,
-    ItemCompletedDelta,
-    ItemDelta,
-    MessageOutputItem,
+    InputEntry,
+    TranscriptEntry,
+    EntryCompletedDelta,
+    ModelDelta,
+    AssistantTextEntry,
     ReasoningDelta,
-    ReasoningItem,
+    ReasoningEntry,
     TextDelta,
     ToolCallDelta,
-    ToolCallItem,
-    ToolCallOutputItem,
+    ToolCallEntry,
+    ToolResultEntry,
     UsageDelta,
 )
 from ..messages import Usage
@@ -128,13 +128,13 @@ class AnthropicProvider:
 
     def _build_payload(
         self,
-        items: list[Item],
+        entries: list[TranscriptEntry],
         tools: list[dict[str, Any]] | None,
         response_format: dict[str, Any] | None,
         settings: ModelSettings | None,
         stream: bool,
     ) -> dict[str, Any]:
-        system_blocks, anthropic_messages = _to_anthropic_messages(items)
+        system_blocks, anthropic_messages = _to_anthropic_messages(entries)
         extra = (
             provider_options(settings, self.name, "claude")
             if settings is not None
@@ -199,14 +199,14 @@ class AnthropicProvider:
 
     async def stream(
         self,
-        input: list[Item],
+        entries: list[TranscriptEntry],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[ItemDelta]:
+    ) -> AsyncIterator[ModelDelta]:
         payload = self._build_payload(
-            input, tools, response_format, settings, stream=True
+            entries, tools, response_format, settings, stream=True
         )
         self._check_ready()
 
@@ -300,23 +300,23 @@ class AnthropicProvider:
                         if kind == "text":
                             content = "".join(text_blocks.get(idx, []))
                             if content:
-                                yield ItemCompletedDelta(
-                                    MessageOutputItem(content=content)
+                                yield EntryCompletedDelta(
+                                    AssistantTextEntry(content=content)
                                 )
                         elif kind == "thinking":
                             metadata: dict[str, Any] = {}
                             if signature := thinking_signatures.get(idx):
                                 metadata["signature"] = signature
-                            yield ItemCompletedDelta(
-                                ReasoningItem(
+                            yield EntryCompletedDelta(
+                                ReasoningEntry(
                                     content="".join(thinking_blocks.get(idx, [])),
                                     provider=self.name,
                                     metadata=metadata,
                                 )
                             )
                         elif kind == "tool_use":
-                            yield ItemCompletedDelta(
-                                ToolCallItem(
+                            yield EntryCompletedDelta(
+                                ToolCallEntry(
                                     call_id=tool_call_ids.get(idx, ""),
                                     name=tool_call_names.get(idx, ""),
                                     arguments=tool_call_arguments.get(idx) or "{}",
@@ -413,9 +413,9 @@ def _is_stream_error_retryable(error: dict[str, Any]) -> bool:
 
 
 def _to_anthropic_messages(
-    items: list[Item],
+    entries: list[TranscriptEntry],
 ) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]]:
-    """Translate Items into Anthropic's API shape.
+    """Translate transcript entries into Anthropic's API shape.
 
     Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
     ``None`` or a list of text blocks suitable for the Anthropic ``system``
@@ -432,13 +432,13 @@ def _to_anthropic_messages(
         out.append({"role": "assistant", "content": pending_blocks})
         pending_blocks = []
 
-    for item in items:
-        if isinstance(item, InputMessageItem) and item.role == "system":
-            if item.content:
-                system_parts.append(_text_only(item.content))
+    for entry in entries:
+        if isinstance(entry, InputEntry) and entry.role == "system":
+            if entry.content:
+                system_parts.append(_text_only(entry.content))
             continue
 
-        if isinstance(item, ToolCallOutputItem):
+        if isinstance(entry, ToolResultEntry):
             flush_assistant()
             out.append(
                 {
@@ -446,47 +446,47 @@ def _to_anthropic_messages(
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": item.call_id,
-                            "content": item.output,
+                            "tool_use_id": entry.call_id,
+                            "content": entry.output,
                         }
                     ],
                 }
             )
             continue
 
-        if isinstance(item, ReasoningItem):
-            if item.provider != "anthropic":
+        if isinstance(entry, ReasoningEntry):
+            if entry.provider != "anthropic":
                 continue
-            block = {"type": "thinking", "thinking": item.content}
-            signature = item.metadata.get("signature")
+            block = {"type": "thinking", "thinking": entry.content}
+            signature = entry.metadata.get("signature")
             if isinstance(signature, str) and signature:
                 block["signature"] = signature
             pending_blocks.append(block)
             continue
 
-        if isinstance(item, MessageOutputItem):
-            pending_blocks.extend(_content_to_anthropic_blocks(item.content))
+        if isinstance(entry, AssistantTextEntry):
+            pending_blocks.extend(_content_to_anthropic_blocks(entry.content))
             continue
 
-        if isinstance(item, ToolCallItem):
+        if isinstance(entry, ToolCallEntry):
             try:
-                parsed = json.loads(item.arguments or "{}")
+                parsed = json.loads(entry.arguments or "{}")
             except json.JSONDecodeError:
-                parsed = {"_raw": item.arguments}
+                parsed = {"_raw": entry.arguments}
             pending_blocks.append(
                 {
                     "type": "tool_use",
-                    "id": item.call_id,
-                    "name": item.name,
+                    "id": entry.call_id,
+                    "name": entry.name,
                     "input": parsed,
                 }
             )
             continue
 
-        if isinstance(item, InputMessageItem):
+        if isinstance(entry, InputEntry):
             flush_assistant()
             out.append(
-                {"role": "user", "content": _content_to_anthropic_blocks(item.content)}
+                {"role": "user", "content": _content_to_anthropic_blocks(entry.content)}
             )
 
     flush_assistant()

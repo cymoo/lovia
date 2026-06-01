@@ -26,8 +26,8 @@ from dotenv import load_dotenv
 from lovia import (
     Agent,
     AgentHooks,
-    InputMessageItem,
-    MessageOutputItem,
+    AssistantTextEntry,
+    InputEntry,
     Runner,
     SummarizingContextPolicy,
     events,
@@ -72,13 +72,13 @@ async def main() -> None:
     seeded: list = []
     for i in range(30):
         seeded.append(
-            InputMessageItem(
+            InputEntry(
                 role="user",
                 content=f"User trivia round {i}: tell me a fact about pandas.",
             )
         )
         seeded.append(
-            MessageOutputItem(
+            AssistantTextEntry(
                 content=f"Fact #{i}: pandas eat about 12kg of bamboo daily."
             )
         )
@@ -91,8 +91,8 @@ async def main() -> None:
         archive_log.append(
             {
                 "session_id": ev.session_id,
-                "n_before": len(ev.items_before),
-                "n_after": len(ev.items_after),
+                "n_before": len(ev.entries_before),
+                "n_after": len(ev.entries_after),
                 "summary": ev.summary,
                 "reactive": ev.reactive,
             }

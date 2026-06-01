@@ -10,38 +10,38 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-from lovia.items import (
+from lovia.transcript import (
     FinishDelta,
-    Item,
-    ItemCompletedDelta,
-    ItemDelta,
+    TranscriptEntry,
+    EntryCompletedDelta,
+    ModelDelta,
     ReasoningDelta,
-    ReasoningItem,
+    ReasoningEntry,
     TextDelta,
     ToolCallDelta,
     UsageDelta,
-    items_to_chat_messages,
+    entries_to_messages,
 )
-from lovia.messages import AssistantMessage, ChatMessage, ToolCall, Usage
+from lovia.messages import AssistantTurn, Message, ToolCall, Usage
 from lovia.providers.base import ModelSettings
 
 
 class ScriptedProvider:
-    """Replay a list of pre-canned :class:`AssistantMessage` answers."""
+    """Replay a list of pre-canned :class:`AssistantTurn` answers."""
 
     name = "scripted"
     supports_json_schema = False
 
-    def __init__(self, script: list[AssistantMessage]) -> None:
-        # ``calls`` records the flattened ChatMessage form received on each
+    def __init__(self, script: list[AssistantTurn]) -> None:
+        # ``calls`` records the flattened Message form received on each
         # turn so tests can assert on what the agent actually saw. We accept
-        # the new Item-based interface but flatten internally for backwards
+        # the new TranscriptEntry-based interface but flatten internally for backwards
         # test ergonomics.
-        self.calls: list[list[ChatMessage]] = []
+        self.calls: list[list[Message]] = []
         self._script = list(script)
 
-    def _pop(self, input: list[Item]) -> AssistantMessage:
-        messages = items_to_chat_messages(input)
+    def _pop(self, input: list[TranscriptEntry]) -> AssistantTurn:
+        messages = entries_to_messages(input)
         self.calls.append([_copy(m) for m in messages])
         if not self._script:
             raise AssertionError("ScriptedProvider ran out of canned responses")
@@ -49,20 +49,20 @@ class ScriptedProvider:
 
     async def stream(
         self,
-        input: list[Item],
+        entries: list[TranscriptEntry],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[ItemDelta]:
-        msg = self._pop(input)
+    ) -> AsyncIterator[ModelDelta]:
+        msg = self._pop(entries)
         # Reasoning streams first (matches Anthropic ordering).
         reasoning = getattr(msg, "_scripted_reasoning_content", None)
         if reasoning:
             for ch in reasoning:
                 yield ReasoningDelta(text=ch)
-            yield ItemCompletedDelta(
-                ReasoningItem(content=reasoning, provider=self.name)
+            yield EntryCompletedDelta(
+                ReasoningEntry(content=reasoning, provider=self.name)
             )
         # Text streams character-by-character so consumers see multiple deltas.
         if msg.content:
@@ -77,8 +77,8 @@ class ScriptedProvider:
         yield FinishDelta(reason=msg.finish_reason)
 
 
-def text(content: str, *, reasoning: str | None = None) -> AssistantMessage:
-    msg = AssistantMessage(
+def text(content: str, *, reasoning: str | None = None) -> AssistantTurn:
+    msg = AssistantTurn(
         content=content,
         usage=Usage(input_tokens=1, output_tokens=1),
     )
@@ -89,8 +89,8 @@ def text(content: str, *, reasoning: str | None = None) -> AssistantMessage:
 
 def call(
     name: str, args: dict[str, Any], *, call_id: str | None = None
-) -> AssistantMessage:
-    return AssistantMessage(
+) -> AssistantTurn:
+    return AssistantTurn(
         content=None,
         tool_calls=[
             ToolCall(
@@ -101,8 +101,8 @@ def call(
     )
 
 
-def _copy(m: ChatMessage) -> ChatMessage:
-    return ChatMessage(
+def _copy(m: Message) -> Message:
+    return Message(
         role=m.role,
         content=m.content,
         tool_calls=list(m.tool_calls),

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lovia.items import Item, MessageOutputItem
+from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
 
 
@@ -56,7 +56,7 @@ async def test_list_orders_by_updated_at_desc() -> None:
 async def test_delete_removes_transcript_and_meta(tmp_path: Path) -> None:
     store = ChatStore.sqlite(tmp_path / "x.db")
     await store.upsert("s1")
-    msg: Item = MessageOutputItem(content="hi")
+    msg: TranscriptEntry = AssistantTextEntry(content="hi")
     await store.session.append("s1", [msg])
     assert (await store.session.load("s1")) != []
     assert (await store.get("s1")) is not None

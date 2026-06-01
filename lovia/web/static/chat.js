@@ -167,7 +167,7 @@ async function switchSession(id) {
     if (!res.ok) throw new Error(res.statusText);
     const data = await res.json();
     chatTitleEl.textContent = data.title || "New chat";
-    renderHistory(data.items || []);
+    renderHistory(data.entries || []);
   } catch (err) {
     transcript.innerHTML = `<div class="empty-state"><h2>Couldn't load chat</h2><p>${err.message ?? err}</p></div>`;
   }
@@ -195,7 +195,7 @@ newChatBtn.addEventListener("click", () => {
 
 // ------------------------------------------------ history rendering ----
 
-function renderHistory(items) {
+function renderHistory(entries) {
   transcript.innerHTML = "";
   state.bubble = null;
   state.body = null;
@@ -205,14 +205,14 @@ function renderHistory(items) {
   const pendingResults = new Map(); // call_id → result text
 
   // First pass: collect tool results.
-  for (const it of items) {
+  for (const it of entries) {
     if (it.type === "tool" && it.role === "tool" && it.tool_call_id) {
       pendingResults.set(it.tool_call_id, contentText(it.content));
     }
   }
 
   let currentBubble = null;
-  for (const it of items) {
+  for (const it of entries) {
     if (it.role === "user") {
       currentBubble = null;
       appendUserTurn(contentText(it.content));

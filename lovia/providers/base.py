@@ -4,14 +4,14 @@ A :class:`Provider` is a thin async interface over a streaming chat-completion
 LLM endpoint. The runner only ever talks to providers through this protocol,
 so adding support for a new vendor is a matter of writing one adapter class.
 
-Providers yield a stream of :class:`ItemDelta` values. Display deltas keep UI
-latency low, and :class:`ItemCompletedDelta` lets adapters hand the runner a
-final provider-native item when ids or metadata must be preserved.
+Providers yield a stream of :class:`ModelDelta` values. Display deltas keep UI
+latency low, and :class:`EntryCompletedDelta` lets adapters hand the runner a
+final provider-native transcript entry when ids or metadata must be preserved.
 
 Providers MAY additionally implement two optional methods used by
 :class:`~lovia.ContextPolicy`:
 
-* ``estimate_tokens(items) -> int`` — approximate prompt size; the framework
+* ``estimate_tokens(entries) -> int`` — approximate prompt size; the framework
   falls back to a chars/4 heuristic via :func:`estimate_tokens` below.
 * ``context_window(model) -> int | None`` — the maximum prompt+output tokens
   the named model accepts; ``None`` (or absent method) means "unknown".
@@ -27,7 +27,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol, runtime_checkable
 
-from ..items import Item, ItemDelta, item_to_dict
+from ..transcript import TranscriptEntry, ModelDelta, entry_to_dict
 
 
 @dataclass
@@ -60,11 +60,11 @@ def provider_options(settings: ModelSettings, *keys: str) -> dict[str, Any]:
 class Provider(Protocol):
     """The minimal interface every LLM backend must implement.
 
-    Providers consume :class:`Item` lists — the framework's vendor-neutral
-    transcript form — and emit :class:`ItemDelta` values as the model streams.
-    Chat-style adapters (OpenAI Chat, Anthropic) flatten incoming items to
+    Providers consume :class:`TranscriptEntry` lists — the framework's vendor-neutral
+    transcript form — and emit :class:`ModelDelta` values as the model streams.
+    Chat-style adapters (OpenAI Chat, Anthropic) flatten incoming entries to
     their wire ``messages`` shape internally while preserving richer state in
-    ``ItemCompletedDelta`` values when a provider exposes it.
+    ``EntryCompletedDelta`` values when a provider exposes it.
     """
 
     @property
@@ -78,12 +78,12 @@ class Provider(Protocol):
 
     def stream(
         self,
-        input: list[Item],
+        entries: list[TranscriptEntry],
         *,
         tools: list[dict[str, Any]] | None = None,
         response_format: dict[str, Any] | None = None,
         settings: ModelSettings | None = None,
-    ) -> AsyncIterator[ItemDelta]: ...
+    ) -> AsyncIterator[ModelDelta]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +91,10 @@ class Provider(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def estimate_tokens(provider: Any, items: list[Item]) -> int:
-    """Approximate the prompt size of ``items`` for ``provider``.
+def estimate_tokens(provider: Any, entries: list[TranscriptEntry]) -> int:
+    """Approximate the prompt size of ``entries`` for ``provider``.
 
-    If the provider exposes an ``estimate_tokens(items) -> int`` method we
+    If the provider exposes an ``estimate_tokens(entries) -> int`` method we
     defer to it (vendors who ship a tokenizer should override). Otherwise
     we fall back to a deliberately rough chars / 4 heuristic on the JSON
     serialization — enough to drive a "compact at 80% of the window"
@@ -102,10 +102,12 @@ def estimate_tokens(provider: Any, items: list[Item]) -> int:
     """
     fn = getattr(provider, "estimate_tokens", None)
     if callable(fn):
-        return int(fn(items))
-    # ``item_to_dict`` is cheap and already used by sessions; reusing it
+        return int(fn(entries))
+    # ``entry_to_dict`` is cheap and already used by sessions; reusing it
     # here keeps the estimate consistent with what gets persisted.
-    chars = sum(len(json.dumps(item_to_dict(it), ensure_ascii=False)) for it in items)
+    chars = sum(
+        len(json.dumps(entry_to_dict(it), ensure_ascii=False)) for it in entries
+    )
     # //4 is the textbook GPT heuristic; close enough for thresholding.
     return chars // 4
 

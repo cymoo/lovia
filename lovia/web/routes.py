@@ -21,7 +21,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from .. import events
 from ..agent import Agent
 from ..context_policy import ContextPolicy
-from ..items import items_to_chat_messages
+from ..transcript import entries_to_messages
 from ..runner import Runner
 from .approvals import ApprovalRegistry
 from .schemas import (
@@ -162,12 +162,15 @@ def build_router(
                 async for ev in handle:
                     if await request.is_disconnected():
                         break
+                    needs_approval = isinstance(ev, events.ApprovalRequired)
+                    if needs_approval:
+                        approvals.register(sid, ev)
                     payload = event_to_sse(ev)
                     if payload is not None:
                         yield payload
                     if isinstance(ev, events.RunCompleted):
                         final_output = ev.result.output
-                    if isinstance(ev, events.ApprovalRequired):
+                    if needs_approval:
                         await approvals.await_decision(sid, ev)
             finally:
                 await approvals.release(sid)
@@ -201,8 +204,8 @@ def build_router(
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
     async def get_session(session_id: str) -> SessionDetail:
         meta = await store.get(session_id)
-        items = await session.load(session_id)
-        msgs = items_to_chat_messages(items)
+        entries = await session.load(session_id)
+        msgs = entries_to_messages(entries)
         body = [
             MessageOut(
                 role=m.role,
@@ -229,9 +232,9 @@ def build_router(
                 agent=None,
                 created_at=_now(),
                 updated_at=_now(),
-                items=body,
+                entries=body,
             )
-        return SessionDetail(**meta.to_dict(), items=body)
+        return SessionDetail(**meta.to_dict(), entries=body)
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
     async def rename_session(session_id: str, req: RenameRequest) -> ChatSessionInfo:

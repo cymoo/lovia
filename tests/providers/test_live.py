@@ -11,13 +11,13 @@ from pydantic import BaseModel
 
 from lovia import (
     Agent,
-    ChatMessage,
-    FileBlock,
-    ImageBlock,
+    Message,
+    FilePart,
+    ImagePart,
     ModelSettings,
     RunResult,
     Runner,
-    TextBlock,
+    TextPart,
     user,
 )
 from lovia import events
@@ -25,7 +25,7 @@ from lovia.tools import tool
 
 pytestmark = pytest.mark.live_provider
 
-LiveInput = str | list[ChatMessage]
+LiveInput = str | list[Message]
 
 _ONE_PIXEL_PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO"
@@ -127,19 +127,19 @@ def _assert_text_result(result: RunResult) -> str:
     return text
 
 
-def _image_input(prompt: str) -> list[ChatMessage]:
+def _image_input(prompt: str) -> list[Message]:
     return [
         user(
             [
-                TextBlock(prompt),
-                ImageBlock(data=_ONE_PIXEL_PNG, mime_type="image/png", detail="low"),
+                TextPart(prompt),
+                ImagePart(data=_ONE_PIXEL_PNG, mime_type="image/png", detail="low"),
             ]
         )
     ]
 
 
-def _file_input(prompt: str, file: FileBlock) -> list[ChatMessage]:
-    return [user([TextBlock(prompt), file])]
+def _file_input(prompt: str, file: FilePart) -> list[Message]:
+    return [user([TextPart(prompt), file])]
 
 
 def _minimal_pdf_bytes(marker: str) -> bytes:
@@ -298,7 +298,7 @@ async def test_openai_chat_live_inline_file_input() -> None:
         agent,
         _file_input(
             "Answer with only the exact marker token in the attached text file.",
-            FileBlock.from_bytes(
+            FilePart.from_bytes(
                 f"marker: {marker}\n".encode(),
                 mime_type="text/plain",
                 filename="marker.txt",
@@ -435,7 +435,7 @@ async def test_anthropic_live_text_file_input() -> None:
         agent,
         _file_input(
             "Answer with only the exact marker token in the attached text file.",
-            FileBlock.from_bytes(
+            FilePart.from_bytes(
                 f"marker: {marker}\n".encode(),
                 mime_type="text/plain",
                 filename="marker.txt",
@@ -461,7 +461,7 @@ async def test_anthropic_live_pdf_file_input() -> None:
         agent,
         _file_input(
             "Answer with only the exact marker token in the attached PDF.",
-            FileBlock.from_bytes(
+            FilePart.from_bytes(
                 _minimal_pdf_bytes(marker),
                 mime_type="application/pdf",
                 filename="marker.pdf",

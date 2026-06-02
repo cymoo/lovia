@@ -57,5 +57,9 @@ class RunContext(Generic[TContext]):
 
     @property
     def messages(self) -> list[Message]:
-        """Lossy chat-format view derived from :attr:`entries` on each access."""
+        """Read-only chat-format view derived from :attr:`entries` on each access.
+
+        A new list is returned every time; mutations to it are silently
+        discarded. To modify the transcript, append to :attr:`entries` instead.
+        """
         return entries_to_messages(self.entries)

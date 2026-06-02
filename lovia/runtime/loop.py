@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
+
+if TYPE_CHECKING:
+    from ..messages import AssistantTurn, Message
 
 from .. import events
 from .model_turn import stream_model_turn

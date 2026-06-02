@@ -12,7 +12,7 @@ from .. import events
 from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..handoff import _HandoffSignal
-from ..messages import Message, ToolCall, tool_message
+from ..messages import ToolCall
 from ..output import FINAL_OUTPUT_TOOL_NAME, StructuredOutput, parse_structured_output
 from ..reliability import CancelToken, RunBudget
 from ..run_context import RunContext
@@ -40,7 +40,6 @@ class ToolCallProcessor:
         run_ctx: RunContext[Any],
         tracer: Tracer,
         structured_output: StructuredOutput | None,
-        transcript: list[Message],
         entries: list[TranscriptEntry],
         state: TurnState,
     ) -> AsyncIterator[events.Event]:
@@ -56,14 +55,12 @@ class ToolCallProcessor:
             state.final_via_tool = parse_structured_output(
                 structured_output, call.arguments
             )
-            transcript.append(tool_message(call.id, "ok"))
             entries.append(ToolResultEntry(call_id=call.id, output="ok"))
             return
 
         tool = tools_by_name.get(call.name)
         if tool is None:
             err = f"Tool {call.name!r} is not available."
-            transcript.append(tool_message(call.id, err))
             entries.append(ToolResultEntry(call_id=call.id, output=err, is_error=True))
             yield events.ToolCallCompleted(call=call, result=err, is_error=True)
             return
@@ -79,7 +76,6 @@ class ToolCallProcessor:
             approved = self.approvals.register(call.id).result()
             if not approved:
                 denial = f"Tool {call.name} was not approved."
-                transcript.append(tool_message(call.id, denial))
                 entries.append(
                     ToolResultEntry(call_id=call.id, output=denial, is_error=True)
                 )
@@ -126,7 +122,6 @@ class ToolCallProcessor:
                 tool, result, run_ctx, default=agent.tool_result_renderer
             )
 
-        transcript.append(tool_message(call.id, result_text))
         entries.append(
             ToolResultEntry(
                 call_id=call.id,

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from .messages import Message, Usage
+from .transcript import TranscriptEntry, entries_to_messages
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -38,8 +39,9 @@ class RunContext(Generic[TContext]):
     Attributes:
         context: User-supplied dependency object (whatever was passed via
             ``Runner.run(..., context=...)``). ``None`` when not supplied.
-        messages: Live, mutable transcript. Mutating it from a tool affects
-            subsequent model turns — usually you want to read, not write.
+        entries: Live transcript log. This is the canonical record — prefer
+            reading over writing. Appending directly affects subsequent model
+            turns.
         agent: The currently active agent (changes across handoffs).
         usage: Cumulative token usage for this run.
         session_id: Stable conversation key when ``session=`` was passed to
@@ -48,7 +50,16 @@ class RunContext(Generic[TContext]):
     """
 
     context: TContext | None
-    messages: list[Message]
+    entries: list[TranscriptEntry]
     agent: "Agent"
     usage: Usage = field(default_factory=Usage)
     session_id: str | None = None
+
+    @property
+    def messages(self) -> list[Message]:
+        """Read-only chat-format view derived from :attr:`entries` on each access.
+
+        A new list is returned every time; mutations to it are silently
+        discarded. To modify the transcript, append to :attr:`entries` instead.
+        """
+        return entries_to_messages(self.entries)

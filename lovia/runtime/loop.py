@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
+
+if TYPE_CHECKING:
+    from ..messages import AssistantTurn, Message
 
 from .. import events
 from .model_turn import stream_model_turn
@@ -55,13 +58,7 @@ from ..transcript import (
     entries_to_messages,
 )
 from ..transcript import InputEntry as _InputEntry
-from ..messages import (
-    AssistantTurn,
-    Message,
-    Usage,
-    system,
-    user,
-)
+from ..messages import Usage, system
 from ..output import (
     FINAL_OUTPUT_TOOL_NAME,
     DefaultOutputRepair,
@@ -83,7 +80,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _BootstrapState:
-    transcript: list[Message]
     entries_log: list[TranscriptEntry]
     run_ctx: RunContext[Any]
     mcp_tools: list[Tool]
@@ -188,7 +184,6 @@ class RunLoop:
         run_span: Any,
     ) -> AsyncIterator[events.Event]:
         bootstrap = await self._bootstrap_phase(agent)
-        transcript = bootstrap.transcript
         entries_log = bootstrap.entries_log
         run_ctx = bootstrap.run_ctx
         mcp_tools = bootstrap.mcp_tools
@@ -216,7 +211,9 @@ class RunLoop:
             # Skip on resume — they already ran on the original input.
             if agent.input_guardrails and self.resume_from is None:
                 await check_input_guardrails(
-                    agent.input_guardrails, transcript, run_ctx
+                    agent.input_guardrails,
+                    entries_to_messages(entries_log),
+                    run_ctx,
                 )
 
             output: Any = None
@@ -270,12 +267,11 @@ class RunLoop:
                         entries_before,
                         new_entries,
                         reactive=False,
-                        transcript=transcript,
                         entries_log=entries_log,
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
-                    # _on_context_compacted mutates entries_log/transcript in place
+                    # _on_context_compacted mutates entries_log in place
                 # Reactive path: provider may report ContextOverflowError mid-stream.
                 # Catch it, ask the policy for its more aggressive compaction,
                 # then retry the turn exactly once. A second overflow propagates.
@@ -315,7 +311,6 @@ class RunLoop:
                         entries_before,
                         new_entries,
                         reactive=True,
-                        transcript=transcript,
                         entries_log=entries_log,
                     ):
                         yield ev
@@ -350,8 +345,6 @@ class RunLoop:
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 turn_entries = state.turn_entries or []
-                msg = assistant.to_message()
-                transcript.append(msg)
                 entries_log.extend(turn_entries)
                 ev_msg = events.MessageCompleted(entries=turn_entries)
                 yield ev_msg
@@ -377,7 +370,6 @@ class RunLoop:
                                 exc.output_type_name,
                                 truncate_repr(str(exc)),
                             )
-                            transcript.append(user(repair_prompt))
                             entries_log.append(
                                 _InputEntry(role="user", content=repair_prompt)
                             )
@@ -405,7 +397,6 @@ class RunLoop:
                         run_ctx=run_ctx,
                         tracer=tracer,
                         structured_output=structured_output,
-                        transcript=transcript,
                         entries=entries_log,
                         state=state,
                     ):
@@ -437,7 +428,6 @@ class RunLoop:
                         state,
                         run_ctx,
                         tracer,
-                        transcript,
                         entries_log,
                         mcp_tools,
                         mcp_cleanup,
@@ -482,11 +472,9 @@ class RunLoop:
             entries_log: list[TranscriptEntry] = list(self.resume_from.entries)
         else:
             entries_log = await self._build_initial_entries(agent)
-        transcript = entries_to_messages(entries_log)
-
         run_ctx = RunContext(
             context=self.context,
-            messages=transcript,
+            entries=entries_log,
             agent=agent,
             session_id=self.session_id,
         )
@@ -513,7 +501,6 @@ class RunLoop:
             raise
         turns = self.resume_from.turns if self.resume_from is not None else 0
         return _BootstrapState(
-            transcript=transcript,
             entries_log=entries_log,
             run_ctx=run_ctx,
             mcp_tools=mcp_tools,
@@ -529,7 +516,6 @@ class RunLoop:
         state: TurnState,
         run_ctx: RunContext[Any],
         tracer: Tracer,
-        transcript: list[Message],
         entries_log: list[TranscriptEntry],
         mcp_tools: list[Tool],
         cleanup: list[Any],
@@ -552,10 +538,9 @@ class RunLoop:
             tools_by_name = self._collect_tools(
                 agent, mcp_tools, sandbox_tools, structured_output
             )
-            transcript[:] = await self._reset_for_handoff(
-                transcript, agent, state.handoff_signal.handoff
+            entries_log[:] = await self._reset_for_handoff(
+                entries_log, agent, state.handoff_signal.handoff
             )
-            entries_log[:] = messages_to_entries(transcript)
         return (
             agent,
             structured_output,
@@ -644,10 +629,10 @@ class RunLoop:
 
     async def _reset_for_handoff(
         self,
-        transcript: list[Message],
+        entries: list[TranscriptEntry],
         agent: Agent,
         handoff: Handoff | None,
-    ) -> list[Message]:
+    ) -> list[TranscriptEntry]:
         """Swap the leading system message when an agent handoff occurs.
 
         If the originating :class:`Handoff` declares an ``input_filter``, it is
@@ -655,15 +640,15 @@ class RunLoop:
         before the new system prompt is prepended.
         """
         new_system = await self._system_prompt(agent)
+        body = entries_to_messages(entries)
         # Drop the leading system message if present; preserve the rest.
-        body: list[Message] = list(transcript)
         if body and body[0].role == "system":
             body = body[1:]
         if handoff is not None and handoff.input_filter is not None:
             body = list(handoff.input_filter(body))
         if new_system:
-            return [system(new_system), *body]
-        return body
+            body = [system(new_system), *body]
+        return messages_to_entries(body)
 
     def _collect_tools(
         self,
@@ -806,25 +791,22 @@ class RunLoop:
         entries_after: list[TranscriptEntry],
         *,
         reactive: bool,
-        transcript: list[Message],
         entries_log: list[TranscriptEntry],
     ) -> AsyncIterator[events.Event]:
         """Persist a compacted transcript and emit ``ContextCompacted``.
 
-        Mutates ``entries_log`` and ``transcript`` in place so the existing
-        loop continues to operate on the rewritten conversation. Tries to
-        recover a summary string by inspecting the new head entry — the
+        Mutates ``entries_log`` in place so the existing loop continues to
+        operate on the rewritten conversation. Tries to recover a summary
+        string by inspecting the new head entry — the
         :class:`SummarizingContextPolicy` always emits a single
         :class:`InputEntry` with the agreed prefix, so we strip the
         marker rather than asking the policy to return a richer object.
         """
         snapshot_before = list(entries_before)
         entries_log[:] = entries_after
-        # Keep the wire-format mirror in lockstep.
-        transcript[:] = entries_to_messages(entries_log)
         # Re-prepend the system prompt when compaction returns a transcript
         # shape that omitted it.
-        await self._reinstate_system_prompt(agent, transcript)
+        await self._reinstate_system_prompt(agent, entries_log)
         # Persist the rewritten transcript so a crash + restart picks up
         # the compacted version (the whole point of permanent compaction).
         if self.session is not None and self.session_id is not None:
@@ -840,19 +822,22 @@ class RunLoop:
         yield ev
 
     async def _reinstate_system_prompt(
-        self, agent: Agent, transcript: list[Message]
+        self, agent: Agent, entries_log: list[TranscriptEntry]
     ) -> None:
-        """Ensure the agent's system prompt is the first message after a rewrite.
+        """Ensure the agent's system prompt is the first entry after a rewrite.
 
-        Compaction operates on ``entries_log`` which may or may not start with
-        a system message; provider adapters expect one, so we re-render and
-        prepend if missing.
+        Compaction may produce a transcript without a leading system message;
+        provider adapters expect one, so we re-render and prepend if missing.
         """
-        if transcript and transcript[0].role == "system":
+        if (
+            entries_log
+            and isinstance(entries_log[0], _InputEntry)
+            and entries_log[0].role == "system"
+        ):
             return
         system_text = await self._system_prompt(agent)
         if system_text:
-            transcript.insert(0, system(system_text))
+            entries_log.insert(0, _InputEntry(role="system", content=system_text))
 
     async def _emit(self, event: events.Event, agent: Agent) -> None:
         # Hooks-only dispatch. Used for events the loop itself yields elsewhere.

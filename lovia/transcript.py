@@ -26,7 +26,6 @@ from typing import Any, Literal, Union
 from .content import ContentPart, FilePart, ImagePart, TextPart
 from .messages import AssistantTurn, Message, ToolCall, Usage
 
-
 # ---------------------------------------------------------------------------
 # Transcript entries
 # ---------------------------------------------------------------------------
@@ -177,7 +176,54 @@ class FinishDelta:
 
 @dataclass
 class EntryCompletedDelta:
-    """A provider-native final transcript entry with ids/metadata preserved."""
+    """A provider-authoritative transcript entry that has finished streaming.
+
+    Most providers stream incremental deltas (TextDelta, ReasoningDelta,
+    ToolCallDelta) and the runner reconstructs transcript entries from those
+    fragments at the end of the turn.
+
+    Some providers, however, expose additional information only when a
+    content block is fully completed, such as:
+
+    - provider-assigned ids
+    - signatures
+    - encrypted reasoning state
+    - provider-specific metadata
+    - finalized tool-call payloads
+
+    Such information cannot always be reconstructed losslessly from deltas
+    alone. In those cases the provider emits EntryCompletedDelta containing
+    the exact TranscriptEntry that should appear in the transcript.
+
+    The runner treats this entry as authoritative. When a completed entry of
+    a given type (ReasoningEntry, AssistantTextEntry, ToolCallEntry, etc.)
+    is present, it takes precedence over entries reconstructed from streamed
+    deltas.
+
+    Note:
+        Despite the name, this is not an incremental delta. It is a stream
+        event indicating that a transcript entry has been fully completed and
+        finalized by the provider.
+
+    Example:
+        Anthropic thinking streams:
+
+            ReasoningDelta("I")
+            ReasoningDelta(" am")
+            ReasoningDelta(" thinking")
+
+        can later be finalized as:
+
+            EntryCompletedDelta(
+                ReasoningEntry(
+                    content="I am thinking",
+                    provider="anthropic",
+                    metadata={"signature": "..."},
+                )
+            )
+
+        allowing provider-specific metadata to be preserved in the transcript.
+    """
 
     entry: TranscriptEntry
     type: Literal["entry_completed_delta"] = "entry_completed_delta"

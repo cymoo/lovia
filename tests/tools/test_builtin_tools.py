@@ -17,7 +17,7 @@ from lovia.run_context import RunContext
 
 
 def _ctx() -> RunContext:
-    return RunContext(context=None, messages=[], agent=None)  # type: ignore[arg-type]
+    return RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------- http

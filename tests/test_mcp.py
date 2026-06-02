@@ -49,7 +49,7 @@ async def test_mcp_tools_capture_names_and_apply_policies() -> None:
     assert tools[0].retries == 3
     assert tools[0].timeout == 5
 
-    ctx = RunContext(context=None, messages=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
     first = await tools[0].invoke({"x": "a"}, ctx)
     second = await tools[1].invoke({"x": "b"}, ctx)
 

@@ -17,7 +17,7 @@ from tests.scripted_provider import ScriptedProvider
 def _ctx() -> RunContext[None]:
     return RunContext(
         context=None,
-        messages=[],
+        entries=[],
         agent=Agent(name="test", model=ScriptedProvider([])),
     )
 

@@ -480,72 +480,115 @@ def safe_window(
     Used by :class:`~lovia.ContextPolicy` implementations to drop a chunk
     from the middle of a transcript without leaving orphan
     :class:`ToolResultEntry`\\ s whose corresponding :class:`ToolCallEntry`
-    was sliced away — providers reject such payloads (OpenAI: "tool message
-    refers to unknown tool_call_id"; Anthropic: missing ``tool_use``).
+    was sliced away.
 
-    If a kept output's call lives inside the dropped middle, the cut is
-    walked backward until the call is included (i.e. the tail grows). If
-    the matching call cannot be found anywhere, the orphan output is
-    dropped instead. ``head`` entries are always preserved as-is.
+    Providers reject such payloads:
+
+    - OpenAI: tool message refers to unknown tool_call_id
+    - Anthropic: missing tool_use block
+
+    If a retained ToolResultEntry references a ToolCallEntry that falls
+    inside the dropped middle region, the tail window is expanded leftward
+    until the ToolCallEntry is included.
+
+    Multiple expansion passes may be required. Example:
+
+        Call(B)
+        Call(A)
+        Result(B)
+        Result(A)
+
+    If only ``Result(A)`` initially falls inside the tail, expanding to
+    include ``Call(A)`` also exposes ``Result(B)``, which then requires a
+    second expansion to include ``Call(B)``.
+
+    If a retained ToolResultEntry refers to a call that cannot be found
+    anywhere outside the preserved head, the orphan result is dropped
+    instead.
 
     Edge cases:
-    * ``tail <= 0``         → returns ``entries[:head]`` (drop everything else)
-    * ``head + tail >= n``  → returns ``list(entries)`` (nothing to drop)
+        tail <= 0
+            Return entries[:head].
+
+        head + tail >= len(entries)
+            Return the entire transcript unchanged.
     """
     n = len(entries)
+
     if tail <= 0:
         return list(entries[:head])
-    if head < 0:
-        head = 0
+
+    head = max(head, 0)
+
     if head + tail >= n:
         return list(entries)
 
     head_entries = list(entries[:head])
-    head_call_ids: set[str] = {
-        it.call_id for it in head_entries if isinstance(it, ToolCallEntry)
+
+    # Tool calls already visible because they are preserved in the head.
+    head_call_ids = {
+        entry.call_id for entry in head_entries if isinstance(entry, ToolCallEntry)
     }
 
     cut = n - tail
-    # Iterate to a fixed point: each expansion of `cut` may pull in more
-    # ToolResultEntrys whose calls are still earlier. In practice this
-    # converges in 1–2 passes because tool calls don't nest.
-    for _ in range(n):
-        tail_slice = entries[cut:]
+
+    # Expanding the tail may reveal additional ToolResultEntry instances
+    # whose ToolCallEntry lives even earlier in the transcript. Repeat
+    # until no orphan tool results remain.
+    while True:
+        tail_entries = entries[cut:]
+
         tail_call_ids = {
-            it.call_id for it in tail_slice if isinstance(it, ToolCallEntry)
+            entry.call_id for entry in tail_entries if isinstance(entry, ToolCallEntry)
         }
-        orphans = {
-            it.call_id
-            for it in tail_slice
-            if isinstance(it, ToolResultEntry)
-            and it.call_id not in tail_call_ids
-            and it.call_id not in head_call_ids
+
+        orphan_call_ids = {
+            entry.call_id
+            for entry in tail_entries
+            if (
+                isinstance(entry, ToolResultEntry)
+                and entry.call_id not in tail_call_ids
+                and entry.call_id not in head_call_ids
+            )
         }
-        if not orphans:
+
+        if not orphan_call_ids:
             break
+
         new_cut = cut
+
+        # Walk left looking for the missing ToolCallEntry instances.
         for i in range(cut - 1, head - 1, -1):
-            it = entries[i]
-            if isinstance(it, ToolCallEntry) and it.call_id in orphans:
+            entry = entries[i]
+
+            if isinstance(entry, ToolCallEntry) and entry.call_id in orphan_call_ids:
                 new_cut = i
-                orphans.discard(it.call_id)
-                if not orphans:
+                orphan_call_ids.discard(entry.call_id)
+
+                if not orphan_call_ids:
                     break
+
         if new_cut == cut:
-            # Remaining orphans have no matching call anywhere reachable;
-            # drop those outputs to keep the payload valid.
-            tail_slice = [
-                it
-                for it in tail_slice
-                if not (isinstance(it, ToolResultEntry) and it.call_id in orphans)
+            # Remaining orphan results reference ToolCallEntry instances
+            # that cannot be found anywhere reachable. Drop those results
+            # to keep the transcript valid for provider replay.
+            tail_entries = [
+                entry
+                for entry in tail_entries
+                if not (
+                    isinstance(entry, ToolResultEntry)
+                    and entry.call_id in orphan_call_ids
+                )
             ]
-            return head_entries + tail_slice
+            return head_entries + tail_entries
+
         cut = new_cut
 
-    # If the expansion swallowed the head boundary, fall back to the
-    # whole transcript rather than emit duplicates.
+    # If expansion consumed the gap between head and tail, returning the
+    # full transcript is simpler than trying to merge overlapping slices.
     if cut <= head:
         return list(entries)
+
     return head_entries + list(entries[cut:])
 
 

@@ -18,8 +18,9 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, SummarizingContextPolicy, tool
+from lovia import Agent, SummarizingContextPolicy, tool, enable_logging
 from lovia.sandbox.sandbox import Sandbox
+from lovia.tracing import ConsoleTracer
 from lovia.web import serve
 
 load_dotenv()
@@ -38,6 +39,8 @@ async def send_email(to: str, subject: str, body: str) -> str:
 
 
 def main() -> None:
+    enable_logging()
+
     agent = Agent(
         name="lovia",
         instructions=(
@@ -47,6 +50,7 @@ def main() -> None:
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[add, send_email],
         sandbox=Sandbox.local(".", mode="trusted"),
+        tracer=ConsoleTracer(),
     )
     # Default policy: when the prompt approaches the model's context
     # window, summarize older turns and keep the last 10. ``max_tokens=None``

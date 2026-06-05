@@ -278,6 +278,88 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* reasoning / chain-of-thought */
+.reasoning {
+  margin: 0 0 10px;
+  background: linear-gradient(135deg, #faf9f6 0%, #f7f5f0 100%);
+  border: 1px solid #e8e4db;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.reasoning[open] {
+  border-color: #d4cdb8;
+  box-shadow: 0 1px 4px rgba(140, 120, 60, 0.06);
+}
+.reasoning summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: #8b7e6a;
+  font-weight: 500;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  transition: color 0.15s, background 0.15s;
+}
+.reasoning summary::-webkit-details-marker { display: none; }
+.reasoning summary:hover { color: #6b5e4a; background: rgba(140, 120, 60, 0.04); }
+.reasoning-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.reasoning-label {
+  flex: 1;
+}
+/* Animated spinner for active thinking (streaming only) */
+.reasoning:not(.done)[open] .reasoning-label::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 2px solid #c8b88a;
+  border-top-color: transparent;
+  animation: reasoning-spin 0.8s linear infinite;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+/* Completed reasoning — no spinner on expand */
+.reasoning.done .reasoning-label {
+  color: #9b8e78;
+}
+@keyframes reasoning-spin {
+  to { transform: rotate(360deg); }
+}
+.reasoning-content {
+  padding: 10px 14px 12px;
+  border-top: 1px solid #ebe6d8;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.68;
+  color: #6b5e4a;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.55);
+}
+/* Subtle fade-in when reasoning panel opens */
+.reasoning[open] .reasoning-content {
+  animation: reasoning-fade-in 0.25s ease;
+}
+@keyframes reasoning-fade-in {
+  from { opacity: 0.5; transform: translateY(-4px); }
+  to   { opacity: 1;   transform: translateY(0); }
+}
+
 /* tool cards */
 .tool {
   margin: 8px 0;

@@ -210,6 +210,7 @@ def build_router(
             MessageOut(
                 role=m.role,
                 content=m.text or m.content,
+                reasoning=m.reasoning,
                 tool_call_id=m.tool_call_id,
                 name=m.name,
                 tool_calls=[

@@ -23,6 +23,10 @@ const state = {
   body: null,
   rawText: "",       // accumulated markdown text for the current body
   toolNodes: new Map(),
+  reasoningText: "", // accumulated chain-of-thought text
+  reasoningNode: null,
+  reasoningStart: 0, // timestamp when reasoning actually started
+  reasoningEnd: 0,   // timestamp of last reasoning delta
 };
 
 // --------------------------------------------------------------- markdown -
@@ -219,6 +223,19 @@ function renderHistory(entries) {
     } else if (it.role === "assistant") {
       if (!currentBubble) currentBubble = startAssistantTurn().bubble;
       const text = contentText(it.content);
+      // Render reasoning first (before the body text).
+      if (it.reasoning) {
+        const details = document.createElement("details");
+        details.className = "reasoning done";
+        const summary = document.createElement("summary");
+        summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Reasoning</span>';
+        details.appendChild(summary);
+        const reasoningContent = document.createElement("div");
+        reasoningContent.className = "reasoning-content";
+        reasoningContent.textContent = it.reasoning;
+        details.appendChild(reasoningContent);
+        currentBubble.appendChild(details);
+      }
       if (text) {
         const body = document.createElement("div");
         body.className = "body";
@@ -308,6 +325,10 @@ function startAssistantTurn() {
   state.body = null;
   state.rawText = "";
   state.toolNodes.clear();
+  state.reasoningText = "";
+  state.reasoningNode = null;
+  state.reasoningStart = 0;
+  state.reasoningEnd = 0;
   scrollDown();
   return { node, bubble: state.bubble };
 }
@@ -321,6 +342,39 @@ function ensureBody() {
     state.rawText = "";
   }
   return state.body;
+}
+
+function ensureReasoning() {
+  if (!state.reasoningNode && state.bubble) {
+    const details = document.createElement("details");
+    details.className = "reasoning";
+    details.open = true; // expanded during streaming
+    const summary = document.createElement("summary");
+    summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Thinking…</span>';
+    details.appendChild(summary);
+    const content = document.createElement("div");
+    content.className = "reasoning-content";
+    details.appendChild(content);
+    // Insert at the top of the bubble, before body and tools.
+    state.bubble.insertBefore(details, state.bubble.firstChild);
+    state.reasoningNode = details;
+  }
+  return state.reasoningNode;
+}
+
+function finalizeReasoning() {
+  /* Collapse the reasoning panel and stamp it with a duration label.
+     Called as soon as reasoning stops — i.e. when text or tool calls
+     begin — so the user sees the timing immediately, not after the
+     entire turn finishes. */
+  if (!state.reasoningNode || !state.reasoningText) return;
+  state.reasoningNode.open = false;
+  state.reasoningNode.classList.add("done");
+  const end = state.reasoningEnd || Date.now();
+  const start = state.reasoningStart || end;
+  const elapsed = ((end - start) / 1000).toFixed(1);
+  const label = state.reasoningNode.querySelector(".reasoning-label");
+  if (label) label.textContent = `Thought for ${elapsed}s`;
 }
 
 function buildToolNode(call) {
@@ -496,9 +550,18 @@ async function handleEvent({ event, data }) {
       state.sessionId = data.session_id;
       break;
     case "text_delta":
+      finalizeReasoning();
       ensureBody();
       state.rawText += data.delta;
       scheduleRender();
+      scrollDown();
+      break;
+    case "reasoning_delta":
+      ensureReasoning();
+      if (!state.reasoningStart) state.reasoningStart = Date.now();
+      state.reasoningEnd = Date.now();
+      state.reasoningText += data.delta;
+      state.reasoningNode.querySelector(".reasoning-content").textContent = state.reasoningText;
       scrollDown();
       break;
     case "message_completed":
@@ -507,8 +570,24 @@ async function handleEvent({ event, data }) {
       if (state.body && state.rawText) flushRender();
       state.body = null;
       state.rawText = "";
+      // If reasoning arrived only in the completed message (no deltas),
+      // render and finalize it now.
+      if (!state.reasoningNode && data.message?.reasoning && state.bubble) {
+        ensureReasoning();
+        state.reasoningText = data.message.reasoning;
+        state.reasoningNode.querySelector(".reasoning-content").textContent = state.reasoningText;
+        state.reasoningEnd = Date.now();
+      }
+      // Safety net: if reasoning still hasnʼt been finalized (e.g. no
+      // text_delta or tool_call followed it), finalize now.
+      finalizeReasoning();
+      state.reasoningNode = null;
+      state.reasoningText = "";
+      state.reasoningStart = 0;
+      state.reasoningEnd = 0;
       break;
     case "tool_call":
+      finalizeReasoning();
       appendTool(data);
       break;
     case "tool_result":

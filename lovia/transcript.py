@@ -395,6 +395,8 @@ def messages_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
             content = m.content if m.content is not None else ""
             out.append(InputEntry(role=m.role, content=content))  # type: ignore[arg-type]
         elif m.role == "assistant":
+            if m.reasoning:
+                out.append(ReasoningEntry(content=m.reasoning))
             if m.content:
                 # ``content`` may be a list[ContentPart]; flatten to text for
                 # the AssistantTextEntry (richer shapes are 9d territory).
@@ -423,26 +425,29 @@ def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
     """Inverse of :func:`messages_to_entries`.
 
     Groups consecutive assistant-side text/tool-call entries into one
-    :class:`Message`. Reasoning entries are intentionally skipped because
-    chat messages are a lossy, provider-neutral view.
+    :class:`Message`. Reasoning entries are collected into the message
+    so downstream renderers (e.g. the web UI) can display them.
     """
     out: list[Message] = []
     # Buffer for the in-progress assistant message.
     pending_content: str | None = None
+    pending_reasoning: str | None = None
     pending_calls: list[ToolCall] = []
 
     def flush_assistant() -> None:
-        nonlocal pending_content, pending_calls
-        if pending_content is None and not pending_calls:
+        nonlocal pending_content, pending_reasoning, pending_calls
+        if pending_content is None and pending_reasoning is None and not pending_calls:
             return
         out.append(
             Message(
                 role="assistant",
                 content=pending_content,
+                reasoning=pending_reasoning,
                 tool_calls=pending_calls,
             )
         )
         pending_content = None
+        pending_reasoning = None
         pending_calls = []
 
     for it in entries:
@@ -450,7 +455,7 @@ def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
             flush_assistant()
             out.append(Message(role=it.role, content=it.content))
         elif isinstance(it, ReasoningEntry):
-            continue
+            pending_reasoning = (pending_reasoning or "") + it.content
         elif isinstance(it, AssistantTextEntry):
             pending_content = it.content
         elif isinstance(it, ToolCallEntry):

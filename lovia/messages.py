@@ -43,6 +43,7 @@ class Message:
 
     role: Role
     content: "str | list[ContentPart] | None" = None
+    reasoning: str | None = None  # chain-of-thought text for the web UI
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None  # optional: agent/tool display name

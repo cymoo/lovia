@@ -42,6 +42,7 @@ class ApprovalRequest(BaseModel):
 class MessageOut(BaseModel):
     role: str
     content: Any
+    reasoning: str | None = None
     tool_call_id: str | None = None
     name: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)

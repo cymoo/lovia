@@ -87,7 +87,7 @@ from .run_context import RunContext
 from .runtime.result import RunHandle, RunResult
 from .runner import Runner
 from .session import Session
-from .skills import Skill, SkillCatalog
+from .skills import LocalDirSkillSource, Skill, SkillMetadata, SkillSource, Skills, SkillsError
 from .memory import Memory
 from .transcript import (
     FinishDelta,
@@ -224,7 +224,11 @@ __all__ = [
     "Runner",
     "Session",
     "Skill",
-    "SkillCatalog",
+    "SkillMetadata",
+    "SkillSource",
+    "Skills",
+    "SkillsError",
+    "LocalDirSkillSource",
     "Summarizer",
     "SummarizingContextPolicy",
     "TextPart",

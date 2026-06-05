@@ -1,51 +1,108 @@
-"""File-system skills.
+"""Skills — reusable instruction bundles with progressive disclosure.
 
-Each subdirectory under ``./skills`` with a ``SKILL.md`` (with YAML
-frontmatter ``name`` + ``description``) becomes an entry the model can lazily
-load via the ``load_skill`` tool. The catalog is rendered into the system
-prompt so the model knows what's available.
+This example uses the ``examples/skills/refund-policy`` directory, which
+contains a realistic skill with:
+
+* ``SKILL.md`` — YAML frontmatter + markdown instructions (Level 2)
+* ``references/international-orders.md`` — supplementary docs (Level 3)
+* ``scripts/calculate_refund.py`` — executable script
+* ``assets/refund-email.txt`` — email template
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 from pathlib import Path
-
-from lovia import Agent, Runner
-from lovia.skills import SkillCatalog
 
 from dotenv import load_dotenv
 
+from lovia import Agent, Runner, Skills
+from lovia.events import (
+    TextDelta,
+    ReasoningDelta,
+    ToolCallStarted,
+    ToolCallCompleted,
+    RunStarted,
+    RunCompleted,
+)
+
 load_dotenv()
 
-SKILL_BODY = """---
-name: refund-policy
-description: Company policy on issuing refunds.
----
-# Refund Policy
-
-- Full refunds within 14 days.
-- Pro-rated refunds otherwise.
-- Always be polite.
-"""
+SKILLS_DIR = Path(__file__).parent / "skills"
 
 
 async def main() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "skills"
-        (root / "refund-policy").mkdir(parents=True)
-        (root / "refund-policy" / "SKILL.md").write_text(SKILL_BODY)
+    skills = Skills.from_dir(SKILLS_DIR)
+    print(f"Skills loaded: {skills.instructions().splitlines()[1]}")
 
-        agent = Agent(
-            name="SupportBot",
-            instructions="Help the customer. Load skills when relevant.",
-            model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-            skills=SkillCatalog.from_dir(root),
-        )
-        result = await Runner.run(agent, "Can I get a refund 5 days after purchase?")
-        print(result.output)
+    # Provide a shell tool so the model can execute skill scripts.
+    from lovia.tools.shell import shell
+
+    agent = Agent(
+        name="SupportBot",
+        instructions=(
+            "You are a customer support agent. "
+            "Use the skills system to access company policies. "
+            "Call `load_skill` when a policy is relevant, "
+            "and `read_skill_file` for supplementary details. "
+            "Use the `shell` tool to run scripts when needed."
+        ),
+        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        tools=[shell()],
+        skills=skills,
+    )
+
+    print("=" * 60)
+    print("SupportBot — Skills Demo")
+    print("=" * 60)
+
+    handle = Runner.stream(
+        agent,
+        "A customer from Germany bought a laptop 37 days ago for $1299 and "
+        "wants a refund. Use the calculate_refund script to compute the exact "
+        "refund amount, then check the international orders reference for any "
+        "EU-specific rules.",
+    )
+
+    in_reasoning = False
+
+    async for event in handle:
+        if isinstance(event, RunStarted):
+            print(f"\n🚀 Agent: {event.agent.name}")
+
+        elif isinstance(event, ReasoningDelta):
+            if not in_reasoning:
+                print("\n💭 ", end="", flush=True)
+                in_reasoning = True
+            print(event.delta, end="", flush=True)
+
+        elif isinstance(event, TextDelta):
+            in_reasoning = False
+            print(event.delta, end="", flush=True)
+
+        elif isinstance(event, ToolCallStarted):
+            in_reasoning = False
+            print(f"\n   🔧 {event.call.name}({event.call.arguments})", flush=True)
+
+        elif isinstance(event, ToolCallCompleted):
+            name = event.call.name
+            rv = event.result
+            if isinstance(rv, str) and len(rv) > 150:
+                rv = rv[:150] + "…"
+            status = "❌" if event.is_error else "✔"
+            print(f"   {status} {name} → {rv!r}", flush=True)
+
+        elif isinstance(event, RunCompleted):
+            r = event.result
+            print(f"\n{'=' * 60}")
+            print(
+                f"Done in {r.turns} turns.  "
+                f"in={r.usage.input_tokens}  out={r.usage.output_tokens}"
+            )
+
+    final = await handle.result()
+    print(f"Output: {final.output}")
 
 
 if __name__ == "__main__":

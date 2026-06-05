@@ -331,24 +331,26 @@ result = await Runner.run(agent, "Continue.", context_policy=policy)
 
 ## Skills
 
-File-backed prompt fragments loaded on demand — ideal for large domain knowledge
-that shouldn't always occupy the context window:
+Reusable instruction bundles following the
+`Agent Skills specification <https://agentskills.io/specification>`_.
+Progressive disclosure keeps the context window lean: metadata is always
+visible, full instructions and sub-files load on demand via tool calls.
 
 ```python
-from lovia.skills import SkillCatalog
-
-catalog = SkillCatalog("skills/", mode="lazy")   # or mode="eager"
+from lovia import Agent, Skills
 
 agent = Agent(
     name="support",
     model="deepseek-v4-pro",
-    skills=catalog,
+    skills=Skills.from_dir("./skills"),
 )
 ```
 
-Each skill is a directory with a `SKILL.md` (YAML frontmatter + body).
-In `lazy` mode the model calls `load_skill(name)` when needed; in `eager` mode
-all skill bodies are inlined at startup.
+Each skill is a directory with a ``SKILL.md`` (YAML frontmatter + body).
+Optional ``references/``, ``scripts/``, and ``assets/`` subdirectories hold
+supplementary resources the model loads via ``read_skill_file``.
+
+Custom skill sources (database, API, MCP) implement the ``SkillSource`` protocol.
 
 ## Built-in tools
 
@@ -442,7 +444,7 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 | `examples/03_streaming.py` | streaming with Rich |
 | `examples/04_structured_output.py` | Pydantic output |
 | `examples/05_handoff.py` | agent handoff |
-| `examples/08_skills.py` | skill catalog |
+| `examples/08_skills.py` | Skills capability |
 | `examples/11_approval.py` | tool approval |
 | `examples/16_web_serve.py` | web UI |
 | `examples/22_sandbox.py` | direct sandbox session |

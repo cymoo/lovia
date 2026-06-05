@@ -1,0 +1,18 @@
+Subject: Refund Confirmation — Order #{{ORDER_ID}}
+
+Hi {{CUSTOMER_NAME}},
+
+Your refund has been processed.
+
+  Order:       #{{ORDER_ID}}
+  Item:        {{ITEM_NAME}}
+  Amount:      ${{REFUND_AMOUNT}} ({{REFUND_TYPE}})
+  Reference:   {{REFUND_REFERENCE}}
+
+The refund should appear on your {{PAYMENT_METHOD}} statement within
+{{PROCESSING_DAYS}} business days.
+
+If you have any questions, reply to this email or call {{SUPPORT_PHONE}}.
+
+Thanks for your patience —
+{{COMPANY_NAME}} Support

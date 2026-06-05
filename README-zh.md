@@ -329,22 +329,26 @@ result = await Runner.run(agent, "继续。", context_policy=policy)
 
 ## Skills（技能库）
 
-按需加载的文件驱动提示片段——适合不需要一直占用上下文窗口的大型领域知识：
+遵循
+`Agent Skills 规范 <https://agentskills.io/specification>`_
+的可复用指令包。渐进式披露让上下文窗口保持精简：metadata 始终可见，
+完整指令和子文件通过工具调用按需加载。
 
 ```python
-from lovia.skills import SkillCatalog
-
-catalog = SkillCatalog("skills/", mode="lazy")   # 或 mode="eager"
+from lovia import Agent, Skills
 
 agent = Agent(
     name="support",
     model="deepseek-v4-pro",
-    skills=catalog,
+    skills=Skills.from_dir("./skills"),
 )
 ```
 
-每个 skill 是一个目录，包含带 YAML frontmatter 的 `SKILL.md`。
-`lazy` 模式下模型按需调用 `load_skill(name)`；`eager` 模式下所有 skill 在启动时内联。
+每个 skill 是一个包含 ``SKILL.md``（YAML frontmatter + body）的目录。
+可选的 ``references/``、``scripts/``、``assets/`` 子目录存放补充资源，
+模型通过 ``read_skill_file`` 按需加载。
+
+自定义 skill 来源（数据库、API、MCP）实现 ``SkillSource`` 协议即可。
 
 ## 内置工具
 

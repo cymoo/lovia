@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from .messages import Message, ToolCall
     from .output import OutputRepairStrategy
     from .runtime.result import RunHandle, RunResult
-    from .skills import SkillCatalog
+    from .skills import Skills
     from .sandbox import SandboxLike
     from .tools import ToolResultRenderer
     from .tracing import Tracer
@@ -76,7 +76,8 @@ class Agent(Generic[TContext]):
         handoffs: Agents (or :class:`Handoff` objects) the model may transfer
             control to via a synthetic ``transfer_to_<name>`` tool.
         settings: Sampling parameters forwarded to the provider.
-        skills: Optional :class:`SkillCatalog` exposing on-demand documents.
+        skills: Optional :class:`~lovia.skills.Skills` capability exposing on-demand
+            skill instructions.
         mcp_servers: MCP client connections whose tools will be merged at run
             time.
         sandbox: Optional filesystem/process environment whose default tools
@@ -101,7 +102,7 @@ class Agent(Generic[TContext]):
     output_repair: "bool | OutputRepairStrategy" = True
     handoffs: list["Agent | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
-    skills: "SkillCatalog | None" = None
+    skills: "Skills | None" = None
     mcp_servers: list["MCPServer"] = field(default_factory=list)
     sandbox: "SandboxLike | None" = None
     hooks: "AgentHooks | None" = None

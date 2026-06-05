@@ -624,7 +624,7 @@ class RunLoop:
             if sandbox_instructions:
                 text = f"{text}\n\n{sandbox_instructions}".strip()
         if agent.skills is not None:
-            text = f"{text}\n\n{agent.skills.render_catalog()}".strip()
+            text = f"{text}\n\n{agent.skills.instructions()}".strip()
         return text
 
     async def _reset_for_handoff(

@@ -182,7 +182,7 @@ async def stream_with_fallback(
     error propagates to avoid duplicating partial assistant output.
     """
     last_exc: BaseException | None = None
-    max_attempts = retry.max_attempts if retry is not None else 1
+    max_retries = retry.max_retries if retry is not None else 1
     for provider in providers:
         attempt = 0
         while True:
@@ -204,7 +204,7 @@ async def stream_with_fallback(
                     raise
                 if isinstance(exc, ContextOverflowError):
                     raise
-                if retry is not None and attempt < max_attempts and retry.retry_on(exc):
+                if retry is not None and attempt < max_retries and retry.retry_on(exc):
                     import random as _random
 
                     delay = min(
@@ -215,7 +215,7 @@ async def stream_with_fallback(
                         "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",
                         getattr(provider, "name", repr(provider)),
                         attempt,
-                        max_attempts,
+                        max_retries,
                         delay,
                         type(exc).__name__,
                         truncate_repr(str(exc)),

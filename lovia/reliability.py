@@ -133,7 +133,7 @@ class RetryPolicy:
     current one are exhausted.
     """
 
-    max_attempts: int = 3
+    max_retries: int = 3
     backoff_base: float = 0.5
     backoff_max: float = 8.0
     retry_on: RetryPredicate = field(default=_default_retry_on)
@@ -153,7 +153,7 @@ class RetryPolicy:
                 return
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 attempt += 1
-                if attempt >= self.max_attempts or not self.retry_on(exc):
+                if attempt >= self.max_retries or not self.retry_on(exc):
                     raise
                 if on_error is not None:
                     on_error(exc)

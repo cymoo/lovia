@@ -145,7 +145,7 @@ async def test_retry_recovers_from_transient_error() -> None:
     provider = _FailingProvider(fail_times=2, answer=text("ok"))
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     result = await Runner.run(agent, "hi", retry=retry)
@@ -158,7 +158,7 @@ async def test_retry_gives_up_after_max_attempts() -> None:
     provider = _FailingProvider(fail_times=99, answer=text("never"))
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
     with pytest.raises(ProviderError):
         await Runner.run(agent, "hi", retry=retry)
@@ -170,7 +170,7 @@ async def test_retry_does_not_retry_explicit_non_retryable_error() -> None:
     provider = _FailingProvider(fail_times=99, answer=text("never"), retryable=False)
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     with pytest.raises(ProviderError):
@@ -184,7 +184,7 @@ async def test_provider_fallback_chain_uses_backup() -> None:
     backup = ScriptedProvider([text("recovered")])
     agent = Agent(name="a", model=[primary, backup])
     retry = RetryPolicy(
-        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     result = await Runner.run(agent, "hi", retry=retry)

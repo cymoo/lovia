@@ -348,6 +348,16 @@ agent = Agent(
 可选的 ``references/``、``scripts/``、``assets/`` 子目录存放补充资源，
 模型通过 ``read_skill_file`` 按需加载。
 
+可传入多个目录合并技能库——``Skills.from_dir("./skills", "./team-skills")``
+（同名时先出现者优先）。frontmatter 中除 ``name``/``description`` 之外的额外字段
+（``tags``、``version`` 等）会一并展示在索引里，便于模型路由。Body 按需懒加载，
+不常驻内存。
+
+通过 ``filter`` 谓词限定暴露哪些技能——适合按租户或权限划分的技能库。被过滤掉的技能
+既不出现在索引中，也无法被加载::
+
+    Skills.from_dir("./skills", filter=lambda m: "internal" not in m.extra.get("tags", []))
+
 自定义 skill 来源（数据库、API、MCP）实现 ``SkillSource`` 协议即可。
 
 ## 内置工具

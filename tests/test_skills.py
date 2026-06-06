@@ -5,15 +5,12 @@ from __future__ import annotations
 
 import logging
 import os
-import stat
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from lovia import Agent, Skills, SkillsError
-from lovia.exceptions import ToolError
 from lovia.run_context import RunContext
 from lovia.skills import (
     LocalDirSkillSource,
@@ -151,21 +148,21 @@ class TestSkill:
 
     def test_read_file_no_path_raises(self) -> None:
         skill = Skill(name="test", description="desc", content="body", path=None)
-        with pytest.raises(ToolError, match="no on-disk path"):
+        with pytest.raises(SkillsError, match="no on-disk path"):
             skill.read_file("references/x.md")
 
     def test_read_file_path_traversal_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             skill = Skill(name="test", description="desc", content="body", path=root)
-            with pytest.raises(ToolError, match="escapes skill directory"):
+            with pytest.raises(SkillsError, match="escapes skill directory"):
                 skill.read_file("../outside")
 
     def test_read_file_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             skill = Skill(name="test", description="desc", content="body", path=root)
-            with pytest.raises(ToolError, match="not found"):
+            with pytest.raises(SkillsError, match="not found"):
                 skill.read_file("nonexistent.md")
 
 
@@ -239,12 +236,23 @@ class TestParseFrontmatter:
         assert meta["name"] == "win"
         assert body == "body"
 
-    def test_indented_closing_delimiter(self) -> None:
-        """Indented --- is not a valid YAML document separator; falls back to split."""
+    def test_indented_closing_delimiter_not_recognized(self) -> None:
+        """An indented '---' is NOT a valid document separator, so it is not
+        treated as the closing delimiter. Without a column-0 delimiter the file
+        has no frontmatter and the whole text is returned as body."""
         text = "---\nname: indented\ndescription: desc\n  ---\nbody"
         meta, body = _parse_frontmatter(text)
-        assert meta["name"] == "indented"
-        assert body == "body"
+        assert meta == {}
+        assert "name: indented" in body
+
+    def test_unterminated_frontmatter_does_not_truncate(self) -> None:
+        """A file missing its closing column-0 '---' is treated as having no
+        frontmatter; a value containing '---' is never silently truncated
+        (regression for the old naive-`find` fallback)."""
+        text = "---\nname: a\ndescription: bar --- baz"
+        meta, body = _parse_frontmatter(text)
+        assert meta == {}
+        assert body == text
 
     def test_dashes_inside_yaml_block_scalar(self) -> None:
         """--- inside a YAML block scalar must not be treated as the closing delimiter."""
@@ -258,7 +266,6 @@ class TestParseFrontmatter:
         meta, body = _parse_frontmatter(text)
         assert meta["name"] == "eof"
         assert body == ""
-
 
 
 # ---------------------------------------------------------------------------
@@ -356,9 +363,7 @@ class TestLocalDirSkillSource:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "test").mkdir()
-            (root / "test" / "SKILL.md").write_text(
-                "---\nname: test\n---\n# Body"
-            )
+            (root / "test" / "SKILL.md").write_text("---\nname: test\n---\n# Body")
             with caplog.at_level(logging.WARNING):
                 source = LocalDirSkillSource(root)
             assert "Skipping invalid" in caplog.text
@@ -386,13 +391,15 @@ class TestLocalDirSkillSourceLoad:
             )
             source = LocalDirSkillSource(root)
             import asyncio
+
             skill = asyncio.run(source.load("refund-policy"))
             assert skill.name == "refund-policy"
             assert "Be polite" in skill.content
             assert skill.path is not None
 
-    def test_load_caches(self) -> None:
-        """Bodies are cached at scan time; load() does not re-read from disk."""
+    def test_load_returns_same_content(self) -> None:
+        """Repeated loads return identical content (bodies are read lazily,
+        not cached, but the file is unchanged)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -401,6 +408,7 @@ class TestLocalDirSkillSourceLoad:
             )
             source = LocalDirSkillSource(root)
             import asyncio
+
             skill1 = asyncio.run(source.load("s"))
             skill2 = asyncio.run(source.load("s"))
             assert skill1.content == skill2.content
@@ -409,10 +417,13 @@ class TestLocalDirSkillSourceLoad:
         with tempfile.TemporaryDirectory() as tmp:
             source = LocalDirSkillSource(Path(tmp))
             import asyncio
+
             with pytest.raises(SkillsError, match="Unknown"):
                 asyncio.run(source.load("nonexistent"))
 
-    def test_invalidate_and_reload(self) -> None:
+    def test_load_reflects_disk_changes(self) -> None:
+        """Bodies are read lazily, so edits on disk are picked up automatically
+        without any cache-invalidation step."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -421,30 +432,15 @@ class TestLocalDirSkillSourceLoad:
             )
             source = LocalDirSkillSource(root)
             import asyncio
+
             skill1 = asyncio.run(source.load("s"))
             assert "Version 1" in skill1.content
-            source.invalidate("s")
             # Modify on disk
             (root / "s" / "SKILL.md").write_text(
                 "---\nname: s\ndescription: A skill.\n---\n# Version 2"
             )
             skill2 = asyncio.run(source.load("s"))
             assert "Version 2" in skill2.content
-
-    def test_invalidate_all(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "s").mkdir()
-            (root / "s" / "SKILL.md").write_text(
-                "---\nname: s\ndescription: A skill.\n---\n# Body"
-            )
-            source = LocalDirSkillSource(root)
-            import asyncio
-            asyncio.run(source.load("s"))
-            source.invalidate_all()
-            # Should reload from disk
-            skill = asyncio.run(source.load("s"))
-            assert skill is not None
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +494,7 @@ class TestSkillsInstructions:
 
 
 class TestSkillsTools:
-    def test_returns_three_tools(self) -> None:
+    def test_returns_two_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -507,24 +503,9 @@ class TestSkillsTools:
             )
             skills = SkillsCapability.from_dir(root)
             tools = skills.tools()
-            assert len(tools) == 3
+            assert len(tools) == 2
             tool_names = {t.name for t in tools}
-            assert tool_names == {"list_skills", "load_skill", "read_skill_file"}
-
-    def test_list_skills_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "s").mkdir()
-            (root / "s" / "SKILL.md").write_text(
-                "---\nname: s\ndescription: A skill.\n---\n# Body"
-            )
-            skills = SkillsCapability.from_dir(root)
-            tools = skills.tools()
-            list_tool = next(t for t in tools if t.name == "list_skills")
-            import asyncio
-            result = asyncio.run(list_tool.invoke({}, _make_ctx()))
-            assert "s" in result
-            assert "A skill" in result
+            assert tool_names == {"load_skill", "read_skill_file"}
 
     def test_load_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -537,9 +518,14 @@ class TestSkillsTools:
             tools = skills.tools()
             load_tool = next(t for t in tools if t.name == "load_skill")
             import asyncio
+
             result = asyncio.run(load_tool.invoke({"name": "s"}, _make_ctx()))
             assert "Be helpful" in result
             assert "path:" in result  # skill path included for script execution
+            # Content is framed as untrusted reference material (injection guard).
+            assert "reference material" in result
+            assert "BEGIN SKILL CONTENT" in result
+            assert "END SKILL CONTENT" in result
 
     def test_load_skill_tool_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -547,12 +533,15 @@ class TestSkillsTools:
             tools = skills.tools()
             load_tool = next(t for t in tools if t.name == "load_skill")
             import asyncio
+
             result = asyncio.run(
                 load_tool.invoke({"name": "unknown"}, _make_ctx())  # type: ignore[arg-type]
             )
             assert "Unknown" in result
 
-    def test_load_skill_tool_dollar_prefix(self) -> None:
+    def test_load_skill_tool_dollar_not_special(self) -> None:
+        """The legacy ``$`` prefix is no longer stripped: ``$s`` is just an
+        ordinary (here unknown) name."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -563,10 +552,12 @@ class TestSkillsTools:
             tools = skills.tools()
             load_tool = next(t for t in tools if t.name == "load_skill")
             import asyncio
+
             result = asyncio.run(
                 load_tool.invoke({"name": "$s"}, _make_ctx())  # type: ignore[arg-type]
             )
-            assert "Body" in result
+            assert "Unknown" in result
+            assert "$s" in result
 
     def test_read_skill_file_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -581,6 +572,7 @@ class TestSkillsTools:
             tools = skills.tools()
             read_tool = next(t for t in tools if t.name == "read_skill_file")
             import asyncio
+
             result = asyncio.run(
                 read_tool.invoke(
                     {"name": "s", "relpath": "references/extra.md"},
@@ -600,6 +592,7 @@ class TestSkillsTools:
             tools = skills.tools()
             read_tool = next(t for t in tools if t.name == "read_skill_file")
             import asyncio
+
             result = asyncio.run(
                 read_tool.invoke(
                     {"name": "s", "relpath": "../outside"},
@@ -614,6 +607,7 @@ class TestSkillsTools:
             tools = skills.tools()
             read_tool = next(t for t in tools if t.name == "read_skill_file")
             import asyncio
+
             result = asyncio.run(
                 read_tool.invoke(
                     {"name": "nope", "relpath": "references/x.md"},
@@ -624,6 +618,308 @@ class TestSkillsTools:
 
 
 # ---------------------------------------------------------------------------
+# Multiple directories
+# ---------------------------------------------------------------------------
+
+
+class TestMultipleDirs:
+    def test_from_dir_merges_multiple_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            r1, r2 = Path(t1), Path(t2)
+            (r1 / "alpha").mkdir()
+            (r1 / "alpha" / "SKILL.md").write_text(
+                "---\nname: alpha\ndescription: First.\n---\n# A"
+            )
+            (r2 / "beta").mkdir()
+            (r2 / "beta" / "SKILL.md").write_text(
+                "---\nname: beta\ndescription: Second.\n---\n# B"
+            )
+            skills = SkillsCapability.from_dir(r1, r2)
+            names = {m.name for m in skills.metadata}
+            assert names == {"alpha", "beta"}
+
+    def test_duplicate_name_across_dirs_first_wins(self, caplog) -> None:
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            r1, r2 = Path(t1), Path(t2)
+            (r1 / "dup").mkdir()
+            (r1 / "dup" / "SKILL.md").write_text(
+                "---\nname: dup\ndescription: From r1.\n---\n# A"
+            )
+            (r2 / "dup").mkdir()
+            (r2 / "dup" / "SKILL.md").write_text(
+                "---\nname: dup\ndescription: From r2.\n---\n# B"
+            )
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(r1, r2)
+            assert len(source.metadata) == 1
+            assert source.metadata[0].description == "From r1."
+            assert "Duplicate skill name" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Extra frontmatter attributes
+# ---------------------------------------------------------------------------
+
+
+class TestExtraFrontmatter:
+    def test_extra_keys_kept_in_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\n"
+                "name: s\n"
+                "description: A skill.\n"
+                "tags: [sql, db]\n"
+                "version: 1.2\n"
+                "---\n# Body"
+            )
+            source = LocalDirSkillSource(root)
+            meta = source.metadata[0]
+            assert meta.extra["tags"] == ["sql", "db"]
+            assert meta.extra["version"] == 1.2
+            assert "name" not in meta.extra
+            assert "description" not in meta.extra
+
+    def test_extra_rendered_in_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\ntags: [sql, db]\n---\n# Body"
+            )
+            skills = SkillsCapability.from_dir(root)
+            text = skills.instructions()
+            assert "tags: sql, db" in text
+
+    def test_extra_carried_into_loaded_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\nlevel: advanced\n---\n# Body"
+            )
+            source = LocalDirSkillSource(root)
+            import asyncio
+
+            skill = asyncio.run(source.load("s"))
+            assert skill.extra["level"] == "advanced"
+            assert skill.metadata.extra["level"] == "advanced"
+
+    def test_no_extra_keeps_index_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n# Body"
+            )
+            skills = SkillsCapability.from_dir(root)
+            text = skills.instructions()
+            assert "- `s` — A skill." in text
+            assert "[" not in text.split("## Using skills")[0].split("\n")[1]
+
+    def test_format_extra_skips_empty_and_nested(self) -> None:
+        from lovia.skills import _format_extra
+
+        rendered = _format_extra(
+            {
+                "tags": ["a", "b"],
+                "version": 2,
+                "empty": "",
+                "none": None,
+                "blank_list": [],
+                "nested": {"k": "v"},
+            }
+        )
+        assert rendered == "tags: a, b; version: 2"
+
+
+# ---------------------------------------------------------------------------
+# Scope filter
+# ---------------------------------------------------------------------------
+
+
+class TestScopeFilter:
+    def _build(self, tmp: str):
+        root = Path(tmp)
+        for name, tags in (("public", "[public]"), ("internal", "[internal]")):
+            (root / name).mkdir()
+            (root / name / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {name} skill.\ntags: {tags}\n---\n# {name}"
+            )
+        return root
+
+    def test_filter_hides_from_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._build(tmp)
+            skills = SkillsCapability.from_dir(
+                root, filter=lambda m: "internal" not in m.extra.get("tags", [])
+            )
+            names = {m.name for m in skills.metadata}
+            assert names == {"public"}
+            text = skills.instructions()
+            assert "public" in text
+            assert "internal" not in text
+
+    def test_filter_blocks_load(self) -> None:
+        """A filtered-out skill cannot be loaded — the filter is a real
+        boundary, not just a cosmetic index change."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._build(tmp)
+            skills = SkillsCapability.from_dir(
+                root, filter=lambda m: "internal" not in m.extra.get("tags", [])
+            )
+            tools = skills.tools()
+            load_tool = next(t for t in tools if t.name == "load_skill")
+            read_tool = next(t for t in tools if t.name == "read_skill_file")
+            import asyncio
+
+            blocked = asyncio.run(
+                load_tool.invoke({"name": "internal"}, _make_ctx())  # type: ignore[arg-type]
+            )
+            assert "Unknown" in blocked
+            # The hint lists only visible skills, not the hidden one.
+            assert "internal" not in blocked.split("Available:")[1]
+
+            allowed = asyncio.run(
+                load_tool.invoke({"name": "public"}, _make_ctx())  # type: ignore[arg-type]
+            )
+            assert "# public" in allowed
+
+            blocked_read = asyncio.run(
+                read_tool.invoke(
+                    {"name": "internal", "relpath": "x.md"},
+                    _make_ctx(),  # type: ignore[arg-type]
+                )
+            )
+            assert "Unknown" in blocked_read
+
+    def test_no_filter_exposes_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._build(tmp)
+            skills = SkillsCapability.from_dir(root)
+            assert {m.name for m in skills.metadata} == {"public", "internal"}
+
+    def test_filter_reflects_source_changes(self) -> None:
+        """Filtering is applied to the live source view, so rescans flow through."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "public").mkdir()
+            (root / "public" / "SKILL.md").write_text(
+                "---\nname: public\ndescription: d.\ntags: [public]\n---\n# p"
+            )
+            source = LocalDirSkillSource(root)
+            skills = SkillsCapability(
+                source, filter=lambda m: "public" in m.extra.get("tags", [])
+            )
+            assert {m.name for m in skills.metadata} == {"public"}
+            (root / "secret").mkdir()
+            (root / "secret" / "SKILL.md").write_text(
+                "---\nname: secret\ndescription: d.\ntags: [internal]\n---\n# s"
+            )
+            source.rescan()
+            # New skill is visible to the source but filtered out of the catalog.
+            assert {m.name for m in source.metadata} == {"public", "secret"}
+            assert {m.name for m in skills.metadata} == {"public"}
+
+
+# ---------------------------------------------------------------------------
+# Dynamic reload seam
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicReload:
+    def test_rescan_picks_up_new_skill(self) -> None:
+        """rescan() refreshes the catalog, and Skills.metadata reads through
+        to the source so a running agent sees the change."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a").mkdir()
+            (root / "a" / "SKILL.md").write_text(
+                "---\nname: a\ndescription: First.\n---\n# A"
+            )
+            source = LocalDirSkillSource(root)
+            skills = SkillsCapability(source)
+            assert {m.name for m in skills.metadata} == {"a"}
+
+            # Add a skill on disk after construction.
+            (root / "b").mkdir()
+            (root / "b" / "SKILL.md").write_text(
+                "---\nname: b\ndescription: Second.\n---\n# B"
+            )
+            # Not visible until a rescan.
+            assert {m.name for m in skills.metadata} == {"a"}
+            source.rescan()
+            assert {m.name for m in skills.metadata} == {"a", "b"}
+            assert "b" in skills.instructions()
+
+    def test_rescan_drops_removed_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a").mkdir()
+            (root / "a" / "SKILL.md").write_text(
+                "---\nname: a\ndescription: First.\n---\n# A"
+            )
+            source = LocalDirSkillSource(root)
+            assert len(source.metadata) == 1
+            (root / "a" / "SKILL.md").unlink()
+            source.rescan()
+            assert source.metadata == []
+
+
+# ---------------------------------------------------------------------------
+# load/read tool framing & in-memory skills
+# ---------------------------------------------------------------------------
+
+
+class TestToolFraming:
+    def test_read_skill_file_returns_raw(self) -> None:
+        """read_skill_file returns file content verbatim (no framing) so
+        scripts/templates can be used as-is."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n# Body"
+            )
+            (root / "s" / "references").mkdir()
+            (root / "s" / "references" / "extra.md").write_text("Extra info.")
+            skills = SkillsCapability.from_dir(root)
+            read_tool = next(t for t in skills.tools() if t.name == "read_skill_file")
+            import asyncio
+
+            result = asyncio.run(
+                read_tool.invoke(
+                    {"name": "s", "relpath": "references/extra.md"},
+                    _make_ctx(),  # type: ignore[arg-type]
+                )
+            )
+            assert result == "Extra info."
+
+    def test_read_skill_file_no_path_in_memory_skill(self) -> None:
+        """A custom source whose skills have no on-disk path returns a clean
+        SkillsError message via the tool (no ToolError leakage)."""
+
+        class MemSource:
+            metadata = [SkillMetadata(name="m", description="In memory.")]
+
+            async def load(self, name: str) -> Skill:
+                return Skill(name="m", description="In memory.", content="# Body")
+
+        skills = SkillsCapability(MemSource())
+        read_tool = next(t for t in skills.tools() if t.name == "read_skill_file")
+        import asyncio
+
+        result = asyncio.run(
+            read_tool.invoke(
+                {"name": "m", "relpath": "references/x.md"},
+                _make_ctx(),  # type: ignore[arg-type]
+            )
+        )
+        assert "no on-disk path" in result
+
+
+# ---------------------------------------------------------------------------
 # Custom SkillSource protocol
 # ---------------------------------------------------------------------------
 
@@ -631,6 +927,7 @@ class TestSkillsTools:
 class TestCustomSkillSource:
     def test_protocol_conformance(self) -> None:
         """A class with metadata and load satisfies the protocol."""
+
         class MySource:
             metadata: list[SkillMetadata] = [
                 SkillMetadata(name="test", description="desc")
@@ -644,6 +941,7 @@ class TestCustomSkillSource:
 
     def test_missing_metadata_not_protocol(self) -> None:
         """A class without metadata does NOT satisfy the protocol."""
+
         class BadSource:
             async def load(self, name: str) -> Skill:
                 return Skill(name="test", description="desc", content="# Body")
@@ -661,14 +959,17 @@ class TestCustomSkillSource:
             async def load(self, name: str) -> Skill:
                 if name != "api-skill":
                     raise SkillsError(f"Unknown: {name}", skill_name=name)
-                return Skill(name="api-skill", description="From API.", content="# API Content")
+                return Skill(
+                    name="api-skill", description="From API.", content="# API Content"
+                )
 
         skills = SkillsCapability(source=ApiSource())
         assert "api-skill" in skills.instructions()
         tools = skills.tools()
-        assert len(tools) == 3
+        assert len(tools) == 2
 
         import asyncio
+
         load_tool = next(t for t in tools if t.name == "load_skill")
         result = asyncio.run(
             load_tool.invoke({"name": "api-skill"}, _make_ctx())  # type: ignore[arg-type]
@@ -742,7 +1043,7 @@ class TestAgentIntegration:
                 instructions="You are helpful.",
                 skills=Skills.from_dir(root),
             )
-            prompt = await agent.render_instructions(None)
+            await agent.render_instructions(None)
             # The skill index is rendered by the run loop via
             # agent.skills.instructions(), not by agent.render_instructions().
             # Just verify the skill index text is available.

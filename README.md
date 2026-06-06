@@ -350,6 +350,17 @@ Each skill is a directory with a ``SKILL.md`` (YAML frontmatter + body).
 Optional ``references/``, ``scripts/``, and ``assets/`` subdirectories hold
 supplementary resources the model loads via ``read_skill_file``.
 
+Pass several directories to merge catalogs — ``Skills.from_dir("./skills",
+"./team-skills")`` (earlier wins on name conflicts). Any frontmatter keys
+beyond ``name``/``description`` (``tags``, ``version``, …) are surfaced in the
+index so the model can route on them. Bodies are read lazily and never cached.
+
+Scope which skills are exposed with a ``filter`` predicate — handy for
+per-tenant or permission-based catalogs. Filtered-out skills are hidden from
+the index *and* cannot be loaded::
+
+    Skills.from_dir("./skills", filter=lambda m: "internal" not in m.extra.get("tags", []))
+
 Custom skill sources (database, API, MCP) implement the ``SkillSource`` protocol.
 
 ## Built-in tools

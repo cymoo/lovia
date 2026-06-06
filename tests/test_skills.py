@@ -3,6 +3,7 @@ error handling, and agent integration."""
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 import tempfile
@@ -221,6 +222,44 @@ class TestParseFrontmatter:
         meta, body = _parse_frontmatter(text)
         assert meta["tags"] == ["a", "b", "c"]
 
+    def test_leading_blank_lines(self) -> None:
+        text = "\n\n---\nname: test\ndescription: desc\n---\n# Body"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "test"
+        assert "# Body" in body
+
+    def test_leading_carriage_returns(self) -> None:
+        text = "\r\n\r\n---\nname: cr\ndescription: cr desc\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "cr"
+
+    def test_windows_delimiter(self) -> None:
+        text = "---\r\nname: win\r\ndescription: windows\r\n---\r\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "win"
+        assert body == "body"
+
+    def test_indented_closing_delimiter(self) -> None:
+        """Indented --- is not a valid YAML document separator; falls back to split."""
+        text = "---\nname: indented\ndescription: desc\n  ---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "indented"
+        assert body == "body"
+
+    def test_dashes_inside_yaml_block_scalar(self) -> None:
+        """--- inside a YAML block scalar must not be treated as the closing delimiter."""
+        text = "---\nname: bs\ndescription: |\n  ---\n  inner dash\n  ---\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "bs"
+        assert body == "body"
+
+    def test_closing_delimiter_eof(self) -> None:
+        text = "---\nname: eof\ndescription: no trailing newline\n---"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "eof"
+        assert body == ""
+
+
 
 # ---------------------------------------------------------------------------
 # LocalDirSkillSource
@@ -281,7 +320,8 @@ class TestLocalDirSkillSource:
             assert source.metadata[0].name == "my-skill"
             assert source.metadata[0].description == "No name field."
 
-    def test_duplicate_name_raises(self) -> None:
+    def test_duplicate_name_first_wins(self, caplog) -> None:
+        """First registrant wins; duplicate logs a warning."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "skill-a").mkdir()
@@ -292,31 +332,40 @@ class TestLocalDirSkillSource:
             (root / "skill-b" / "SKILL.md").write_text(
                 "---\nname: dup\ndescription: Second.\n---\n# B"
             )
-            with pytest.raises(SkillsError, match="Duplicate"):
-                LocalDirSkillSource(root)
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(root)
+            assert "Duplicate" in caplog.text
+            assert len(source.metadata) == 1
+            assert source.metadata[0].description == "First."
 
-    def test_invalid_name_raises(self) -> None:
+    def test_invalid_name_skipped(self, caplog) -> None:
+        """Invalid name logs a warning and is skipped."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "BadName").mkdir()
             (root / "BadName" / "SKILL.md").write_text(
                 "---\nname: BadName\ndescription: Invalid name.\n---\n# Body"
             )
-            with pytest.raises(SkillsError, match="kebab-case"):
-                LocalDirSkillSource(root)
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(root)
+            assert "Skipping invalid" in caplog.text
+            assert source.metadata == []
 
-    def test_missing_description_raises(self) -> None:
+    def test_missing_description_skipped(self, caplog) -> None:
+        """Missing description logs a warning and is skipped."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "test").mkdir()
             (root / "test" / "SKILL.md").write_text(
                 "---\nname: test\n---\n# Body"
             )
-            with pytest.raises(SkillsError, match="empty description"):
-                LocalDirSkillSource(root)
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(root)
+            assert "Skipping invalid" in caplog.text
+            assert source.metadata == []
 
-    def test_metadata_list_async(self) -> None:
-        """list_metadata() returns the same as metadata property."""
+    def test_metadata_property(self) -> None:
+        """metadata property returns cached metadata synchronously."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -324,9 +373,7 @@ class TestLocalDirSkillSource:
                 "---\nname: s\ndescription: A skill.\n---\n# Body"
             )
             source = LocalDirSkillSource(root)
-            import asyncio
-            meta = asyncio.run(source.list_metadata())
-            assert len(meta) == 1
+            assert len(source.metadata) == 1
 
 
 class TestLocalDirSkillSourceLoad:
@@ -345,6 +392,7 @@ class TestLocalDirSkillSourceLoad:
             assert skill.path is not None
 
     def test_load_caches(self) -> None:
+        """Bodies are cached at scan time; load() does not re-read from disk."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -355,7 +403,7 @@ class TestLocalDirSkillSourceLoad:
             import asyncio
             skill1 = asyncio.run(source.load("s"))
             skill2 = asyncio.run(source.load("s"))
-            assert skill1 is skill2
+            assert skill1.content == skill2.content
 
     def test_load_unknown_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -364,7 +412,7 @@ class TestLocalDirSkillSourceLoad:
             with pytest.raises(SkillsError, match="Unknown"):
                 asyncio.run(source.load("nonexistent"))
 
-    def test_evict_and_reload(self) -> None:
+    def test_invalidate_and_reload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -374,16 +422,16 @@ class TestLocalDirSkillSourceLoad:
             source = LocalDirSkillSource(root)
             import asyncio
             skill1 = asyncio.run(source.load("s"))
-            source.evict("s")
+            assert "Version 1" in skill1.content
+            source.invalidate("s")
             # Modify on disk
             (root / "s" / "SKILL.md").write_text(
                 "---\nname: s\ndescription: A skill.\n---\n# Version 2"
             )
             skill2 = asyncio.run(source.load("s"))
             assert "Version 2" in skill2.content
-            assert skill1 is not skill2
 
-    def test_clear_cache(self) -> None:
+    def test_invalidate_all(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "s").mkdir()
@@ -393,7 +441,7 @@ class TestLocalDirSkillSourceLoad:
             source = LocalDirSkillSource(root)
             import asyncio
             asyncio.run(source.load("s"))
-            source.clear_cache()
+            source.invalidate_all()
             # Should reload from disk
             skill = asyncio.run(source.load("s"))
             assert skill is not None
@@ -431,9 +479,9 @@ class TestSkillsInstructions:
             (root / "s" / "SKILL.md").write_text(
                 "---\nname: s\ndescription: A skill.\n---\n# Body"
             )
-            skills = SkillsCapability.from_dir(root, usage_rules=False)
+            skills = SkillsCapability.from_dir(root, usage_rules="")
             text = skills.instructions()
-            assert "How to use skills" not in text
+            assert "Using skills" not in text
 
     def test_instructions_includes_all_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -582,10 +630,11 @@ class TestSkillsTools:
 
 class TestCustomSkillSource:
     def test_protocol_conformance(self) -> None:
-        """A class with list_metadata and load satisfies the protocol."""
+        """A class with metadata and load satisfies the protocol."""
         class MySource:
-            async def list_metadata(self) -> list[SkillMetadata]:
-                return [SkillMetadata(name="test", description="desc")]
+            metadata: list[SkillMetadata] = [
+                SkillMetadata(name="test", description="desc")
+            ]
 
             async def load(self, name: str) -> Skill:
                 return Skill(name="test", description="desc", content="# Body")
@@ -593,20 +642,21 @@ class TestCustomSkillSource:
         source = MySource()
         assert isinstance(source, SkillSource)
 
-    def test_missing_method_not_protocol(self) -> None:
-        """A class missing a method does NOT satisfy the protocol."""
+    def test_missing_metadata_not_protocol(self) -> None:
+        """A class without metadata does NOT satisfy the protocol."""
         class BadSource:
-            async def list_metadata(self) -> list[SkillMetadata]:
-                return []
+            async def load(self, name: str) -> Skill:
+                return Skill(name="test", description="desc", content="# Body")
 
         assert not isinstance(BadSource(), SkillSource)
 
     def test_custom_source_with_skills_container(self) -> None:
-        """Skills container works with a custom source."""
+        """Skills container works with a custom source, instructions() included."""
 
         class ApiSource:
-            async def list_metadata(self) -> list[SkillMetadata]:
-                return [SkillMetadata(name="api-skill", description="From API.")]
+            metadata: list[SkillMetadata] = [
+                SkillMetadata(name="api-skill", description="From API.")
+            ]
 
             async def load(self, name: str) -> Skill:
                 if name != "api-skill":
@@ -614,8 +664,7 @@ class TestCustomSkillSource:
                 return Skill(name="api-skill", description="From API.", content="# API Content")
 
         skills = SkillsCapability(source=ApiSource())
-        # instructions() won't work well for custom async sources
-        # (they haven't pre-cached metadata) — but tools() should work
+        assert "api-skill" in skills.instructions()
         tools = skills.tools()
         assert len(tools) == 3
 
@@ -708,7 +757,7 @@ class TestAgentIntegration:
 
 
 class TestErrorIsolation:
-    def test_corrupt_skill_dir_does_not_block_others(self) -> None:
+    def test_corrupt_skill_dir_does_not_block_others(self, caplog) -> None:
         """A directory with a broken SKILL.md doesn't prevent other skills
         from being discovered (error isolation)."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -730,10 +779,11 @@ class TestErrorIsolation:
             os.chmod(broken_md, 0o000)
 
             try:
-                source = LocalDirSkillSource(root)
-                # The good skill should be discovered; the broken one skipped
+                with caplog.at_level(logging.WARNING):
+                    source = LocalDirSkillSource(root)
                 assert len(source.metadata) == 1
                 assert source.metadata[0].name == "good-skill"
+                assert "Skipping unreadable" in caplog.text
             finally:
                 # Restore permissions so tempfile can clean up
                 os.chmod(broken_md, 0o644)

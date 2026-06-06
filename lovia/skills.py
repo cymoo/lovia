@@ -38,6 +38,7 @@ databases, APIs, MCP servers, or any other backend.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from .exceptions import ToolError
 from .tools import Tool
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -55,7 +58,8 @@ class SkillsError(Exception):
     """Raised when a skill fails to load or validate.
 
     Carries structured context for programmatic handling and clear error
-    messages for humans.
+    messages for humans and models alike.  The *hint* is folded into the
+    string representation so the model can act on it.
     """
 
     def __init__(
@@ -71,6 +75,12 @@ class SkillsError(Exception):
         self.path = path
         self.hint = hint
 
+    def __str__(self) -> str:
+        msg = self.args[0] if self.args else ""
+        if self.hint:
+            msg = f"{msg}  {self.hint}"
+        return msg
+
 
 # ---------------------------------------------------------------------------
 # Name / description validation
@@ -79,6 +89,7 @@ class SkillsError(Exception):
 _NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _NAME_MAX_LENGTH = 64
 _DESCRIPTION_MAX_LENGTH = 1024
+_CLOSING_FM = re.compile(r"\n---[ \t\r]*(?:\n|$)")
 
 
 def _validate_name(name: str) -> str:
@@ -160,7 +171,7 @@ class Skill:
     name: str
     description: str
     content: str
-    """Raw ``SKILL.md`` text including frontmatter."""
+    """``SKILL.md`` body text, without YAML frontmatter."""
 
     path: Path | None = None
     """On-disk directory, used by :meth:`read_file` to resolve sub-resources."""
@@ -212,16 +223,15 @@ class Skill:
 class SkillSource(Protocol):
     """Abstract source of skills — filesystem, database, API, MCP, etc.
 
-    Two methods:
+    Two members:
 
-    * ``list_metadata()`` — returns lightweight index entries. Called eagerly.
+    * ``metadata`` — sync property returning lightweight index entries.
     * ``load(name)`` — returns the full :class:`Skill`. Called lazily when
       the model invokes ``load_skill``.
     """
 
-    async def list_metadata(self) -> list[SkillMetadata]:
-        """Return metadata for every available skill (Level 1)."""
-        ...
+    metadata: list[SkillMetadata]
+    """Lightweight index entries for every available skill (Level 1)."""
 
     async def load(self, name: str) -> Skill:
         """Return the full :class:`Skill` for *name* (Level 2).
@@ -239,32 +249,27 @@ class SkillSource(Protocol):
 class LocalDirSkillSource:
     """Scan a local directory for ``*/SKILL.md`` files.
 
-    Metadata is eagerly cached at construction time so :meth:`instructions`
-    is synchronous. Individual skills are loaded on demand via :meth:`load`.
+    Metadata and body text are eagerly cached at construction time so
+    :meth:`~Skills.instructions` is synchronous and :meth:`load` never
+    re-reads a file (unless :meth:`invalidate` is called first).
     """
 
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root)
         self._metadata: dict[str, SkillMetadata] = {}
+        self._bodies: dict[str, str] = {}  # name → SKILL.md body
         self._skill_dirs: dict[str, Path] = {}
-        self._loaded: dict[str, Skill] = {}
         self._scan()
 
     # -- metadata ----------------------------------------------------------- #
 
-    async def list_metadata(self) -> list[SkillMetadata]:
-        return list(self._metadata.values())
-
     @property
     def metadata(self) -> list[SkillMetadata]:
-        """Synchronous access to cached metadata."""
         return list(self._metadata.values())
 
     # -- load --------------------------------------------------------------- #
 
     async def load(self, name: str) -> Skill:
-        if name in self._loaded:
-            return self._loaded[name]
         if name not in self._metadata:
             known = ", ".join(sorted(self._metadata.keys())) or "(none)"
             raise SkillsError(
@@ -272,16 +277,34 @@ class LocalDirSkillSource:
                 skill_name=name,
                 hint=f"Available: {known}",
             )
-        skill = self._load_from_disk(name)
-        self._loaded[name] = skill
-        return skill
+        meta = self._metadata[name]
+        body = self._bodies.get(name)
+        if body is None:
+            body = self._read_body(name)
+            self._bodies[name] = body
+        return Skill(
+            name=meta.name,
+            description=meta.description,
+            content=body,
+            path=self._skill_dirs[name],
+        )
+
+    # -- cache invalidation ------------------------------------------------- #
+
+    def invalidate(self, name: str) -> None:
+        """Drop cached body so the next :meth:`load` re-reads from disk."""
+        self._bodies.pop(name, None)
+
+    def invalidate_all(self) -> None:
+        """Drop all cached bodies."""
+        self._bodies.clear()
 
     # -- internal ----------------------------------------------------------- #
 
     def _scan(self) -> None:
-        """Eagerly scan the root directory and cache metadata.
+        """Eagerly scan the root directory, caching metadata and bodies.
 
-        Each entry is isolated — one corrupt or unreadable skill directory
+        Each entry is isolated — one broken or invalid skill directory
         does not block the rest.
         """
         if not self._root.exists():
@@ -299,68 +322,63 @@ class LocalDirSkillSource:
                 if not manifest.is_file():
                     continue
                 raw = manifest.read_text(encoding="utf-8")
-                frontmatter, _body = _parse_frontmatter(raw)
+                frontmatter, body = _parse_frontmatter(raw)
                 name = frontmatter.get("name", entry.name)
                 description = frontmatter.get("description", "")
                 _validate_name(name)
                 _validate_description(name, description)
                 if name in self._metadata:
-                    raise SkillsError(
-                        f"Duplicate skill name {name!r}.",
-                        skill_name=name,
-                        path=str(entry),
-                        hint="Rename one of the skills to avoid conflicts.",
+                    logger.warning(
+                        f"Duplicate skill name {name!r} in {entry}, skipped."
                     )
-                self._metadata[name] = SkillMetadata(
-                    name=name, description=description
-                )
+                    continue
+                self._metadata[name] = SkillMetadata(name=name, description=description)
+                self._bodies[name] = body
                 self._skill_dirs[name] = entry
-            except OSError:
-                # Error isolation — a broken directory doesn't block others.
-                continue
-            except SkillsError:
-                raise  # Validation errors should propagate.
+            except OSError as exc:
+                logger.warning(f"Skipping unreadable skill directory {entry}: {exc}")
+            except SkillsError as exc:
+                logger.warning(f"Skipping invalid skill in {entry}: {exc}")
 
-    def _load_from_disk(self, name: str) -> Skill:
-        """Read a single skill's SKILL.md from disk using the cached directory path."""
-        entry = self._skill_dirs[name]
-        manifest = entry / "SKILL.md"
+    def _read_body(self, name: str) -> str:
+        """Return the body of a SKILL.md file, stripping the YAML frontmatter.
+
+        Uses a simple regex cut rather than a full parse — the file was
+        already validated during :meth:`_scan`, so we know the frontmatter
+        is well-formed.
+        """
+        manifest = self._skill_dirs[name] / "SKILL.md"
         try:
             raw = manifest.read_text(encoding="utf-8")
         except OSError as exc:
             raise SkillsError(
                 f"Failed to read skill {name!r}: {exc}",
                 skill_name=name,
-                path=str(entry),
+                path=str(self._skill_dirs[name]),
                 hint="Check file permissions.",
             ) from exc
-        meta = self._metadata[name]
-        return Skill(
-            name=meta.name,
-            description=meta.description,
-            content=raw,
-            path=entry,
-        )
-
-    def evict(self, name: str) -> None:
-        """Remove a cached skill so the next :meth:`load` re-reads from disk."""
-        self._loaded.pop(name, None)
-
-    def clear_cache(self) -> None:
-        """Drop all cached loaded skills."""
-        self._loaded.clear()
+        raw = raw.lstrip()
+        m = _CLOSING_FM.search(raw[3:])
+        if m:
+            return raw[3 + m.end() :].lstrip("\n\r")
+        # Fallback: bare --- anywhere after the opening delimiter.
+        parts = raw.split("---", 2)
+        return parts[2].lstrip("\n\r") if len(parts) >= 3 else raw
 
 
 # ---------------------------------------------------------------------------
 # System prompt fragment
 # ---------------------------------------------------------------------------
 
-_USAGE_RULES = """\
-### How to use skills
-- Call `load_skill(name)` to read a skill's full instructions (Level 2).
-- Use `read_skill_file(name, "references/...")` for supplementary files (Level 3).
-- Load only what you need for the current task — don't bulk-load.
-- The skill index above shows what's available; descriptions indicate when to use each skill."""
+_DEFAULT_USAGE_RULES = """\
+## Using skills
+Skills provide domain-specific instructions, procedures, and reference material.
+Each skill listed above has a description — use it to decide which are relevant.
+- Call `load_skill(name)` to load a skill's full instructions.
+- Call `read_skill_file(name, relpath)` to read supplementary files
+  (e.g. `references/…`, `scripts/…`, `assets/…`).
+- Load skills only when needed. Each one consumes context — prefer
+  targeted loading over loading everything upfront."""
 
 
 # ---------------------------------------------------------------------------
@@ -388,10 +406,11 @@ class Skills:
         self,
         source: SkillSource,
         *,
-        usage_rules: bool = True,
+        usage_rules: str | None = None,
     ) -> None:
         self._source = source
-        self._usage_rules = usage_rules
+        self._usage_rules = usage_rules  # None → default, "" → none, str → custom
+        self._metadata = source.metadata  # protocol guarantees sync access
 
     # -- factories ---------------------------------------------------------- #
 
@@ -400,7 +419,7 @@ class Skills:
         cls,
         path: str | Path,
         *,
-        usage_rules: bool = True,
+        usage_rules: str | None = None,
     ) -> "Skills":
         """Scan *path* for ``*/SKILL.md`` and build a :class:`Skills` instance."""
         return cls(LocalDirSkillSource(path), usage_rules=usage_rules)
@@ -410,30 +429,21 @@ class Skills:
     def instructions(self) -> str:
         """Render the skill index as a system-prompt fragment (Level 1).
 
-        Synchronous because :class:`LocalDirSkillSource` caches metadata
-        eagerly at construction time.
+        Synchronous because metadata is cached eagerly during ``__init__``.
         """
-        # Sources that cache metadata eagerly expose it via a synchronous
-        # ``metadata`` property (e.g. LocalDirSkillSource). Pure protocol
-        # implementations without pre-caching return an empty prompt here —
-        # callers should invoke ``list_metadata()`` first to warm the cache.
-        source_meta: list[SkillMetadata] | None = getattr(
-            self._source, "metadata", None
-        )
-        if source_meta is None:
-            return ""
-        metadata = source_meta
-
-        if not metadata:
+        if not self._metadata:
             return ""
 
         lines = ["## Skills"]
-        for m in metadata:
+        for m in self._metadata:
             lines.append(f"- `{m.name}` — {m.description}")
 
-        if self._usage_rules:
+        rules = self._usage_rules
+        if rules is None:
+            rules = _DEFAULT_USAGE_RULES
+        if rules:
             lines.append("")
-            lines.append(_USAGE_RULES)
+            lines.append(rules)
 
         return "\n".join(lines)
 
@@ -508,21 +518,33 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     Returns ``(metadata_dict, body_text)``. When no frontmatter is present
     returns ``({}, text)``.
 
+    Tolerates leading blank lines and trailing whitespace on the ``---``
+    delimiters.
+
     Uses ``yaml.safe_load`` (PyYAML is a transitive dependency). Falls back
     to a minimal line parser only when PyYAML is somehow unavailable — this
     path handles the simple ``key: value`` pairs used in ``SKILL.md`` metadata
     but does not aim to be a general-purpose YAML parser.
     """
-    if not text.startswith("---"):
+
+    trimmed = text.lstrip()
+    if not trimmed.startswith("---"):
         return {}, text
 
-    # Find the closing delimiter (second "---" on its own line or inline)
-    end = text.find("---", 3)
-    if end == -1:
-        return {}, text
+    # Find the closing "---" on its own line (possibly with trailing
+    # whitespace and Windows-style line endings).
+    m = _CLOSING_FM.search(trimmed[3:])
+    if m:
+        body_start = 3 + m.end()
+        fm_text = trimmed[3 : 3 + m.start()].strip()
+    else:
+        end = trimmed.find("---", 3)
+        if end == -1:
+            return {}, text
+        body_start = end + 3
+        fm_text = trimmed[3:end].strip()
 
-    fm_text = text[3:end].strip()
-    body = text[end + 3:].strip()
+    body = trimmed[body_start:].lstrip("\n\r")
 
     if not fm_text:
         return {}, body
@@ -555,11 +577,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         # Inline list: [a, b, c]
         if raw.startswith("[") and raw.endswith("]"):
             inner = raw[1:-1]
-            items = [
-                it.strip().strip("\"'")
-                for it in inner.split(",")
-                if it.strip()
-            ]
+            items = [it.strip().strip("\"'") for it in inner.split(",") if it.strip()]
             meta[k] = items
         else:
             meta[k] = raw

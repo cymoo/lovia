@@ -137,6 +137,22 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "event": "handoff",
             "data": json.dumps({"from": ev.from_agent.name, "to": ev.to_agent.name}),
         }
+    if isinstance(ev, events.TurnStarted):
+        return {
+            "event": "turn_started",
+            "data": json.dumps({"turn": ev.turn, "agent": ev.agent.name}),
+        }
+    if isinstance(ev, events.ContextCompacted):
+        return {
+            "event": "context_compacted",
+            "data": json.dumps(
+                {
+                    "session_id": ev.session_id,
+                    "summary": ev.summary,
+                    "reactive": ev.reactive,
+                }
+            ),
+        }
     if isinstance(ev, events.ErrorOccurred):
         return {
             "event": "error",

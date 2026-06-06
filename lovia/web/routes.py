@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Request
+    from fastapi import APIRouter, HTTPException, Query, Request
     from fastapi.templating import Jinja2Templates
     from sse_starlette.sse import EventSourceResponse
 except ImportError as exc:  # pragma: no cover - depends on optional env
@@ -21,7 +21,13 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from .. import events
 from ..agent import Agent
 from ..context_policy import ContextPolicy
-from ..transcript import entries_to_messages
+from ..reliability import CancelToken
+from ..transcript import (
+    AssistantTextEntry,
+    ReasoningEntry,
+    ToolCallEntry,
+    entries_to_messages,
+)
 from ..runner import Runner
 from .approvals import ApprovalRegistry
 from .schemas import (
@@ -58,6 +64,8 @@ def build_router(
 ) -> APIRouter:
     router = APIRouter()
     session = store.session
+    # Per-session CancelTokens for cooperative cancellation via the stop button.
+    _cancel_tokens: dict[str, CancelToken] = {}
 
     def _pick(name: str | None) -> Agent[Any]:
         if name is None:
@@ -147,6 +155,14 @@ def build_router(
         is_new = (await store.get(sid)) is None
         await store.upsert(sid, agent=agent.name)
 
+        # Cancel any previous run on the same session so the stop button
+        # only affects the current stream.
+        if sid in _cancel_tokens:
+            _cancel_tokens[sid].cancel("new stream started")
+
+        cancel = CancelToken()
+        _cancel_tokens[sid] = cancel
+
         async def gen():
             handle = Runner.stream(
                 agent,
@@ -154,6 +170,7 @@ def build_router(
                 session=session,
                 session_id=sid,
                 context_policy=context_policy,
+                cancel_token=cancel,
             )
             # Tell the client its session id up front so reconnects work.
             yield {"event": "session", "data": json.dumps({"session_id": sid})}
@@ -161,6 +178,7 @@ def build_router(
             try:
                 async for ev in handle:
                     if await request.is_disconnected():
+                        cancel.cancel("client disconnected")
                         break
                     needs_approval = isinstance(ev, events.ApprovalRequired)
                     if needs_approval:
@@ -174,6 +192,7 @@ def build_router(
                         await approvals.await_decision(sid, ev)
             finally:
                 await approvals.release(sid)
+                _cancel_tokens.pop(sid, None)
 
             if is_new and generate_titles:
                 # Schedule title generation as a background task so it is not
@@ -195,10 +214,24 @@ def build_router(
             raise HTTPException(status_code=404, detail="no pending approval matches")
         return {"ok": True}
 
+    @router.post("/api/chat/cancel")
+    async def cancel(session_id: str = Query(...)) -> dict[str, bool]:
+        """Cancel an in-progress stream for ``session_id``."""
+        token = _cancel_tokens.get(session_id)
+        if token is None:
+            raise HTTPException(status_code=404, detail="no active stream")
+        token.cancel("user requested stop")
+        return {"ok": True}
+
     # ---- sessions -------------------------------------------------------
 
     @router.get("/api/sessions", response_model=list[ChatSessionInfo])
-    async def list_sessions() -> list[ChatSessionInfo]:
+    async def list_sessions(q: str = Query("", max_length=200)) -> list[ChatSessionInfo]:
+        if q:
+            return [
+                ChatSessionInfo(**m.to_dict())
+                for m in await store.search(q, limit=200)
+            ]
         return [ChatSessionInfo(**m.to_dict()) for m in await store.list()]
 
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
@@ -251,5 +284,76 @@ def build_router(
     async def delete_session(session_id: str) -> dict[str, bool]:
         await store.delete(session_id)
         return {"ok": True}
+
+    @router.get("/api/sessions/{session_id}/export")
+    async def export_session(
+        session_id: str, format: str = Query("md", pattern="^(md|json|txt)$")
+    ) -> Any:
+        """Export a session as markdown, JSON, or plain text."""
+        meta = await store.get(session_id)
+        entries = await session.load(session_id)
+        msgs = entries_to_messages(entries)
+
+        if format == "json":
+            body = []
+            for m in msgs:
+                body.append(
+                    {
+                        "role": m.role,
+                        "content": m.text or m.content,
+                        "reasoning": m.reasoning,
+                        "tool_calls": [
+                            {"id": c.id, "name": c.name, "arguments": c.arguments}
+                            for c in m.tool_calls
+                        ],
+                    }
+                )
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content={
+                    "session_id": session_id,
+                    "title": meta.title if meta else None,
+                    "agent": meta.agent if meta else None,
+                    "messages": body,
+                }
+            )
+
+        if format == "txt":
+            lines: list[str] = []
+            for m in msgs:
+                role = m.role.upper()
+                text = (m.text or m.content) if isinstance(m.text or m.content, str) else str(m.text or m.content or "")
+                if text:
+                    lines.append(f"## {role}\n\n{text}\n")
+                if m.tool_calls:
+                    for tc in m.tool_calls:
+                        lines.append(f"### Tool: {tc.name}\n```\n{tc.arguments}\n```\n")
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(
+                "\n".join(lines),
+                headers={"Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.txt"},
+            )
+
+        # Markdown
+        lines = []
+        title = meta.title if meta else "Chat"
+        lines.append(f"# {title}\n")
+        lines.append(f"*Session: `{session_id}`*\n")
+        for m in msgs:
+            role = m.role.capitalize()
+            text = (m.text or m.content) if isinstance(m.text or m.content, str) else str(m.text or m.content or "")
+            if text:
+                lines.append(f"### {role}\n\n{text}\n")
+            if m.reasoning:
+                lines.append(f"<details>\n<summary>Reasoning</summary>\n\n{m.reasoning}\n\n</details>\n")
+            if m.tool_calls:
+                for tc in m.tool_calls:
+                    lines.append(f"**Tool: `{tc.name}`**\n\n```json\n{tc.arguments}\n```\n")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(
+            "\n".join(lines),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.md"},
+        )
 
     return router

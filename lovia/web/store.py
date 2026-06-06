@@ -182,3 +182,39 @@ class ChatStore:
                 self._meta._release(conn)
 
         await self._meta._run(_impl)
+
+    async def delete_all(self) -> None:
+        """Remove ALL transcripts and metadata."""
+        metas = await self.list()
+        for m in metas:
+            await self.session.clear(m.id)
+
+        def _impl() -> None:
+            conn = self._meta._connect()
+            try:
+                conn.execute("DELETE FROM chat_sessions")
+                conn.commit()
+            finally:
+                self._meta._release(conn)
+
+        await self._meta._run(_impl)
+
+    async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
+        """Search sessions whose title or id contains ``query``."""
+
+        def _impl() -> list[ChatMeta]:
+            conn = self._meta._connect()
+            try:
+                pattern = f"%{query}%"
+                rows = conn.execute(
+                    "SELECT id, title, agent, created_at, updated_at "
+                    "FROM chat_sessions "
+                    "WHERE title LIKE ? OR id LIKE ? "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (pattern, pattern, limit),
+                ).fetchall()
+                return [ChatMeta(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+            finally:
+                self._meta._release(conn)
+
+        return await self._meta._run(_impl)

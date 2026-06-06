@@ -1,102 +1,135 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title }}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}" />
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked@4/marked.min.js"></script>
-  </head>
-  <body>
-    <aside class="sidebar">
-      <div class="sidebar-head">
-        <div class="brand">
-          <span class="mark" aria-hidden="true"></span>
-          <span class="brand-name">{{ title }}</span>
-        </div>
-        <button id="new-chat" class="btn btn-primary btn-sm" type="button" title="New chat">
-          +
-        </button>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@4/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<!-- Sidebar overlay (mobile) -->
+<div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-head">
+    <span class="sidebar-title">Chats</span>
+    <button id="new-chat" class="btn-icon" type="button" title="New chat" aria-label="New chat">+</button>
+  </div>
+  <div class="sidebar-search">
+    <input type="search" id="session-search" class="search-input" placeholder="Filter…" autocomplete="off" />
+  </div>
+  <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
+  <div class="sidebar-foot">
+    <select id="agent-select" class="agent-select" aria-label="Select agent"></select>
+  </div>
+</aside>
+
+<!-- Main -->
+<main class="page">
+  <header class="topbar">
+    <button id="sidebar-toggle" class="btn-icon hamburger-btn" type="button" aria-label="Toggle sidebar">
+      <span class="hamburger"></span>
+    </button>
+    <h1 id="chat-title" class="chat-title">New chat</h1>
+    <div class="topbar-actions">
+      <span id="turn-progress" class="turn-progress hidden"></span>
+      <button id="export-btn" class="btn btn-ghost btn-sm" type="button" title="Export as Markdown" style="display:none">Export</button>
+      <button id="dark-toggle" class="btn-icon" type="button" title="Toggle theme" aria-label="Toggle dark mode">
+        <span class="theme-icon">◐</span>
+      </button>
+    </div>
+  </header>
+
+  <section id="transcript" class="transcript" aria-live="polite">
+    <div class="empty-state" id="empty-state">
+      <h2>How can I help?</h2>
+      <p>Ask anything — I'll respond with tools and reasoning as needed.</p>
+    </div>
+  </section>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <div class="composer-inner">
+      <label class="vh" for="prompt">message</label>
+      <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…" required></textarea>
+      <button id="send" class="btn btn-primary" type="submit" aria-label="Send">Send</button>
+      <button id="stop" class="btn btn-danger" type="button" aria-label="Stop" style="display:none">Stop</button>
+    </div>
+    <p class="composer-hint">Enter to send &thinsp;·&thinsp; Shift+Enter for newline</p>
+  </form>
+</main>
+
+<!-- Templates -->
+<template id="tmpl-turn">
+  <article class="turn">
+    <div class="avatar" aria-hidden="true"></div>
+    <div class="bubble">
+      <div class="meta">
+        <span class="role"></span>
+        <span class="timestamp"></span>
       </div>
-      <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
-      <div class="sidebar-foot">
-        <span id="agent-label" class="agent-label">-</span>
-      </div>
-    </aside>
+    </div>
+  </article>
+</template>
 
-    <main class="page">
-      <header class="topbar">
-        <h1 id="chat-title" class="chat-title">New chat</h1>
-      </header>
+<template id="tmpl-tool">
+  <details class="tool">
+    <summary>
+      <span class="tool-label">Tool</span>
+      <span class="tool-name"></span>
+      <span class="tool-args"></span>
+    </summary>
+    <pre class="tool-result"></pre>
+  </details>
+</template>
 
-      <section id="transcript" class="transcript" aria-live="polite">
-        <div class="empty-state" id="empty-state">
-          <h2>How can I help?</h2>
-          <p>Ask a question, approve tools when needed, and keep the thread.</p>
-        </div>
-      </section>
+<template id="tmpl-approval">
+  <div class="approval">
+    <div class="approval-head">Awaiting your decision</div>
+    <div class="approval-call">
+      <code class="approval-name"></code>
+      <pre class="approval-args"></pre>
+    </div>
+    <div class="approval-actions">
+      <button type="button" class="btn btn-ghost decline">Deny</button>
+      <button type="button" class="btn btn-primary approve">Approve</button>
+    </div>
+  </div>
+</template>
 
-      <form id="composer" class="composer" autocomplete="off">
-        <div class="composer-inner">
-          <label class="vh" for="prompt">message</label>
-          <textarea
-            id="prompt"
-            name="prompt"
-            rows="1"
-            placeholder="Send a message..."
-            required
-          ></textarea>
-          <button id="send" class="btn btn-primary" type="submit" aria-label="Send">
-            Send
-          </button>
-        </div>
-        <p class="composer-hint">Enter to send · Shift+Enter for newline</p>
-      </form>
-    </main>
+<template id="tmpl-handoff">
+  <div class="handoff-banner">
+    <span class="handoff-text"></span>
+  </div>
+</template>
 
-    <template id="tmpl-turn">
-      <article class="turn">
-        <div class="avatar" aria-hidden="true"></div>
-        <div class="bubble">
-          <div class="meta">
-            <span class="role"></span>
-          </div>
-        </div>
-      </article>
-    </template>
+<template id="tmpl-usage">
+  <div class="usage-info"><span class="usage-tokens"></span></div>
+</template>
 
-    <template id="tmpl-tool">
-      <details class="tool">
-        <summary>
-          <span class="tool-label">Tool</span>
-          <span class="tool-name"></span>
-          <span class="tool-args"></span>
-        </summary>
-        <pre class="tool-result"></pre>
-      </details>
-    </template>
+<template id="tmpl-context-compacted">
+  <div class="context-notice">
+    <span class="context-text"></span>
+  </div>
+</template>
 
-    <template id="tmpl-approval">
-      <div class="approval">
-        <div class="approval-head">Awaiting your decision</div>
-        <div class="approval-call">
-          <code class="approval-name"></code>
-          <pre class="approval-args"></pre>
-        </div>
-        <div class="approval-actions">
-          <button type="button" class="btn btn-ghost decline">Deny</button>
-          <button type="button" class="btn btn-primary approve">Approve</button>
-        </div>
-      </div>
-    </template>
+<template id="tmpl-copy-btn">
+  <button type="button" class="btn-copy" title="Copy" aria-label="Copy message">Copy</button>
+</template>
 
-    <script type="module" src="{{ url_for('static', path='chat.js') }}"></script>
-  </body>
+<template id="tmpl-retry">
+  <div class="retry-row">
+    <button type="button" class="btn btn-ghost btn-sm retry-btn">Retry</button>
+  </div>
+</template>
+
+<script type="module" src="{{ url_for('static', path='js/main.js') }}"></script>
+</body>
 </html>

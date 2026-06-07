@@ -229,7 +229,7 @@ def build_router(
                 ChatSessionInfo(**m.to_dict())
                 for m in await store.search(q, limit=200)
             ]
-        return [ChatSessionInfo(**m.to_dict()) for m in await store.list()]
+        return [ChatSessionInfo(**m.to_dict()) for m in await store.list_all()]
 
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
     async def get_session(session_id: str) -> SessionDetail:

@@ -154,7 +154,7 @@ class ChatStore:
 
         return await self._meta._run(_impl)
 
-    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
+    async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
         def _impl() -> list[ChatMeta]:
             conn = self._meta._connect()
             try:
@@ -185,7 +185,7 @@ class ChatStore:
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts and metadata."""
-        metas = await self.list()
+        metas = await self.list_all()
         for m in metas:
             await self.session.clear(m.id)
 

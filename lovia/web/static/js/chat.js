@@ -103,18 +103,9 @@ function formatTimestamp(ts) {
   if (ts == null) ts = Date.now();
   const ms = ts > 1e12 ? ts : ts * 1000;
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) {
-    // Fallback to current time
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-  }
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function isoTime() {
-  return formatTimestamp(Date.now());
+  if (Number.isNaN(d.getTime())) d.setTime(Date.now());
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function formatArgs(args) {
@@ -265,16 +256,6 @@ function appendHandoff(from, to) {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-handoff');
   node.querySelector('.handoff-text').textContent = `${from}  →  ${to}`;
-  store.bubble.appendChild(node);
-}
-
-function appendUsage(usage) {
-  if (!store.bubble || !usage) return;
-  const node = cloneTemplate('tmpl-usage');
-  const parts = [];
-  if (usage.input_tokens) parts.push(`in ${usage.input_tokens}`);
-  if (usage.output_tokens) parts.push(`out ${usage.output_tokens}`);
-  node.querySelector('.usage-tokens').textContent = parts.join('  ·  ');
   store.bubble.appendChild(node);
 }
 
@@ -517,7 +498,6 @@ async function handleEvent({ event, data }) {
 
     case 'done':
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
-      appendUsage(data.usage);
       break;
   }
 }

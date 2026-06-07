@@ -744,17 +744,6 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   font-weight: 500;
 }
 
-.usage-info {
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--muted-2);
-  font-family: var(--mono);
-  background: var(--surface-2);
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: var(--radius-xs);
-}
-
 .context-notice {
   display: flex;
   align-items: center;

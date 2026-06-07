@@ -661,9 +661,15 @@ class RunLoop:
 
         def add_tool(source: str, t: Tool) -> None:
             if t.name in tools:
+                hint = "Rename one tool or remove the duplicate."
+                if source == "mcp":
+                    hint = (
+                        "Set MCPServer.name to prefix each server's tools "
+                        "(e.g. name='fs' -> fs__read_file)."
+                    )
                 raise UserError(
                     f"Tool name conflict for {t.name!r} from {source}.",
-                    hint="Rename one tool or remove the duplicate.",
+                    hint=hint,
                 )
             tools[t.name] = t
 
@@ -698,10 +704,19 @@ class RunLoop:
     async def _connect_mcp(self, agent: Agent) -> tuple[list[Tool], list[Any]]:
         tools: list[Tool] = []
         cleanup: list[Any] = []
-        for server in agent.mcp_servers:
-            server_tools = await server.connect()
-            tools.extend(server_tools)
-            cleanup.append(server.aclose)
+        try:
+            for server in agent.mcp_servers:
+                conn = await server.open()
+                if server.close_on_run:
+                    cleanup.append(conn.close)
+                tools.extend(conn.tools())
+        except Exception:
+            for close in reversed(cleanup):
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            raise
         return tools, cleanup
 
     async def _connect_sandbox(self, agent: Agent) -> tuple[list[Tool], list[Any]]:

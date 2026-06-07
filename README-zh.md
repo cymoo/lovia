@@ -423,6 +423,59 @@ agent = Agent(
 )
 ```
 
+## MCP
+
+连接 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，其工具会
+以普通 lovia 工具的形式出现。支持两种传输：`MCPServerStdio`（子进程）与
+`MCPServerStreamableHTTP`（远程端点）。
+
+```bash
+pip install "lovia[mcp]"
+```
+
+```python
+from lovia import Agent
+from lovia.mcp import MCPServerStdio
+
+agent = Agent(
+    name="assistant",
+    model="openai:gpt-5.4",
+    mcp_servers=[
+        MCPServerStdio(
+            name="fs",                       # 工具名前缀：fs__read_file …
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-filesystem", "."],
+            include_tools=["read_file", "list_directory"],  # 可选白名单
+        )
+    ],
+)
+```
+
+默认情况下每次运行都会新建连接并在结束后关闭（对并发运行天然安全）。若想在多次运行
+间复用同一连接，打开一个 **session** 并把活动连接挂到 agent 上：
+
+```python
+server = MCPServerStdio(command="npx", args=["-y", "@modelcontextprotocol/server-everything"])
+
+async with server.session() as conn:          # 打开一次，反复复用
+    agent = Agent(name="assistant", mcp_servers=[conn])
+    await Runner.run(agent, "...")
+    await Runner.run(agent, "...")
+    tools = await conn.refresh_tools()         # 服务器有变动时重新列举
+```
+
+要点：
+
+- **过滤** — `include_tools` / `exclude_tools`（按 MCP 原始工具名匹配）。
+- **结果** — 文本原样透传；图片/音频/二进制渲染为紧凑占位符
+  （`[image: image/png, 12.3 KB]`），绝不塞入 base64。传入 `result_renderer`
+  可拿到原始 `MCPToolResult`，自行决定喂给模型的内容。返回 MCP `isError` 的工具会
+  以 `[tool error] …` 标记展示给模型，便于其自我纠正。
+- **韧性** — 传输错误统一包装为 `MCPError`；`auto_reconnect`（默认开启）会在单次
+  调用内透明地重连一次。对于 `stdio`，重连即重启进程，服务器端状态会丢失。
+
+明确不做：MCP prompts、resource 浏览、sampling、OAuth、hosted MCP——以保持接口精简。
+
 ## Web UI
 
 一行代码启动带流式输出的聊天界面：

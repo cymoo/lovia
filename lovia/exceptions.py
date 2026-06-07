@@ -112,3 +112,20 @@ class ContextOverflowError(LoviaError):
     single ``except`` clause. The original exception is preserved via
     ``raise ... from exc`` so users keep full debugging context.
     """
+
+
+class MCPError(LoviaError):
+    """Raised when an MCP server connection or tool call fails.
+
+    Wraps the underlying transport/protocol exception so the model and the
+    caller see a consistent, hint-bearing error instead of a raw
+    ``BrokenPipeError``. Protocol-level *tool* failures reported via an MCP
+    ``isError`` response are NOT raised — they are rendered back to the model
+    so it can self-correct.
+
+    Extra field populated when available:
+
+    * ``tool_name`` — the MCP tool whose call failed.
+    """
+
+    tool_name: str | None = None

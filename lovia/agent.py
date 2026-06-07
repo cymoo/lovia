@@ -23,7 +23,7 @@ from .tools import Tool
 if TYPE_CHECKING:
     from .guardrails import GuardrailFn
     from .hooks import AgentHooks
-    from .mcp import MCPServer
+    from .mcp import MCPServerLike
     from .memory import Memory
     from .messages import Message, ToolCall
     from .output import OutputRepairStrategy
@@ -78,8 +78,10 @@ class Agent(Generic[TContext]):
         settings: Sampling parameters forwarded to the provider.
         skills: Optional :class:`~lovia.skills.Skills` capability exposing on-demand
             skill instructions.
-        mcp_servers: MCP client connections whose tools will be merged at run
-            time.
+        mcp_servers: MCP servers (or live :class:`~lovia.mcp.MCPConnection`
+            objects) whose tools are merged at run time. Plain server configs
+            are opened fresh per run; a connection from
+            ``async with server.session()`` is reused across runs.
         sandbox: Optional filesystem/process environment whose default tools
             are merged at run time.
         hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
@@ -103,7 +105,7 @@ class Agent(Generic[TContext]):
     handoffs: list["Agent | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
     skills: "Skills | None" = None
-    mcp_servers: list["MCPServer"] = field(default_factory=list)
+    mcp_servers: list["MCPServerLike"] = field(default_factory=list)
     sandbox: "SandboxLike | None" = None
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None

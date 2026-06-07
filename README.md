@@ -428,7 +428,65 @@ agent = Agent(
 )
 ```
 
-## Web UI
+## MCP
+
+Connect to [Model Context Protocol](https://modelcontextprotocol.io) servers;
+their tools appear as ordinary lovia tools. Two transports are supported —
+`MCPServerStdio` (subprocess) and `MCPServerStreamableHTTP` (remote endpoint).
+
+```bash
+pip install "lovia[mcp]"
+```
+
+```python
+from lovia import Agent
+from lovia.mcp import MCPServerStdio
+
+agent = Agent(
+    name="assistant",
+    model="openai:gpt-5.4",
+    mcp_servers=[
+        MCPServerStdio(
+            name="fs",                       # prefixes tools as fs__read_file, …
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-filesystem", "."],
+            include_tools=["read_file", "list_directory"],  # optional allowlist
+        )
+    ],
+)
+```
+
+By default each run opens a fresh connection and closes it afterwards (safe for
+concurrent runs). To keep one connection alive across many runs, open a
+**session** and put the live connection on the agent:
+
+```python
+server = MCPServerStdio(command="npx", args=["-y", "@modelcontextprotocol/server-everything"])
+
+async with server.session() as conn:          # opened once, reused
+    agent = Agent(name="assistant", mcp_servers=[conn])
+    await Runner.run(agent, "...")
+    await Runner.run(agent, "...")
+    tools = await conn.refresh_tools()         # re-list if the server changed
+```
+
+Details:
+
+- **Filtering** — `include_tools` / `exclude_tools` (matched on the raw MCP name).
+- **Results** — text passes through; images/audio/binary become compact
+  placeholders (`[image: image/png, 12.3 KB]`), never base64. Pass a
+  `result_renderer` to receive the raw `MCPToolResult` and decide what the model
+  sees. A tool that returns an MCP `isError` is shown to the model with a
+  `[tool error] …` marker so it can self-correct.
+- **Resilience** — transport failures are wrapped in `MCPError`; `auto_reconnect`
+  (on by default) transparently re-establishes a dropped connection once per
+  call. For `stdio`, reconnect respawns the process, so any server-side state is
+  lost.
+
+Deliberate non-goals: MCP prompts, resource browsing, sampling, OAuth, and
+hosted MCP — kept out to keep the surface small.
+
+
 
 A minimal FastAPI app with streaming, sessions, markdown rendering, and approval:
 

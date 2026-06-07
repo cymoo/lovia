@@ -441,11 +441,11 @@ agent = Agent(
     name="assistant",
     model="openai:gpt-5.4",
     mcp_servers=[
+        # 官方 `fetch` 服务器，可从公开 Web API 拉取实时数据。
         MCPServerStdio(
-            name="fs",                       # 工具名前缀：fs__read_file …
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-filesystem", "."],
-            include_tools=["read_file", "list_directory"],  # 可选白名单
+            name="web",                      # 工具名前缀：web__fetch
+            command="uvx",
+            args=["mcp-server-fetch"],
         )
     ],
 )
@@ -455,14 +455,16 @@ agent = Agent(
 间复用同一连接，打开一个 **session** 并把活动连接挂到 agent 上：
 
 ```python
-server = MCPServerStdio(command="npx", args=["-y", "@modelcontextprotocol/server-everything"])
+server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:          # 打开一次，反复复用
     agent = Agent(name="assistant", mcp_servers=[conn])
-    await Runner.run(agent, "...")
+    await Runner.run(agent, "Fetch https://wttr.in/Tokyo?format=j1 and summarise it.")
     await Runner.run(agent, "...")
     tools = await conn.refresh_tools()         # 服务器有变动时重新列举
 ```
+
+完整的流式示例见 `examples/26_mcp.py`。
 
 要点：
 
@@ -507,6 +509,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `examples/16_web_serve.py` | Web UI |
 | `examples/22_sandbox.py` | 直接使用 sandbox session |
 | `examples/23_sandbox_agent.py` | Coding Agent |
+| `examples/26_mcp.py` | 远程 MCP 服务器（fetch）+ 流式 |
 | `examples/24_prefect.py` | Prefect 工作流 |
 | `examples/tools/` | 各工具专项示例 |
 | `examples/workflows/` | 常见工作流模式 |

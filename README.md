@@ -446,11 +446,11 @@ agent = Agent(
     name="assistant",
     model="openai:gpt-5.4",
     mcp_servers=[
+        # The official `fetch` server pulls live data from public web APIs.
         MCPServerStdio(
-            name="fs",                       # prefixes tools as fs__read_file, …
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-filesystem", "."],
-            include_tools=["read_file", "list_directory"],  # optional allowlist
+            name="web",                      # prefixes tools as web__fetch
+            command="uvx",
+            args=["mcp-server-fetch"],
         )
     ],
 )
@@ -461,14 +461,16 @@ concurrent runs). To keep one connection alive across many runs, open a
 **session** and put the live connection on the agent:
 
 ```python
-server = MCPServerStdio(command="npx", args=["-y", "@modelcontextprotocol/server-everything"])
+server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:          # opened once, reused
     agent = Agent(name="assistant", mcp_servers=[conn])
-    await Runner.run(agent, "...")
+    await Runner.run(agent, "Fetch https://wttr.in/Tokyo?format=j1 and summarise it.")
     await Runner.run(agent, "...")
     tools = await conn.refresh_tools()         # re-list if the server changed
 ```
+
+See `examples/26_mcp.py` for a full streaming demo.
 
 Details:
 
@@ -518,6 +520,7 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 | `examples/16_web_serve.py` | web UI |
 | `examples/22_sandbox.py` | direct sandbox session |
 | `examples/23_sandbox_agent.py` | coding agent |
+| `examples/26_mcp.py` | remote MCP server (fetch) + streaming |
 | `examples/24_prefect.py` | Prefect workflow |
 | `examples/tools/` | focused tool demos |
 | `examples/workflows/` | workflow patterns |

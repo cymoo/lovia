@@ -46,6 +46,7 @@ class MessageOut(BaseModel):
     tool_call_id: str | None = None
     name: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    timestamp: float | None = None
 
 
 class SessionDetail(BaseModel):

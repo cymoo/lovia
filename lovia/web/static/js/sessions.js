@@ -140,6 +140,7 @@ export async function deleteSession(id) {
 export async function switchSession(id) {
   if (store.streaming || store.sessionId === id) return;
   store.sessionId = id;
+  store.syncURL(id);
   store.emit('session-switched', id);
 
   const transcript = document.getElementById('transcript');
@@ -162,6 +163,7 @@ export async function switchSession(id) {
 
 export function clearChat() {
   store.sessionId = null;
+  store.syncURL(null);
   store.bubble = null;
   store.body = null;
   store.rawText = '';

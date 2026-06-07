@@ -2,7 +2,7 @@
 import { store } from './store.js';
 import { initTheme, initSidebarToggle } from './ui.js';
 import { initComposer, cancelStream, renderHistory } from './chat.js';
-import { initSessions, loadSessions, clearChat } from './sessions.js';
+import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 
 // ---- Agent loading ------------------------------------------------------
 async function loadAgents() {
@@ -55,4 +55,13 @@ store.on('clear-chat', clearChat);
   document.getElementById('prompt')?.focus();
 
   store.on('cancel', cancelStream);
+
+  // Restore session from URL query string (?session=xxx).
+  // Wait for the initial session list to land so the sidebar
+  // is populated before we mark one as active.
+  await loadSessions();
+  const sid = store.readSessionFromURL();
+  if (sid) {
+    await switchSession(sid).catch(() => {});
+  }
 })();

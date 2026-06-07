@@ -88,10 +88,10 @@ def test_chat_triggers_background_title_generation() -> None:
 def test_stream_schedules_background_title() -> None:
     """The streaming path must schedule title generation as a background task.
 
-    The title is *not* sent as an inline SSE event (that design was unreliable
-    because SSE-connection cancellation would silently drop the title).  Instead,
-    the background task stores the title in the DB and the client picks it up via
-    a delayed loadSessions() poll.
+    The title is *not* sent as an inline SSE event (that would block the
+    stream from closing and keep the UI in a streaming state).  Instead,
+    the background task stores the title in the DB and the client picks it up
+    via a tight loadSessions() poll.
     """
     from .test_web import _parse_sse  # reuse SSE parser
 

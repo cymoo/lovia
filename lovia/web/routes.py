@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -195,10 +196,6 @@ def build_router(
                 _cancel_tokens.pop(sid, None)
 
             if is_new and generate_titles:
-                # Schedule title generation as a background task so it is not
-                # affected by SSE connection cancellation (e.g. the client
-                # navigates away while the LLM is still thinking).  The client
-                # picks up the stored title via the delayed loadSessions() poll.
                 asyncio.create_task(
                     _schedule_title(sid, req.message, final_output, agent.name)
                 )
@@ -239,6 +236,17 @@ def build_router(
         meta = await store.get(session_id)
         entries = await session.load(session_id)
         msgs = entries_to_messages(entries)
+
+        # Synthesise per-message timestamps by spreading them evenly
+        # between created_at and updated_at.
+        n = len(msgs)
+        t0 = meta.created_at if meta else time.time()
+        t1 = meta.updated_at if meta else t0
+        if n <= 1:
+            spacing = 0.0
+        else:
+            spacing = max(0.0, (t1 - t0)) / (n - 1)
+
         body = [
             MessageOut(
                 role=m.role,
@@ -254,8 +262,9 @@ def build_router(
                     }
                     for c in m.tool_calls
                 ],
+                timestamp=t0 + i * spacing,
             )
-            for m in msgs
+            for i, m in enumerate(msgs)
         ]
         if meta is None:
             from time import time as _now

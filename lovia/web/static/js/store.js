@@ -33,5 +33,20 @@ export const store = {
   emit(event, data) {
     const arr = _listeners.get(event);
     if (arr) arr.forEach(fn => fn(data));
-  }
+  },
+
+  syncURL(sessionId) {
+    const url = new URL(window.location);
+    if (sessionId) {
+      url.searchParams.set('session', sessionId);
+    } else {
+      url.searchParams.delete('session');
+    }
+    window.history.replaceState({}, '', url);
+  },
+
+  readSessionFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('session');
+  },
 };

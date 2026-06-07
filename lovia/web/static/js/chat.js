@@ -39,19 +39,32 @@ function cloneTemplate(id) {
   return document.getElementById(id).content.firstElementChild.cloneNode(true);
 }
 
-function makeTurn(role) {
+function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
   node.classList.add(role);
   node.querySelector('.role').textContent =
     role === 'user' ? 'You' : store.agent ?? 'Assistant';
-  node.querySelector('.timestamp').textContent = isoTime();
+  node.querySelector('.timestamp').textContent = formatTimestamp(ts);
   return node;
 }
 
-function isoTime() {
-  const d = new Date();
+function formatTimestamp(ts) {
+  // Accept seconds (float from backend) or ms.
+  if (ts == null) ts = Date.now();
+  const ms = ts > 1e12 ? ts : ts * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) {
+    // Fallback to current time
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  }
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function isoTime() {
+  return formatTimestamp(Date.now());
 }
 
 function formatArgs(args) {
@@ -87,10 +100,10 @@ export function appendUserTurn(text) {
   scrollDown();
 }
 
-function startAssistantTurn() {
+function startAssistantTurn(ts) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return {};
-  const node = makeTurn('assistant');
+  const node = makeTurn('assistant', ts);
   node.classList.add('streaming');
   transcriptEl.appendChild(node);
   store.bubble = node.querySelector('.bubble');
@@ -134,6 +147,9 @@ function ensureReasoning() {
 
 function finalizeReasoning() {
   if (!store.reasoningNode || !store.reasoningText) return;
+  // Only collapse on the first call — subsequent calls (e.g. from
+  // repeated text_delta events) must not reset the user's toggle.
+  if (store.reasoningNode.classList.contains('done')) return;
   store.reasoningNode.open = false;
   store.reasoningNode.classList.add('done');
   const end = store.reasoningEnd || Date.now();
@@ -271,7 +287,7 @@ export function renderHistory(entries) {
   for (const it of entries) {
     if (it.role === 'user') {
       currentBubble = null;
-      const turn = makeTurn('user');
+      const turn = makeTurn('user', it.timestamp);
       const body = document.createElement('div');
       body.className = 'body';
       body.textContent = contentText(it.content);
@@ -280,7 +296,7 @@ export function renderHistory(entries) {
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
-        const result = startAssistantTurn();
+        const result = startAssistantTurn(it.timestamp);
         currentBubble = result.bubble;
       }
       const text = contentText(it.content);
@@ -365,6 +381,7 @@ async function handleEvent({ event, data }) {
   switch (event) {
     case 'session':
       store.sessionId = data.session_id;
+      store.syncURL(data.session_id);
       break;
 
     case 'text_delta':
@@ -527,15 +544,26 @@ export async function runStream(message) {
     if (stopBtn) stopBtn.style.display = 'none';
     if (promptEl) promptEl.focus();
     if (turnProgressEl) turnProgressEl.classList.add('hidden');
+    // Title is generated in a background task after the stream closes.
+    // Poll with back-off: 0.6, 1.2, 2.0, 3.5, 6, 12 s, then every
+    // 10 s until the user switches sessions.  This covers both fast
+    // title generation (1-2 s) and slow/queued LLM calls (30+ s).
+    let _pollAttempt = 0;
+    const _pollSid = store.sessionId;
+    const _doPoll = () => {
+      if (!_pollSid || store.sessionId !== _pollSid) return;
+      _pollAttempt++;
+      loadSessions();
+      let next;
+      if (_pollAttempt <= 6) {
+        next = [600, 600, 800, 1500, 2500, 6000][_pollAttempt - 1];
+      } else {
+        next = 10_000; // keep checking every 10 s forever
+      }
+      setTimeout(_doPoll, next);
+    };
     loadSessions();
-    // Title generation runs in background after SSE closes.
-    // Poll a few times to pick up the generated title.
-    const sid = store.sessionId;
-    for (const delay of [2000, 5000, 10000]) {
-      setTimeout(() => {
-        if (store.sessionId === sid) loadSessions();
-      }, delay);
-    }
+    setTimeout(_doPoll, 600);
   }
 }
 

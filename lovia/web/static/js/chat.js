@@ -20,6 +20,56 @@ function highlightCode(container) {
       el.dataset.highlighted = '1';
     }
   });
+  addCodeBlockControls(container);
+}
+
+// ---- Code block copy buttons -------------------------------------------
+function addCodeBlockControls(container) {
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('.btn-copy-code')) return; // already added
+
+    // Detect language from highlight.js class
+    const code = pre.querySelector('code');
+    let lang = '';
+    if (code) {
+      const classes = code.className.split(' ');
+      for (const cls of classes) {
+        if (cls.startsWith('language-') && cls !== 'language-') {
+          lang = cls.replace('language-', '');
+          break;
+        }
+      }
+    }
+
+    // Language label
+    if (lang) {
+      const label = document.createElement('span');
+      label.className = 'code-lang';
+      label.textContent = lang;
+      pre.appendChild(label);
+    }
+
+    // Copy button
+    const btn = document.createElement('button');
+    btn.className = 'btn-copy-code';
+    btn.type = 'button';
+    btn.title = 'Copy code';
+    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const codeText = code?.textContent || pre.textContent?.replace(/Copy$/, '') || '';
+      const ok = await copyToClipboard(codeText.trimEnd());
+      if (ok) {
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      }
+    });
+    pre.appendChild(btn);
+  });
 }
 
 // Debounced streaming render
@@ -252,13 +302,14 @@ function addCopyButton(bubble) {
 
   const btn = cloneTemplate('tmpl-copy-btn');
   btn.addEventListener('click', async () => {
-    const text = bodyEl.textContent || '';
+    // Use raw markdown if available, fall back to plain text
+    const text = bodyEl.dataset.raw || bodyEl.textContent || '';
     const ok = await copyToClipboard(text);
     if (ok) {
-      btn.textContent = 'Copied';
+      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied';
       btn.classList.add('copied');
       setTimeout(() => {
-        btn.textContent = 'Copy';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
         btn.classList.remove('copied');
       }, 1500);
     }
@@ -315,6 +366,7 @@ export function renderHistory(entries) {
       if (text) {
         const body = document.createElement('div');
         body.className = 'body';
+        body.dataset.raw = text; // store raw markdown for copy
         body.innerHTML = renderMarkdown(text);
         currentBubble.appendChild(body);
         highlightCode(body);
@@ -532,7 +584,10 @@ export async function runStream(message) {
     }
   } finally {
     clearTimeout(_renderTimer);
-    if (store.body && store.rawText) flushRender();
+    if (store.body && store.rawText) {
+      store.body.dataset.raw = store.rawText; // store raw markdown for copy
+      flushRender();
+    }
     if (turn) {
       turn.classList.remove('streaming');
       // Add copy button to final bubble

@@ -27,6 +27,7 @@ htmlcov/
 # Temporary files
 tmp/
 .cache/
+.lovia/
 
 # Test database files
 *.db

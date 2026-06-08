@@ -1,8 +1,6 @@
 // UI utilities: theme, sidebar toggle, dialogs.
 import { store } from './store.js';
 
-export const $ = (s, root = document) => root.querySelector(s);
-
 const darkToggle = document.getElementById('dark-toggle');
 const themeIcon = darkToggle?.querySelector('.theme-icon');
 
@@ -22,18 +20,19 @@ export function initTheme() {
 }
 
 // ---- Sidebar toggle (mobile) -------------------------------------------
+const overlay = document.getElementById('sidebar-overlay');
 let sidebarOpen = false;
 
 function openSidebar() {
   sidebarOpen = true;
   document.getElementById('sidebar')?.classList.add('open');
-  document.getElementById('sidebar-overlay')?.classList.add('open');
+  overlay?.classList.add('open');
 }
 
 function closeSidebar() {
   sidebarOpen = false;
   document.getElementById('sidebar')?.classList.remove('open');
-  document.getElementById('sidebar-overlay')?.classList.remove('open');
+  overlay?.classList.remove('open');
 }
 
 export function initSidebarToggle() {
@@ -43,8 +42,6 @@ export function initSidebarToggle() {
     if (e.key === 'Escape' && sidebarOpen) closeSidebar();
   });
 }
-
-const overlay = document.getElementById('sidebar-overlay');
 
 // ---- Native Dialog -----------------------------------------------------
 export function showDialog({ body, actions, onClose } = {}) {

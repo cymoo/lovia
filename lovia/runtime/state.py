@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from ..handoff import _HandoffSignal
 from ..messages import AssistantTurn
@@ -17,4 +16,4 @@ class TurnState:
     assistant: AssistantTurn | None = None
     turn_entries: list[TranscriptEntry] | None = None
     handoff_signal: _HandoffSignal | None = None
-    final_via_tool: Any = None
+    final_via_tool: object | None = None

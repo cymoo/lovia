@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from typing import AsyncIterator, Protocol, runtime_checkable
 
+from .._types import JsonObject
 from ..transcript import TranscriptEntry, ModelDelta, entry_to_dict
 
 
@@ -44,13 +45,13 @@ class ModelSettings:
     max_tokens: int | None = None
     stop: list[str] | None = None
     parallel_tool_calls: bool | None = None
-    provider_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    provider_options: dict[str, JsonObject] = field(default_factory=dict)
 
 
-def provider_options(settings: ModelSettings, *keys: str) -> dict[str, Any]:
+def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:
     """Return a merged copy of provider-specific settings for ``keys``."""
 
-    out: dict[str, Any] = {}
+    out: JsonObject = {}
     for key in keys:
         out.update(settings.provider_options.get(key, {}))
     return out
@@ -80,8 +81,8 @@ class Provider(Protocol):
         self,
         entries: list[TranscriptEntry],
         *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
+        tools: list[JsonObject] | None = None,
+        response_format: JsonObject | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]: ...
 
@@ -91,7 +92,17 @@ class Provider(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def estimate_tokens(provider: Any, entries: list[TranscriptEntry]) -> int:
+@runtime_checkable
+class TokenEstimator(Protocol):
+    def estimate_tokens(self, entries: list[TranscriptEntry]) -> int: ...
+
+
+@runtime_checkable
+class ContextWindowProvider(Protocol):
+    def context_window(self, model: str) -> int | None: ...
+
+
+def estimate_tokens(provider: object, entries: list[TranscriptEntry]) -> int:
     """Approximate the prompt size of ``entries`` for ``provider``.
 
     If the provider exposes an ``estimate_tokens(entries) -> int`` method we
@@ -100,9 +111,8 @@ def estimate_tokens(provider: Any, entries: list[TranscriptEntry]) -> int:
     serialization — enough to drive a "compact at 80% of the window"
     policy without pulling in tiktoken as a hard dependency.
     """
-    fn = getattr(provider, "estimate_tokens", None)
-    if callable(fn):
-        return int(fn(entries))
+    if isinstance(provider, TokenEstimator):
+        return int(provider.estimate_tokens(entries))
     # ``entry_to_dict`` is cheap and already used by sessions; reusing it
     # here keeps the estimate consistent with what gets persisted.
     chars = sum(
@@ -112,7 +122,7 @@ def estimate_tokens(provider: Any, entries: list[TranscriptEntry]) -> int:
     return chars // 4
 
 
-def context_window(provider: Any, model: str | None) -> int | None:
+def context_window(provider: object, model: str | None) -> int | None:
     """Return the prompt+output token cap for ``model`` on ``provider``.
 
     Returns ``None`` when the provider doesn't expose the information (no
@@ -122,8 +132,7 @@ def context_window(provider: Any, model: str | None) -> int | None:
     """
     if model is None:
         return None
-    fn = getattr(provider, "context_window", None)
-    if callable(fn):
-        result = fn(model)
+    if isinstance(provider, ContextWindowProvider):
+        result = provider.context_window(model)
         return int(result) if result is not None else None
     return None

@@ -9,11 +9,12 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 from __future__ import annotations
 
 import os
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
 
+from .._types import JsonObject
 from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
@@ -46,7 +47,7 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # vendor-neutral. Other providers translate their own way.
 
 
-def _tool_call_to_openai(tc: ToolCall) -> dict[str, Any]:
+def _tool_call_to_openai(tc: ToolCall) -> JsonObject:
     return {
         "id": tc.id,
         "type": "function",
@@ -54,9 +55,9 @@ def _tool_call_to_openai(tc: ToolCall) -> dict[str, Any]:
     }
 
 
-def message_to_openai(msg: Message) -> dict[str, Any]:
+def message_to_openai(msg: Message) -> JsonObject:
     """Serialize a :class:`Message` to the OpenAI Chat Completions wire format."""
-    out: dict[str, Any] = {"role": msg.role}
+    out: JsonObject = {"role": msg.role}
     if msg.content is not None:
         out["content"] = _content_to_openai(msg.content)
     if msg.tool_calls:
@@ -72,8 +73,8 @@ def _assistant_to_openai(
     content: str | None,
     tool_calls: list[ToolCall],
     reasoning_content: str | None,
-) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": "assistant"}
+) -> JsonObject:
+    out: JsonObject = {"role": "assistant"}
     if content is not None:
         out["content"] = content
     if reasoning_content is not None:
@@ -87,10 +88,10 @@ def entries_to_openai_messages(
     entries: list[TranscriptEntry],
     *,
     reasoning_provider: str = "openai-chat",
-) -> list[dict[str, Any]]:
+) -> list[JsonObject]:
     """Serialize transcript entries to OpenAI Chat messages."""
 
-    out: list[dict[str, Any]] = []
+    out: list[JsonObject] = []
     pending_reasoning: str | None = None
     pending_content: str | None = None
     pending_calls: list[ToolCall] = []
@@ -226,12 +227,12 @@ class OpenAIChatProvider:
     def _build_payload(
         self,
         entries: list[TranscriptEntry],
-        tools: list[dict[str, Any]] | None,
-        response_format: dict[str, Any] | None,
+        tools: list[JsonObject] | None,
+        response_format: JsonObject | None,
         settings: ModelSettings | None,
         stream: bool,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+    ) -> JsonObject:
+        payload: JsonObject = {
             "model": self.model,
             "messages": entries_to_openai_messages(
                 entries, reasoning_provider=self.name
@@ -263,8 +264,8 @@ class OpenAIChatProvider:
         self,
         entries: list[TranscriptEntry],
         *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
+        tools: list[JsonObject] | None = None,
+        response_format: JsonObject | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]:
         payload = self._build_payload(

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from ._types import JsonValue
 from .tools import Tool
 
 logger = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ class SkillMetadata:
     description: str
     """What the skill does and when to use it, max 1024 characters."""
 
-    extra: Mapping[str, Any] = field(default_factory=dict)
+    extra: Mapping[str, JsonValue] = field(default_factory=dict)
     """Any frontmatter keys beyond ``name``/``description`` (tags, version, …),
     surfaced verbatim in the system-prompt index so the model can route on them."""
 
@@ -182,7 +183,7 @@ class Skill:
     path: Path | None = None
     """On-disk directory, used by :meth:`read_file` to resolve sub-resources."""
 
-    extra: Mapping[str, Any] = field(default_factory=dict)
+    extra: Mapping[str, JsonValue] = field(default_factory=dict)
     """Extra frontmatter keys carried over from :class:`SkillMetadata`."""
 
     # -- sub-resource access ------------------------------------------------ #
@@ -587,7 +588,7 @@ _SKILL_CONTENT_PREAMBLE = (
 )
 
 
-def _format_extra(extra: Mapping[str, Any]) -> str:
+def _format_extra(extra: Mapping[str, JsonValue]) -> str:
     """Render extra frontmatter keys as a compact ``key: value; …`` string.
 
     Scalars and flat lists are rendered inline; empty and nested values are

@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
 
+from .._types import JsonObject
 from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
@@ -129,11 +130,11 @@ class AnthropicProvider:
     def _build_payload(
         self,
         entries: list[TranscriptEntry],
-        tools: list[dict[str, Any]] | None,
-        response_format: dict[str, Any] | None,
+        tools: list[JsonObject] | None,
+        response_format: JsonObject | None,
         settings: ModelSettings | None,
         stream: bool,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         system_blocks, anthropic_messages = _to_anthropic_messages(entries)
         extra = (
             provider_options(settings, self.name, "claude")
@@ -148,7 +149,7 @@ class AnthropicProvider:
                 "cache_control": {"type": "ephemeral"},
             }
 
-        payload: dict[str, Any] = {
+        payload: JsonObject = {
             "model": self.model,
             "messages": anthropic_messages,
             "max_tokens": (
@@ -201,8 +202,8 @@ class AnthropicProvider:
         self,
         entries: list[TranscriptEntry],
         *,
-        tools: list[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
+        tools: list[JsonObject] | None = None,
+        response_format: JsonObject | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]:
         payload = self._build_payload(
@@ -304,7 +305,7 @@ class AnthropicProvider:
                                     AssistantTextEntry(content=content)
                                 )
                         elif kind == "thinking":
-                            metadata: dict[str, Any] = {}
+                            metadata: JsonObject = {}
                             if signature := thinking_signatures.get(idx):
                                 metadata["signature"] = signature
                             yield EntryCompletedDelta(
@@ -323,10 +324,10 @@ class AnthropicProvider:
                                 )
                             )
                     elif etype == "message_delta":
-                        stop_reason = (event.get("delta") or {}).get(
-                            "stop_reason"
-                        ) or stop_reason
-                        if u := event.get("usage"):
+                        delta = event.get("delta") or {}
+                        stop_reason = delta.get("stop_reason") or stop_reason
+                        if u_raw := event.get("usage"):
+                            u = u_raw
                             usage.output_tokens = u.get(
                                 "output_tokens", usage.output_tokens
                             )
@@ -337,7 +338,9 @@ class AnthropicProvider:
                             if "cache_read_input_tokens" in u:
                                 usage.cache_read_tokens = u["cache_read_input_tokens"]
                     elif etype == "message_start":
-                        if u := (event.get("message") or {}).get("usage"):
+                        message = event.get("message") or {}
+                        if u_raw := message.get("usage"):
+                            u = u_raw
                             usage.input_tokens = u.get("input_tokens", 0)
                             usage.output_tokens = u.get("output_tokens", 0)
                             usage.cache_write_tokens = u.get(
@@ -388,8 +391,8 @@ def _normalize_stop_reason(reason: str | None) -> str | None:
 
 
 def _response_format_to_output_config(
-    response_format: dict[str, Any],
-) -> dict[str, Any] | None:
+    response_format: JsonObject,
+) -> JsonObject | None:
     """Map supported OpenAI response_format shapes to Anthropic output_config."""
     if response_format.get("type") != "json_schema":
         return None
@@ -402,7 +405,7 @@ def _response_format_to_output_config(
     return {"format": {"type": "json_schema", "schema": schema}}
 
 
-def _is_stream_error_retryable(error: dict[str, Any]) -> bool:
+def _is_stream_error_retryable(error: JsonObject) -> bool:
     error_type = str(error.get("type") or "").lower()
     message = str(error.get("message") or "").lower()
     text = f"{error_type} {message}"
@@ -414,7 +417,7 @@ def _is_stream_error_retryable(error: dict[str, Any]) -> bool:
 
 def _to_anthropic_messages(
     entries: list[TranscriptEntry],
-) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]]:
+) -> tuple[list[JsonObject] | None, list[JsonObject]]:
     """Translate transcript entries into Anthropic's API shape.
 
     Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
@@ -422,8 +425,8 @@ def _to_anthropic_messages(
     parameter (we use the block form so callers can attach ``cache_control``).
     """
     system_parts: list[str] = []
-    out: list[dict[str, Any]] = []
-    pending_blocks: list[dict[str, Any]] = []
+    out: list[JsonObject] = []
+    pending_blocks: list[JsonObject] = []
 
     def flush_assistant() -> None:
         nonlocal pending_blocks
@@ -457,7 +460,7 @@ def _to_anthropic_messages(
         if isinstance(entry, ReasoningEntry):
             if entry.provider != "anthropic":
                 continue
-            block = {"type": "thinking", "thinking": entry.content}
+            block: JsonObject = {"type": "thinking", "thinking": entry.content}
             signature = entry.metadata.get("signature")
             if isinstance(signature, str) and signature:
                 block["signature"] = signature
@@ -490,7 +493,7 @@ def _to_anthropic_messages(
             )
 
     flush_assistant()
-    system_blocks: list[dict[str, Any]] | None
+    system_blocks: list[JsonObject] | None
     if system_parts:
         system_blocks = [{"type": "text", "text": "\n\n".join(system_parts)}]
     else:

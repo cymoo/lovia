@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, cast
+
+from .._types import JsonValue
 
 if TYPE_CHECKING:
     from ..messages import AssistantTurn, Message
@@ -72,18 +74,20 @@ from ..run_context import RunContext
 from .result import RunResult
 from ..session import Session
 from ..tools import Tool
-from ..tracing import NoopTracer, Tracer
+from ..tracing import NoopTracer, Span, Tracer
 
 
 logger = logging.getLogger(__name__)
+
+Cleanup = Callable[[], Awaitable[None]]
 
 
 @dataclass
 class _BootstrapState:
     entries_log: list[TranscriptEntry]
-    run_ctx: RunContext[Any]
+    run_ctx: RunContext[object]
     mcp_tools: list[Tool]
-    mcp_cleanup: list[Any]
+    mcp_cleanup: list[Cleanup]
     structured_output: StructuredOutput | None
     tools_by_name: dict[str, Tool]
     turns: int
@@ -102,7 +106,7 @@ class RunLoop:
         *,
         initial_agent: Agent,
         user_input: "str | list[Message]",
-        context: Any,
+        context: object,
         session: Session | None,
         session_id: str | None,
         max_turns: int,
@@ -115,7 +119,7 @@ class RunLoop:
         run_id: str | None = None,
         resume_from: RunSnapshot | None = None,
         append_instructions: "str | None" = None,
-        output_type_override: Any | None = None,
+        output_type_override: object | None = None,
         has_output_type_override: bool = False,
     ) -> None:
         if session is not None and session_id is None:
@@ -151,7 +155,7 @@ class RunLoop:
         self.has_output_type_override = has_output_type_override
         self._override_consumed = False
 
-    def _resolve_output_type(self, agent: Agent) -> Any:
+    def _resolve_output_type(self, agent: Agent) -> object:
         """Return the output type to use for ``agent``.
 
         The Runner-level override applies only to the initial agent. After
@@ -181,7 +185,7 @@ class RunLoop:
         self,
         agent: Agent,
         tracer: Tracer,
-        run_span: Any,
+        run_span: Span,
     ) -> AsyncIterator[events.Event]:
         bootstrap = await self._bootstrap_phase(agent)
         entries_log = bootstrap.entries_log
@@ -216,7 +220,7 @@ class RunLoop:
                     run_ctx,
                 )
 
-            output: Any = None
+            output: object | None = None
             turns = bootstrap.turns
             output_repair_attempts = 0
             while True:
@@ -249,7 +253,7 @@ class RunLoop:
 
                 # ContextPolicy: rewrite the transcript before the model
                 # call. Identity check skips the no-op path.
-                primary_provider = providers[0] if providers else None
+                primary_provider = providers[0]
                 policy_model = getattr(primary_provider, "model", None)
                 policy_ctx = PolicyContext(
                     provider=primary_provider,
@@ -482,7 +486,7 @@ class RunLoop:
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
 
-        mcp_cleanup: list[Any] = []
+        mcp_cleanup: list[Cleanup] = []
         try:
             mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
             sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
@@ -515,11 +519,11 @@ class RunLoop:
         self,
         agent: Agent,
         state: TurnState,
-        run_ctx: RunContext[Any],
+        run_ctx: RunContext[object],
         tracer: Tracer,
         entries_log: list[TranscriptEntry],
         mcp_tools: list[Tool],
-        cleanup: list[Any],
+        cleanup: list[Cleanup],
     ) -> tuple[Agent, StructuredOutput | None, dict[str, Tool], events.HandoffOccurred]:
         """Switch active agent and rebuild agent-specific run state."""
         assert state.handoff_signal is not None
@@ -553,11 +557,11 @@ class RunLoop:
         self,
         agent: Agent,
         entries_log: list[TranscriptEntry],
-        run_ctx: RunContext[Any],
+        run_ctx: RunContext[object],
         turns: int,
-        output: Any,
+        output: object | None,
         structured_output: StructuredOutput | None,
-        run_span: Any,
+        run_span: Span,
     ) -> RunResult:
         """Run final guardrails, persistence, usage propagation, and result build."""
         if structured_output is not None and output is None:
@@ -702,9 +706,9 @@ class RunLoop:
             )
         return tools
 
-    async def _connect_mcp(self, agent: Agent) -> tuple[list[Tool], list[Any]]:
+    async def _connect_mcp(self, agent: Agent) -> tuple[list[Tool], list[Cleanup]]:
         tools: list[Tool] = []
-        cleanup: list[Any] = []
+        cleanup: list[Cleanup] = []
         try:
             for server in agent.mcp_servers:
                 conn = await server.open()
@@ -720,11 +724,11 @@ class RunLoop:
             raise
         return tools, cleanup
 
-    async def _connect_sandbox(self, agent: Agent) -> tuple[list[Tool], list[Any]]:
+    async def _connect_sandbox(self, agent: Agent) -> tuple[list[Tool], list[Cleanup]]:
         if agent.sandbox is None:
             return [], []
         session = await agent.sandbox.open()
-        cleanup: list[Any] = []
+        cleanup: list[Cleanup] = []
         if agent.sandbox.close_on_run:
             cleanup.append(session.close)
         try:
@@ -766,7 +770,7 @@ class RunLoop:
         self,
         assistant: AssistantTurn,
         structured_output: StructuredOutput | None,
-    ) -> Any:
+    ) -> object:
         if structured_output is None:
             return assistant.content or ""
         # Either the model used the structured ``response_format`` path or it
@@ -776,7 +780,8 @@ class RunLoop:
         # and may be repaired in the main loop if the agent opts in.
         try:
             return parse_structured_output(
-                structured_output, loads_lenient(assistant.content or "")
+                structured_output,
+                cast(JsonValue, loads_lenient(assistant.content or "")),
             )
         except OutputValidationError as exc:
             if exc.output_type_name is None:

@@ -18,7 +18,9 @@ defaults to ``web_search``.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Annotated, Any, Protocol
 
 from ..exceptions import UserError
@@ -51,11 +53,28 @@ class WebSearch(Protocol):
     ) -> list[SearchResult]: ...
 
 
+class _DDGSSession(Protocol):
+    def __enter__(self) -> "_DDGSSession": ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+
+    def text(self, query: str, *, max_results: int) -> Iterable[dict[str, Any]]: ...
+
+
+class _DDGSFactory(Protocol):
+    def __call__(self) -> _DDGSSession: ...
+
+
 class DuckDuckGoSearch:
     """Default backend using ``duckduckgo-search`` (install with ``lovia[tools]``)."""
 
     def __init__(self) -> None:
-        ddgs_cls: Any
+        ddgs_cls: _DDGSFactory
         try:
             try:
                 from ddgs import DDGS as ddgs_impl  # type: ignore[import-not-found]

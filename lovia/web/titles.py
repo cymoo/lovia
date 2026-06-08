@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from ..agent import Agent
+from ..providers import Provider
 from ..runner import Runner
 
 __all__ = ["generate_title", "TITLE_INSTRUCTIONS"]
@@ -39,7 +40,7 @@ async def generate_title(
     user_message: str,
     assistant_reply: Any,
     *,
-    model: Any,
+    model: str | Provider | list[str | Provider],
 ) -> str:
     """Return a short, human-friendly title for the chat.
 

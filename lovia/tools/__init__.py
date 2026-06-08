@@ -23,12 +23,15 @@ from typing import (
     Awaitable,
     Callable,
     Protocol,
+    cast,
     get_origin,
     get_type_hints,
+    overload,
 )
 
 from pydantic import BaseModel
 
+from .._types import JsonObject, JsonSchema
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
@@ -88,7 +91,7 @@ class Tool:
 
     name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: JsonSchema
     # The underlying callable. The runner always awaits the result, so sync
     # callables are wrapped during construction.
     invoke: Callable[[dict[str, Any], "RunContext"], Awaitable[Any]]
@@ -115,7 +118,7 @@ class Tool:
             return bool(self.needs_approval(args, ctx))
         return bool(self.needs_approval)
 
-    def openai_schema(self) -> dict[str, Any]:
+    def openai_schema(self) -> JsonObject:
         return {
             "type": "function",
             "function": {
@@ -245,8 +248,40 @@ async def render_tool_result(
     if renderer is None:
         return default_result_renderer(result)
     rendered = renderer(result, ctx)
-    rendered = await _maybe_await(rendered)
-    return rendered if isinstance(rendered, str) else str(rendered)
+    rendered_value = await _maybe_await(rendered)
+    return rendered_value if isinstance(rendered_value, str) else str(rendered_value)
+
+
+@overload
+def tool(
+    fn: Callable[..., Any],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    needs_approval: bool | ApprovalPredicate = False,
+    retries: int | None = None,
+    timeout: float | None = None,
+    result_renderer: ToolResultRenderer | None = None,
+    wrap: ToolWrap | None = None,
+    policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
+    strict: bool = False,
+) -> Tool: ...
+
+
+@overload
+def tool(
+    fn: None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    needs_approval: bool | ApprovalPredicate = False,
+    retries: int | None = None,
+    timeout: float | None = None,
+    result_renderer: ToolResultRenderer | None = None,
+    wrap: ToolWrap | None = None,
+    policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
+    strict: bool = False,
+) -> Callable[[Callable[..., Any]], Tool]: ...
 
 
 def tool(
@@ -261,7 +296,7 @@ def tool(
     wrap: ToolWrap | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
-) -> Any:
+) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Decorate a function to turn it into a :class:`Tool`.
 
     The function may be sync or async; sync functions are run on a thread so
@@ -294,7 +329,7 @@ def tool(
             if context_param is not None:
                 kwargs[context_param] = ctx
             if is_async:
-                return await func(**kwargs)
+                return await cast(Awaitable[Any], func(**kwargs))
             # Offload sync work so we don't block the event loop.
             return await asyncio.to_thread(lambda: func(**kwargs))
 

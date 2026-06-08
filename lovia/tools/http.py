@@ -8,10 +8,11 @@ Already-required dependency, so no extras needed::
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, cast
 
 import httpx
 
+from .._types import JsonObject, JsonValue
 from . import tool
 
 __all__ = ["http_fetch"]
@@ -22,9 +23,9 @@ async def http_fetch(
     url: Annotated[str, "Absolute URL to fetch."],
     method: Annotated[str, "HTTP method (GET, POST, ...). Defaults to GET."] = "GET",
     headers: Annotated[dict[str, str] | None, "Optional request headers."] = None,
-    body: Annotated[Any, "Optional JSON body for POST/PUT/PATCH."] = None,
+    body: Annotated[object | None, "Optional JSON body for POST/PUT/PATCH."] = None,
     timeout: Annotated[float, "Request timeout in seconds."] = 30.0,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Fetch a URL and return ``{status, headers, text, json}``.
 
     The ``json`` field of the result is set only when the response body
@@ -33,9 +34,9 @@ async def http_fetch(
     """
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.request(method.upper(), url, headers=headers, json=body)
-    parsed: Any = None
+    parsed: JsonValue = None
     try:
-        parsed = resp.json()
+        parsed = cast(JsonValue, resp.json())
     except Exception:  # noqa: BLE001 - body may not be JSON
         parsed = None
     return {

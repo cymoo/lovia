@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
+from .._types import JsonObject
+from ..content import ContentPart
 from ..providers.base import (
     ModelSettings,
+    Provider,
     context_window as _provider_context_window,
     estimate_tokens as _estimate_tokens,
 )
@@ -57,7 +60,7 @@ Rules:
 class PolicyContext:
     """Per-turn information available to a context policy."""
 
-    provider: Any
+    provider: Provider
     model: str | None
     last_input_tokens: int | None = None
     session_id: str | None = None
@@ -73,7 +76,7 @@ class ContextPolicyResult:
     reason: str | None = None
     summary: str | None = None
     archive_ref: ArchiveRef | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -121,7 +124,7 @@ class ProviderSummarizer:
 
     def __init__(
         self,
-        provider: Any | None = None,
+        provider: Provider | None = None,
         *,
         prompt: str = DEFAULT_SUMMARY_PROMPT,
         settings: ModelSettings | None = None,
@@ -227,7 +230,7 @@ class CompactingContextPolicy:
         original_entries = entries
         current = entries
         changed = False
-        stage_results: list[dict[str, Any]] = []
+        stage_results: list[JsonObject] = []
 
         for stage in self.stages:
             result = await stage.apply(current, ctx=ctx)
@@ -309,7 +312,7 @@ class CompactingContextPolicy:
         *,
         ctx: PolicyContext,
         reactive: bool,
-        stage_results: list[dict[str, Any]],
+        stage_results: list[JsonObject],
         archive_entries: list[TranscriptEntry],
     ) -> ContextPolicyResult | None:
         reason = "reactive_summary" if reactive else "auto_summary"
@@ -342,15 +345,13 @@ class CompactingContextPolicy:
 
         self._summary_failures.record_success()
         tail = (
-            self.reactive_keep_recent_entries
-            if reactive
-            else self.keep_recent_entries
+            self.reactive_keep_recent_entries if reactive else self.keep_recent_entries
         )
         compacted = [
             make_summary_entry(summary, reactive=reactive),
             *safe_window(entries, tail=tail),
         ]
-        metadata: dict[str, Any] = {
+        metadata: JsonObject = {
             "entries_before": len(entries),
             "entries_after": len(compacted),
             "kept_recent_entries": tail,
@@ -428,7 +429,7 @@ def _transcript_to_text(entries: list[TranscriptEntry]) -> str:
     return "\n".join(out)
 
 
-def _parts_to_text(parts: Any) -> str:
+def _parts_to_text(parts: list[ContentPart]) -> str:
     try:
         from ..content import text_of
 

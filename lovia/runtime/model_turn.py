@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
+from .._types import JsonObject
 from .. import events
 from ..agent import Agent
 from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
-from ..providers.base import Provider
+from ..providers.base import ModelSettings, Provider
 from ..reliability import RetryPolicy
 from .state import TurnState
 from .utils import truncate_repr
@@ -170,9 +171,9 @@ async def stream_with_fallback(
     providers: list[Provider],
     input_entries: list[TranscriptEntry],
     *,
-    tools: list[dict[str, Any]] | None,
-    response_format: dict[str, Any] | None,
-    settings: Any,
+    tools: list[JsonObject] | None,
+    response_format: JsonObject | None,
+    settings: ModelSettings | None,
     retry: RetryPolicy | None,
 ) -> AsyncIterator[ModelDelta]:
     """Stream from the first provider that succeeds.

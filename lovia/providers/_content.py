@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Any
+from typing import cast
 
-from ..content import FilePart, ImagePart, TextPart
+from .._types import JsonObject
+from ..content import ContentPart, FilePart, ImagePart, TextPart
 from ..exceptions import UserError
 
 
@@ -16,7 +17,7 @@ def _image_url(part: ImagePart) -> str:
     return f"data:{part.mime_type};base64,{part.data}"
 
 
-def _openai_file(part: FilePart) -> dict[str, Any]:
+def _openai_file(part: FilePart) -> JsonObject:
     if part.url is not None:
         raise UserError(
             "OpenAI Chat provider does not support FilePart URL inputs",
@@ -24,13 +25,13 @@ def _openai_file(part: FilePart) -> dict[str, Any]:
         )
     if part.data is None:  # pragma: no cover - FilePart validates this.
         raise TypeError(f"Unsupported file part: {part!r}")
-    file: dict[str, Any] = {"file_data": part.data}
+    file: JsonObject = {"file_data": part.data}
     if part.filename is not None:
         file["filename"] = part.filename
     return file
 
 
-def _anthropic_file_source(part: FilePart) -> dict[str, Any]:
+def _anthropic_file_source(part: FilePart) -> JsonObject:
     if part.url is not None:
         if part.mime_type not in (None, "application/pdf"):
             raise UserError(
@@ -65,16 +66,16 @@ def _anthropic_file_source(part: FilePart) -> dict[str, Any]:
     )
 
 
-def content_to_openai_chat(content: str | list[Any]) -> str | list[dict[str, Any]]:
+def content_to_openai_chat(content: str | list[ContentPart]) -> str | list[JsonObject]:
     """Convert lovia content parts to OpenAI Chat content."""
     if isinstance(content, str):
         return content
-    parts: list[dict[str, Any]] = []
+    parts: list[JsonObject] = []
     for part in content:
         if isinstance(part, TextPart):
             parts.append({"type": "text", "text": part.text})
         elif isinstance(part, ImagePart):
-            image_url: dict[str, Any] = {"url": _image_url(part)}
+            image_url: JsonObject = {"url": _image_url(part)}
             if part.detail is not None:
                 image_url["detail"] = part.detail
             parts.append({"type": "image_url", "image_url": image_url})
@@ -85,17 +86,17 @@ def content_to_openai_chat(content: str | list[Any]) -> str | list[dict[str, Any
     return parts
 
 
-def content_to_anthropic_blocks(content: str | list[Any]) -> list[dict[str, Any]]:
+def content_to_anthropic_blocks(content: str | list[ContentPart]) -> list[JsonObject]:
     """Convert lovia content parts to Anthropic content blocks."""
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
-    out: list[dict[str, Any]] = []
+    out: list[JsonObject] = []
     for part in content:
         if isinstance(part, TextPart):
             out.append({"type": "text", "text": part.text})
         elif isinstance(part, ImagePart):
             if part.url is not None:
-                source: dict[str, Any] = {"type": "url", "url": part.url}
+                source: JsonObject = {"type": "url", "url": part.url}
             else:
                 source = {
                     "type": "base64",
@@ -104,7 +105,10 @@ def content_to_anthropic_blocks(content: str | list[Any]) -> list[dict[str, Any]
                 }
             out.append({"type": "image", "source": source})
         elif isinstance(part, FilePart):
-            document = {"type": "document", "source": _anthropic_file_source(part)}
+            document: JsonObject = {
+                "type": "document",
+                "source": _anthropic_file_source(part),
+            }
             if part.filename is not None:
                 document["title"] = part.filename
             out.append(document)
@@ -113,7 +117,7 @@ def content_to_anthropic_blocks(content: str | list[Any]) -> list[dict[str, Any]
     return out
 
 
-def text_only(content: str | list[Any] | None) -> str:
+def text_only(content: str | list[ContentPart] | None) -> str:
     """Flatten content parts to plain text for fields that do not accept parts."""
     if content is None:
         return ""
@@ -127,10 +131,10 @@ def text_only(content: str | list[Any] | None) -> str:
     return "".join(parts)
 
 
-def openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
+def openai_tool_to_anthropic(tool: JsonObject) -> JsonObject:
     """Convert an OpenAI Chat function tool schema to Anthropic's shape."""
-    fn = tool.get("function") or {}
-    out = {
+    fn = cast(JsonObject, tool.get("function") or {})
+    out: JsonObject = {
         "name": fn.get("name", ""),
         "description": fn.get("description", ""),
         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},

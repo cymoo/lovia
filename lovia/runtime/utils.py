@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
+from .._types import JsonObject
 from ..agent import Agent
 from ..messages import Message
 from ..run_context import RunContext
@@ -11,7 +10,7 @@ from ..run_context import RunContext
 _LOG_REPR_MAX = 200
 
 
-def truncate_repr(value: Any, max_len: int = _LOG_REPR_MAX) -> str:
+def truncate_repr(value: object, max_len: int = _LOG_REPR_MAX) -> str:
     """Render ``value`` for a single log line, clipping to ``max_len`` chars."""
     try:
         text = value if isinstance(value, str) else repr(value)
@@ -59,5 +58,5 @@ def supports_json_schema(agent: Agent) -> bool:
     return bool(getattr(provider, "supports_json_schema", False))
 
 
-async def unreachable_invoke(args: dict[str, Any], ctx: RunContext) -> Any:
+async def unreachable_invoke(args: JsonObject, ctx: RunContext) -> object:
     raise AssertionError("final_output tool must be intercepted by the runner")

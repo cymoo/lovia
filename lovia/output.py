@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ._types import JsonObject, JsonSchema, JsonValue
 from .exceptions import OutputValidationError
 from .schema import coerce_output, model_json_schema
 
@@ -62,15 +63,15 @@ class DefaultOutputRepair:
 class StructuredOutput:
     """How the runner should obtain a typed final result for one run."""
 
-    output_type: type
+    output_type: Any
     # When True, ``final_output`` is injected as a tool the model must call.
     use_tool_fallback: bool
     # Pre-computed JSON schema for the output type (used by either path).
-    schema: dict[str, Any]
+    schema: JsonSchema
 
 
 def resolve_structured_output(
-    output_type: type, supports_response_format: bool
+    output_type: Any, supports_response_format: bool
 ) -> StructuredOutput | None:
     """Return the structured-output policy, or ``None`` for plain text."""
     if output_type is str:
@@ -83,7 +84,7 @@ def resolve_structured_output(
     )
 
 
-def response_format_for(spec: StructuredOutput) -> dict[str, Any]:
+def response_format_for(spec: StructuredOutput) -> JsonObject:
     """Build the OpenAI ``response_format`` payload for native JSON Schema."""
     return {
         "type": "json_schema",
@@ -95,9 +96,7 @@ def response_format_for(spec: StructuredOutput) -> dict[str, Any]:
     }
 
 
-def parse_structured_output(
-    spec: StructuredOutput, payload: str | dict[str, Any]
-) -> Any:
+def parse_structured_output(spec: StructuredOutput, payload: str | JsonValue) -> Any:
     try:
         return coerce_output(spec.output_type, payload)
     except Exception as exc:  # pydantic raises various subclasses

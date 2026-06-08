@@ -24,7 +24,7 @@ Typical use::
 from __future__ import annotations
 
 import logging as _logging
-from typing import Any as _Any
+from typing import TextIO
 
 from . import events
 from .agent import Agent
@@ -147,7 +147,7 @@ def enable_logging(
     *,
     format: str = "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     datefmt: str = "%H:%M:%S",
-    stream: _Any = None,
+    stream: TextIO | None = None,
 ) -> _logging.Logger:
     """Configure the ``lovia`` logger for quick interactive use.
 

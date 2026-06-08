@@ -11,12 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ._types import JsonObject
 from .transcript import TranscriptEntry
 from .messages import ToolCall
 
 if TYPE_CHECKING:
     from .agent import Agent
     from .approvals import ApprovalChannel
+    from .context.archive import ArchiveRef
     from .runtime.result import RunResult
 
 
@@ -203,5 +205,5 @@ class ContextCompacted(ContextEvent):
     reason: str
     summary: str | None = None
     reactive: bool = False
-    archive_ref: Any | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    archive_ref: "ArchiveRef | None" = None
+    metadata: JsonObject = field(default_factory=dict)

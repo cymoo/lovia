@@ -25,12 +25,14 @@ extra metadata. Two forms are recognised:
 from __future__ import annotations
 
 import inspect
-from typing import Annotated, Any, Callable, get_args, get_origin, get_type_hints
+from typing import Annotated, Callable, cast, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 
+from ._types import JsonObject, JsonSchema
 
-def _is_context_annotation(annotation: Any) -> bool:
+
+def _is_context_annotation(annotation: object) -> bool:
     """True if ``annotation`` is ``RunContext`` or ``RunContext[X]``.
 
     Imported lazily to avoid a circular import (``run_context`` does not
@@ -46,7 +48,7 @@ def _is_context_annotation(annotation: Any) -> bool:
     return origin is RunContext
 
 
-def _normalize_annotation(annotation: Any) -> Any:
+def _normalize_annotation(annotation: object) -> object:
     """Convert ``Annotated[T, "desc"]`` to ``Annotated[T, Field(description=...)]``.
 
     Bare string metadata is treated as a description so users can write
@@ -56,7 +58,7 @@ def _normalize_annotation(annotation: Any) -> Any:
     if get_origin(annotation) is not Annotated:
         return annotation
     base, *meta = get_args(annotation)
-    new_meta: list[Any] = []
+    new_meta: list[object] = []
     for item in meta:
         if isinstance(item, str):
             new_meta.append(Field(description=item))
@@ -66,8 +68,8 @@ def _normalize_annotation(annotation: Any) -> Any:
 
 
 def _iter_arg_params(
-    fn: Callable[..., Any],
-) -> list[tuple[str, inspect.Parameter, Any]]:
+    fn: Callable[..., object],
+) -> list[tuple[str, inspect.Parameter, object]]:
     """Yield ``(name, param, annotation)`` for each LLM-visible parameter.
 
     Skips ``self``/``cls``, underscore-prefixed names, var-args, and any
@@ -75,7 +77,7 @@ def _iter_arg_params(
     """
     sig = inspect.signature(fn)
     hints = get_type_hints(fn, include_extras=True)
-    out: list[tuple[str, inspect.Parameter, Any]] = []
+    out: list[tuple[str, inspect.Parameter, object]] = []
     for name, param in sig.parameters.items():
         if name.startswith("_") or name in ("self", "cls"):
             continue
@@ -91,7 +93,7 @@ def _iter_arg_params(
     return out
 
 
-def model_json_schema(tp: Any) -> dict[str, Any]:
+def model_json_schema(tp: object) -> JsonSchema:
     """Return a JSON Schema for an arbitrary supported type ``tp``."""
     # Pydantic BaseModel subclass - use its built-in schema.
     if isinstance(tp, type) and issubclass(tp, BaseModel):
@@ -103,10 +105,10 @@ def model_json_schema(tp: Any) -> dict[str, Any]:
 
 
 def function_args_schema(
-    fn: Callable[..., Any],
+    fn: Callable[..., object],
     *,
     strict: bool = False,
-) -> tuple[dict[str, Any], list[str]]:
+) -> tuple[JsonSchema, list[str]]:
     """Build a JSON Schema for a function's keyword arguments.
 
     Returns ``(schema, param_names)`` so the runner can validate inputs and
@@ -118,7 +120,7 @@ def function_args_schema(
     ``additionalProperties: False`` and marks every field as required
     (matching OpenAI's strict-mode requirements).
     """
-    fields: dict[str, Any] = {}
+    fields: dict[str, object] = {}
     param_names: list[str] = []
     for name, param, annotation in _iter_arg_params(fn):
         default = param.default if param.default is not inspect.Parameter.empty else ...
@@ -140,13 +142,13 @@ def function_args_schema(
     return schema, param_names
 
 
-def validate_args(fn: Callable[..., Any], data: dict[str, Any]) -> dict[str, Any]:
+def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, object]:
     """Validate ``data`` against ``fn``'s signature and coerce types.
 
     Uses pydantic so that e.g. ``"3"`` becomes ``3`` when the annotation is
     ``int``. Returns the cleaned kwargs dict.
     """
-    fields: dict[str, Any] = {}
+    fields: dict[str, object] = {}
     for name, param, annotation in _iter_arg_params(fn):
         default = param.default if param.default is not inspect.Parameter.empty else ...
         fields[name] = (annotation, default)
@@ -156,7 +158,7 @@ def validate_args(fn: Callable[..., Any], data: dict[str, Any]) -> dict[str, Any
     return Model(**data).model_dump()
 
 
-def coerce_output(tp: Any, data: Any) -> Any:
+def coerce_output(tp: object, data: object) -> object:
     """Coerce ``data`` (usually parsed JSON) into ``tp`` via pydantic."""
     if tp is str:
         return data if isinstance(data, str) else str(data)
@@ -169,7 +171,7 @@ def coerce_output(tp: Any, data: Any) -> Any:
     return TypeAdapter(tp).validate_python(data)
 
 
-def _strip_titles(schema: dict[str, Any]) -> dict[str, Any]:
+def _strip_titles(schema: JsonSchema) -> JsonSchema:
     """Remove pydantic's auto-generated ``title`` fields.
 
     They are valid JSON Schema but add noise to the system prompt and tool
@@ -179,9 +181,9 @@ def _strip_titles(schema: dict[str, Any]) -> dict[str, Any]:
         schema.pop("title", None)
         for value in schema.values():
             if isinstance(value, dict):
-                _strip_titles(value)
+                _strip_titles(cast(JsonObject, value))
             elif isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
-                        _strip_titles(item)
+                        _strip_titles(cast(JsonObject, item))
     return schema

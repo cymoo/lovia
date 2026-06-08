@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from .._types import JsonObject
 from ..transcript import InputEntry, ToolCallEntry, ToolResultEntry, TranscriptEntry
 from ..transcript import safe_window
 
@@ -28,7 +29,7 @@ class StageResult:
     entries: list[TranscriptEntry]
     changed: bool = False
     reason: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
 
 class ContextStage(Protocol):
@@ -81,7 +82,7 @@ class ToolResultBudgetStage:
             return StageResult(entries=entries)
 
         new_entries = list(entries)
-        archived: list[dict[str, object]] = []
+        archived: list[JsonObject] = []
         changed = False
         for idx, entry in sorted(
             tool_results, key=lambda pair: len(pair[1].output), reverse=True
@@ -122,7 +123,7 @@ class ToolResultBudgetStage:
         entry: ToolResultEntry,
         *,
         ctx: "PolicyContext",
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, JsonObject]:
         preview = entry.output[: self.preview_chars]
         if self.archive is None:
             return (
@@ -251,9 +252,7 @@ class ToolResultRetentionStage:
         new_entries = list(entries)
         changed = 0
         old_results = (
-            tool_results
-            if self.keep_recent == 0
-            else tool_results[: -self.keep_recent]
+            tool_results if self.keep_recent == 0 else tool_results[: -self.keep_recent]
         )
         for idx, entry in old_results:
             if len(entry.output) <= self.min_chars:

@@ -23,14 +23,16 @@ code, not the Runner.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, Sequence
+from typing import Protocol, Sequence
+
+from ._types import JsonObject
 
 
 class MemoryRecord(Protocol):
     """A retrieved memory item. Implementations may extend with more fields."""
 
     content: str
-    metadata: dict[str, Any]
+    metadata: JsonObject
 
 
 class Memory(Protocol):
@@ -46,7 +48,7 @@ class Memory(Protocol):
         self,
         content: str,
         *,
-        metadata: dict[str, Any] | None = None,
+        metadata: JsonObject | None = None,
     ) -> None:
         """Persist a single memory entry."""
         ...

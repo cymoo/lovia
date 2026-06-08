@@ -37,7 +37,7 @@ class ToolCallProcessor:
         *,
         agent: Agent,
         tools_by_name: dict[str, Tool],
-        run_ctx: RunContext[Any],
+        run_ctx: RunContext[object],
         tracer: Tracer,
         structured_output: StructuredOutput | None,
         entries: list[TranscriptEntry],
@@ -66,7 +66,7 @@ class ToolCallProcessor:
             return
 
         try:
-            args = json.loads(call.arguments or "{}")
+            args: dict[str, Any] = json.loads(call.arguments or "{}")
         except json.JSONDecodeError:
             args = {}
 
@@ -143,7 +143,7 @@ class ToolCallProcessor:
         self,
         call: ToolCall,
         agent: Agent,
-        run_ctx: RunContext[Any],
+        run_ctx: RunContext[object],
     ) -> AsyncIterator[events.Event]:
         """Yield :class:`events.ApprovalRequired` and resolve the channel."""
         fut = self.approvals.register(call.id)

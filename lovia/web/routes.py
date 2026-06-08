@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from .. import events
 from ..agent import Agent
 from ..context import ContextPolicy
+from ..providers import Provider
 from ..reliability import CancelToken
 from ..transcript import entries_to_messages
 from ..runner import Runner
@@ -40,7 +42,7 @@ from .schemas import (
 )
 from .markdown import render_markdown
 from .sse import _coerce, event_to_sse
-from .store import ChatStore
+from .store import ChatMeta, ChatStore
 from .titles import generate_title
 
 log = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ def build_router(
     approvals: ApprovalRegistry,
     *,
     context_policy: ContextPolicy | None = None,
-    title_model: Any = None,
+    title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
 ) -> APIRouter:
@@ -62,6 +64,15 @@ def build_router(
     session = store.session
     # Per-session CancelTokens for cooperative cancellation via the stop button.
     _cancel_tokens: dict[str, CancelToken] = {}
+
+    def _session_info(meta: ChatMeta) -> ChatSessionInfo:
+        return ChatSessionInfo(
+            id=meta.id,
+            title=meta.title,
+            agent=meta.agent,
+            created_at=meta.created_at,
+            updated_at=meta.updated_at,
+        )
 
     def _pick(name: str | None) -> Agent[Any]:
         if name is None:
@@ -159,7 +170,7 @@ def build_router(
         cancel = CancelToken()
         _cancel_tokens[sid] = cancel
 
-        async def gen():
+        async def gen() -> AsyncIterator[dict[str, str]]:
             handle = Runner.stream(
                 agent,
                 req.message,
@@ -176,16 +187,18 @@ def build_router(
                     if await request.is_disconnected():
                         cancel.cancel("client disconnected")
                         break
-                    needs_approval = isinstance(ev, events.ApprovalRequired)
-                    if needs_approval:
-                        approvals.register(sid, ev)
+                    approval_ev = (
+                        ev if isinstance(ev, events.ApprovalRequired) else None
+                    )
+                    if approval_ev is not None:
+                        approvals.register(sid, approval_ev)
                     payload = event_to_sse(ev)
                     if payload is not None:
                         yield payload
                     if isinstance(ev, events.RunCompleted):
                         final_output = ev.result.output
-                    if needs_approval:
-                        await approvals.await_decision(sid, ev)
+                    if approval_ev is not None:
+                        await approvals.await_decision(sid, approval_ev)
             finally:
                 await approvals.release(sid)
                 _cancel_tokens.pop(sid, None)
@@ -218,13 +231,12 @@ def build_router(
     # ---- sessions -------------------------------------------------------
 
     @router.get("/api/sessions", response_model=list[ChatSessionInfo])
-    async def list_sessions(q: str = Query("", max_length=200)) -> list[ChatSessionInfo]:
+    async def list_sessions(
+        q: str = Query("", max_length=200),
+    ) -> list[ChatSessionInfo]:
         if q:
-            return [
-                ChatSessionInfo(**m.to_dict())
-                for m in await store.search(q, limit=200)
-            ]
-        return [ChatSessionInfo(**m.to_dict()) for m in await store.list_all()]
+            return [_session_info(m) for m in await store.search(q, limit=200)]
+        return [_session_info(m) for m in await store.list_all()]
 
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
     async def get_session(session_id: str) -> SessionDetail:
@@ -272,7 +284,14 @@ def build_router(
                 updated_at=_now(),
                 entries=body,
             )
-        return SessionDetail(**meta.to_dict(), entries=body)
+        return SessionDetail(
+            id=meta.id,
+            title=meta.title,
+            agent=meta.agent,
+            created_at=meta.created_at,
+            updated_at=meta.updated_at,
+            entries=body,
+        )
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
     async def rename_session(session_id: str, req: RenameRequest) -> ChatSessionInfo:
@@ -282,7 +301,7 @@ def build_router(
         await store.set_title(session_id, req.title)
         meta = await store.get(session_id)
         assert meta is not None  # just updated
-        return ChatSessionInfo(**meta.to_dict())
+        return _session_info(meta)
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
@@ -313,6 +332,7 @@ def build_router(
                     }
                 )
             from fastapi.responses import JSONResponse
+
             return JSONResponse(
                 content={
                     "session_id": session_id,
@@ -326,16 +346,23 @@ def build_router(
             lines: list[str] = []
             for m in msgs:
                 role = m.role.upper()
-                text = (m.text or m.content) if isinstance(m.text or m.content, str) else str(m.text or m.content or "")
+                text = (
+                    (m.text or m.content)
+                    if isinstance(m.text or m.content, str)
+                    else str(m.text or m.content or "")
+                )
                 if text:
                     lines.append(f"## {role}\n\n{text}\n")
                 if m.tool_calls:
                     for tc in m.tool_calls:
                         lines.append(f"### Tool: {tc.name}\n```\n{tc.arguments}\n```\n")
             from fastapi.responses import PlainTextResponse
+
             return PlainTextResponse(
                 "\n".join(lines),
-                headers={"Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.txt"},
+                headers={
+                    "Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.txt"
+                },
             )
 
         # Markdown
@@ -345,19 +372,30 @@ def build_router(
         lines.append(f"*Session: `{session_id}`*\n")
         for m in msgs:
             role = m.role.capitalize()
-            text = (m.text or m.content) if isinstance(m.text or m.content, str) else str(m.text or m.content or "")
+            text = (
+                (m.text or m.content)
+                if isinstance(m.text or m.content, str)
+                else str(m.text or m.content or "")
+            )
             if text:
                 lines.append(f"### {role}\n\n{text}\n")
             if m.reasoning:
-                lines.append(f"<details>\n<summary>Reasoning</summary>\n\n{m.reasoning}\n\n</details>\n")
+                lines.append(
+                    f"<details>\n<summary>Reasoning</summary>\n\n{m.reasoning}\n\n</details>\n"
+                )
             if m.tool_calls:
                 for tc in m.tool_calls:
-                    lines.append(f"**Tool: `{tc.name}`**\n\n```json\n{tc.arguments}\n```\n")
+                    lines.append(
+                        f"**Tool: `{tc.name}`**\n\n```json\n{tc.arguments}\n```\n"
+                    )
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse(
             "\n".join(lines),
             media_type="text/markdown",
-            headers={"Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.md"},
+            headers={
+                "Content-Disposition": f"attachment; filename=lovia-{session_id[:8]}.md"
+            },
         )
 
     return router

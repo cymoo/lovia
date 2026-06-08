@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from ._types import JsonObject
 from .messages import Message
 from .tools import Tool
 
@@ -105,9 +106,13 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
             result = handoff.on_handoff(args, ctx)
             if hasattr(result, "__await__"):
                 await result  # type: ignore[misc]
-        return _HandoffSignal(target=target, handoff=handoff, reason=args.get("reason"))
+        return _HandoffSignal(
+            target=target,
+            handoff=handoff,
+            reason=args.get("reason"),
+        )
 
-    parameters = {
+    parameters: JsonObject = {
         "type": "object",
         "properties": {
             "reason": {
@@ -158,7 +163,7 @@ def agent_as_tool(
         )
         return result.output
 
-    parameters = {
+    parameters: JsonObject = {
         "type": "object",
         "properties": {
             "input": {

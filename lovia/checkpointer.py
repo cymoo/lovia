@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from ._types import JsonObject
 from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict
 from .messages import Usage
 
@@ -35,7 +36,7 @@ class RunSnapshot:
 
     # ----- (de)serialization helpers, used by store implementations -----
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonObject:
         return {
             "run_id": self.run_id,
             "agent_name": self.agent_name,
@@ -55,7 +56,7 @@ class RunSnapshot:
         return cls(
             run_id=data["run_id"],
             agent_name=data["agent_name"],
-            entries=[entry_from_dict(d) for d in data["entries"]],
+            entries=[entry_from_dict(entry) for entry in data["entries"]],
             usage=Usage(**data.get("usage", {})),
             turns=data.get("turns", 0),
             updated_at=data.get("updated_at", time.time()),

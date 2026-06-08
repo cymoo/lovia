@@ -21,8 +21,9 @@ or metadata that would otherwise be lost.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Union
+from typing import Any, Callable, Literal, Union
 
+from ._types import JsonObject
 from .content import ContentPart, FilePart, ImagePart, TextPart
 from .messages import AssistantTurn, Message, ToolCall, Usage
 
@@ -71,7 +72,7 @@ class ReasoningEntry:
     content: str
     id: str | None = None
     provider: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
     type: Literal["reasoning"] = "reasoning"
 
 
@@ -100,7 +101,7 @@ class ToolResultEntry:
 
     call_id: str
     output: str
-    raw: Any = None
+    raw: object | None = None
     is_error: bool = False
     type: Literal["tool_result"] = "tool_result"
 
@@ -245,7 +246,7 @@ ModelDelta = Union[
 # ---------------------------------------------------------------------------
 
 
-_ENTRY_TYPES: dict[str, type[Any]] = {
+_ENTRY_TYPES: dict[str, Callable[..., TranscriptEntry]] = {
     "input": InputEntry,
     "assistant_text": AssistantTextEntry,
     "reasoning": ReasoningEntry,
@@ -254,7 +255,7 @@ _ENTRY_TYPES: dict[str, type[Any]] = {
 }
 
 
-def entry_to_dict(entry: TranscriptEntry) -> dict[str, Any]:
+def entry_to_dict(entry: TranscriptEntry) -> JsonObject:
     """Serialize a :class:`TranscriptEntry` to a JSON-safe ``dict``.
 
     Handles :class:`InputEntry` specially because ``ContentPart``
@@ -301,7 +302,7 @@ def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
     # Strip ``type`` since it's the dataclass default; pass everything else
     # through so we surface unknown fields as a clean TypeError.
     payload = {k: v for k, v in data.items() if k != "type"}
-    return cls(**payload)  # type: ignore[no-any-return]
+    return cls(**payload)
 
 
 def _content_to_dict(
@@ -312,9 +313,7 @@ def _content_to_dict(
     return [asdict(part) for part in content]
 
 
-def _content_from_dict(
-    content: str | list[dict[str, Any]],
-) -> str | list[ContentPart]:
+def _content_from_dict(content: Any) -> str | list[ContentPart]:
     if isinstance(content, str):
         return content
     parts: list[ContentPart] = []

@@ -22,7 +22,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, ContextManager, Iterator, Protocol
+from typing import ContextManager, Iterator, Protocol
 
 # Per-task indent depth, used by ConsoleTracer to render nesting. A contextvar
 # is the right tool because runs may be interleaved in the same event loop.
@@ -34,14 +34,14 @@ _depth: contextvars.ContextVar[int] = contextvars.ContextVar(
 class Span(Protocol):
     """A live span. Methods are best-effort — adapters may no-op some of them."""
 
-    def set_attribute(self, key: str, value: Any) -> None: ...
+    def set_attribute(self, key: str, value: object) -> None: ...
     def record_exception(self, exc: BaseException) -> None: ...
 
 
 class Tracer(Protocol):
     """Produces :class:`Span` instances inside a context manager."""
 
-    def span(self, name: str, /, **attributes: Any) -> "ContextManager[Span]":
+    def span(self, name: str, /, **attributes: object) -> "ContextManager[Span]":
         """Open a span named ``name``. Use as ``with tracer.span(...) as s:``."""
         ...
 
@@ -53,7 +53,7 @@ class Tracer(Protocol):
 class _NoopSpan:
     """A span that silently discards every attribute and exception."""
 
-    def set_attribute(self, key: str, value: Any) -> None:
+    def set_attribute(self, key: str, value: object) -> None:
         return None
 
     def record_exception(self, exc: BaseException) -> None:
@@ -66,7 +66,7 @@ class NoopTracer:
     _SPAN = _NoopSpan()
 
     @contextmanager
-    def span(self, name: str, /, **attributes: Any) -> Iterator[Span]:
+    def span(self, name: str, /, **attributes: object) -> Iterator[Span]:
         yield self._SPAN
 
 
@@ -77,10 +77,10 @@ class NoopTracer:
 @dataclass
 class _ConsoleSpan:
     name: str
-    attrs: dict[str, Any]
+    attrs: dict[str, object]
     exception: BaseException | None = None
 
-    def set_attribute(self, key: str, value: Any) -> None:
+    def set_attribute(self, key: str, value: object) -> None:
         self.attrs[key] = value
 
     def record_exception(self, exc: BaseException) -> None:
@@ -104,7 +104,7 @@ class ConsoleTracer:
         self.min_duration_ms = min_duration_ms
 
     @contextmanager
-    def span(self, name: str, /, **attributes: Any) -> Iterator[Span]:
+    def span(self, name: str, /, **attributes: object) -> Iterator[Span]:
         span = _ConsoleSpan(name=name, attrs=dict(attributes))
         depth = _depth.get()
         token = _depth.set(depth + 1)
@@ -140,11 +140,11 @@ class RecordedSpan:
     """A span captured by :class:`InMemoryTracer`."""
 
     name: str
-    attrs: dict[str, Any] = field(default_factory=dict)
+    attrs: dict[str, object] = field(default_factory=dict)
     duration_ms: float = 0.0
     exception: BaseException | None = None
 
-    def set_attribute(self, key: str, value: Any) -> None:
+    def set_attribute(self, key: str, value: object) -> None:
         self.attrs[key] = value
 
     def record_exception(self, exc: BaseException) -> None:
@@ -158,7 +158,7 @@ class InMemoryTracer:
         self.spans: list[RecordedSpan] = []
 
     @contextmanager
-    def span(self, name: str, /, **attributes: Any) -> Iterator[Span]:
+    def span(self, name: str, /, **attributes: object) -> Iterator[Span]:
         rec = RecordedSpan(name=name, attrs=dict(attributes))
         self.spans.append(rec)
         start = time.perf_counter()

@@ -38,8 +38,9 @@ import asyncio
 import json
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Protocol, cast, runtime_checkable
 
+from ._types import JsonObject
 from .exceptions import MCPError, UserError
 from .run_context import RunContext
 from .tools import ApprovalPredicate, Tool, ToolResultRenderer
@@ -140,7 +141,7 @@ def _default_mcp_renderer(result: Any, ctx: RunContext[Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Schema normalisation
 # --------------------------------------------------------------------------- #
-def normalize_schema(schema: Any) -> dict[str, Any]:
+def normalize_schema(schema: object) -> JsonObject:
     """Coerce a (possibly loose) MCP input schema into a valid object schema.
 
     MCP servers emit ``None``, ``{}``, or ``{"type": "object"}`` without
@@ -149,7 +150,7 @@ def normalize_schema(schema: Any) -> dict[str, Any]:
     """
     if not isinstance(schema, dict) or not schema:
         return {"type": "object", "properties": {}}
-    out = dict(schema)
+    out = cast(JsonObject, dict(schema))
     if "type" not in out:
         out["type"] = "object"
     if out.get("type") == "object" and not isinstance(out.get("properties"), dict):

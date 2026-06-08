@@ -16,8 +16,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from .._types import JsonObject
 from ..session import Session
 from ..stores import InMemorySession, SQLiteSession
 from ..stores._sqlite import SQLiteStore
@@ -48,7 +48,7 @@ class ChatMeta:
     created_at: float
     updated_at: float
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonObject:
         return {
             "id": self.id,
             "title": self.title,

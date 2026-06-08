@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from pydantic import BaseModel
 
+from .._types import JsonObject, JsonValue
 from .. import events
 from ..transcript import (
     AssistantTextEntry,
@@ -23,7 +24,7 @@ from ..transcript import (
 
 
 class _ModelEncoder(json.JSONEncoder):
-    def default(self, obj: Any) -> Any:
+    def default(self, obj: object) -> object:
         if isinstance(obj, BaseModel):
             return obj.model_dump()
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
@@ -31,7 +32,7 @@ class _ModelEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def _entries_to_dict(entries: list[TranscriptEntry]) -> dict[str, Any]:
+def _entries_to_dict(entries: list[TranscriptEntry]) -> JsonObject:
     """Flatten the entries emitted in one assistant turn into a wire shape.
 
     The web UI only needs the user-facing pieces: assistant text, the
@@ -39,7 +40,7 @@ def _entries_to_dict(entries: list[TranscriptEntry]) -> dict[str, Any]:
     """
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
-    tool_calls: list[dict[str, str]] = []
+    tool_calls: list[JsonObject] = []
     for it in entries:
         if isinstance(it, AssistantTextEntry):
             if isinstance(it.content, str):
@@ -58,7 +59,7 @@ def _entries_to_dict(entries: list[TranscriptEntry]) -> dict[str, Any]:
     }
 
 
-def _format_result(value: Any) -> str:
+def _format_result(value: object) -> str:
     """Format a tool result as a human-readable string for the web UI.
 
     Pydantic models are rendered as ``key: value`` lines so that actual
@@ -69,9 +70,10 @@ def _format_result(value: Any) -> str:
         return ""
     if isinstance(value, str):
         return value
-    if hasattr(value, "model_dump"):
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
         lines: list[str] = []
-        for k, v in value.model_dump().items():
+        for k, v in dump().items():
             if isinstance(v, str):
                 lines.append(f"{k}:\n{v.rstrip()}" if "\n" in v else f"{k}: {v}")
             else:
@@ -82,10 +84,11 @@ def _format_result(value: Any) -> str:
     return str(value)
 
 
-def _coerce(value: Any) -> Any:
+def _coerce(value: object) -> JsonValue:
     """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump()
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)

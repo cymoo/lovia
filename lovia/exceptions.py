@@ -10,8 +10,6 @@ digging into the traceback.
 
 from __future__ import annotations
 
-from typing import Any
-
 
 class LoviaError(Exception):
     """Base class for all lovia errors.
@@ -23,7 +21,7 @@ class LoviaError(Exception):
     hint: str | None
 
     def __init__(
-        self, message: str = "", *, hint: str | None = None, **extra: Any
+        self, message: str = "", *, hint: str | None = None, **extra: object
     ) -> None:
         super().__init__(message)
         self.hint = hint

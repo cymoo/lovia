@@ -15,6 +15,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ..agent import Agent
 from ..context import CompactingContextPolicy, ContextPolicy
+from ..providers import Provider
 from ..session import Session
 from .approvals import ApprovalRegistry
 from .routes import build_router
@@ -47,7 +48,7 @@ def create_app(
     session: Session | None = None,
     store: ChatStore | None = None,
     context_policy: ContextPolicy | None = None,
-    title_model: Any = None,
+    title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
 ) -> FastAPI:
@@ -117,7 +118,7 @@ def serve(
     session: Session | None = None,
     store: ChatStore | None = None,
     context_policy: ContextPolicy | None = None,
-    title_model: Any = None,
+    title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
     **uvicorn_kwargs: Any,

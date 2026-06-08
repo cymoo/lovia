@@ -318,14 +318,27 @@ await Runner.run(agent, "我的项目叫 Atlas。", session=session, session_id=
 await Runner.run(agent, "我的项目叫什么？",  session=session, session_id="u1")
 ```
 
-长对话接近上下文窗口上限时，context policy 会自动压缩旧消息：
+长对话默认使用 `CompactingContextPolicy` 管理上下文。它会在每次模型调用前先做
+便宜的结构压缩；如果 provider 报告 context overflow，则自动退到更激进的摘要压缩。
+
+如果你想调整阈值、保留窗口或归档路径，可以显式传入 policy：
 
 ```python
-from lovia import SummarizingContextPolicy
+from pathlib import Path
 
-policy = SummarizingContextPolicy(keep_recent_messages=10)
+from lovia import CompactingContextPolicy, FileCompactionArchive
+
+policy = CompactingContextPolicy(
+    keep_recent_entries=20,
+    keep_recent_tool_results=3,
+    archive=FileCompactionArchive(
+        root=lambda ctx: Path(".lovia") / (ctx.session_id or "default")
+    ),
+)
 result = await Runner.run(agent, "继续。", context_policy=policy)
 ```
+
+如果需要完全禁用自动上下文管理，传入 `NoopContextPolicy()`。
 
 ## Skills（技能库）
 

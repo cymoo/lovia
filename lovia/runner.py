@@ -12,7 +12,7 @@ from typing import Any, TypeVar
 from .runtime.loop import RunLoop
 from .agent import Agent
 from .checkpointer import Checkpointer, RunSnapshot
-from .context_policy import ContextPolicy
+from .context import ContextPolicy
 from .exceptions import UserError
 from .messages import Message, Usage
 from .reliability import CancelToken, RetryPolicy, RunBudget

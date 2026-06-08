@@ -191,6 +191,7 @@ class ContextCompacted(ContextEvent):
     is the model-produced summary text when the policy used LLM
     summarization, or ``None`` for purely structural compaction.
 
+    ``reason`` names the policy decision that caused the rewrite.
     ``reactive`` is ``True`` when the compaction was triggered by a
     :class:`~lovia.ContextOverflowError` from the provider rather than by
     the proactive token threshold.
@@ -199,5 +200,8 @@ class ContextCompacted(ContextEvent):
     session_id: str | None
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
+    reason: str
     summary: str | None = None
     reactive: bool = False
+    archive_ref: Any | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)

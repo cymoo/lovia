@@ -1,10 +1,10 @@
 """Long conversations that survive the model's context window.
 
-This example shows ``SummarizingContextPolicy`` doing its job:
+This example shows ``CompactingContextPolicy`` doing its job:
 
 1. We seed an ``InMemorySession`` with a long fake transcript that would
    normally blow past a small model's context window.
-2. A small ``max_tokens`` + ``compact_at_ratio=0.5`` forces the policy to
+2. A small ``context_window_tokens`` + ``trigger_ratio=0.5`` forces the policy to
    summarize on the next turn.
 3. The ``archive`` callback captures the pre-compaction transcript so we
    can audit it offline.
@@ -29,7 +29,7 @@ from lovia import (
     AssistantTextEntry,
     InputEntry,
     Runner,
-    SummarizingContextPolicy,
+    CompactingContextPolicy,
     events,
 )
 from lovia.stores import InMemorySession
@@ -102,10 +102,10 @@ async def main() -> None:
     # first real turn. In production you'd set max_tokens to the model's
     # actual context window (or omit it and let provider.context_window
     # decide).
-    policy = SummarizingContextPolicy(
-        max_tokens=2_000,
-        compact_at_ratio=0.5,  # threshold = 1000 tokens
-        keep_recent_messages=4,
+    policy = CompactingContextPolicy(
+        context_window_tokens=2_000,
+        trigger_ratio=0.5,  # threshold = 1000 tokens
+        keep_recent_entries=4,
         archive=archive,
     )
 

@@ -218,3 +218,7 @@ class ChatStore:
                 self._meta._release(conn)
 
         return await self._meta._run(_impl)
+
+    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
+        """Return chat metadata ordered by most recent activity."""
+        return await self.list_all(limit=limit)

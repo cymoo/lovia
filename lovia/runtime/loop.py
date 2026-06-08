@@ -37,11 +37,11 @@ from .tool_calls import ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import Checkpointer, RunSnapshot
-from ..context_policy import (
+from ..context import (
+    CompactingContextPolicy,
     ContextPolicy,
-    NoopContextPolicy,
+    ContextPolicyResult,
     PolicyContext,
-    extract_compaction_summary,
 )
 from ..exceptions import (
     ContextOverflowError,
@@ -131,10 +131,10 @@ class RunLoop:
         self.cancel_token = cancel_token
         self.retry = retry
         self.checkpointer = checkpointer
-        self.context_policy: ContextPolicy = context_policy or NoopContextPolicy()
-        # Tracks the prompt-token count from the previous turn so
+        self.context_policy: ContextPolicy = context_policy or CompactingContextPolicy()
+        # Tracks the input-token count from the previous turn so
         # ContextPolicy can prefer real usage over heuristic estimates.
-        self._last_prompt_tokens: int | None = None
+        self._last_input_tokens: int | None = None
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.approvals = ApprovalChannel()
@@ -254,18 +254,19 @@ class RunLoop:
                 policy_ctx = PolicyContext(
                     provider=primary_provider,
                     model=policy_model,
-                    last_prompt_tokens=self._last_prompt_tokens,
+                    last_input_tokens=self._last_input_tokens,
                     session_id=self.session_id,
+                    run_id=self.run_id,
                 )
                 entries_before = entries_log
-                new_entries = await self.context_policy.apply(
+                policy_result = await self.context_policy.apply(
                     entries_before, ctx=policy_ctx
                 )
-                if new_entries is not entries_before:
+                if policy_result.changed:
                     async for ev in self._on_context_compacted(
                         agent,
                         entries_before,
-                        new_entries,
+                        policy_result,
                         reactive=False,
                         entries_log=entries_log,
                     ):
@@ -296,10 +297,10 @@ class RunLoop:
                         overflow,
                     )
                     entries_before = entries_log
-                    new_entries = await self.context_policy.apply_reactive(
+                    policy_result = await self.context_policy.apply_reactive(
                         entries_before, ctx=policy_ctx
                     )
-                    if new_entries is entries_before:
+                    if not policy_result.changed:
                         # Policy refused / couldn't shrink — surface original.
                         logger.error(
                             "context.overflow: policy could not shrink "
@@ -309,7 +310,7 @@ class RunLoop:
                     async for ev in self._on_context_compacted(
                         agent,
                         entries_before,
-                        new_entries,
+                        policy_result,
                         reactive=True,
                         entries_log=entries_log,
                     ):
@@ -341,7 +342,7 @@ class RunLoop:
                 # ContextPolicy can size compaction against actual usage
                 # rather than the chars/4 heuristic.
                 if assistant.usage and assistant.usage.input_tokens:
-                    self._last_prompt_tokens = assistant.usage.input_tokens
+                    self._last_input_tokens = assistant.usage.input_tokens
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 turn_entries = state.turn_entries or []
@@ -803,7 +804,7 @@ class RunLoop:
         self,
         agent: Agent,
         entries_before: list[TranscriptEntry],
-        entries_after: list[TranscriptEntry],
+        result: ContextPolicyResult,
         *,
         reactive: bool,
         entries_log: list[TranscriptEntry],
@@ -811,14 +812,10 @@ class RunLoop:
         """Persist a compacted transcript and emit ``ContextCompacted``.
 
         Mutates ``entries_log`` in place so the existing loop continues to
-        operate on the rewritten conversation. Tries to recover a summary
-        string by inspecting the new head entry — the
-        :class:`SummarizingContextPolicy` always emits a single
-        :class:`InputEntry` with the agreed prefix, so we strip the
-        marker rather than asking the policy to return a richer object.
+        operate on the rewritten conversation.
         """
         snapshot_before = list(entries_before)
-        entries_log[:] = entries_after
+        entries_log[:] = result.entries
         # Re-prepend the system prompt when compaction returns a transcript
         # shape that omitted it.
         await self._reinstate_system_prompt(agent, entries_log)
@@ -826,13 +823,15 @@ class RunLoop:
         # the compacted version (the whole point of permanent compaction).
         if self.session is not None and self.session_id is not None:
             await self._persist_session(entries_log)
-        summary = extract_compaction_summary(entries_after)
         ev = events.ContextCompacted(
             session_id=self.session_id,
             entries_before=snapshot_before,
-            entries_after=list(entries_after),
-            summary=summary,
+            entries_after=list(entries_log),
+            summary=result.summary,
             reactive=reactive,
+            reason=result.reason or "context_policy",
+            archive_ref=result.archive_ref,
+            metadata=result.metadata,
         )
         yield ev
 

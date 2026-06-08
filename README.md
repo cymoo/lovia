@@ -319,15 +319,28 @@ await Runner.run(agent, "My project is called Atlas.", session=session, session_
 await Runner.run(agent, "What is my project called?",  session=session, session_id="u1")
 ```
 
-For long-running conversations, a context policy compresses old messages before
-the model's context window fills up:
+Long-running conversations use :class:`CompactingContextPolicy` by default.
+It applies cheap structural compaction before each model call and falls back
+to an LLM summary if the provider reports a context overflow.
+
+Pass a policy explicitly when you want different thresholds or retention:
 
 ```python
-from lovia import SummarizingContextPolicy
+from pathlib import Path
 
-policy = SummarizingContextPolicy(keep_recent_messages=10)
+from lovia import CompactingContextPolicy, FileCompactionArchive
+
+policy = CompactingContextPolicy(
+    keep_recent_entries=20,
+    keep_recent_tool_results=3,
+    archive=FileCompactionArchive(
+        root=lambda ctx: Path(".lovia") / (ctx.session_id or "default")
+    ),
+)
 result = await Runner.run(agent, "Continue.", context_policy=policy)
 ```
+
+Pass ``NoopContextPolicy()`` to disable automatic context management.
 
 ## Skills
 

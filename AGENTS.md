@@ -66,7 +66,7 @@ lovia/
   hooks.py          # AgentHooks subscriber
   guardrails.py     # input/output guardrail protocol
   session.py        # Session protocol
-  context_policy.py # ContextPolicy — keeps long conversations under the model's window
+  context/          # ContextPolicy, compaction stages, and archive sinks
   skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
@@ -130,6 +130,8 @@ Three persistence concepts that serve different purposes:
 `ContextPolicy` implementations rewrite the transcript when it approaches the model's context window. Two triggers:
 - **Proactive**: called before each model turn via `policy.apply()`
 - **Reactive**: called when the provider raises `ContextOverflowError` via `policy.apply_reactive()`
+
+`Runner` defaults to `CompactingContextPolicy`; pass `NoopContextPolicy()` only when explicitly disabling automatic context management.
 
 `safe_window()` in `transcript.py` is critical for any policy that drops middle entries — it ensures `ToolCallEntry`/`ToolResultEntry` pairs stay intact by walking the cut point backward to include orphaned call IDs.
 

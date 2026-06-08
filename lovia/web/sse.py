@@ -148,6 +148,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "data": json.dumps(
                 {
                     "session_id": ev.session_id,
+                    "reason": ev.reason,
                     "summary": ev.summary,
                     "reactive": ev.reactive,
                 }

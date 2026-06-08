@@ -8,7 +8,6 @@ Output: JSON with refund_type, refund_amount, and notes.
 
 import json
 import sys
-from datetime import datetime, timedelta
 
 
 def calculate(days: int, price: float) -> dict:

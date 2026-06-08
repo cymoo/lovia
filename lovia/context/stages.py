@@ -24,7 +24,14 @@ TOOL_RESULT_PLACEHOLDER = (
 
 @dataclass
 class StageResult:
-    """Result of one cheap context stage."""
+    """Result of one cheap context stage.
+
+    Attributes:
+        entries: Transcript entries after the stage has run.
+        changed: Whether the stage changed the transcript.
+        reason: Stable reason code, usually the stage ``name``.
+        metadata: Extra stage-specific diagnostics.
+    """
 
     entries: list[TranscriptEntry]
     changed: bool = False
@@ -42,7 +49,9 @@ class ContextStage(Protocol):
         entries: list[TranscriptEntry],
         *,
         ctx: "PolicyContext",
-    ) -> StageResult: ...
+    ) -> StageResult:
+        """Return a rewritten transcript, or the original when unchanged."""
+        ...
 
 
 class ToolResultBudgetStage:
@@ -58,6 +67,17 @@ class ToolResultBudgetStage:
         preview_chars: int = 2_000,
         archive: "CompactionArchive | None" = None,
     ) -> None:
+        """Configure the tool-result character budget.
+
+        Args:
+            max_chars: Total allowed characters across tool-result outputs.
+                ``None`` disables this stage.
+            large_result_chars: Minimum size for an individual result to be
+                replaced. Smaller outputs are left inline even if the total is
+                over budget.
+            preview_chars: Leading characters kept inline after replacement.
+            archive: Optional sink for full outputs before they are replaced.
+        """
         self.max_chars = max_chars
         self.large_result_chars = large_result_chars
         self.preview_chars = preview_chars
@@ -69,6 +89,7 @@ class ToolResultBudgetStage:
         *,
         ctx: "PolicyContext",
     ) -> StageResult:
+        """Replace the largest eligible tool results until under budget."""
         if self.max_chars is None:
             return StageResult(entries=entries)
 
@@ -124,6 +145,7 @@ class ToolResultBudgetStage:
         *,
         ctx: "PolicyContext",
     ) -> tuple[str, JsonObject]:
+        """Return inline replacement text and archive metadata for ``entry``."""
         preview = entry.output[: self.preview_chars]
         if self.archive is None:
             return (
@@ -162,21 +184,29 @@ class ToolResultBudgetStage:
         )
 
 
-class MiddleSnipStage:
+class MiddleTrimStage:
     """Trim the middle of long transcripts while preserving tool pairs."""
 
-    name = "middle_snip"
+    name = "middle_trim"
 
     def __init__(
         self,
         *,
         max_entries: int | None = 80,
-        keep_initial_entries: int = 3,
-        keep_recent_entries: int = 40,
+        keep_initial: int = 3,
+        keep_recent: int = 40,
     ) -> None:
+        """Configure middle trimming.
+
+        Args:
+            max_entries: Maximum transcript length before trimming. ``None``
+                disables this stage.
+            keep_initial: Number of leading entries to keep.
+            keep_recent: Number of recent trailing entries to keep.
+        """
         self.max_entries = max_entries
-        self.keep_initial_entries = keep_initial_entries
-        self.keep_recent_entries = keep_recent_entries
+        self.keep_initial = keep_initial
+        self.keep_recent = keep_recent
 
     async def apply(
         self,
@@ -184,12 +214,13 @@ class MiddleSnipStage:
         *,
         ctx: "PolicyContext",
     ) -> StageResult:
+        """Drop the middle of long transcripts using ``safe_window``."""
         del ctx
         if self.max_entries is None or len(entries) <= self.max_entries:
             return StageResult(entries=entries)
 
-        head = max(0, self.keep_initial_entries)
-        tail = max(0, self.keep_recent_entries)
+        head = max(0, self.keep_initial)
+        tail = max(0, self.keep_recent)
         kept = safe_window(entries, head=head, tail=tail)
         if len(kept) >= len(entries):
             return StageResult(entries=entries)
@@ -227,6 +258,15 @@ class ToolResultRetentionStage:
         min_chars: int = 120,
         placeholder: str = TOOL_RESULT_PLACEHOLDER,
     ) -> None:
+        """Configure retention of recent tool results.
+
+        Args:
+            keep_recent: Number of latest tool results to keep intact. ``None``
+                disables this stage; ``0`` allows all eligible results to be
+                replaced.
+            min_chars: Results at or below this size stay inline.
+            placeholder: Text used for replaced older results.
+        """
         self.keep_recent = keep_recent
         self.min_chars = min_chars
         self.placeholder = placeholder
@@ -237,6 +277,7 @@ class ToolResultRetentionStage:
         *,
         ctx: "PolicyContext",
     ) -> StageResult:
+        """Replace older long tool results with a compact placeholder."""
         del ctx
         if self.keep_recent is None:
             return StageResult(entries=entries)
@@ -278,6 +319,7 @@ class ToolResultRetentionStage:
 
 
 def _is_compacted_tool_result(output: str) -> bool:
+    """Return whether ``output`` already looks like a compacted tool result."""
     return (
         output.startswith(TOOL_RESULT_PLACEHOLDER)
         or output.startswith("[Persisted tool result]")
@@ -286,6 +328,7 @@ def _is_compacted_tool_result(output: str) -> bool:
 
 
 def _preview_marker(*, call_id: str, preview: str) -> str:
+    """Build the inline marker used when a result was not archived."""
     return (
         "[Tool result preview]\n"
         f"call_id: {call_id}\n"
@@ -296,6 +339,7 @@ def _preview_marker(*, call_id: str, preview: str) -> str:
 
 
 def _persisted_marker(*, call_id: str, uri: str, preview: str) -> str:
+    """Build the inline marker used when a full result was archived."""
     return (
         "[Persisted tool result]\n"
         f"call_id: {call_id}\n"
@@ -306,6 +350,7 @@ def _persisted_marker(*, call_id: str, uri: str, preview: str) -> str:
 
 
 def _can_insert_user_entry(entries: list[TranscriptEntry]) -> bool:
+    """Return whether inserting a user entry would avoid splitting tool pairs."""
     pending_calls: set[str] = set()
     for entry in entries:
         if isinstance(entry, ToolCallEntry):

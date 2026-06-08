@@ -428,9 +428,7 @@ def test_safe_window_long_sequence():
     got = safe_window(entries, tail=5)
     # Last 5 entries should include some call/result pairs.
     # Check no orphan ToolResultEntrys remain.
-    call_ids_in_result = {
-        it.call_id for it in got if isinstance(it, ToolCallEntry)
-    }
+    call_ids_in_result = {it.call_id for it in got if isinstance(it, ToolCallEntry)}
     for it in got:
         if isinstance(it, ToolResultEntry):
             assert it.call_id in call_ids_in_result, (
@@ -495,7 +493,9 @@ class _RecordingArchive:
 
     async def save_transcript(self, entries, *, ctx, reason):
         self.transcripts.append(list(entries))
-        return ArchiveRef(uri=f"memory://transcript/{len(self.transcripts)}", kind="transcript")
+        return ArchiveRef(
+            uri=f"memory://transcript/{len(self.transcripts)}", kind="transcript"
+        )
 
     async def save_tool_result(self, output, *, call_id, ctx):
         self.tool_results.append((call_id, output))
@@ -518,18 +518,18 @@ class _FakeProviderWithWindow:
 async def test_compacting_skips_when_under_threshold():
     summarizer = _FakeSummarizer()
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000,
+        window_tokens=10_000,
         trigger_ratio=0.8,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=summarizer,
     )
     entries = [_user("short")]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(),
         model="fake-model",
-        last_input_tokens=100,
+        last_prompt_tokens=100,
     )
     out = await policy.apply(entries, ctx=ctx)
     assert out.entries is entries
@@ -541,12 +541,12 @@ async def test_compacting_compacts_when_over_threshold(tmp_path):
     summarizer = _FakeSummarizer("Goal: ship feature.")
     archive = FileCompactionArchive(root=tmp_path)
     policy = CompactingContextPolicy(
-        context_window_tokens=1_000,
+        window_tokens=1_000,
         trigger_ratio=0.5,  # threshold = 500
         max_entries=None,
-        keep_recent_entries=2,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_recent=2,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=summarizer,
         archive=archive,
     )
@@ -554,7 +554,7 @@ async def test_compacting_compacts_when_over_threshold(tmp_path):
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
-        last_input_tokens=900,  # over threshold
+        last_prompt_tokens=900,  # over threshold
         session_id="sess-1",
         run_id="run-1",
     )
@@ -575,18 +575,18 @@ async def test_compacting_compacts_when_over_threshold(tmp_path):
 async def test_compacting_falls_back_to_provider_context_window():
     summarizer = _FakeSummarizer()
     policy = CompactingContextPolicy(
-        context_window_tokens=None,  # let provider answer
+        window_tokens=None,  # let provider answer
         trigger_ratio=0.5,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=summarizer,
     )
     entries = [_user("x" * 100) for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
-        last_input_tokens=600,
+        last_prompt_tokens=600,
     )
     out = await policy.apply(entries, ctx=ctx)
     assert out.changed is True
@@ -596,17 +596,17 @@ async def test_compacting_falls_back_to_provider_context_window():
 async def test_compacting_skips_when_no_window_info_available():
     summarizer = _FakeSummarizer()
     policy = CompactingContextPolicy(
-        context_window_tokens=None,
+        window_tokens=None,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=summarizer,
     )
     entries = [_user("x") for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=None),
         model="unknown-model",
-        last_input_tokens=999_999,
+        last_prompt_tokens=999_999,
     )
     out = await policy.apply(entries, ctx=ctx)
     # Without window info, proactive compaction is disabled.
@@ -618,9 +618,9 @@ async def test_compacting_skips_when_no_window_info_available():
 async def test_compacting_reactive_always_compacts():
     summarizer = _FakeSummarizer("Reactive summary.")
     policy = CompactingContextPolicy(
-        context_window_tokens=None,
+        window_tokens=None,
         summarizer=summarizer,
-        reactive_keep_recent_entries=1,
+        reactive_keep_recent=1,
     )
     entries = [_user(f"m{i}") for i in range(5)]
     ctx = PolicyContext(provider=None, model=None)
@@ -635,10 +635,10 @@ async def test_compacting_reactive_always_compacts():
 async def test_compacting_tool_result_retention_replaces_old_outputs():
     summarizer = _FakeSummarizer()
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000_000,  # never proactively summarize
+        window_tokens=10_000_000,  # never proactively summarize
         max_entries=None,
-        keep_recent_tool_results=1,
-        tool_result_budget_chars=None,
+        keep_tool_results=1,
+        max_tool_result_chars=None,
         summarizer=summarizer,
     )
     entries = [
@@ -661,10 +661,10 @@ async def test_compacting_tool_result_retention_replaces_old_outputs():
 
 async def test_tool_result_retention_can_keep_zero_results():
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000_000,
+        window_tokens=10_000_000,
         max_entries=None,
-        keep_recent_tool_results=0,
-        tool_result_budget_chars=None,
+        keep_tool_results=0,
+        max_tool_result_chars=None,
         summarizer=_FakeSummarizer(),
     )
     entries = [
@@ -684,12 +684,12 @@ async def test_tool_result_retention_can_keep_zero_results():
 
 async def test_tool_result_budget_persists_large_outputs(tmp_path):
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000_000,
+        window_tokens=10_000_000,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=500,
+        keep_tool_results=None,
+        max_tool_result_chars=500,
         large_tool_result_chars=100,
-        tool_result_preview_chars=30,
+        tool_preview_chars=30,
         archive=FileCompactionArchive(root=tmp_path),
         summarizer=_FakeSummarizer(),
     )
@@ -723,12 +723,12 @@ async def test_file_archive_accepts_dynamic_root(tmp_path):
 
 async def test_tool_result_budget_falls_back_to_preview_when_archive_fails():
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000_000,
+        window_tokens=10_000_000,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=500,
+        keep_tool_results=None,
+        max_tool_result_chars=500,
         large_tool_result_chars=100,
-        tool_result_preview_chars=12,
+        tool_preview_chars=12,
         archive=_FailingArchive(),
         summarizer=_FakeSummarizer(),
     )
@@ -744,14 +744,14 @@ async def test_tool_result_budget_falls_back_to_preview_when_archive_fails():
     assert "abcdefabcdef" in result.output
 
 
-async def test_middle_snip_trims_long_transcripts():
+async def test_middle_trim_trims_long_transcripts():
     policy = CompactingContextPolicy(
-        context_window_tokens=10_000_000,
+        window_tokens=10_000_000,
         max_entries=6,
-        keep_initial_entries=2,
-        keep_recent_entries=2,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_initial=2,
+        keep_recent=2,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=_FakeSummarizer(),
     )
     entries = [_user(f"m{i}") for i in range(10)]
@@ -774,12 +774,12 @@ async def test_summary_archives_original_transcript_before_stage_rewrites():
     archive = _RecordingArchive()
     summarizer = _FakeSummarizer("summary")
     policy = CompactingContextPolicy(
-        context_window_tokens=100,
+        window_tokens=100,
         trigger_ratio=0.5,
         max_entries=None,
-        keep_recent_entries=1,
-        keep_recent_tool_results=0,
-        tool_result_budget_chars=None,
+        keep_recent=1,
+        keep_tool_results=0,
+        max_tool_result_chars=None,
         archive=archive,
         summarizer=summarizer,
     )
@@ -789,7 +789,7 @@ async def test_summary_archives_original_transcript_before_stage_rewrites():
         ctx=PolicyContext(
             provider=_FakeProviderWithWindow(),
             model="fake-model",
-            last_input_tokens=1_000,
+            last_prompt_tokens=1_000,
         ),
     )
     assert out.changed is True
@@ -806,30 +806,30 @@ async def test_summary_archives_original_transcript_before_stage_rewrites():
 def test_compacting_policy_validates_parameters():
     with pytest.raises(ValueError, match="trigger_ratio"):
         CompactingContextPolicy(trigger_ratio=1)
-    with pytest.raises(ValueError, match="keep_recent_entries"):
-        CompactingContextPolicy(keep_recent_entries=0)
-    with pytest.raises(ValueError, match="reactive_keep_recent_entries"):
-        CompactingContextPolicy(reactive_keep_recent_entries=0)
-    with pytest.raises(ValueError, match="keep_recent_tool_results"):
-        CompactingContextPolicy(keep_recent_tool_results=-1)
+    with pytest.raises(ValueError, match="keep_recent"):
+        CompactingContextPolicy(keep_recent=0)
+    with pytest.raises(ValueError, match="reactive_keep_recent"):
+        CompactingContextPolicy(reactive_keep_recent=0)
+    with pytest.raises(ValueError, match="keep_tool_results"):
+        CompactingContextPolicy(keep_tool_results=-1)
 
 
 async def test_compacting_circuit_breaker():
     failing = _FailingSummarizer()
     policy = CompactingContextPolicy(
-        context_window_tokens=100,
+        window_tokens=100,
         trigger_ratio=0.5,
         max_entries=None,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=failing,
-        max_summary_failures=2,
+        summary_failure_limit=2,
     )
     entries = [_user("x" * 1000)]
     ctx = PolicyContext(
         provider=None,
         model=None,
-        last_input_tokens=500,
+        last_prompt_tokens=500,
     )
     # Proactive summary failures do not crash a run; after two failures the
     # circuit breaker stops trying.
@@ -844,7 +844,7 @@ async def test_compacting_circuit_breaker():
 
 async def test_reactive_summarizer_failure_propagates():
     failing = _FailingSummarizer()
-    policy = CompactingContextPolicy(summarizer=failing, max_summary_failures=2)
+    policy = CompactingContextPolicy(summarizer=failing, summary_failure_limit=2)
     entries = [_user("x" * 1000)]
     ctx = PolicyContext(provider=None, model=None)
     with pytest.raises(RuntimeError, match="boom"):
@@ -852,7 +852,7 @@ async def test_reactive_summarizer_failure_propagates():
 
 
 async def test_compacting_uses_current_entries_when_last_prompt_is_stale():
-    """Regression: ``last_input_tokens`` is the *previous* turn's prompt
+    """Regression: ``last_prompt_tokens`` is the *previous* turn's prompt
     size — it does not include the assistant reply, tool results, or new
     user message that have been appended since. The policy must therefore
     fall back to the current entries estimate when it is larger; otherwise a
@@ -861,26 +861,26 @@ async def test_compacting_uses_current_entries_when_last_prompt_is_stale():
     """
     summarizer = _FakeSummarizer("compacted")
     policy = CompactingContextPolicy(
-        context_window_tokens=1_000,
+        window_tokens=1_000,
         trigger_ratio=0.5,  # threshold = 500
         max_entries=None,
-        keep_recent_entries=2,
-        keep_recent_tool_results=None,
-        tool_result_budget_chars=None,
+        keep_recent=2,
+        keep_tool_results=None,
+        max_tool_result_chars=None,
         summarizer=summarizer,
     )
     # 10 messages of ~400 chars each ≈ 1000 estimated tokens, well above
-    # threshold. ``last_input_tokens`` is stale and below threshold.
+    # threshold. ``last_prompt_tokens`` is stale and below threshold.
     entries = [_user("x" * 400) for _ in range(10)]
     ctx = PolicyContext(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
-        last_input_tokens=100,  # stale: from a much earlier turn
+        last_prompt_tokens=100,  # stale: from a much earlier turn
     )
     out = await policy.apply(entries, ctx=ctx)
     assert out.changed is True, (
         "expected compaction to trigger from current-entries estimate "
-        "despite stale last_input_tokens"
+        "despite stale last_prompt_tokens"
     )
     assert summarizer.calls
 
@@ -920,9 +920,9 @@ class _OverflowOnceProvider:
 async def test_runner_reactive_compaction_recovers_from_overflow():
     summarizer = _FakeSummarizer("Compacted history.")
     policy = CompactingContextPolicy(
-        context_window_tokens=None,
+        window_tokens=None,
         summarizer=summarizer,
-        reactive_keep_recent_entries=1,
+        reactive_keep_recent=1,
     )
     provider = _OverflowOnceProvider()
     agent = Agent(
@@ -946,7 +946,7 @@ async def test_runner_reactive_compaction_recovers_from_overflow():
 async def test_runner_emits_context_compacted_event():
     summarizer = _FakeSummarizer("S.")
     policy = CompactingContextPolicy(
-        context_window_tokens=None,
+        window_tokens=None,
         summarizer=summarizer,
     )
     provider = _OverflowOnceProvider()
@@ -991,9 +991,9 @@ async def test_runner_default_policy_recovers_from_overflow():
 async def test_runner_session_replace_after_compaction():
     summarizer = _FakeSummarizer("S.")
     policy = CompactingContextPolicy(
-        context_window_tokens=None,
+        window_tokens=None,
         summarizer=summarizer,
-        reactive_keep_recent_entries=1,
+        reactive_keep_recent=1,
     )
     provider = _OverflowOnceProvider()
     agent = Agent(name="t", instructions="x", model=provider)
@@ -1007,8 +1007,7 @@ async def test_runner_session_replace_after_compaction():
     )
     persisted = await sess.load("s1")
     assert any(
-        isinstance(it, InputEntry) and "S." in str(it.content)
-        for it in persisted
+        isinstance(it, InputEntry) and "S." in str(it.content) for it in persisted
     )
     # The final assistant reply must also be persisted.
     assert any(

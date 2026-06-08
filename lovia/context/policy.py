@@ -26,7 +26,7 @@ from ..transcript import (
 from .archive import ArchiveRef, CompactionArchive
 from .stages import (
     ContextStage,
-    MiddleSnipStage,
+    MiddleTrimStage,
     ToolResultBudgetStage,
     ToolResultRetentionStage,
 )
@@ -58,18 +58,37 @@ Rules:
 
 @dataclass
 class PolicyContext:
-    """Per-turn information available to a context policy."""
+    """Per-turn information available to a context policy.
 
-    provider: Provider
+    Attributes:
+        provider: Provider selected for the next model call, if one is known.
+        model: Model name passed to the provider.
+        last_prompt_tokens: Last observed provider input-token count. This can
+            lag behind the current transcript, so policies should combine it
+            with an estimate of ``entries`` rather than trusting it alone.
+        session_id: Session being compacted, used by archives.
+        run_id: Run being compacted, used by archives.
+    """
+
+    provider: Provider | None
     model: str | None
-    last_input_tokens: int | None = None
+    last_prompt_tokens: int | None = None
     session_id: str | None = None
     run_id: str | None = None
 
 
 @dataclass
 class ContextPolicyResult:
-    """Structured result returned by :class:`ContextPolicy` implementations."""
+    """Structured result returned by :class:`ContextPolicy` implementations.
+
+    Attributes:
+        entries: Transcript entries to use for the next provider call.
+        changed: Whether ``entries`` differs from the input transcript.
+        reason: Stable machine-readable reason for the rewrite.
+        summary: Summary text produced during compaction, when applicable.
+        archive_ref: Reference to the archived original transcript, if saved.
+        metadata: Extra diagnostic details emitted with compaction events.
+    """
 
     entries: list[TranscriptEntry]
     changed: bool = False
@@ -85,20 +104,26 @@ class ContextPolicy(Protocol):
 
     async def apply(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
-    ) -> ContextPolicyResult: ...
+    ) -> ContextPolicyResult:
+        """Rewrite ``entries`` proactively before a provider call."""
+        ...
 
     async def apply_reactive(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
-    ) -> ContextPolicyResult: ...
+    ) -> ContextPolicyResult:
+        """Rewrite ``entries`` after a provider reports context overflow."""
+        ...
 
 
 @runtime_checkable
-class Summarizer(Protocol):
-    """Pluggable summarization backend used by :class:`CompactingContextPolicy`."""
+class ContextSummarizer(Protocol):
+    """Summarization backend used by :class:`CompactingContextPolicy`."""
 
     async def summarize(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
-    ) -> str: ...
+    ) -> str:
+        """Return a compact natural-language summary of ``entries``."""
+        ...
 
 
 class NoopContextPolicy:
@@ -109,17 +134,19 @@ class NoopContextPolicy:
     async def apply(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
     ) -> ContextPolicyResult:
+        """Return ``entries`` unchanged during proactive compaction."""
         del ctx
         return ContextPolicyResult(entries=entries)
 
     async def apply_reactive(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
     ) -> ContextPolicyResult:
+        """Return ``entries`` unchanged after context overflow."""
         del ctx
         return ContextPolicyResult(entries=entries)
 
 
-class ProviderSummarizer:
+class LLMSummarizer:
     """Summarize a transcript by asking an LLM provider."""
 
     def __init__(
@@ -129,6 +156,15 @@ class ProviderSummarizer:
         prompt: str = DEFAULT_SUMMARY_PROMPT,
         settings: ModelSettings | None = None,
     ) -> None:
+        """Create an LLM-backed summarizer.
+
+        Args:
+            provider: Provider used for summaries. When omitted, the active
+                run provider from :class:`PolicyContext` is used.
+            prompt: System prompt that defines what the summary must preserve.
+            settings: Provider settings for the summary call. Defaults to
+                deterministic generation with ``temperature=0``.
+        """
         self.provider = provider
         self.prompt = prompt
         self.settings = settings or ModelSettings(temperature=0)
@@ -136,9 +172,10 @@ class ProviderSummarizer:
     async def summarize(
         self, entries: list[TranscriptEntry], *, ctx: PolicyContext
     ) -> str:
+        """Convert ``entries`` to plain text and stream a provider summary."""
         provider = self.provider or ctx.provider
         if provider is None:
-            raise ValueError("ProviderSummarizer requires a provider")
+            raise ValueError("LLMSummarizer requires a provider")
         transcript_text = _transcript_to_text(entries)
         input_entries: list[TranscriptEntry] = [
             InputEntry(role="system", content=self.prompt),
@@ -158,7 +195,7 @@ class ProviderSummarizer:
                 chunks.append(text)
         summary = "".join(chunks).strip()
         if not summary:
-            raise ValueError("Summarizer returned empty text")
+            raise ValueError("LLMSummarizer returned empty text")
         return summary
 
 
@@ -170,55 +207,92 @@ class CompactingContextPolicy:
     def __init__(
         self,
         *,
-        context_window_tokens: int | None = None,
+        window_tokens: int | None = None,
         trigger_ratio: float = 0.8,
         max_entries: int | None = 80,
-        keep_initial_entries: int = 3,
-        keep_recent_entries: int = 40,
-        reactive_keep_recent_entries: int = 8,
-        keep_recent_tool_results: int | None = 3,
-        tool_result_budget_chars: int | None = 200_000,
+        keep_initial: int = 3,
+        keep_recent: int = 40,
+        reactive_keep_recent: int = 8,
+        keep_tool_results: int | None = 3,
+        max_tool_result_chars: int | None = 200_000,
         large_tool_result_chars: int = 20_000,
-        tool_result_preview_chars: int = 2_000,
+        tool_preview_chars: int = 2_000,
         stages: list[ContextStage] | None = None,
-        summarizer: Summarizer | None = None,
+        summarizer: ContextSummarizer | None = None,
         summary_prompt: str = DEFAULT_SUMMARY_PROMPT,
         archive: CompactionArchive | None = None,
-        max_summary_failures: int = 3,
+        summary_failure_limit: int = 3,
     ) -> None:
+        """Configure context compaction.
+
+        Args:
+            window_tokens: Model context window. When omitted, the policy asks
+                the provider; if the provider does not know, proactive summary
+                compaction is skipped.
+            trigger_ratio: Fraction of ``window_tokens`` that triggers an LLM
+                summary during proactive compaction.
+            max_entries: Maximum transcript entries before the middle-trim
+                stage removes older middle entries. ``None`` disables this
+                stage.
+            keep_initial: Number of leading entries to preserve when trimming
+                the middle of a long transcript.
+            keep_recent: Number of recent entries to preserve for proactive
+                summaries and middle trimming.
+            reactive_keep_recent: Number of recent entries to preserve after a
+                provider reports context overflow.
+            keep_tool_results: Number of most recent tool results to leave
+                intact. ``None`` disables placeholder replacement for older
+                tool results.
+            max_tool_result_chars: Total character budget for tool-result
+                output before large results are archived or previewed. ``None``
+                disables this budget.
+            large_tool_result_chars: Minimum size for a single tool result to
+                be eligible for archive/preview replacement.
+            tool_preview_chars: Number of leading characters kept in the inline
+                preview when a large tool result is replaced.
+            stages: Custom cheap structural stages. When provided, these
+                replace the default tool-budget, middle-trim, and retention
+                stages.
+            summarizer: Summary backend. Defaults to :class:`LLMSummarizer`.
+            summary_prompt: Prompt used by the default summarizer.
+            archive: Optional sink for transcripts and large tool results that
+                leave the active model context.
+            summary_failure_limit: Proactive summary failures allowed before
+                the circuit breaker stops retrying summaries.
+        """
         if not 0 < trigger_ratio < 1:
             raise ValueError("trigger_ratio must be between 0 and 1 (exclusive)")
-        if keep_recent_entries < 1:
-            raise ValueError("keep_recent_entries must be >= 1")
-        if reactive_keep_recent_entries < 1:
-            raise ValueError("reactive_keep_recent_entries must be >= 1")
-        if keep_initial_entries < 0:
-            raise ValueError("keep_initial_entries must be >= 0")
-        if keep_recent_tool_results is not None and keep_recent_tool_results < 0:
-            raise ValueError("keep_recent_tool_results must be >= 0")
+        if keep_recent < 1:
+            raise ValueError("keep_recent must be >= 1")
+        if reactive_keep_recent < 1:
+            raise ValueError("reactive_keep_recent must be >= 1")
+        if keep_initial < 0:
+            raise ValueError("keep_initial must be >= 0")
+        if keep_tool_results is not None and keep_tool_results < 0:
+            raise ValueError("keep_tool_results must be >= 0")
 
-        self.context_window_tokens = context_window_tokens
+        self.window_tokens = window_tokens
         self.trigger_ratio = trigger_ratio
-        self.keep_recent_entries = keep_recent_entries
-        self.reactive_keep_recent_entries = reactive_keep_recent_entries
+        self.keep_recent = keep_recent
+        self.reactive_keep_recent = reactive_keep_recent
         self.archive = archive
-        self.summarizer: Summarizer = summarizer or ProviderSummarizer(
+        self.summarizer: ContextSummarizer = summarizer or LLMSummarizer(
             prompt=summary_prompt
         )
-        self._summary_failures = _SummaryFailures(max_failures=max_summary_failures)
+        self._summary_failures = _SummaryFailures(max_failures=summary_failure_limit)
         self.stages = stages or [
             ToolResultBudgetStage(
-                max_chars=tool_result_budget_chars,
+                max_chars=max_tool_result_chars,
                 large_result_chars=large_tool_result_chars,
-                preview_chars=tool_result_preview_chars,
+                preview_chars=tool_preview_chars,
                 archive=archive,
             ),
-            MiddleSnipStage(
+            MiddleTrimStage(
                 max_entries=max_entries,
-                keep_initial_entries=keep_initial_entries,
-                keep_recent_entries=keep_recent_entries,
+                keep_initial=keep_initial,
+                keep_recent=keep_recent,
             ),
-            ToolResultRetentionStage(keep_recent=keep_recent_tool_results),
+            ToolResultRetentionStage(keep_recent=keep_tool_results),
         ]
 
     async def apply(
@@ -227,6 +301,7 @@ class CompactingContextPolicy:
         *,
         ctx: PolicyContext,
     ) -> ContextPolicyResult:
+        """Run cheap stages, then summarize only if the prompt is near capacity."""
         original_entries = entries
         current = entries
         changed = False
@@ -271,6 +346,7 @@ class CompactingContextPolicy:
         *,
         ctx: PolicyContext,
     ) -> ContextPolicyResult:
+        """Summarize immediately after a provider context-overflow error."""
         result = await self._summarize(
             entries,
             ctx=ctx,
@@ -281,7 +357,7 @@ class CompactingContextPolicy:
         return result or ContextPolicyResult(entries=entries)
 
     def _threshold(self, ctx: PolicyContext) -> int | None:
-        cap = self.context_window_tokens
+        cap = self.window_tokens
         if cap is None:
             cap = _provider_context_window(ctx.provider, ctx.model)
         if cap is None:
@@ -293,6 +369,7 @@ class CompactingContextPolicy:
         entries: list[TranscriptEntry],
         ctx: PolicyContext,
     ) -> bool:
+        """Return whether proactive LLM summarization should run."""
         threshold = self._threshold(ctx)
         if threshold is None:
             return False
@@ -303,8 +380,9 @@ class CompactingContextPolicy:
         entries: list[TranscriptEntry],
         ctx: PolicyContext,
     ) -> int:
+        """Return the best known current prompt size."""
         estimate = _estimate_tokens(ctx.provider, entries)
-        return max(estimate, ctx.last_input_tokens or 0)
+        return max(estimate, ctx.last_prompt_tokens or 0)
 
     async def _summarize(
         self,
@@ -315,6 +393,7 @@ class CompactingContextPolicy:
         stage_results: list[JsonObject],
         archive_entries: list[TranscriptEntry],
     ) -> ContextPolicyResult | None:
+        """Archive the original transcript and replace history with a summary."""
         reason = "reactive_summary" if reactive else "auto_summary"
         if self._summary_failures.tripped:
             logger.warning(
@@ -344,9 +423,7 @@ class CompactingContextPolicy:
             return None
 
         self._summary_failures.record_success()
-        tail = (
-            self.reactive_keep_recent_entries if reactive else self.keep_recent_entries
-        )
+        tail = self.reactive_keep_recent if reactive else self.keep_recent
         compacted = [
             make_summary_entry(summary, reactive=reactive),
             *safe_window(entries, tail=tail),
@@ -374,6 +451,7 @@ class CompactingContextPolicy:
         ctx: PolicyContext,
         reason: str,
     ) -> ArchiveRef | None:
+        """Persist ``entries`` when an archive is configured."""
         if self.archive is None:
             return None
         try:
@@ -388,6 +466,7 @@ class CompactingContextPolicy:
 
 
 def make_summary_entry(summary: str, *, reactive: bool = False) -> InputEntry:
+    """Return the user-role transcript entry that carries a context summary."""
     label = "Reactive context summary" if reactive else "Context summary"
     return InputEntry(role="user", content=f"[{label}]\n\n{summary}")
 
@@ -409,6 +488,7 @@ class _SummaryFailures:
 
 
 def _transcript_to_text(entries: list[TranscriptEntry]) -> str:
+    """Render transcript entries as plain text for the summarizer prompt."""
     out: list[str] = []
     for entry in entries:
         if isinstance(entry, InputEntry):
@@ -430,6 +510,7 @@ def _transcript_to_text(entries: list[TranscriptEntry]) -> str:
 
 
 def _parts_to_text(parts: list[ContentPart]) -> str:
+    """Best-effort text extraction for multimodal input parts."""
     try:
         from ..content import text_of
 

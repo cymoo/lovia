@@ -79,7 +79,7 @@ def create_app(
         chat_store = ChatStore.sqlite(_default_db_path(agents))
 
     effective_policy: ContextPolicy = context_policy or CompactingContextPolicy(
-        context_window_tokens=_DEFAULT_MAX_TOKENS
+        window_tokens=_DEFAULT_MAX_TOKENS
     )
 
     approvals = ApprovalRegistry()

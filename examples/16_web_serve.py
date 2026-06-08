@@ -52,13 +52,12 @@ def main() -> None:
         sandbox=Sandbox.local(".", mode="trusted"),
         tracer=ConsoleTracer(),
     )
-    # Default policy: when the prompt approaches the model's context
-    # window, summarize older turns and keep the last 10.
-    # tells the policy to ask the provider for the active model's window —
-    # falling back to the reactive overflow path for unknown models so the
-    # server never crashes a long-running chat session.
-    # policy = CompactingContextPolicy(keep_recent_entries=10)
-    policy = CompactingContextPolicy(context_window_tokens=200_000)
+    # Default policy: when the prompt approaches the model's context window,
+    # summarize older turns. Omit window_tokens to ask the provider for the
+    # active model's window and fall back to the reactive overflow path when
+    # the window is unknown.
+    # policy = CompactingContextPolicy(keep_recent=10)
+    policy = CompactingContextPolicy(window_tokens=200_000)
     serve(agent, host="127.0.0.1", port=8000, context_policy=policy)
 
 

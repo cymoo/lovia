@@ -136,9 +136,9 @@ class RunLoop:
         self.retry = retry
         self.checkpointer = checkpointer
         self.context_policy: ContextPolicy = context_policy or CompactingContextPolicy()
-        # Tracks the input-token count from the previous turn so
+        # Tracks the prompt-token count from the previous turn so
         # ContextPolicy can prefer real usage over heuristic estimates.
-        self._last_input_tokens: int | None = None
+        self._last_prompt_tokens: int | None = None
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.approvals = ApprovalChannel()
@@ -258,7 +258,7 @@ class RunLoop:
                 policy_ctx = PolicyContext(
                     provider=primary_provider,
                     model=policy_model,
-                    last_input_tokens=self._last_input_tokens,
+                    last_prompt_tokens=self._last_prompt_tokens,
                     session_id=self.session_id,
                     run_id=self.run_id,
                 )
@@ -346,7 +346,7 @@ class RunLoop:
                 # ContextPolicy can size compaction against actual usage
                 # rather than the chars/4 heuristic.
                 if assistant.usage and assistant.usage.input_tokens:
-                    self._last_input_tokens = assistant.usage.input_tokens
+                    self._last_prompt_tokens = assistant.usage.input_tokens
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 turn_entries = state.turn_entries or []

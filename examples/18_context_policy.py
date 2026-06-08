@@ -4,10 +4,10 @@ This example shows ``CompactingContextPolicy`` doing its job:
 
 1. We seed an ``InMemorySession`` with a long fake transcript that would
    normally blow past a small model's context window.
-2. A small ``context_window_tokens`` + ``trigger_ratio=0.5`` forces the policy to
+2. A small ``window_tokens`` + ``trigger_ratio=0.5`` forces the policy to
    summarize on the next turn.
-3. The ``archive`` callback captures the pre-compaction transcript so we
-   can audit it offline.
+3. The ``archive`` sink captures the pre-compaction transcript so we can audit
+   it offline.
 4. A hook listens for ``ContextCompacted`` and feeds the summary into a
    long-term ``Memory`` — the three layers stay nicely orthogonal.
 
@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from lovia import (
     Agent,
     AgentHooks,
+    ArchiveRef,
     AssistantTextEntry,
     InputEntry,
     Runner,
@@ -47,6 +48,39 @@ class _DictMemory:
 
     async def retrieve(self, query: str, *, k: int = 5):
         return []
+
+
+class _ListArchive:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    async def save_transcript(self, entries, *, ctx, reason: str) -> ArchiveRef:
+        record = {
+            "kind": "transcript",
+            "session_id": ctx.session_id,
+            "n_before": len(entries),
+            "reason": reason,
+        }
+        self.records.append(record)
+        return ArchiveRef(
+            uri=f"memory://transcripts/{len(self.records)}",
+            kind="transcript",
+            metadata=record,
+        )
+
+    async def save_tool_result(self, output: str, *, call_id: str, ctx) -> ArchiveRef:
+        record = {
+            "kind": "tool_result",
+            "session_id": ctx.session_id,
+            "call_id": call_id,
+            "chars": len(output),
+        }
+        self.records.append(record)
+        return ArchiveRef(
+            uri=f"memory://tool-results/{call_id}",
+            kind="tool_result",
+            metadata=record,
+        )
 
 
 async def main() -> None:
@@ -84,28 +118,17 @@ async def main() -> None:
         )
     await session.append("u-mei", seeded)
 
-    # Write-only archive: a one-liner persists the pre-compaction transcript.
-    archive_log: list = []
-
-    async def archive(ev) -> None:
-        archive_log.append(
-            {
-                "session_id": ev.session_id,
-                "n_before": len(ev.entries_before),
-                "n_after": len(ev.entries_after),
-                "summary": ev.summary,
-                "reactive": ev.reactive,
-            }
-        )
+    # Write-only archive: persists data before it leaves the active context.
+    archive = _ListArchive()
 
     # Tight budget so this demo definitely triggers compaction on the
-    # first real turn. In production you'd set max_tokens to the model's
+    # first real turn. In production you'd set window_tokens to the model's
     # actual context window (or omit it and let provider.context_window
     # decide).
     policy = CompactingContextPolicy(
-        context_window_tokens=2_000,
+        window_tokens=2_000,
         trigger_ratio=0.5,  # threshold = 1000 tokens
-        keep_recent_entries=4,
+        keep_recent=4,
         archive=archive,
     )
 
@@ -118,15 +141,13 @@ async def main() -> None:
     )
     print("Assistant:", result.output)
     print()
-    print(f"Archive entries: {len(archive_log)}")
-    for entry in archive_log:
+    print(f"Archive entries: {len(archive.records)}")
+    for entry in archive.records:
         print(
             f"  • session={entry['session_id']!r} "
-            f"before={entry['n_before']} after={entry['n_after']} "
-            f"reactive={entry['reactive']}"
+            f"kind={entry['kind']!r} reason={entry.get('reason')!r} "
+            f"size={entry.get('n_before', entry.get('chars'))}"
         )
-        if entry["summary"]:
-            print(f"    summary preview: {entry['summary'][:120]}...")
     print()
     print(f"Long-term memory records: {len(long_term.records)}")
 

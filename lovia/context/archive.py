@@ -19,7 +19,14 @@ ArchiveRoot = str | Path | Callable[["PolicyContext"], str | Path]
 
 @dataclass
 class ArchiveRef:
-    """Reference to data saved outside the active model context."""
+    """Reference to data saved outside the active model context.
+
+    Attributes:
+        uri: Location of the archived data. May be a file path, URL, or custom
+            store URI.
+        kind: Type of archived payload.
+        metadata: Store-specific details such as counts, run id, or call id.
+    """
 
     uri: str
     kind: Literal["transcript", "tool_result"]
@@ -35,7 +42,15 @@ class CompactionArchive(Protocol):
         *,
         ctx: "PolicyContext",
         reason: str,
-    ) -> ArchiveRef: ...
+    ) -> ArchiveRef:
+        """Persist a transcript before it is summarized or replaced.
+
+        Args:
+            entries: Transcript entries leaving the active context.
+            ctx: Policy context for session/run metadata.
+            reason: Compaction reason such as ``"auto_summary"``.
+        """
+        ...
 
     async def save_tool_result(
         self,
@@ -43,7 +58,15 @@ class CompactionArchive(Protocol):
         *,
         call_id: str,
         ctx: "PolicyContext",
-    ) -> ArchiveRef: ...
+    ) -> ArchiveRef:
+        """Persist one large tool result before replacing it inline.
+
+        Args:
+            output: Full tool output.
+            call_id: Tool-call id associated with the result.
+            ctx: Policy context for session/run metadata.
+        """
+        ...
 
 
 class FileCompactionArchive:
@@ -54,6 +77,12 @@ class FileCompactionArchive:
     """
 
     def __init__(self, root: ArchiveRoot = ".lovia") -> None:
+        """Create a file-backed archive.
+
+        Args:
+            root: Base directory, or a callable that derives one from the
+                current :class:`PolicyContext`.
+        """
         self.root = root
 
     async def save_transcript(
@@ -63,6 +92,7 @@ class FileCompactionArchive:
         ctx: "PolicyContext",
         reason: str,
     ) -> ArchiveRef:
+        """Write ``entries`` as JSONL and return their archive reference."""
         session = _safe_segment(ctx.session_id or "default")
         run = _safe_segment(ctx.run_id or "run")
         path = (
@@ -94,6 +124,7 @@ class FileCompactionArchive:
         call_id: str,
         ctx: "PolicyContext",
     ) -> ArchiveRef:
+        """Write a tool result as UTF-8 text and return its archive reference."""
         session = _safe_segment(ctx.session_id or "default")
         safe_call = _safe_segment(call_id or "tool-result")
         path = (
@@ -116,10 +147,12 @@ class FileCompactionArchive:
         )
 
     def _root_for(self, ctx: "PolicyContext") -> Path:
+        """Resolve the archive root for ``ctx``."""
         root = self.root(ctx) if callable(self.root) else self.root
         return Path(root)
 
 
 def _safe_segment(value: str) -> str:
+    """Return a filesystem-safe path segment for session/run/call ids."""
     safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in value)
     return safe or "default"

@@ -329,8 +329,8 @@ from pathlib import Path
 from lovia import CompactingContextPolicy, FileCompactionArchive
 
 policy = CompactingContextPolicy(
-    keep_recent_entries=20,
-    keep_recent_tool_results=3,
+    keep_recent=20,
+    keep_tool_results=3,
     archive=FileCompactionArchive(
         root=lambda ctx: Path(".lovia") / (ctx.session_id or "default")
     ),

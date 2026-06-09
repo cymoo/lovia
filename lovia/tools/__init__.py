@@ -7,8 +7,7 @@ only thing that invokes it, so the surface area stays small:
 * ``invoke`` runs the underlying callable with already-validated kwargs.
 * Simple policy kwargs (``needs_approval``, ``retries``, ``timeout``,
   ``result_renderer``) cover the common cases.
-* Advanced callers can pass composable ``policies``; the legacy ``wrap`` escape
-  hatch is normalized into the same chain.
+* Advanced callers can pass composable ``policies``.
 """
 
 from __future__ import annotations
@@ -45,7 +44,6 @@ ApprovalPredicate = Callable[[dict[str, Any], "RunContext"], bool]
 # auth, redaction). Retries and timeout, when configured, are applied *around*
 # wrap — i.e. wrap sees one attempt at a time.
 ToolInvoker = Callable[[dict[str, Any], "RunContext"], Awaitable[Any]]
-ToolWrap = Callable[[ToolInvoker, dict[str, Any], "RunContext"], Awaitable[Any]]
 
 
 class ToolPolicy(Protocol):
@@ -63,21 +61,6 @@ class ToolPolicy(Protocol):
         args: dict[str, Any],
         ctx: "RunContext",
     ) -> Awaitable[Any]: ...
-
-
-@dataclass(frozen=True)
-class WrapPolicy:
-    """Adapter that turns a legacy ``wrap`` callable into a ``ToolPolicy``."""
-
-    wrap: ToolWrap
-
-    async def __call__(
-        self,
-        invoke: ToolInvoker,
-        args: dict[str, Any],
-        ctx: "RunContext",
-    ) -> Any:
-        return await self.wrap(invoke, args, ctx)
 
 
 # Render the raw return value as the string the model receives. ``None`` uses
@@ -105,8 +88,6 @@ class Tool:
     timeout: float | None = None
     # Optional custom renderer for the result string the model sees.
     result_renderer: ToolResultRenderer | None = None
-    # Optional escape hatch for behaviours that don't fit a flat field.
-    wrap: ToolWrap | None = None
     # Advanced per-attempt policy chain. Policies compose in list order.
     policies: tuple[ToolPolicy, ...] = field(default_factory=tuple)
     # When True the runner passes the RunContext to invoke as the named kwarg.
@@ -176,11 +157,7 @@ async def run_tool(
     attempts = max(1, attempts)
     timeout = tool.timeout if tool.timeout is not None else default_timeout
 
-    policies: tuple[ToolPolicy, ...]
-    if tool.wrap is not None:
-        policies = (*tool.policies, WrapPolicy(tool.wrap))
-    else:
-        policies = tool.policies
+    policies = tool.policies
 
     async def one_attempt(a: dict[str, Any], c: "RunContext") -> Any:
         return await apply_tool_policies(tool.invoke, policies, a, c)
@@ -195,8 +172,7 @@ async def run_tool(
             last_exc = exc
             if attempt >= attempts:
                 raise
-            # Bounded exponential backoff. Kept tiny because tools are usually
-            # local; if you need fancier behaviour, use ``wrap``.
+            # Bounded exponential backoff. Kept tiny because tools are usually local
             await asyncio.sleep(min(0.5, 0.05 * (2 ** (attempt - 1))))
     # Unreachable, but keeps type-checkers happy.
     assert last_exc is not None
@@ -262,7 +238,6 @@ def tool(
     retries: int | None = None,
     timeout: float | None = None,
     result_renderer: ToolResultRenderer | None = None,
-    wrap: ToolWrap | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
 ) -> Tool: ...
@@ -278,7 +253,6 @@ def tool(
     retries: int | None = None,
     timeout: float | None = None,
     result_renderer: ToolResultRenderer | None = None,
-    wrap: ToolWrap | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
@@ -293,7 +267,6 @@ def tool(
     retries: int | None = None,
     timeout: float | None = None,
     result_renderer: ToolResultRenderer | None = None,
-    wrap: ToolWrap | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
 ) -> Tool | Callable[[Callable[..., Any]], Tool]:
@@ -342,7 +315,6 @@ def tool(
             retries=retries,
             timeout=timeout,
             result_renderer=result_renderer,
-            wrap=wrap,
             policies=tuple(policies),
             _wants_context=context_param is not None,
             _context_param=context_param,
@@ -407,8 +379,6 @@ __all__ = [
     "ToolInvoker",
     "ToolPolicy",
     "ToolResultRenderer",
-    "ToolWrap",
-    "WrapPolicy",
     "WebSearch",
     "apply_tool_policies",
     "ask_human",
@@ -425,7 +395,6 @@ __all__ = [
     "run_tool",
     "shell",
     "sleep",
-    "think",
     "tool",
     "todo_tools",
     "web_search",

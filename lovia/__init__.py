@@ -128,7 +128,7 @@ from .transcript import (
     messages_to_entries,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
-from .tools import Tool, ToolPolicy, ToolResultRenderer, ToolWrap, WrapPolicy, tool
+from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 # ---------------------------------------------------------------------------
@@ -266,13 +266,11 @@ __all__ = [
     "ToolResultBudgetStage",
     "ToolResultRenderer",
     "ToolResultRetentionStage",
-    "ToolWrap",
     "Tracer",
     "Usage",
     "UsageDelta",
     "FinishDelta",
     "UserError",
-    "WrapPolicy",
     "agent_as_tool",
     "assistant",
     "assistant_to_entries",

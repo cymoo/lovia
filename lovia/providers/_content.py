@@ -6,7 +6,7 @@ import base64
 import binascii
 from typing import cast
 
-from .._types import JsonObject
+from .._types import JsonArray, JsonObject, JsonValue
 from ..content import ContentPart, FilePart, ImagePart, TextPart
 from ..exceptions import UserError
 
@@ -86,6 +86,32 @@ def content_to_openai_chat(content: str | list[ContentPart]) -> str | list[JsonO
     return parts
 
 
+def merge_openai_chat_content(left: object, right: object) -> JsonValue:
+    """Merge already-serialized OpenAI Chat content.
+
+    Used when transcript compaction leaves adjacent system/user messages; keeps
+    text as text and only falls back to content-part arrays when needed.
+    """
+    if isinstance(left, str) and isinstance(right, str):
+        return _join_text(left, right)
+    left_parts = _openai_chat_content_parts(left)
+    right_parts = _openai_chat_content_parts(right)
+    if left_parts and right_parts:
+        return [*left_parts, {"type": "text", "text": "\n\n"}, *right_parts]
+    return left_parts or right_parts
+
+
+def _openai_chat_content_parts(content: object) -> JsonArray:
+    """Normalize serialized OpenAI content to a part list for merging."""
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        return [cast(JsonValue, part) for part in content]
+    return [{"type": "text", "text": str(content)}]
+
+
 def content_to_anthropic_blocks(content: str | list[ContentPart]) -> list[JsonObject]:
     """Convert lovia content parts to Anthropic content blocks."""
     if isinstance(content, str):
@@ -117,6 +143,24 @@ def content_to_anthropic_blocks(content: str | list[ContentPart]) -> list[JsonOb
     return out
 
 
+def merge_anthropic_blocks(left: object, right: object) -> list[JsonObject]:
+    """Merge already-serialized Anthropic content blocks.
+
+    Used when consecutive user-role messages need one Anthropic message without
+    losing tool_result, image, or document blocks.
+    """
+    left_blocks = list(left) if isinstance(left, list) else []
+    right_blocks = list(right) if isinstance(right, list) else []
+    if (
+        left_blocks
+        and right_blocks
+        and left_blocks[-1].get("type") == "text"
+        and right_blocks[0].get("type") == "text"
+    ):
+        return [*left_blocks, {"type": "text", "text": "\n\n"}, *right_blocks]
+    return [*left_blocks, *right_blocks]
+
+
 def text_only(content: str | list[ContentPart] | None) -> str:
     """Flatten content parts to plain text for fields that do not accept parts."""
     if content is None:
@@ -129,6 +173,15 @@ def text_only(content: str | list[ContentPart] | None) -> str:
         if isinstance(text, str):
             parts.append(text)
     return "".join(parts)
+
+
+def _join_text(left: str, right: str) -> str:
+    """Join adjacent text messages with a readable paragraph break."""
+    if not left:
+        return right
+    if not right:
+        return left
+    return f"{left}\n\n{right}"
 
 
 def openai_tool_to_anthropic(tool: JsonObject) -> JsonObject:

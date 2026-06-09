@@ -45,6 +45,7 @@ from ..transcript import (
 from ..messages import Usage
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
+    merge_anthropic_blocks as _merge_anthropic_blocks,
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
@@ -415,6 +416,18 @@ def _is_stream_error_retryable(error: JsonObject) -> bool:
     )
 
 
+def _append_user_message(out: list[JsonObject], content: list[JsonObject]) -> None:
+    """Append Anthropic user content, merging adjacent user messages.
+
+    Anthropic represents tool results as user messages, so this keeps compacted
+    history valid without changing the stored transcript entries.
+    """
+    if out and out[-1].get("role") == "user":
+        out[-1]["content"] = _merge_anthropic_blocks(out[-1].get("content"), content)
+        return
+    out.append({"role": "user", "content": content})
+
+
 def _to_anthropic_messages(
     entries: list[TranscriptEntry],
 ) -> tuple[list[JsonObject] | None, list[JsonObject]]:
@@ -432,6 +445,11 @@ def _to_anthropic_messages(
         nonlocal pending_blocks
         if not pending_blocks:
             return
+        if all(block.get("type") == "thinking" for block in pending_blocks):
+            # Compaction may leave provider replay state without its assistant
+            # action; Anthropic thinking blocks cannot stand alone either.
+            pending_blocks = []
+            return
         out.append({"role": "assistant", "content": pending_blocks})
         pending_blocks = []
 
@@ -443,17 +461,15 @@ def _to_anthropic_messages(
 
         if isinstance(entry, ToolResultEntry):
             flush_assistant()
-            out.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": entry.call_id,
-                            "content": entry.output,
-                        }
-                    ],
-                }
+            _append_user_message(
+                out,
+                [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": entry.call_id,
+                        "content": entry.output,
+                    }
+                ],
             )
             continue
 
@@ -488,9 +504,7 @@ def _to_anthropic_messages(
 
         if isinstance(entry, InputEntry):
             flush_assistant()
-            out.append(
-                {"role": "user", "content": _content_to_anthropic_blocks(entry.content)}
-            )
+            _append_user_message(out, _content_to_anthropic_blocks(entry.content))
 
     flush_assistant()
     system_blocks: list[JsonObject] | None

@@ -1,41 +1,30 @@
-"""Context compaction policies and helpers."""
+"""Context-window management for long-running agent conversations.
 
-from .archive import ArchiveRef, CompactionArchive, FileCompactionArchive
+Compaction is a pure per-call view transform: a :class:`ContextPolicy` shapes
+only what is sent to the provider for one model call and never mutates the
+transcript or the Session.
+"""
+
 from .policy import (
     DEFAULT_SUMMARY_PROMPT,
     CompactingContextPolicy,
+    CompactionRequest,
     ContextPolicy,
-    ContextPolicyResult,
+    ContextResult,
     ContextSummarizer,
     LLMSummarizer,
     NoopContextPolicy,
-    PolicyContext,
     make_summary_entry,
-)
-from .stages import (
-    ContextStage,
-    MiddleTrimStage,
-    StageResult,
-    ToolResultBudgetStage,
-    ToolResultRetentionStage,
 )
 
 __all__ = [
-    "ArchiveRef",
-    "CompactionArchive",
     "CompactingContextPolicy",
+    "CompactionRequest",
     "ContextPolicy",
-    "ContextPolicyResult",
-    "ContextStage",
+    "ContextResult",
     "ContextSummarizer",
     "DEFAULT_SUMMARY_PROMPT",
-    "FileCompactionArchive",
     "LLMSummarizer",
-    "MiddleTrimStage",
     "NoopContextPolicy",
-    "PolicyContext",
-    "StageResult",
-    "ToolResultBudgetStage",
-    "ToolResultRetentionStage",
     "make_summary_entry",
 ]

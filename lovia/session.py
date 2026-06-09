@@ -31,12 +31,13 @@ class Session(Protocol):
     async def append(self, session_id: str, entries: list[TranscriptEntry]) -> None: ...
 
     async def replace(self, session_id: str, entries: list[TranscriptEntry]) -> None:
-        """Atomically replace the transcript for ``session_id``.
+        """Atomically replace the stored transcript for ``session_id``.
 
-        Called by :class:`~lovia.ContextPolicy` implementations after
-        compaction so the rewritten (typically shorter) transcript becomes
-        the new source of truth. Implementations should make this
-        transactional — partial replacement leaves a corrupt transcript.
+        Used by the runner to persist the run's full transcript and by callers
+        that explicitly edit history. Context compaction never calls this — it
+        only shapes the per-call view and leaves the Session untouched.
+        Implementations should make this transactional; partial replacement
+        leaves a corrupt transcript.
         """
         ...
 

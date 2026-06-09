@@ -320,24 +320,32 @@ await Runner.run(agent, "What is my project called?",  session=session, session_
 ```
 
 Long-running conversations use :class:`CompactingContextPolicy` by default.
-It applies cheap structural compaction before each model call and falls back
-to an LLM summary if the provider reports a context overflow.
+Compaction is **view-only**: it shapes only the transcript sent to the model
+for one call and never touches the stored session, so the full history stays the
+source of truth. It replaces stale tool results with a tiny marker first and
+falls back to an incremental LLM summary as the prompt nears the context window
+(or after the provider reports an overflow).
 
 Pass a policy explicitly when you want different thresholds or retention:
 
 ```python
-from pathlib import Path
-
-from lovia import CompactingContextPolicy, FileCompactionArchive
+from lovia import CompactingContextPolicy
 
 policy = CompactingContextPolicy(
+    window_tokens=200_000,
+    trigger_ratio=0.8,
     keep_recent=20,
-    keep_tool_results=3,
-    archive=FileCompactionArchive(
-        root=lambda ctx: Path(".lovia") / (ctx.session_id or "default")
-    ),
 )
 result = await Runner.run(agent, "Continue.", context_policy=policy)
+```
+
+Add the opt-in ``recall_tool_result`` tool so the agent can pull back a tool
+output that compaction dropped from the view, without re-running the tool:
+
+```python
+from lovia.tools import recall_tool_result
+
+agent = Agent(name="x", tools=[..., recall_tool_result])
 ```
 
 Pass ``NoopContextPolicy()`` to disable automatic context management.

@@ -16,7 +16,8 @@ pip install -e .[mcp]
 pip install -e .[web]
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+. Use the repository virtualenv for Python commands:
+`.venv/bin/python -m pytest`, `.venv/bin/python -m ruff`, etc.
 
 ## Commands
 
@@ -66,7 +67,7 @@ lovia/
   hooks.py          # AgentHooks subscriber
   guardrails.py     # input/output guardrail protocol
   session.py        # Session protocol
-  context/          # ContextPolicy, compaction stages, and archive sinks
+  context/          # ContextPolicy + the default CompactingContextPolicy
   skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
@@ -127,11 +128,20 @@ Three persistence concepts that serve different purposes:
 
 ### Context compaction
 
-`ContextPolicy` implementations rewrite the transcript when it approaches the model's context window. Two triggers:
-- **Proactive**: called before each model turn via `policy.apply()`
-- **Reactive**: called when the provider raises `ContextOverflowError` via `policy.apply_reactive()`
+`ContextPolicy` implementations produce the **per-call view** of the transcript
+sent to the provider. Compaction is view-only: it never mutates the transcript
+or the `Session`, so the full conversation stays the source of truth. A single
+method handles both triggers:
+- **Proactive**: `policy.compact(req)` runs before each model turn.
+- **Reactive**: on `ContextOverflowError`, the runner sets `req.overflow=True`
+  and calls `compact` again for a more aggressive view, then retries the turn once.
 
-`Runner` defaults to `CompactingContextPolicy`; pass `NoopContextPolicy()` only when explicitly disabling automatic context management.
+`Runner` defaults to `CompactingContextPolicy` (stale-tool-result trimming, then
+an incremental LLM summary near the window); pass `NoopContextPolicy()` to
+disable. The running summary is folded incrementally using per-run `scratch`
+state owned by `RunLoop`, so it never leaks across runs. The optional
+`lovia.tools.recall_tool_result` tool lets the agent retrieve a tool output that
+compaction dropped from the view.
 
 `safe_window()` in `transcript.py` is critical for any policy that drops middle entries — it ensures `ToolCallEntry`/`ToolResultEntry` pairs stay intact by walking the cut point backward to include orphaned call IDs.
 

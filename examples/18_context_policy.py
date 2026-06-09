@@ -6,10 +6,13 @@ This example shows ``CompactingContextPolicy`` doing its job:
    normally blow past a small model's context window.
 2. A small ``window_tokens`` + ``trigger_ratio=0.5`` forces the policy to
    summarize on the next turn.
-3. The ``archive`` sink captures the pre-compaction transcript so we can audit
-   it offline.
+3. Compaction is **view-only**: it shapes only what is sent to the model for
+   that turn. The ``Session`` is never modified, so the full history remains the
+   source of truth — a bad summary can only ever affect one model call.
 4. A hook listens for ``ContextCompacted`` and feeds the summary into a
-   long-term ``Memory`` — the three layers stay nicely orthogonal.
+   long-term ``Memory`` — the layers stay nicely orthogonal.
+5. ``recall_tool_result`` lets the agent pull back a tool output that
+   compaction dropped from the view, without re-running the tool.
 
 Run::
 
@@ -26,14 +29,14 @@ from dotenv import load_dotenv
 from lovia import (
     Agent,
     AgentHooks,
-    ArchiveRef,
     AssistantTextEntry,
+    CompactingContextPolicy,
     InputEntry,
     Runner,
-    CompactingContextPolicy,
     events,
 )
 from lovia.stores import InMemorySession
+from lovia.tools import recall_tool_result
 
 load_dotenv()
 
@@ -48,39 +51,6 @@ class _DictMemory:
 
     async def retrieve(self, query: str, *, k: int = 5):
         return []
-
-
-class _ListArchive:
-    def __init__(self) -> None:
-        self.records: list[dict[str, object]] = []
-
-    async def save_transcript(self, entries, *, ctx, reason: str) -> ArchiveRef:
-        record = {
-            "kind": "transcript",
-            "session_id": ctx.session_id,
-            "n_before": len(entries),
-            "reason": reason,
-        }
-        self.records.append(record)
-        return ArchiveRef(
-            uri=f"memory://transcripts/{len(self.records)}",
-            kind="transcript",
-            metadata=record,
-        )
-
-    async def save_tool_result(self, output: str, *, call_id: str, ctx) -> ArchiveRef:
-        record = {
-            "kind": "tool_result",
-            "session_id": ctx.session_id,
-            "call_id": call_id,
-            "chars": len(output),
-        }
-        self.records.append(record)
-        return ArchiveRef(
-            uri=f"memory://tool-results/{call_id}",
-            kind="tool_result",
-            metadata=record,
-        )
 
 
 async def main() -> None:
@@ -98,6 +68,8 @@ async def main() -> None:
         name="companion",
         instructions="You are a helpful, concise companion.",
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        # Opt in to recall so the agent can retrieve compacted tool outputs.
+        tools=[recall_tool_result],
         hooks=hooks,
     )
 
@@ -118,18 +90,13 @@ async def main() -> None:
         )
     await session.append("u-mei", seeded)
 
-    # Write-only archive: persists data before it leaves the active context.
-    archive = _ListArchive()
-
-    # Tight budget so this demo definitely triggers compaction on the
-    # first real turn. In production you'd set window_tokens to the model's
-    # actual context window (or omit it and let provider.context_window
-    # decide).
+    # Tight budget so this demo definitely triggers compaction on the first
+    # real turn. In production you'd set window_tokens to the model's actual
+    # context window (or omit it and let provider.context_window decide).
     policy = CompactingContextPolicy(
         window_tokens=2_000,
         trigger_ratio=0.5,  # threshold = 1000 tokens
         keep_recent=4,
-        archive=archive,
     )
 
     result = await Runner.run(
@@ -141,15 +108,12 @@ async def main() -> None:
     )
     print("Assistant:", result.output)
     print()
-    print(f"Archive entries: {len(archive.records)}")
-    for entry in archive.records:
-        print(
-            f"  • session={entry['session_id']!r} "
-            f"kind={entry['kind']!r} reason={entry.get('reason')!r} "
-            f"size={entry.get('n_before', entry.get('chars'))}"
-        )
-    print()
-    print(f"Long-term memory records: {len(long_term.records)}")
+
+    # The Session still holds the full, untouched history — compaction only
+    # shaped the per-call view, never what was stored.
+    persisted = await session.load("u-mei")
+    print(f"Entries stored in the session (full history): {len(persisted)}")
+    print(f"Long-term memory records (summaries): {len(long_term.records)}")
 
 
 if __name__ == "__main__":

@@ -382,6 +382,7 @@ from .http import http_fetch  # noqa: E402
 from .human import HumanChannel, HumanQuestion, ask_human  # noqa: E402
 from .list_dir import list_dir  # noqa: E402
 from .read_file import read_file  # noqa: E402
+from .recall import recall_tool_result  # noqa: E402
 from .search import (  # noqa: E402
     DuckDuckGoSearch,
     SearchResult,
@@ -421,6 +422,7 @@ __all__ = [
     "list_dir",
     "now",
     "read_file",
+    "recall_tool_result",
     "render_tool_result",
     "run_tool",
     "shell",

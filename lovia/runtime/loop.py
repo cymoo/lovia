@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, cast
 
 from .._types import JsonValue
 
@@ -41,9 +41,9 @@ from ..approvals import ApprovalChannel
 from ..checkpointer import Checkpointer, RunSnapshot
 from ..context import (
     CompactingContextPolicy,
+    CompactionRequest,
     ContextPolicy,
-    ContextPolicyResult,
-    PolicyContext,
+    ContextResult,
 )
 from ..exceptions import (
     ContextOverflowError,
@@ -139,6 +139,9 @@ class RunLoop:
         # Tracks the prompt-token count from the previous turn so
         # ContextPolicy can prefer real usage over heuristic estimates.
         self._last_prompt_tokens: int | None = None
+        # Per-run scratch the context policy may use to cache derived state
+        # (e.g. a running summary). Owned here so it cannot leak across runs.
+        self._compaction_scratch: dict[str, Any] = {}
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.approvals = ApprovalChannel()
@@ -251,40 +254,37 @@ class RunLoop:
                 providers = agent.resolve_providers()
                 state = TurnState()
 
-                # ContextPolicy: rewrite the transcript before the model
-                # call. Identity check skips the no-op path.
+                # ContextPolicy: build the per-call VIEW of the transcript.
+                # The view is sent to the provider for this turn only; the real
+                # ``entries_log`` (and the Session) are never modified here.
                 primary_provider = providers[0]
                 policy_model = getattr(primary_provider, "model", None)
-                policy_ctx = PolicyContext(
+                req = CompactionRequest(
+                    entries=entries_log,
                     provider=primary_provider,
                     model=policy_model,
                     last_prompt_tokens=self._last_prompt_tokens,
                     session_id=self.session_id,
                     run_id=self.run_id,
+                    overflow=False,
+                    scratch=self._compaction_scratch,
                 )
-                entries_before = entries_log
-                policy_result = await self.context_policy.apply(
-                    entries_before, ctx=policy_ctx
-                )
-                if policy_result.changed:
-                    async for ev in self._on_context_compacted(
-                        agent,
-                        entries_before,
-                        policy_result,
-                        reactive=False,
-                        entries_log=entries_log,
+                ctx_result = await self.context_policy.compact(req)
+                view = await self._build_view(agent, entries_log, ctx_result)
+                if ctx_result.changed:
+                    async for ev in self._emit_compacted(
+                        entries_log, view, ctx_result, reactive=False
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
-                    # _on_context_compacted mutates entries_log in place
                 # Reactive path: provider may report ContextOverflowError mid-stream.
-                # Catch it, ask the policy for its more aggressive compaction,
-                # then retry the turn exactly once. A second overflow propagates.
+                # Ask the policy for its more aggressive view, then retry the turn
+                # exactly once. A second overflow propagates.
                 try:
                     async for ev in stream_model_turn(
                         agent=agent,
                         providers=providers,
-                        input_entries=entries_log,
+                        input_entries=view,
                         tools_by_name=tools_by_name,
                         structured_output=structured_output,
                         tracer=tracer,
@@ -296,27 +296,22 @@ class RunLoop:
                         await dispatch(agent.hooks, ev)
                 except ContextOverflowError as overflow:
                     logger.warning(
-                        "context.overflow: provider raised; invoking reactive "
-                        "context_policy.apply_reactive (%s)",
+                        "context.overflow: provider raised; rebuilding a more "
+                        "aggressive view (%s)",
                         overflow,
                     )
-                    entries_before = entries_log
-                    policy_result = await self.context_policy.apply_reactive(
-                        entries_before, ctx=policy_ctx
-                    )
-                    if not policy_result.changed:
+                    req.overflow = True
+                    ctx_result = await self.context_policy.compact(req)
+                    if not ctx_result.changed:
                         # Policy refused / couldn't shrink — surface original.
                         logger.error(
                             "context.overflow: policy could not shrink "
                             "transcript; surfacing ContextOverflowError"
                         )
                         raise
-                    async for ev in self._on_context_compacted(
-                        agent,
-                        entries_before,
-                        policy_result,
-                        reactive=True,
-                        entries_log=entries_log,
+                    view = await self._build_view(agent, entries_log, ctx_result)
+                    async for ev in self._emit_compacted(
+                        entries_log, view, ctx_result, reactive=True
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
@@ -324,7 +319,7 @@ class RunLoop:
                     async for ev in stream_model_turn(
                         agent=agent,
                         providers=providers,
-                        input_entries=entries_log,
+                        input_entries=view,
                         tools_by_name=tools_by_name,
                         structured_output=structured_output,
                         tracer=tracer,
@@ -805,62 +800,47 @@ class RunLoop:
         ]
         await self.session.replace(self.session_id, body)
 
-    async def _on_context_compacted(
+    async def _build_view(
         self,
         agent: Agent,
+        entries_log: list[TranscriptEntry],
+        result: ContextResult,
+    ) -> list[TranscriptEntry]:
+        """Return the per-call view to send to the provider.
+
+        Compaction is view-only: ``entries_log`` is never mutated. When the
+        policy dropped the leading system message (e.g. it summarized the head),
+        re-prepend it so provider adapters still see one.
+        """
+        if not result.changed:
+            return entries_log
+        view = result.entries
+        if view and isinstance(view[0], _InputEntry) and view[0].role == "system":
+            return view
+        system_text = await self._system_prompt(agent)
+        if system_text:
+            return [_InputEntry(role="system", content=system_text), *view]
+        return view
+
+    async def _emit_compacted(
+        self,
         entries_before: list[TranscriptEntry],
-        result: ContextPolicyResult,
+        view: list[TranscriptEntry],
+        result: ContextResult,
         *,
         reactive: bool,
-        entries_log: list[TranscriptEntry],
     ) -> AsyncIterator[events.Event]:
-        """Persist a compacted transcript and emit ``ContextCompacted``.
-
-        Mutates ``entries_log`` in place so the existing loop continues to
-        operate on the rewritten conversation.
-        """
-        snapshot_before = list(entries_before)
-        entries_log[:] = result.entries
-        # Re-prepend the system prompt when compaction returns a transcript
-        # shape that omitted it.
-        await self._reinstate_system_prompt(agent, entries_log)
-        # Persist the rewritten transcript so a crash + restart picks up
-        # the compacted version (the whole point of permanent compaction).
-        if self.session is not None and self.session_id is not None:
-            await self._persist_session(entries_log)
+        """Emit ``ContextCompacted``. Does not mutate state or persist anything."""
         ev = events.ContextCompacted(
             session_id=self.session_id,
-            entries_before=snapshot_before,
-            entries_after=list(entries_log),
+            entries_before=list(entries_before),
+            entries_after=list(view),
             summary=result.summary,
             reactive=reactive,
             reason=result.reason or "context_policy",
-            archive_ref=result.archive_ref,
             metadata=result.metadata,
         )
         yield ev
-
-    async def _reinstate_system_prompt(
-        self, agent: Agent, entries_log: list[TranscriptEntry]
-    ) -> None:
-        """Ensure the agent's system prompt is the first entry after a rewrite.
-
-        Compaction may produce a transcript without a leading system message;
-        provider adapters expect one, so we re-render and prepend if missing.
-        """
-        if (
-            entries_log
-            and isinstance(entries_log[0], _InputEntry)
-            and entries_log[0].role == "system"
-        ):
-            return
-        system_text = await self._system_prompt(agent)
-        if system_text:
-            entries_log.insert(0, _InputEntry(role="system", content=system_text))
-
-    async def _emit(self, event: events.Event, agent: Agent) -> None:
-        # Hooks-only dispatch. Used for events the loop itself yields elsewhere.
-        await dispatch(agent.hooks, event)
 
 
 __all__ = ["RunLoop"]

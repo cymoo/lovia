@@ -318,24 +318,31 @@ await Runner.run(agent, "我的项目叫 Atlas。", session=session, session_id=
 await Runner.run(agent, "我的项目叫什么？",  session=session, session_id="u1")
 ```
 
-长对话默认使用 `CompactingContextPolicy` 管理上下文。它会在每次模型调用前先做
-便宜的结构压缩；如果 provider 报告 context overflow，则自动退到更激进的摘要压缩。
+长对话默认使用 `CompactingContextPolicy` 管理上下文。压缩是**仅作用于单次调用的视图**：
+它只裁剪发送给模型的那一份转录，绝不修改已存储的 session，因此完整历史始终是唯一可信源。
+它会先把较旧的工具结果替换为一个简短标记；当 prompt 接近上下文窗口（或 provider 报告
+context overflow）时，再退化为增量式 LLM 摘要。
 
-如果你想调整阈值、保留窗口或归档路径，可以显式传入 policy：
+如果你想调整阈值或保留窗口，可以显式传入 policy：
 
 ```python
-from pathlib import Path
-
-from lovia import CompactingContextPolicy, FileCompactionArchive
+from lovia import CompactingContextPolicy
 
 policy = CompactingContextPolicy(
+    window_tokens=200_000,
+    trigger_ratio=0.8,
     keep_recent=20,
-    keep_tool_results=3,
-    archive=FileCompactionArchive(
-        root=lambda ctx: Path(".lovia") / (ctx.session_id or "default")
-    ),
 )
 result = await Runner.run(agent, "继续。", context_policy=policy)
+```
+
+可加入可选的 `recall_tool_result` 工具，让 agent 在压缩丢弃了某个工具输出后，无需重跑
+工具即可取回完整结果：
+
+```python
+from lovia.tools import recall_tool_result
+
+agent = Agent(name="x", tools=[..., recall_tool_result])
 ```
 
 如果需要完全禁用自动上下文管理，传入 `NoopContextPolicy()`。

@@ -18,7 +18,6 @@ from .messages import ToolCall
 if TYPE_CHECKING:
     from .agent import Agent
     from .approvals import ApprovalChannel
-    from .context.archive import ArchiveRef
     from .runtime.result import RunResult
 
 
@@ -185,18 +184,21 @@ class RunCompleted(RunEvent):
 
 @dataclass
 class ContextCompacted(ContextEvent):
-    """Emitted when :class:`~lovia.ContextPolicy` rewrote the transcript.
+    """Emitted when :class:`~lovia.ContextPolicy` produced a compacted view.
 
-    ``entries_before`` is the full transcript that existed before compaction;
-    ``entries_after`` is the trimmed transcript the runner will use going
-    forward (and that has been written back to the session). ``summary``
-    is the model-produced summary text when the policy used LLM
-    summarization, or ``None`` for purely structural compaction.
+    ``entries_before`` is the full transcript; ``entries_after`` is the view the
+    runner sent to the provider for this turn. ``summary`` is the model-produced
+    summary text when the policy used LLM summarization, or ``None`` for purely
+    structural compaction.
 
     ``reason`` names the policy decision that caused the rewrite.
     ``reactive`` is ``True`` when the compaction was triggered by a
     :class:`~lovia.ContextOverflowError` from the provider rather than by
     the proactive token threshold.
+
+    Compaction is view-only: ``entries_before`` is the full transcript and
+    remains the source of truth; ``entries_after`` is the transcript the
+    provider saw for this turn only — it is not written back to the Session.
     """
 
     session_id: str | None
@@ -205,5 +207,4 @@ class ContextCompacted(ContextEvent):
     reason: str
     summary: str | None = None
     reactive: bool = False
-    archive_ref: "ArchiveRef | None" = None
     metadata: JsonObject = field(default_factory=dict)

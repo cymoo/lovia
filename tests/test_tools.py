@@ -50,7 +50,7 @@ async def test_tool_policies_compose_in_order() -> None:
 async def test_retries_then_success() -> None:
     attempts = {"n": 0}
 
-    @tool(retries=3)
+    @tool(retries=2)
     async def flaky() -> str:
         attempts["n"] += 1
         if attempts["n"] < 3:
@@ -75,7 +75,7 @@ async def test_retries_receive_fresh_top_level_args() -> None:
         args["value"] = "mutated"
         return await invoke(args, ctx)
 
-    @tool(retries=2, policies=[mutate])
+    @tool(retries=1, policies=[mutate])
     async def flaky(value: str) -> str:
         attempts["n"] += 1
         if attempts["n"] == 1:
@@ -89,7 +89,7 @@ async def test_retries_receive_fresh_top_level_args() -> None:
 
 @pytest.mark.asyncio
 async def test_retries_exhausted_surfaces_as_tool_error() -> None:
-    @tool(retries=2)
+    @tool(retries=1)
     async def always_fail() -> str:
         raise RuntimeError("boom")
 
@@ -150,7 +150,7 @@ async def test_agent_default_tool_retries_apply_when_tool_unset() -> None:
         return "ok"
 
     provider = ScriptedProvider([call("flaky", {}), text("done")])
-    agent = Agent(name="a", model=provider, tools=[flaky], default_tool_retries=3)
+    agent = Agent(name="a", model=provider, tools=[flaky], default_tool_retries=1)
     await Runner.run(agent, "go")
     assert attempts["n"] == 2
 

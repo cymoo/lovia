@@ -113,7 +113,7 @@ class Agent(Generic[TContext]):
     output_guardrails: list["GuardrailFn"] = field(default_factory=list)
     # Default policies applied to every tool whose own field is ``None``.
     # Tools may still override either knob individually.
-    default_tool_retries: int = 1
+    default_tool_retries: int = 0
     default_tool_timeout: float | None = None
     # Optional agent-wide renderer applied to any tool whose own
     # ``result_renderer`` is ``None``. Useful for things like always

@@ -83,11 +83,11 @@ class Tool:
     parameters: JsonSchema
     # The underlying callable. The runner always awaits the result, so sync
     # callables are wrapped during construction.
-    invoke: Callable[[dict[str, Any], "RunContext"], Awaitable[Any]]
+    invoke: ToolInvoker
     # ---- flat policies ----
     needs_approval: bool | ApprovalPredicate = False
-    # Maximum total number of attempts (1 = no retry). ``None`` means "use the
-    # agent's default_tool_retries".
+    # Number of retries after the first attempt (0 = no retry). ``None`` means
+    # "use the agent's default_tool_retries".
     retries: int | None = None
     # Per-attempt timeout in seconds. ``None`` means no timeout (or the
     # agent's default_tool_timeout if set).
@@ -101,7 +101,7 @@ class Tool:
     _context_param: str | None = field(default=None, repr=False)
 
     def requires_approval(self, args: dict[str, Any], ctx: "RunContext") -> bool:
-        if callable(self.needs_approval) and not isinstance(self.needs_approval, bool):
+        if callable(self.needs_approval):
             return bool(self.needs_approval(args, ctx))
         return bool(self.needs_approval)
 
@@ -174,7 +174,7 @@ async def run_tool(
     args: dict[str, Any],
     ctx: "RunContext",
     *,
-    default_retries: int = 1,
+    default_retries: int = 0,
     default_timeout: float | None = None,
 ) -> Any:
     """Invoke ``tool`` honouring policy chain / retries / timeout.
@@ -182,8 +182,8 @@ async def run_tool(
     Retries and timeout are applied *around* the per-attempt policy chain so
     each policy sees a single attempt unless it intentionally loops itself.
     """
-    attempts = tool.retries if tool.retries is not None else default_retries
-    attempts = max(1, attempts)
+    num_retries = tool.retries if tool.retries is not None else default_retries
+    attempts = 1 + max(0, num_retries)
     timeout = tool.timeout if tool.timeout is not None else default_timeout
 
     policies = tool.policies
@@ -204,8 +204,8 @@ async def run_tool(
             last_exc = exc
             if attempt >= attempts:
                 raise
-            # Bounded exponential backoff. Kept tiny because tools are usually local
-            await asyncio.sleep(min(0.5, 0.05 * (2 ** (attempt - 1))))
+            # Exponential backoff for transient failures.
+            await asyncio.sleep(min(5.0, 0.1 * (2 ** (attempt - 1))))
     # Unreachable, but keeps type-checkers happy.
     assert last_exc is not None
     raise last_exc
@@ -332,8 +332,7 @@ def tool(
         )
         parameters, _ = function_args_schema(func, strict=strict)
 
-        sig = inspect.signature(func)
-        context_param = _find_context_param(func, sig)
+        context_param = _find_context_param(func)
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
@@ -364,13 +363,14 @@ def tool(
     return make(fn)
 
 
-def _find_context_param(func: Callable[..., Any], sig: inspect.Signature) -> str | None:
+def _find_context_param(func: Callable[..., Any]) -> str | None:
     """Return the name of the parameter annotated as ``RunContext`` (or ``None``).
 
     Annotations are resolved lazily via ``get_type_hints`` so ``from __future__
     import annotations`` (string-form annotations) keeps working.
     """
     try:
+        sig = inspect.signature(func)
         hints = get_type_hints(func, include_extras=False)
     except Exception:
         # Unresolvable forward refs etc. fall through to "no context"; this

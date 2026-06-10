@@ -32,7 +32,10 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Message, ToolCall, Usage
-from ._content import content_to_openai_chat as _content_to_openai
+from ._content import (
+    content_to_openai_chat as _content_to_openai,
+    merge_openai_chat_content as _merge_openai_content,
+)
 from ._http import raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
@@ -69,6 +72,21 @@ def message_to_openai(msg: Message) -> JsonObject:
     return out
 
 
+def _append_input_message(out: list[JsonObject], entry: InputEntry) -> None:
+    """Append a system/user entry in OpenAI Chat format.
+
+    Compaction can create adjacent input entries; merging them avoids provider
+    quirks while preserving the canonical transcript shape.
+    """
+    msg = message_to_openai(Message(entry.role, entry.content))
+    if out and out[-1].get("role") == entry.role:
+        out[-1]["content"] = _merge_openai_content(
+            out[-1].get("content"), msg.get("content")
+        )
+        return
+    out.append(msg)
+
+
 def _assistant_to_openai(
     content: str | None,
     tool_calls: list[ToolCall],
@@ -100,6 +118,11 @@ def entries_to_openai_messages(
         nonlocal pending_reasoning, pending_content, pending_calls
         if pending_content is None and not pending_calls and pending_reasoning is None:
             return
+        if pending_content is None and not pending_calls:
+            # Compaction may leave provider replay state without its assistant
+            # action; OpenAI rejects assistant messages that only contain it.
+            pending_reasoning = None
+            return
         out.append(
             _assistant_to_openai(pending_content, pending_calls, pending_reasoning)
         )
@@ -110,7 +133,7 @@ def entries_to_openai_messages(
     for entry in entries:
         if isinstance(entry, InputEntry):
             flush_assistant()
-            out.append(message_to_openai(Message(entry.role, entry.content)))
+            _append_input_message(out, entry)
         elif isinstance(entry, ReasoningEntry):
             if entry.provider == reasoning_provider:
                 pending_reasoning = (pending_reasoning or "") + entry.content

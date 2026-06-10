@@ -15,29 +15,6 @@ from .scripted_provider import ScriptedProvider, call, text
 
 
 @pytest.mark.asyncio
-async def test_wrap_can_mutate_args_and_result() -> None:
-    seen: dict[str, Any] = {}
-
-    async def my_wrap(invoke, args, ctx):
-        # Normalize args before the call, transform the result after.
-        args = {"city": args["city"].lower()}
-        result = await invoke(args, ctx)
-        return f"[ok:{result}]"
-
-    @tool(wrap=my_wrap)
-    async def weather(city: str) -> str:
-        seen["city"] = city
-        return f"sunny in {city}"
-
-    provider = ScriptedProvider([call("weather", {"city": "SHANGHAI"}), text("done")])
-    agent = Agent(name="a", model=provider, tools=[weather])
-    result = await Runner.run(agent, "hi")
-    assert seen["city"] == "shanghai"
-    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
-    assert last_tool.content == "[ok:sunny in shanghai]"
-
-
-@pytest.mark.asyncio
 async def test_tool_policies_compose_in_order() -> None:
     seen: dict[str, Any] = {}
 

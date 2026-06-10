@@ -165,6 +165,75 @@ def test_entries_to_openai_messages_flushes_assistant_entries_in_order() -> None
     ]
 
 
+def test_entries_to_openai_messages_drops_orphan_reasoning() -> None:
+    out = entries_to_openai_messages(
+        [
+            InputEntry(role="user", content="before"),
+            ReasoningEntry(content="stale", provider="openai-chat"),
+            InputEntry(role="user", content="after"),
+        ]
+    )
+
+    assert out == [{"role": "user", "content": "before\n\nafter"}]
+
+
+def test_entries_to_openai_messages_keeps_reasoning_with_tool_call() -> None:
+    out = entries_to_openai_messages(
+        [
+            ReasoningEntry(content="think", provider="openai-chat"),
+            ToolCallEntry(call_id="call_1", name="add", arguments='{"a":1}'),
+        ]
+    )
+
+    assert out == [
+        {
+            "role": "assistant",
+            "reasoning_content": "think",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "add", "arguments": '{"a":1}'},
+                }
+            ],
+        }
+    ]
+
+
+def test_entries_to_openai_messages_coalesces_adjacent_user_entries() -> None:
+    out = entries_to_openai_messages(
+        [
+            InputEntry(role="user", content="one"),
+            InputEntry(role="user", content="two"),
+        ]
+    )
+
+    assert out == [{"role": "user", "content": "one\n\ntwo"}]
+
+
+def test_build_payload_skips_compacted_reasoning_only_turn() -> None:
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
+
+    payload = provider._build_payload(
+        [
+            InputEntry(role="user", content="[Context summary]\n\nold state"),
+            ReasoningEntry(content="orphaned replay state", provider="openai-chat"),
+            InputEntry(role="user", content="continue"),
+        ],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(),
+        stream=True,
+    )
+
+    assert payload["messages"] == [
+        {
+            "role": "user",
+            "content": "[Context summary]\n\nold state\n\ncontinue",
+        }
+    ]
+
+
 def test_build_payload_maps_settings_and_stream_options() -> None:
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
 

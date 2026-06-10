@@ -89,7 +89,7 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
         "tool_use_id": "c1",
         "content": "3",
     }
-    assert out[3] == {"role": "user", "content": [{"type": "text", "text": ""}]}
+    assert out[2]["content"][1] == {"type": "text", "text": ""}
 
 
 def test_message_translation_wraps_invalid_tool_arguments() -> None:
@@ -98,6 +98,40 @@ def test_message_translation_wraps_invalid_tool_arguments() -> None:
     )
 
     assert out[0]["content"][0]["input"] == {"_raw": "{bad"}
+
+
+def test_message_translation_drops_orphan_thinking() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="user", content="before"),
+            ReasoningEntry(content="stale", provider="anthropic"),
+            InputEntry(role="user", content="after"),
+        ]
+    )
+
+    assert out == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "before"},
+                {"type": "text", "text": "\n\n"},
+                {"type": "text", "text": "after"},
+            ],
+        }
+    ]
+
+
+def test_message_translation_keeps_thinking_with_tool_use() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            ReasoningEntry(content="think", provider="anthropic"),
+            ToolCallEntry(call_id="c1", name="add", arguments='{"a":1}'),
+        ]
+    )
+
+    assert out[0]["role"] == "assistant"
+    assert out[0]["content"][0] == {"type": "thinking", "thinking": "think"}
+    assert out[0]["content"][1]["type"] == "tool_use"
 
 
 def test_tool_schema_translation_preserves_strict() -> None:

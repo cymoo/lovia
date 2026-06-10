@@ -20,7 +20,9 @@ or metadata that would otherwise be lost.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import math
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Callable, Literal, Union
 
 from ._types import JsonObject
@@ -260,10 +262,9 @@ def entry_to_dict(entry: TranscriptEntry) -> JsonObject:
 
     Handles :class:`InputEntry` specially because ``ContentPart``
     dataclasses also need their ``type`` discriminator preserved.
-    :class:`ToolResultEntry` is handled specially because its ``raw``
-    field may hold arbitrary Python objects (e.g. Pydantic models) that are
-    not JSON-serializable; ``raw`` is never restored on deserialization so it
-    is always omitted here.
+    :class:`ToolResultEntry` is handled specially because its ``raw`` field may
+    hold arbitrary Python objects (e.g. Pydantic models). We preserve a
+    JSON-safe version when possible and fall back to ``None``.
     ``dataclasses.asdict`` does the right thing for everything else.
     """
     if isinstance(entry, InputEntry):
@@ -278,9 +279,41 @@ def entry_to_dict(entry: TranscriptEntry) -> JsonObject:
             "call_id": entry.call_id,
             "output": entry.output,
             "is_error": entry.is_error,
-            "raw": None,
+            "raw": to_json_safe(entry.raw),
         }
     return asdict(entry)
+
+
+def to_json_safe(value: object) -> Any:
+    """Return a JSON-safe version of ``value``, or ``None`` if impossible."""
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if hasattr(value, "model_dump"):
+        try:
+            return to_json_safe(value.model_dump(mode="json"))  # type: ignore[attr-defined]
+        except Exception:
+            return None
+    if is_dataclass(value) and not isinstance(value, type):
+        return to_json_safe(asdict(value))
+    if isinstance(value, Mapping):
+        dict_out: dict[str, Any] = {}
+        for key, item in value.items():
+            safe = to_json_safe(item)
+            if safe is None and item is not None:
+                return None
+            dict_out[str(key)] = safe
+        return dict_out
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        list_out: list[Any] = []
+        for item in value:
+            safe = to_json_safe(item)
+            if safe is None and item is not None:
+                return None
+            list_out.append(safe)
+        return list_out
+    return None
 
 
 def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:

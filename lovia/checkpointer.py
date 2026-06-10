@@ -2,9 +2,10 @@
 
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
 serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
-active agent's name, the accumulated usage, and the turn counter. The
-opaque ``RunContext.context`` value is *not* snapshotted — callers
-re-supply it on resume.
+active agent's name, the accumulated usage, the turn counter, terminal status,
+JSON-safe output/error payloads, and small runner-owned runtime state. The opaque
+``RunContext.context`` value is *not* snapshotted — callers re-supply it on
+resume.
 
 The default in-process implementation is :class:`InMemoryCheckpointer`;
 :class:`~lovia.stores.sqlite_checkpointer.SQLiteCheckpointer` persists
@@ -16,11 +17,13 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from ._types import JsonObject
-from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict
+from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
 from .messages import Usage
+
+RunStatus = Literal["running", "completed", "failed"]
 
 
 @dataclass
@@ -32,6 +35,10 @@ class RunSnapshot:
     entries: list[TranscriptEntry]
     usage: Usage
     turns: int
+    status: RunStatus = "running"
+    output: Any | None = None
+    error: JsonObject | None = None
+    runtime: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     # ----- (de)serialization helpers, used by store implementations -----
@@ -48,6 +55,10 @@ class RunSnapshot:
                 "cache_write_tokens": self.usage.cache_write_tokens,
             },
             "turns": self.turns,
+            "status": self.status,
+            "output": to_json_safe(self.output),
+            "error": to_json_safe(self.error),
+            "runtime": to_json_safe(self.runtime) or {},
             "updated_at": self.updated_at,
         }
 
@@ -59,6 +70,10 @@ class RunSnapshot:
             entries=[entry_from_dict(entry) for entry in data["entries"]],
             usage=Usage(**data.get("usage", {})),
             turns=data.get("turns", 0),
+            status=data["status"],
+            output=data.get("output"),
+            error=data.get("error"),
+            runtime=data.get("runtime", {}),
             updated_at=data.get("updated_at", time.time()),
         )
 

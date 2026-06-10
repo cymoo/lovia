@@ -510,7 +510,7 @@ async def test_compacting_skips_when_under_threshold():
             entries,
             provider=_FakeProviderWithWindow(),
             model="fake-model",
-            last_prompt_tokens=100,
+            last_input_tokens=100,
         )
     )
     assert out.entries is entries
@@ -532,7 +532,7 @@ async def test_compacting_compacts_when_over_threshold():
             entries,
             provider=_FakeProviderWithWindow(window=1_000),
             model="fake-model",
-            last_prompt_tokens=900,  # over threshold
+            last_input_tokens=900,  # over threshold
             session_id="sess-1",
             run_id="run-1",
         )
@@ -562,7 +562,7 @@ async def test_compacting_falls_back_to_provider_context_window():
             entries,
             provider=_FakeProviderWithWindow(window=1_000),
             model="fake-model",
-            last_prompt_tokens=600,
+            last_input_tokens=600,
         )
     )
     assert out.changed is True
@@ -578,7 +578,7 @@ async def test_compacting_skips_when_no_window_info_available():
             entries,
             provider=_FakeProviderWithWindow(window=None),
             model="unknown-model",
-            last_prompt_tokens=999_999,
+            last_input_tokens=999_999,
         )
     )
     # Without window info, proactive compaction is disabled.
@@ -670,7 +670,7 @@ async def test_running_summary_folds_new_span_incrementally():
     ctx_kw = dict(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
-        last_prompt_tokens=900,
+        last_input_tokens=900,
         scratch=scratch,
     )
     entries = [_user(f"m{i}") for i in range(10)]
@@ -699,7 +699,7 @@ async def test_scratch_isolated_so_no_cross_run_leak():
     base = dict(
         provider=_FakeProviderWithWindow(window=1_000),
         model="fake-model",
-        last_prompt_tokens=900,
+        last_input_tokens=900,
     )
     await policy.compact(_req(entries, scratch={}, **base))
     # New run, new scratch → prior_summary is None again.
@@ -728,7 +728,7 @@ async def test_compacting_circuit_breaker():
         summarizer=failing,
     )
     entries = [_user("x" * 1000) for _ in range(4)]
-    base = dict(provider=None, model=None, last_prompt_tokens=500, scratch={})
+    base = dict(provider=None, model=None, last_input_tokens=500, scratch={})
     # Proactive failures don't crash; after the limit the breaker stops trying.
     for _ in range(5):
         out = await policy.compact(_req(entries, **base))
@@ -746,7 +746,7 @@ async def test_reactive_summarizer_failure_propagates():
         )
 
 
-async def test_compacting_uses_current_entries_when_last_prompt_is_stale():
+async def test_compacting_uses_current_entries_when_last_input_is_stale():
     summarizer = _FakeSummarizer("compacted")
     policy = CompactingContextPolicy(
         window_tokens=1_000,
@@ -760,7 +760,7 @@ async def test_compacting_uses_current_entries_when_last_prompt_is_stale():
             entries,
             provider=_FakeProviderWithWindow(window=1_000),
             model="fake-model",
-            last_prompt_tokens=100,  # stale: from a much earlier turn
+            last_input_tokens=100,  # stale: from a much earlier turn
         )
     )
     assert out.changed is True

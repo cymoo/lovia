@@ -85,7 +85,7 @@ class CompactionRequest:
             new list for the model call and never mutates ``entries``.
         provider: Provider selected for the next model call, if known.
         model: Model name passed to the provider.
-        last_prompt_tokens: Last observed provider input-token count. This can
+        last_input_tokens: Last observed provider input-token count. This can
             lag the current transcript, so policies combine it with an estimate
             of ``entries`` rather than trusting it alone.
         session_id: Session being compacted (informational).
@@ -101,7 +101,7 @@ class CompactionRequest:
     entries: list[TranscriptEntry]
     provider: Provider | None = None
     model: str | None = None
-    last_prompt_tokens: int | None = None
+    last_input_tokens: int | None = None
     session_id: str | None = None
     run_id: str | None = None
     overflow: bool = False
@@ -439,7 +439,7 @@ class CompactingContextPolicy:
         if threshold is None:
             return False
         estimate = _estimate_tokens(req.provider, entries)
-        return max(estimate, req.last_prompt_tokens or 0) >= threshold
+        return max(estimate, req.last_input_tokens or 0) >= threshold
 
 
 def make_summary_entry(summary: str, *, reactive: bool = False) -> InputEntry:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from lovia import (
     Agent,
@@ -22,7 +24,17 @@ from lovia import (
 from lovia.messages import Usage
 from lovia.stores.sqlite_checkpointer import SQLiteCheckpointer
 
-from .scripted_provider import ScriptedProvider, text
+from .scripted_provider import ScriptedProvider, call, text
+
+
+class RecordingCheckpointer(InMemoryCheckpointer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved: list[RunSnapshot] = []
+
+    async def save(self, snapshot: RunSnapshot) -> None:
+        self.saved.append(snapshot)
+        await super().save(snapshot)
 
 
 @pytest.mark.asyncio
@@ -37,9 +49,138 @@ async def test_checkpointer_snapshot_round_trip() -> None:
     assert snap is not None
     assert snap.run_id == "r1"
     assert snap.agent_name == "a"
+    assert snap.status == "completed"
+    assert snap.output == "hello there"
     # The assistant turn shows up as a AssistantTextEntry in the snapshot.
     assert any(isinstance(it, AssistantTextEntry) for it in snap.entries)
     assert snap.usage.output_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_snapshot_returns_without_rerunning_provider() -> None:
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="a", model=provider)
+
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="done")
+    result = await Runner.resume(agent, checkpointer=cp, run_id="done")
+
+    assert result.output == "done"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_snapshot_can_delete_checkpoint() -> None:
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="a", model=provider)
+
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="done-delete")
+    result = await Runner.resume(
+        agent,
+        checkpointer=cp,
+        run_id="done-delete",
+        delete_checkpoint_on_success=True,
+    )
+
+    assert result.output == "done"
+    assert await cp.load("done-delete") is None
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_structured_snapshot_rehydrates_output() -> None:
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([call("final_output", {"value": 3})])
+    agent = Agent(name="a", model=provider, output_type=Out)
+
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="typed")
+    result = await Runner.resume(agent, checkpointer=cp, run_id="typed")
+
+    assert isinstance(result.output, Out)
+    assert result.output.value == 3
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_snapshot_requires_run_level_output_type() -> None:
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([call("final_output", {"value": 3})])
+    agent = Agent(name="a", model=provider)
+
+    await Runner.run(agent, "hi", output_type=Out, checkpointer=cp, run_id="override")
+    snap = await cp.load("override")
+    assert snap is not None
+    assert snap.runtime["output_type_source"] == "run_override"
+    with pytest.raises(Exception, match="run-level output_type"):
+        await Runner.resume(agent, checkpointer=cp, run_id="override")
+
+    result = await Runner.resume(
+        agent, checkpointer=cp, run_id="override", output_type=Out
+    )
+    assert isinstance(result.output, Out)
+    assert result.output.value == 3
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_snapshot_rejects_unserializable_output() -> None:
+    cp = InMemoryCheckpointer()
+    await cp.save(
+        RunSnapshot(
+            run_id="bad-output",
+            agent_name="a",
+            entries=[InputEntry(role="user", content="hi")],
+            usage=Usage(),
+            turns=1,
+            status="completed",
+            output=None,
+            error={
+                "type": "OutputNotSerializable",
+                "message": "could not serialize",
+            },
+        )
+    )
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    with pytest.raises(Exception, match="not JSON-safe"):
+        await Runner.resume(agent, checkpointer=cp, run_id="bad-output")
+
+
+@pytest.mark.asyncio
+async def test_run_failure_saves_failed_snapshot() -> None:
+    cp = InMemoryCheckpointer()
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    with pytest.raises(AssertionError):
+        await Runner.run(agent, "hi", checkpointer=cp, run_id="failed")
+
+    snap = await cp.load("failed")
+    assert snap is not None
+    assert snap.status == "failed"
+    assert snap.error is not None
+    assert snap.error["type"] == "AssertionError"
+
+
+@pytest.mark.asyncio
+async def test_success_can_delete_checkpoint() -> None:
+    cp = InMemoryCheckpointer()
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]))
+
+    await Runner.run(
+        agent,
+        "hi",
+        checkpointer=cp,
+        run_id="delete-me",
+        delete_checkpoint_on_success=True,
+    )
+
+    assert await cp.load("delete-me") is None
 
 
 @pytest.mark.asyncio
@@ -75,6 +216,136 @@ async def test_resume_continues_from_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
+    cp = InMemoryCheckpointer()
+    entries = [
+        InputEntry(role="user", content="What is the time?"),
+        ToolCallEntry(call_id="c1", name="clock", arguments="{}"),
+    ]
+    await cp.save(
+        RunSnapshot(
+            run_id="pending-tool",
+            agent_name="a",
+            entries=entries,
+            usage=Usage(input_tokens=10, output_tokens=5),
+            turns=1,
+        )
+    )
+    calls = 0
+
+    @tool
+    async def clock() -> str:
+        nonlocal calls
+        calls += 1
+        return "12:00"
+
+    provider = ScriptedProvider([text("It is noon.")])
+    agent = Agent(name="a", model=provider, tools=[clock])
+
+    result = await Runner.resume(agent, checkpointer=cp, run_id="pending-tool")
+
+    assert result.output == "It is noon."
+    assert calls == 1
+    assert any(
+        isinstance(entry, ToolResultEntry) and entry.call_id == "c1"
+        for entry in result.entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_handoff_snapshot_records_target_agent_after_switch() -> None:
+    cp = RecordingCheckpointer()
+    spanish = Agent(
+        name="Spanish",
+        instructions="reply in Spanish",
+        model=ScriptedProvider([text("Hola!")]),
+    )
+    english = Agent(
+        name="English",
+        instructions="reply in English",
+        model=ScriptedProvider(
+            [call("transfer_to_spanish", {"reason": "user spoke Spanish"})]
+        ),
+        handoffs=[spanish],
+    )
+
+    result = await Runner.run(english, "Hola", checkpointer=cp, run_id="handoff")
+
+    assert result.final_agent.name == "Spanish"
+    handoff_snapshots = [
+        snap
+        for snap in cp.saved
+        if snap.status == "running" and snap.agent_name == "Spanish"
+    ]
+    assert handoff_snapshots
+    first_entry = handoff_snapshots[0].entries[0]
+    assert isinstance(first_entry, InputEntry)
+    assert first_entry.role == "system"
+    assert "reply in Spanish" in first_entry.content
+
+
+@pytest.mark.asyncio
+async def test_handoff_preserves_run_level_output_type_contract() -> None:
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    spanish = Agent(
+        name="Spanish",
+        model=ScriptedProvider([call("final_output", {"value": 7})]),
+    )
+    english = Agent(
+        name="English",
+        model=ScriptedProvider(
+            [call("transfer_to_spanish", {"reason": "user spoke Spanish"})]
+        ),
+        handoffs=[spanish],
+    )
+
+    await Runner.run(english, "Hola", output_type=Out, checkpointer=cp, run_id="handoff")
+    snap = await cp.load("handoff")
+    assert snap is not None
+    assert snap.runtime["output_type_source"] == "run_override"
+
+    with pytest.raises(Exception, match="run-level output_type"):
+        await Runner.resume(spanish, checkpointer=cp, run_id="handoff")
+
+    result = await Runner.resume(
+        spanish, checkpointer=cp, run_id="handoff", output_type=Out
+    )
+    assert isinstance(result.output, Out)
+    assert result.output.value == 7
+
+
+@pytest.mark.asyncio
+async def test_handoff_without_override_uses_target_agent_output_type() -> None:
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    spanish = Agent(
+        name="Spanish",
+        output_type=Out,
+        model=ScriptedProvider([call("final_output", {"value": 9})]),
+    )
+    english = Agent(
+        name="English",
+        model=ScriptedProvider(
+            [call("transfer_to_spanish", {"reason": "user spoke Spanish"})]
+        ),
+        handoffs=[spanish],
+    )
+
+    result = await Runner.run(english, "Hola", checkpointer=cp, run_id="agent-output")
+    snap = await cp.load("agent-output")
+
+    assert isinstance(result.output, Out)
+    assert result.output.value == 9
+    assert snap is not None
+    assert snap.runtime["output_type_source"] == "agent"
+
+
+@pytest.mark.asyncio
 async def test_resume_missing_run_id_raises() -> None:
     cp = InMemoryCheckpointer()
     agent = Agent(name="a", model=ScriptedProvider([]))
@@ -107,6 +378,10 @@ async def test_sqlite_checkpointer_delete_is_idempotent(tmp_path: Any) -> None:
 
 
 def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
+    @dataclass
+    class Raw:
+        value: int
+
     snap = RunSnapshot(
         run_id="r",
         agent_name="a",
@@ -116,13 +391,20 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
                 content=[TextPart("describe this"), ImagePart(url="https://x/y.png")],
             ),
             AssistantTextEntry(content="a cat"),
+            ToolResultEntry(call_id="c1", output="raw", raw=Raw(42)),
         ],
         usage=Usage(input_tokens=3, output_tokens=2, cache_read_tokens=1),
         turns=1,
+        status="completed",
+        output={"ok": True},
+        runtime={"last_input_tokens": 3},
     )
     payload = snap.to_dict()
     restored = RunSnapshot.from_dict(payload)
     assert restored.run_id == snap.run_id
+    assert restored.status == "completed"
+    assert restored.output == {"ok": True}
+    assert restored.runtime["last_input_tokens"] == 3
     assert restored.usage.cache_read_tokens == 1
     first = restored.entries[0]
     assert isinstance(first, InputEntry)
@@ -130,3 +412,6 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
     assert isinstance(first.content[0], TextPart)
     assert isinstance(first.content[1], ImagePart)
     assert first.content[1].url == "https://x/y.png"
+    raw_entry = restored.entries[2]
+    assert isinstance(raw_entry, ToolResultEntry)
+    assert raw_entry.raw == {"value": 42}

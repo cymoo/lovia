@@ -29,7 +29,7 @@ from typing import TextIO
 from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
-from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot
+from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot, RunStatus
 from .content import (
     ContentPart,
     FilePart,
@@ -233,6 +233,7 @@ __all__ = [
     "RunHandle",
     "RunResult",
     "RunSnapshot",
+    "RunStatus",
     "Runner",
     "Session",
     "Skill",

@@ -19,7 +19,7 @@ from lovia import (
 from lovia.context import CompactionRequest
 from lovia.events import ContextCompacted
 from lovia.run_context import RunContext
-from lovia.stores.memory import InMemorySession
+from lovia.stores.session import InMemorySession
 from lovia.tools import recall_tool_result, run_tool
 
 from ..scripted_provider import ScriptedProvider, text

@@ -1,7 +1,9 @@
-"""SQLite-backed :class:`Checkpointer`.
+"""Checkpointer implementations: in-memory and SQLite-backed.
 
-One snapshot per ``run_id``; updates overwrite. Uses the stdlib :mod:`sqlite3`
-driver through :func:`asyncio.to_thread` to avoid adding a dependency.
+:class:`InMemoryCheckpointer` is a trivial in-process store suitable for
+tests and short-lived runs. :class:`SQLiteCheckpointer` persists snapshots to
+a SQLite file using the stdlib :mod:`sqlite3` driver via
+:func:`asyncio.to_thread`; one row per ``run_id``, updates overwrite.
 """
 
 from __future__ import annotations
@@ -12,7 +14,23 @@ from ..checkpointer import RunSnapshot
 from ._sqlite import SQLiteStore
 
 
-_SCHEMA = """
+class InMemoryCheckpointer:
+    """Trivial in-process checkpointer. Useful for tests and short-lived runs."""
+
+    def __init__(self) -> None:
+        self._snapshots: dict[str, RunSnapshot] = {}
+
+    async def save(self, snapshot: RunSnapshot) -> None:
+        self._snapshots[snapshot.run_id] = snapshot
+
+    async def load(self, run_id: str) -> RunSnapshot | None:
+        return self._snapshots.get(run_id)
+
+    async def delete(self, run_id: str) -> None:
+        self._snapshots.pop(run_id, None)
+
+
+_CHECKPOINT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS run_snapshots (
     run_id TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -22,10 +40,10 @@ CREATE TABLE IF NOT EXISTS run_snapshots (
 
 
 class SQLiteCheckpointer(SQLiteStore):
-    """Persist :class:`RunSnapshot` instances to a SQLite database."""
+    """Persist :class:`~lovia.checkpointer.RunSnapshot` instances to a SQLite database."""
 
     def __init__(self, path: str | Path) -> None:
-        super().__init__(path, _SCHEMA)
+        super().__init__(path, _CHECKPOINT_SCHEMA)
 
     async def save(self, snapshot: RunSnapshot) -> None:
         await self._run(lambda: self._save_sync(snapshot))

@@ -1,24 +1,47 @@
-"""SQLite-backed :class:`Session`.
+"""Session implementations: in-memory and SQLite-backed.
 
-Uses :mod:`sqlite3` from the stdlib via :func:`asyncio.to_thread` so we don't
-add ``aiosqlite`` as a dependency. Concurrency is serialized through a single
-async lock; that's plenty for the kind of workloads agent frameworks see.
-
-The schema is intentionally trivial: entries are stored as JSON blobs in
-insertion order (one row per :class:`TranscriptEntry`). Loading deserializes
-them via :func:`lovia.transcript.entry_from_dict`.
+:class:`InMemorySession` keeps transcripts in process — suitable for tests,
+CLIs, or single-process applications. :class:`SQLiteSession` persists entries
+to a SQLite file via the stdlib :mod:`sqlite3` driver and
+:func:`asyncio.to_thread`; no extra dependencies required.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from ..transcript import TranscriptEntry, entry_from_dict, entry_to_dict
 from ._sqlite import SQLiteStore
 
 
-_SCHEMA = """
+class InMemorySession:
+    """A :class:`~lovia.session.Session` that keeps transcripts in a dict."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, list[TranscriptEntry]] = defaultdict(list)
+        self._lock = asyncio.Lock()
+
+    async def load(self, session_id: str) -> list[TranscriptEntry]:
+        async with self._lock:
+            return list(self._data.get(session_id, []))
+
+    async def append(self, session_id: str, entries: list[TranscriptEntry]) -> None:
+        async with self._lock:
+            self._data[session_id].extend(entries)
+
+    async def replace(self, session_id: str, entries: list[TranscriptEntry]) -> None:
+        async with self._lock:
+            self._data[session_id] = list(entries)
+
+    async def clear(self, session_id: str) -> None:
+        async with self._lock:
+            self._data.pop(session_id, None)
+
+
+_SESSION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS session_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -31,10 +54,10 @@ CREATE INDEX IF NOT EXISTS idx_session_entries_sid
 
 
 class SQLiteSession(SQLiteStore):
-    """A :class:`Session` persisted to a SQLite file."""
+    """A :class:`~lovia.session.Session` persisted to a SQLite file."""
 
     def __init__(self, path: str | Path) -> None:
-        super().__init__(path, _SCHEMA)
+        super().__init__(path, _SESSION_SCHEMA)
 
     async def load(self, session_id: str) -> list[TranscriptEntry]:
         def _impl() -> list[TranscriptEntry]:
@@ -81,9 +104,6 @@ class SQLiteSession(SQLiteStore):
         def _impl() -> None:
             conn = self._connect()
             try:
-                # Single transaction: delete existing rows, then insert the
-                # new transcript. On error we rollback so the old transcript
-                # survives intact.
                 try:
                     conn.execute("BEGIN")
                     conn.execute(

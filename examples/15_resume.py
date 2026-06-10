@@ -17,7 +17,7 @@ import os
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, tool
-from lovia.stores.sqlite_checkpointer import SQLiteCheckpointer
+from lovia.stores.checkpointer import SQLiteCheckpointer
 
 load_dotenv()
 

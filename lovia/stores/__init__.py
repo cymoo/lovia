@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from .memory import InMemorySession
-from .sqlite import SQLiteSession
-from .sqlite_checkpointer import SQLiteCheckpointer
+from .checkpointer import InMemoryCheckpointer, SQLiteCheckpointer
+from .session import InMemorySession, SQLiteSession
 
 __all__ = [
+    "InMemoryCheckpointer",
     "InMemorySession",
     "SQLiteCheckpointer",
     "SQLiteSession",

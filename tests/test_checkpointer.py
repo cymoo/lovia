@@ -27,7 +27,7 @@ from lovia import (
     tool,
 )
 from lovia.messages import Usage
-from lovia.stores.sqlite_checkpointer import SQLiteCheckpointer
+from lovia.stores.checkpointer import SQLiteCheckpointer
 
 from .scripted_provider import ScriptedProvider, call, text
 

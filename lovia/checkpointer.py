@@ -7,9 +7,9 @@ JSON-safe output/error payloads, and small runner-owned runtime state. The opaqu
 ``RunContext.context`` value is *not* snapshotted — callers re-supply it on
 resume.
 
-The default in-process implementation is :class:`InMemoryCheckpointer`;
-:class:`~lovia.stores.sqlite_checkpointer.SQLiteCheckpointer` persists
-snapshots to a SQLite file.
+Concrete implementations live in :mod:`lovia.stores`:
+:class:`~lovia.stores.InMemoryCheckpointer` for in-process use and
+:class:`~lovia.stores.SQLiteCheckpointer` for durable persistence.
 """
 
 from __future__ import annotations
@@ -94,19 +94,3 @@ class Checkpointer(Protocol):
     async def load(self, run_id: str) -> RunSnapshot | None: ...
 
     async def delete(self, run_id: str) -> None: ...
-
-
-class InMemoryCheckpointer:
-    """Trivial in-process checkpointer. Useful for tests and short-lived runs."""
-
-    def __init__(self) -> None:
-        self._snapshots: dict[str, RunSnapshot] = {}
-
-    async def save(self, snapshot: RunSnapshot) -> None:
-        self._snapshots[snapshot.run_id] = snapshot
-
-    async def load(self, run_id: str) -> RunSnapshot | None:
-        return self._snapshots.get(run_id)
-
-    async def delete(self, run_id: str) -> None:
-        self._snapshots.pop(run_id, None)

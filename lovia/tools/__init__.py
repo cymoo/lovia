@@ -14,9 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import enum
 import inspect
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
 from typing import (
     Any,
     Awaitable,
@@ -27,10 +31,12 @@ from typing import (
     get_type_hints,
     overload,
 )
+from uuid import UUID
 
 from pydantic import BaseModel
 
 from .._types import JsonObject, JsonSchema
+from ..exceptions import UserError
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
@@ -116,17 +122,40 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-def _to_jsonable(value: Any) -> Any:
+def _to_jsonable(value: Any, *, _depth: int = 0) -> Any:
     """Recursively convert Pydantic models and dataclasses to JSON-safe types."""
+    if _depth > 50:
+        return str(value)
     if isinstance(value, BaseModel):
-        return value.model_dump()
+        return _to_jsonable(value.model_dump(mode="json"), _depth=_depth + 1)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return dataclasses.asdict(value)
-    if isinstance(value, list):
-        return [_to_jsonable(v) for v in value]
+        return _to_jsonable(dataclasses.asdict(value), _depth=_depth + 1)
+    if isinstance(value, enum.Enum):
+        return _to_jsonable(value.value, _depth=_depth + 1)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, (Decimal, Path, UUID)):
+        return str(value)
+    if isinstance(value, bytes):
+        try:
+            return value.decode()
+        except UnicodeDecodeError:
+            return value.hex()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_to_jsonable(v, _depth=_depth + 1) for v in value]
     if isinstance(value, dict):
-        return {k: _to_jsonable(v) for k, v in value.items()}
+        return {
+            _jsonable_key(k, _depth=_depth + 1): _to_jsonable(v, _depth=_depth + 1)
+            for k, v in value.items()
+        }
     return value
+
+
+def _jsonable_key(value: Any, *, _depth: int) -> str | int | float | bool | None:
+    key = _to_jsonable(value, _depth=_depth)
+    if isinstance(key, (str, int, float, bool)) or key is None:
+        return key
+    return str(key)
 
 
 def default_result_renderer(result: Any) -> str:
@@ -164,10 +193,13 @@ async def run_tool(
 
     last_exc: BaseException | None = None
     for attempt in range(1, attempts + 1):
+        attempt_args = dict(args)
         try:
             if timeout is not None:
-                return await asyncio.wait_for(one_attempt(args, ctx), timeout=timeout)
-            return await one_attempt(args, ctx)
+                return await asyncio.wait_for(
+                    one_attempt(attempt_args, ctx), timeout=timeout
+                )
+            return await one_attempt(attempt_args, ctx)
         except Exception as exc:  # noqa: BLE001 — we want to retry any tool error
             last_exc = exc
             if attempt >= attempts:
@@ -225,7 +257,11 @@ async def render_tool_result(
         return default_result_renderer(result)
     rendered = renderer(result, ctx)
     rendered_value = await _maybe_await(rendered)
-    return rendered_value if isinstance(rendered_value, str) else str(rendered_value)
+    return (
+        rendered_value
+        if isinstance(rendered_value, str)
+        else default_result_renderer(rendered_value)
+    )
 
 
 @overload
@@ -289,7 +325,11 @@ def tool(
 
     def make(func: Callable[..., Any]) -> Tool:
         tool_name = name or func.__name__
-        tool_desc = description or (inspect.getdoc(func) or "").strip()
+        tool_desc = (
+            description
+            if description is not None
+            else (inspect.getdoc(func) or "").strip()
+        )
         parameters, _ = function_args_schema(func, strict=strict)
 
         sig = inspect.signature(func)
@@ -297,14 +337,13 @@ def tool(
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
-            cleaned = validate_args(func, args)
-            kwargs = dict(cleaned)
+            kwargs = validate_args(func, args)
             if context_param is not None:
                 kwargs[context_param] = ctx
             if is_async:
                 return await cast(Awaitable[Any], func(**kwargs))
             # Offload sync work so we don't block the event loop.
-            return await asyncio.to_thread(lambda: func(**kwargs))
+            return await asyncio.to_thread(func, **kwargs)
 
         return Tool(
             name=tool_name,
@@ -337,14 +376,20 @@ def _find_context_param(func: Callable[..., Any], sig: inspect.Signature) -> str
         # Unresolvable forward refs etc. fall through to "no context"; this
         # matches how the rest of the framework treats schema introspection.
         return None
+    matches: list[str] = []
     for pname in sig.parameters:
         annotation = hints.get(pname)
         if annotation is None:
             continue
         origin = get_origin(annotation) or annotation
         if origin is RunContext:
-            return pname
-    return None
+            matches.append(pname)
+    if len(matches) > 1:
+        raise UserError(
+            "Tool functions can have at most one RunContext parameter.",
+            hint="Remove the extra RunContext annotation or pass that value through ctx.context.",
+        )
+    return matches[0] if matches else None
 
 
 from .coding_tools import coding_tools  # noqa: E402

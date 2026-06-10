@@ -211,6 +211,7 @@ async def stream_with_fallback(
                     delay = min(
                         retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1))
                     )
+                    # TODO: use better jitter strategy
                     delay *= 0.5 + _random.random()
                     logger.warning(
                         "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",

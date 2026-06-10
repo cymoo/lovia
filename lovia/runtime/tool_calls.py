@@ -68,6 +68,7 @@ class ToolCallProcessor:
         try:
             args: dict[str, Any] = json.loads(call.arguments or "{}")
         except json.JSONDecodeError:
+            # TODO: log this error properly
             args = {}
 
         if tool.requires_approval(args, run_ctx):

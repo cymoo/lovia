@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncIterator
 
 import pytest
 from pydantic import BaseModel
 
 from lovia import (
     Agent,
+    FinishDelta,
     ImagePart,
     InMemoryCheckpointer,
     InputEntry,
     AssistantTextEntry,
+    ModelDelta,
+    ProviderError,
     Runner,
     RunSnapshot,
     TextPart,
     ToolCallEntry,
     ToolResultEntry,
+    TextDelta,
+    UsageDelta,
     tool,
 )
 from lovia.messages import Usage
@@ -35,6 +40,22 @@ class RecordingCheckpointer(InMemoryCheckpointer):
     async def save(self, snapshot: RunSnapshot) -> None:
         self.saved.append(snapshot)
         await super().save(snapshot)
+
+
+class FlakyProvider:
+    name = "flaky"
+    supports_json_schema = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ModelDelta]:
+        self.calls += 1
+        if self.calls == 1:
+            raise ProviderError("temporary outage", retryable=True)
+        yield TextDelta(text="recovered")
+        yield UsageDelta(usage=Usage(input_tokens=1, output_tokens=1))
+        yield FinishDelta(reason="stop")
 
 
 @pytest.mark.asyncio
@@ -165,6 +186,27 @@ async def test_run_failure_saves_failed_snapshot() -> None:
     assert snap.status == "failed"
     assert snap.error is not None
     assert snap.error["type"] == "AssertionError"
+
+
+@pytest.mark.asyncio
+async def test_retryable_provider_failure_saves_interrupted_snapshot() -> None:
+    cp = InMemoryCheckpointer()
+    provider = FlakyProvider()
+    agent = Agent(name="a", model=provider)
+
+    with pytest.raises(ProviderError):
+        await Runner.run(agent, "hi", checkpointer=cp, run_id="interrupted")
+
+    snap = await cp.load("interrupted")
+    assert snap is not None
+    assert snap.status == "interrupted"
+    assert snap.turns == 0
+    assert snap.error is not None
+    assert snap.error["type"] == "ProviderError"
+
+    result = await Runner.resume(agent, checkpointer=cp, run_id="interrupted")
+    assert result.output == "recovered"
+    assert provider.calls == 2
 
 
 @pytest.mark.asyncio

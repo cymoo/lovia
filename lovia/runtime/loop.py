@@ -49,6 +49,8 @@ from ..exceptions import (
     ContextOverflowError,
     MaxTurnsExceeded,
     OutputValidationError,
+    ProviderError,
+    RunCancelled,
     UserError,
 )
 from ..guardrails import check_input_guardrails, check_output_guardrails
@@ -239,6 +241,7 @@ class RunLoop:
         )
         output: object | None = None
         turns = bootstrap.turns
+        turn_in_progress = False
         terminal_checkpoint_saved = False
         try:
             # Input guardrails run once on the fully-built initial transcript.
@@ -319,6 +322,7 @@ class RunLoop:
                 if self.budget is not None:
                     self.budget.check(run_ctx.usage)
                 turns += 1
+                turn_in_progress = True
                 logger.debug(
                     "run.turn.start: agent=%r turn=%d",
                     agent.name,
@@ -423,6 +427,7 @@ class RunLoop:
                     self.budget.check(run_ctx.usage)
                 turn_entries = state.turn_entries or []
                 entries_log.extend(turn_entries)
+                turn_in_progress = False
                 ev_msg = events.MessageCompleted(entries=turn_entries)
                 yield ev_msg
                 await dispatch(agent.hooks, ev_msg)
@@ -493,9 +498,15 @@ class RunLoop:
 
         except Exception as exc:
             if not terminal_checkpoint_saved:
-                await self._snapshot_failed_safely(
-                    agent, entries_log, run_ctx, turns, exc
-                )
+                snapshot_turns = max(0, turns - 1) if turn_in_progress else turns
+                if self._is_resumable_exception(exc):
+                    await self._snapshot_interrupted_safely(
+                        agent, entries_log, run_ctx, snapshot_turns, exc
+                    )
+                else:
+                    await self._snapshot_failed_safely(
+                        agent, entries_log, run_ctx, snapshot_turns, exc
+                    )
             raise
         finally:
             for cleanup in mcp_cleanup:
@@ -867,6 +878,35 @@ class RunLoop:
             )
         except Exception:  # noqa: BLE001 - don't mask the original run failure
             logger.exception("checkpoint.failed_snapshot: could not persist failure")
+
+    async def _snapshot_interrupted_safely(
+        self,
+        agent: Agent,
+        entries_log: list[TranscriptEntry],
+        run_ctx: RunContext,
+        turns: int,
+        exc: Exception,
+    ) -> None:
+        try:
+            await self._snapshot(
+                agent,
+                entries_log,
+                run_ctx,
+                turns,
+                status="interrupted",
+                error=self._error_payload(exc),
+            )
+        except Exception:  # noqa: BLE001 - don't mask the original run failure
+            logger.exception(
+                "checkpoint.interrupted_snapshot: could not persist interruption"
+            )
+
+    def _is_resumable_exception(self, exc: Exception) -> bool:
+        if isinstance(exc, RunCancelled):
+            return True
+        if isinstance(exc, ProviderError):
+            return getattr(exc, "retryable", None) is not False
+        return isinstance(exc, (TimeoutError, ConnectionError))
 
     def _error_payload(self, exc: Exception) -> JsonObject:
         return {

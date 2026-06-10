@@ -2,7 +2,7 @@
 
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
 serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
-active agent's name, the accumulated usage, the turn counter, terminal status,
+active agent's name, the accumulated usage, the turn counter, run status,
 JSON-safe output/error payloads, and small runner-owned runtime state. The opaque
 ``RunContext.context`` value is *not* snapshotted — callers re-supply it on
 resume.
@@ -23,7 +23,7 @@ from ._types import JsonObject
 from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
 from .messages import Usage
 
-RunStatus = Literal["running", "completed", "failed"]
+RunStatus = Literal["running", "interrupted", "completed", "failed"]
 
 
 @dataclass

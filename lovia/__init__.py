@@ -29,7 +29,8 @@ from typing import TextIO
 from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
-from .checkpointer import Checkpointer, InMemoryCheckpointer, RunSnapshot, RunStatus
+from .checkpointer import Checkpointer, RunSnapshot, RunStatus
+from .stores.checkpointer import InMemoryCheckpointer
 from .content import (
     ContentPart,
     FilePart,
@@ -277,4 +278,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.5.13"
+__version__ = "0.5.14"

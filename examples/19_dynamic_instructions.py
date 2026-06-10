@@ -38,11 +38,13 @@ async def main() -> None:
 
     @agent.system_prompt
     def greet(ctx) -> str:  # type: ignore[no-untyped-def]
-        return f"Address the user as {ctx.context.user_name}."
+        # TODO: ctx should be RunContext, not Deps; make the full context available in system prompts
+        # return f"Address the user as {ctx.context.user_name}."
+        return f"Address the user as {ctx.user_name}."
 
     @agent.system_prompt
     async def localise(ctx) -> str:  # type: ignore[no-untyped-def]
-        return f"Reply in locale: {ctx.context.locale}."
+        return f"Reply in locale: {ctx.locale}."
 
     result = await Runner.run(
         agent,

@@ -141,6 +141,7 @@ class RunLoop:
         self.retry = retry
         self.checkpointer = checkpointer
         self.context_policy: ContextPolicy = context_policy or CompactingContextPolicy()
+        # TODO: 根本不知道 runtime 里保存的是啥...太不利于以后重构或维护了吧....
         runtime = resume_from.runtime if resume_from is not None else {}
         # Tracks the input-token count from the previous turn so
         # ContextPolicy can prefer real usage over heuristic estimates.
@@ -158,6 +159,7 @@ class RunLoop:
         self.append_instructions = append_instructions
         # ``output_type=None`` means "use the active agent default", while
         # ``output_type=str`` means "force free-form text" for the whole run.
+        # TODO: output_type_override 搞的也太复杂了吧...
         self.output_type_override = output_type_override
         source = runtime.get("output_type_source")
         if self.output_type_override is not None:
@@ -273,6 +275,7 @@ class RunLoop:
                             await dispatch(agent.hooks, ev)
                         await self._snapshot(agent, entries_log, run_ctx, turns)
 
+                    # TODO: 有3处 emit turn ended...好绕
                     ev_te = events.TurnEnded(agent=turn_agent, turn=turns)
                     yield ev_te
                     await dispatch(turn_agent.hooks, ev_te)
@@ -287,6 +290,7 @@ class RunLoop:
                             agent.name,
                             state.handoff_signal.target.name,
                         )
+                        # TODO: 利用返回值来覆盖上面的变量，oh no...
                         (
                             agent,
                             structured_output,
@@ -305,6 +309,7 @@ class RunLoop:
                         await dispatch(agent.hooks, handoff_ev)
 
                     await self._snapshot(agent, entries_log, run_ctx, turns)
+                    # TODO: 有必要continue吗，此时 pending_calls 已经被清空了吧...
                     continue
 
                 if turns >= self.max_turns:
@@ -333,6 +338,7 @@ class RunLoop:
                 await dispatch(agent.hooks, ev_turn)
 
                 providers = agent.resolve_providers()
+                # TODO: 多处 new TurnState()，太绕了...
                 state = TurnState()
 
                 # ContextPolicy: build the per-call VIEW of the transcript.
@@ -348,6 +354,7 @@ class RunLoop:
                     session_id=self.session_id,
                     run_id=self.run_id,
                     overflow=False,
+                    # TODO: _compaction_scratch 这个又是啥...
                     scratch=self._compaction_scratch,
                 )
                 ctx_result = await self.context_policy.compact(req)
@@ -396,6 +403,7 @@ class RunLoop:
                     ):
                         yield ev
                         await dispatch(agent.hooks, ev)
+                    # TODO: ...
                     state = TurnState()
                     async for ev in stream_model_turn(
                         agent=agent,
@@ -459,6 +467,7 @@ class RunLoop:
                             yield ev_end
                             await dispatch(agent.hooks, ev_end)
                             await self._snapshot(agent, entries_log, run_ctx, turns)
+                            # TODO: ...
                             continue
                         await dispatch(agent.hooks, events.ErrorOccurred(error=exc))
                         raise
@@ -470,6 +479,7 @@ class RunLoop:
                 # Persist tool calls before executing them. Resume drains any
                 # calls without matching ToolResultEntry by call_id.
                 await self._snapshot(agent, entries_log, run_ctx, turns)
+                # TODO: 各种 continue 和 break，太难理解整个流程了...
                 continue
 
             result = await self._finalize_phase(
@@ -496,6 +506,7 @@ class RunLoop:
                 result.usage.output_tokens,
             )
 
+        # TODO: 这个 catch 离上面的 try 有个几公里了吧...
         except Exception as exc:
             if not terminal_checkpoint_saved:
                 snapshot_turns = max(0, turns - 1) if turn_in_progress else turns
@@ -509,6 +520,7 @@ class RunLoop:
                     )
             raise
         finally:
+            # TODO: loop 负责清理合适吗...
             for cleanup in mcp_cleanup:
                 try:
                     await cleanup()
@@ -535,7 +547,9 @@ class RunLoop:
         mcp_cleanup: list[Cleanup] = []
         try:
             mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
+            # TODO: sandbox 的 cleanup 使用方来做更合适吧...
             sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
+            # TODO: 这是什么代码...
             mcp_cleanup.extend(sandbox_cleanup)
             structured_output = resolve_structured_output(
                 self._resolve_output_type(agent), supports_json_schema(agent)
@@ -584,6 +598,8 @@ class RunLoop:
             structured_output = resolve_structured_output(
                 self._resolve_output_type(agent), supports_json_schema(agent)
             )
+            # TODO: 没有添加 handoff agent 的 mcp 的清理？我怀疑有 BUG...
+            # TODO: 有必要 loop 来负责清理吗？让调用方自己做更合适吧...
             sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
             cleanup.extend(sandbox_cleanup)
             tools_by_name = self._collect_tools(
@@ -695,6 +711,7 @@ class RunLoop:
         # Drop the leading system message if present; preserve the rest.
         if body and body[0].role == "system":
             body = body[1:]
+        # TODO: 直接传入 filter 不是更易懂...
         if handoff is not None and handoff.input_filter is not None:
             body = list(handoff.input_filter(body))
         if new_system:
@@ -745,6 +762,7 @@ class RunLoop:
                 "output",
                 Tool(
                     name=FINAL_OUTPUT_TOOL_NAME,
+                    # TODO: oh no....这个 prompt 太简陋了....上下文长一些或工具多一些，我不觉得模型能记得这个指令...
                     description="Call once with the final answer.",
                     parameters=structured_output.schema,
                     invoke=unreachable_invoke,
@@ -758,6 +776,7 @@ class RunLoop:
         try:
             for server in agent.mcp_servers:
                 conn = await server.open()
+                # TODO: close_on_run 这个变量起的真差劲
                 if server.close_on_run:
                     cleanup.append(conn.close)
                 tools.extend(conn.tools())
@@ -789,6 +808,7 @@ class RunLoop:
         return tools, cleanup
 
     def _pending_tool_calls(self, entries: list[TranscriptEntry]) -> list[ToolCall]:
+        # TODO: 这个算法实现的有些复杂...不易懂
         completed_counts: dict[str, int] = {}
         for entry in entries:
             if isinstance(entry, _ToolResultEntry):
@@ -803,6 +823,7 @@ class RunLoop:
                 continue
             index = seen_calls.get(entry.call_id, 0)
             seen_calls[entry.call_id] = index + 1
+            # TODO: 绕绕绕
             if index >= completed_counts.get(entry.call_id, 0):
                 pending.append(
                     ToolCall(
@@ -814,6 +835,8 @@ class RunLoop:
         return pending
 
     def _snapshot_runtime(self) -> JsonObject:
+        # TODO: 整个代码仓充斥着无意义的 cast
+        # TODO: snapshot_runtime 这名字起的...而且返回值是 dict，太容易出错了吧...
         return cast(
             JsonObject,
             to_json_safe(
@@ -926,6 +949,7 @@ class RunLoop:
         error: JsonObject | None = None,
     ) -> None:
         """Persist a :class:`RunSnapshot` if a checkpointer is configured."""
+        # TODO: 传入 usage 不就行了...为什么还要传入 run_ctx...
         if self.checkpointer is None or self.run_id is None:
             return
         snapshot = RunSnapshot(
@@ -951,6 +975,7 @@ class RunLoop:
         assistant: AssistantTurn,
         structured_output: StructuredOutput | None,
     ) -> object:
+        # TODO: 传入 assistant.content 不就行了...为啥需要整个 assistant
         if structured_output is None:
             return assistant.content or ""
         # Either the model used the structured ``response_format`` path or it
@@ -997,9 +1022,11 @@ class RunLoop:
         policy dropped the leading system message (e.g. it summarized the head),
         re-prepend it so provider adapters still see one.
         """
+        # TODO: 有必要传入 entries_log 吗？如果 result.change == False，result.entries 不就等于 entries_log 吗？
         if not result.changed:
             return entries_log
         view = result.entries
+        # TODO: context compaction 根本就不应该压缩 system message 啊...
         if view and isinstance(view[0], _InputEntry) and view[0].role == "system":
             return view
         system_text = await self._system_prompt(agent)

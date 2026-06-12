@@ -8,8 +8,8 @@ Run::
 
 Demonstrates the optional ``lovia.web`` layer: REST endpoints, SSE streaming,
 human-in-the-loop approval, the bundled refined-minimal chat page, and
-``CompactingContextPolicy`` so a long chat session never crashes the
-provider with a context-window overflow.
+``Compaction`` so a long chat session never crashes the provider with a
+context-window overflow.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, CompactingContextPolicy, tool, enable_logging
+from lovia import Agent, Compaction, tool, enable_logging
 from lovia.workspace import Workspace
 from lovia.tracing import ConsoleTracer
 from lovia.web import serve
@@ -52,12 +52,12 @@ def main() -> None:
         workspace=Workspace.local(".", mode="trusted"),
         tracer=ConsoleTracer(),
     )
-    # Default policy: when the prompt approaches the model's context window,
-    # summarize older turns. Omit window_tokens to ask the provider for the
-    # active model's window and fall back to the reactive overflow path when
-    # the window is unknown.
-    # policy = CompactingContextPolicy(keep_recent=10)
-    policy = CompactingContextPolicy(window_tokens=200_000)
+    # Default policy: cheap moves first (archive/clear old tool results),
+    # an incremental LLM summary as the last resort, all decisions sticky so
+    # the prompt prefix stays cache-friendly. Omit context_window to ask the
+    # provider for the active model's window and fall back to the reactive
+    # overflow path when the window is unknown.
+    policy = Compaction(context_window=200_000)
     serve(agent, host="127.0.0.1", port=8000, context_policy=policy)
 
 

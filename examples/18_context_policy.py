@@ -1,14 +1,17 @@
 """Long conversations that survive the model's context window.
 
-This example shows ``CompactingContextPolicy`` doing its job:
+This example shows the default ``Compaction`` doing its job:
 
 1. We seed an ``InMemorySession`` with a long fake transcript that would
    normally blow past a small model's context window.
-2. A small ``window_tokens`` + ``trigger_ratio=0.5`` forces the policy to
-   summarize on the next turn.
-3. Compaction is **view-only**: it shapes only what is sent to the model for
-   that turn. The ``Session`` is never modified, so the full history remains the
-   source of truth — a bad summary can only ever affect one model call.
+2. A small ``context_window`` + a low ``compact_at`` force the pipeline to
+   compact on the next turn: old tool results are cleared first (free), and
+   the older prefix is folded into a running LLM summary only as a last
+   resort.
+3. Compaction is **view-only and sticky**: it shapes only what is sent to the
+   model, while decisions are remembered per run so the prompt prefix stays
+   byte-stable across turns (prompt-cache friendly). The ``Session`` is never
+   modified — the full history remains the source of truth.
 4. A hook listens for ``ContextCompacted`` and feeds the summary into a
    long-term ``Memory`` — the layers stay nicely orthogonal.
 5. ``recall_tool_result`` lets the agent pull back a tool output that
@@ -30,7 +33,7 @@ from lovia import (
     Agent,
     AgentHooks,
     AssistantTextEntry,
-    CompactingContextPolicy,
+    Compaction,
     InputEntry,
     Runner,
     events,
@@ -61,6 +64,10 @@ async def main() -> None:
 
     @hooks.on(events.ContextCompacted)
     async def _record(ev: events.ContextCompacted) -> None:
+        print(
+            f"[compacted] reason={ev.reason} "
+            f"tokens={ev.metadata.get('tokens_before')}→{ev.metadata.get('tokens_after')}"
+        )
         if ev.summary:
             await long_term.add(ev.summary, metadata={"session_id": ev.session_id})
 
@@ -90,13 +97,14 @@ async def main() -> None:
         )
     await session.append("u-mei", seeded)
 
-    # Tight budget so this demo definitely triggers compaction on the first
-    # real turn. In production you'd set window_tokens to the model's actual
-    # context window (or omit it and let provider.context_window decide).
-    policy = CompactingContextPolicy(
-        window_tokens=2_000,
-        trigger_ratio=0.5,  # threshold = 1000 tokens
-        keep_recent=4,
+    # Tight budget so this demo definitely compacts on the first real turn.
+    # In production you'd set context_window to the model's actual context
+    # window (or omit it and let provider.context_window decide).
+    policy = Compaction(
+        context_window=2_000,
+        reserve_output_tokens=500,
+        compact_at=0.5,
+        compact_to=0.3,
     )
 
     result = await Runner.run(

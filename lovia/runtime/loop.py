@@ -40,7 +40,7 @@ from .tool_calls import ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import Checkpointer, RunSnapshot
-from ..context import CompactingContextPolicy, CompactionRequest, ContextPolicy, ContextResult
+from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
 from ..exceptions import (
     ContextOverflowError,
     MaxTurnsExceeded,
@@ -124,7 +124,7 @@ class RunLoop:
         self.budget = budget
         self.cancel_token = cancel_token
         self.retry = retry
-        self.context_policy: ContextPolicy = context_policy or CompactingContextPolicy()
+        self.context_policy: ContextPolicy = context_policy or Compaction()
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
         self.append_instructions = append_instructions
@@ -201,7 +201,9 @@ class RunLoop:
                         state, events.TurnStarted(agent=state.agent, turn=state.turns)
                     )
                     logger.debug(
-                        "run.turn.start: agent=%r turn=%d", state.agent.name, state.turns
+                        "run.turn.start: agent=%r turn=%d",
+                        state.agent.name,
+                        state.turns,
                     )
 
                     turn_durable = False
@@ -375,10 +377,12 @@ class RunLoop:
             run_id=self.run_id,
             overflow=False,
             scratch=state.runtime.compaction_scratch,
+            workspace=state.run_ctx.workspace,
+            tool_names=frozenset(state.tools_by_name),
         )
         ctx_result = await self.context_policy.compact(request)
         view = await self._build_view(state, ctx_result)
-        if ctx_result.changed:
+        if ctx_result.compacted:
             yield await self._emit(
                 state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
@@ -401,7 +405,7 @@ class RunLoop:
             )
             request.overflow = True
             ctx_result = await self.context_policy.compact(request)
-            if not ctx_result.changed:
+            if not ctx_result.compacted:
                 logger.error(
                     "context.overflow: policy could not shrink transcript; "
                     "surfacing ContextOverflowError"
@@ -465,9 +469,7 @@ class RunLoop:
         prev_agent = state.agent
         target = signal.target
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
-        with tracer.span(
-            "handoff", from_agent=prev_agent.name, to_agent=target.name
-        ):
+        with tracer.span("handoff", from_agent=prev_agent.name, to_agent=target.name):
             state.agent = target
             state.run_ctx.agent = target
             # The per-call addendum applies to the initial agent only.
@@ -757,9 +759,7 @@ class RunLoop:
                     _push_cleanup(resources, aclose)
         return providers
 
-    async def _connect_mcp(
-        self, agent: Agent, resources: AsyncExitStack
-    ) -> list[Tool]:
+    async def _connect_mcp(self, agent: Agent, resources: AsyncExitStack) -> list[Tool]:
         tools: list[Tool] = []
         for server in agent.mcp_servers:
             conn = await server.open()
@@ -824,6 +824,11 @@ class RunLoop:
         *,
         reactive: bool,
     ) -> events.ContextCompacted:
+        metadata = dict(result.metadata)
+        if result.tokens_before is not None:
+            metadata["tokens_before"] = result.tokens_before
+        if result.tokens_after is not None:
+            metadata["tokens_after"] = result.tokens_after
         return events.ContextCompacted(
             session_id=self.session_id,
             entries_before=list(state.transcript),
@@ -831,7 +836,7 @@ class RunLoop:
             summary=result.summary,
             reactive=reactive,
             reason=result.reason or "context_policy",
-            metadata=result.metadata,
+            metadata=metadata,
         )
 
 
@@ -852,9 +857,7 @@ def pending_tool_calls(entries: list[TranscriptEntry]) -> list[ToolCall]:
             unconsumed_results[entry.call_id] -= 1
         else:
             pending.append(
-                ToolCall(
-                    id=entry.call_id, name=entry.name, arguments=entry.arguments
-                )
+                ToolCall(id=entry.call_id, name=entry.name, arguments=entry.arguments)
             )
     return pending
 

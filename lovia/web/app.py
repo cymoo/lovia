@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ..agent import Agent
-from ..context import CompactingContextPolicy, ContextPolicy
+from ..context import Compaction, ContextPolicy
 from ..providers import Provider
 from ..session import Session
 from .approvals import ApprovalRegistry
@@ -64,7 +64,7 @@ def create_app(
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
 
-    ``context_policy`` defaults to :class:`CompactingContextPolicy` with a
+    ``context_policy`` defaults to :class:`Compaction` with a
     64 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
     """
     agents = _normalise(agent_or_agents)
@@ -78,8 +78,8 @@ def create_app(
     else:
         chat_store = ChatStore.sqlite(_default_db_path(agents))
 
-    effective_policy: ContextPolicy = context_policy or CompactingContextPolicy(
-        window_tokens=_DEFAULT_MAX_TOKENS
+    effective_policy: ContextPolicy = context_policy or Compaction(
+        context_window=_DEFAULT_MAX_TOKENS
     )
 
     approvals = ApprovalRegistry()

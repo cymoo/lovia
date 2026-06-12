@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Workspace"]
 
+
 @dataclass(frozen=True)
 class Workspace:
     """A local directory the agent's file/shell tools operate in.
@@ -79,7 +80,9 @@ class Workspace:
                 )
         elif mode == "readonly":
             if command_rules:
-                raise UserError("mode='readonly' has no shell; command_rules are unused.")
+                raise UserError(
+                    "mode='readonly' has no shell; command_rules are unused."
+                )
             policy = WorkspacePolicy.readonly(denied_paths=denied_paths)
         elif mode == "coding":
             policy = WorkspacePolicy.coding(
@@ -153,7 +156,9 @@ class Workspace:
             "for new files or full rewrites.",
         ]
         if not self.policy.allow_write:
-            lines.append("This workspace is read-only: writing and editing are disabled.")
+            lines.append(
+                "This workspace is read-only: writing and editing are disabled."
+            )
         if self.policy.denied_paths:
             denied = ", ".join(repr(p) for p in self.policy.denied_paths)
             lines.append(f"Paths matching {denied} are off-limits.")

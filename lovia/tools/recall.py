@@ -3,12 +3,14 @@
 When the context policy compacts a long conversation it replaces older tool
 results with a short marker in the per-call view, e.g.::
 
-    [Earlier tool result omitted to save context.
+    [Earlier tool result cleared to save context.
      Call recall_tool_result("call_42") to retrieve the full output.]
 
-The full output still lives in the run transcript. ``recall_tool_result`` reads
-it back by ``call_id`` so the agent can recover it without re-running a tool
-that may have side effects or be non-deterministic.
+Results archived to workspace files carry the same hint alongside the file
+path. Either way the full output still lives in the run transcript;
+``recall_tool_result`` reads it back by ``call_id`` so the agent can recover
+it without re-running a tool that may have side effects or be
+non-deterministic.
 
 This tool is opt-in — add it to an agent that works with large tool outputs::
 

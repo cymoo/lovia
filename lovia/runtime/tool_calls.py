@@ -9,18 +9,15 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from .. import events
-from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..handoff import _HandoffSignal
 from ..messages import ToolCall
-from ..output import FINAL_OUTPUT_TOOL_NAME, StructuredOutput, parse_structured_output
 from ..reliability import CancelToken, RunBudget
-from ..run_context import RunContext
-from .state import TurnState
+from .run_state import RunState
 from .utils import truncate_repr
-from ..tools import Tool, render_tool_result, run_tool
+from ..tools import render_tool_result, run_tool
 from ..tracing import Tracer
-from ..transcript import ToolResultEntry, TranscriptEntry
+from ..transcript import ToolResultEntry
 
 logger = logging.getLogger(__name__)
 
@@ -35,49 +32,74 @@ class ToolCallProcessor:
         self,
         call: ToolCall,
         *,
-        agent: Agent,
-        tools_by_name: dict[str, Tool],
-        run_ctx: RunContext[object],
+        state: RunState,
         tracer: Tracer,
-        structured_output: StructuredOutput | None,
-        entries: list[TranscriptEntry],
-        state: TurnState,
     ) -> AsyncIterator[events.Event]:
-        """Execute one assistant-requested tool call."""
+        """Execute one assistant-requested tool call.
+
+        Appends a :class:`ToolResultEntry` to ``state.transcript`` in every
+        outcome (missing tool, malformed arguments, denial, error, success)
+        so the transcript never contains a dangling tool call. A handoff tool
+        records its signal in ``state.pending_handoff``.
+        """
 
         if self.cancel_token is not None:
             self.cancel_token.check()
         if self.budget is not None:
             self.budget.record_tool_call()
-            self.budget.check(run_ctx.usage)
+            self.budget.check(state.run_ctx.usage)
 
-        if call.name == FINAL_OUTPUT_TOOL_NAME and structured_output is not None:
-            state.final_via_tool = parse_structured_output(
-                structured_output, call.arguments
-            )
-            entries.append(ToolResultEntry(call_id=call.id, output="ok"))
-            return
-
-        tool = tools_by_name.get(call.name)
+        tool = state.tools_by_name.get(call.name)
         if tool is None:
             err = f"Tool {call.name!r} is not available."
-            entries.append(ToolResultEntry(call_id=call.id, output=err, is_error=True))
+            state.transcript.append(
+                ToolResultEntry(call_id=call.id, output=err, is_error=True)
+            )
             yield events.ToolCallCompleted(call=call, result=err, is_error=True)
             return
 
         try:
             args: dict[str, Any] = json.loads(call.arguments or "{}")
-        except json.JSONDecodeError:
-            # TODO: log this error properly
-            args = {}
+        except json.JSONDecodeError as exc:
+            # Feed the parse error back to the model instead of silently
+            # running the tool with empty arguments.
+            err = f"Invalid JSON in tool arguments: {exc}"
+            logger.warning(
+                "tool.bad_arguments: %s call_id=%s args=%s",
+                call.name,
+                call.id,
+                truncate_repr(call.arguments),
+            )
+            state.transcript.append(
+                ToolResultEntry(call_id=call.id, output=err, is_error=True)
+            )
+            yield events.ToolCallCompleted(call=call, result=err, is_error=True)
+            return
 
-        if tool.requires_approval(args, run_ctx):
-            async for ev in self.await_approval(call, agent, run_ctx):
-                yield ev
-            approved = self.approvals.register(call.id).result()
+        if tool.requires_approval(args, state.run_ctx):
+            # Fail-closed approval. Resolution order: the streaming consumer
+            # (while suspended at the ApprovalRequired yield, or out-of-band
+            # via the channel), then ``agent.approval_handler``, then deny.
+            fut = self.approvals.register(call.id)
+            yield events.ApprovalRequired(call=call, _channel=self.approvals)
+            handler = state.agent.approval_handler
+            if handler is not None and not fut.done():
+                try:
+                    decision = handler(call, state.run_ctx)
+                    if inspect.isawaitable(decision):
+                        decision = await decision
+                except Exception as exc:
+                    yield events.ErrorOccurred(error=exc)
+                    decision = False
+                self._apply_handler_decision(call.id, decision)
+            if not fut.done():
+                # Nobody decided — deny so the run cannot hang.
+                self.approvals.reject(call.id)
+            approved = fut.result()
+            self.approvals.discard(call.id)
             if not approved:
                 denial = f"Tool {call.name} was not approved."
-                entries.append(
+                state.transcript.append(
                     ToolResultEntry(call_id=call.id, output=denial, is_error=True)
                 )
                 yield events.ToolCallCompleted(call=call, result=denial, is_error=True)
@@ -96,9 +118,9 @@ class ToolCallProcessor:
                 result = await run_tool(
                     tool,
                     args,
-                    run_ctx,
-                    default_retries=agent.default_tool_retries,
-                    default_timeout=agent.default_tool_timeout,
+                    state.run_ctx,
+                    default_retries=state.agent.default_tool_retries,
+                    default_timeout=state.agent.default_tool_timeout,
                 )
             is_error = False
         except Exception as exc:
@@ -114,16 +136,16 @@ class ToolCallProcessor:
             yield events.ErrorOccurred(error=exc)
 
         if isinstance(result, _HandoffSignal):
-            state.handoff_signal = result
+            state.pending_handoff = result
             result_text = f"Transferred to {result.target.name}" + (
                 f" ({result.reason})" if result.reason else ""
             )
         else:
             result_text = await render_tool_result(
-                tool, result, run_ctx, default=agent.tool_result_renderer
+                tool, result, state.run_ctx, default=state.agent.tool_result_renderer
             )
 
-        entries.append(
+        state.transcript.append(
             ToolResultEntry(
                 call_id=call.id,
                 output=result_text,
@@ -140,34 +162,11 @@ class ToolCallProcessor:
             )
         yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
 
-    async def await_approval(
-        self,
-        call: ToolCall,
-        agent: Agent,
-        run_ctx: RunContext[object],
-    ) -> AsyncIterator[events.Event]:
-        """Yield :class:`events.ApprovalRequired` and resolve the channel."""
-        fut = self.approvals.register(call.id)
-        yield events.ApprovalRequired(call=call, _channel=self.approvals)
-
-        if agent.approval_handler is not None and not fut.done():
-            try:
-                decision = agent.approval_handler(call, run_ctx)
-                if inspect.isawaitable(decision):
-                    decision = await decision
-            except Exception as exc:
-                yield events.ErrorOccurred(error=exc)
-                decision = False
-            if isinstance(decision, str):
-                token = decision.strip().lower()
-                if token == "ask":
-                    pass
-                elif token in ("allow", "approve", "yes"):
-                    self.approvals.approve(call.id)
-                else:
-                    self.approvals.reject(call.id)
-            elif not fut.done():
-                self.approvals._resolve(call.id, bool(decision))
-
-        if not fut.done():
-            self.approvals.reject(call.id)
+    def _apply_handler_decision(self, call_id: str, decision: object) -> None:
+        if isinstance(decision, str):
+            token = decision.strip().lower()
+            if token == "ask":
+                return  # defer; falls through to the default-deny check
+            self.approvals.resolve(call_id, token in ("allow", "approve", "yes"))
+        else:
+            self.approvals.resolve(call_id, bool(decision))

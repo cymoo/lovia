@@ -289,9 +289,9 @@ async def test_config_open_is_owned_per_run(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
 
     server = _FakeServer(name="srv")
-    assert server.close_on_run is True
+    assert server.close_after_run is True
     conn = await server.open()
-    assert conn.close_on_run is True
+    assert conn.close_after_run is True
     assert [t.name for t in conn.tools()] == ["srv__echo"]
     # A live connection "opens" to itself (so it can sit on agent.mcp_servers).
     assert await conn.open() is conn
@@ -306,7 +306,7 @@ async def test_persistent_session_not_owned(monkeypatch: pytest.MonkeyPatch) -> 
 
     server = _FakeServer()
     async with server.session() as conn:
-        assert conn.close_on_run is False
+        assert conn.close_after_run is False
         assert conn._session is not None
         assert [t.name for t in conn.tools()] == ["echo"]
     assert conn._session is None  # closed on context exit

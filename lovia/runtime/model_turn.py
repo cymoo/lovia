@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from typing import AsyncIterator
 
 from .._types import JsonObject
@@ -13,7 +15,7 @@ from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
 from ..providers.base import ModelSettings, Provider
 from ..reliability import RetryPolicy
-from .state import TurnState
+from .run_state import ModelTurnResult
 from .utils import truncate_repr
 from ..tools import Tool
 from ..tracing import Tracer
@@ -34,6 +36,15 @@ from ..transcript import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _ToolCallSlot:
+    """One tool call assembled incrementally from streamed deltas."""
+
+    call_id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
 async def stream_model_turn(
     *,
     agent: Agent,
@@ -43,17 +54,21 @@ async def stream_model_turn(
     structured_output: StructuredOutput | None,
     tracer: Tracer,
     turn: int,
-    state: TurnState,
+    result: ModelTurnResult,
     retry: RetryPolicy | None,
 ) -> AsyncIterator[events.Event]:
-    """Stream one model call and capture its assembled assistant turn."""
+    """Stream one model call, yielding delta events.
+
+    The assembled assistant turn lands in ``result`` (an async generator
+    cannot ``return`` a value, so the caller supplies the accumulator).
+    """
 
     model_label = getattr(providers[0], "model", None) if providers else None
 
     text_buf: list[str] = []
     reasoning_buf: list[str] = []
     completed_entries: list[TranscriptEntry] = []
-    tool_slots: dict[int, dict[str, str]] = {}
+    tool_slots: dict[int, _ToolCallSlot] = {}
     usage = Usage()
     finish_reason: str | None = None
 
@@ -64,7 +79,7 @@ async def stream_model_turn(
             tools=[t.openai_schema() for t in tools_by_name.values()] or None,
             response_format=(
                 response_format_for(structured_output)
-                if structured_output and not structured_output.use_tool_fallback
+                if structured_output and structured_output.use_native
                 else None
             ),
             settings=agent.settings,
@@ -77,15 +92,13 @@ async def stream_model_turn(
                 reasoning_buf.append(delta.text)
                 yield events.ReasoningDelta(delta=delta.text)
             elif isinstance(delta, ToolCallDelta):
-                slot = tool_slots.setdefault(
-                    delta.index, {"id": "", "name": "", "arguments": ""}
-                )
+                slot = tool_slots.setdefault(delta.index, _ToolCallSlot())
                 if delta.call_id:
-                    slot["id"] = delta.call_id
+                    slot.call_id = delta.call_id
                 if delta.name:
-                    slot["name"] = delta.name
+                    slot.name = delta.name
                 if delta.arguments:
-                    slot["arguments"] += delta.arguments
+                    slot.arguments += delta.arguments
             elif isinstance(delta, UsageDelta):
                 usage = delta.usage
             elif isinstance(delta, FinishDelta):
@@ -99,7 +112,7 @@ async def stream_model_turn(
         tool_slots=tool_slots,
         completed_entries=completed_entries,
     )
-    state.assistant = AssistantTurn(
+    result.assistant = AssistantTurn(
         content="".join(
             entry.content
             for entry in turn_entries
@@ -114,14 +127,14 @@ async def stream_model_turn(
         usage=usage,
         finish_reason=finish_reason,
     )
-    state.turn_entries = turn_entries
+    result.turn_entries = turn_entries
 
 
 def assemble_turn_entries(
     *,
     text: str | None,
     reasoning: str | None,
-    tool_slots: dict[int, dict[str, str]],
+    tool_slots: dict[int, _ToolCallSlot],
     completed_entries: list[TranscriptEntry],
 ) -> list[TranscriptEntry]:
     """Use provider-completed entries when available, with delta fallback."""
@@ -158,11 +171,11 @@ def assemble_turn_entries(
     else:
         out.extend(
             ToolCallEntry(
-                call_id=s["id"],
-                name=s["name"],
-                arguments=s["arguments"] or "{}",
+                call_id=slot.call_id,
+                name=slot.name,
+                arguments=slot.arguments or "{}",
             )
-            for _, s in sorted(tool_slots.items())
+            for _, slot in sorted(tool_slots.items())
         )
     return out
 
@@ -178,12 +191,15 @@ async def stream_with_fallback(
 ) -> AsyncIterator[ModelDelta]:
     """Stream from the first provider that succeeds.
 
-    Retried/fallback errors are only safe before any delta has been forwarded.
-    Once text or tool-call fragments have reached the caller, a mid-stream
-    error propagates to avoid duplicating partial assistant output.
+    Each provider is retried per ``retry`` (``max_retries`` counts attempts,
+    so ``None`` means a single attempt), then the next provider in the chain
+    is tried. Retries and fallback are only safe before any delta has been
+    forwarded; once output reached the caller, a mid-stream error propagates
+    to avoid duplicating partial assistant output. Cancellation and
+    :class:`ContextOverflowError` always propagate immediately.
     """
-    last_exc: BaseException | None = None
-    max_retries = retry.max_retries if retry is not None else 1
+    last_exc: Exception | None = None
+    max_attempts = retry.max_retries if retry is not None else 1
     for provider in providers:
         attempt = 0
         while True:
@@ -199,25 +215,19 @@ async def stream_with_fallback(
                     committed = True
                     yield delta
                 return
-            except BaseException as exc:
+            except (asyncio.CancelledError, ContextOverflowError):
+                raise
+            except Exception as exc:
                 last_exc = exc
                 if committed:
                     raise
-                if isinstance(exc, ContextOverflowError):
-                    raise
-                if retry is not None and attempt < max_retries and retry.retry_on(exc):
-                    import random as _random
-
-                    delay = min(
-                        retry.backoff_max, retry.backoff_base * (2 ** (attempt - 1))
-                    )
-                    # TODO: use better jitter strategy
-                    delay *= 0.5 + _random.random()
+                if retry is not None and attempt < max_attempts and retry.retry_on(exc):
+                    delay = retry.backoff_delay(attempt)
                     logger.warning(
                         "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",
                         getattr(provider, "name", repr(provider)),
                         attempt,
-                        max_retries,
+                        max_attempts,
                         delay,
                         type(exc).__name__,
                         truncate_repr(str(exc)),
@@ -226,4 +236,9 @@ async def stream_with_fallback(
                     continue
                 break
     if last_exc is not None:
+        if len(providers) > 1:
+            logger.error(
+                "run.fallback_exhausted: all providers failed: %s",
+                ", ".join(getattr(p, "name", repr(p)) for p in providers),
+            )
         raise last_exc

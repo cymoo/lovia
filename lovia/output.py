@@ -5,12 +5,13 @@ Two strategies are used:
 * If the provider supports JSON Schema natively (currently only OpenAI's
   ``response_format: {type: "json_schema"}``), we forward the schema and parse
   the assistant's final message.
-* Otherwise the runner installs a synthetic ``final_output`` tool whose
-  parameters match the requested type; the model is instructed to call it
-  exactly once, and its arguments become the structured output.
+* Otherwise the runner appends :func:`format_output_instructions` to the
+  system prompt; the model replies with a JSON document as its final message,
+  which is parsed leniently and validated against the schema. Parse failures
+  go through the agent's ``output_repair`` policy.
 
 This module keeps the structured-output decision in one place; the runner only
-needs to know whether a run has a ``StructuredOutput`` policy.
+needs to know whether a run has a :class:`StructuredOutput` policy.
 """
 
 from __future__ import annotations
@@ -22,9 +23,6 @@ from typing import Any, Protocol
 from ._types import JsonObject, JsonSchema, JsonValue
 from .exceptions import OutputValidationError
 from .schema import coerce_output, model_json_schema
-
-
-FINAL_OUTPUT_TOOL_NAME = "final_output"
 
 
 class OutputRepairStrategy(Protocol):
@@ -64,8 +62,9 @@ class StructuredOutput:
     """How the runner should obtain a typed final result for one run."""
 
     output_type: Any
-    # When True, ``final_output`` is injected as a tool the model must call.
-    use_tool_fallback: bool
+    # True when the provider enforces the schema via ``response_format``;
+    # False when the schema is conveyed through the system prompt instead.
+    use_native: bool
     # Pre-computed JSON schema for the output type (used by either path).
     schema: JsonSchema
 
@@ -79,8 +78,26 @@ def resolve_structured_output(
     schema = model_json_schema(output_type)
     return StructuredOutput(
         output_type=output_type,
-        use_tool_fallback=not supports_response_format,
+        use_native=supports_response_format,
         schema=schema,
+    )
+
+
+def format_output_instructions(spec: StructuredOutput) -> str:
+    """System-prompt block instructing the model to reply with schema-shaped JSON.
+
+    Used when the provider has no native ``response_format`` support. Lives in
+    the system prompt (rather than a synthetic tool description) so the
+    requirement stays visible regardless of context length or tool count.
+    """
+    return (
+        "## Output format\n"
+        "When you have finished the task, your final reply MUST be a single "
+        "JSON document matching this JSON Schema:\n\n"
+        f"{json.dumps(spec.schema, ensure_ascii=False)}\n\n"
+        "The final reply must contain only the JSON document — no surrounding "
+        "explanation, no markdown code fences. You may call tools as needed "
+        "before producing it."
     )
 
 
@@ -116,16 +133,76 @@ def parse_structured_output(spec: StructuredOutput, payload: str | JsonValue) ->
 
 
 def loads_lenient(text: str) -> Any:
-    """Parse JSON but raise :class:`OutputValidationError` on failure."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        snippet = (text[:200] + "…") if len(text) > 200 else text
-        raise OutputValidationError(
-            f"Model output is not valid JSON: {exc}",
-            hint=(
-                "Set output_repair=True on the Agent (default) to let the model "
-                "auto-correct, or pass an OutputRepairStrategy for custom retries."
-            ),
-            raw=snippet,
-        ) from exc
+    """Parse model output as JSON, tolerating common formatting noise.
+
+    Tries, in order: the text as-is, the text with markdown code fences
+    stripped, and the first balanced JSON object/array embedded in the text.
+    Raises :class:`OutputValidationError` when none of them parse.
+    """
+    candidates = [text, _strip_code_fences(text)]
+    embedded = _extract_json_block(text)
+    if embedded is not None:
+        candidates.append(embedded)
+    last_exc: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_exc = exc
+    snippet = (text[:200] + "…") if len(text) > 200 else text
+    raise OutputValidationError(
+        f"Model output is not valid JSON: {last_exc}",
+        hint=(
+            "Set output_repair=True on the Agent (default) to let the model "
+            "auto-correct, or pass an OutputRepairStrategy for custom retries."
+        ),
+        raw=snippet,
+    ) from last_exc
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove a single wrapping markdown code fence (```json ... ```)."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_newline = stripped.find("\n")
+    if first_newline == -1 or not stripped.endswith("```"):
+        return stripped
+    return stripped[first_newline + 1 : -3].strip()
+
+
+def _extract_json_block(text: str) -> str | None:
+    """Return the first balanced ``{...}`` or ``[...]`` block in ``text``.
+
+    Brace counting ignores braces inside JSON strings, so prose around the
+    document doesn't break extraction.
+    """
+    start = min(
+        (idx for idx in (text.find("{"), text.find("[")) if idx != -1),
+        default=-1,
+    )
+    if start == -1:
+        return None
+    open_ch = text[start]
+    close_ch = "}" if open_ch == "{" else "]"
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None

@@ -13,7 +13,16 @@ session data, and clone operations copy it immutably.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Literal,
+    TypeVar,
+    Union,
+)
 
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
@@ -41,11 +50,17 @@ TContext = TypeVar("TContext")
 # returns the system prompt. May be sync or async.
 InstructionsFn = Callable[[Any], "str | Awaitable[str]"]
 
-# A programmatic approval handler. Returns True to allow the call, False to
-# deny. May be sync or async (the runner awaits the result either way).
+# A programmatic approval decision: ``True``/``"allow"`` permits the call,
+# ``False``/``"deny"`` blocks it, and ``"ask"`` defers to the streaming
+# consumer (the call is denied if nobody resolves it — fail closed).
+ApprovalDecision = Union[bool, Literal["allow", "deny", "ask"]]
+
+# A programmatic approval handler consulted for tools gated by
+# ``needs_approval``. May be sync or async (the runner awaits the result
+# either way).
 ApprovalHandler = Callable[
     ["ToolCall", "RunContext"],
-    "bool | Awaitable[bool]",
+    "ApprovalDecision | Awaitable[ApprovalDecision]",
 ]
 
 
@@ -85,11 +100,13 @@ class Agent(Generic[TContext]):
         sandbox: Optional filesystem/process environment whose default tools
             are merged at run time.
         hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
-        approval_handler: Optional async callable consulted whenever a tool
-            with ``needs_approval`` is about to run. Returns ``True`` to allow,
-            ``False`` to deny. If ``None`` and no streaming consumer resolves
-            the :class:`~lovia.events.ApprovalRequired` event, the call is
-            denied by default.
+        approval_handler: Optional callable consulted whenever a tool with
+            ``needs_approval`` is about to run. Returns an
+            :data:`ApprovalDecision` — ``True``/``"allow"`` to permit,
+            ``False``/``"deny"`` to block, ``"ask"`` to defer to the streaming
+            consumer. If ``None`` and no streaming consumer resolves the
+            :class:`~lovia.events.ApprovalRequired` event, the call is denied
+            by default.
     """
 
     name: str

@@ -76,7 +76,7 @@ class SandboxLike(Protocol):
     """Configuration object that can open a sandbox session."""
 
     mode: str
-    close_on_run: bool
+    close_after_run: bool
 
     async def open(self) -> SandboxSession:
         """Open a sandbox session."""

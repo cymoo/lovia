@@ -161,6 +161,8 @@ class Runner:
         run_id: str,
         context: TContext | None = None,
         output_type: Any | None = None,
+        session: Session | None = None,
+        session_id: str | None = None,
         delete_checkpoint_on_success: bool = False,
         max_turns: int = 20,
         budget: RunBudget | None = None,
@@ -168,7 +170,12 @@ class Runner:
         retry: RetryPolicy | None = None,
         context_policy: ContextPolicy | None = None,
     ) -> RunResult:
-        """Resume a previously checkpointed run to completion."""
+        """Resume a previously checkpointed run to completion.
+
+        If the original run persisted to a :class:`Session`, pass the same
+        ``session``/``session_id`` here so the resumed run's transcript is
+        written back on completion.
+        """
         snapshot = await checkpointer.load(run_id)
         if snapshot is None:
             raise UserError(f"No snapshot found for run_id={run_id!r}")
@@ -190,6 +197,8 @@ class Runner:
             input=[],
             context=context,
             output_type=output_type,
+            session=session,
+            session_id=session_id,
             checkpointer=checkpointer,
             run_id=run_id,
             resume_from=snapshot,
@@ -278,12 +287,7 @@ def _result_from_completed_snapshot(
         output=output,
         entries=list(snapshot.entries),
         final_agent=agent,
-        usage=Usage(
-            input_tokens=snapshot.usage.input_tokens,
-            output_tokens=snapshot.usage.output_tokens,
-            cache_read_tokens=snapshot.usage.cache_read_tokens,
-            cache_write_tokens=snapshot.usage.cache_write_tokens,
-        ),
+        usage=snapshot.usage.clone(),
         turns=snapshot.turns,
     )
 

@@ -30,7 +30,7 @@ class Sandbox:
 
     backend: SandboxBackend
     spec: SandboxSpec
-    close_on_run: bool = True
+    close_after_run: bool = True
 
     @classmethod
     def local(
@@ -117,7 +117,7 @@ class _SandboxSessionBinding:
 
     session: SandboxSession
     mode: SandboxMode = "coding"
-    close_on_run: bool = False
+    close_after_run: bool = False
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.session, name)

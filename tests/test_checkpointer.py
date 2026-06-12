@@ -114,7 +114,7 @@ async def test_resume_completed_structured_snapshot_rehydrates_output() -> None:
         value: int
 
     cp = InMemoryCheckpointer()
-    provider = ScriptedProvider([call("final_output", {"value": 3})])
+    provider = ScriptedProvider([text('{"value": 3}')])
     agent = Agent(name="a", model=provider, output_type=Out)
 
     await Runner.run(agent, "hi", checkpointer=cp, run_id="typed")
@@ -131,7 +131,7 @@ async def test_resume_completed_snapshot_requires_run_level_output_type() -> Non
         value: int
 
     cp = InMemoryCheckpointer()
-    provider = ScriptedProvider([call("final_output", {"value": 3})])
+    provider = ScriptedProvider([text('{"value": 3}')])
     agent = Agent(name="a", model=provider)
 
     await Runner.run(agent, "hi", output_type=Out, checkpointer=cp, run_id="override")
@@ -334,7 +334,7 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
     cp = InMemoryCheckpointer()
     spanish = Agent(
         name="Spanish",
-        model=ScriptedProvider([call("final_output", {"value": 7})]),
+        model=ScriptedProvider([text('{"value": 7}')]),
     )
     english = Agent(
         name="English",
@@ -368,7 +368,7 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
     spanish = Agent(
         name="Spanish",
         output_type=Out,
-        model=ScriptedProvider([call("final_output", {"value": 9})]),
+        model=ScriptedProvider([text('{"value": 9}')]),
     )
     english = Agent(
         name="English",

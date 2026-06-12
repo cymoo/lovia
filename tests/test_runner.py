@@ -77,21 +77,22 @@ async def test_tool_exception_is_reported() -> None:
     assert "boom" in tool_msg.content
 
 
-async def test_structured_output_via_final_output_tool() -> None:
+async def test_structured_output_via_prompt_instructions() -> None:
     class Sum(BaseModel):
         result: int
 
-    # The scripted provider isn't an OpenAIChatProvider, so the runner will
-    # fall back to the synthetic ``final_output`` tool.
-    provider = ScriptedProvider(
-        [
-            call("final_output", {"result": 5}, call_id="c1"),
-        ]
-    )
+    # The scripted provider has no native response_format support, so the
+    # runner conveys the schema through the system prompt and parses the
+    # final text message as JSON.
+    provider = ScriptedProvider([text('{"result": 5}')])
     agent = Agent(name="t", model=provider, output_type=Sum)
     result = await Runner.run(agent, "what is 2+3?")
     assert isinstance(result.output, Sum)
     assert result.output.result == 5
+    # The schema contract lives in the system prompt, not a synthetic tool.
+    system_msg = provider.calls[0][0]
+    assert system_msg.role == "system"
+    assert "JSON Schema" in (system_msg.content or "")
 
 
 async def test_max_turns_enforced() -> None:

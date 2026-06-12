@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from .._types import JsonObject
 from ..agent import Agent
 from ..messages import Message
-from ..run_context import RunContext
 
 _LOG_REPR_MAX = 200
 
@@ -56,7 +54,3 @@ def supports_json_schema(agent: Agent) -> bool:
     if isinstance(provider, list):
         return all(bool(getattr(p, "supports_json_schema", False)) for p in provider)
     return bool(getattr(provider, "supports_json_schema", False))
-
-
-async def unreachable_invoke(args: JsonObject, ctx: RunContext) -> object:
-    raise AssertionError("final_output tool must be intercepted by the runner")

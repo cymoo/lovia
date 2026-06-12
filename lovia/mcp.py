@@ -193,7 +193,7 @@ class MCPConnection:
 
     Created by :meth:`MCPServer.open` / :meth:`MCPServer.session`; not usually
     constructed directly. Implements the same minimal surface the runtime needs
-    from a server (``close_on_run`` + :meth:`open`), so a persistent connection
+    from a server (``close_after_run`` + :meth:`open`), so a persistent connection
     can be placed directly on ``agent.mcp_servers``.
     """
 
@@ -206,7 +206,7 @@ class MCPConnection:
     timeout: float | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
-    close_on_run: bool = False
+    close_after_run: bool = False
     _session: Any = field(default=None, repr=False)
     _exit_stack: Any = field(default=None, repr=False)
     _tools: list[Tool] | None = field(default=None, repr=False)
@@ -375,11 +375,11 @@ class MCPConnection:
 class MCPServerLike(Protocol):
     """What the runtime needs from an ``agent.mcp_servers`` entry.
 
-    Satisfied by both :class:`MCPServer` config (``close_on_run=True``) and a
-    live :class:`MCPConnection` (``close_on_run=False``).
+    Satisfied by both :class:`MCPServer` config (``close_after_run=True``) and a
+    live :class:`MCPConnection` (``close_after_run=False``).
     """
 
-    close_on_run: bool
+    close_after_run: bool
 
     async def open(self) -> MCPConnection: ...
 
@@ -400,25 +400,25 @@ class MCPServer:
     timeout: float | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
-    close_on_run: bool = True
+    close_after_run: bool = True
 
     def _make_transport(self) -> Callable[[], Any]:  # pragma: no cover - overridden
         raise NotImplementedError
 
     async def open(self) -> MCPConnection:
         """Open a fresh connection owned by the caller (the runtime, per run)."""
-        return await self._open_connection(close_on_run=self.close_on_run)
+        return await self._open_connection(close_after_run=self.close_after_run)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[MCPConnection]:
         """Open a persistent connection for reuse across multiple runs."""
-        conn = await self._open_connection(close_on_run=False)
+        conn = await self._open_connection(close_after_run=False)
         try:
             yield conn
         finally:
             await conn.close()
 
-    async def _open_connection(self, *, close_on_run: bool) -> MCPConnection:
+    async def _open_connection(self, *, close_after_run: bool) -> MCPConnection:
         conn = MCPConnection(
             transport=self._make_transport(),
             prefix=self.name,
@@ -429,7 +429,7 @@ class MCPServer:
             timeout=self.timeout,
             result_renderer=self.result_renderer,
             auto_reconnect=self.auto_reconnect,
-            close_on_run=close_on_run,
+            close_after_run=close_after_run,
         )
         try:
             await conn._open_session()

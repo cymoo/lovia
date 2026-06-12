@@ -403,7 +403,7 @@ def input_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
     """Translate a system/user message prefix to :class:`InputEntry`\\ s.
 
     Only ``system`` and ``user`` roles are accepted — the runner uses this to
-    seed ``entries_log`` with the initial transcript. Assistant / tool messages
+    seed the run transcript. Assistant / tool messages
     in a snapshot are handled by :func:`messages_to_entries` instead.
     """
     out: list[TranscriptEntry] = []
@@ -489,7 +489,7 @@ def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
         elif isinstance(it, ReasoningEntry):
             pending_reasoning = (pending_reasoning or "") + it.content
         elif isinstance(it, AssistantTextEntry):
-            pending_content = it.content
+            pending_content = (pending_content or "") + it.content
         elif isinstance(it, ToolCallEntry):
             pending_calls.append(
                 ToolCall(id=it.call_id, name=it.name, arguments=it.arguments)

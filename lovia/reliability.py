@@ -128,6 +128,9 @@ class RetryPolicy:
     ``backoff_max`` define the exponential schedule; a small jitter is added
     so concurrent retries don't synchronize.
 
+    ``max_retries`` is the total number of *attempts* (the first call counts
+    as attempt 1), so ``max_retries=3`` means at most two retries.
+
     If you supply :class:`Agent.model` as a list, the policy is applied
     *per-provider*; the runner moves to the next provider once retries on the
     current one are exhausted.
@@ -138,6 +141,11 @@ class RetryPolicy:
     backoff_max: float = 8.0
     retry_on: RetryPredicate = field(default=_default_retry_on)
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
+
+    def backoff_delay(self, attempt: int) -> float:
+        """Jittered exponential delay before retrying after ``attempt`` failures."""
+        delay = min(self.backoff_max, self.backoff_base * (2 ** (attempt - 1)))
+        return delay * (0.5 + random.random())
 
     async def run(
         self,
@@ -151,12 +159,12 @@ class RetryPolicy:
             try:
                 await op()
                 return
-            except BaseException as exc:  # noqa: BLE001 - re-raised below
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 attempt += 1
                 if attempt >= self.max_retries or not self.retry_on(exc):
                     raise
                 if on_error is not None:
                     on_error(exc)
-                delay = min(self.backoff_max, self.backoff_base * (2 ** (attempt - 1)))
-                delay *= 0.5 + random.random()
-                await self.sleep(delay)
+                await self.sleep(self.backoff_delay(attempt))

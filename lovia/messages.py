@@ -77,6 +77,15 @@ class Usage:
         self.cache_read_tokens += other.cache_read_tokens
         self.cache_write_tokens += other.cache_write_tokens
 
+    def clone(self) -> Usage:
+        """Return an independent copy (``Usage`` is mutated in place by ``add``)."""
+        return Usage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+        )
+
 
 @dataclass
 class AssistantTurn:

@@ -63,6 +63,12 @@ class RunHandle:
                 if isinstance(ev, events.RunCompleted):
                     self._result = ev.result
                 yield ev
+        except GeneratorExit:
+            # The consumer broke out of iteration. Don't record this as the
+            # run's error — a later ``result()`` call should report
+            # abandonment, not re-raise GeneratorExit.
+            self._done.set()
+            raise
         except BaseException as exc:
             self._error = exc
             self._done.set()
@@ -80,7 +86,10 @@ class RunHandle:
         if self._error is not None:
             raise self._error
         if self._result is None:
-            raise RuntimeError("Run completed without producing a result")
+            raise RuntimeError(
+                "Run was abandoned before completion (the event stream was "
+                "closed before RunCompleted was emitted)"
+            )
         return self._result
 
     def __await__(self):  # type: ignore[no-untyped-def]

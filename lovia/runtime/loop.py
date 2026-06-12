@@ -1,79 +1,72 @@
 """Internal runtime that drives an :class:`Agent` to completion.
 
-This is the only place in the framework that touches mutable state. It
+This is the only place in the framework that touches mutable run state. It
 orchestrates:
 
-* Building the message list from instructions, optional session history,
-  optional skill catalog, and the user input.
-* Calling the provider in a loop, parsing tool calls, dispatching them, and
-  feeding results back into the conversation.
-* Handling structured output, multi-agent handoffs, human approval, and
-  event hooks.
+* Building the transcript from instructions, optional session history, and
+  the user input.
+* The turn loop: one iteration is one full turn — a model call followed by
+  the execution of any tool calls it requested.
+* Structured output, multi-agent handoffs, human approval, context
+  compaction, checkpointing, and event hooks.
 
 The public facade in :mod:`lovia.runner` owns the user-facing methods; this
-module owns the mutable orchestration state.
+module owns the orchestration. All mutable run state lives in
+:class:`~lovia.runtime.run_state.RunState`.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, cast
-
-from .._types import JsonObject, JsonValue
+from collections import Counter
+from contextlib import AsyncExitStack
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
-    from ..messages import AssistantTurn, Message
+    from ..messages import Message
 
 from .. import events
+from .checkpoint import CheckpointWriter
 from .model_turn import stream_model_turn
-from .state import TurnState
+from .run_state import ModelTurnResult, RunState, RuntimeState
 from .utils import (
     agent_model_label,
     input_preview,
     supports_json_schema,
     truncate_repr,
-    unreachable_invoke,
 )
 from .tool_calls import ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
-from ..checkpointer import Checkpointer, RunSnapshot, RunStatus
-from ..context import (
-    CompactingContextPolicy,
-    CompactionRequest,
-    ContextPolicy,
-    ContextResult,
-)
+from ..checkpointer import Checkpointer, RunSnapshot
+from ..context import CompactingContextPolicy, CompactionRequest, ContextPolicy, ContextResult
 from ..exceptions import (
     ContextOverflowError,
     MaxTurnsExceeded,
     OutputValidationError,
-    ProviderError,
-    RunCancelled,
     UserError,
 )
 from ..guardrails import check_input_guardrails, check_output_guardrails
 from ..handoff import Handoff, build_handoff_tool
 from ..hooks import dispatch
 from ..transcript import (
+    InputEntry,
+    ToolCallEntry,
+    ToolResultEntry,
     TranscriptEntry,
-    messages_to_entries,
     entries_to_messages,
-    to_json_safe,
+    messages_to_entries,
 )
-from ..transcript import InputEntry as _InputEntry
-from ..transcript import ToolCallEntry as _ToolCallEntry
-from ..transcript import ToolResultEntry as _ToolResultEntry
-from ..messages import ToolCall, Usage, system
+from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import (
-    FINAL_OUTPUT_TOOL_NAME,
     DefaultOutputRepair,
     StructuredOutput,
-    resolve_structured_output,
+    format_output_instructions,
     loads_lenient,
     parse_structured_output,
+    resolve_structured_output,
 )
+from ..providers.base import Provider
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -81,29 +74,20 @@ from ..session import Session
 from ..tools import Tool
 from ..tracing import NoopTracer, Span, Tracer
 
-
 logger = logging.getLogger(__name__)
 
-Cleanup = Callable[[], Awaitable[None]]
-
-
-@dataclass
-class _BootstrapState:
-    entries_log: list[TranscriptEntry]
-    run_ctx: RunContext[object]
-    mcp_tools: list[Tool]
-    mcp_cleanup: list[Cleanup]
-    structured_output: StructuredOutput | None
-    tools_by_name: dict[str, Tool]
-    turns: int
+# Sentinel distinguishing "no final output yet" from a legitimate ``None``
+# output (e.g. an Optional output_type).
+_UNSET: object = object()
 
 
 class RunLoop:
-    """The actual event-producing async iterator.
+    """The event-producing async iterator behind :meth:`Runner.stream`.
 
-    Kept as a class (rather than a long async generator) because it carries a
-    small amount of mutable state across turns: the active agent, the
-    transcript, accumulated usage, and the resolved structured-output policy.
+    Construction wires up configuration; :meth:`stream` drives the run. All
+    per-run mutable state lives in a :class:`RunState` created during
+    bootstrap, so handoffs mutate one object instead of threading new values
+    through return tuples.
     """
 
     def __init__(
@@ -129,7 +113,7 @@ class RunLoop:
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
-        self.agent = initial_agent
+        self.initial_agent = initial_agent
         self.user_input = user_input
         self.context = context
         self.session = session
@@ -139,68 +123,26 @@ class RunLoop:
         self.budget = budget
         self.cancel_token = cancel_token
         self.retry = retry
-        self.checkpointer = checkpointer
         self.context_policy: ContextPolicy = context_policy or CompactingContextPolicy()
-        # TODO: 根本不知道 runtime 里保存的是啥...太不利于以后重构或维护了吧....
-        runtime = resume_from.runtime if resume_from is not None else {}
-        # Tracks the input-token count from the previous turn so
-        # ContextPolicy can prefer real usage over heuristic estimates.
-        self._last_input_tokens = self._runtime_int(runtime, "last_input_tokens")
-        # Per-run scratch the context policy may use to cache derived state
-        # (e.g. a running summary). Owned here so it cannot leak across runs.
-        self._compaction_scratch = self._runtime_dict(runtime, "compaction_scratch")
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
         self.resume_from = resume_from
-        self.delete_checkpoint_on_success = delete_checkpoint_on_success
-        self.approvals = ApprovalChannel()
-        # Per-call addendum appended to the initial agent's system prompt.
-        # Applied once on the initial transcript; not re-applied across
-        # handoffs (the new agent uses its own instructions verbatim).
         self.append_instructions = append_instructions
-        # ``output_type=None`` means "use the active agent default", while
-        # ``output_type=str`` means "force free-form text" for the whole run.
-        # TODO: output_type_override 搞的也太复杂了吧...
+        # ``output_type=None`` means "use the active agent's output_type";
+        # any other value is a run-wide final-output contract.
         self.output_type_override = output_type_override
-        source = runtime.get("output_type_source")
-        if self.output_type_override is not None:
-            self._output_type_source = "run_override"
-        else:
-            self._output_type_source = (
-                source if source in ("agent", "run_override") else "agent"
-            )
-        self._output_repair_attempts = self._runtime_int(
-            runtime, "output_repair_attempts"
-        ) or 0
+        self.approvals = ApprovalChannel()
+        self.checkpoints = CheckpointWriter(
+            checkpointer=checkpointer,
+            run_id=self.run_id,
+            delete_on_success=delete_checkpoint_on_success,
+        )
 
-    @staticmethod
-    def _runtime_int(runtime: JsonObject, key: str) -> int | None:
-        value = runtime.get(key)
-        if isinstance(value, int):
-            return value
-        return None
-
-    @staticmethod
-    def _runtime_dict(runtime: JsonObject, key: str) -> dict[str, Any]:
-        value = runtime.get(key)
-        if isinstance(value, dict):
-            return dict(value)
-        return {}
-
-    def _resolve_output_type(self, agent: Agent) -> object:
-        """Return the output type to use for ``agent``.
-
-        A Runner-level override is a run-wide final-output contract. When no
-        override was supplied, each active agent uses its declared
-        ``output_type``.
-        """
-        if self.output_type_override is not None:
-            self._output_type_source = "run_override"
-            return self.output_type_override
-        self._output_type_source = "agent"
-        return agent.output_type
+    # ------------------------------------------------------------------ #
+    # Stream driver
+    # ------------------------------------------------------------------ #
 
     async def stream(self) -> AsyncIterator[events.Event]:
-        agent = self.agent
+        agent = self.initial_agent
         tracer: Tracer = agent.tracer or NoopTracer()
 
         with tracer.span(
@@ -209,448 +151,461 @@ class RunLoop:
             run_id=self.run_id,
             resumed=self.resume_from is not None,
         ) as run_span:
-            async for ev in self._stream_inner(agent, tracer, run_span):
+            async for ev in self._stream_inner(tracer, run_span):
                 yield ev
 
     async def _stream_inner(
-        self,
-        agent: Agent,
-        tracer: Tracer,
-        run_span: Span,
+        self, tracer: Tracer, run_span: Span
     ) -> AsyncIterator[events.Event]:
-        bootstrap = await self._bootstrap_phase(agent)
-        entries_log = bootstrap.entries_log
-        run_ctx = bootstrap.run_ctx
-        mcp_tools = bootstrap.mcp_tools
-        mcp_cleanup = bootstrap.mcp_cleanup
-        structured_output = bootstrap.structured_output
-        tools_by_name = bootstrap.tools_by_name
-        tool_processor = ToolCallProcessor(
-            approvals=self.approvals,
-            cancel_token=self.cancel_token,
-            budget=self.budget,
-        )
+        async with AsyncExitStack() as resources:
+            state = await self._bootstrap(resources)
+            processor = ToolCallProcessor(
+                approvals=self.approvals,
+                cancel_token=self.cancel_token,
+                budget=self.budget,
+            )
 
-        ev_start = events.RunStarted(agent=agent)
-        yield ev_start
-        await dispatch(agent.hooks, ev_start)
-        model_label = agent_model_label(agent)
-        logger.info(
-            "run.start: agent=%r model=%s input=%s",
-            agent.name,
-            model_label,
-            truncate_repr(input_preview(self.user_input)),
-        )
-        output: object | None = None
-        turns = bootstrap.turns
-        turn_in_progress = False
-        terminal_checkpoint_saved = False
-        try:
-            # Input guardrails run once on the fully-built initial transcript.
-            # Skip on resume — they already ran on the original input.
-            if agent.input_guardrails and self.resume_from is None:
-                await check_input_guardrails(
-                    agent.input_guardrails,
-                    entries_to_messages(entries_log),
-                    run_ctx,
-                )
+            yield await self._emit(state, events.RunStarted(agent=state.agent))
+            logger.info(
+                "run.start: agent=%r model=%s input=%s",
+                state.agent.name,
+                agent_model_label(state.agent),
+                truncate_repr(input_preview(self.user_input)),
+            )
 
-            while True:
-                pending_calls = self._pending_tool_calls(entries_log)
-                if pending_calls:
-                    state = TurnState()
-                    turn_agent = agent
-                    for call in pending_calls:
-                        async for ev in tool_processor.process(
-                            call,
-                            agent=agent,
-                            tools_by_name=tools_by_name,
-                            run_ctx=run_ctx,
-                            tracer=tracer,
-                            structured_output=structured_output,
-                            entries=entries_log,
-                            state=state,
+            run_completed = False
+            turn_durable = True
+            try:
+                # Input guardrails run once on the fully-built initial
+                # transcript. Skip on resume — they already ran on the
+                # original input.
+                if state.agent.input_guardrails and self.resume_from is None:
+                    await check_input_guardrails(
+                        state.agent.input_guardrails,
+                        entries_to_messages(state.transcript),
+                        state.run_ctx,
+                    )
+
+                if self.resume_from is not None:
+                    async for ev in self._drain_pending_calls(
+                        state, processor, resources, tracer
+                    ):
+                        yield ev
+
+                output: object = _UNSET
+                while output is _UNSET:
+                    self._check_limits(state)
+                    state.turns += 1
+                    yield await self._emit(
+                        state, events.TurnStarted(agent=state.agent, turn=state.turns)
+                    )
+                    logger.debug(
+                        "run.turn.start: agent=%r turn=%d", state.agent.name, state.turns
+                    )
+
+                    turn_durable = False
+                    turn = ModelTurnResult()
+                    async for ev in self._model_phase(state, turn, tracer):
+                        yield ev
+                    assistant = turn.assistant
+                    if assistant is None:
+                        # Provider exited without emitting ``done`` — shouldn't
+                        # happen for well-behaved adapters, but be defensive.
+                        raise RuntimeError(
+                            "Provider stream ended without final message"
+                        )
+                    self._record_usage(state, assistant)
+                    state.transcript.extend(turn.turn_entries)
+                    yield await self._emit(
+                        state, events.MessageCompleted(entries=turn.turn_entries)
+                    )
+                    # Persist requested tool calls before executing them, so a
+                    # crash mid-execution can resume by draining the calls
+                    # that have no matching result yet.
+                    await self.checkpoints.save_running(state)
+                    turn_durable = True
+
+                    if assistant.tool_calls:
+                        async for ev in self._tool_phase(
+                            state, processor, assistant.tool_calls, tracer
                         ):
                             yield ev
-                            await dispatch(agent.hooks, ev)
-                        await self._snapshot(agent, entries_log, run_ctx, turns)
+                    else:
+                        output = await self._finalize_output(state, assistant)
 
-                    # TODO: 有3处 emit turn ended...好绕
-                    ev_te = events.TurnEnded(agent=turn_agent, turn=turns)
-                    yield ev_te
-                    await dispatch(turn_agent.hooks, ev_te)
-
-                    if state.final_via_tool is not None:
-                        output = state.final_via_tool
-                        break
-
-                    if state.handoff_signal is not None:
-                        logger.info(
-                            "run.handoff: %r → %r",
-                            agent.name,
-                            state.handoff_signal.target.name,
-                        )
-                        # TODO: 利用返回值来覆盖上面的变量，oh no...
-                        (
-                            agent,
-                            structured_output,
-                            tools_by_name,
-                            handoff_ev,
-                        ) = await self._handoff_phase(
-                            agent,
-                            state,
-                            run_ctx,
-                            tracer,
-                            entries_log,
-                            mcp_tools,
-                            mcp_cleanup,
-                        )
-                        yield handoff_ev
-                        await dispatch(agent.hooks, handoff_ev)
-
-                    await self._snapshot(agent, entries_log, run_ctx, turns)
-                    # TODO: 有必要continue吗，此时 pending_calls 已经被清空了吧...
-                    continue
-
-                if turns >= self.max_turns:
-                    logger.warning(
-                        "run.max_turns: agent=%r turns=%d/%d",
-                        agent.name,
-                        turns,
-                        self.max_turns,
+                    yield await self._emit(
+                        state, events.TurnEnded(agent=state.agent, turn=state.turns)
                     )
-                    raise MaxTurnsExceeded(
-                        f"Run exceeded max_turns={self.max_turns} without producing output"
-                    )
-                if self.cancel_token is not None:
-                    self.cancel_token.check()
-                if self.budget is not None:
-                    self.budget.check(run_ctx.usage)
-                turns += 1
-                turn_in_progress = True
-                logger.debug(
-                    "run.turn.start: agent=%r turn=%d",
-                    agent.name,
-                    turns,
+                    if state.pending_handoff is not None:
+                        async for ev in self._apply_handoff(state, resources, tracer):
+                            yield ev
+                    await self.checkpoints.save_running(state)
+
+                result = await self._finalize(state, output, run_span)
+                await self.checkpoints.complete(state, result.output)
+                run_completed = True
+
+                yield await self._emit(state, events.RunCompleted(result=result))
+                logger.info(
+                    "run.done: agent=%r turns=%d tokens=%d(in=%d out=%d)",
+                    result.final_agent.name,
+                    result.turns,
+                    result.usage.total_tokens,
+                    result.usage.input_tokens,
+                    result.usage.output_tokens,
                 )
-                ev_turn = events.TurnStarted(agent=agent, turn=turns)
-                yield ev_turn
-                await dispatch(agent.hooks, ev_turn)
+            except GeneratorExit:
+                # The consumer abandoned the stream; not a run failure.
+                raise
+            except BaseException as exc:
+                if not run_completed:
+                    if not turn_durable:
+                        # The in-flight turn left nothing in the transcript.
+                        state.turns = max(0, state.turns - 1)
+                    await self.checkpoints.save_terminal(state, exc)
+                if isinstance(exc, Exception):
+                    yield await self._emit(state, events.ErrorOccurred(error=exc))
+                raise
 
-                providers = agent.resolve_providers()
-                # TODO: 多处 new TurnState()，太绕了...
-                state = TurnState()
+    # ------------------------------------------------------------------ #
+    # Phases
+    # ------------------------------------------------------------------ #
 
-                # ContextPolicy: build the per-call VIEW of the transcript.
-                # The view is sent to the provider for this turn only; the real
-                # ``entries_log`` (and the Session) are never modified here.
-                primary_provider = providers[0]
-                policy_model = getattr(primary_provider, "model", None)
-                req = CompactionRequest(
-                    entries=entries_log,
-                    provider=primary_provider,
-                    model=policy_model,
-                    last_input_tokens=self._last_input_tokens,
-                    session_id=self.session_id,
-                    run_id=self.run_id,
-                    overflow=False,
-                    # TODO: _compaction_scratch 这个又是啥...
-                    scratch=self._compaction_scratch,
-                )
-                ctx_result = await self.context_policy.compact(req)
-                view = await self._build_view(agent, entries_log, ctx_result)
-                if ctx_result.changed:
-                    async for ev in self._emit_compacted(
-                        entries_log, view, ctx_result, reactive=False
-                    ):
-                        yield ev
-                        await dispatch(agent.hooks, ev)
-                # Reactive path: provider may report ContextOverflowError mid-stream.
-                # Ask the policy for its more aggressive view, then retry the turn
-                # exactly once. A second overflow propagates.
-                try:
-                    async for ev in stream_model_turn(
-                        agent=agent,
-                        providers=providers,
-                        input_entries=view,
-                        tools_by_name=tools_by_name,
-                        structured_output=structured_output,
-                        tracer=tracer,
-                        turn=turns,
-                        state=state,
-                        retry=self.retry,
-                    ):
-                        yield ev
-                        await dispatch(agent.hooks, ev)
-                except ContextOverflowError as overflow:
-                    logger.warning(
-                        "context.overflow: provider raised; rebuilding a more "
-                        "aggressive view (%s)",
-                        overflow,
-                    )
-                    req.overflow = True
-                    ctx_result = await self.context_policy.compact(req)
-                    if not ctx_result.changed:
-                        # Policy refused / couldn't shrink — surface original.
-                        logger.error(
-                            "context.overflow: policy could not shrink "
-                            "transcript; surfacing ContextOverflowError"
-                        )
-                        raise
-                    view = await self._build_view(agent, entries_log, ctx_result)
-                    async for ev in self._emit_compacted(
-                        entries_log, view, ctx_result, reactive=True
-                    ):
-                        yield ev
-                        await dispatch(agent.hooks, ev)
-                    # TODO: ...
-                    state = TurnState()
-                    async for ev in stream_model_turn(
-                        agent=agent,
-                        providers=providers,
-                        input_entries=view,
-                        tools_by_name=tools_by_name,
-                        structured_output=structured_output,
-                        tracer=tracer,
-                        turn=turns,
-                        state=state,
-                        retry=self.retry,
-                    ):
-                        yield ev
-                        await dispatch(agent.hooks, ev)
-                assistant = state.assistant
+    async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
+        """Connect tools, build the initial transcript, and assemble RunState."""
+        agent = self.initial_agent
+        runtime = (
+            RuntimeState.from_dict(self.resume_from.runtime)
+            if self.resume_from is not None
+            else RuntimeState()
+        )
+        structured_output = resolve_structured_output(
+            self._resolve_output_type(agent, runtime), supports_json_schema(agent)
+        )
+        system_extra = self.append_instructions
 
-                if assistant is None:
-                    # Provider exited without emitting ``done`` - shouldn't
-                    # happen for well-behaved adapters, but be defensive.
-                    raise RuntimeError("Provider stream ended without final message")
+        mcp_tools = await self._connect_mcp(agent, resources)
+        sandbox_tools = await self._connect_sandbox(agent, resources)
+        tools_by_name = self._collect_tools(agent, mcp_tools, sandbox_tools)
 
-                run_ctx.usage.add(assistant.usage)
-                # Remember the real input-token count so the next turn's
-                # ContextPolicy can size compaction against actual usage
-                # rather than the chars/4 heuristic.
-                if assistant.usage and assistant.usage.input_tokens:
-                    self._last_input_tokens = assistant.usage.input_tokens
-                if self.budget is not None:
-                    self.budget.check(run_ctx.usage)
-                turn_entries = state.turn_entries or []
-                entries_log.extend(turn_entries)
-                turn_in_progress = False
-                ev_msg = events.MessageCompleted(entries=turn_entries)
-                yield ev_msg
-                await dispatch(agent.hooks, ev_msg)
-
-                # No tool calls -> we're done. Parse text or JSON output.
-                if not assistant.tool_calls:
-                    try:
-                        output = await self._finalize_text_output(
-                            assistant, structured_output
-                        )
-                    except OutputValidationError as exc:
-                        repair_prompt = self._build_repair_prompt(
-                            agent, exc, self._output_repair_attempts + 1
-                        )
-                        if repair_prompt is not None and structured_output is not None:
-                            self._output_repair_attempts += 1
-                            logger.warning(
-                                "run.output_repair: agent=%r attempt=%d "
-                                "schema=%s error=%s",
-                                agent.name,
-                                self._output_repair_attempts,
-                                exc.output_type_name,
-                                truncate_repr(str(exc)),
-                            )
-                            entries_log.append(
-                                _InputEntry(role="user", content=repair_prompt)
-                            )
-                            ev_end = events.TurnEnded(agent=agent, turn=turns)
-                            yield ev_end
-                            await dispatch(agent.hooks, ev_end)
-                            await self._snapshot(agent, entries_log, run_ctx, turns)
-                            # TODO: ...
-                            continue
-                        await dispatch(agent.hooks, events.ErrorOccurred(error=exc))
-                        raise
-                    ev_end = events.TurnEnded(agent=agent, turn=turns)
-                    yield ev_end
-                    await dispatch(agent.hooks, ev_end)
-                    break
-
-                # Persist tool calls before executing them. Resume drains any
-                # calls without matching ToolResultEntry by call_id.
-                await self._snapshot(agent, entries_log, run_ctx, turns)
-                # TODO: 各种 continue 和 break，太难理解整个流程了...
-                continue
-
-            result = await self._finalize_phase(
-                agent,
-                entries_log,
-                run_ctx,
-                turns,
-                output,
-                structured_output,
-                run_span,
-            )
-            await self._complete_checkpoint(result)
-            terminal_checkpoint_saved = True
-
-            done = events.RunCompleted(result=result)
-            yield done
-            await dispatch(agent.hooks, done)
-            logger.info(
-                "run.done: agent=%r turns=%d tokens=%d(in=%d out=%d)",
-                result.final_agent.name,
-                result.turns,
-                result.usage.total_tokens,
-                result.usage.input_tokens,
-                result.usage.output_tokens,
-            )
-
-        # TODO: 这个 catch 离上面的 try 有个几公里了吧...
-        except Exception as exc:
-            if not terminal_checkpoint_saved:
-                snapshot_turns = max(0, turns - 1) if turn_in_progress else turns
-                if self._is_resumable_exception(exc):
-                    await self._snapshot_interrupted_safely(
-                        agent, entries_log, run_ctx, snapshot_turns, exc
-                    )
-                else:
-                    await self._snapshot_failed_safely(
-                        agent, entries_log, run_ctx, snapshot_turns, exc
-                    )
-            raise
-        finally:
-            # TODO: loop 负责清理合适吗...
-            for cleanup in mcp_cleanup:
-                try:
-                    await cleanup()
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-
-    # ------------------------------------------------------------------ helpers
-
-    async def _bootstrap_phase(self, agent: Agent) -> _BootstrapState:
-        """Initialize transcript, tools, structured output, and run context."""
         if self.resume_from is not None:
-            entries_log: list[TranscriptEntry] = list(self.resume_from.entries)
+            transcript: list[TranscriptEntry] = list(self.resume_from.entries)
         else:
-            entries_log = await self._build_initial_entries(agent)
+            transcript = await self._build_initial_entries(
+                agent, structured_output, system_extra
+            )
+
         run_ctx = RunContext(
             context=self.context,
-            entries=entries_log,
+            entries=transcript,
             agent=agent,
             session_id=self.session_id,
         )
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
 
-        mcp_cleanup: list[Cleanup] = []
-        try:
-            mcp_tools, mcp_cleanup = await self._connect_mcp(agent)
-            # TODO: sandbox 的 cleanup 使用方来做更合适吧...
-            sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
-            # TODO: 这是什么代码...
-            mcp_cleanup.extend(sandbox_cleanup)
-            structured_output = resolve_structured_output(
-                self._resolve_output_type(agent), supports_json_schema(agent)
-            )
-            tools_by_name = self._collect_tools(
-                agent, mcp_tools, sandbox_tools, structured_output
-            )
-        except Exception:
-            for cleanup in mcp_cleanup:
-                try:
-                    await cleanup()
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-            raise
-        turns = self.resume_from.turns if self.resume_from is not None else 0
-        return _BootstrapState(
-            entries_log=entries_log,
-            run_ctx=run_ctx,
-            mcp_tools=mcp_tools,
-            mcp_cleanup=mcp_cleanup,
-            structured_output=structured_output,
+        return RunState(
+            agent=agent,
+            transcript=transcript,
             tools_by_name=tools_by_name,
-            turns=turns,
+            structured_output=structured_output,
+            run_ctx=run_ctx,
+            runtime=runtime,
+            turns=self.resume_from.turns if self.resume_from is not None else 0,
+            system_extra=system_extra,
         )
 
-    async def _handoff_phase(
+    async def _drain_pending_calls(
         self,
-        agent: Agent,
-        state: TurnState,
-        run_ctx: RunContext[object],
+        state: RunState,
+        processor: ToolCallProcessor,
+        resources: AsyncExitStack,
         tracer: Tracer,
-        entries_log: list[TranscriptEntry],
-        mcp_tools: list[Tool],
-        cleanup: list[Cleanup],
-    ) -> tuple[Agent, StructuredOutput | None, dict[str, Tool], events.HandoffOccurred]:
-        """Switch active agent and rebuild agent-specific run state."""
-        assert state.handoff_signal is not None
-        prev_agent = agent
-        with tracer.span(
-            "handoff",
-            from_agent=prev_agent.name,
-            to_agent=state.handoff_signal.target.name,
-        ):
-            agent = state.handoff_signal.target
-            run_ctx.agent = agent
-            structured_output = resolve_structured_output(
-                self._resolve_output_type(agent), supports_json_schema(agent)
-            )
-            # TODO: 没有添加 handoff agent 的 mcp 的清理？我怀疑有 BUG...
-            # TODO: 有必要 loop 来负责清理吗？让调用方自己做更合适吧...
-            sandbox_tools, sandbox_cleanup = await self._connect_sandbox(agent)
-            cleanup.extend(sandbox_cleanup)
-            tools_by_name = self._collect_tools(
-                agent, mcp_tools, sandbox_tools, structured_output
-            )
-            entries_log[:] = await self._reset_for_handoff(
-                entries_log, agent, state.handoff_signal.handoff
-            )
-        return (
-            agent,
-            structured_output,
-            tools_by_name,
-            events.HandoffOccurred(from_agent=prev_agent, to_agent=agent),
+    ) -> AsyncIterator[events.Event]:
+        """Execute tool calls a resumed snapshot left without results.
+
+        The interrupted turn already streamed its model output in the
+        original process, so this re-enters that turn (same ``turn`` number)
+        for the tool-execution half only.
+        """
+        pending = pending_tool_calls(state.transcript)
+        if not pending:
+            return
+        logger.info(
+            "run.resume: draining %d pending tool call(s) for turn %d",
+            len(pending),
+            state.turns,
         )
+        yield await self._emit(
+            state, events.TurnStarted(agent=state.agent, turn=state.turns)
+        )
+        async for ev in self._tool_phase(state, processor, pending, tracer):
+            yield ev
+        yield await self._emit(
+            state, events.TurnEnded(agent=state.agent, turn=state.turns)
+        )
+        if state.pending_handoff is not None:
+            async for ev in self._apply_handoff(state, resources, tracer):
+                yield ev
+        await self.checkpoints.save_running(state)
 
-    async def _finalize_phase(
-        self,
-        agent: Agent,
-        entries_log: list[TranscriptEntry],
-        run_ctx: RunContext[object],
-        turns: int,
-        output: object | None,
-        structured_output: StructuredOutput | None,
-        run_span: Span,
-    ) -> RunResult:
-        """Run final guardrails, persistence, usage propagation, and result build."""
-        if structured_output is not None and output is None:
-            raise UserError(
-                f"Agent {agent.name!r} ended without producing structured output"
+    async def _model_phase(
+        self, state: RunState, turn: ModelTurnResult, tracer: Tracer
+    ) -> AsyncIterator[events.Event]:
+        """Run one model call against the context policy's view of the transcript.
+
+        The view is per-call only: ``state.transcript`` (and the Session) are
+        never modified by compaction. When the provider reports a context
+        overflow before any output reached the consumer, the policy gets one
+        chance to produce a more aggressive view and the call is retried; a
+        second overflow — or one after partial output — propagates.
+        """
+        providers = state.agent.resolve_providers()
+        primary = providers[0]
+        request = CompactionRequest(
+            entries=state.transcript,
+            provider=primary,
+            model=getattr(primary, "model", None),
+            last_input_tokens=state.runtime.last_input_tokens,
+            session_id=self.session_id,
+            run_id=self.run_id,
+            overflow=False,
+            scratch=state.runtime.compaction_scratch,
+        )
+        ctx_result = await self.context_policy.compact(request)
+        view = await self._build_view(state, ctx_result)
+        if ctx_result.changed:
+            yield await self._emit(
+                state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
 
-        if agent.output_guardrails:
-            await check_output_guardrails(agent.output_guardrails, output, run_ctx)
+        forwarded = False
+        try:
+            async for ev in self._call_model(state, providers, view, turn, tracer):
+                forwarded = True
+                yield ev
+            return
+        except ContextOverflowError as overflow:
+            if forwarded:
+                # Partial output already reached the consumer; retrying the
+                # turn would stream it again.
+                raise
+            logger.warning(
+                "context.overflow: provider raised; rebuilding a more "
+                "aggressive view (%s)",
+                overflow,
+            )
+            request.overflow = True
+            ctx_result = await self.context_policy.compact(request)
+            if not ctx_result.changed:
+                logger.error(
+                    "context.overflow: policy could not shrink transcript; "
+                    "surfacing ContextOverflowError"
+                )
+                raise
+            view = await self._build_view(state, ctx_result)
+
+        yield await self._emit(
+            state, self._compacted_event(state, view, ctx_result, reactive=True)
+        )
+        turn.assistant = None
+        turn.turn_entries = []
+        async for ev in self._call_model(state, providers, view, turn, tracer):
+            yield ev
+
+    async def _call_model(
+        self,
+        state: RunState,
+        providers: list[Provider],
+        view: list[TranscriptEntry],
+        turn: ModelTurnResult,
+        tracer: Tracer,
+    ) -> AsyncIterator[events.Event]:
+        async for ev in stream_model_turn(
+            agent=state.agent,
+            providers=providers,
+            input_entries=view,
+            tools_by_name=state.tools_by_name,
+            structured_output=state.structured_output,
+            tracer=tracer,
+            turn=state.turns,
+            result=turn,
+            retry=self.retry,
+        ):
+            yield await self._emit(state, ev)
+
+    async def _tool_phase(
+        self,
+        state: RunState,
+        processor: ToolCallProcessor,
+        calls: list[ToolCall],
+        tracer: Tracer,
+    ) -> AsyncIterator[events.Event]:
+        for call in calls:
+            async for ev in processor.process(call, state=state, tracer=tracer):
+                yield await self._emit(state, ev)
+            await self.checkpoints.save_running(state)
+
+    async def _apply_handoff(
+        self, state: RunState, resources: AsyncExitStack, tracer: Tracer
+    ) -> AsyncIterator[events.Event]:
+        """Switch the active agent in place and rebuild agent-specific state.
+
+        The new agent gets its own MCP/sandbox connections and tool set; the
+        previous agent's run-scoped connections stay open until the run ends
+        (closing them eagerly would add failure modes for no gain).
+        """
+        signal = state.pending_handoff
+        assert signal is not None
+        state.pending_handoff = None
+        prev_agent = state.agent
+        target = signal.target
+        logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
+        with tracer.span(
+            "handoff", from_agent=prev_agent.name, to_agent=target.name
+        ):
+            state.agent = target
+            state.run_ctx.agent = target
+            # The per-call addendum applies to the initial agent only.
+            state.system_extra = None
+            state.structured_output = resolve_structured_output(
+                self._resolve_output_type(target, state.runtime),
+                supports_json_schema(target),
+            )
+            mcp_tools = await self._connect_mcp(target, resources)
+            sandbox_tools = await self._connect_sandbox(target, resources)
+            state.tools_by_name = self._collect_tools(
+                target, mcp_tools, sandbox_tools
+            )
+            await self._reset_transcript_for_handoff(state, signal.handoff)
+
+        ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=target)
+        if prev_agent.hooks is not None and prev_agent.hooks is not target.hooks:
+            await dispatch(prev_agent.hooks, ev)
+        yield await self._emit(state, ev)
+
+    async def _finalize_output(
+        self, state: RunState, assistant: AssistantTurn
+    ) -> object:
+        """Parse the final assistant message, or arm one output-repair retry.
+
+        Returns the run output, or :data:`_UNSET` after appending a repair
+        prompt so the loop rolls another turn.
+        """
+        try:
+            return self._parse_output(state, assistant.content or "")
+        except OutputValidationError as exc:
+            attempt = state.runtime.output_repair_attempts + 1
+            repair_prompt = self._build_repair_prompt(state.agent, exc, attempt)
+            if repair_prompt is None or state.structured_output is None:
+                raise
+            state.runtime.output_repair_attempts = attempt
+            logger.warning(
+                "run.output_repair: agent=%r attempt=%d schema=%s error=%s",
+                state.agent.name,
+                attempt,
+                exc.output_type_name,
+                truncate_repr(str(exc)),
+            )
+            state.transcript.append(InputEntry(role="user", content=repair_prompt))
+            return _UNSET
+
+    async def _finalize(
+        self, state: RunState, output: object, run_span: Span
+    ) -> RunResult:
+        """Run output guardrails, persistence, and usage propagation."""
+        if state.agent.output_guardrails:
+            await check_output_guardrails(
+                state.agent.output_guardrails, output, state.run_ctx
+            )
 
         result = RunResult(
             output=output,
-            entries=entries_log,
-            final_agent=agent,
-            usage=run_ctx.usage,
-            turns=turns,
+            entries=state.transcript,
+            final_agent=state.agent,
+            usage=state.run_ctx.usage,
+            turns=state.turns,
         )
 
         if self.session is not None:
-            await self._persist_session(entries_log)
+            await self._persist_session(state.transcript)
 
         if self.parent_usage is not None:
-            self.parent_usage.add(run_ctx.usage)
+            self.parent_usage.add(state.run_ctx.usage)
 
-        run_span.set_attribute("turns", turns)
-        run_span.set_attribute("total_tokens", run_ctx.usage.total_tokens)
+        run_span.set_attribute("turns", state.turns)
+        run_span.set_attribute("total_tokens", state.run_ctx.usage.total_tokens)
         return result
+
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+
+    async def _emit(self, state: RunState, ev: events.Event) -> events.Event:
+        """Dispatch ``ev`` to the active agent's hooks, then hand it back to
+        be yielded to the stream consumer (``yield await self._emit(...)``)."""
+        await dispatch(state.agent.hooks, ev)
+        return ev
+
+    def _check_limits(self, state: RunState) -> None:
+        if state.turns >= self.max_turns:
+            logger.warning(
+                "run.max_turns: agent=%r turns=%d/%d",
+                state.agent.name,
+                state.turns,
+                self.max_turns,
+            )
+            raise MaxTurnsExceeded(
+                f"Run exceeded max_turns={self.max_turns} without producing output"
+            )
+        if self.cancel_token is not None:
+            self.cancel_token.check()
+        if self.budget is not None:
+            self.budget.check(state.run_ctx.usage)
+
+    def _record_usage(self, state: RunState, assistant: AssistantTurn) -> None:
+        state.run_ctx.usage.add(assistant.usage)
+        # Remember the real input-token count so the next turn's
+        # ContextPolicy can size compaction against actual usage rather
+        # than the chars/4 heuristic.
+        if assistant.usage and assistant.usage.input_tokens:
+            state.runtime.last_input_tokens = assistant.usage.input_tokens
+        if self.budget is not None:
+            self.budget.check(state.run_ctx.usage)
+
+    def _resolve_output_type(self, agent: Agent, runtime: RuntimeState) -> object:
+        """Return the output type to use for ``agent``.
+
+        A Runner-level override is a run-wide final-output contract. When no
+        override was supplied, each active agent uses its declared
+        ``output_type``.
+        """
+        if self.output_type_override is not None:
+            runtime.output_type_source = "run_override"
+            return self.output_type_override
+        runtime.output_type_source = "agent"
+        return agent.output_type
+
+    def _parse_output(self, state: RunState, content: str) -> object:
+        if state.structured_output is None:
+            return content
+        # The model either used the native ``response_format`` path or was
+        # instructed via the system prompt to reply with schema-shaped JSON.
+        # Either way the final text must parse as JSON describing the target
+        # type; failures surface as ``OutputValidationError`` and may be
+        # repaired in the main loop if the agent opts in.
+        try:
+            return parse_structured_output(
+                state.structured_output, loads_lenient(content)
+            )
+        except OutputValidationError as exc:
+            if exc.output_type_name is None:
+                exc.output_type_name = getattr(
+                    state.structured_output.output_type,
+                    "__name__",
+                    str(state.structured_output.output_type),
+                )
+            raise
 
     def _build_repair_prompt(
         self, agent: Agent, exc: OutputValidationError, attempt: int
@@ -668,62 +623,82 @@ class RunLoop:
             policy = DefaultOutputRepair()
         return policy.build_prompt(exc, attempt)
 
-    async def _build_initial_entries(self, agent: Agent) -> list[TranscriptEntry]:
+    async def _build_initial_entries(
+        self,
+        agent: Agent,
+        structured_output: StructuredOutput | None,
+        system_extra: str | None,
+    ) -> list[TranscriptEntry]:
         entries: list[TranscriptEntry] = []
-        system_text = await self._system_prompt(agent, extra=self.append_instructions)
+        system_text = await self._system_prompt(
+            agent, structured_output, extra=system_extra
+        )
         if system_text:
-            entries.append(_InputEntry(role="system", content=system_text))
+            entries.append(InputEntry(role="system", content=system_text))
 
         if self.session is not None:
-            history_entries = await self.session.load(self.session_id)  # type: ignore[arg-type]
-            entries.extend(history_entries)
+            assert self.session_id is not None  # validated in __init__
+            entries.extend(await self.session.load(self.session_id))
 
         if isinstance(self.user_input, str):
-            entries.append(_InputEntry(role="user", content=self.user_input))
+            entries.append(InputEntry(role="user", content=self.user_input))
         else:
             entries.extend(messages_to_entries(self.user_input))
         return entries
 
-    async def _system_prompt(self, agent: Agent, *, extra: "str | None" = None) -> str:
-        text = await agent.render_instructions(self.context, extra=extra)
-        if agent.sandbox is not None:
-            sandbox_instructions = agent.sandbox.instructions()
-            if sandbox_instructions:
-                text = f"{text}\n\n{sandbox_instructions}".strip()
-        if agent.skills is not None:
-            text = f"{text}\n\n{agent.skills.instructions()}".strip()
-        return text
-
-    async def _reset_for_handoff(
+    async def _system_prompt(
         self,
-        entries: list[TranscriptEntry],
         agent: Agent,
-        handoff: Handoff | None,
-    ) -> list[TranscriptEntry]:
-        """Swap the leading system message when an agent handoff occurs.
+        structured_output: StructuredOutput | None,
+        *,
+        extra: "str | None" = None,
+    ) -> str:
+        """Render the full system prompt for ``agent``.
 
-        If the originating :class:`Handoff` declares an ``input_filter``, it is
-        applied to the inherited transcript (excluding the old system prompt)
-        before the new system prompt is prepended.
+        Concatenates the agent's instructions (plus the optional per-run
+        ``extra`` addendum), sandbox and skills instructions, and — for
+        providers without native ``response_format`` support — the
+        structured-output contract.
         """
-        new_system = await self._system_prompt(agent)
-        body = entries_to_messages(entries)
-        # Drop the leading system message if present; preserve the rest.
-        if body and body[0].role == "system":
+        parts = [await agent.render_instructions(self.context, extra=extra)]
+        if agent.sandbox is not None:
+            parts.append(agent.sandbox.instructions())
+        if agent.skills is not None:
+            parts.append(agent.skills.instructions())
+        if structured_output is not None and not structured_output.use_native:
+            parts.append(format_output_instructions(structured_output))
+        return "\n\n".join(part for part in parts if part).strip()
+
+    async def _reset_transcript_for_handoff(
+        self, state: RunState, handoff: Handoff | None
+    ) -> None:
+        """Swap the leading system message for the new active agent.
+
+        Operates on entries directly so nothing is lost in translation. Only
+        when the originating :class:`Handoff` declares an ``input_filter`` is
+        the body round-tripped through the (lossy, message-shaped) filter API.
+        """
+        new_system = await self._system_prompt(
+            state.agent, state.structured_output, extra=state.system_extra
+        )
+        body: list[TranscriptEntry] = list(state.transcript)
+        if body and isinstance(body[0], InputEntry) and body[0].role == "system":
             body = body[1:]
-        # TODO: 直接传入 filter 不是更易懂...
         if handoff is not None and handoff.input_filter is not None:
-            body = list(handoff.input_filter(body))
-        if new_system:
-            body = [system(new_system), *body]
-        return messages_to_entries(body)
+            body = messages_to_entries(
+                list(handoff.input_filter(entries_to_messages(body)))
+            )
+        head: list[TranscriptEntry] = (
+            [InputEntry(role="system", content=new_system)] if new_system else []
+        )
+        # In-place so RunContext.entries keeps observing the same list.
+        state.transcript[:] = [*head, *body]
 
     def _collect_tools(
         self,
         agent: Agent,
         mcp_tools: list[Tool],
         sandbox_tools: list[Tool],
-        structured_output: StructuredOutput | None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -749,310 +724,121 @@ class RunLoop:
             add_tool("mcp", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
-            tool = build_handoff_tool(handoff_obj)
-            add_tool("handoff", tool)
+            add_tool("handoff", build_handoff_tool(handoff_obj))
         if agent.skills is not None:
             for t in agent.skills.tools():
                 add_tool("skills", t)
-        if structured_output is not None and structured_output.use_tool_fallback:
-            # Insert the synthetic ``final_output`` tool. Note we don't register
-            # it as a real :class:`Tool` because the runner intercepts the call
-            # by name; we only need its schema to be advertised to the model.
-            add_tool(
-                "output",
-                Tool(
-                    name=FINAL_OUTPUT_TOOL_NAME,
-                    # TODO: oh no....这个 prompt 太简陋了....上下文长一些或工具多一些，我不觉得模型能记得这个指令...
-                    description="Call once with the final answer.",
-                    parameters=structured_output.schema,
-                    invoke=unreachable_invoke,
-                ),
-            )
         return tools
 
-    async def _connect_mcp(self, agent: Agent) -> tuple[list[Tool], list[Cleanup]]:
+    async def _connect_mcp(
+        self, agent: Agent, resources: AsyncExitStack
+    ) -> list[Tool]:
         tools: list[Tool] = []
-        cleanup: list[Cleanup] = []
-        try:
-            for server in agent.mcp_servers:
-                conn = await server.open()
-                # TODO: close_on_run 这个变量起的真差劲
-                if server.close_on_run:
-                    cleanup.append(conn.close)
-                tools.extend(conn.tools())
-        except Exception:
-            for close in reversed(cleanup):
-                try:
-                    await close()
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-            raise
-        return tools, cleanup
+        for server in agent.mcp_servers:
+            conn = await server.open()
+            if server.close_after_run:
+                _push_cleanup(resources, conn.close)
+            tools.extend(conn.tools())
+        return tools
 
-    async def _connect_sandbox(self, agent: Agent) -> tuple[list[Tool], list[Cleanup]]:
+    async def _connect_sandbox(
+        self, agent: Agent, resources: AsyncExitStack
+    ) -> list[Tool]:
         if agent.sandbox is None:
-            return [], []
+            return []
         session = await agent.sandbox.open()
-        cleanup: list[Cleanup] = []
-        if agent.sandbox.close_on_run:
-            cleanup.append(session.close)
-        try:
-            tools = agent.sandbox.tools(session)
-        except Exception:
-            for close in cleanup:
-                try:
-                    await close()
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-            raise
-        return tools, cleanup
+        if agent.sandbox.close_after_run:
+            _push_cleanup(resources, session.close)
+        return agent.sandbox.tools(session)
 
-    def _pending_tool_calls(self, entries: list[TranscriptEntry]) -> list[ToolCall]:
-        # TODO: 这个算法实现的有些复杂...不易懂
-        completed_counts: dict[str, int] = {}
-        for entry in entries:
-            if isinstance(entry, _ToolResultEntry):
-                completed_counts[entry.call_id] = (
-                    completed_counts.get(entry.call_id, 0) + 1
-                )
-
-        seen_calls: dict[str, int] = {}
-        pending: list[ToolCall] = []
-        for entry in entries:
-            if not isinstance(entry, _ToolCallEntry):
-                continue
-            index = seen_calls.get(entry.call_id, 0)
-            seen_calls[entry.call_id] = index + 1
-            # TODO: 绕绕绕
-            if index >= completed_counts.get(entry.call_id, 0):
-                pending.append(
-                    ToolCall(
-                        id=entry.call_id,
-                        name=entry.name,
-                        arguments=entry.arguments,
-                    )
-                )
-        return pending
-
-    def _snapshot_runtime(self) -> JsonObject:
-        # TODO: 整个代码仓充斥着无意义的 cast
-        # TODO: snapshot_runtime 这名字起的...而且返回值是 dict，太容易出错了吧...
-        return cast(
-            JsonObject,
-            to_json_safe(
-                {
-                    "last_input_tokens": self._last_input_tokens,
-                    "compaction_scratch": self._compaction_scratch,
-                    "output_repair_attempts": self._output_repair_attempts,
-                    "output_type_source": self._output_type_source,
-                }
-            )
-            or {},
-        )
-
-    async def _complete_checkpoint(self, result: RunResult) -> None:
-        if self.checkpointer is None or self.run_id is None:
-            return
-        if self.delete_checkpoint_on_success:
-            await self.checkpointer.delete(self.run_id)
-            return
-        output = to_json_safe(result.output)
-        error: JsonObject | None = None
-        if output is None and result.output is not None:
-            error = {
-                "type": "OutputNotSerializable",
-                "message": (
-                    "Final output could not be serialized into JSON-safe "
-                    "checkpoint payload."
-                ),
-            }
-        await self._snapshot(
-            result.final_agent,
-            result.entries,
-            RunContext(
-                context=self.context,
-                entries=result.entries,
-                agent=result.final_agent,
-                usage=result.usage,
-                session_id=self.session_id,
-            ),
-            result.turns,
-            status="completed",
-            output=output,
-            error=error,
-        )
-
-    async def _snapshot_failed_safely(
-        self,
-        agent: Agent,
-        entries_log: list[TranscriptEntry],
-        run_ctx: RunContext,
-        turns: int,
-        exc: Exception,
-    ) -> None:
-        try:
-            await self._snapshot(
-                agent,
-                entries_log,
-                run_ctx,
-                turns,
-                status="failed",
-                error=self._error_payload(exc),
-            )
-        except Exception:  # noqa: BLE001 - don't mask the original run failure
-            logger.exception("checkpoint.failed_snapshot: could not persist failure")
-
-    async def _snapshot_interrupted_safely(
-        self,
-        agent: Agent,
-        entries_log: list[TranscriptEntry],
-        run_ctx: RunContext,
-        turns: int,
-        exc: Exception,
-    ) -> None:
-        try:
-            await self._snapshot(
-                agent,
-                entries_log,
-                run_ctx,
-                turns,
-                status="interrupted",
-                error=self._error_payload(exc),
-            )
-        except Exception:  # noqa: BLE001 - don't mask the original run failure
-            logger.exception(
-                "checkpoint.interrupted_snapshot: could not persist interruption"
-            )
-
-    def _is_resumable_exception(self, exc: Exception) -> bool:
-        if isinstance(exc, RunCancelled):
-            return True
-        if isinstance(exc, ProviderError):
-            return getattr(exc, "retryable", None) is not False
-        return isinstance(exc, (TimeoutError, ConnectionError))
-
-    def _error_payload(self, exc: Exception) -> JsonObject:
-        return {
-            "type": type(exc).__name__,
-            "message": str(exc),
-        }
-
-    async def _snapshot(
-        self,
-        agent: Agent,
-        entries_log: list[TranscriptEntry],
-        run_ctx: RunContext,
-        turns: int,
-        *,
-        status: RunStatus = "running",
-        output: object | None = None,
-        error: JsonObject | None = None,
-    ) -> None:
-        """Persist a :class:`RunSnapshot` if a checkpointer is configured."""
-        # TODO: 传入 usage 不就行了...为什么还要传入 run_ctx...
-        if self.checkpointer is None or self.run_id is None:
-            return
-        snapshot = RunSnapshot(
-            run_id=self.run_id,
-            agent_name=agent.name,
-            entries=list(entries_log),
-            usage=Usage(
-                input_tokens=run_ctx.usage.input_tokens,
-                output_tokens=run_ctx.usage.output_tokens,
-                cache_read_tokens=run_ctx.usage.cache_read_tokens,
-                cache_write_tokens=run_ctx.usage.cache_write_tokens,
-            ),
-            turns=turns,
-            status=status,
-            output=to_json_safe(output),
-            error=error,
-            runtime=self._snapshot_runtime(),
-        )
-        await self.checkpointer.save(snapshot)
-
-    async def _finalize_text_output(
-        self,
-        assistant: AssistantTurn,
-        structured_output: StructuredOutput | None,
-    ) -> object:
-        # TODO: 传入 assistant.content 不就行了...为啥需要整个 assistant
-        if structured_output is None:
-            return assistant.content or ""
-        # Either the model used the structured ``response_format`` path or it
-        # was supposed to call the synthetic ``final_output`` tool. In both
-        # cases, the remaining text content should parse as JSON describing the
-        # target type. Any failure here surfaces as ``OutputValidationError``
-        # and may be repaired in the main loop if the agent opts in.
-        try:
-            return parse_structured_output(
-                structured_output,
-                cast(JsonValue, loads_lenient(assistant.content or "")),
-            )
-        except OutputValidationError as exc:
-            if exc.output_type_name is None:
-                exc.output_type_name = getattr(
-                    structured_output.output_type,
-                    "__name__",
-                    str(structured_output.output_type),
-                )
-            raise
-
-    async def _persist_session(self, entries_log: list[TranscriptEntry]) -> None:
+    async def _persist_session(self, transcript: list[TranscriptEntry]) -> None:
         # Replace stored transcript with the latest (simple and predictable).
         # System prompts are agent-owned and re-rendered each run, so any
-        # system :class:`InputEntry` is excluded from the persisted
-        # history.
+        # system :class:`InputEntry` is excluded from the persisted history.
         assert self.session is not None and self.session_id is not None
         body = [
-            it
-            for it in entries_log
-            if not (isinstance(it, _InputEntry) and it.role == "system")
+            entry
+            for entry in transcript
+            if not (isinstance(entry, InputEntry) and entry.role == "system")
         ]
         await self.session.replace(self.session_id, body)
 
     async def _build_view(
-        self,
-        agent: Agent,
-        entries_log: list[TranscriptEntry],
-        result: ContextResult,
+        self, state: RunState, result: ContextResult
     ) -> list[TranscriptEntry]:
         """Return the per-call view to send to the provider.
 
-        Compaction is view-only: ``entries_log`` is never mutated. When the
-        policy dropped the leading system message (e.g. it summarized the head),
-        re-prepend it so provider adapters still see one.
+        Compaction is view-only: ``state.transcript`` is never mutated. When
+        the policy dropped the leading system message (e.g. it summarized the
+        head), re-prepend it so provider adapters still see one.
         """
-        # TODO: 有必要传入 entries_log 吗？如果 result.change == False，result.entries 不就等于 entries_log 吗？
         if not result.changed:
-            return entries_log
+            return state.transcript
         view = result.entries
-        # TODO: context compaction 根本就不应该压缩 system message 啊...
-        if view and isinstance(view[0], _InputEntry) and view[0].role == "system":
+        if view and isinstance(view[0], InputEntry) and view[0].role == "system":
             return view
-        system_text = await self._system_prompt(agent)
+        system_text = await self._system_prompt(
+            state.agent, state.structured_output, extra=state.system_extra
+        )
         if system_text:
-            return [_InputEntry(role="system", content=system_text), *view]
+            return [InputEntry(role="system", content=system_text), *view]
         return view
 
-    async def _emit_compacted(
+    def _compacted_event(
         self,
-        entries_before: list[TranscriptEntry],
+        state: RunState,
         view: list[TranscriptEntry],
         result: ContextResult,
         *,
         reactive: bool,
-    ) -> AsyncIterator[events.Event]:
-        """Emit ``ContextCompacted``. Does not mutate state or persist anything."""
-        ev = events.ContextCompacted(
+    ) -> events.ContextCompacted:
+        return events.ContextCompacted(
             session_id=self.session_id,
-            entries_before=list(entries_before),
+            entries_before=list(state.transcript),
             entries_after=list(view),
             summary=result.summary,
             reactive=reactive,
             reason=result.reason or "context_policy",
             metadata=result.metadata,
         )
-        yield ev
 
 
-__all__ = ["RunLoop"]
+def pending_tool_calls(entries: list[TranscriptEntry]) -> list[ToolCall]:
+    """Tool calls in ``entries`` that have no matching result yet.
+
+    Duplicate call ids are paired by occurrence order: each result consumes
+    one earlier call with the same id.
+    """
+    unconsumed_results = Counter(
+        entry.call_id for entry in entries if isinstance(entry, ToolResultEntry)
+    )
+    pending: list[ToolCall] = []
+    for entry in entries:
+        if not isinstance(entry, ToolCallEntry):
+            continue
+        if unconsumed_results[entry.call_id] > 0:
+            unconsumed_results[entry.call_id] -= 1
+        else:
+            pending.append(
+                ToolCall(
+                    id=entry.call_id, name=entry.name, arguments=entry.arguments
+                )
+            )
+    return pending
+
+
+def _push_cleanup(
+    resources: AsyncExitStack, close: Callable[[], Awaitable[None]]
+) -> None:
+    """Register ``close`` for best-effort teardown when the run ends."""
+
+    async def safe_close() -> None:
+        try:
+            await close()
+        except Exception:
+            logger.debug("run.cleanup: connection close failed", exc_info=True)
+
+    resources.push_async_callback(safe_close)
+
+
+__all__ = ["RunLoop", "pending_tool_calls"]

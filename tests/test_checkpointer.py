@@ -344,7 +344,9 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
         handoffs=[spanish],
     )
 
-    await Runner.run(english, "Hola", output_type=Out, checkpointer=cp, run_id="handoff")
+    await Runner.run(
+        english, "Hola", output_type=Out, checkpointer=cp, run_id="handoff"
+    )
     snap = await cp.load("handoff")
     assert snap is not None
     assert snap.runtime["output_type_source"] == "run_override"

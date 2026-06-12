@@ -48,7 +48,9 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
 def _render_file_content(result: Any, ctx: RunContext[Any]) -> Any:
     if not isinstance(result, FileContent):
         return result
-    header = f"{result.path} (lines {result.start}-{result.end} of {result.total_lines})"
+    header = (
+        f"{result.path} (lines {result.start}-{result.end} of {result.total_lines})"
+    )
     if not result.content:
         return f"{header}\n(empty)"
     return f"{header}\n{result.content}"
@@ -214,7 +216,10 @@ async def grep_files(
     path: Annotated[str, "Workspace-relative directory to search."] = ".",
     glob: Annotated[
         str | None,
-        Field(default=None, description="Only search files matching this glob, e.g. '*.py'."),
+        Field(
+            default=None,
+            description="Only search files matching this glob, e.g. '*.py'.",
+        ),
     ] = None,
     ignore_case: Annotated[
         bool, Field(default=False, description="Case-insensitive matching.")

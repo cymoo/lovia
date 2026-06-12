@@ -32,9 +32,28 @@ _SKIPPED_HTML_ELEMENTS = frozenset(
 )
 _BLOCK_HTML_ELEMENTS = frozenset(
     {
-        "p", "div", "section", "article", "header", "footer", "main",
-        "br", "hr", "li", "ul", "ol", "table", "tr", "blockquote", "pre",
-        "h1", "h2", "h3", "h4", "h5", "h6",
+        "p",
+        "div",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "main",
+        "br",
+        "hr",
+        "li",
+        "ul",
+        "ol",
+        "table",
+        "tr",
+        "blockquote",
+        "pre",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
     }
 )
 
@@ -64,9 +83,7 @@ class _TextExtractor(HTMLParser):
             self._chunks.append(data)
 
     def text(self) -> str:
-        lines = (
-            " ".join(line.split()) for line in "".join(self._chunks).splitlines()
-        )
+        lines = (" ".join(line.split()) for line in "".join(self._chunks).splitlines())
         out: list[str] = []
         blank = False
         for line in lines:
@@ -136,7 +153,9 @@ async def http_fetch(
     ] = 30.0,
     max_chars: Annotated[
         int,
-        Field(default=20_000, ge=100, le=200_000, description="Max characters returned."),
+        Field(
+            default=20_000, ge=100, le=200_000, description="Max characters returned."
+        ),
     ] = 20_000,
 ) -> str:
     scheme = urlparse(url).scheme.lower()

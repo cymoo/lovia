@@ -20,7 +20,10 @@ from lovia.workspace import LocalWorkspaceSession
 
 def _ctx(session: LocalWorkspaceSession | None = None) -> RunContext:
     return RunContext(
-        context=None, entries=[], agent=None, workspace=session  # type: ignore[arg-type]
+        context=None,
+        entries=[],
+        agent=None,
+        workspace=session,  # type: ignore[arg-type]
     )
 
 
@@ -64,9 +67,7 @@ async def test_edit_and_write_round_trip(session, tmp_path) -> None:
     assert result.ok is True
     assert "BETA" in (tmp_path / "a.txt").read_text()
 
-    created = await write_file.invoke(
-        {"path": "sub/new.txt", "content": "hi"}, ctx
-    )
+    created = await write_file.invoke({"path": "sub/new.txt", "content": "hi"}, ctx)
     assert created.action == "created"
 
 

@@ -227,9 +227,7 @@ class LocalWorkspaceSession:
                     )
                 updated = text.replace(old, new)
                 p.write_text(updated, encoding="utf-8")
-                return EditResult(
-                    ok=True, path=rel, replacements=count, changed=True
-                )
+                return EditResult(ok=True, path=rel, replacements=count, changed=True)
 
             return await asyncio.to_thread(_edit)
 

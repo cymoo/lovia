@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..agent import Agent
 from ..messages import Message
+from ..providers.base import Provider
 
 _LOG_REPR_MAX = 200
 
@@ -48,9 +49,13 @@ def input_preview(user_input: str | list[Message]) -> str:
     return ""
 
 
-def supports_json_schema(agent: Agent) -> bool:
-    """Whether the agent's provider can use OpenAI-style ``response_format``."""
-    provider = agent.resolve_provider() if isinstance(agent.model, str) else agent.model
-    if isinstance(provider, list):
-        return all(bool(getattr(p, "supports_json_schema", False)) for p in provider)
-    return bool(getattr(provider, "supports_json_schema", False))
+def supports_json_schema(providers: list[Provider]) -> bool:
+    """Whether every provider in the fallback chain supports ``response_format``.
+
+    The native structured-output path is only safe when *all* providers in
+    the chain accept the schema payload — a fallback provider that doesn't
+    would reject the request mid-run.
+    """
+    return bool(providers) and all(
+        bool(getattr(p, "supports_json_schema", False)) for p in providers
+    )

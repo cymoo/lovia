@@ -207,10 +207,10 @@ class AnthropicProvider:
         response_format: JsonObject | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]:
+        self._check_ready()
         payload = self._build_payload(
             entries, tools, response_format, settings, stream=True
         )
-        self._check_ready()
 
         # Anthropic streams content blocks by index. We only need to remember
         # id/name per block so we can echo them on every argument delta.
@@ -461,16 +461,14 @@ def _to_anthropic_messages(
 
         if isinstance(entry, ToolResultEntry):
             flush_assistant()
-            _append_user_message(
-                out,
-                [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": entry.call_id,
-                        "content": entry.output,
-                    }
-                ],
-            )
+            result_block: JsonObject = {
+                "type": "tool_result",
+                "tool_use_id": entry.call_id,
+                "content": entry.output,
+            }
+            if entry.is_error:
+                result_block["is_error"] = True
+            _append_user_message(out, [result_block])
             continue
 
         if isinstance(entry, ReasoningEntry):
@@ -534,10 +532,15 @@ def _is_context_overflow(status: int, body: str) -> bool:
 # Context-window table for recent, commonly used Anthropic aliases. Date-pinned
 # snapshots and retired Claude 3.x/older 4.x aliases fall back to reactive
 # overflow handling.
+#
+# Values are the *default* windows. The 1M-token variants are gated behind the
+# ``context-1m`` beta header, which this adapter does not send by default;
+# advertising 1M here would make proactive compaction trigger far too late.
+# Users who enable the beta can size their ContextPolicy explicitly.
 _ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
-    "claude-opus-4-8": 1_000_000,
-    "claude-opus-4-7": 1_000_000,
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-sonnet-4-5": 1_000_000,
+    "claude-opus-4-8": 200_000,
+    "claude-opus-4-7": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-sonnet-4-5": 200_000,
     "claude-haiku-4-5": 200_000,
 }

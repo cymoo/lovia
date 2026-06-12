@@ -22,6 +22,7 @@ from .._types import JsonObject
 from ..agent import Agent
 from ..messages import AssistantTurn
 from ..output import StructuredOutput
+from ..providers.base import Provider
 from ..run_context import RunContext
 from ..tools import Tool
 from ..transcript import TranscriptEntry, to_json_safe
@@ -102,6 +103,11 @@ class RunState:
     structured_output: StructuredOutput | None
     run_ctx: RunContext[Any]
     runtime: RuntimeState
+    # The active agent's resolved provider fallback chain. Resolved once per
+    # agent (at bootstrap and on each handoff) so HTTP clients are reused
+    # across turns; providers built from string specs are closed when the run
+    # ends, user-supplied Provider instances are left to their owner.
+    providers: list[Provider] = field(default_factory=list)
     turns: int = 0
     # Per-call system-prompt addendum (``append_instructions``). Applied to
     # the initial agent only; cleared on the first handoff so subsequent

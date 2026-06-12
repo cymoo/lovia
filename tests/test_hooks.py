@@ -93,3 +93,30 @@ async def test_multiple_handlers_same_event_type_run_in_order() -> None:
     await Runner.run(agent, "go")
 
     assert order == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_handler_exception_is_logged_and_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hooks = AgentHooks()
+    seen: list[str] = []
+
+    @hooks.on(events.RunCompleted)
+    def boom(ev: events.RunCompleted) -> None:
+        raise RuntimeError("observer crashed")
+
+    @hooks.on(events.RunCompleted)
+    def later(ev: events.RunCompleted) -> None:
+        seen.append("later")
+
+    provider = ScriptedProvider([text("hi")])
+    agent = Agent(name="t", model=provider, hooks=hooks)
+    with caplog.at_level("ERROR", logger="lovia.hooks"):
+        result = await Runner.run(agent, "go")
+
+    # The run completes, subsequent handlers still fire, and the failure
+    # is logged with its traceback.
+    assert result.output == "hi"
+    assert seen == ["later"]
+    assert any(r.exc_info for r in caplog.records)

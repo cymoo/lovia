@@ -88,6 +88,14 @@ def test_tool_annotated_field_metadata_carried() -> None:
     assert schema["maximum"] == 10
 
 
+def test_every_public_export_resolves() -> None:
+    """Each name in ``lovia.__all__`` must exist (guards ``import *``)."""
+    import lovia
+
+    missing = [name for name in lovia.__all__ if not hasattr(lovia, name)]
+    assert missing == []
+
+
 def test_loviaerror_hint_appears_in_str() -> None:
     exc = LoviaError("something broke", hint="try again with --verbose")
     s = str(exc)

@@ -106,7 +106,13 @@ def test_message_to_openai_serializes_inline_file_blocks() -> None:
 
     assert out["content"] == [
         {"type": "text", "text": "summarize"},
-        {"type": "file", "file": {"file_data": "cGRm", "filename": "doc.pdf"}},
+        {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,cGRm",
+                "filename": "doc.pdf",
+            },
+        },
     ]
 
 

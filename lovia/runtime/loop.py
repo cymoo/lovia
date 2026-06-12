@@ -280,8 +280,9 @@ class RunLoop:
             if self.resume_from is not None
             else RuntimeState()
         )
+        providers = self._resolve_providers(agent, resources)
         structured_output = resolve_structured_output(
-            self._resolve_output_type(agent, runtime), supports_json_schema(agent)
+            self._resolve_output_type(agent, runtime), supports_json_schema(providers)
         )
         system_extra = self.append_instructions
 
@@ -313,6 +314,7 @@ class RunLoop:
             structured_output=structured_output,
             run_ctx=run_ctx,
             runtime=runtime,
+            providers=providers,
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
         )
@@ -362,7 +364,7 @@ class RunLoop:
         chance to produce a more aggressive view and the call is retried; a
         second overflow — or one after partial output — propagates.
         """
-        providers = state.agent.resolve_providers()
+        providers = state.providers
         primary = providers[0]
         request = CompactionRequest(
             entries=state.transcript,
@@ -470,9 +472,10 @@ class RunLoop:
             state.run_ctx.agent = target
             # The per-call addendum applies to the initial agent only.
             state.system_extra = None
+            state.providers = self._resolve_providers(target, resources)
             state.structured_output = resolve_structured_output(
                 self._resolve_output_type(target, state.runtime),
-                supports_json_schema(target),
+                supports_json_schema(state.providers),
             )
             mcp_tools = await self._connect_mcp(target, resources)
             workspace, workspace_tools = await self._connect_workspace(
@@ -734,6 +737,25 @@ class RunLoop:
             for t in agent.skills.tools():
                 add_tool("skills", t)
         return tools
+
+    def _resolve_providers(
+        self, agent: Agent, resources: AsyncExitStack
+    ) -> list[Provider]:
+        """Resolve ``agent``'s provider chain once for the rest of the run.
+
+        Providers built here from string specs are owned by the run: their
+        lazily-created HTTP clients are reused across turns and closed when
+        the run ends. User-supplied :class:`Provider` instances are never
+        closed — their lifecycle belongs to the caller.
+        """
+        specs = agent.model if isinstance(agent.model, list) else [agent.model]
+        providers = agent.resolve_providers()
+        for spec, provider in zip(specs, providers):
+            if isinstance(spec, str):
+                aclose = getattr(provider, "aclose", None)
+                if callable(aclose):
+                    _push_cleanup(resources, aclose)
+        return providers
 
     async def _connect_mcp(
         self, agent: Agent, resources: AsyncExitStack

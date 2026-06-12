@@ -291,10 +291,10 @@ class OpenAIChatProvider:
         response_format: JsonObject | None = None,
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]:
+        self._check_ready()
         payload = self._build_payload(
             entries, tools, response_format, settings, stream=True
         )
-        self._check_ready()
 
         # We only need to remember the per-index tool-call id+name so we can
         # echo them on every argument delta — the runner does the final

@@ -286,3 +286,53 @@ async def test_agent_as_tool_propagates_usage() -> None:
     # ``Usage(input_tokens=1, output_tokens=1)``).
     assert result.usage.input_tokens >= 3
     assert result.usage.output_tokens >= 3
+
+
+# ------------------------------------------------------------------------- #
+# Provider lifecycle
+# ------------------------------------------------------------------------- #
+
+
+async def test_string_spec_provider_resolved_once_and_closed() -> None:
+    """A provider built from a string spec is created once per run — so its
+    HTTP client is reused across turns — and closed when the run ends."""
+    from lovia.providers import _REGISTRY, register_provider
+
+    created: list[ScriptedProvider] = []
+
+    class _ClosableScripted(ScriptedProvider):
+        def __init__(self) -> None:
+            super().__init__([call("add", {"a": 2, "b": 3}, call_id="c1"), text("5")])
+            self.closed = False
+            created.append(self)
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    register_provider("lifecycle-test", lambda model: _ClosableScripted())
+    try:
+        agent = Agent(name="t", model="lifecycle-test:m", tools=[add])
+        result = await Runner.run(agent, "2+3?")
+    finally:
+        _REGISTRY.pop("lifecycle-test", None)
+
+    assert result.output == "5"
+    # Two turns, one provider instance: resolved per run, not per turn.
+    assert len(created) == 1
+    assert created[0].closed is True
+
+
+async def test_user_supplied_provider_instance_is_not_closed() -> None:
+    """The run never closes a Provider instance the caller owns."""
+    closed: list[bool] = []
+
+    class _Closable(ScriptedProvider):
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    provider = _Closable([text("hi")])
+    agent = Agent(name="t", model=provider)
+    result = await Runner.run(agent, "go")
+
+    assert result.output == "hi"
+    assert closed == []

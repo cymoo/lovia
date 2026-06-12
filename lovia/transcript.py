@@ -551,11 +551,10 @@ def safe_window(
             Return the entire transcript unchanged.
     """
     n = len(entries)
+    head = max(head, 0)
 
     if tail <= 0:
         return list(entries[:head])
-
-    head = max(head, 0)
 
     if head + tail >= n:
         return list(entries)

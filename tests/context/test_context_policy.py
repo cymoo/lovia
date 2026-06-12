@@ -59,6 +59,14 @@ def test_safe_window_with_head_and_tail():
     assert [it.content for it in got] == ["m0", "m1", "m7", "m8", "m9"]
 
 
+def test_safe_window_negative_head_treated_as_zero():
+    """A negative head must not slice from the end of the list."""
+    entries = [_user(f"m{i}") for i in range(5)]
+    assert safe_window(entries, head=-1, tail=0) == []
+    got = safe_window(entries, head=-1, tail=2)
+    assert [it.content for it in got] == ["m3", "m4"]
+
+
 def test_safe_window_pulls_orphan_tool_call_into_tail():
     """Tail starts on a tool_result whose call is in the dropped middle."""
     entries = [

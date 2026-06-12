@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -42,8 +43,7 @@ class RunBudget:
 
     def check(self, usage: Usage) -> None:
         """Raise :class:`BudgetExceeded` if any limit is exceeded."""
-        loop = asyncio.get_event_loop()
-        now = loop.time()
+        now = time.monotonic()
         if self._started_at is None:
             self._started_at = now
 

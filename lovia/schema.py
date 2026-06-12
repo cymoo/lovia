@@ -146,7 +146,9 @@ def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, obje
     """Validate ``data`` against ``fn``'s signature and coerce types.
 
     Uses pydantic so that e.g. ``"3"`` becomes ``3`` when the annotation is
-    ``int``. Returns the cleaned kwargs dict.
+    ``int``. Returns the cleaned kwargs dict. Values are read back as
+    attributes (not ``model_dump``) so parameters annotated with a pydantic
+    model or dataclass receive the validated instance, not a plain dict.
     """
     fields: dict[str, object] = {}
     for name, param, annotation in _iter_arg_params(fn):
@@ -155,7 +157,8 @@ def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, obje
     if not fields:
         return {}
     Model = create_model(f"{fn.__name__.title()}Args", **fields)  # type: ignore[call-overload]
-    return Model(**data).model_dump()
+    validated = Model(**data)
+    return {name: getattr(validated, name) for name in fields}
 
 
 def coerce_output(tp: object, data: object) -> object:
@@ -176,9 +179,14 @@ def _strip_titles(schema: JsonSchema) -> JsonSchema:
 
     They are valid JSON Schema but add noise to the system prompt and tool
     payloads. Strip them recursively for a cleaner wire format.
+
+    Only string values are removed: inside a ``properties`` dict the key
+    ``title`` is a *field name* whose value is a schema dict, and stripping
+    it would silently drop the user's field.
     """
     if isinstance(schema, dict):
-        schema.pop("title", None)
+        if isinstance(schema.get("title"), str):
+            del schema["title"]
         for value in schema.values():
             if isinstance(value, dict):
                 _strip_titles(cast(JsonObject, value))

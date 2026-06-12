@@ -40,12 +40,15 @@ databases, APIs, MCP servers, or any other backend.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+import yaml  # type: ignore[import-untyped]
 
 from ._types import JsonValue
 from .tools import Tool
@@ -313,10 +316,12 @@ class LocalDirSkillSource:
                 skill_name=name,
                 hint=f"Available: {known}",
             )
+        # File IO runs on a worker thread so a slow disk never blocks the loop.
+        content = await asyncio.to_thread(self._read_body, name)
         return Skill(
             name=meta.name,
             description=meta.description,
-            content=self._read_body(name),
+            content=content,
             path=self._dirs[name],
             extra=meta.extra,
         )
@@ -547,11 +552,13 @@ class Skills:
                 skill = await load(name)
             except SkillsError as exc:
                 return str(exc)
+            # The on-disk path lets the model execute bundled scripts
+            # (e.g. via a workspace shell tool).
             location = f"  path: {skill.path}" if skill.path is not None else ""
             return (
                 f"[skill: {skill.name}{location}]\n"
                 f"{_SKILL_CONTENT_PREAMBLE}\n"
-                f"{_SKILL_BEGIN}\n{skill.content}\n{_SKILL_END}"
+                f"{_SKILL_BEGIN}\n{_truncate(skill.content)}\n{_SKILL_END}"
             )
 
         @_tool
@@ -568,11 +575,27 @@ class Skills:
             """
             try:
                 skill = await load(name)
-                return skill.read_file(relpath)
+                content = await asyncio.to_thread(skill.read_file, relpath)
+                return _truncate(content)
             except SkillsError as exc:
                 return str(exc)
 
         return [load_skill, read_skill_file]
+
+
+# Cap on what one skill tool call can put into the model context. Skill
+# bodies and references are instructions for the model, so anything beyond
+# this is almost certainly a mistake (huge asset, binary blob, ...).
+_MAX_CONTENT_CHARS = 100_000
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _MAX_CONTENT_CHARS:
+        return text
+    return (
+        text[:_MAX_CONTENT_CHARS]
+        + f"\n[truncated: {len(text)} chars total, showing first {_MAX_CONTENT_CHARS}]"
+    )
 
 
 # Skill content is author-supplied and therefore untrusted. We frame it as
@@ -620,12 +643,8 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     returns ``({}, text)``.
 
     Tolerates leading blank lines and trailing whitespace on the ``---``
-    delimiters.
-
-    Uses ``yaml.safe_load`` (PyYAML is a transitive dependency). Falls back
-    to a minimal line parser only when PyYAML is somehow unavailable — this
-    path handles the simple ``key: value`` pairs used in ``SKILL.md`` metadata
-    but does not aim to be a general-purpose YAML parser.
+    delimiters. Malformed YAML (or YAML that is not a mapping) yields ``{}``
+    so the caller's name/description validation produces the actual error.
     """
 
     trimmed = text.lstrip()
@@ -647,37 +666,10 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not fm_text:
         return {}, body
 
-    # Primary path: PyYAML (available via jsonschema / pydantic dependency)
     try:
-        import yaml  # type: ignore[import-untyped]
-
         parsed = yaml.safe_load(fm_text)
-        if isinstance(parsed, dict):
-            return parsed, body
-    except Exception:
-        pass
-
-    # Fallback: minimal key:value parser for environments without PyYAML.
-    # Handles quoted values, comments, and simple inline lists.
-    meta: dict[str, Any] = {}
-    for line in fm_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if ":" not in stripped:
-            continue
-        k, raw = stripped.split(":", 1)
-        k = k.strip()
-        raw = raw.strip()
-        # Unquote simple quoted strings
-        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
-            raw = raw[1:-1]
-        # Inline list: [a, b, c]
-        if raw.startswith("[") and raw.endswith("]"):
-            inner = raw[1:-1]
-            items = [it.strip().strip("\"'") for it in inner.split(",") if it.strip()]
-            meta[k] = items
-        else:
-            meta[k] = raw
-
-    return meta, body
+    except yaml.YAMLError:
+        return {}, body
+    if isinstance(parsed, dict):
+        return parsed, body
+    return {}, body

@@ -30,7 +30,12 @@ from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
 from .checkpointer import Checkpointer, RunSnapshot, RunStatus
-from .stores.checkpointer import InMemoryCheckpointer
+from .stores import (
+    InMemoryCheckpointer,
+    InMemorySession,
+    SQLiteCheckpointer,
+    SQLiteSession,
+)
 from .content import (
     ContentPart,
     FilePart,
@@ -201,6 +206,7 @@ __all__ = [
     "Handoff",
     "ImagePart",
     "InMemoryCheckpointer",
+    "InMemorySession",
     "InMemoryTracer",
     "InputGuardrail",
     "InputEntry",
@@ -236,6 +242,8 @@ __all__ = [
     "RunSnapshot",
     "RunStatus",
     "Runner",
+    "SQLiteCheckpointer",
+    "SQLiteSession",
     "Session",
     "Skill",
     "SkillMetadata",
@@ -254,7 +262,6 @@ __all__ = [
     "ToolError",
     "ToolPolicy",
     "ToolResultRenderer",
-    "ToolResultRetentionStage",
     "Tracer",
     "Usage",
     "UsageDelta",
@@ -278,4 +285,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"

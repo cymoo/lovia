@@ -77,3 +77,26 @@ def test_coerce_output_to_pydantic() -> None:
     p = coerce_output(Point, {"x": 1, "y": 2})
     assert isinstance(p, Point)
     assert (p.x, p.y) == (1, 2)
+
+
+def test_schema_preserves_user_field_named_title() -> None:
+    # Pydantic's auto-generated ``title`` annotations are stripped, but a
+    # *field* named ``title`` (a dict under ``properties``) must survive.
+    class Doc(BaseModel):
+        title: str
+        body: str
+
+    s = model_json_schema(Doc)
+    assert s["properties"]["title"] == {"type": "string"}
+    assert set(s["required"]) == {"title", "body"}
+    assert "title" not in s  # the schema-level annotation is still stripped
+
+
+def test_validate_args_keeps_nested_model_instances() -> None:
+    def fn(point: Point, scale: int = 1) -> str:
+        return ""
+
+    out = validate_args(fn, {"point": {"x": 1, "y": 2}, "scale": "3"})
+    assert isinstance(out["point"], Point)
+    assert (out["point"].x, out["point"].y) == (1, 2)
+    assert out["scale"] == 3

@@ -92,6 +92,22 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
     assert out[2]["content"][1] == {"type": "text", "text": ""}
 
 
+def test_message_translation_forwards_tool_result_is_error() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+            ToolResultEntry(call_id="c1", output="boom", is_error=True),
+        ]
+    )
+
+    assert out[1]["content"][0] == {
+        "type": "tool_result",
+        "tool_use_id": "c1",
+        "content": "boom",
+        "is_error": True,
+    }
+
+
 def test_message_translation_wraps_invalid_tool_arguments() -> None:
     _, out = _to_anthropic_messages(
         [ToolCallEntry(call_id="c1", name="broken", arguments="{bad")]
@@ -578,7 +594,9 @@ def test_stop_reason_and_context_overflow_helpers() -> None:
 def test_context_window_includes_current_claude_aliases() -> None:
     provider = AnthropicProvider(model="claude-opus-4-8", api_key="x")
 
-    assert provider.context_window("claude-opus-4-8") == 1_000_000
-    assert provider.context_window("claude-sonnet-4-6") == 1_000_000
+    # Default (non-beta) windows: the 1M variants require the ``context-1m``
+    # beta header, which the adapter does not send.
+    assert provider.context_window("claude-opus-4-8") == 200_000
+    assert provider.context_window("claude-sonnet-4-6") == 200_000
     assert provider.context_window("claude-haiku-4-5") == 200_000
     assert provider.context_window("claude-sonnet-4-5-20250929") is None

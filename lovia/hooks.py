@@ -34,9 +34,12 @@ Typical use::
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable, TypeVar, Union
 
 from . import events
+
+logger = logging.getLogger(__name__)
 
 # A handler may be sync or async; both shapes are supported.
 Handler = Callable[[Any], Union[None, Awaitable[None]]]
@@ -77,23 +80,33 @@ class AgentHooks:
         return fn
 
     async def dispatch(self, event: events.Event) -> None:
-        """Invoke every matching handler for ``event``."""
+        """Invoke every matching handler for ``event``.
+
+        Handler exceptions are logged and swallowed: hooks are observers, and
+        a broken log/metrics handler must not abort the run it watches.
+        """
         # First the catch-alls so listeners that mutate state see events
         # in the same order the runner emits them.
         for fn in self._any:
-            await _maybe_await(fn(event))
+            await _call_handler(fn, event)
         for event_type, listeners in self._listeners.items():
             if isinstance(event, event_type):
                 for fn in listeners:
-                    await _maybe_await(fn(event))
+                    await _call_handler(fn, event)
 
 
-async def _maybe_await(result: Any) -> None:
-    """Await ``result`` if it looks awaitable, otherwise discard it."""
-    if result is None:
-        return
-    if hasattr(result, "__await__"):
-        await result
+async def _call_handler(fn: Handler, event: events.Event) -> None:
+    """Run one handler (sync or async), logging instead of raising on failure."""
+    try:
+        result = fn(event)
+        if result is not None and hasattr(result, "__await__"):
+            await result
+    except Exception:
+        logger.exception(
+            "hook handler %r failed for %s; continuing",
+            getattr(fn, "__qualname__", fn),
+            type(event).__name__,
+        )
 
 
 async def dispatch(hooks: AgentHooks | None, event: events.Event) -> None:

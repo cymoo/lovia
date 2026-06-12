@@ -35,22 +35,30 @@ def test_register_provider_with_factory() -> None:
     assert p.model == "fake-model-1"
 
 
-def test_register_provider_overrides_existing() -> None:
+def test_register_provider_overrides_builtin_prefix() -> None:
+    from lovia.providers import _REGISTRY
+
     register_provider("openai", lambda model: _FakeProvider(f"override:{model}"))
     try:
-        # NOTE: built-in `openai` lives in _BUILTIN which has precedence over the
-        # runtime _REGISTRY. So this registration is a no-op for the built-in
-        # prefix — that's by design (built-ins always win). Verify by hitting a
-        # new prefix instead.
+        p = provider_from_string("openai:gpt")
+        assert isinstance(p, _FakeProvider)
+        assert p.model == "override:gpt"
+    finally:
+        _REGISTRY.pop("openai", None)
+    # With the registration removed, the built-in factory applies again.
+    assert provider_from_string("openai:gpt").name == "openai-chat"
+
+
+def test_register_provider_later_registration_wins() -> None:
+    from lovia.providers import _REGISTRY
+
+    try:
         register_provider("openaix", lambda model: _FakeProvider(f"v1:{model}"))
         register_provider("openaix", lambda model: _FakeProvider(f"v2:{model}"))
         p = provider_from_string("openaix:gpt")
         assert isinstance(p, _FakeProvider)
         assert p.model == "v2:gpt"
     finally:
-        # Best-effort cleanup so other tests aren't affected.
-        from lovia.providers import _REGISTRY
-
         _REGISTRY.pop("openaix", None)
 
 

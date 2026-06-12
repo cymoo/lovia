@@ -58,7 +58,8 @@ def register_provider(prefix: str, factory: ProviderFactory) -> None:
 
     The factory receives the model string (everything after the colon) and
     must return a :class:`Provider`. Later registrations override earlier
-    ones for the same prefix.
+    ones for the same prefix, including the built-in ``openai``/``anthropic``
+    prefixes.
     """
     _REGISTRY[prefix.lower()] = factory
 
@@ -117,10 +118,12 @@ def provider_from_string(spec: str) -> Provider:
         return OpenAIChatProvider(model=spec)
     vendor, model = spec.split(":", 1)
     vendor = vendor.lower()
-    if vendor in _BUILTIN:
-        return _BUILTIN[vendor](model)
+    # Explicit registrations win over builtins so applications can swap in
+    # their own adapter for a built-in prefix.
     if vendor in _REGISTRY:
         return _REGISTRY[vendor](model)
+    if vendor in _BUILTIN:
+        return _BUILTIN[vendor](model)
     factory = _factory_from_entry_point(vendor)
     if factory is not None:
         _REGISTRY[vendor] = factory

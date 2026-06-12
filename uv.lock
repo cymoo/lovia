@@ -1342,11 +1342,12 @@ wheels = [
 
 [[package]]
 name = "lovia"
-version = "0.5.11"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -1413,6 +1414,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-dotenv", marker = "extra == 'dotenv'", specifier = ">=1.0.0" },
     { name = "python-dotenv", marker = "extra == 'examples'", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", marker = "extra == 'examples'", specifier = ">=13.7" },
     { name = "rich", marker = "extra == 'rich'", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },

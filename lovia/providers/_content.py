@@ -25,7 +25,9 @@ def _openai_file(part: FilePart) -> JsonObject:
         )
     if part.data is None:  # pragma: no cover - FilePart validates this.
         raise TypeError(f"Unsupported file part: {part!r}")
-    file: JsonObject = {"file_data": part.data}
+    # The Chat Completions API expects ``file_data`` as a data URI, not bare
+    # base64 (same convention as ``image_url``).
+    file: JsonObject = {"file_data": f"data:{part.mime_type};base64,{part.data}"}
     if part.filename is not None:
         file["filename"] = part.filename
     return file

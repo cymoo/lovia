@@ -261,6 +261,14 @@ class TestParseFrontmatter:
         assert meta["name"] == "bs"
         assert body == "body"
 
+    def test_malformed_yaml_returns_empty_meta(self) -> None:
+        """Broken YAML yields no metadata (the caller's name/description
+        validation then reports the actual problem) instead of raising."""
+        text = "---\nname: [unclosed\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta == {}
+        assert body == "body"
+
     def test_closing_delimiter_eof(self) -> None:
         text = "---\nname: eof\ndescription: no trailing newline\n---"
         meta, body = _parse_frontmatter(text)
@@ -506,6 +514,31 @@ class TestSkillsTools:
             assert len(tools) == 2
             tool_names = {t.name for t in tools}
             assert tool_names == {"load_skill", "read_skill_file"}
+
+    def test_read_skill_file_truncates_huge_files(self) -> None:
+        from lovia.skills import _MAX_CONTENT_CHARS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n# Body"
+            )
+            (root / "s" / "references").mkdir()
+            (root / "s" / "references" / "big.md").write_text(
+                "x" * (_MAX_CONTENT_CHARS + 100)
+            )
+            skills = SkillsCapability.from_dir(root)
+            read_tool = next(t for t in skills.tools() if t.name == "read_skill_file")
+            import asyncio
+
+            result = asyncio.run(
+                read_tool.invoke(
+                    {"name": "s", "relpath": "references/big.md"}, _make_ctx()
+                )
+            )
+            assert "[truncated:" in result
+            assert len(result) < _MAX_CONTENT_CHARS + 200
 
     def test_load_skill_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

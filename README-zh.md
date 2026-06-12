@@ -318,23 +318,32 @@ await Runner.run(agent, "我的项目叫 Atlas。", session=session, session_id=
 await Runner.run(agent, "我的项目叫什么？",  session=session, session_id="u1")
 ```
 
-长对话默认使用 `CompactingContextPolicy` 管理上下文。压缩是**仅作用于单次调用的视图**：
-它只裁剪发送给模型的那一份转录，绝不修改已存储的 session，因此完整历史始终是唯一可信源。
-它会先把较旧的工具结果替换为一个简短标记；当 prompt 接近上下文窗口（或 provider 报告
-context overflow）时，再退化为增量式 LLM 摘要。
+长对话默认使用 `Compaction` 管理上下文。压缩是**仅作用于单次调用的视图且具有粘性**：
+它只裁剪发送给模型的那一份转录，绝不修改已存储的 session，因此完整历史始终是唯一可信源；
+同时压缩决策在单次 run 内被记住并逐调用重放，prompt 前缀跨轮保持字节级稳定——provider 的
+prompt cache 不会失效。当 token 压力到来时按"先便宜后昂贵"依次执行：超大工具结果归档到
+workspace 文件（有 workspace 时）、较旧工具结果替换为简短 recall 标记、最后才把更早的前缀
+折叠进增量式 LLM 摘要。压缩以稀疏突发方式发生——低于 `compact_at` 水位线时什么都不做，
+触发后一次性压到 `compact_to` 水位线。
 
-如果你想调整阈值或保留窗口，可以显式传入 policy：
+如果你想调整阈值或阶段组合，可以显式传入 policy：
 
 ```python
-from lovia import CompactingContextPolicy
+from lovia import Compaction
 
-policy = CompactingContextPolicy(
-    window_tokens=200_000,
-    trigger_ratio=0.8,
-    keep_recent=20,
+policy = Compaction(
+    context_window=200_000,  # 省略则向 provider 询问
+    compact_at=0.75,         # 可用窗口的 75% 时开始压缩
+    compact_to=0.50,         # 一次压到 50%（也支持绝对 token 数，如 100_000）
 )
 result = await Runner.run(agent, "继续。", context_policy=policy)
 ```
+
+压缩限制的是**模型看到的视图**；transcript 本身保留完整工具输出（这正是 recall 与
+view-only 安全性的前提）。对可能返回巨型输出的工具，应在源头限制进入 transcript 的体量——
+`Agent(max_tool_output_chars=...)` 或工具级 `@tool(max_output_chars=...)` 会在存储前截断
+超长输出（保留头尾 + 标记），同时丢弃 raw 原始对象，从而约束内存、checkpoint 与 session
+的开销。内置 workspace 工具已通过 `Workspace` 的限制在源头封顶。
 
 可加入可选的 `recall_tool_result` 工具，让 agent 在压缩丢弃了某个工具输出后，无需重跑
 工具即可取回完整结果：

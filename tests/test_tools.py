@@ -254,3 +254,88 @@ async def test_param_named_ctx_without_annotation_is_a_regular_arg() -> None:
     agent = Agent(name="a", model=provider, tools=[echo])
     await Runner.run(agent, "hi")
     assert captured["ctx"] == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Tool-output caps (memory bound at the transcript boundary)
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_tool_output_helper() -> None:
+    from lovia.tools import truncate_tool_output
+
+    assert truncate_tool_output("short", 100) == "short"
+    text_in = "H" * 8_000 + "T" * 2_000
+    out = truncate_tool_output(text_in, 1_000)
+    assert out.startswith("H" * 800)
+    assert out.endswith("T" * 200)
+    assert "truncated: kept 1,000 of 10,000 chars" in out
+    assert len(out) < 1_200  # limit plus the marker
+
+
+async def test_agent_level_output_cap_truncates_and_drops_raw() -> None:
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def big() -> str:
+        """Return a huge payload."""
+        return "x" * 50_000
+
+    provider = ScriptedProvider([call("big", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[big], max_tool_output_chars=2_000)
+    result = await Runner.run(agent, "go")
+
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert len(entry.output) < 2_200
+    assert "truncated" in entry.output
+    assert entry.raw is None  # the giant raw value is not retained
+    # The model saw the truncated version too.
+    tool_msg = next(m for m in provider.calls[1] if m.role == "tool")
+    assert "truncated" in tool_msg.content
+
+
+async def test_per_tool_cap_overrides_agent_default() -> None:
+    from lovia.transcript import ToolResultEntry
+
+    @tool(max_output_chars=500)
+    def big() -> str:
+        """Return a huge payload."""
+        return "y" * 50_000
+
+    provider = ScriptedProvider([call("big", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[big], max_tool_output_chars=100_000)
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert len(entry.output) < 700
+
+
+async def test_no_cap_keeps_full_output_and_raw() -> None:
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def big() -> dict:
+        """Return a structured payload."""
+        return {"data": "z" * 10_000}
+
+    provider = ScriptedProvider([call("big", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[big])
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert "z" * 10_000 in entry.output
+    assert entry.raw == {"data": "z" * 10_000}
+
+
+async def test_small_output_not_touched_by_cap() -> None:
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def small() -> str:
+        """Return a small payload."""
+        return "tiny result"
+
+    provider = ScriptedProvider([call("small", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[small], max_tool_output_chars=2_000)
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert entry.output == "tiny result"
+    assert entry.raw == "tiny result"

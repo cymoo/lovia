@@ -42,47 +42,51 @@ lovia/
     loop.py         #   RunLoop — the only module with mutable state
     model_turn.py   #   Calls the provider, assembles deltas → AssistantTurn
     tool_calls.py   #   Dispatches tool calls, handoff, approval, final_output
-    state.py        #   TurnState — mutable scratchpad for one turn
+    run_state.py    #   RunState / RuntimeState — mutable per-run scratchpad
+    checkpoint.py   #   CheckpointWriter
     result.py       #   RunHandle (async iterator + awaitable) and RunResult
   tools/            # @tool decorator, Tool type, and opt-in tool factories
-    __init__.py     #   core Tool/tool API + public re-exports
-    read_file.py    #   sandbox-backed file tools (read, write, edit, list, glob, shell)
-    write_file.py
-    edit_file.py
-    list_dir.py
-    glob.py
-    shell.py
-    coding_tools.py #   coding_tools() convenience factory
+    base.py         #   core Tool/tool API
+    files.py        #   workspace-backed file tools
+    shell.py        #   workspace shell tool
     http.py         #   http_fetch
     search.py       #   duckduckgo_search_tool  (requires lovia[tools])
-    todo.py         #   TodoList + todo_tools
     human.py        #   HumanChannel + ask_human
-    think.py        #   think
+    recall.py       #   recall_tool_result (recovers compacted tool outputs)
     time.py         #   now
-  messages.py       # ChatMessage, ToolCall, Usage types — lossy chat-provider view
-  transcript.py     # TranscriptEntry — canonical discriminated union; conversions
+  messages.py       # Message, ToolCall, Usage types — lossy chat-provider view
+  transcript.py     # TranscriptEntry — canonical discriminated union; conversions;
+                    #   safe_window() pair-aware slicing
   events.py         # Streaming event types
   output.py         # Structured output handling (native JSON Schema / final_output fallback)
   handoff.py        # Handoff + agent_as_tool
   hooks.py          # AgentHooks subscriber
   guardrails.py     # input/output guardrail protocol
   session.py        # Session protocol
-  context/          # ContextPolicy + the default CompactingContextPolicy
+  context/          # Context-window management (see "Context compaction" below)
+    policy.py       #   ContextPolicy protocol, CompactionRequest/ContextResult, Noop
+    compaction.py   #   Compaction — the default policy (sticky staged pipeline)
+    stages.py       #   Stage protocol + OffloadToolResults/ClearToolResults/SummarizeHistory
+    state.py        #   CompactionState (sticky decisions) + transcript fingerprint
+    render.py       #   pure transcript+state → view rendering, markers, protected tail
+    tokens.py       #   TokenCounter (memoized estimates) + TokenBudget (watermarks)
+    summarizer.py   #   Summarizer protocol + LLMSummarizer (structured sections)
+    prompts.py      #   summary prompt templates + background-reference wrapper
   skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
   mcp.py            # Optional MCP client (requires mcp package)
   providers/        # LLM provider adapters (OpenAI, Anthropic, …)
   stores/           # Session and memory store implementations
-  sandbox/          # Filesystem + process sandbox (Sandbox.local,
-                    #   SandboxBackend/SandboxSession protocols)
+  workspace/        # Filesystem + process workspace (Workspace.local,
+                    #   WorkspaceLike/WorkspaceSession protocols, policy gating)
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
 ```
 
 Three layers, each strictly downstream of the previous: **core** (everything
-outside `sandbox/` and `web/`), **sandbox** (fs + exec), **web** (HTTP/SSE/UI).
-Core never imports sandbox or web.
+outside `workspace/` and `web/`), **workspace** (fs + exec), **web** (HTTP/SSE/UI).
+Core never imports workspace or web (type-only imports excepted).
 
 ### Runner split
 
@@ -122,7 +126,7 @@ This keeps the runner's main loop simple: handoff is just another tool result, f
 
 Three persistence concepts that serve different purposes:
 
-- **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start, persists after each run. Context compaction rewrites via `replace()`.
+- **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start and persists the **full** transcript after each run — context compaction never writes to the Session.
 - **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + agent_name) keyed by `run_id`. Used for crash recovery / pause-and-resume. The runner snapshots after every turn via `_snapshot()`.
 - **`Memory`** (`memory.py`) — a `Protocol` with `add(content)` / `retrieve(query, k)`. Long-term semantic store that spans sessions (vector DB, RAG, etc.). Never auto-injected by the framework — users wire it via tools or hooks.
 
@@ -134,14 +138,63 @@ or the `Session`, so the full conversation stays the source of truth. A single
 method handles both triggers:
 - **Proactive**: `policy.compact(req)` runs before each model turn.
 - **Reactive**: on `ContextOverflowError`, the runner sets `req.overflow=True`
-  and calls `compact` again for a more aggressive view, then retries the turn once.
+  and calls `compact` again for a more aggressive view, then retries the turn
+  once (only when the policy reports `compacted=True`, i.e. it made *new*
+  decisions).
 
-`Runner` defaults to `CompactingContextPolicy` (stale-tool-result trimming, then
-an incremental LLM summary near the window); pass `NoopContextPolicy()` to
-disable. The running summary is folded incrementally using per-run `scratch`
-state owned by `RunLoop`, so it never leaks across runs. The optional
-`lovia.tools.recall_tool_result` tool lets the agent retrieve a tool output that
-compaction dropped from the view.
+`Runner` defaults to `Compaction` (in `context/compaction.py`); pass
+`NoopContextPolicy()` to disable. Key design points, in dependency order:
+
+- **Plan/render split.** Stages never transform views. They record *sticky
+  decisions* into `CompactionState` (cleared call_ids, offloaded
+  call_id→file-path records, running-summary text + coverage), and the pure
+  function `render_view(transcript, state)` rebuilds the per-call view.
+  Decisions are monotonic, so the rendered prompt prefix is byte-stable
+  across turns — that is what keeps provider prompt caches warm. Never make a
+  stage "undo" a decision.
+- **Watermark hysteresis.** Nothing happens below `compact_at` (default 0.75
+  of the usable window); a burst then shrinks the view to `compact_to`
+  (default 0.50). Both accept a fraction (float) or absolute tokens (int).
+  `TokenBudget` owns the math; `reserve_output_tokens` is subtracted first.
+- **Cheap-first stages**: `OffloadToolResults` (archive huge results to
+  workspace files; inert without a writable workspace) → `ClearToolResults`
+  (replace older results with recall markers; Anthropic `clear_tool_uses`
+  semantics) → `SummarizeHistory` (incremental LLM summary of the older
+  prefix; anti-thrash skip below 10% projected savings; per-run circuit
+  breaker). Custom stages implement the `Stage` protocol
+  (`async def plan(body, ctx) -> bool`).
+- **Protected tail.** `render.protected_tail_start()` computes the verbatim
+  tail every stage must respect: token-budgeted (`keep_recent_tokens`,
+  default usable//5), anchors the most recent user message when affordable,
+  and expands over tool call/result pairs so views never contain orphan
+  results. On the aggressive path, a single result bigger than the target
+  budget loses this immunity (`_oversized` in `stages.py`) — otherwise one
+  giant tool output would make overflow recovery impossible.
+- **Token accounting.** `TokenCounter` estimates per entry (chars//4, flat
+  image/file costs, `id()`+weakref memo) and is *calibrated* against the
+  provider's real `last_input_tokens` via an EMA ratio stored in state.
+- **State location.** Sticky state serializes into the per-run
+  `RuntimeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
+  `Compaction` additionally keeps a bounded in-process cache keyed by
+  `session_id` so a *new run* on the same session resumes prior decisions; a
+  structural `fingerprint` of the covered prefix detects rewritten history
+  (handoff `input_filter`) and resets the summary while keeping
+  call_id-keyed decisions.
+- **Markers and recovery.** Cleared/offloaded results render as markers that
+  preserve `call_id`/`is_error` (pair validity). Markers mention the opt-in
+  `lovia.tools.recall_tool_result` tool only when the agent actually has it
+  (`CompactionRequest.tool_names`); offload markers carry the file path +
+  preview. The full output always remains in the real transcript.
+- **Memory is bounded at the transcript boundary, not by compaction.**
+  Compaction shapes only the per-call *view*; the transcript keeps full tool
+  outputs (plus `ToolResultEntry.raw`) for the run's lifetime, and sessions/
+  checkpoints persist them. Tools that can return huge payloads should be
+  capped at the source: built-in workspace tools already truncate
+  (`max_read_chars`/`max_output_chars` on `Workspace`), and user tools are
+  capped via `Agent.max_tool_output_chars` or per-tool
+  `@tool(max_output_chars=...)` — `ToolCallProcessor` truncates (head + tail
+  + marker) before the entry is stored and drops the raw value. This is
+  deliberately lossy; `recall_tool_result` sees the truncated version.
 
 `safe_window()` in `transcript.py` is critical for any policy that drops middle entries — it ensures `ToolCallEntry`/`ToolResultEntry` pairs stay intact by walking the cut point backward to include orphaned call IDs.
 
@@ -159,6 +212,13 @@ provider = ScriptedProvider([
 ```
 
 The provider records every prompt it receives in `provider.calls` (as `list[list[Message]]`), so tests can assert on what the agent actually sent.
+
+Context-system tests live under `tests/context/` (tokens, state, render,
+stages, pipeline, recall, offload integration). Live end-to-end tests against
+the real endpoint configured in `.env` are in
+`tests/context/test_live_context.py` and `tests/providers/test_live.py`; run
+them with `LOVIA_LIVE_TESTS=1 pytest -m live_provider` (the genuine
+context-overflow probe additionally needs `LOVIA_LIVE_OVERFLOW_TESTS=1`).
 
 ## Conventions
 

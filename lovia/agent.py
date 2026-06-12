@@ -134,6 +134,16 @@ class Agent(Generic[TContext]):
     # Tools may still override either knob individually.
     default_tool_retries: int = 0
     default_tool_timeout: float | None = None
+    # Cap on the rendered tool-output string stored in the transcript, in
+    # characters. Anything longer is truncated (head + tail kept, with a
+    # marker) *before* it enters the transcript, and the raw return value is
+    # dropped — bounding memory, checkpoint, and session cost for tools that
+    # can return huge payloads. Lossy by design: the cut middle is gone (the
+    # ``recall_tool_result`` tool sees the truncated version too); tools that
+    # need full-fidelity recovery should write to the workspace themselves.
+    # ``None`` (default) stores outputs in full. Per-tool ``max_output_chars``
+    # overrides this.
+    max_tool_output_chars: int | None = None
     # Optional agent-wide renderer applied to any tool whose own
     # ``result_renderer`` is ``None``. Useful for things like always
     # JSON-serialising via a custom encoder.

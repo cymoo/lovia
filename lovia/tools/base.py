@@ -92,6 +92,11 @@ class Tool:
     # Per-attempt timeout in seconds. ``None`` means no timeout (or the
     # agent's default_tool_timeout if set).
     timeout: float | None = None
+    # Cap (in characters) on the rendered output stored in the transcript;
+    # longer outputs are truncated head+tail with a marker and the raw return
+    # value is dropped. ``None`` means "use the agent's
+    # ``max_tool_output_chars``" (which itself defaults to unlimited).
+    max_output_chars: int | None = None
     # Optional custom renderer for the result string the model sees.
     result_renderer: ToolResultRenderer | None = None
     # Advanced per-attempt policy chain. Policies compose in list order.
@@ -114,6 +119,25 @@ class Tool:
                 "parameters": self.parameters,
             },
         }
+
+
+def truncate_tool_output(text: str, limit: int) -> str:
+    """Truncate ``text`` to roughly ``limit`` chars, keeping head and tail.
+
+    The head carries most of the budget (structure, status lines); a short
+    tail survives because many tools put totals/errors last. A marker in the
+    middle states how much was cut so the model knows the output is partial.
+    """
+    if len(text) <= limit:
+        return text
+    limit = max(1, limit)
+    head = max(1, int(limit * 0.8))
+    tail = max(0, limit - head)
+    marker = (
+        f"\n\n[... tool output truncated: kept {head + tail:,} "
+        f"of {len(text):,} chars ...]\n\n"
+    )
+    return text[:head] + marker + (text[-tail:] if tail else "")
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -273,6 +297,7 @@ def tool(
     needs_approval: bool | ApprovalPredicate = False,
     retries: int | None = None,
     timeout: float | None = None,
+    max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
@@ -288,6 +313,7 @@ def tool(
     needs_approval: bool | ApprovalPredicate = False,
     retries: int | None = None,
     timeout: float | None = None,
+    max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
@@ -302,6 +328,7 @@ def tool(
     needs_approval: bool | ApprovalPredicate = False,
     retries: int | None = None,
     timeout: float | None = None,
+    max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     strict: bool = False,
@@ -321,6 +348,12 @@ def tool(
     When ``strict=True`` the generated JSON Schema is marked
     ``additionalProperties: False`` and every argument becomes required —
     matching OpenAI's strict-mode requirements.
+
+    ``max_output_chars`` caps the rendered output stored in the transcript:
+    longer results are truncated (head + tail, with a marker) before they
+    enter the transcript and their raw return value is dropped, bounding
+    memory and storage for tools that can return huge payloads. ``None``
+    falls back to the agent's ``max_tool_output_chars`` (default: unlimited).
     """
 
     def make(func: Callable[..., Any]) -> Tool:
@@ -352,6 +385,7 @@ def tool(
             needs_approval=needs_approval,
             retries=retries,
             timeout=timeout,
+            max_output_chars=max_output_chars,
             result_renderer=result_renderer,
             policies=tuple(policies),
             _wants_context=context_param is not None,
@@ -390,4 +424,3 @@ def _find_context_param(func: Callable[..., Any]) -> str | None:
             hint="Remove the extra RunContext annotation or pass that value through ctx.context.",
         )
     return matches[0] if matches else None
-

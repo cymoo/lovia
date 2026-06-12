@@ -15,7 +15,7 @@ from ..messages import ToolCall
 from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
-from ..tools import render_tool_result, run_tool
+from ..tools import render_tool_result, run_tool, truncate_tool_output
 from ..tracing import Tracer
 from ..transcript import ToolResultEntry
 
@@ -145,11 +145,31 @@ class ToolCallProcessor:
                 tool, result, state.run_ctx, default=state.agent.tool_result_renderer
             )
 
+        # Cap what enters the transcript: everything downstream (run memory,
+        # checkpoints, session storage) pays for the full string, so huge
+        # outputs are cut at the source and their retained raw value dropped.
+        # The transient ToolCallCompleted event still carries the original
+        # result for observability.
+        raw_value: object = result
+        limit = tool.max_output_chars
+        if limit is None:
+            limit = state.agent.max_tool_output_chars
+        if limit is not None and len(result_text) > limit:
+            logger.info(
+                "tool.truncate: %s call_id=%s output %d chars > limit %d",
+                tool.name,
+                call.id,
+                len(result_text),
+                limit,
+            )
+            result_text = truncate_tool_output(result_text, limit)
+            raw_value = None
+
         state.transcript.append(
             ToolResultEntry(
                 call_id=call.id,
                 output=result_text,
-                raw=result,
+                raw=raw_value,
                 is_error=is_error,
             )
         )

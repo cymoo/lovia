@@ -319,25 +319,38 @@ await Runner.run(agent, "My project is called Atlas.", session=session, session_
 await Runner.run(agent, "What is my project called?",  session=session, session_id="u1")
 ```
 
-Long-running conversations use :class:`CompactingContextPolicy` by default.
-Compaction is **view-only**: it shapes only the transcript sent to the model
-for one call and never touches the stored session, so the full history stays the
-source of truth. It replaces stale tool results with a tiny marker first and
-falls back to an incremental LLM summary as the prompt nears the context window
-(or after the provider reports an overflow).
+Long-running conversations use :class:`Compaction` by default. Compaction
+is **view-only and sticky**: it shapes only the transcript sent to the model
+for one call and never touches the stored session, while its decisions are
+remembered per run so the rendered prompt prefix stays byte-stable across
+turns — provider prompt caches stay warm. Under token pressure it runs
+cheap-first stages: archive huge tool results to workspace files (when a
+workspace is open), replace older tool results with tiny recall markers, and
+only as a last resort fold the older prefix into an incremental LLM summary.
+Compaction fires in rare bursts — nothing is touched below the
+``compact_at`` watermark, and a burst shrinks the prompt down to
+``compact_to``.
 
-Pass a policy explicitly when you want different thresholds or retention:
+Pass a policy explicitly when you want different thresholds or stages:
 
 ```python
-from lovia import CompactingContextPolicy
+from lovia import Compaction
 
-policy = CompactingContextPolicy(
-    window_tokens=200_000,
-    trigger_ratio=0.8,
-    keep_recent=20,
+policy = Compaction(
+    context_window=200_000,  # omit to ask the provider
+    compact_at=0.75,         # start compacting at 75% of the usable window
+    compact_to=0.50,         # ... and shrink down to 50% (or absolute tokens)
 )
 result = await Runner.run(agent, "Continue.", context_policy=policy)
 ```
+
+Compaction bounds what the *model* sees; the transcript itself keeps full
+tool outputs (that is what makes recall and view-only safety possible). For
+tools that can return huge payloads, cap what enters the transcript at the
+source — ``Agent(max_tool_output_chars=...)`` or per-tool
+``@tool(max_output_chars=...)`` truncate oversized outputs (head + tail, with
+a marker) before they are stored, bounding memory, checkpoint, and session
+cost. Built-in workspace tools are already capped via ``Workspace`` limits.
 
 Add the opt-in ``recall_tool_result`` tool so the agent can pull back a tool
 output that compaction dropped from the view, without re-running the tool:

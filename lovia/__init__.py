@@ -56,15 +56,12 @@ from .exceptions import (
     UserError,
 )
 from .context import (
-    CompactingContextPolicy,
     CompactionRequest,
+    Compaction,
     ContextPolicy,
     ContextResult,
-    ContextSummarizer,
-    DEFAULT_SUMMARY_PROMPT,
     LLMSummarizer,
     NoopContextPolicy,
-    make_summary_entry,
 )
 from .guardrails import (
     GuardrailFn,
@@ -192,15 +189,13 @@ __all__ = [
     "CancelToken",
     "Message",
     "Checkpointer",
-    "CompactingContextPolicy",
     "CompactionRequest",
     "ConsoleTracer",
     "ContentPart",
     "ContextOverflowError",
+    "Compaction",
     "ContextPolicy",
     "ContextResult",
-    "ContextSummarizer",
-    "DEFAULT_SUMMARY_PROMPT",
     "GuardrailFn",
     "GuardrailTripped",
     "Handoff",
@@ -219,7 +214,6 @@ __all__ = [
     "Memory",
     "AssistantTextEntry",
     "LLMSummarizer",
-    "make_summary_entry",
     "ModelSettings",
     "NoopContextPolicy",
     "NoopTracer",
@@ -285,4 +279,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"

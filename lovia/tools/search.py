@@ -24,7 +24,7 @@ from types import TracebackType
 from typing import Annotated, Any, Protocol
 
 from ..exceptions import UserError
-from . import Tool, tool
+from .base import Tool, tool
 
 __all__ = [
     "DuckDuckGoSearch",

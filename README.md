@@ -45,7 +45,7 @@ The LLM agent space is crowded. lovia makes a specific set of trade-offs:
 - 🔌 **Provider-neutral** — OpenAI, Anthropic, any OpenAI-compatible endpoint. Swap with one line.
 - 🧩 **Extend without subclassing** — Protocols and dataclasses throughout. Plug in your own session store, memory backend, or provider without touching framework internals.
 - ✂️ **Thin by default** — Only `httpx` and `pydantic` are required. Web UI, MCP, search, and orchestration stay optional.
-- 🛡️ **Production primitives** — Guardrails, approval gates, lifecycle hooks, sandboxed file/shell tools — available when you need them, invisible when you don't.
+- 🛡️ **Production primitives** — Guardrails, approval gates, lifecycle hooks, policy-scoped workspace tools — available when you need them, invisible when you don't.
 
 ---
 
@@ -392,62 +392,58 @@ pick what you need:
 ```python
 from lovia.tools.http import http_fetch
 from lovia.tools.search import duckduckgo_search_tool
-from lovia.tools.todo import TodoList, todo_tools
 from lovia.tools.human import HumanChannel, ask_human
 from lovia.tools.time import now
 
-todos = TodoList()
 agent = Agent(
     name="assistant",
     model="deepseek-v4-pro",
-    tools=[
-        http_fetch,
-        duckduckgo_search_tool(),
-        *todo_tools(todos),
-        now,
-    ],
+    tools=[http_fetch, duckduckgo_search_tool(), now],
 )
 ```
 
 Focused examples are in [`examples/tools/`](./examples/tools/).
 
-## Sandbox and coding agent
+## Workspace and coding agent
 
-Attach a sandbox to a coding agent — no need to wire each tool manually:
+A `Workspace` gives an agent file and shell tools scoped to a directory and
+a permission policy — no need to wire each tool manually:
 
 ```python
 from lovia import Agent
-from lovia.sandbox import Sandbox
+from lovia.workspace import CommandRule, Workspace
 
 agent = Agent(
     name="coder",
     instructions="Make small, targeted edits.",
     model="deepseek-v4-pro",
-    sandbox=Sandbox.local(".", mode="coding"),
+    workspace=Workspace.local(
+        ".",
+        mode="coding",
+        denied_paths=(".env*",),
+        command_rules=(
+            CommandRule("git status", "allow"),
+            CommandRule("rm -rf", "deny"),
+        ),
+    ),
 )
 ```
 
 | Mode | Tools exposed |
 | --- | --- |
-| `"readonly"` | read\_file, list\_dir, glob |
-| `"coding"` | read\_file, write\_file, edit\_file, list\_dir, glob + shell (approval required) |
-| `"trusted"` | all of the above, shell without approval |
+| `"readonly"` | read\_file, list\_files, grep\_files |
+| `"coding"` | + write\_file, edit\_file, shell (approval by default) |
+| `"trusted"` | all of the above, shell without approval by default |
 
-Local sandbox paths are root-relative. Absolute paths, `..` escapes, and
-symlink escapes are rejected. The local shell still runs as the host user —
-this is a convenience boundary, not a hard security sandbox.
+The policy decides per command: `allow` runs immediately, `ask` goes through
+the approval channel, `deny` is refused (compound commands like
+`a && b` take the most restrictive decision across segments). `denied_paths`
+globs are enforced on every file operation.
 
-Or use the tool factories directly:
-
-```python
-from lovia.tools import coding_tools
-
-agent = Agent(
-    name="coder",
-    model="deepseek-v4-pro",
-    tools=coding_tools(root=".", mode="coding"),
-)
-```
+Workspace paths are root-relative. Absolute paths, `..` escapes, and symlink
+escapes are rejected. The local shell still runs as the host user — the
+policy is honest scoping, not OS-level isolation; hard isolation belongs to
+sandboxed backends implementing the same session protocol.
 
 ## MCP
 
@@ -539,8 +535,8 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 | `examples/08_skills.py` | Skills capability |
 | `examples/11_approval.py` | tool approval |
 | `examples/16_web_serve.py` | web UI |
-| `examples/22_sandbox.py` | direct sandbox session |
-| `examples/23_sandbox_agent.py` | coding agent |
+| `examples/22_workspace.py` | direct workspace session |
+| `examples/23_workspace_agent.py` | coding agent |
 | `examples/26_mcp.py` | remote MCP server (fetch) + streaming |
 | `examples/24_prefect.py` | Prefect workflow |
 | `examples/tools/` | focused tool demos |

@@ -1,10 +1,10 @@
-"""Path normalization for sandbox file tools."""
+"""Path normalization and confinement for workspace file operations."""
 
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-from .errors import PathOutsideSandboxError
+from .errors import PathOutsideWorkspaceError
 
 __all__ = [
     "ensure_inside",
@@ -15,19 +15,19 @@ __all__ = [
 
 
 def normalize_relative_path(path: str) -> str:
-    """Return a normalized sandbox-relative POSIX path.
+    """Return a normalized workspace-relative POSIX path.
 
     Absolute paths are rejected. ``..`` segments are allowed only when they do
-    not escape above the sandbox root.
+    not escape above the workspace root.
     """
 
     if not path or path == ".":
         return "."
     pp = PurePosixPath(path)
     if pp.is_absolute():
-        raise PathOutsideSandboxError(
+        raise PathOutsideWorkspaceError(
             f"Path {path!r} is absolute.",
-            hint="Use a path relative to the sandbox root, e.g. 'src/app.py'.",
+            hint="Use a path relative to the workspace root, e.g. 'src/app.py'.",
         )
 
     parts: list[str] = []
@@ -36,9 +36,9 @@ def normalize_relative_path(path: str) -> str:
             continue
         if part == "..":
             if not parts:
-                raise PathOutsideSandboxError(
-                    f"Path {path!r} escapes the sandbox root.",
-                    hint="Use a path relative to the sandbox root.",
+                raise PathOutsideWorkspaceError(
+                    f"Path {path!r} escapes the workspace root.",
+                    hint="Use a path relative to the workspace root.",
                 )
             parts.pop()
             continue
@@ -54,15 +54,15 @@ def ensure_inside(root: Path, target: Path, original: str) -> Path:
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise PathOutsideSandboxError(
-            f"Path {original!r} resolves outside the sandbox root {root}.",
-            hint="Check for symlinks pointing outside the sandbox root.",
+        raise PathOutsideWorkspaceError(
+            f"Path {original!r} resolves outside the workspace root {root}.",
+            hint="Check for symlinks pointing outside the workspace root.",
         ) from exc
     return resolved
 
 
 def resolve_existing(root: Path, path: str) -> Path:
-    """Resolve an existing sandbox-relative path under ``root``."""
+    """Resolve an existing workspace-relative path under ``root``."""
 
     rel = normalize_relative_path(path)
     target = root if rel == "." else root / rel
@@ -78,9 +78,9 @@ def resolve_parent(root: Path, path: str) -> tuple[Path, str]:
 
     rel = normalize_relative_path(path)
     if rel == ".":
-        raise PathOutsideSandboxError(
-            "Cannot write to the sandbox root as a file.",
-            hint="Provide a file path relative to the sandbox root.",
+        raise PathOutsideWorkspaceError(
+            "Cannot write to the workspace root as a file.",
+            hint="Provide a file path relative to the workspace root.",
         )
     parts = PurePosixPath(rel).parts
     parent = root

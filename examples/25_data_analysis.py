@@ -1,7 +1,7 @@
 """Data analysis agent: query a SQLite DB via shell and render a Chart.js report.
 
 Seeds ``tmp/sales.db`` with two years of synthetic sales data, then lets the
-agent query it freely via the sandbox ``shell`` tool and write the chart report.
+agent query it freely via the workspace ``shell`` tool and write the chart report.
 
 Run::
 
@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from lovia import Agent, Runner, events
-from lovia.sandbox import Sandbox
+from lovia.workspace import Workspace
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -96,7 +96,7 @@ def _seed(db_path: Path) -> None:
 # ── agent ─────────────────────────────────────────────────────────────────────
 
 INSTRUCTIONS = """\
-You are a data analyst. The sandbox root contains `sales.db` — a SQLite
+You are a data analyst. The workspace root contains `sales.db` — a SQLite
 database with two tables:
 
     products(id, name, category, price)
@@ -136,7 +136,7 @@ async def main() -> None:
         name="data-analyst",
         instructions=INSTRUCTIONS,
         model=MODEL,
-        sandbox=Sandbox.local("tmp", mode="trusted"),
+        workspace=Workspace.local("tmp", mode="trusted"),
     )
 
     text_buf = ""

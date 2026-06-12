@@ -5,7 +5,7 @@ Wraps the official ``mcp`` Python SDK so MCP tools appear as ordinary
 is optional: importing this module is always fine, but constructing a transport
 without ``mcp`` installed raises a clear :class:`~lovia.exceptions.UserError`.
 
-Design mirrors :mod:`lovia.sandbox`: the server object is **frozen config**, and
+Design mirrors :mod:`lovia.workspace`: the server object is **frozen config**, and
 opening it yields a separate live :class:`MCPConnection`. This keeps per-run
 usage concurrency-safe by construction (each run owns its own connection) while
 still allowing an explicit, kept-alive connection across many runs.

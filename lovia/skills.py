@@ -30,7 +30,7 @@ Three layers of progressive disclosure:
   ``read_skill_file``. The body names the files it needs, so the model never
   has to guess paths.
 
-:class:`Skills` mirrors the :class:`~lovia.sandbox.Sandbox` pattern — both
+:class:`Skills` mirrors the :class:`~lovia.workspace.Workspace` pattern — both
 expose ``instructions()`` (system prompt fragment) and ``tools()`` (model-facing
 tools), making them peer capabilities on an :class:`~lovia.Agent`.
 
@@ -413,7 +413,7 @@ SkillFilter = Callable[[SkillMetadata], bool]
 class Skills:
     """A collection of skills exposed to the model as a capability.
 
-    Mirrors the :class:`~lovia.sandbox.Sandbox` pattern: both provide
+    Mirrors the :class:`~lovia.workspace.Workspace` pattern: both provide
     ``instructions()`` (system prompt fragment) and ``tools()`` (model-facing
     tools). Attach to an :class:`~lovia.Agent` via the ``skills`` field.
 

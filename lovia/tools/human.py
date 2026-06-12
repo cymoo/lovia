@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 from ..exceptions import ToolError
-from . import Tool, tool
+from .base import Tool, tool
 
 __all__ = ["HumanChannel", "HumanQuestion", "ask_human"]
 

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
     from ..messages import Message
+    from ..workspace.protocol import WorkspaceSession
 
 from .. import events
 from .checkpoint import CheckpointWriter
@@ -285,8 +286,8 @@ class RunLoop:
         system_extra = self.append_instructions
 
         mcp_tools = await self._connect_mcp(agent, resources)
-        sandbox_tools = await self._connect_sandbox(agent, resources)
-        tools_by_name = self._collect_tools(agent, mcp_tools, sandbox_tools)
+        workspace, workspace_tools = await self._connect_workspace(agent, resources)
+        tools_by_name = self._collect_tools(agent, mcp_tools, workspace_tools)
 
         if self.resume_from is not None:
             transcript: list[TranscriptEntry] = list(self.resume_from.entries)
@@ -300,6 +301,7 @@ class RunLoop:
             entries=transcript,
             agent=agent,
             session_id=self.session_id,
+            workspace=workspace,
         )
         if self.resume_from is not None:
             run_ctx.usage.add(self.resume_from.usage)
@@ -451,9 +453,9 @@ class RunLoop:
     ) -> AsyncIterator[events.Event]:
         """Switch the active agent in place and rebuild agent-specific state.
 
-        The new agent gets its own MCP/sandbox connections and tool set; the
-        previous agent's run-scoped connections stay open until the run ends
-        (closing them eagerly would add failure modes for no gain).
+        The new agent gets its own MCP/workspace connections and tool set;
+        the previous agent's run-scoped connections stay open until the run
+        ends (closing them eagerly would add failure modes for no gain).
         """
         signal = state.pending_handoff
         assert signal is not None
@@ -473,9 +475,12 @@ class RunLoop:
                 supports_json_schema(target),
             )
             mcp_tools = await self._connect_mcp(target, resources)
-            sandbox_tools = await self._connect_sandbox(target, resources)
+            workspace, workspace_tools = await self._connect_workspace(
+                target, resources
+            )
+            state.run_ctx.workspace = workspace
             state.tools_by_name = self._collect_tools(
-                target, mcp_tools, sandbox_tools
+                target, mcp_tools, workspace_tools
             )
             await self._reset_transcript_for_handoff(state, signal.handoff)
 
@@ -656,13 +661,13 @@ class RunLoop:
         """Render the full system prompt for ``agent``.
 
         Concatenates the agent's instructions (plus the optional per-run
-        ``extra`` addendum), sandbox and skills instructions, and — for
+        ``extra`` addendum), workspace and skills instructions, and — for
         providers without native ``response_format`` support — the
         structured-output contract.
         """
         parts = [await agent.render_instructions(self.context, extra=extra)]
-        if agent.sandbox is not None:
-            parts.append(agent.sandbox.instructions())
+        if agent.workspace is not None:
+            parts.append(agent.workspace.instructions())
         if agent.skills is not None:
             parts.append(agent.skills.instructions())
         if structured_output is not None and not structured_output.use_native:
@@ -698,7 +703,7 @@ class RunLoop:
         self,
         agent: Agent,
         mcp_tools: list[Tool],
-        sandbox_tools: list[Tool],
+        workspace_tools: list[Tool],
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -718,8 +723,8 @@ class RunLoop:
 
         for t in agent.tools:
             add_tool("agent.tools", t)
-        for t in sandbox_tools:
-            add_tool("agent.sandbox", t)
+        for t in workspace_tools:
+            add_tool("agent.workspace", t)
         for t in mcp_tools:
             add_tool("mcp", t)
         for h in agent.handoffs:
@@ -741,15 +746,20 @@ class RunLoop:
             tools.extend(conn.tools())
         return tools
 
-    async def _connect_sandbox(
+    async def _connect_workspace(
         self, agent: Agent, resources: AsyncExitStack
-    ) -> list[Tool]:
-        if agent.sandbox is None:
-            return []
-        session = await agent.sandbox.open()
-        if agent.sandbox.close_after_run:
+    ) -> "tuple[WorkspaceSession | None, list[Tool]]":
+        """Open the agent's workspace and return its session and tool bundle.
+
+        The session is also injected into ``RunContext.workspace`` by the
+        caller, which is where the built-in file/shell tools find it.
+        """
+        if agent.workspace is None:
+            return None, []
+        session = await agent.workspace.open()
+        if agent.workspace.close_after_run:
             _push_cleanup(resources, session.close)
-        return agent.sandbox.tools(session)
+        return session, agent.workspace.tools()
 
     async def _persist_session(self, transcript: list[TranscriptEntry]) -> None:
         # Replace stored transcript with the latest (simple and predictable).

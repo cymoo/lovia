@@ -22,7 +22,7 @@ from typing import Annotated
 
 from ..run_context import RunContext
 from ..transcript import ToolResultEntry
-from . import tool
+from .base import tool
 
 __all__ = ["recall_tool_result"]
 

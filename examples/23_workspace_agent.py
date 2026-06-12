@@ -1,8 +1,11 @@
-"""Coding agent with a local sandbox.
+"""Coding agent with a local workspace.
+
+Shell commands the policy marks "ask" pause the stream for approval; the
+allow rules below let read-only commands run without prompting.
 
 Run::
 
-    python examples/23_sandbox_agent.py
+    python examples/23_workspace_agent.py
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from lovia import Agent, Runner, events
-from lovia.sandbox import Sandbox
+from lovia.workspace import CommandRule, Workspace
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -27,7 +30,16 @@ async def main() -> None:
         name="coder",
         instructions="You are a careful coding agent. Inspect files before editing.",
         model=MODEL,
-        sandbox=Sandbox.local(".", mode="coding"),
+        workspace=Workspace.local(
+            ".",
+            mode="coding",
+            command_rules=(
+                CommandRule("git status", "allow"),
+                CommandRule("git diff", "allow"),
+                CommandRule("ls", "allow"),
+                CommandRule("rm -rf", "deny"),
+            ),
+        ),
     )
     handle = Runner.stream(
         agent, "List the top-level Python files and explain their purpose.", max_turns=6

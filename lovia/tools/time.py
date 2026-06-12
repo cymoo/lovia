@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from . import tool
+from .base import tool
 
 __all__ = ["now", "sleep"]
 

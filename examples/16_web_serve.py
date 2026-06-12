@@ -19,7 +19,7 @@ import os
 from dotenv import load_dotenv
 
 from lovia import Agent, CompactingContextPolicy, tool, enable_logging
-from lovia.sandbox.sandbox import Sandbox
+from lovia.workspace import Workspace
 from lovia.tracing import ConsoleTracer
 from lovia.web import serve
 
@@ -49,7 +49,7 @@ def main() -> None:
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[add, send_email],
-        sandbox=Sandbox.local(".", mode="trusted"),
+        workspace=Workspace.local(".", mode="trusted"),
         tracer=ConsoleTracer(),
     )
     # Default policy: when the prompt approaches the model's context window,

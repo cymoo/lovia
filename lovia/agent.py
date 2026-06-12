@@ -38,8 +38,8 @@ if TYPE_CHECKING:
     from .output import OutputRepairStrategy
     from .runtime.result import RunHandle, RunResult
     from .skills import Skills
-    from .sandbox import SandboxLike
     from .tools import ToolResultRenderer
+    from .workspace import WorkspaceLike
     from .tracing import Tracer
 
 
@@ -97,8 +97,10 @@ class Agent(Generic[TContext]):
             objects) whose tools are merged at run time. Plain server configs
             are opened fresh per run; a connection from
             ``async with server.session()`` is reused across runs.
-        sandbox: Optional filesystem/process environment whose default tools
-            are merged at run time.
+        workspace: Optional :class:`~lovia.workspace.Workspace` (or anything
+            implementing ``WorkspaceLike``) scoping file/shell tools to a
+            directory and policy. Its tool bundle is merged at run time and
+            its live session is injected into ``RunContext.workspace``.
         hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
         approval_handler: Optional callable consulted whenever a tool with
             ``needs_approval`` is about to run. Returns an
@@ -123,7 +125,7 @@ class Agent(Generic[TContext]):
     settings: ModelSettings = field(default_factory=ModelSettings)
     skills: "Skills | None" = None
     mcp_servers: list["MCPServerLike"] = field(default_factory=list)
-    sandbox: "SandboxLike | None" = None
+    workspace: "WorkspaceLike | None" = None
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)

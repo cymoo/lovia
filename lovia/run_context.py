@@ -27,6 +27,7 @@ from .transcript import TranscriptEntry, entries_to_messages
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .workspace.protocol import WorkspaceSession
 
 
 TContext = TypeVar("TContext")
@@ -46,7 +47,10 @@ class RunContext(Generic[TContext]):
         usage: Cumulative token usage for this run.
         session_id: Stable conversation key when ``session=`` was passed to
             :meth:`Runner.run`. ``None`` for one-shot runs. Tools that key
-            per-session resources (sandboxes, caches, memory) read it here.
+            per-session resources (caches, memory) read it here.
+        workspace: The active agent's live workspace session, when the agent
+            has ``workspace=`` configured. The built-in file/shell tools read
+            it here; custom tools may too. Swapped on handoff.
     """
 
     context: TContext | None
@@ -54,6 +58,7 @@ class RunContext(Generic[TContext]):
     agent: "Agent"
     usage: Usage = field(default_factory=Usage)
     session_id: str | None = None
+    workspace: "WorkspaceSession | None" = None
 
     @property
     def messages(self) -> list[Message]:

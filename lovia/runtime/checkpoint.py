@@ -39,9 +39,10 @@ class CheckpointWriter:
     run_id: str | None
     delete_on_success: bool = False
 
-    @property
-    def enabled(self) -> bool:
-        return self.checkpointer is not None and self.run_id is not None
+    async def delete(self) -> None:
+        """Drop this run's snapshot (no-op when checkpointing is off)."""
+        if self.checkpointer is not None and self.run_id is not None:
+            await self.checkpointer.delete(self.run_id)
 
     async def save_running(self, state: RunState) -> None:
         await self._save(state, status="running")
@@ -62,10 +63,9 @@ class CheckpointWriter:
 
     async def complete(self, state: RunState, output: object) -> None:
         """Record successful completion (or delete the checkpoint)."""
-        if not self.enabled:
+        if self.checkpointer is None or self.run_id is None:
             return
         if self.delete_on_success:
-            assert self.checkpointer is not None and self.run_id is not None
             await self.checkpointer.delete(self.run_id)
             return
         safe_output = to_json_safe(output)
@@ -86,9 +86,9 @@ class CheckpointWriter:
 
         Cancellation, run limits (turns/budget), transient transport errors,
         and retryable provider errors leave the transcript in a consistent
-        state — the run is ``interrupted`` and :meth:`Runner.resume` may
-        continue it (with raised limits where applicable). Everything else is
-        ``failed``.
+        state — the run is ``interrupted`` and re-running the same ``run_id``
+        may continue it (with raised limits where applicable). Everything else
+        is ``failed``.
         """
         if isinstance(
             exc,
@@ -117,9 +117,8 @@ class CheckpointWriter:
     ) -> None:
         """Persist a snapshot. ``output`` must already be JSON-safe: ``complete``
         pre-serializes it; ``save_running``/``save_terminal`` pass ``None``."""
-        if not self.enabled:
+        if self.checkpointer is None or self.run_id is None:
             return
-        assert self.checkpointer is not None and self.run_id is not None
         await self.checkpointer.save(
             RunSnapshot(
                 run_id=self.run_id,

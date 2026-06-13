@@ -137,7 +137,7 @@ async def test_resume_completed_snapshot_requires_run_level_output_type() -> Non
     await Runner.run(agent, "hi", output_type=Out, checkpointer=cp, run_id="override")
     snap = await cp.load("override")
     assert snap is not None
-    assert snap.runtime["output_type_source"] == "run_override"
+    assert snap.resume_state["output_type_source"] == "run_override"
     with pytest.raises(Exception, match="run-level output_type"):
         await Runner.resume(agent, checkpointer=cp, run_id="override")
 
@@ -349,7 +349,7 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
     )
     snap = await cp.load("handoff")
     assert snap is not None
-    assert snap.runtime["output_type_source"] == "run_override"
+    assert snap.resume_state["output_type_source"] == "run_override"
 
     with pytest.raises(Exception, match="run-level output_type"):
         await Runner.resume(spanish, checkpointer=cp, run_id="handoff")
@@ -386,7 +386,7 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
     assert isinstance(result.output, Out)
     assert result.output.value == 9
     assert snap is not None
-    assert snap.runtime["output_type_source"] == "agent"
+    assert snap.resume_state["output_type_source"] == "agent"
 
 
 @pytest.mark.asyncio
@@ -441,14 +441,14 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
         turns=1,
         status="completed",
         output={"ok": True},
-        runtime={"last_input_tokens": 3},
+        resume_state={"last_input_tokens": 3},
     )
     payload = snap.to_dict()
     restored = RunSnapshot.from_dict(payload)
     assert restored.run_id == snap.run_id
     assert restored.status == "completed"
     assert restored.output == {"ok": True}
-    assert restored.runtime["last_input_tokens"] == 3
+    assert restored.resume_state["last_input_tokens"] == 3
     assert restored.usage.cache_read_tokens == 1
     first = restored.entries[0]
     assert isinstance(first, InputEntry)

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 from .. import events
 from .checkpoint import CheckpointWriter
 from .model_turn import stream_model_turn
-from .run_state import ModelTurnResult, RunState, RuntimeState
+from .run_state import ModelTurnResult, ResumeState, RunState
 from .utils import (
     agent_model_label,
     input_preview,
@@ -277,14 +277,15 @@ class RunLoop:
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
         """Connect tools, build the initial transcript, and assemble RunState."""
         agent = self.initial_agent
-        runtime = (
-            RuntimeState.from_dict(self.resume_from.runtime)
+        resume_state = (
+            ResumeState.from_dict(self.resume_from.resume_state)
             if self.resume_from is not None
-            else RuntimeState()
+            else ResumeState()
         )
         providers = self._resolve_providers(agent, resources)
         structured_output = resolve_structured_output(
-            self._resolve_output_type(agent, runtime), supports_json_schema(providers)
+            self._resolve_output_type(agent, resume_state),
+            supports_json_schema(providers),
         )
         system_extra = self.append_instructions
 
@@ -310,12 +311,10 @@ class RunLoop:
             run_ctx.usage.add(self.resume_from.usage)
 
         return RunState(
-            agent=agent,
-            transcript=transcript,
+            run_ctx=run_ctx,
             tools_by_name=tools_by_name,
             structured_output=structured_output,
-            run_ctx=run_ctx,
-            runtime=runtime,
+            resume_state=resume_state,
             providers=providers,
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
@@ -372,11 +371,11 @@ class RunLoop:
             entries=state.transcript,
             provider=primary,
             model=getattr(primary, "model", None),
-            last_input_tokens=state.runtime.last_input_tokens,
+            last_input_tokens=state.resume_state.last_input_tokens,
             session_id=self.session_id,
             run_id=self.run_id,
             overflow=False,
-            scratch=state.runtime.compaction_scratch,
+            scratch=state.resume_state.compaction_scratch,
             workspace=state.run_ctx.workspace,
             tool_names=frozenset(state.tools_by_name),
         )
@@ -471,12 +470,11 @@ class RunLoop:
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
         with tracer.span("handoff", from_agent=prev_agent.name, to_agent=target.name):
             state.agent = target
-            state.run_ctx.agent = target
             # The per-call addendum applies to the initial agent only.
             state.system_extra = None
             state.providers = self._resolve_providers(target, resources)
             state.structured_output = resolve_structured_output(
-                self._resolve_output_type(target, state.runtime),
+                self._resolve_output_type(target, state.resume_state),
                 supports_json_schema(state.providers),
             )
             mcp_tools = await self._connect_mcp(target, resources)
@@ -505,11 +503,11 @@ class RunLoop:
         try:
             return self._parse_output(state, assistant.content or "")
         except OutputValidationError as exc:
-            attempt = state.runtime.output_repair_attempts + 1
+            attempt = state.resume_state.output_repair_attempts + 1
             repair_prompt = self._build_repair_prompt(state.agent, exc, attempt)
             if repair_prompt is None or state.structured_output is None:
                 raise
-            state.runtime.output_repair_attempts = attempt
+            state.resume_state.output_repair_attempts = attempt
             logger.warning(
                 "run.output_repair: agent=%r attempt=%d schema=%s error=%s",
                 state.agent.name,
@@ -579,11 +577,11 @@ class RunLoop:
         # ContextPolicy can size compaction against actual usage rather
         # than the chars/4 heuristic.
         if assistant.usage and assistant.usage.input_tokens:
-            state.runtime.last_input_tokens = assistant.usage.input_tokens
+            state.resume_state.last_input_tokens = assistant.usage.input_tokens
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 
-    def _resolve_output_type(self, agent: Agent, runtime: RuntimeState) -> object:
+    def _resolve_output_type(self, agent: Agent, resume_state: ResumeState) -> object:
         """Return the output type to use for ``agent``.
 
         A Runner-level override is a run-wide final-output contract. When no
@@ -591,9 +589,9 @@ class RunLoop:
         ``output_type``.
         """
         if self.output_type_override is not None:
-            runtime.output_type_source = "run_override"
+            resume_state.output_type_source = "run_override"
             return self.output_type_override
-        runtime.output_type_source = "agent"
+        resume_state.output_type_source = "agent"
         return agent.output_type
 
     def _parse_output(self, state: RunState, content: str) -> object:

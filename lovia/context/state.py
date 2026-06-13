@@ -8,7 +8,7 @@ reverts; summary coverage only grows), so the rendered prompt prefix is
 byte-stable across turns — which is exactly what provider prompt caches need.
 
 The state lives inside the runner-owned per-run ``scratch`` dict
-(:attr:`~lovia.runtime.run_state.RuntimeState.compaction_scratch`) as plain
+(:attr:`~lovia.runtime.run_state.ResumeState.compaction_scratch`) as plain
 JSON types, so it survives checkpoint/resume for free and can never leak
 across runs. :meth:`CompactionState.load` is deliberately forgiving: garbage,
 missing keys, or a different schema version simply mean a fresh state.

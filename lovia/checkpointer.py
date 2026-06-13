@@ -3,7 +3,7 @@
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
 serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
 active agent's name, the accumulated usage, the turn counter, run status,
-JSON-safe output/error payloads, and small runner-owned runtime state. The opaque
+JSON-safe output/error payloads, and small runner-owned resume state. The opaque
 ``RunContext.context`` value is *not* snapshotted — callers re-supply it on
 resume.
 
@@ -38,7 +38,10 @@ class RunSnapshot:
     status: RunStatus = "running"
     output: Any | None = None
     error: JsonObject | None = None
-    runtime: JsonObject = field(default_factory=dict)
+    # Serialized form of the runtime ``ResumeState``: small, JSON-safe
+    # runner-owned accumulators that must survive resume (e.g. the context
+    # policy's compaction scratch). See ``lovia.runtime.run_state.ResumeState``.
+    resume_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     # ----- (de)serialization helpers, used by store implementations -----
@@ -58,7 +61,7 @@ class RunSnapshot:
             "status": self.status,
             "output": to_json_safe(self.output),
             "error": to_json_safe(self.error),
-            "runtime": to_json_safe(self.runtime) or {},
+            "resume_state": to_json_safe(self.resume_state) or {},
             "updated_at": self.updated_at,
         }
 
@@ -73,7 +76,7 @@ class RunSnapshot:
             status=data["status"],
             output=data.get("output"),
             error=data.get("error"),
-            runtime=data.get("runtime", {}),
+            resume_state=data.get("resume_state", {}),
             updated_at=data.get("updated_at", time.time()),
         )
 

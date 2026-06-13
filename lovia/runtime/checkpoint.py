@@ -21,9 +21,8 @@ from ..exceptions import (
     ProviderError,
     RunCancelled,
 )
-from ..messages import Usage
-from ..transcript import TranscriptEntry, to_json_safe
-from .run_state import RunState, RuntimeState
+from ..transcript import to_json_safe
+from .run_state import RunState
 
 logger = logging.getLogger(__name__)
 
@@ -120,41 +119,17 @@ class CheckpointWriter:
             return
         assert self.checkpointer is not None and self.run_id is not None
         await self.checkpointer.save(
-            self._snapshot(
+            RunSnapshot(
+                run_id=self.run_id,
                 agent_name=state.agent.name,
-                entries=state.transcript,
-                usage=state.run_ctx.usage,
+                entries=list(state.transcript),
+                usage=state.run_ctx.usage.clone(),
                 turns=state.turns,
-                runtime=state.runtime,
                 status=status,
-                output=output,
+                output=to_json_safe(output),
                 error=error,
+                resume_state=state.resume_state.to_dict(),
             )
-        )
-
-    def _snapshot(
-        self,
-        *,
-        agent_name: str,
-        entries: list[TranscriptEntry],
-        usage: Usage,
-        turns: int,
-        runtime: RuntimeState,
-        status: RunStatus,
-        output: object | None,
-        error: JsonObject | None,
-    ) -> RunSnapshot:
-        assert self.run_id is not None
-        return RunSnapshot(
-            run_id=self.run_id,
-            agent_name=agent_name,
-            entries=list(entries),
-            usage=usage.clone(),
-            turns=turns,
-            status=status,
-            output=to_json_safe(output),
-            error=error,
-            runtime=runtime.to_dict(),
         )
 
 

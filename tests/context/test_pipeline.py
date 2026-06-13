@@ -19,7 +19,7 @@ from lovia import (
 )
 from lovia.context import CompactionState
 from lovia.events import ContextCompacted
-from lovia.runtime.run_state import RuntimeState
+from lovia.runtime.run_state import ResumeState
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 
 from ..scripted_provider import ScriptedProvider, text
@@ -367,8 +367,8 @@ async def test_state_survives_checkpoint_round_trip():
     first = await pipeline.compact(req(entries, scratch=scratch))
     assert first.compacted is True
 
-    runtime = RuntimeState(compaction_scratch=scratch)
-    revived = RuntimeState.from_dict(json.loads(json.dumps(runtime.to_dict())))
+    resume_state = ResumeState(compaction_scratch=scratch)
+    revived = ResumeState.from_dict(json.loads(json.dumps(resume_state.to_dict())))
     res = await pipeline.compact(req(entries, scratch=revived.compaction_scratch))
     assert res.compacted is False  # decisions replayed, none re-made
     assert [entry_to_dict(e) for e in res.entries] == [

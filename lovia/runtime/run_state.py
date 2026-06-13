@@ -4,10 +4,13 @@ Three layers, by lifetime:
 
 * :class:`RunState` — everything that changes while a run executes (active
   agent, transcript, resolved tools, turn counter, ...). A handoff mutates
-  this in place instead of threading new values through return tuples.
-* :class:`RuntimeState` — the small, JSON-serializable slice of runner state
+  this in place. It *embeds* the run's :class:`~lovia.run_context.RunContext`
+  (the public surface handed to tools/guardrails/hooks) and adds the loop's
+  private machinery around it; ``agent`` and ``transcript`` are thin views
+  onto the embedded context, not separate storage.
+* :class:`ResumeState` — the small, JSON-serializable slice of runner state
   that must survive a checkpoint/resume cycle. It round-trips through
-  :attr:`~lovia.checkpointer.RunSnapshot.runtime`.
+  :attr:`~lovia.checkpointer.RunSnapshot.resume_state`.
 * :class:`ModelTurnResult` — scratch for a single model call, populated by
   :func:`~lovia.runtime.model_turn.stream_model_turn` (an async generator
   cannot ``return`` a value, so it fills in an accumulator instead).
@@ -36,8 +39,12 @@ OutputTypeSource = Literal["agent", "run_override"]
 
 
 @dataclass
-class RuntimeState:
-    """Runner-owned state persisted in a checkpoint's ``runtime`` field.
+class ResumeState:
+    """Runner-owned accumulators persisted in a checkpoint's ``resume_state``.
+
+    These are live values the loop reads and updates each turn; they are
+    grouped here (rather than scattered across :class:`RunState`) because they
+    share one trait: each must survive a checkpoint/resume as a JSON-safe unit.
 
     Attributes:
         last_input_tokens: Input-token count reported by the previous model
@@ -70,7 +77,7 @@ class RuntimeState:
         return data
 
     @classmethod
-    def from_dict(cls, data: JsonObject) -> "RuntimeState":
+    def from_dict(cls, data: JsonObject) -> "ResumeState":
         """Rebuild from a snapshot, tolerating missing or malformed keys."""
         state = cls()
         last_input = data.get("last_input_tokens")
@@ -92,17 +99,21 @@ class RuntimeState:
 class RunState:
     """Everything that changes while one run executes.
 
-    The loop creates this in its bootstrap phase and mutates it in place;
-    a handoff swaps ``agent``, ``tools_by_name``, ``structured_output``, and
+    The loop creates this in its bootstrap phase and mutates it in place; a
+    handoff swaps ``agent``, ``tools_by_name``, ``structured_output``, and
     rewrites ``transcript`` for the new agent.
+
+    The split from :class:`~lovia.run_context.RunContext` is by audience:
+    ``run_ctx`` is the public surface user code (tools, guardrails, hooks)
+    receives; everything else here is private loop machinery. ``agent`` and
+    ``transcript`` are views onto ``run_ctx`` so the active agent and the live
+    transcript have a single source of truth.
     """
 
-    agent: Agent
-    transcript: list[TranscriptEntry]
+    run_ctx: RunContext[Any]
     tools_by_name: dict[str, Tool]
     structured_output: StructuredOutput | None
-    run_ctx: RunContext[Any]
-    runtime: RuntimeState
+    resume_state: ResumeState
     # The active agent's resolved provider fallback chain. Resolved once per
     # agent (at bootstrap and on each handoff) so HTTP clients are reused
     # across turns; providers built from string specs are closed when the run
@@ -116,6 +127,25 @@ class RunState:
     # Set by the tool phase when a handoff tool fired; consumed by the loop.
     pending_handoff: "_HandoffSignal | None" = None
 
+    @property
+    def agent(self) -> Agent:
+        """The active agent. Single source of truth: ``run_ctx.agent``."""
+        return self.run_ctx.agent
+
+    @agent.setter
+    def agent(self, value: Agent) -> None:
+        self.run_ctx.agent = value
+
+    @property
+    def transcript(self) -> list[TranscriptEntry]:
+        """The live transcript — the very list stored in ``run_ctx.entries``.
+
+        Read/write the list in place (``append``/``extend``/``[:] =``); the
+        loop relies on this alias so appended turns reach the model and the
+        Session.
+        """
+        return self.run_ctx.entries
+
 
 @dataclass
 class ModelTurnResult:
@@ -125,4 +155,4 @@ class ModelTurnResult:
     turn_entries: list[TranscriptEntry] = field(default_factory=list)
 
 
-__all__ = ["ModelTurnResult", "OutputTypeSource", "RunState", "RuntimeState"]
+__all__ = ["ModelTurnResult", "OutputTypeSource", "ResumeState", "RunState"]

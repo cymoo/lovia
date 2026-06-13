@@ -19,7 +19,6 @@ from .exceptions import UserError
 from .messages import Message, Usage
 from .schema import coerce_output
 from .reliability import CancelToken, RetryPolicy, RunBudget
-from .run_context import RunContext
 from .runtime.result import RunHandle, RunResult
 from .session import Session
 
@@ -258,7 +257,7 @@ def _validate_snapshot_output_type(
 ) -> None:
     if output_type is not None:
         return
-    if snapshot.runtime.get("output_type_source") != "run_override":
+    if snapshot.resume_state.get("output_type_source") != "run_override":
         return
     raise UserError(
         f"Checkpoint {snapshot.run_id!r} was created with a run-level output_type.",
@@ -292,4 +291,4 @@ def _result_from_completed_snapshot(
     )
 
 
-__all__ = ["Runner", "RunContext", "RunResult", "RunHandle"]
+__all__ = ["Runner", "RunResult", "RunHandle"]

@@ -188,7 +188,7 @@ async def test_entries_mirror_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_entries_mirror_resume_from_snapshot() -> None:
     """Resume rebuilds the transcript from the snapshot's entries; the
     mirror must still round-trip."""
-    from lovia import InputEntry, AssistantTextEntry
+    from lovia import InputEntry, AssistantTextEntry, InMemoryCheckpointer
     from lovia.checkpointer import RunSnapshot
     from lovia.messages import Usage
 
@@ -203,10 +203,14 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
     snap = RunSnapshot(
         run_id="r1", agent_name="t", entries=snap_entries, usage=Usage(), turns=1
     )
+    cp = InMemoryCheckpointer()
+    await cp.save(snap)
 
     provider = ScriptedProvider([text("you're welcome")])
     agent = Agent(name="t", instructions="be helpful", model=provider)
-    result = await Runner.run(agent, "ignored", resume_from=snap)
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="r1", if_run_exists="require"
+    )
     assert _normalize(entries_to_messages(result.entries)) == _normalize(
         result.messages
     )

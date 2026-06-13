@@ -24,6 +24,7 @@ from lovia import (
     ToolResultEntry,
     TextDelta,
     UsageDelta,
+    events,
     tool,
 )
 from lovia.messages import Usage
@@ -84,7 +85,9 @@ async def test_resume_completed_snapshot_returns_without_rerunning_provider() ->
     agent = Agent(name="a", model=provider)
 
     await Runner.run(agent, "hi", checkpointer=cp, run_id="done")
-    result = await Runner.resume(agent, checkpointer=cp, run_id="done")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="done", if_run_exists="require"
+    )
 
     assert result.output == "done"
     assert len(provider.calls) == 1
@@ -97,11 +100,13 @@ async def test_resume_completed_snapshot_can_delete_checkpoint() -> None:
     agent = Agent(name="a", model=provider)
 
     await Runner.run(agent, "hi", checkpointer=cp, run_id="done-delete")
-    result = await Runner.resume(
+    result = await Runner.run(
         agent,
+        [],
         checkpointer=cp,
         run_id="done-delete",
         delete_checkpoint_on_success=True,
+        if_run_exists="require",
     )
 
     assert result.output == "done"
@@ -118,7 +123,9 @@ async def test_resume_completed_structured_snapshot_rehydrates_output() -> None:
     agent = Agent(name="a", model=provider, output_type=Out)
 
     await Runner.run(agent, "hi", checkpointer=cp, run_id="typed")
-    result = await Runner.resume(agent, checkpointer=cp, run_id="typed")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="typed", if_run_exists="require"
+    )
 
     assert isinstance(result.output, Out)
     assert result.output.value == 3
@@ -139,10 +146,17 @@ async def test_resume_completed_snapshot_requires_run_level_output_type() -> Non
     assert snap is not None
     assert snap.resume_state["output_type_source"] == "run_override"
     with pytest.raises(Exception, match="run-level output_type"):
-        await Runner.resume(agent, checkpointer=cp, run_id="override")
+        await Runner.run(
+            agent, [], checkpointer=cp, run_id="override", if_run_exists="require"
+        )
 
-    result = await Runner.resume(
-        agent, checkpointer=cp, run_id="override", output_type=Out
+    result = await Runner.run(
+        agent,
+        [],
+        checkpointer=cp,
+        run_id="override",
+        output_type=Out,
+        if_run_exists="require",
     )
     assert isinstance(result.output, Out)
     assert result.output.value == 3
@@ -170,7 +184,96 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
     agent = Agent(name="a", model=ScriptedProvider([]))
 
     with pytest.raises(Exception, match="not JSON-safe"):
-        await Runner.resume(agent, checkpointer=cp, run_id="bad-output")
+        await Runner.run(
+            agent, [], checkpointer=cp, run_id="bad-output", if_run_exists="require"
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_snapshot_does_not_write_session() -> None:
+    # A completed snapshot is replayed verbatim: its transcript was already
+    # persisted on the original completion, so resume does not write it back
+    # even when a session is supplied.
+    from lovia.stores import InMemorySession
+
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="a", model=provider)
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="done-session")
+
+    session = InMemorySession()
+    result = await Runner.run(
+        agent,
+        [],
+        checkpointer=cp,
+        run_id="done-session",
+        session=session,
+        session_id="s1",
+        if_run_exists="require",
+    )
+
+    assert result.output == "done"
+    assert await session.load("s1") == []
+
+
+@pytest.mark.asyncio
+async def test_run_idempotent_resumes_existing_run() -> None:
+    # Re-issuing the same run(...) after a crash resumes the stored run rather
+    # than restarting (if_run_exists defaults to "resume").
+    cp = InMemoryCheckpointer()
+    provider = FlakyProvider()
+    agent = Agent(name="a", model=provider)
+
+    with pytest.raises(ProviderError):
+        await Runner.run(agent, "hi", checkpointer=cp, run_id="job")
+
+    result = await Runner.run(agent, "hi", checkpointer=cp, run_id="job")
+    assert result.output == "recovered"
+    assert provider.calls == 2  # resumed; did not restart from turn 0
+
+
+@pytest.mark.asyncio
+async def test_run_idempotent_replays_completed_run() -> None:
+    # A completed run is replayed; the new input is dropped and the model is
+    # not called again.
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="a", model=provider)
+
+    first = await Runner.run(agent, "hi", checkpointer=cp, run_id="job")
+    assert first.output == "done"
+
+    again = await Runner.run(agent, "different", checkpointer=cp, run_id="job")
+    assert again.output == "done"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_if_run_exists_fail_raises_on_existing() -> None:
+    cp = InMemoryCheckpointer()
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]))
+
+    await Runner.run(agent, "hi", checkpointer=cp, run_id="job")
+    with pytest.raises(Exception, match="already exists"):
+        await Runner.run(
+            agent, "hi", checkpointer=cp, run_id="job", if_run_exists="fail"
+        )
+
+
+@pytest.mark.asyncio
+async def test_if_run_exists_restart_overwrites() -> None:
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("first"), text("second")])
+    agent = Agent(name="a", model=provider)
+
+    first = await Runner.run(agent, "hi", checkpointer=cp, run_id="job")
+    assert first.output == "first"
+
+    again = await Runner.run(
+        agent, "hi", checkpointer=cp, run_id="job", if_run_exists="restart"
+    )
+    assert again.output == "second"
+    assert len(provider.calls) == 2  # ran fresh both times
 
 
 @pytest.mark.asyncio
@@ -204,9 +307,49 @@ async def test_retryable_provider_failure_saves_interrupted_snapshot() -> None:
     assert snap.error is not None
     assert snap.error["type"] == "ProviderError"
 
-    result = await Runner.resume(agent, checkpointer=cp, run_id="interrupted")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="interrupted", if_run_exists="require"
+    )
     assert result.output == "recovered"
     assert provider.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_streams_events() -> None:
+    # if_run_exists="require" returns a RunHandle, so a resumed run can be
+    # consumed as a live event stream — not just awaited for the RunResult.
+    cp = InMemoryCheckpointer()
+    provider = FlakyProvider()
+    agent = Agent(name="a", model=provider)
+
+    with pytest.raises(ProviderError):
+        await Runner.run(agent, "hi", checkpointer=cp, run_id="stream-resume")
+
+    handle = Runner.stream(
+        agent, [], checkpointer=cp, run_id="stream-resume", if_run_exists="require"
+    )
+    seen: list[type] = []
+    async for ev in handle:
+        seen.append(type(ev))
+
+    assert events.RunStarted in seen
+    assert events.RunCompleted in seen
+    result = await handle.result()
+    assert result.output == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_require_missing_run_id_raises_when_driven() -> None:
+    # The snapshot loads lazily, so a missing run_id surfaces when the handle
+    # is first driven rather than from the stream() call itself.
+    cp = InMemoryCheckpointer()
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    handle = Runner.stream(
+        agent, [], checkpointer=cp, run_id="missing", if_run_exists="require"
+    )
+    with pytest.raises(Exception, match="No snapshot found"):
+        await handle
 
 
 @pytest.mark.asyncio
@@ -250,7 +393,9 @@ async def test_resume_continues_from_snapshot() -> None:
     provider = ScriptedProvider([text("It is noon.")])
     agent = Agent(name="a", model=provider, tools=[clock])
 
-    result = await Runner.resume(agent, checkpointer=cp, run_id="r2")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="r2", if_run_exists="require"
+    )
     assert result.output == "It is noon."
     # The first three entries survive the resume verbatim.
     assert result.entries[:3] == entries
@@ -284,7 +429,9 @@ async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
     provider = ScriptedProvider([text("It is noon.")])
     agent = Agent(name="a", model=provider, tools=[clock])
 
-    result = await Runner.resume(agent, checkpointer=cp, run_id="pending-tool")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="pending-tool", if_run_exists="require"
+    )
 
     assert result.output == "It is noon."
     assert calls == 1
@@ -352,10 +499,17 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
     assert snap.resume_state["output_type_source"] == "run_override"
 
     with pytest.raises(Exception, match="run-level output_type"):
-        await Runner.resume(spanish, checkpointer=cp, run_id="handoff")
+        await Runner.run(
+            spanish, [], checkpointer=cp, run_id="handoff", if_run_exists="require"
+        )
 
-    result = await Runner.resume(
-        spanish, checkpointer=cp, run_id="handoff", output_type=Out
+    result = await Runner.run(
+        spanish,
+        [],
+        checkpointer=cp,
+        run_id="handoff",
+        output_type=Out,
+        if_run_exists="require",
     )
     assert isinstance(result.output, Out)
     assert result.output.value == 7
@@ -390,11 +544,13 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_missing_run_id_raises() -> None:
+async def test_require_missing_run_id_raises() -> None:
     cp = InMemoryCheckpointer()
     agent = Agent(name="a", model=ScriptedProvider([]))
     with pytest.raises(Exception, match="No snapshot"):
-        await Runner.resume(agent, checkpointer=cp, run_id="missing")
+        await Runner.run(
+            agent, [], checkpointer=cp, run_id="missing", if_run_exists="require"
+        )
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from .. import events
 from .checkpoint import CheckpointWriter
+from .resume import IfRunExists, check_resumable, result_from_completed_snapshot
 from .model_turn import stream_model_turn
 from .run_state import ModelTurnResult, ResumeState, RunState
 from .utils import (
@@ -88,8 +89,7 @@ class RunLoop:
 
     Construction wires up configuration; :meth:`stream` drives the run. All
     per-run mutable state lives in a :class:`RunState` created during
-    bootstrap, so handoffs mutate one object instead of threading new values
-    through return tuples.
+    bootstrap.
     """
 
     def __init__(
@@ -112,6 +112,7 @@ class RunLoop:
         append_instructions: "str | None" = None,
         output_type_override: object | None = None,
         delete_checkpoint_on_success: bool = False,
+        if_run_exists: IfRunExists = "resume",
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -127,7 +128,11 @@ class RunLoop:
         self.retry = retry
         self.context_policy: ContextPolicy = context_policy or Compaction()
         self.run_id = run_id or (resume_from.run_id if resume_from else None)
+        self.checkpointer = checkpointer
+        # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
+        # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
         self.resume_from = resume_from
+        self.if_run_exists = if_run_exists
         self.append_instructions = append_instructions
         # ``output_type=None`` means "use the active agent's output_type";
         # any other value is a run-wide final-output contract.
@@ -147,12 +152,7 @@ class RunLoop:
         agent = self.initial_agent
         tracer: Tracer = agent.tracer or NoopTracer()
 
-        with tracer.span(
-            "run",
-            agent=agent.name,
-            run_id=self.run_id,
-            resumed=self.resume_from is not None,
-        ) as run_span:
+        with tracer.span("run", agent=agent.name, run_id=self.run_id) as run_span:
             async for ev in self._stream_inner(tracer, run_span):
                 yield ev
 
@@ -160,6 +160,22 @@ class RunLoop:
         self, tracer: Tracer, run_span: Span
     ) -> AsyncIterator[events.Event]:
         async with AsyncExitStack() as resources:
+            completed = await self._resolve_resume()
+            run_span.set_attribute(
+                "resumed", completed is not None or self.resume_from is not None
+            )
+            if completed is not None:
+                # Already-completed run: replay terminal events only. No
+                # bootstrap, guardrails, or hooks — those ran on the original
+                # completion; replay just folds usage and clears the checkpoint.
+                if self.parent_usage is not None:
+                    self.parent_usage.add(completed.usage)
+                if self.checkpoints.delete_on_success:
+                    await self.checkpoints.delete()
+                yield events.RunStarted(agent=self.initial_agent)
+                yield events.RunCompleted(result=completed)
+                return
+
             state = await self._bootstrap(resources)
             processor = ToolCallProcessor(
                 approvals=self.approvals,
@@ -278,6 +294,46 @@ class RunLoop:
     # ------------------------------------------------------------------ #
     # Phases
     # ------------------------------------------------------------------ #
+
+    async def _resolve_resume(self) -> RunResult | None:
+        """Apply the ``if_run_exists`` policy, loading the snapshot by ``run_id``.
+
+        Returns a :class:`RunResult` when the target run already ``completed``
+        (the caller replays it); otherwise returns ``None`` and, for a resumable
+        snapshot, sets ``self.resume_from`` so :meth:`_bootstrap` rehydrates it.
+        Raises :class:`UserError` for an unresumable snapshot or a policy
+        conflict (``require`` with nothing stored, or ``fail`` with a run already
+        present).
+        """
+        snapshot = self.resume_from
+        if snapshot is None:
+            if self.checkpointer is None or self.run_id is None:
+                return None
+            if self.if_run_exists == "restart":
+                return None  # ignore any stored run and start fresh
+            snapshot = await self.checkpointer.load(self.run_id)
+
+        if snapshot is None:
+            if self.if_run_exists == "require":
+                raise UserError(f"No snapshot found for run_id={self.run_id!r}")
+            return None  # nothing stored yet — start fresh
+
+        if self.if_run_exists == "fail":
+            raise UserError(
+                f"A run already exists for run_id={self.run_id!r} "
+                f"(status={snapshot.status!r}).",
+                hint="Pass if_run_exists='resume' to continue it, or 'restart' to overwrite it.",
+            )
+
+        check_resumable(
+            self.initial_agent, snapshot, output_type=self.output_type_override
+        )
+        if snapshot.status == "completed":
+            return result_from_completed_snapshot(
+                self.initial_agent, snapshot, output_type=self.output_type_override
+            )
+        self.resume_from = snapshot
+        return None
 
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
         """Connect tools, build the initial transcript, and assemble RunState."""

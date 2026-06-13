@@ -24,7 +24,7 @@ from .tools import Tool
 
 if TYPE_CHECKING:
     from .agent import Agent
-    from .runner import RunContext
+    from .run_context import RunContext
 
 
 HANDOFF_TOOL_PREFIX = "transfer_to_"

@@ -173,7 +173,9 @@ async def test_budget_exceeded_is_interrupted_and_resumable() -> None:
 
     # Resume without the tight budget: the pending call drains, then the
     # remaining script completes the run.
-    result = await Runner.resume(agent, checkpointer=cp, run_id="budgeted")
+    result = await Runner.run(
+        agent, [], checkpointer=cp, run_id="budgeted", if_run_exists="require"
+    )
     assert result.output == "done"
 
 
@@ -266,12 +268,14 @@ async def test_resume_persists_session_history() -> None:
             budget=RunBudget(max_tool_calls=1),
         )
 
-    result = await Runner.resume(
+    result = await Runner.run(
         agent,
+        [],
         checkpointer=cp,
         run_id="sessioned",
         session=session,
         session_id="s1",
+        if_run_exists="require",
     )
 
     assert result.output == "done"

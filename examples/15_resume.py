@@ -1,9 +1,10 @@
 """Checkpoint a run, then resume it later.
 
 The runner snapshots the transcript at the end of every turn when a
-:class:`Checkpointer` is provided. ``Runner.resume(...)`` rehydrates the
-saved state and continues the loop — useful for long-running agents that
-might be interrupted by a crash, deploy, or queue worker hand-off.
+:class:`Checkpointer` is provided. Re-issuing the run under the same
+``run_id`` (or passing ``if_run_exists="require"`` to resume a known one)
+rehydrates the saved state and continues the loop — useful for long-running
+agents that might be interrupted by a crash, deploy, or queue worker hand-off.
 
 Note: the opaque ``RunContext.context`` value is not snapshotted; you
 re-supply it on resume.
@@ -55,7 +56,9 @@ async def main() -> None:
     snap = await cp.load(run_id)
     print(f"snapshot: {len(snap.entries)} entries, {snap.turns} turns")
 
-    resumed = await Runner.resume(agent, checkpointer=cp, run_id=run_id)
+    resumed = await Runner.run(
+        agent, [], checkpointer=cp, run_id=run_id, if_run_exists="require"
+    )
     print("resumed output:", resumed.output)
 
 

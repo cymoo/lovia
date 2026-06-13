@@ -25,6 +25,10 @@ class RunBudget:
     tool. Tools and model calls that are already in flight when the budget
     trips are allowed to finish; the check happens at the next safe point.
 
+    ``max_tool_calls`` counts every *requested* tool call — including ones the
+    runner rejects (unknown tool, malformed arguments, denied approval), not
+    just those that actually execute.
+
     Any limit set to ``None`` is unconstrained. ``max_seconds`` measures wall
     clock from the first :meth:`check` call.
     """

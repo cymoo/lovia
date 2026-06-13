@@ -17,6 +17,7 @@ module owns the orchestration. All mutable run state lives in
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import Counter
 from contextlib import AsyncExitStack
@@ -244,7 +245,7 @@ class RunLoop:
                             yield ev
                     await self.checkpoints.save_running(state)
 
-                result = await self._finalize(state, output, run_span)
+                result = await self._finalize_run(state, output, run_span)
                 await self.checkpoints.complete(state, result.output)
                 run_completed = True
 
@@ -265,7 +266,11 @@ class RunLoop:
                     if not turn_durable:
                         # The in-flight turn left nothing in the transcript.
                         state.turns = max(0, state.turns - 1)
-                    await self.checkpoints.save_terminal(state, exc)
+                    # Shield the terminal save: a run cancelled via
+                    # wait_for/timeout must still leave an ``interrupted``
+                    # snapshot. Without the shield, awaiting here could itself
+                    # be cancelled and drop the checkpoint.
+                    await asyncio.shield(self.checkpoints.save_terminal(state, exc))
                 if isinstance(exc, Exception):
                     yield await self._emit(state, events.ErrorOccurred(error=exc))
                 raise
@@ -518,7 +523,7 @@ class RunLoop:
             state.transcript.append(InputEntry(role="user", content=repair_prompt))
             return _UNSET
 
-    async def _finalize(
+    async def _finalize_run(
         self, state: RunState, output: object, run_span: Span
     ) -> RunResult:
         """Run output guardrails, persistence, and usage propagation."""
@@ -631,6 +636,10 @@ class RunLoop:
             policy = DefaultOutputRepair()
         return policy.build_prompt(exc, attempt)
 
+    def _system_entry(self, system_text: str) -> list[TranscriptEntry]:
+        """Wrap rendered system text as a leading entry (``[]`` when blank)."""
+        return [InputEntry(role="system", content=system_text)] if system_text else []
+
     async def _build_initial_entries(
         self,
         agent: Agent,
@@ -641,8 +650,7 @@ class RunLoop:
         system_text = await self._system_prompt(
             agent, structured_output, extra=system_extra
         )
-        if system_text:
-            entries.append(InputEntry(role="system", content=system_text))
+        entries.extend(self._system_entry(system_text))
 
         if self.session is not None:
             assert self.session_id is not None  # validated in __init__
@@ -696,9 +704,7 @@ class RunLoop:
             body = messages_to_entries(
                 list(handoff.input_filter(entries_to_messages(body)))
             )
-        head: list[TranscriptEntry] = (
-            [InputEntry(role="system", content=new_system)] if new_system else []
-        )
+        head = self._system_entry(new_system)
         # In-place so RunContext.entries keeps observing the same list.
         state.transcript[:] = [*head, *body]
 
@@ -750,6 +756,10 @@ class RunLoop:
         """
         specs = agent.model if isinstance(agent.model, list) else [agent.model]
         providers = agent.resolve_providers()
+        # NOTE: this pairs each provider with its spec positionally, which is
+        # correct only while Agent.resolve_providers() returns providers 1:1 in
+        # agent.model order. If it ever dedups or reorders, the run-owned (built
+        # from a string spec) vs caller-owned distinction below would be wrong.
         for spec, provider in zip(specs, providers):
             if isinstance(spec, str):
                 aclose = getattr(provider, "aclose", None)
@@ -810,9 +820,7 @@ class RunLoop:
         system_text = await self._system_prompt(
             state.agent, state.structured_output, extra=state.system_extra
         )
-        if system_text:
-            return [InputEntry(role="system", content=system_text), *view]
-        return view
+        return [*self._system_entry(system_text), *view]
 
     def _compacted_event(
         self,
@@ -874,4 +882,4 @@ def _push_cleanup(
     resources.push_async_callback(safe_close)
 
 
-__all__ = ["RunLoop", "pending_tool_calls"]
+__all__ = ["RunLoop"]

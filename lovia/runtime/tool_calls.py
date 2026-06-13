@@ -46,6 +46,9 @@ class ToolCallProcessor:
         if self.cancel_token is not None:
             self.cancel_token.check()
         if self.budget is not None:
+            # Every requested call counts toward max_tool_calls, including ones
+            # rejected just below (unknown tool, malformed args, denied) — so a
+            # model stuck spamming a bad tool name still hits the cap.
             self.budget.record_tool_call()
             self.budget.check(state.run_ctx.usage)
 

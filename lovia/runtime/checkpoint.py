@@ -115,6 +115,8 @@ class CheckpointWriter:
         output: object | None = None,
         error: JsonObject | None = None,
     ) -> None:
+        """Persist a snapshot. ``output`` must already be JSON-safe: ``complete``
+        pre-serializes it; ``save_running``/``save_terminal`` pass ``None``."""
         if not self.enabled:
             return
         assert self.checkpointer is not None and self.run_id is not None
@@ -126,7 +128,7 @@ class CheckpointWriter:
                 usage=state.run_ctx.usage.clone(),
                 turns=state.turns,
                 status=status,
-                output=to_json_safe(output),
+                output=output,
                 error=error,
                 resume_state=state.resume_state.to_dict(),
             )

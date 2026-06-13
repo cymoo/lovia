@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 from .._types import JsonObject
 from .. import events
-from ..agent import Agent
 from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
@@ -17,7 +16,6 @@ from ..providers.base import ModelSettings, Provider
 from ..reliability import RetryPolicy
 from .run_state import ModelTurnResult
 from .utils import truncate_repr
-from ..tools import Tool
 from ..tracing import Tracer
 from ..transcript import (
     AssistantTextEntry,
@@ -32,6 +30,10 @@ from ..transcript import (
     TranscriptEntry,
     UsageDelta,
 )
+
+if TYPE_CHECKING:
+    from ..agent import Agent
+    from ..tools import Tool
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,12 @@ def assemble_turn_entries(
 ) -> list[TranscriptEntry]:
     """Use provider-completed entries when available, with delta fallback."""
 
+    # Per entry kind (reasoning / message / tool call) this is all-or-nothing:
+    # if the provider emitted any completed entry of a kind we take only the
+    # completed ones, else we rebuild that kind from streamed deltas. This
+    # assumes a provider reports each kind *entirely* one way or the other; a
+    # provider that mixed completed and delta-only entries of the same kind
+    # would drop the delta-only ones.
     has_reasoning = any(
         isinstance(entry, ReasoningEntry) for entry in completed_entries
     )

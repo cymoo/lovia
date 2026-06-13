@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -278,3 +279,32 @@ async def test_resume_persists_session_history() -> None:
     assert history, "resumed run must write its transcript back to the session"
     final_messages = entries_to_messages(history)
     assert any(m.role == "assistant" and m.content == "done" for m in final_messages)
+
+
+# ---------------------------------------------------------------------------
+# A cancelled run still persists an interrupted (resumable) snapshot
+# ---------------------------------------------------------------------------
+
+
+class _CancelMidStreamProvider:
+    """Yields one delta, then raises CancelledError (simulated cancellation)."""
+
+    name = "cancel-midstream"
+    model = "fake-model"
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        yield TextDelta(text="partial")
+        raise asyncio.CancelledError()
+
+
+async def test_cancelled_run_persists_interrupted_snapshot() -> None:
+    provider = _CancelMidStreamProvider()
+    agent = Agent(name="t", instructions="x", model=provider)
+    cp = InMemoryCheckpointer()
+
+    with pytest.raises(asyncio.CancelledError):
+        await Runner.run(agent, "go", checkpointer=cp, run_id="cancelled")
+
+    snap = await cp.load("cancelled")
+    assert snap is not None
+    assert snap.status == "interrupted"

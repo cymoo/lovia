@@ -68,3 +68,13 @@ class ChatSessionInfo(BaseModel):
 
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class TodoItemOut(BaseModel):
+    content: str
+    status: str
+    active_form: str | None = None
+
+
+class TodosResponse(BaseModel):
+    todos: list[TodoItemOut] = Field(default_factory=list)

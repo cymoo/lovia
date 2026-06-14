@@ -10,11 +10,19 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from lovia import Agent, tool  # noqa: E402
+from lovia import Agent, tool, todo_plugin  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from .scripted_provider import ScriptedProvider, call, text  # noqa: E402
+
+_TODOS = {
+    "todos": [
+        {"content": "Design model", "status": "completed"},
+        {"content": "Write tests", "status": "in_progress", "active_form": "Writing tests"},
+        {"content": "Document", "status": "pending"},
+    ]
+}
 
 
 # ---------------------------------------------------------------- helpers -
@@ -312,3 +320,73 @@ async def test_approval_registry_resolve_unknown() -> None:
 
     reg = ApprovalRegistry()
     assert await reg.resolve("nope", "nope", True) is False
+
+
+# ------------------------------------------------------------------ todos -
+
+
+def _todo_agent() -> Agent:
+    return Agent(
+        name="bot",
+        model=ScriptedProvider([call("todo_write", _TODOS, call_id="c1"), text("done")]),
+        plugins=[todo_plugin()],
+    )
+
+
+def test_stream_emits_todo_event_and_suppresses_tool_result() -> None:
+    client = TestClient(_app(_todo_agent()))
+    res = client.post("/api/chat/stream", json={"message": "go"})
+    evs = _parse_sse(res.text)
+
+    todos = [d for (e, d) in evs if e == "todo"]
+    assert todos, "expected a todo event"
+    payload = todos[0]
+    assert payload["name"] == "todo_write"
+    assert [t["content"] for t in payload["todos"]] == [
+        "Design model",
+        "Write tests",
+        "Document",
+    ]
+    assert payload["todos"][1]["active_form"] == "Writing tests"
+    # The structured todo event replaces the raw tool_result for that call.
+    assert all(d.get("name") != "todo_write" for (e, d) in evs if e == "tool_result")
+
+
+def test_todos_api_reconstructs_latest_from_session() -> None:
+    client = TestClient(_app(_todo_agent()))
+    client.post("/api/chat/stream", json={"message": "go", "session_id": "s1"})
+
+    res = client.get("/api/sessions/s1/todos")
+    assert res.status_code == 200
+    data = res.json()
+    assert [t["content"] for t in data["todos"]] == [
+        "Design model",
+        "Write tests",
+        "Document",
+    ]
+    assert data["todos"][0]["status"] == "completed"
+
+
+def test_todos_api_empty_for_session_without_todos() -> None:
+    client = TestClient(_app(_make_agent([text("hi")])))
+    client.post("/api/chat/stream", json={"message": "go", "session_id": "s2"})
+    res = client.get("/api/sessions/s2/todos")
+    assert res.status_code == 200
+    assert res.json()["todos"] == []
+
+
+def test_max_turns_caps_the_agent_loop() -> None:
+    @tool
+    async def noop() -> str:
+        """A tool that never ends the loop on its own."""
+        return "ok"
+
+    # The script would keep calling the tool forever; max_turns must stop it.
+    provider = ScriptedProvider([call("noop", {}, call_id=f"c{i}") for i in range(6)])
+    agent = Agent(name="bot", model=provider, tools=[noop])
+    client = TestClient(_app(agent, max_turns=2))
+    res = client.post("/api/chat/stream", json={"message": "go"})
+    evs = _parse_sse(res.text)
+    assert len(provider.calls) <= 2
+    # The cap surfaces as a clean `error` event, not a faulted response.
+    assert any(e == "error" for (e, _) in evs)

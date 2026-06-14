@@ -11,14 +11,29 @@ checkpointed and session-persisted). The list is full-replace: each
 from __future__ import annotations
 
 import json
-import logging
 
 from ..transcript import ToolCallEntry, TranscriptEntry
 from .types import Todo, TodoInput
 
-logger = logging.getLogger(__name__)
-
 _BOX = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
+
+
+def _parse_todo_inputs(arguments: str) -> list[TodoInput] | None:
+    """Parse a ``todo_write`` call's JSON arguments into todo inputs.
+
+    Returns ``None`` when the payload is not a todo write (no ``todos`` array)
+    or fails validation — callers treat that as "not a todo call".
+    """
+    try:
+        data = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not (isinstance(data, dict) and isinstance(data.get("todos"), list)):
+        return None
+    try:
+        return [TodoInput.model_validate(item) for item in data["todos"]]
+    except Exception:
+        return None
 
 
 def render_todos(items: list[Todo]) -> str:
@@ -76,15 +91,26 @@ class TodoList:
         """
         for entry in reversed(entries):
             if isinstance(entry, ToolCallEntry) and entry.name == tool_name:
-                try:
-                    data = json.loads(entry.arguments)
-                    raw = data.get("todos", []) if isinstance(data, dict) else []
-                    inputs = [TodoInput.model_validate(item) for item in raw]
-                except Exception:
-                    logger.warning("todo rehydrate failed", exc_info=True)
-                    return
-                self.replace(inputs)
+                inputs = _parse_todo_inputs(entry.arguments)
+                if inputs is not None:
+                    self.replace(inputs)
                 return
 
 
-__all__ = ["TodoList", "render_todos"]
+def todos_from_entries(entries: list[TranscriptEntry]) -> list[Todo]:
+    """Reconstruct the latest todo list from a transcript, name-agnostically.
+
+    Scans backward for the most recent tool call whose arguments parse as a
+    todo-write payload (a ``todos`` array), so it works even if the tool was
+    renamed. Returns an empty list when none is found. Used by the web layer to
+    surface current todos on session reload.
+    """
+    for entry in reversed(entries):
+        if isinstance(entry, ToolCallEntry):
+            inputs = _parse_todo_inputs(entry.arguments)
+            if inputs is not None:
+                return TodoList().replace(inputs)
+    return []
+
+
+__all__ = ["TodoList", "render_todos", "todos_from_entries"]

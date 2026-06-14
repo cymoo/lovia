@@ -6,7 +6,7 @@ The first :class:`~lovia.plugins.Plugin`. See :func:`todo_plugin`.
 from __future__ import annotations
 
 from .plugin import todo_plugin
-from .store import TodoList, render_todos
+from .store import TodoList, render_todos, todos_from_entries
 from .types import Todo, TodoInput, TodoStatus
 
 __all__ = [
@@ -16,4 +16,5 @@ __all__ = [
     "TodoStatus",
     "render_todos",
     "todo_plugin",
+    "todos_from_entries",
 ]

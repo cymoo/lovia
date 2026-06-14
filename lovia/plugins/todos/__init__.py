@@ -1,11 +1,11 @@
 """Todo plugin: an externalized, per-turn-visible checklist for long tasks.
 
-The first :class:`~lovia.plugins.Plugin`. See :func:`todo_plugin`.
+The first :class:`~lovia.plugins.Plugin`. See :func:`todos`.
 """
 
 from __future__ import annotations
 
-from .plugin import todo_plugin
+from .plugin import todos
 from .store import TodoList, render_todos, todos_from_entries
 from .types import Todo, TodoInput, TodoStatus
 
@@ -15,6 +15,6 @@ __all__ = [
     "TodoList",
     "TodoStatus",
     "render_todos",
-    "todo_plugin",
+    "todos",
     "todos_from_entries",
 ]

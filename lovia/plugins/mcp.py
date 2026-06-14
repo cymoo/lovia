@@ -13,13 +13,13 @@ still allowing an explicit, kept-alive connection across many runs.
 Lifecycle::
 
     # Per-run (default): the runtime opens a fresh connection each run and
-    # closes it afterwards. Just hand the server to the agent:
-    agent = Agent(..., mcp_servers=[MCPServerStdio(command="...", args=[...])])
+    # closes it afterwards. Just hand the server to the ``mcp`` plugin:
+    agent = Agent(..., plugins=[mcp(MCPServerStdio(command="...", args=[...]))])
 
     # Persistent: open once, reuse across runs, close when done:
     server = MCPServerStdio(command="...", args=[...])
     async with server.session() as conn:
-        agent = Agent(..., mcp_servers=[conn])
+        agent = Agent(..., plugins=[mcp(conn)])
         await Runner.run(agent, "...")   # reuses the live connection
         await Runner.run(agent, "...")   # reused again
 
@@ -36,14 +36,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Protocol, cast, runtime_checkable
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Protocol,
+    cast,
+    runtime_checkable,
+)
 
-from ._types import JsonObject
-from .exceptions import MCPError, UserError
-from .run_context import RunContext
-from .tools import ApprovalPredicate, Tool, ToolResultRenderer
+from .._types import JsonObject
+from ..exceptions import MCPError, UserError
+from ..run_context import RunContext
+from ..tools import ApprovalPredicate, Tool, ToolResultRenderer
+from .base import Plugin, PluginInstance
+
+logger = logging.getLogger(__name__)
 
 _MCP_INSTALL_HINT = "Install the optional dependency with: pip install 'lovia[mcp]'"
 
@@ -194,7 +206,7 @@ class MCPConnection:
     Created by :meth:`MCPServer.open` / :meth:`MCPServer.session`; not usually
     constructed directly. Implements the same minimal surface the runtime needs
     from a server (``close_after_run`` + :meth:`open`), so a persistent connection
-    can be placed directly on ``agent.mcp_servers``.
+    can be passed directly to :func:`mcp`.
     """
 
     transport: Callable[[], Any]
@@ -373,7 +385,7 @@ class MCPConnection:
 # --------------------------------------------------------------------------- #
 @runtime_checkable
 class MCPServerLike(Protocol):
-    """What the runtime needs from an ``agent.mcp_servers`` entry.
+    """What the :func:`mcp` plugin needs from each server entry.
 
     Satisfied by both :class:`MCPServer` config (``close_after_run=True``) and a
     live :class:`MCPConnection` (``close_after_run=False``).
@@ -493,6 +505,53 @@ class MCPServerStreamableHTTP(MCPServer):
         return lambda: client(url, headers=headers)
 
 
+# --------------------------------------------------------------------------- #
+# Plugin factory
+# --------------------------------------------------------------------------- #
+@dataclass
+class _MCPPlugin:
+    servers: tuple[MCPServerLike, ...]
+    name: str = "mcp"
+
+    async def setup(self) -> PluginInstance:
+        tools: list[Tool] = []
+        closers: list[Callable[[], Awaitable[None]]] = []
+        for server in self.servers:
+            conn = await server.open()
+            if server.close_after_run:
+                closers.append(conn.close)
+            tools.extend(conn.tools())
+
+        async def aclose() -> None:
+            for close in reversed(closers):
+                try:
+                    await close()
+                except Exception:  # noqa: BLE001 - best-effort teardown
+                    logger.debug("mcp.close failed during teardown", exc_info=True)
+
+        return PluginInstance(tools=tools, aclose=aclose)
+
+
+def mcp(*servers: MCPServerLike, name: str = "mcp") -> Plugin:
+    """Mount one or more MCP servers' tools on an agent, as a plugin.
+
+    Each ``server`` is opened once per run; a config :class:`MCPServer` is closed
+    when the run ends, while a live :class:`MCPConnection` (from
+    ``async with server.session()``) is left open for its owner. Disambiguate
+    overlapping tool names with ``MCPServer.name`` (which prefixes ``name__tool``).
+
+    Example::
+
+        from lovia.plugins.mcp import mcp, MCPServerStdio
+
+        agent = Agent(
+            ...,
+            plugins=[mcp(MCPServerStdio(command="uvx", args=["mcp-server-fetch"]))],
+        )
+    """
+    return _MCPPlugin(servers=tuple(servers), name=name)
+
+
 __all__ = [
     "MCPConnection",
     "MCPError",
@@ -501,6 +560,7 @@ __all__ = [
     "MCPServerStdio",
     "MCPServerStreamableHTTP",
     "MCPToolResult",
+    "mcp",
     "normalize_schema",
     "render_mcp_content",
 ]

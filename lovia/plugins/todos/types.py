@@ -41,8 +41,7 @@ class TodoInput(BaseModel):
     active_form: str | None = Field(
         default=None,
         description=(
-            "Present-tense form shown while in_progress, "
-            "e.g. 'Running the test suite'."
+            "Present-tense form shown while in_progress, e.g. 'Running the test suite'."
         ),
     )
 

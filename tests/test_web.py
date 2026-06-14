@@ -10,7 +10,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from lovia import Agent, tool, todo_plugin  # noqa: E402
+from lovia import Agent, tool, todos  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -344,7 +344,7 @@ def _todo_agent() -> Agent:
     return Agent(
         name="bot",
         model=ScriptedProvider([call("todo_write", _TODOS, call_id="c1"), text("done")]),
-        plugins=[todo_plugin()],
+        plugins=[todos()],
     )
 
 

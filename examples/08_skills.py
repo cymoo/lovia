@@ -17,7 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, Skills
+from lovia import Agent, Runner, skills
 from lovia.events import (
     TextDelta,
     ReasoningDelta,
@@ -33,9 +33,6 @@ SKILLS_DIR = Path(__file__).parent / "skills"
 
 
 async def main() -> None:
-    skills = Skills.from_dir(SKILLS_DIR)
-    print(f"Skills loaded: {skills.instructions().splitlines()[1]}")
-
     # Provide a shell tool so the model can execute skill scripts.
     from lovia.tools.shell import shell
 
@@ -50,7 +47,7 @@ async def main() -> None:
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[shell()],
-        skills=skills,
+        plugins=[skills(SKILLS_DIR)],
     )
 
     print("=" * 60)

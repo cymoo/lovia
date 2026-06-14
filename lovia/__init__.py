@@ -91,16 +91,6 @@ from .run_context import RunContext
 from .runtime.result import RunHandle, RunResult
 from .runner import Runner
 from .session import Session
-from .skills import (
-    LocalDirSkillSource,
-    Skill,
-    SkillFilter,
-    SkillMetadata,
-    SkillSource,
-    Skills,
-    SkillsError,
-)
-from .memory import Memory
 from .transcript import (
     FinishDelta,
     InputEntry,
@@ -124,9 +114,25 @@ from .transcript import (
     messages_to_entries,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
-from .plugins import Plugin, PluginInstance, ViewInjector
+from .plugins import (
+    LocalDirSkillSource,
+    Plugin,
+    PluginInstance,
+    Skill,
+    SkillFilter,
+    SkillMetadata,
+    SkillSource,
+    Skills,
+    SkillsError,
+    Todo,
+    TodoInput,
+    TodoList,
+    TodoStatus,
+    ViewInjector,
+    skills,
+    todos,
+)
 from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
-from .todos import Todo, TodoInput, TodoList, TodoStatus, todo_plugin
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 # ---------------------------------------------------------------------------
@@ -213,7 +219,6 @@ __all__ = [
     "LoviaError",
     "MaxTurnsExceeded",
     "MCPError",
-    "Memory",
     "AssistantTextEntry",
     "LLMSummarizer",
     "ModelSettings",
@@ -283,8 +288,9 @@ __all__ = [
     "provider_from_string",
     "safe_window",
     "messages_to_entries",
+    "skills",
     "system",
-    "todo_plugin",
+    "todos",
     "tool",
     "user",
 ]

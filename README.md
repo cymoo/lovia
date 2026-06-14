@@ -53,8 +53,8 @@ ship.
 - **Provider-neutral by design.** Built-in adapters speak OpenAI Chat
   Completions and Anthropic Messages directly over `httpx`; custom providers
   implement a small `Protocol`.
-- **Python-native extension.** Agents are dataclasses, providers, sessions,
-  memory, plugins, skills, and workspaces are protocol-shaped. You plug things
+- **Python-native extension.** Agents are dataclasses; providers, sessions,
+  plugins, skills, and workspaces are protocol-shaped. You plug things
   in; you do not subclass a framework universe.
 - **Minimal by default.** The base install stays focused. Search, MCP, web UI,
   example niceties, and orchestration integrations live behind extras.
@@ -316,7 +316,7 @@ for question in channel.pending:
     channel.answer(question.id, "Use option A.")
 ```
 
-## Sessions, Checkpoints, And Memory
+## Sessions and Checkpoints
 
 Sessions persist conversation transcript across calls:
 
@@ -344,9 +344,9 @@ result = await Runner.run(
 )
 ```
 
-Memory is a small protocol for long-term semantic stores. lovia never injects
-memory automatically; wire it through tools or hooks so your product controls
-what the model sees.
+Long-term memory across sessions is not a core concept — there is no `Memory`
+type. Add it as a plugin over your own store (see the `MemoryPlugin` example
+under Plugins below).
 
 ## Context Management
 
@@ -459,61 +459,175 @@ pip install "lovia[ddg]"
 
 Custom search is just a `WebSearch` implementation passed to `web_search()`.
 
-## Skills
+## Plugins
+
+A **plugin** is lovia's one extension axis for bundling a feature. A single
+object contributes any mix of: `tools`, system-prompt `instructions`, per-turn
+`view_injectors` (transient reminders, never written to the transcript), event
+`hooks`, and `input_guardrails` / `output_guardrails`. The runner activates each
+plugin **once per run** (and once per agent on a handoff) by awaiting its async
+`setup()`, and releases anything it opened via `aclose()` when the run ends.
+Plugins are purely additive — they never drive control flow; the loop keeps the
+abort, retry, and handoff. Skills, MCP, and the todo list below are all built-in
+plugins.
+
+### Todo lists
+
+The built-in todo plugin gives the model a checklist tool and re-shows the
+current list every turn, without bloating the persisted transcript:
+
+```python
+from lovia import Agent, Runner, todos
+
+agent = Agent(
+    name="builder",
+    instructions="Complete multi-step work carefully.",
+    model="deepseek-v4-pro",
+    plugins=[todos()],
+)
+
+await Runner.run(agent, "Implement a small REST API with tests and docs.")
+```
+
+### Skills
 
 Skills are reusable instruction bundles following the Agent Skills
 specification. lovia exposes skill metadata up front, then lets the model load
 full instructions and referenced files only when needed.
 
 ```python
-from lovia import Agent, Skills
+from lovia import Agent, skills
 
 agent = Agent(
     name="support",
     instructions="Help customers using the right policy.",
     model="deepseek-v4-pro",
-    skills=Skills.from_dir("./skills"),
+    plugins=[skills("./skills")],
 )
 ```
 
-A skill directory contains `SKILL.md` with YAML frontmatter, plus optional
-`references/`, `scripts/`, and `assets/` files. Multiple directories can be
-merged:
+A skill directory holds `SKILL.md` with YAML frontmatter, plus optional
+`references/`, `scripts/`, and `assets/` files. Pass several directories, or
+scope the catalog with a filter:
 
 ```python
-skills = Skills.from_dir("./skills", "./team-skills")
+plugins=[skills("./skills", "./team-skills")]
+plugins=[skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
 ```
 
-Scope catalogs with a filter:
+For a custom backend, pass a `SkillSource` (or a pre-built `Skills`) instead of
+paths.
 
-```python
-skills = Skills.from_dir(
-    "./skills",
-    filter=lambda meta: "internal" not in meta.extra.get("tags", []),
-)
+### MCP
+
+[Model Context Protocol](https://modelcontextprotocol.io) servers expose their
+tools to the agent. Install the optional dependency:
+
+```bash
+pip install "lovia[mcp]"
 ```
 
-## Plugins
-
-A plugin bundles tools, instructions, view injectors, and hooks behind one
-object. The built-in todo plugin gives the model a checklist tool and re-shows
-the current list every turn without writing the reminder into the transcript.
-
 ```python
-from lovia import Agent, Runner, todo_plugin
+from lovia import Agent
+from lovia.plugins.mcp import MCPServerStdio, mcp
 
 agent = Agent(
-    name="builder",
-    instructions="Complete multi-step work carefully.",
+    name="assistant",
     model="deepseek-v4-pro",
-    plugins=[todo_plugin()],
+    plugins=[
+        mcp(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
+    ],
 )
-
-await Runner.run(agent, "Implement a small REST API with tests and docs.")
 ```
 
-The same plugin seam is useful for product-specific context, policy reminders,
-or observability bundles.
+By default each run opens and closes the server. To reuse one connection across
+runs, open a session and pass the live connection instead:
+
+```python
+server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
+
+async with server.session() as conn:
+    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[mcp(conn)])
+    await Runner.run(agent, "Fetch https://example.com and summarize it.")
+```
+
+`mcp()` takes several servers — `mcp(a, b)` — and `MCPServer.name` prefixes a
+server's tools (`web__fetch`) to keep names unique.
+
+### Writing a plugin
+
+A plugin is any object with a `name` and an `async setup()` that returns a
+`PluginInstance`. State that should be **fresh per run** is built inside `setup`
+(like the todo list above); state that should **persist across runs and
+sessions** is held on the plugin and passed in at construction. Here is a
+long-term memory plugin — it wraps a backend you supply, created once and shared
+by every run, so the agent can recall a fact from one conversation in the next:
+
+```python
+from dataclasses import dataclass
+from typing import Protocol
+
+from lovia import Agent, PluginInstance, tool
+
+
+class MemoryStore(Protocol):
+    """Your long-term backend — implement it over a vector DB, SQLite, etc."""
+
+    async def add(self, fact: str) -> None: ...
+    async def search(self, query: str, k: int) -> list[str]: ...
+
+
+@dataclass
+class MemoryPlugin:
+    """Cross-session long-term memory the agent can write to and search."""
+
+    store: MemoryStore  # long-lived, shared by every run — not rebuilt per run
+    name: str = "memory"
+
+    async def setup(self) -> PluginInstance:
+        store = self.store
+
+        @tool
+        async def remember(fact: str) -> str:
+            """Save a durable fact to recall in any later session."""
+            await store.add(fact)
+            return "Saved to long-term memory."
+
+        @tool
+        async def recall(query: str) -> str:
+            """Search long-term memory for facts relevant to the query."""
+            hits = await store.search(query, k=5)
+            return "\n".join(f"- {h}" for h in hits) or "(nothing relevant)"
+
+        return PluginInstance(
+            tools=[remember, recall],
+            instructions=(
+                "You have long-term memory that persists across sessions. Call "
+                "`recall` to check it before answering, and `remember` to store "
+                "durable facts or preferences the user shares."
+            ),
+        )
+
+
+store = MyVectorStore()  # your MemoryStore: just async add() and search()
+agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MemoryPlugin(store)])
+```
+
+Because that backend is shared across (possibly concurrent) runs it must be safe
+for concurrent use, and the plugin never closes it — its lifecycle belongs to
+whoever created it. (Contrast the todo plugin, whose store is rebuilt inside
+`setup` for each run.)
+
+`PluginInstance` carries any subset of these contributions:
+
+| Field | Effect |
+| --- | --- |
+| `tools` | merged into the agent's tool set |
+| `instructions` | appended to the system prompt |
+| `view_injectors` | entries appended to the model's view each turn — never persisted |
+| `hooks` | an `AgentHooks` that observes run events (metrics, audit, …) |
+| `input_guardrails` / `output_guardrails` | run at the loop's checkpoints, with the agent's own; the loop keeps the abort |
+| `aclose` | coroutine awaited at run end to release resources opened in `setup` |
 
 ## Workspace Agents
 
@@ -551,43 +665,6 @@ Modes:
 Workspace paths are root-relative; absolute paths, `..` escapes, and symlink
 escapes are rejected. The local shell still runs as the host user, so use
 containerized or remote workspace backends when you need hard isolation.
-
-## MCP
-
-Install optional MCP support:
-
-```bash
-pip install "lovia[mcp]"
-```
-
-Then attach servers; their tools are merged with ordinary lovia tools.
-
-```python
-from lovia import Agent
-from lovia.mcp import MCPServerStdio
-
-agent = Agent(
-    name="assistant",
-    model="deepseek-v4-pro",
-    mcp_servers=[
-        MCPServerStdio(
-            name="web",
-            command="uvx",
-            args=["mcp-server-fetch"],
-        )
-    ],
-)
-```
-
-Each run opens and closes server configs safely. For reuse, open a session:
-
-```python
-server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
-
-async with server.session() as conn:
-    agent = Agent(name="assistant", model="deepseek-v4-pro", mcp_servers=[conn])
-    await Runner.run(agent, "Fetch https://example.com and summarize it.")
-```
 
 ## Web UI
 

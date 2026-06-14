@@ -32,13 +32,10 @@ from .tools import Tool
 if TYPE_CHECKING:
     from .guardrails import GuardrailFn
     from .hooks import AgentHooks
-    from .mcp import MCPServerLike
-    from .memory import Memory
     from .messages import Message, ToolCall
     from .output import OutputRepairStrategy
     from .plugins import Plugin
     from .runtime.result import RunHandle, RunResult
-    from .skills import Skills
     from .tools import ToolResultRenderer
     from .workspace import WorkspaceLike
     from .tracing import Tracer
@@ -92,12 +89,6 @@ class Agent(Generic[TContext]):
         handoffs: Agents (or :class:`Handoff` objects) the model may transfer
             control to via a synthetic ``transfer_to_<name>`` tool.
         settings: Sampling parameters forwarded to the provider.
-        skills: Optional :class:`~lovia.skills.Skills` capability exposing on-demand
-            skill instructions.
-        mcp_servers: MCP servers (or live :class:`~lovia.mcp.MCPConnection`
-            objects) whose tools are merged at run time. Plain server configs
-            are opened fresh per run; a connection from
-            ``async with server.session()`` is reused across runs.
         workspace: Optional :class:`~lovia.workspace.Workspace` (or anything
             implementing ``WorkspaceLike``) scoping file/shell tools to a
             directory and policy. Its tool bundle is merged at run time and
@@ -124,13 +115,11 @@ class Agent(Generic[TContext]):
     output_repair: "bool | OutputRepairStrategy" = True
     handoffs: list["Agent | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
-    skills: "Skills | None" = None
-    mcp_servers: list["MCPServerLike"] = field(default_factory=list)
     workspace: "WorkspaceLike | None" = None
     # Declarative features that bundle tools, per-turn view injectors, static
     # system-prompt text, and event hooks. Each is activated once per run (and
     # per agent on a handoff). See :mod:`lovia.plugins` and
-    # :func:`lovia.todos.todo_plugin`.
+    # :func:`lovia.plugins.todos`.
     plugins: list["Plugin"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
@@ -154,10 +143,9 @@ class Agent(Generic[TContext]):
     # ``result_renderer`` is ``None``. Useful for things like always
     # JSON-serialising via a custom encoder.
     tool_result_renderer: "ToolResultRenderer | None" = None
-    # Optional observability + long-term memory hooks. When ``tracer`` is
-    # ``None`` the runner uses a no-op tracer, so instrumentation is free.
+    # Optional tracer. When ``None`` the runner uses a no-op tracer, so
+    # instrumentation is free.
     tracer: "Tracer | None" = None
-    memory: "Memory | None" = None
     # Dynamic system-prompt fragments registered via @agent.system_prompt.
     # Rendered in registration order and appended after ``instructions``.
     # Not a public field — use the decorator or ``with_system_prompt`` instead.

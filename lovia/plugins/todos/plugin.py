@@ -1,11 +1,11 @@
 """The todo plugin: a ``todo_write`` tool + a per-turn reminder injector.
 
-``todo_plugin()`` returns a :class:`~lovia.plugins.Plugin`. Each run, ``setup``
-builds a fresh :class:`~lovia.todos.store.TodoList` and closes both the tool
+``todos()`` returns a :class:`~lovia.plugins.Plugin`. Each run, ``setup`` builds
+a fresh :class:`~lovia.plugins.todos.store.TodoList` and closes both the tool
 (which replaces the list) and the injector (which re-shows it every turn) over
 it. Attach it to an agent::
 
-    agent = Agent(name="builder", plugins=[todo_plugin()], tools=[...])
+    agent = Agent(name="builder", plugins=[todos()], tools=[...])
 
 Observability: filter ``ToolCallCompleted`` where ``call.name == "todo_write"``;
 ``ToolResultEntry.raw`` carries the structured ``list[Todo]``.
@@ -16,10 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated
 
-from ..plugins import Plugin, PluginInstance, ViewInjector
-from ..run_context import RunContext
-from ..tools import Tool, tool
-from ..transcript import InputEntry, TranscriptEntry
+from ..base import Plugin, PluginInstance, ViewInjector
+from ...run_context import RunContext
+from ...tools import Tool, tool
+from ...transcript import InputEntry, TranscriptEntry
 from .store import TodoList, render_todos
 from .types import Todo, TodoInput
 
@@ -98,7 +98,7 @@ class _TodoPlugin:
     instructions: str | None = _INSTRUCTIONS
     name: str = "todos"  # plugin identity (satisfies the Plugin protocol)
 
-    def setup(self) -> PluginInstance:
+    async def setup(self) -> PluginInstance:
         store = TodoList()
         return PluginInstance(
             tools=[_make_tool(store, self.tool_name)],
@@ -109,7 +109,7 @@ class _TodoPlugin:
         )
 
 
-def todo_plugin(
+def todos(
     *,
     tool_name: str = "todo_write",
     inject: bool = True,
@@ -127,4 +127,4 @@ def todo_plugin(
     return _TodoPlugin(tool_name=tool_name, inject=inject, instructions=instructions)
 
 
-__all__ = ["todo_plugin"]
+__all__ = ["todos"]

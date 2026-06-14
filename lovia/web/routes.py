@@ -25,7 +25,7 @@ from ..agent import Agent
 from ..context import ContextPolicy
 from ..providers import Provider
 from ..reliability import CancelToken, RetryPolicy, RunBudget
-from ..todos import todos_from_entries
+from ..plugins import todos_from_entries
 from ..transcript import entries_to_messages
 from ..runner import Runner
 from .approvals import ApprovalRegistry

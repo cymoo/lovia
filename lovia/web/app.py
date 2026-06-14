@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -55,6 +56,8 @@ def create_app(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    empty_title: str = "Wake up, Neo.",
+    empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -74,6 +77,9 @@ def create_app(
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
     the agent loop per request, ``budget`` (a :class:`RunBudget`) bounds token
     spend, and ``retry`` (a :class:`RetryPolicy`) governs provider retries.
+
+    ``empty_title`` and ``empty_description`` customize the blank chat state;
+    ``empty_description`` may be a string or a list of short lines.
     """
     agents = _normalise(agent_or_agents)
 
@@ -105,6 +111,8 @@ def create_app(
             max_turns=max_turns,
             budget=budget,
             retry=retry,
+            empty_title=empty_title,
+            empty_description=empty_description,
         )
     )
     app.mount(
@@ -135,6 +143,8 @@ def serve(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    empty_title: str = "Wake up, Neo.",
+    empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking).
@@ -162,5 +172,7 @@ def serve(
         max_turns=max_turns,
         budget=budget,
         retry=retry,
+        empty_title=empty_title,
+        empty_description=empty_description,
     )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

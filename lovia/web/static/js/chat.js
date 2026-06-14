@@ -80,8 +80,10 @@ function scheduleRender() {
 }
 function flushRender() {
   if (!store.body || !store.rawText) return;
+  store.body.dataset.raw = store.rawText;
   store.body.innerHTML = renderMarkdown(store.rawText);
   highlightCode(store.body);
+  scrollDown();
 }
 
 // ---- Templates ---------------------------------------------------------
@@ -92,9 +94,7 @@ function cloneTemplate(id) {
 function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
   node.classList.add(role);
-  node.querySelector('.role').textContent =
-    role === 'user' ? 'You' : store.agent ?? 'Assistant';
-  node.querySelector('.timestamp').textContent = formatTimestamp(ts);
+  node.dataset.timestamp = formatTimestamp(ts);
   return node;
 }
 
@@ -128,6 +128,35 @@ function contentText(content) {
   return String(content);
 }
 
+function ensureFooter(bubble) {
+  if (!bubble) return null;
+  let footer = bubble.querySelector(':scope > .turn-footer');
+  if (!footer) {
+    footer = document.createElement('div');
+    footer.className = 'turn-footer';
+    const timestamp = document.createElement('span');
+    timestamp.className = 'timestamp';
+    footer.appendChild(timestamp);
+  }
+  const timestamp = footer.querySelector('.timestamp');
+  const turn = bubble.closest('.turn');
+  if (timestamp && turn?.dataset.timestamp) {
+    timestamp.textContent = turn.dataset.timestamp;
+  }
+  bubble.appendChild(footer);
+  return footer;
+}
+
+function appendBubbleContent(bubble, node) {
+  if (!bubble || !node) return;
+  const footer = bubble.querySelector(':scope > .turn-footer');
+  if (footer) {
+    bubble.insertBefore(node, footer);
+  } else {
+    bubble.appendChild(node);
+  }
+}
+
 // ---- Render helpers ----------------------------------------------------
 export function appendUserTurn(text) {
   const transcriptEl = document.getElementById('transcript');
@@ -136,7 +165,9 @@ export function appendUserTurn(text) {
   const body = document.createElement('div');
   body.className = 'body';
   body.textContent = text;
-  node.querySelector('.bubble').appendChild(body);
+  const bubble = node.querySelector('.bubble');
+  appendBubbleContent(bubble, body);
+  ensureFooter(bubble);
   transcriptEl.appendChild(node);
   scrollDown();
 }
@@ -155,7 +186,6 @@ function startAssistantTurn(ts) {
   store.reasoningNode = null;
   store.reasoningStart = 0;
   store.reasoningEnd = 0;
-  store.todoNode = null;
   scrollDown();
   return { node, bubble: store.bubble };
 }
@@ -164,7 +194,7 @@ function ensureBody() {
   if (!store.body && store.bubble) {
     store.body = document.createElement('div');
     store.body.className = 'body';
-    store.bubble.appendChild(store.body);
+    appendBubbleContent(store.bubble, store.body);
     store.rawText = '';
   }
   return store.body;
@@ -184,7 +214,7 @@ function ensureReasoning() {
     // Append in stream order. A run shares one bubble across turns, so each
     // turn's reasoning must land after the prior turn's text/tools — inserting
     // at the top would stack every turn's thinking above the conversation.
-    store.bubble.appendChild(details);
+    appendBubbleContent(store.bubble, details);
     store.reasoningNode = details;
   }
   return store.reasoningNode;
@@ -214,7 +244,7 @@ function buildToolNode(call) {
 function appendTool(call) {
   if (!store.bubble) return;
   const node = buildToolNode(call);
-  store.bubble.appendChild(node);
+  appendBubbleContent(store.bubble, node);
   store.toolNodes.set(call.id, node);
   store.body = null;
   store.rawText = '';
@@ -243,6 +273,8 @@ function removeToolNode(id) {
 // Seeded with the default; renamed tools are learned from `todo` events.
 const todoNames = new Set(['todo_write']);
 const TODO_MARK = { completed: '✓', in_progress: '◐', pending: '' };
+const STICKY_SCROLL_PX = 160;
+const USER_SCROLL_PAUSE_MS = 900;
 
 // Parse a todo_write call's arguments into a todos array, or null.
 function parseTodos(args) {
@@ -263,14 +295,20 @@ function fillTodoCard(card, todos) {
   const total = todos.length;
   const done = todos.filter((t) => t.status === 'completed').length;
   const pct = total ? Math.round((done / total) * 100) : 0;
+  const expanded = !store.todoCollapsed;
   card.classList.toggle('complete', total > 0 && done === total);
   card.innerHTML =
-    '<div class="todo-head">' +
+    `<button class="todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? 'Hide plan' : 'Show plan'}">` +
     '<span class="todo-title">Plan</span>' +
     `<span class="todo-count">${done}/${total}</span>` +
-    '</div>' +
+    `<span class="todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
+    '</button>' +
+    '<div class="todo-content">' +
     `<div class="todo-bar"><div class="todo-bar-fill" style="width:${pct}%"></div></div>` +
-    '<ul class="todo-list"></ul>';
+    '<ul class="todo-list"></ul>' +
+    '</div>';
+  const toggle = card.querySelector('.todo-toggle');
+  toggle?.addEventListener('click', () => setTodoCollapsed(!store.todoCollapsed));
   const ul = card.querySelector('.todo-list');
   for (const t of todos) {
     const status = ['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending';
@@ -295,17 +333,62 @@ function buildTodoCard(todos) {
   return fillTodoCard(card, todos);
 }
 
-// Create the run's todo card on first sight, update it in place after.
+function setTodoCollapsed(collapsed) {
+  const panel = document.getElementById('todo-panel');
+  store.todoCollapsed = collapsed;
+  panel?.classList.toggle('collapsed', collapsed);
+  const toggle = panel?.querySelector('.todo-toggle');
+  const icon = panel?.querySelector('.todo-toggle-icon');
+  toggle?.setAttribute('aria-expanded', String(!collapsed));
+  if (toggle) toggle.title = collapsed ? 'Show plan' : 'Hide plan';
+  if (icon) icon.textContent = collapsed ? '+' : '-';
+}
+
+function clearTodoPanel() {
+  const panel = document.getElementById('todo-panel');
+  if (panel) {
+    panel.replaceChildren();
+    panel.classList.add('hidden');
+    panel.classList.remove('collapsed');
+  }
+  store.todoNode = null;
+  store.todoCollapsed = false;
+  store.todos = [];
+}
+
+function resetChatView({ cancel = false } = {}) {
+  if (cancel && store.streaming) store.emit('cancel');
+  if (cancel) store.chatEpoch += 1;
+  store.bubble = null;
+  store.body = null;
+  store.rawText = '';
+  store.toolNodes.clear();
+  store.reasoningText = '';
+  store.reasoningNode = null;
+  store.reasoningStart = 0;
+  store.reasoningEnd = 0;
+  clearTodoPanel();
+}
+
+// Create the session's todo panel on first sight, update it in place after.
 function upsertTodoCard(todos) {
-  if (!store.bubble) return;
-  if (store.todoNode) {
+  const panel = document.getElementById('todo-panel');
+  if (!panel) return;
+
+  store.todos = todos;
+  if (!todos.length) {
+    clearTodoPanel();
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  panel.classList.toggle('collapsed', store.todoCollapsed);
+  if (store.todoNode && panel.contains(store.todoNode)) {
     fillTodoCard(store.todoNode, todos);
   } else {
     store.todoNode = buildTodoCard(todos);
-    store.bubble.appendChild(store.todoNode);
+    panel.replaceChildren(store.todoNode);
   }
-  store.body = null;
-  store.rawText = '';
   scrollDown();
 }
 
@@ -326,7 +409,7 @@ function appendApproval(call) {
   };
   node.querySelector('.approve').addEventListener('click', () => resolve('approve'));
   node.querySelector('.decline').addEventListener('click', () => resolve('deny'));
-  store.bubble.appendChild(node);
+  appendBubbleContent(store.bubble, node);
   store.body = null;
   store.rawText = '';
   scrollDown();
@@ -336,7 +419,7 @@ function appendHandoff(from, to) {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-handoff');
   node.querySelector('.handoff-text').textContent = `${from}  →  ${to}`;
-  store.bubble.appendChild(node);
+  appendBubbleContent(store.bubble, node);
 }
 
 function appendContextCompacted(data) {
@@ -344,28 +427,80 @@ function appendContextCompacted(data) {
   const node = cloneTemplate('tmpl-context-compacted');
   const msg = data.summary ? 'Context compacted with summary.' : 'Context compacted.';
   node.querySelector('.context-text').textContent = msg;
-  store.bubble.appendChild(node);
+  appendBubbleContent(store.bubble, node);
 }
 
 function appendRetry() {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-retry');
   node.querySelector('.retry-btn').addEventListener('click', () => store.emit('retry'));
-  store.bubble.appendChild(node);
+  appendBubbleContent(store.bubble, node);
+}
+
+function cleanMarkdownForCopy(markdown) {
+  const lines = markdown.trim().split('\n');
+  let openFence = null;
+  const cleaned = [];
+  const markdownBoundary = /^(---+|\*\*\*+|___+|#{1,6}\s|[-*+]\s|\d+\.\s|>\s|\|.*\|)/;
+  const nextNonEmpty = (start) => {
+    for (let i = start; i < lines.length; i++) {
+      const text = lines[i].trim();
+      if (text) return text;
+    }
+    return '';
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const match = trimmed.match(/^(```+|~~~+)(.*)$/);
+    const marker = match?.[1];
+    if (!marker) {
+      cleaned.push(line);
+      continue;
+    }
+
+    if (!openFence) {
+      const info = (match?.[2] || '').trim();
+      const next = nextNonEmpty(i + 1);
+      if (!info && (!next || markdownBoundary.test(next))) continue;
+      openFence = marker;
+      cleaned.push(line);
+    } else if (
+      marker[0] === openFence[0] &&
+      marker.length >= openFence.length
+    ) {
+      cleaned.push(line);
+      openFence = null;
+    } else {
+      cleaned.push(line);
+    }
+  }
+  if (openFence && /^```+\s*$/.test(cleaned[cleaned.length - 1]?.trim() || '')) {
+    cleaned.pop();
+  }
+  return cleaned.join('\n').trim();
 }
 
 function addCopyButton(bubble) {
   if (!bubble) return;
-  // Remove existing copy button if any
-  bubble.querySelector('.btn-copy')?.remove();
-  const bodyEl = bubble.querySelector('.body');
-  if (!bodyEl || !bodyEl.textContent?.trim()) return;
+  for (const node of bubble.querySelectorAll(':scope > .btn-copy, :scope > .turn-footer > .btn-copy')) {
+    node.remove();
+  }
+  const bodies = Array.from(bubble.children).filter((node) =>
+    node.classList?.contains('body')
+  );
+  const footer = ensureFooter(bubble);
+  const markdown = cleanMarkdownForCopy(bodies
+    .map((body) => body.dataset.raw || body.textContent || '')
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join('\n\n'));
+  if (!markdown) return;
 
   const btn = cloneTemplate('tmpl-copy-btn');
   btn.addEventListener('click', async () => {
-    // Use raw markdown if available, fall back to plain text
-    const text = bodyEl.dataset.raw || bodyEl.textContent || '';
-    const ok = await copyToClipboard(text);
+    const ok = await copyToClipboard(markdown);
     if (ok) {
       btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied';
       btn.classList.add('copied');
@@ -375,8 +510,7 @@ function addCopyButton(bubble) {
       }, 1500);
     }
   });
-  // Place after the body
-  bodyEl.insertAdjacentElement('afterend', btn);
+  footer?.insertBefore(btn, footer.firstChild);
 }
 
 // ---- History rendering --------------------------------------------------
@@ -384,6 +518,8 @@ export function renderHistory(entries) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
   transcriptEl.innerHTML = '';
+  _resumeAutoScroll();
+  resetChatView();
   store.bubble = null;
   store.body = null;
   store.rawText = '';
@@ -404,7 +540,8 @@ export function renderHistory(entries) {
       body.className = 'body';
       body.textContent = contentText(it.content);
       const bubble = turn.querySelector('.bubble');
-      bubble.appendChild(body);
+      appendBubbleContent(bubble, body);
+      ensureFooter(bubble);
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
@@ -422,21 +559,21 @@ export function renderHistory(entries) {
         rc.className = 'reasoning-content';
         rc.textContent = it.reasoning;
         details.appendChild(rc);
-        currentBubble.appendChild(details);
+        appendBubbleContent(currentBubble, details);
       }
       if (text) {
         const body = document.createElement('div');
         body.className = 'body';
         body.dataset.raw = text; // store raw markdown for copy
         body.innerHTML = renderMarkdown(text);
-        currentBubble.appendChild(body);
+        appendBubbleContent(currentBubble, body);
         highlightCode(body);
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
           const todos = parseTodos(call.arguments);
           if (todos) {
-            upsertTodoCard(todos); // render/update the run's checklist card
+            upsertTodoCard(todos); // render/update the session's checklist panel
             continue;
           }
           const node = buildToolNode(call);
@@ -448,7 +585,7 @@ export function renderHistory(entries) {
             const pre = node.querySelector('.tool-result');
             if (pre) pre.style.display = 'none';
           }
-          currentBubble.appendChild(node);
+          appendBubbleContent(currentBubble, node);
         }
       }
       addCopyButton(currentBubble);
@@ -464,20 +601,101 @@ export function renderHistory(entries) {
 }
 
 // ---- Scroll ------------------------------------------------------------
-let _userScrolled = false;
+let _stickToBottom = true;
+let _programmaticScroll = false;
+let _scrollFrame = null;
+let _userScrollPauseUntil = 0;
+let _lastScrollTop = 0;
 function _isAtBottom() {
   const el = document.getElementById('transcript');
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL_PX;
+}
+function _isUserScrollPaused() {
+  return Date.now() < _userScrollPauseUntil;
+}
+function _pauseAutoScroll() {
+  if (_scrollFrame) {
+    cancelAnimationFrame(_scrollFrame);
+    _scrollFrame = null;
+  }
+  _stickToBottom = false;
+  _userScrollPauseUntil = Date.now() + USER_SCROLL_PAUSE_MS;
+}
+function _resumeAutoScroll() {
+  _userScrollPauseUntil = 0;
+  _stickToBottom = true;
+  const el = document.getElementById('transcript');
+  if (el) _lastScrollTop = el.scrollTop;
 }
 function scrollDown() {
-  if (_userScrolled) return;
-  requestAnimationFrame(() => {
-    document.getElementById('transcript')?.scrollTo({ top: document.getElementById('transcript').scrollHeight, behavior: 'smooth' });
+  if (!_stickToBottom || _isUserScrollPaused() || _scrollFrame) return;
+  _scrollFrame = requestAnimationFrame(() => {
+    _scrollFrame = null;
+    if (!_stickToBottom || _isUserScrollPaused()) return;
+    const el = document.getElementById('transcript');
+    if (!el) return;
+    _programmaticScroll = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      _programmaticScroll = false;
+      _lastScrollTop = el.scrollTop;
+      _stickToBottom = !_isUserScrollPaused() && _isAtBottom();
+    });
   });
 }
-document.getElementById('transcript')?.addEventListener('scroll', () => {
-  _userScrolled = !_isAtBottom();
+const transcriptEl = document.getElementById('transcript');
+transcriptEl?.addEventListener('wheel', (e) => {
+  if (e.deltaY < 0) {
+    _pauseAutoScroll();
+  } else {
+    requestAnimationFrame(() => {
+      if (_isAtBottom()) _resumeAutoScroll();
+    });
+  }
 }, { passive: true });
+transcriptEl?.addEventListener('scroll', () => {
+  if (_programmaticScroll) return;
+  const current = transcriptEl.scrollTop;
+  const movedUp = current < _lastScrollTop;
+  const movedDown = current > _lastScrollTop;
+  _lastScrollTop = current;
+
+  if (movedUp) {
+    _pauseAutoScroll();
+  } else if (_isAtBottom() && (movedDown || !_isUserScrollPaused())) {
+    _resumeAutoScroll();
+  } else {
+    _stickToBottom = false;
+  }
+}, { passive: true });
+
+export function renderEmptyState() {
+  const transcript = document.getElementById('transcript');
+  if (!transcript) return;
+  const title = store.emptyTitle || 'Wake up, Neo.';
+  const desc = store.emptyDescription;
+  const empty = document.createElement('div');
+  empty.className = 'empty-state';
+  empty.id = 'empty-state';
+  const h2 = document.createElement('h2');
+  h2.textContent = title;
+  empty.appendChild(h2);
+  if (Array.isArray(desc)) {
+    const ul = document.createElement('ul');
+    for (const item of desc) {
+      const li = document.createElement('li');
+      li.textContent = item;
+      ul.appendChild(li);
+    }
+    empty.appendChild(ul);
+  } else if (desc) {
+    const p = document.createElement('p');
+    p.textContent = desc;
+    empty.appendChild(p);
+  }
+  transcript.replaceChildren(empty);
+}
 
 // ---- SSE ---------------------------------------------------------------
 function parseSSE(chunk) {
@@ -507,7 +725,6 @@ async function handleEvent({ event, data }) {
       ensureBody();
       store.rawText += data.delta;
       scheduleRender();
-      scrollDown();
       break;
 
     case 'reasoning_delta':
@@ -540,7 +757,16 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'tool_call':
-      if (todoNames.has(data.name)) break; // rendered as a todo card instead
+      {
+        const todos = parseTodos(data.arguments);
+        if (todoNames.has(data.name) || todos) {
+          if (todos) {
+            todoNames.add(data.name);
+            upsertTodoCard(todos);
+          }
+          break; // rendered as a todo panel instead
+        }
+      }
       finalizeReasoning();
       appendTool(data);
       break;
@@ -608,8 +834,9 @@ export async function runStream(message) {
   sendBtn.style.display = 'none';
   if (stopBtn) stopBtn.style.display = '';
   const { node: turn, bubble } = startAssistantTurn();
+  const streamEpoch = store.chatEpoch;
 
-  _userScrolled = false;
+  _resumeAutoScroll();
   _streamAbortController = new AbortController();
 
   try {
@@ -639,6 +866,10 @@ export async function runStream(message) {
           const chunk = raw.slice(0, idx);
           raw = raw.slice(idx + 2);
           const ev = parseSSE(chunk);
+          if (store.chatEpoch !== streamEpoch) {
+            _streamAbortController?.abort();
+            return;
+          }
           if (ev) await handleEvent(ev);
         }
       }
@@ -695,6 +926,12 @@ export async function runStream(message) {
   }
 }
 
+export function resetChatForNewSession() {
+  resetChatView({ cancel: true });
+  _resumeAutoScroll();
+  renderEmptyState();
+}
+
 export async function cancelStream() {
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
@@ -727,7 +964,7 @@ export function initComposer() {
     if (!message) return;
     promptEl.value = '';
     autoresize();
-    _userScrolled = false;
+    _resumeAutoScroll();
     document.getElementById('empty-state')?.remove();
     appendUserTurn(message);
     await runStream(message);

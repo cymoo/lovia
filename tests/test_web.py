@@ -71,6 +71,21 @@ def test_healthz_and_index() -> None:
     res = c.get("/")
     assert res.status_code == 200
     assert "<html" in res.text.lower()
+    assert "Wake up, Neo." in res.text
+    assert "The Matrix has you." in res.text
+
+
+def test_index_accepts_custom_empty_state() -> None:
+    app = _app(
+        _make_agent([text("hi")]),
+        empty_title="Mission control",
+        empty_description=["Tune the array", "Listen for the reply"],
+    )
+    res = TestClient(app).get("/")
+    assert res.status_code == 200
+    assert "Mission control" in res.text
+    assert "Tune the array" in res.text
+    assert "Listen for the reply" in res.text
 
 
 def test_list_agents_single() -> None:

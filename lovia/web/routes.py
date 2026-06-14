@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,8 @@ def build_router(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    empty_title: str = "Wake up, Neo.",
+    empty_description: str | Sequence[str] | None = None,
 ) -> APIRouter:
     router = APIRouter()
     session = store.session
@@ -107,7 +109,22 @@ def build_router(
 
     @router.get("/", include_in_schema=False)
     async def index(request: Request) -> Any:
-        return _TEMPLATES.TemplateResponse(request, "index.html", {"title": title})
+        description = empty_description
+        if description is None:
+            description = "The Matrix has you."
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "title": title,
+                "empty_title": empty_title,
+                "empty_description": description,
+                "app_config": {
+                    "empty_title": empty_title,
+                    "empty_description": description,
+                },
+            },
+        )
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:

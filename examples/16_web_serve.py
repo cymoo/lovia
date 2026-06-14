@@ -18,7 +18,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Compaction, tool, enable_logging
+from lovia import Agent, Compaction, tool, enable_logging, todo_plugin
 from lovia.workspace import Workspace
 from lovia.tracing import ConsoleTracer
 from lovia.web import serve
@@ -49,6 +49,7 @@ def main() -> None:
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         tools=[add, send_email],
+        plugins=[todo_plugin()],
         workspace=Workspace.local(".", mode="trusted"),
         tracer=ConsoleTracer(),
     )

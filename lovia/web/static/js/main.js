@@ -1,12 +1,28 @@
 // Entry point — wires together all modules.
 import { store } from './store.js';
 import { initTheme, initSidebarToggle } from './ui.js';
-import { initComposer, cancelStream, renderHistory } from './chat.js';
+import { initComposer, cancelStream, renderHistory, resetChatForNewSession } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
+
+// ---- Page config --------------------------------------------------------
+function loadPageConfig() {
+  const node = document.getElementById('app-config');
+  if (!node?.textContent) return;
+  try {
+    const cfg = JSON.parse(node.textContent);
+    if (typeof cfg.empty_title === 'string') store.emptyTitle = cfg.empty_title;
+    if (typeof cfg.empty_description === 'string' || Array.isArray(cfg.empty_description)) {
+      store.emptyDescription = cfg.empty_description;
+    }
+  } catch (err) {
+    console.error('app-config:', err);
+  }
+}
 
 // ---- Agent loading ------------------------------------------------------
 async function loadAgents() {
   const select = document.getElementById('agent-select');
+  const switcher = document.getElementById('agent-switcher');
   try {
     const res = await fetch('/api/agents');
     store.agents = await res.json();
@@ -18,14 +34,14 @@ async function loadAgents() {
         a => `<option value="${a.name}">${a.name}</option>`
       ).join('');
       select.value = store.agent;
+      if (switcher) switcher.classList.remove('hidden');
       select.addEventListener('change', () => {
         store.agent = select.value;
         clearChat();
         document.getElementById('prompt')?.focus();
       });
     } else if (select) {
-      // Single agent
-      select.style.display = 'none';
+      if (switcher) switcher.classList.add('hidden');
     }
   } catch (err) {
     console.error('loadAgents:', err);
@@ -43,10 +59,11 @@ store.on('retry', () => {
   }
 });
 
-store.on('clear-chat', clearChat);
+store.on('reset-chat-view', resetChatForNewSession);
 
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
+  loadPageConfig();
   initTheme();
   initSidebarToggle();
   initComposer();

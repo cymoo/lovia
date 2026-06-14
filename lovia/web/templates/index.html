@@ -13,6 +13,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 <body>
+<script id="app-config" type="application/json">{{ app_config | tojson }}</script>
 
 <!-- Sidebar overlay (mobile) -->
 <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
@@ -21,20 +22,25 @@
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-head">
     <span class="sidebar-title">Chats</span>
-    <button id="new-chat" class="btn-icon" type="button" title="New chat" aria-label="New chat">+</button>
+    <div class="sidebar-head-actions">
+      <button id="sidebar-collapse" class="btn-icon sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">‹</button>
+      <button id="new-chat" class="btn-icon" type="button" title="New chat" aria-label="New chat">+</button>
+    </div>
+  </div>
+  <div class="agent-switcher" id="agent-switcher">
+    <label class="agent-label" for="agent-select">Agent</label>
+    <select id="agent-select" class="agent-select" aria-label="Select agent"></select>
   </div>
   <div class="sidebar-search">
     <input type="search" id="session-search" class="search-input" placeholder="Filter…" autocomplete="off" />
   </div>
   <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
-  <div class="sidebar-foot">
-    <select id="agent-select" class="agent-select" aria-label="Select agent"></select>
-  </div>
 </aside>
 
 <!-- Main -->
 <main class="page">
   <header class="topbar">
+    <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button" title="Show sidebar" aria-label="Show sidebar">›</button>
     <button id="sidebar-toggle" class="btn-icon hamburger-btn" type="button" aria-label="Toggle sidebar">
       <span class="hamburger"></span>
     </button>
@@ -48,12 +54,23 @@
     </div>
   </header>
 
-  <section id="transcript" class="transcript" aria-live="polite">
-    <div class="empty-state" id="empty-state">
-      <h2>How can I help?</h2>
-      <p>Ask anything — I'll respond with tools and reasoning as needed.</p>
-    </div>
-  </section>
+  <div id="chat-region" class="chat-region">
+    <section id="transcript" class="transcript" aria-live="polite">
+      <div class="empty-state" id="empty-state">
+        <h2>{{ empty_title }}</h2>
+        {% if empty_description is string %}
+        <p>{{ empty_description }}</p>
+        {% else %}
+        <ul>
+          {% for item in empty_description %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+    </section>
+    <aside id="todo-panel" class="todo-panel hidden" aria-label="Current plan" aria-live="polite"></aside>
+  </div>
 
   <form id="composer" class="composer" autocomplete="off">
     <div class="composer-inner">
@@ -62,20 +79,13 @@
       <button id="send" class="btn btn-primary" type="submit" aria-label="Send">Send</button>
       <button id="stop" class="btn btn-danger" type="button" aria-label="Stop" style="display:none">Stop</button>
     </div>
-    <p class="composer-hint">Enter to send &thinsp;·&thinsp; Shift+Enter for newline</p>
   </form>
 </main>
 
 <!-- Templates -->
 <template id="tmpl-turn">
   <article class="turn">
-    <div class="avatar" aria-hidden="true"></div>
-    <div class="bubble">
-      <div class="meta">
-        <span class="role"></span>
-        <span class="timestamp"></span>
-      </div>
-    </div>
+    <div class="bubble"></div>
   </article>
 </template>
 

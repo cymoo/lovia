@@ -22,6 +22,8 @@ export function initTheme() {
 // ---- Sidebar toggle (mobile) -------------------------------------------
 const overlay = document.getElementById('sidebar-overlay');
 let sidebarOpen = false;
+const sidebarCollapseBtn = document.getElementById('sidebar-collapse');
+const sidebarExpandBtn = document.getElementById('sidebar-expand');
 
 function openSidebar() {
   sidebarOpen = true;
@@ -35,12 +37,26 @@ function closeSidebar() {
   overlay?.classList.remove('open');
 }
 
+function applySidebarCollapsed(collapsed) {
+  if (window.matchMedia('(max-width: 720px)').matches) {
+    document.body.classList.remove('sidebar-collapsed');
+    return;
+  }
+  store.sidebarCollapsed = collapsed;
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  localStorage.setItem('lovia-sidebar-collapsed', collapsed ? '1' : '0');
+}
+
 export function initSidebarToggle() {
+  applySidebarCollapsed(store.sidebarCollapsed);
   document.getElementById('sidebar-toggle')?.addEventListener('click', openSidebar);
+  sidebarCollapseBtn?.addEventListener('click', () => applySidebarCollapsed(true));
+  sidebarExpandBtn?.addEventListener('click', () => applySidebarCollapsed(false));
   overlay?.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && sidebarOpen) closeSidebar();
   });
+  window.addEventListener('resize', () => applySidebarCollapsed(store.sidebarCollapsed));
 }
 
 // ---- Native Dialog -----------------------------------------------------

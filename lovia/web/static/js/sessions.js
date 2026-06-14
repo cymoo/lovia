@@ -164,22 +164,10 @@ export async function switchSession(id) {
 export function clearChat() {
   store.sessionId = null;
   store.syncURL(null);
-  store.bubble = null;
-  store.body = null;
-  store.rawText = '';
-  store.toolNodes.clear();
   store.lastMessage = null;
   if (chatTitleEl) chatTitleEl.textContent = 'New chat';
   if (exportBtn) exportBtn.style.display = 'none';
-
-  const transcript = document.getElementById('transcript');
-  if (transcript) {
-    transcript.innerHTML = `
-      <div class="empty-state" id="empty-state">
-        <h2>How can I help?</h2>
-        <p>Ask anything — I'll respond with tools and reasoning as needed.</p>
-      </div>`;
-  }
+  store.emit('reset-chat-view');
   renderSessions();
 }
 
@@ -236,7 +224,5 @@ export function initSessions() {
   });
 
   exportBtn?.addEventListener('click', () => exportSession('md'));
-
-  // Listen for clear-chat from main
   store.on('clear-chat', clearChat);
 }

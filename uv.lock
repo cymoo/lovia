@@ -1351,6 +1351,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+ddg = [
+    { name = "ddgs" },
+]
 dev = [
     { name = "build" },
     { name = "fastapi" },
@@ -1364,9 +1367,6 @@ dev = [
     { name = "twine" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-dotenv = [
-    { name = "python-dotenv" },
-]
 examples = [
     { name = "ddgs" },
     { name = "prefect" },
@@ -1375,15 +1375,6 @@ examples = [
 ]
 mcp = [
     { name = "mcp" },
-]
-prefect = [
-    { name = "prefect" },
-]
-rich = [
-    { name = "rich" },
-]
-tools = [
-    { name = "ddgs" },
 ]
 web = [
     { name = "fastapi" },
@@ -1396,8 +1387,8 @@ web = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
+    { name = "ddgs", marker = "extra == 'ddg'", specifier = ">=7.0" },
     { name = "ddgs", marker = "extra == 'examples'", specifier = ">=7.0" },
-    { name = "ddgs", marker = "extra == 'tools'", specifier = ">=7.0" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.110" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
@@ -1408,15 +1399,12 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "prefect", marker = "extra == 'examples'", specifier = ">=3.0" },
-    { name = "prefect", marker = "extra == 'prefect'", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "python-dotenv", marker = "extra == 'dotenv'", specifier = ">=1.0.0" },
     { name = "python-dotenv", marker = "extra == 'examples'", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", marker = "extra == 'examples'", specifier = ">=13.7" },
-    { name = "rich", marker = "extra == 'rich'", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "sse-starlette", marker = "extra == 'dev'", specifier = ">=2.1" },
     { name = "sse-starlette", marker = "extra == 'web'", specifier = ">=2.1" },
@@ -1424,7 +1412,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["dotenv", "mcp", "tools", "rich", "prefect", "web", "examples", "dev"]
+provides-extras = ["mcp", "ddg", "web", "examples", "dev"]
 
 [[package]]
 name = "lxml"

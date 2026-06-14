@@ -157,7 +157,7 @@ def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) 
     )
     with pytest.raises(UserError) as exc_info:
         duckduckgo_search_tool()
-    assert "lovia[tools]" in str(exc_info.value)
+    assert "lovia[ddg]" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------- human

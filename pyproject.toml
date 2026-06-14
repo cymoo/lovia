@@ -29,17 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dotenv = ["python-dotenv>=1.0.0"]
 mcp = ["mcp>=1.0"]
-tools = [
-    "ddgs>=7.0",
-]
-rich = [
-    "rich>=13.7",
-]
-prefect = [
-    "prefect>=3.0",
-]
+ddg = ["ddgs>=7.0"]
 web = [
     "fastapi>=0.110",
     "jinja2>=3.1",

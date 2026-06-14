@@ -1,8 +1,8 @@
-"""Web search — defaults to DuckDuckGo via ``lovia[tools]``.
+"""Web search — defaults to DuckDuckGo via ``lovia[ddg]``.
 
 Install with::
 
-    pip install 'lovia[tools]'
+    pip install 'lovia[ddg]'
 
 Or plug your own backend by implementing the :class:`WebSearch` Protocol
 and passing it to ``web_search(my_backend)``.

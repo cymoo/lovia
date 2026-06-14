@@ -3,11 +3,11 @@
 The :class:`WebSearch` :class:`typing.Protocol` is the extension point —
 implement it for whatever backend you like. A convenience
 :func:`duckduckgo_search_tool` factory is provided behind the optional
-``lovia[tools]`` extra so users can get started without an API key::
+``lovia[ddg]`` extra so users can get started without an API key::
 
     from lovia.tools.search import duckduckgo_search_tool, web_search
 
-    search = duckduckgo_search_tool()         # requires lovia[tools]
+    search = duckduckgo_search_tool()         # requires lovia[ddg]
     custom = web_search(MySearchBackend())    # or your own implementation
     agent = Agent(name="x", tools=[search])
 
@@ -71,7 +71,7 @@ class _DDGSFactory(Protocol):
 
 
 class DuckDuckGoSearch:
-    """Default backend using ``duckduckgo-search`` (install with ``lovia[tools]``)."""
+    """Default backend using ``ddgs`` (install with ``lovia[ddg]``)."""
 
     def __init__(self) -> None:
         ddgs_cls: _DDGSFactory
@@ -89,7 +89,7 @@ class DuckDuckGoSearch:
         except ImportError as exc:
             raise UserError(
                 "DuckDuckGoSearch requires the 'ddgs' package.",
-                hint="Install with: pip install 'lovia[tools]'",
+                hint="Install with: pip install 'lovia[ddg]'",
             ) from exc
         self._ddgs_cls = ddgs_cls
 

@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on this repository.
 
 ## Project overview
 
-**lovia** is a lightweight, provider-neutral agent framework for Python. Core is under ~2000 lines; hard dependencies are only `httpx` and `pydantic`.
+**lovia** is a lightweight, provider-neutral agent framework for Python.
 
 ## Setup
 
@@ -50,7 +50,7 @@ lovia/
     files.py        #   workspace-backed file tools
     shell.py        #   workspace shell tool
     http.py         #   http_fetch
-    search.py       #   duckduckgo_search_tool  (requires lovia[tools])
+    search.py       #   duckduckgo_search_tool  (requires lovia[ddg])
     human.py        #   HumanChannel + ask_human
     recall.py       #   recall_tool_result (recovers compacted tool outputs)
     time.py         #   now
@@ -249,7 +249,7 @@ lovia is built around four words. When in doubt, optimise for the one earlier in
 1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools/`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
 2. **Lightweight (轻量).** Core has exactly two hard dependencies: `httpx` and `pydantic`. Every other capability — MCP, web UI, DuckDuckGo, etc. — is an opt-in extra and only imported when the user asks for it. `import lovia` must stay cheap.
 3. **Extensible (易扩展).** Public surfaces are dataclasses, Protocols, and `@decorator` hooks — not subclasses you must inherit from. Providers, sessions, memory stores, web-search backends, and hooks are all Protocol-based; users plug in their own implementations without monkey-patching.
-4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, todo, human-in-the-loop, think, time, filesystem, shell), and `lovia.sandbox.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
+4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, human-in-the-loop, time, filesystem, shell), `lovia.todos.*` ships the todo plugin, and `lovia.workspace.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
 
 A few corollaries that follow from these:
 

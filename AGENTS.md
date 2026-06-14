@@ -42,7 +42,7 @@ lovia/
     loop.py         #   RunLoop — the only module with mutable state
     model_turn.py   #   Calls the provider, assembles deltas → AssistantTurn
     tool_calls.py   #   Dispatches tool calls, handoff, approval, final_output
-    run_state.py    #   RunState / RuntimeState — mutable per-run scratchpad
+    run_state.py    #   RunState (mutable per-run) + ResumeState (JSON-safe slice)
     checkpoint.py   #   CheckpointWriter
     result.py       #   RunHandle (async iterator + awaitable) and RunResult
   tools/            # @tool decorator, Tool type, and opt-in tool factories
@@ -73,6 +73,10 @@ lovia/
     summarizer.py   #   Summarizer protocol + LLMSummarizer (structured sections)
     prompts.py      #   summary prompt templates + background-reference wrapper
   skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
+  plugins.py        # Plugin protocol + PluginInstance (tools/view_injectors/
+                    #   instructions/hooks) + ViewInjector type
+  todos/            # Todo plugin — the first Plugin (todo_write + per-turn
+                    #   reminder injector); store, types, plugin factory
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
   mcp.py            # Optional MCP client (requires mcp package)
@@ -110,7 +114,13 @@ Provider registration supports the `lovia.providers` entry-point group for third
 
 ### Tool merging
 
-Tools from six sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, `agent.sandbox`, MCP servers, handoffs, skills, and the synthetic `final_output` tool (when structured output falls back to tool mode).
+Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins, `agent.workspace`, MCP servers, handoffs, skills, and the synthetic `final_output` tool (when structured output falls back to tool mode).
+
+### Plugins and view injectors
+
+A `Plugin` (`plugins.py`) is a declarative feature bundle. `RunLoop._activate_plugins()` calls `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state built inside `setup` is fresh and concurrency-safe. The returned `PluginInstance` contributes across the agent's existing extension axes: `tools` (merged above), `instructions` (folded into `_system_prompt`), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `view_injectors`.
+
+`ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
 
 ### Handoff mechanism
 
@@ -174,7 +184,7 @@ method handles both triggers:
   image/file costs, `id()`+weakref memo) and is *calibrated* against the
   provider's real `last_input_tokens` via an EMA ratio stored in state.
 - **State location.** Sticky state serializes into the per-run
-  `RuntimeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
+  `ResumeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
   `Compaction` additionally keeps a bounded in-process cache keyed by
   `session_id` so a *new run* on the same session resumes prior decisions; a
   structural `fingerprint` of the covered prefix detects rewritten history

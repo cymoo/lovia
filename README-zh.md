@@ -45,7 +45,7 @@ LLM Agent 框架不少，lovia 的取舍如下：
 - 🔌 **模型中立** — OpenAI、Anthropic、任何 OpenAI 兼容接口，一行代码切换。
 - 🧩 **扩展无需继承** — 全程 Protocol 和 dataclass，自定义 session store、memory 或 provider，不用动框架内部。
 - ✂️ **默认极轻** — 只有 `httpx` 和 `pydantic` 是必须的，Web UI、MCP、搜索和编排全是可选项。
-- 🛡️ **生产级原语** — 护栏、审批门控、生命周期钩子、沙箱化的文件/Shell 工具——需要时都在，用不到时不存在。
+- 🛡️ **生产级原语** — 护栏、审批门控、生命周期钩子、策略化的文件/Shell 工具、可插拔功能（todo 清单或你自己的插件）——需要时都在，用不到时不存在。
 
 ---
 
@@ -389,6 +389,61 @@ agent = Agent(
 
 自定义 skill 来源（数据库、API、MCP）实现 ``SkillSource`` 协议即可。
 
+## 插件（Plugins）
+
+**插件**把一个功能所需的工具、每轮上下文、系统提示词、事件钩子打包成一个对象，
+每次运行时新建一份。一行挂到 Agent 上，不必把各部分分别接线。
+
+内置的 **todo 插件**给模型一个 `todo_write` 工具，并在每一轮把当前清单回显给它，
+让它在多步、长任务中始终不跑偏：
+
+```python
+from lovia import Agent, Runner, todo_plugin
+
+agent = Agent(
+    name="builder",
+    instructions="认真完成多步骤任务。",
+    model="deepseek-v4-pro",
+    plugins=[todo_plugin()],
+)
+await Runner.run(agent, "搭一个 REST API：数据模型、增删改查、测试、文档。")
+```
+
+每轮注入的提醒是**仅视图（view-only）**的——只进入当次模型调用，绝不写入 transcript
+或 session，所以轮数再多上下文也不会膨胀。而每次 `todo_write` 调用本身仍留在
+transcript 里（结果带结构化 `list[Todo]`），天然形成审计轨迹，并支持 resume/handoff
+自动恢复。是否用清单由模型自己判断：琐碎任务不会生成清单，零开销。
+
+通过过滤事件实时查看进度：
+
+```python
+from lovia import events
+
+async for ev in Runner.stream(agent, task):
+    if isinstance(ev, events.ToolCallCompleted) and ev.call.name == "todo_write":
+        for t in ev.result:                # list[Todo]
+            print(t.status, "-", t.content)
+```
+
+自己写一个插件，只需 `setup()` 返回它贡献的内容：
+
+```python
+from lovia import InputEntry
+from lovia.plugins import PluginInstance
+
+class StayTerse:
+    name = "stay_terse"
+
+    def setup(self) -> PluginInstance:
+        def remind(ctx):
+            return [InputEntry(role="user", content="<reminder>保持简洁。</reminder>")]
+        # PluginInstance 还可携带：tools、instructions、hooks。
+        return PluginInstance(view_injectors=[remind])
+```
+
+`view_injectors` 每轮运行，把临时条目追加到当次模型调用——这是临时提醒/临时插入消息
+的通用机制。
+
 ## 内置工具
 
 实用工具统一放在 `lovia.tools` 下，不会自动导入，按需取用：
@@ -535,6 +590,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `examples/05_handoff.py` | Agent handoff |
 | `examples/08_skills.py` | Skill 技能库 |
 | `examples/11_approval.py` | 工具审批 |
+| `examples/27_todos.py` | todo 插件 / 任务清单 |
 | `examples/16_web_serve.py` | Web UI |
 | `examples/22_sandbox.py` | 直接使用 sandbox session |
 | `examples/23_sandbox_agent.py` | Coding Agent |

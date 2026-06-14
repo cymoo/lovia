@@ -72,14 +72,14 @@ lovia/
     tokens.py       #   TokenCounter (memoized estimates) + TokenBudget (watermarks)
     summarizer.py   #   Summarizer protocol + LLMSummarizer (structured sections)
     prompts.py      #   summary prompt templates + background-reference wrapper
-  skills.py         # Skill / SkillCatalog (SKILL.md, lazy/eager modes)
-  plugins.py        # Plugin protocol + PluginInstance (tools/view_injectors/
-                    #   instructions/hooks) + ViewInjector type
-  todos/            # Todo plugin — the first Plugin (todo_write + per-turn
-                    #   reminder injector); store, types, plugin factory
+  plugins/          # Declarative capability plugins — the one extension axis
+    base.py         #   Plugin protocol (async setup + aclose) + PluginInstance
+                    #   (tools/instructions/view_injectors/hooks/guardrails)
+    todos/          #   todos() plugin: todo_write + per-turn reminder injector
+    skills.py       #   skills() plugin + Skills/SkillSource (SKILL.md disclosure)
+    mcp.py          #   mcp() plugin + MCP client (lazy; requires mcp package)
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
-  mcp.py            # Optional MCP client (requires mcp package)
   providers/        # LLM provider adapters (OpenAI, Anthropic, …)
   stores/           # Session and memory store implementations
   workspace/        # Filesystem + process workspace (Workspace.local,
@@ -114,13 +114,13 @@ Provider registration supports the `lovia.providers` entry-point group for third
 
 ### Tool merging
 
-Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins, `agent.workspace`, MCP servers, handoffs, skills, and the synthetic `final_output` tool (when structured output falls back to tool mode).
+Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins (which now include MCP, skills, and todos), `agent.workspace`, handoffs, and the synthetic `final_output` tool (when structured output falls back to tool mode).
 
 ### Plugins and view injectors
 
-A `Plugin` (`plugins.py`) is a declarative feature bundle. `RunLoop._activate_plugins()` calls `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state built inside `setup` is fresh and concurrency-safe. The returned `PluginInstance` contributes across the agent's existing extension axes: `tools` (merged above), `instructions` (folded into `_system_prompt`), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `view_injectors`.
+A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `mcp()`, `skills()`, and `todos()` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
 
-`ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
+`ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`plugins/todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
 
 ### Handoff mechanism
 
@@ -132,13 +132,14 @@ Handoffs use a **sentinel pattern** across three modules. When a handoff tool is
 
 This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type.
 
-### Session vs Checkpointer vs Memory
+### Session vs Checkpointer
 
-Three persistence concepts that serve different purposes:
+Two persistence concepts that serve different purposes:
 
 - **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start and persists the **full** transcript after each run — context compaction never writes to the Session.
 - **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + agent_name) keyed by `run_id`. Used for crash recovery / pause-and-resume. The runner snapshots after every turn via `_snapshot()`.
-- **`Memory`** (`memory.py`) — a `Protocol` with `add(content)` / `retrieve(query, k)`. Long-term semantic store that spans sessions (vector DB, RAG, etc.). Never auto-injected by the framework — users wire it via tools or hooks.
+
+Long-term cross-session **memory** is deliberately *not* a core concept — there is no `Memory` protocol or `Agent.memory` field. Wire it as a user plugin over your own store (see the `MemoryPlugin` example in the README).
 
 ### Context compaction
 
@@ -249,7 +250,7 @@ lovia is built around four words. When in doubt, optimise for the one earlier in
 1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools/`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
 2. **Lightweight (轻量).** Core has exactly two hard dependencies: `httpx` and `pydantic`. Every other capability — MCP, web UI, DuckDuckGo, etc. — is an opt-in extra and only imported when the user asks for it. `import lovia` must stay cheap.
 3. **Extensible (易扩展).** Public surfaces are dataclasses, Protocols, and `@decorator` hooks — not subclasses you must inherit from. Providers, sessions, memory stores, web-search backends, and hooks are all Protocol-based; users plug in their own implementations without monkey-patching.
-4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, human-in-the-loop, time, filesystem, shell), `lovia.todos.*` ships the todo plugin, and `lovia.workspace.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
+4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, human-in-the-loop, time, filesystem, shell), `lovia.plugins.*` ships the built-in plugins (todos, skills, MCP), and `lovia.workspace.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
 
 A few corollaries that follow from these:
 

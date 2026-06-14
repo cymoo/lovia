@@ -22,6 +22,7 @@ import inspect
 import logging
 from collections import Counter
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
@@ -52,7 +53,11 @@ from ..exceptions import (
     OutputValidationError,
     UserError,
 )
-from ..guardrails import check_input_guardrails, check_output_guardrails
+from ..guardrails import (
+    GuardrailFn,
+    check_input_guardrails,
+    check_output_guardrails,
+)
 from ..handoff import Handoff, build_handoff_tool
 from ..hooks import dispatch
 from ..transcript import (
@@ -85,6 +90,23 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
+
+
+@dataclass
+class _PluginActivation:
+    """Aggregated per-run contributions from all of an agent's plugins.
+
+    Built by :meth:`RunLoop._activate_plugins`; each field maps to one fixed
+    slot in the loop (tool merge, system prompt, per-turn view, event dispatch,
+    input/output guardrail checkpoints).
+    """
+
+    tools: "list[Tool]" = field(default_factory=list)
+    view_injectors: "list[ViewInjector]" = field(default_factory=list)
+    instructions: list[str] = field(default_factory=list)
+    hooks: "list[AgentHooks]" = field(default_factory=list)
+    input_guardrails: "list[GuardrailFn]" = field(default_factory=list)
+    output_guardrails: "list[GuardrailFn]" = field(default_factory=list)
 
 
 class RunLoop:
@@ -200,9 +222,12 @@ class RunLoop:
                 # Input guardrails run once on the fully-built initial
                 # transcript. Skip on resume — they already ran on the
                 # original input.
-                if state.agent.input_guardrails and self.resume_from is None:
+                input_guardrails = (
+                    state.agent.input_guardrails + state.plugin_input_guardrails
+                )
+                if input_guardrails and self.resume_from is None:
                     await check_input_guardrails(
-                        state.agent.input_guardrails,
+                        input_guardrails,
                         entries_to_messages(state.transcript),
                         state.run_ctx,
                     )
@@ -353,20 +378,15 @@ class RunLoop:
         )
         system_extra = self.append_instructions
 
-        mcp_tools = await self._connect_mcp(agent, resources)
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
-        plugin_tools, plugin_injectors, plugin_instructions, plugin_hooks = (
-            self._activate_plugins(agent)
-        )
-        tools_by_name = self._collect_tools(
-            agent, mcp_tools, workspace_tools, plugin_tools
-        )
+        plugins = await self._activate_plugins(agent, resources)
+        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
 
         if self.resume_from is not None:
             transcript: list[TranscriptEntry] = list(self.resume_from.entries)
         else:
             transcript = await self._build_initial_entries(
-                agent, structured_output, system_extra, plugin_instructions
+                agent, structured_output, system_extra, plugins.instructions
             )
 
         run_ctx = RunContext(
@@ -387,32 +407,36 @@ class RunLoop:
             providers=providers,
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
-            view_injectors=plugin_injectors,
-            plugin_instructions=plugin_instructions,
-            plugin_hooks=plugin_hooks,
+            view_injectors=plugins.view_injectors,
+            plugin_instructions=plugins.instructions,
+            plugin_hooks=plugins.hooks,
+            plugin_input_guardrails=plugins.input_guardrails,
+            plugin_output_guardrails=plugins.output_guardrails,
         )
 
-    def _activate_plugins(
-        self, agent: Agent
-    ) -> tuple[list[Tool], list["ViewInjector"], list[str], list["AgentHooks"]]:
+    async def _activate_plugins(
+        self, agent: Agent, resources: AsyncExitStack
+    ) -> _PluginActivation:
         """Activate ``agent.plugins`` for one run, collecting their contributions.
 
-        ``setup`` is called once per plugin so any run-scoped state is fresh and
-        all of a plugin's contributions (tool, injector, ...) share it.
+        ``setup`` is awaited once per plugin so any run-scoped state (and async
+        resources like MCP connections) is fresh and all of a plugin's
+        contributions (tool, injector, ...) share it. Each instance's ``aclose``
+        is registered for best-effort teardown when the run ends (LIFO).
         """
-        tools: list[Tool] = []
-        injectors: list[ViewInjector] = []
-        instructions: list[str] = []
-        hooks: list[AgentHooks] = []
+        act = _PluginActivation()
         for plugin in agent.plugins:
-            inst = plugin.setup()
-            tools.extend(inst.tools)
-            injectors.extend(inst.view_injectors)
+            inst = await plugin.setup()
+            act.tools.extend(inst.tools)
+            act.view_injectors.extend(inst.view_injectors)
             if inst.instructions:
-                instructions.append(inst.instructions)
+                act.instructions.append(inst.instructions)
             if inst.hooks is not None:
-                hooks.append(inst.hooks)
-        return tools, injectors, instructions, hooks
+                act.hooks.append(inst.hooks)
+            act.input_guardrails.extend(inst.input_guardrails)
+            act.output_guardrails.extend(inst.output_guardrails)
+            _push_cleanup(resources, inst.aclose)
+        return act
 
     async def _drain_pending_calls(
         self,
@@ -601,19 +625,18 @@ class RunLoop:
                 self._resolve_output_type(target, state.resume_state),
                 supports_json_schema(state.providers),
             )
-            mcp_tools = await self._connect_mcp(target, resources)
             workspace, workspace_tools = await self._connect_workspace(
                 target, resources
             )
             state.run_ctx.workspace = workspace
-            plugin_tools, plugin_injectors, plugin_instructions, plugin_hooks = (
-                self._activate_plugins(target)
-            )
-            state.view_injectors = plugin_injectors
-            state.plugin_instructions = plugin_instructions
-            state.plugin_hooks = plugin_hooks
+            plugins = await self._activate_plugins(target, resources)
+            state.view_injectors = plugins.view_injectors
+            state.plugin_instructions = plugins.instructions
+            state.plugin_hooks = plugins.hooks
+            state.plugin_input_guardrails = plugins.input_guardrails
+            state.plugin_output_guardrails = plugins.output_guardrails
             state.tools_by_name = self._collect_tools(
-                target, mcp_tools, workspace_tools, plugin_tools
+                target, workspace_tools, plugins.tools
             )
             await self._reset_transcript_for_handoff(state, signal.handoff)
 
@@ -652,10 +675,11 @@ class RunLoop:
         self, state: RunState, output: object, run_span: Span
     ) -> RunResult:
         """Run output guardrails, persistence, and usage propagation."""
-        if state.agent.output_guardrails:
-            await check_output_guardrails(
-                state.agent.output_guardrails, output, state.run_ctx
-            )
+        output_guardrails = (
+            state.agent.output_guardrails + state.plugin_output_guardrails
+        )
+        if output_guardrails:
+            await check_output_guardrails(output_guardrails, output, state.run_ctx)
 
         result = RunResult(
             output=output,
@@ -805,15 +829,13 @@ class RunLoop:
         """Render the full system prompt for ``agent``.
 
         Concatenates the agent's instructions (plus the optional per-run
-        ``extra`` addendum), workspace, skills, and plugin instructions, and —
+        ``extra`` addendum), workspace, and plugin instructions, and —
         for providers without native ``response_format`` support — the
         structured-output contract.
         """
         parts = [await agent.render_instructions(self.context, extra=extra)]
         if agent.workspace is not None:
             parts.append(agent.workspace.instructions())
-        if agent.skills is not None:
-            parts.append(agent.skills.instructions())
         for instructions in plugin_instructions or []:
             parts.append(instructions)
         if structured_output is not None and not structured_output.use_native:
@@ -849,7 +871,6 @@ class RunLoop:
     def _collect_tools(
         self,
         agent: Agent,
-        mcp_tools: list[Tool],
         workspace_tools: list[Tool],
         plugin_tools: list[Tool] | None = None,
     ) -> dict[str, Tool]:
@@ -857,15 +878,11 @@ class RunLoop:
 
         def add_tool(source: str, t: Tool) -> None:
             if t.name in tools:
-                hint = "Rename one tool or remove the duplicate."
-                if source == "mcp":
-                    hint = (
-                        "Set MCPServer.name to prefix each server's tools "
-                        "(e.g. name='fs' -> fs__read_file)."
-                    )
                 raise UserError(
                     f"Tool name conflict for {t.name!r} from {source}.",
-                    hint=hint,
+                    hint="Rename one tool or remove the duplicate. For MCP, set "
+                    "MCPServer.name to prefix a server's tools "
+                    "(e.g. name='fs' -> fs__read_file).",
                 )
             tools[t.name] = t
 
@@ -875,14 +892,9 @@ class RunLoop:
             add_tool("plugin", t)
         for t in workspace_tools:
             add_tool("agent.workspace", t)
-        for t in mcp_tools:
-            add_tool("mcp", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             add_tool("handoff", build_handoff_tool(handoff_obj))
-        if agent.skills is not None:
-            for t in agent.skills.tools():
-                add_tool("skills", t)
         return tools
 
     def _resolve_providers(
@@ -907,15 +919,6 @@ class RunLoop:
                 if callable(aclose):
                     _push_cleanup(resources, aclose)
         return providers
-
-    async def _connect_mcp(self, agent: Agent, resources: AsyncExitStack) -> list[Tool]:
-        tools: list[Tool] = []
-        for server in agent.mcp_servers:
-            conn = await server.open()
-            if server.close_after_run:
-                _push_cleanup(resources, conn.close)
-            tools.extend(conn.tools())
-        return tools
 
     async def _connect_workspace(
         self, agent: Agent, resources: AsyncExitStack

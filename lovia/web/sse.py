@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from .._types import JsonObject, JsonValue
 from .. import events
-from ..todos import Todo
+from ..plugins import Todo
 from ..transcript import (
     AssistantTextEntry,
     ReasoningEntry,

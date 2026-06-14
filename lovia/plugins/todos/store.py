@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from ..transcript import ToolCallEntry, TranscriptEntry
+from ...transcript import ToolCallEntry, TranscriptEntry
 from .types import Todo, TodoInput
 
 _BOX = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
@@ -78,9 +78,7 @@ class TodoList:
         )
         return self.items
 
-    def rehydrate_from(
-        self, entries: list[TranscriptEntry], *, tool_name: str
-    ) -> None:
+    def rehydrate_from(self, entries: list[TranscriptEntry], *, tool_name: str) -> None:
         """Rebuild from the most recent ``todo_write`` call in ``entries``.
 
         Used after a resume (fresh empty store) or a handoff (the new agent's

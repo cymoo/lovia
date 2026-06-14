@@ -31,6 +31,7 @@ from ..tools import Tool
 from ..transcript import TranscriptEntry, to_json_safe
 
 if TYPE_CHECKING:
+    from ..guardrails import GuardrailFn
     from ..handoff import _HandoffSignal
     from ..hooks import AgentHooks
     from ..plugins import ViewInjector
@@ -135,6 +136,10 @@ class RunState:
     view_injectors: list["ViewInjector"] = field(default_factory=list)
     plugin_instructions: list[str] = field(default_factory=list)
     plugin_hooks: list["AgentHooks"] = field(default_factory=list)
+    # Guardrails contributed by plugins, merged with the agent's own at the
+    # loop's existing input/output checkpoints (the loop keeps the abort).
+    plugin_input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    plugin_output_guardrails: list["GuardrailFn"] = field(default_factory=list)
 
     @property
     def agent(self) -> Agent:

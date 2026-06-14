@@ -7,9 +7,9 @@ import json
 import pytest
 
 from lovia import Agent, Runner, Todo
-from lovia.todos import todo_plugin
-from lovia.todos.store import TodoList, render_todos
-from lovia.todos.types import TodoInput
+from lovia.plugins import todos
+from lovia.plugins.todos.store import TodoList, render_todos
+from lovia.plugins.todos.types import TodoInput
 from lovia.transcript import InputEntry, ToolCallEntry
 
 from .scripted_provider import ScriptedProvider, call, text
@@ -105,7 +105,7 @@ async def test_end_to_end_reinjection_and_audit_trail() -> None:
             text("all done"),
         ]
     )
-    agent = Agent(name="t", model=provider, plugins=[todo_plugin()])
+    agent = Agent(name="t", model=provider, plugins=[todos()])
     result = await Runner.run(agent, "do the thing")
 
     # Turn 1's view has no reminder (store still empty); turns 2 and 3 do.
@@ -136,7 +136,7 @@ async def test_end_to_end_reinjection_and_audit_trail() -> None:
 @pytest.mark.asyncio
 async def test_system_prompt_carries_todo_instructions() -> None:
     provider = ScriptedProvider([text("hi")])
-    agent = Agent(name="t", model=provider, plugins=[todo_plugin()])
+    agent = Agent(name="t", model=provider, plugins=[todos()])
     await Runner.run(agent, "go")
     system = provider.calls[0][0]
     assert system.role == "system"
@@ -157,7 +157,7 @@ async def test_todos_carry_across_handoff() -> None:
             }
         ]
     }
-    b = Agent(name="B", model=ScriptedProvider([text("done by B")]), plugins=[todo_plugin()])
+    b = Agent(name="B", model=ScriptedProvider([text("done by B")]), plugins=[todos()])
     a = Agent(
         name="A",
         model=ScriptedProvider(
@@ -166,7 +166,7 @@ async def test_todos_carry_across_handoff() -> None:
                 call("transfer_to_b", {"reason": "continue"}, call_id="h1"),
             ]
         ),
-        plugins=[todo_plugin()],
+        plugins=[todos()],
         handoffs=[b],
     )
     await Runner.run(a, "go")
@@ -184,7 +184,7 @@ async def test_inject_false_omits_reminder() -> None:
     provider = ScriptedProvider(
         [call("todo_write", args, call_id="c1"), text("done")]
     )
-    agent = Agent(name="t", model=provider, plugins=[todo_plugin(inject=False)])
+    agent = Agent(name="t", model=provider, plugins=[todos(inject=False)])
     await Runner.run(agent, "go")
     assert not any(
         m.role == "user" and "system-reminder" in (m.content or "")

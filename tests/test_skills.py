@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from lovia import Agent, Skills, SkillsError
+from lovia import Agent, Skills, SkillsError, UserError, skills
 from lovia.run_context import RunContext
-from lovia.skills import (
+from lovia.plugins.skills import (
     LocalDirSkillSource,
     Skill,
     SkillMetadata,
@@ -516,7 +516,7 @@ class TestSkillsTools:
             assert tool_names == {"load_skill", "read_skill_file"}
 
     def test_read_skill_file_truncates_huge_files(self) -> None:
-        from lovia.skills import _MAX_CONTENT_CHARS
+        from lovia.plugins.skills import _MAX_CONTENT_CHARS
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -752,7 +752,7 @@ class TestExtraFrontmatter:
             assert "[" not in text.split("## Using skills")[0].split("\n")[1]
 
     def test_format_extra_skips_empty_and_nested(self) -> None:
-        from lovia.skills import _format_extra
+        from lovia.plugins.skills import _format_extra
 
         rendered = _format_extra(
             {
@@ -1052,16 +1052,16 @@ class TestAgentIntegration:
             agent = Agent(
                 name="test",
                 instructions="Help the customer.",
-                skills=Skills.from_dir(root),
+                plugins=[skills(root)],
             )
-            assert agent.skills is not None
-            text = agent.skills.instructions()
+            assert agent.plugins
+            text = Skills.from_dir(root).instructions()
             assert "refund-policy" in text
             assert "Process refunds" in text
 
     def test_agent_without_skills(self) -> None:
         agent = Agent(name="test", instructions="Be helpful.")
-        assert agent.skills is None
+        assert agent.plugins == []
 
     async def test_system_prompt_includes_skills_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1071,18 +1071,38 @@ class TestAgentIntegration:
                 "---\nname: deploy\ndescription: Deploy the application.\n---\n# Deploy\n..."
             )
 
+            catalog = Skills.from_dir(root)
             agent = Agent(
                 name="test",
                 instructions="You are helpful.",
-                skills=Skills.from_dir(root),
+                plugins=[skills(catalog)],
             )
             await agent.render_instructions(None)
-            # The skill index is rendered by the run loop via
-            # agent.skills.instructions(), not by agent.render_instructions().
-            # Just verify the skill index text is available.
-            index = agent.skills.instructions()
+            # The skill index is rendered into the system prompt by the run loop
+            # via the skills plugin's instructions(), not by
+            # agent.render_instructions(). Verify it's available from the catalog.
+            index = catalog.instructions()
             assert "deploy" in index
             assert "Deploy the application" in index
+
+    async def test_skills_factory_accepts_dir_and_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "deploy").mkdir()
+            (root / "deploy" / "SKILL.md").write_text(
+                "---\nname: deploy\ndescription: Deploy the app.\n---\n# Deploy\n..."
+            )
+            # New DX: pass the directory straight to skills().
+            inst = await skills(root).setup()
+            assert "deploy" in (inst.instructions or "")
+            assert {t.name for t in inst.tools} == {"load_skill", "read_skill_file"}
+            # A SkillSource is wrapped without Skills(...) boilerplate.
+            inst2 = await skills(LocalDirSkillSource(str(root))).setup()
+            assert "deploy" in (inst2.instructions or "")
+
+    def test_skills_factory_requires_a_source(self) -> None:
+        with pytest.raises(UserError):
+            skills()
 
 
 # ---------------------------------------------------------------------------

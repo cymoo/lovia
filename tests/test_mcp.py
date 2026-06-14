@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from lovia.exceptions import MCPError
-from lovia.mcp import (
+from lovia.plugins.mcp import (
     MCPConnection,
     MCPServer,
     MCPToolResult,
@@ -293,7 +293,7 @@ async def test_config_open_is_owned_per_run(monkeypatch: pytest.MonkeyPatch) -> 
     conn = await server.open()
     assert conn.close_after_run is True
     assert [t.name for t in conn.tools()] == ["srv__echo"]
-    # A live connection "opens" to itself (so it can sit on agent.mcp_servers).
+    # A live connection "opens" to itself (so it can be passed to mcp()).
     assert await conn.open() is conn
     await conn.close()
 

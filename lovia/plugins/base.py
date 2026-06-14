@@ -1,11 +1,12 @@
-"""Plugins: bundle a feature's tools, view injectors, instructions, and hooks.
+"""Plugin protocol: declarative, additive capability bundles for an Agent.
 
 A :class:`Plugin` is a **declarative** feature attached to an :class:`Agent`.
-The runner activates it **once per run** (via :meth:`Plugin.setup`), so a plugin
-that needs run-scoped state simply builds a fresh store in ``setup`` and closes
-its tools/injectors over it — concurrency-safe by construction, the same way
-``workspace`` produces a fresh session per run. Keep run state inside ``setup``,
-not on the plugin object, or concurrent runs of one agent would share it.
+The runner activates it **once per run** (via the async :meth:`Plugin.setup`),
+so a plugin that needs run-scoped state simply builds a fresh store in ``setup``
+and closes its tools/injectors over it — concurrency-safe by construction, the
+same way ``workspace`` produces a fresh session per run. Keep run state inside
+``setup``, not on the plugin object, or concurrent runs of one agent would
+share it.
 
 A plugin contributes capabilities across the agent's existing extension axes via
 :class:`PluginInstance`:
@@ -23,13 +24,16 @@ A plugin contributes capabilities across the agent's existing extension axes via
 * ``hooks`` — an :class:`~lovia.hooks.AgentHooks` whose handlers receive every
   run event, dispatched alongside the agent's own hooks. Lets a plugin observe
   the run (metrics, audit, notifications) without a second mechanism.
+* ``input_guardrails`` / ``output_guardrails`` — guardrail callables the runner
+  runs at its existing input/output checkpoints, merged with the agent's own.
+  The runner — never the plugin — owns the abort, so a self-contained feature
+  (e.g. PII redaction) can ship its checks alongside its tools and instructions.
 
-See :func:`lovia.todos.todo_plugin` for the first concrete plugin.
+The instance also carries an ``aclose`` coroutine the runner invokes (LIFO, best
+effort) when the run ends, so a plugin that opens a resource in ``setup`` (an MCP
+connection, an HTTP client) tears it down cleanly.
 
-Out of scope for v1 (non-breaking to add later): async ``setup``/teardown for
-plugins that acquire resources, and a channel for plugins to *emit* custom
-events into the run stream (today, surface state changes by observing
-``ToolCallCompleted`` or via ``hooks``).
+See :func:`lovia.plugins.todos` for the first concrete plugin.
 """
 
 from __future__ import annotations
@@ -38,10 +42,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Awaitable, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .hooks import AgentHooks
-    from .run_context import RunContext
-    from .tools import Tool
-    from .transcript import TranscriptEntry
+    from ..guardrails import GuardrailFn
+    from ..hooks import AgentHooks
+    from ..run_context import RunContext
+    from ..tools import Tool
+    from ..transcript import TranscriptEntry
 
 
 # A view injector is evaluated once per turn with the live run context. It
@@ -54,33 +59,45 @@ ViewInjector = Callable[
 ]
 
 
+async def _noop_aclose() -> None:
+    """Default teardown for plugins that hold no run-scoped resources."""
+    return None
+
+
 @dataclass
 class PluginInstance:
     """The per-run contributions produced by :meth:`Plugin.setup`.
 
     Every field is optional: a plugin contributes any subset. Stateful plugins
     build their store in ``setup`` and close ``tools``/``view_injectors`` over
-    it so all contributions share the same instance.
+    it so all contributions share the same instance. Set ``aclose`` to a
+    coroutine to release resources opened during ``setup``.
     """
 
     tools: "list[Tool]" = field(default_factory=list)
     view_injectors: list[ViewInjector] = field(default_factory=list)
     instructions: str | None = None
     hooks: "AgentHooks | None" = None
+    input_guardrails: "list[GuardrailFn]" = field(default_factory=list)
+    output_guardrails: "list[GuardrailFn]" = field(default_factory=list)
+    aclose: Callable[[], Awaitable[None]] = _noop_aclose
 
 
 @runtime_checkable
 class Plugin(Protocol):
     """A declarative feature that contributes capabilities to an agent run.
 
-    ``setup`` is called once per run (and once per agent on a handoff) and must
+    ``setup`` is awaited once per run (and once per agent on a handoff) and must
     return a fresh :class:`PluginInstance`; the runner never shares one across
     runs, so run-scoped state created inside ``setup`` stays isolated per run.
+    It is ``async`` so a plugin may open resources (e.g. an MCP connection)
+    during activation; pair that with :attr:`PluginInstance.aclose` for
+    teardown.
     """
 
     name: str
 
-    def setup(self) -> PluginInstance: ...
+    async def setup(self) -> PluginInstance: ...
 
 
 __all__ = ["Plugin", "PluginInstance", "ViewInjector"]

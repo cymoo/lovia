@@ -41,7 +41,7 @@ asyncio.run(main())
 
 - **心智模型很小。** `Agent` 描述行为，`Runner` 负责执行，`@tool` 暴露 Python 函数。大多数能力都从这三个概念自然展开。
 - **模型中立。** 内置 OpenAI Chat Completions 和 Anthropic Messages 适配器，直接用 `httpx` 请求；自定义 provider 只需要实现一个小 `Protocol`。
-- **Python 原生扩展。** Agent 是 dataclass，provider、session、memory、plugin、skill、workspace 都是协议形状。你是在接入自己的代码，不是在继承一座框架大厦。
+- **Python 原生扩展。** Agent 是 dataclass，provider、session、plugin、skill、workspace 都是协议形状。你是在接入自己的代码，不是在继承一座框架大厦。
 - **默认轻量。** 核心安装保持克制。搜索、MCP、Web UI、示例脚本的美化依赖、编排集成都放在 extras 里。
 - **生产原语齐全。** 审批、护栏、重试、预算、取消、checkpoint/resume、上下文压缩、生命周期 hooks、带策略的 workspace 工具，需要时都能拿出来用。
 
@@ -288,7 +288,7 @@ for question in channel.pending:
     channel.answer(question.id, "使用方案 A。")
 ```
 
-## Sessions、Checkpoints 与 Memory
+## Sessions 与 Checkpoints
 
 Session 用于跨多次调用保存对话 transcript：
 
@@ -316,7 +316,7 @@ result = await Runner.run(
 )
 ```
 
-Memory 是一个长期语义存储协议。lovia 不会自动注入 memory；你可以通过工具或 hooks 接入，让产品自己决定模型能看到什么。
+跨 session 的长期记忆不是核心概念——没有 `Memory` 类型。把它做成一个 plugin、包裹你自己的存储即可（见下方 Plugins 里的 `MemoryPlugin` 示例）。
 
 ## 上下文管理
 
@@ -424,54 +424,149 @@ pip install "lovia[ddg]"
 
 如果你有自己的搜索后端，实现 `WebSearch` 并传给 `web_search()` 即可。
 
-## Skills
-
-Skills 是遵循 Agent Skills 规范的可复用指令包。lovia 会先暴露轻量 metadata，让模型判断是否需要；完整指令和引用文件只在需要时加载。
-
-```python
-from lovia import Agent, Skills
-
-agent = Agent(
-    name="support",
-    instructions="根据正确政策帮助客户。",
-    model="deepseek-v4-pro",
-    skills=Skills.from_dir("./skills"),
-)
-```
-
-一个 skill 目录包含带 YAML frontmatter 的 `SKILL.md`，也可以包含 `references/`、`scripts/`、`assets/`。多个目录可以合并：
-
-```python
-skills = Skills.from_dir("./skills", "./team-skills")
-```
-
-也可以用 filter 控制哪些 skill 暴露给模型：
-
-```python
-skills = Skills.from_dir(
-    "./skills",
-    filter=lambda meta: "internal" not in meta.extra.get("tags", []),
-)
-```
-
 ## Plugins
 
-Plugin 把一组工具、系统提示、临时视图注入和 hooks 打包成一个对象。内置 todo plugin 给模型一个清单工具，并在每一轮把当前清单重新展示给模型，但不会把这条提醒写进 transcript。
+**Plugin** 是 lovia 唯一的扩展轴，用来把一个功能打包成一个对象。单个 plugin 可以贡献任意组合：`tools`、系统提示 `instructions`、每轮注入的 `view_injectors`（临时提醒，永不写入 transcript）、事件 `hooks`，以及 `input_guardrails` / `output_guardrails`。runner 在**每次 run**（以及 handoff 时每个 agent）通过 await 其异步 `setup()` 来激活每个 plugin，并在 run 结束时通过 `aclose()` 释放它打开的资源。Plugin 是纯增量的——它们不驱动控制流；中止、重试、handoff 始终由 loop 掌控。下面的 Skills、MCP 和 todo 列表都是内置 plugin。
+
+### Todo 列表
+
+内置 todo plugin 给模型一个清单工具，并在每一轮重新展示当前清单，同时不会让持久化的 transcript 膨胀：
 
 ```python
-from lovia import Agent, Runner, todo_plugin
+from lovia import Agent, Runner, todos
 
 agent = Agent(
     name="builder",
     instructions="认真完成多步骤任务。",
     model="deepseek-v4-pro",
-    plugins=[todo_plugin()],
+    plugins=[todos()],
 )
 
 await Runner.run(agent, "实现一个小型 REST API，包含测试和文档。")
 ```
 
-同一条 plugin 扩展线也适合产品级上下文、策略提醒或观测能力。
+### Skills
+
+Skills 是遵循 Agent Skills 规范的可复用指令包。lovia 会先暴露轻量 metadata，让模型判断是否需要；完整指令和引用文件只在需要时加载。
+
+```python
+from lovia import Agent, skills
+
+agent = Agent(
+    name="support",
+    instructions="根据正确政策帮助客户。",
+    model="deepseek-v4-pro",
+    plugins=[skills("./skills")],
+)
+```
+
+一个 skill 目录包含带 YAML frontmatter 的 `SKILL.md`，也可以包含 `references/`、`scripts/`、`assets/`。可以传入多个目录，或用 filter 控制哪些 skill 暴露给模型：
+
+```python
+plugins=[skills("./skills", "./team-skills")]
+plugins=[skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
+```
+
+如需自定义后端，把 `SkillSource`（或预先构建的 `Skills`）传给 `skills()` 而不是路径。
+
+### MCP
+
+[Model Context Protocol](https://modelcontextprotocol.io) server 把它们的工具暴露给 agent。安装可选依赖：
+
+```bash
+pip install "lovia[mcp]"
+```
+
+```python
+from lovia import Agent
+from lovia.plugins.mcp import MCPServerStdio, mcp
+
+agent = Agent(
+    name="assistant",
+    model="deepseek-v4-pro",
+    plugins=[
+        mcp(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
+    ],
+)
+```
+
+默认情况下每次 run 会打开并关闭 server。需要跨多次 run 复用同一连接时，打开 session 并传入这个活跃连接：
+
+```python
+server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
+
+async with server.session() as conn:
+    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[mcp(conn)])
+    await Runner.run(agent, "抓取 https://example.com 并总结。")
+```
+
+`mcp()` 接受多个 server——`mcp(a, b)`——而 `MCPServer.name` 会给某个 server 的工具加前缀（`web__fetch`）以避免冲突。
+
+### 编写 plugin
+
+一个 plugin 就是任意带有 `name` 和返回 `PluginInstance` 的 `async setup()` 的对象。需要**每次 run 全新**的状态放在 `setup` 内部（如上面的 todo 列表）；需要**跨 run、跨 session 持久化**的状态则挂在 plugin 上、在构造时传入。下面是一个长期记忆 plugin——它包裹一个你自己实现、只创建一次、被每次 run 共享的后端，于是 agent 能在下一次对话里回忆起上一次的事实：
+
+```python
+from dataclasses import dataclass
+from typing import Protocol
+
+from lovia import Agent, PluginInstance, tool
+
+
+class MemoryStore(Protocol):
+    """你的长期后端——用向量库、SQLite 等实现它。"""
+
+    async def add(self, fact: str) -> None: ...
+    async def search(self, query: str, k: int) -> list[str]: ...
+
+
+@dataclass
+class MemoryPlugin:
+    """跨 session 的长期记忆，agent 可以写入并检索。"""
+
+    store: MemoryStore  # 长生命周期，被每次 run 共享——不在每次 run 重建
+    name: str = "memory"
+
+    async def setup(self) -> PluginInstance:
+        store = self.store
+
+        @tool
+        async def remember(fact: str) -> str:
+            """保存一条持久事实，供以后任意 session 回忆。"""
+            await store.add(fact)
+            return "已存入长期记忆。"
+
+        @tool
+        async def recall(query: str) -> str:
+            """在长期记忆中检索与 query 相关的事实。"""
+            hits = await store.search(query, k=5)
+            return "\n".join(f"- {h}" for h in hits) or "（没有相关内容）"
+
+        return PluginInstance(
+            tools=[remember, recall],
+            instructions=(
+                "你拥有跨 session 持久的长期记忆。回答前先用 `recall` 查一查，"
+                "并用 `remember` 存下用户透露的持久事实或偏好。"
+            ),
+        )
+
+
+store = MyVectorStore()  # 你的 MemoryStore：只需两个异步方法 add() 和 search()
+agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MemoryPlugin(store)])
+```
+
+由于该后端被（可能并发的）多个 run 共享，它必须支持并发访问；而且 plugin 不会关闭它——它的生命周期属于创建它的人。（对比 todo plugin：它的 store 在每次 run 的 `setup` 里重建。）
+
+`PluginInstance` 可携带以下贡献的任意子集：
+
+| 字段 | 作用 |
+| --- | --- |
+| `tools` | 合并进 agent 的工具集 |
+| `instructions` | 追加到系统提示 |
+| `view_injectors` | 每轮追加到模型视图的条目——永不持久化 |
+| `hooks` | 观察 run 事件的 `AgentHooks`（指标、审计……） |
+| `input_guardrails` / `output_guardrails` | 在 loop 的检查点运行，与 agent 自身的一起；中止由 loop 掌控 |
+| `aclose` | run 结束时 await，用于释放 `setup` 中打开的资源 |
 
 ## Workspace Agents
 
@@ -506,43 +601,6 @@ agent = Agent(
 | `trusted` | coding 工具 + 默认允许的 `shell` |
 
 Workspace 路径都是 root-relative；绝对路径、`..` 逃逸和符号链接逃逸都会被拒绝。本地 shell 仍以宿主机用户身份运行；如果你需要强隔离，请使用容器或远程 workspace backend。
-
-## MCP
-
-安装可选 MCP 支持：
-
-```bash
-pip install "lovia[mcp]"
-```
-
-然后挂载 MCP server；它们的工具会和普通 lovia 工具一起合并。
-
-```python
-from lovia import Agent
-from lovia.mcp import MCPServerStdio
-
-agent = Agent(
-    name="assistant",
-    model="deepseek-v4-pro",
-    mcp_servers=[
-        MCPServerStdio(
-            name="web",
-            command="uvx",
-            args=["mcp-server-fetch"],
-        )
-    ],
-)
-```
-
-普通 server 配置会在每次 run 中安全地打开和关闭。需要复用时打开 session：
-
-```python
-server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
-
-async with server.session() as conn:
-    agent = Agent(name="assistant", model="deepseek-v4-pro", mcp_servers=[conn])
-    await Runner.run(agent, "抓取 https://example.com 并总结。")
-```
 
 ## Web UI
 

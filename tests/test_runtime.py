@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from lovia import Agent, Runner, tool
 from lovia.exceptions import BudgetExceeded, ContextOverflowError
+from lovia.plugins.mcp import mcp
 from lovia.messages import AssistantTurn, ToolCall, Usage
 from lovia.reliability import RunBudget
 from lovia.stores import InMemoryCheckpointer, InMemorySession
@@ -69,7 +70,7 @@ async def test_handoff_connects_target_agent_mcp_tools() -> None:
         model=ScriptedProvider(
             [call("ping", {}, call_id="p1"), text("¡pong recibido!")]
         ),
-        mcp_servers=[server],
+        plugins=[mcp(server)],
     )
     english = Agent(
         name="English",

@@ -155,6 +155,7 @@ function startAssistantTurn(ts) {
   store.reasoningNode = null;
   store.reasoningStart = 0;
   store.reasoningEnd = 0;
+  store.todoNode = null;
   scrollDown();
   return { node, bubble: store.bubble };
 }
@@ -180,7 +181,10 @@ function ensureReasoning() {
     const content = document.createElement('div');
     content.className = 'reasoning-content';
     details.appendChild(content);
-    store.bubble.insertBefore(details, store.bubble.firstChild);
+    // Append in stream order. A run shares one bubble across turns, so each
+    // turn's reasoning must land after the prior turn's text/tools — inserting
+    // at the top would stack every turn's thinking above the conversation.
+    store.bubble.appendChild(details);
     store.reasoningNode = details;
   }
   return store.reasoningNode;
@@ -227,6 +231,82 @@ function updateToolResult(id, result, isError) {
   }
   if (pre) pre.textContent = String(result);
   if (isError) node.classList.add('error');
+}
+
+function removeToolNode(id) {
+  const node = store.toolNodes.get(id);
+  if (node) { node.remove(); store.toolNodes.delete(id); }
+}
+
+// ---- Todo plugin: a live checklist card --------------------------------
+// Tool names whose calls render as a todo card instead of a tool bubble.
+// Seeded with the default; renamed tools are learned from `todo` events.
+const todoNames = new Set(['todo_write']);
+const TODO_MARK = { completed: '✓', in_progress: '◐', pending: '' };
+
+// Parse a todo_write call's arguments into a todos array, or null.
+function parseTodos(args) {
+  try {
+    const obj = JSON.parse(args);
+    if (obj && Array.isArray(obj.todos)) {
+      return obj.todos.map((t) => ({
+        content: t.content ?? '',
+        status: t.status ?? 'pending',
+        active_form: t.active_form ?? null,
+      }));
+    }
+  } catch { /* not a todo payload */ }
+  return null;
+}
+
+function fillTodoCard(card, todos) {
+  const total = todos.length;
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  card.classList.toggle('complete', total > 0 && done === total);
+  card.innerHTML =
+    '<div class="todo-head">' +
+    '<span class="todo-title">Plan</span>' +
+    `<span class="todo-count">${done}/${total}</span>` +
+    '</div>' +
+    `<div class="todo-bar"><div class="todo-bar-fill" style="width:${pct}%"></div></div>` +
+    '<ul class="todo-list"></ul>';
+  const ul = card.querySelector('.todo-list');
+  for (const t of todos) {
+    const status = ['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending';
+    const li = document.createElement('li');
+    li.className = `todo-item ${status}`;
+    const label = status === 'in_progress' && t.active_form ? t.active_form : t.content;
+    const mark = document.createElement('span');
+    mark.className = 'todo-mark';
+    mark.textContent = TODO_MARK[status];
+    const text = document.createElement('span');
+    text.className = 'todo-text';
+    text.textContent = label;
+    li.append(mark, text);
+    ul.appendChild(li);
+  }
+  return card;
+}
+
+function buildTodoCard(todos) {
+  const card = document.createElement('div');
+  card.className = 'todo-card';
+  return fillTodoCard(card, todos);
+}
+
+// Create the run's todo card on first sight, update it in place after.
+function upsertTodoCard(todos) {
+  if (!store.bubble) return;
+  if (store.todoNode) {
+    fillTodoCard(store.todoNode, todos);
+  } else {
+    store.todoNode = buildTodoCard(todos);
+    store.bubble.appendChild(store.todoNode);
+  }
+  store.body = null;
+  store.rawText = '';
+  scrollDown();
 }
 
 function appendApproval(call) {
@@ -354,6 +434,11 @@ export function renderHistory(entries) {
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
+          const todos = parseTodos(call.arguments);
+          if (todos) {
+            upsertTodoCard(todos); // render/update the run's checklist card
+            continue;
+          }
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
           if (result !== undefined && result !== '') {
@@ -455,12 +540,20 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'tool_call':
+      if (todoNames.has(data.name)) break; // rendered as a todo card instead
       finalizeReasoning();
       appendTool(data);
       break;
 
     case 'tool_result':
       updateToolResult(data.id, data.result, data.is_error);
+      break;
+
+    case 'todo':
+      finalizeReasoning();
+      if (data.name) todoNames.add(data.name);
+      removeToolNode(data.call_id); // drop the bubble if it slipped through
+      upsertTodoCard(data.todos || []);
       break;
 
     case 'approval_required':

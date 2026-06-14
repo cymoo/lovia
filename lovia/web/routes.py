@@ -24,7 +24,8 @@ from .. import events
 from ..agent import Agent
 from ..context import ContextPolicy
 from ..providers import Provider
-from ..reliability import CancelToken
+from ..reliability import CancelToken, RetryPolicy, RunBudget
+from ..todos import todos_from_entries
 from ..transcript import entries_to_messages
 from ..runner import Runner
 from .approvals import ApprovalRegistry
@@ -39,6 +40,8 @@ from .schemas import (
     MessageOut,
     RenameRequest,
     SessionDetail,
+    TodoItemOut,
+    TodosResponse,
 )
 from .markdown import render_markdown
 from .sse import _coerce, event_to_sse
@@ -59,6 +62,9 @@ def build_router(
     title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
+    max_turns: int = 50,
+    budget: RunBudget | None = None,
+    retry: RetryPolicy | None = None,
 ) -> APIRouter:
     router = APIRouter()
     session = store.session
@@ -140,6 +146,9 @@ def build_router(
             session=session,
             session_id=sid,
             context_policy=context_policy,
+            max_turns=max_turns,
+            budget=budget,
+            retry=retry,
         )
         if is_new and generate_titles:
             asyncio.create_task(
@@ -178,6 +187,9 @@ def build_router(
                 session_id=sid,
                 context_policy=context_policy,
                 cancel_token=cancel,
+                max_turns=max_turns,
+                budget=budget,
+                retry=retry,
             )
             # Tell the client its session id up front so reconnects work.
             yield {"event": "session", "data": json.dumps({"session_id": sid})}
@@ -199,6 +211,12 @@ def build_router(
                         final_output = ev.result.output
                     if approval_ev is not None:
                         await approvals.await_decision(sid, approval_ev)
+            except Exception as exc:
+                # Fatal run errors (MaxTurnsExceeded, provider failure, …) are
+                # already surfaced to the client as an `error` event by the
+                # loop before it re-raises; swallow the re-raise here so the SSE
+                # stream closes cleanly instead of faulting the ASGI response.
+                log.warning("stream %s ended with error: %s", sid, exc)
             finally:
                 await approvals.release(sid)
                 _cancel_tokens.pop(sid, None)
@@ -291,6 +309,20 @@ def build_router(
             created_at=meta.created_at,
             updated_at=meta.updated_at,
             entries=body,
+        )
+
+    @router.get("/api/sessions/{session_id}/todos", response_model=TodosResponse)
+    async def get_todos(session_id: str) -> TodosResponse:
+        """Latest todo list for a session, reconstructed from its transcript."""
+        entries = await session.load(session_id)
+        todos = todos_from_entries(entries)
+        return TodosResponse(
+            todos=[
+                TodoItemOut(
+                    content=t.content, status=t.status, active_form=t.active_form
+                )
+                for t in todos
+            ]
         )
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)

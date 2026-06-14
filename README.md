@@ -45,7 +45,7 @@ The LLM agent space is crowded. lovia makes a specific set of trade-offs:
 - 🔌 **Provider-neutral** — OpenAI, Anthropic, any OpenAI-compatible endpoint. Swap with one line.
 - 🧩 **Extend without subclassing** — Protocols and dataclasses throughout. Plug in your own session store, memory backend, or provider without touching framework internals.
 - ✂️ **Thin by default** — Only `httpx` and `pydantic` are required. Web UI, MCP, search, and orchestration stay optional.
-- 🛡️ **Production primitives** — Guardrails, approval gates, lifecycle hooks, policy-scoped workspace tools — available when you need them, invisible when you don't.
+- 🛡️ **Production primitives** — Guardrails, approval gates, lifecycle hooks, policy-scoped workspace tools, and pluggable features (todo checklists, your own) — available when you need them, invisible when you don't.
 
 ---
 
@@ -397,6 +397,64 @@ the index *and* cannot be loaded::
 
 Custom skill sources (database, API, MCP) implement the ``SkillSource`` protocol.
 
+## Plugins
+
+A **plugin** bundles a feature's tools, per-turn context, system-prompt text, and
+event hooks behind one object — activated fresh per run. Attach it in one line
+instead of wiring each piece onto the agent separately.
+
+The built-in **todo plugin** gives the model a `todo_write` tool and re-shows the
+current checklist to it every turn, so it stays on-plan through long, multi-step
+work:
+
+```python
+from lovia import Agent, Runner, todo_plugin
+
+agent = Agent(
+    name="builder",
+    instructions="Complete multi-step tasks carefully.",
+    model="deepseek-v4-pro",
+    plugins=[todo_plugin()],
+)
+await Runner.run(agent, "Scaffold a REST API: model, endpoints, tests, docs.")
+```
+
+The per-turn reminder is **view-only** — injected into each model call but never
+written to the transcript or session, so context never bloats as turns grow. Each
+`todo_write` call still lands in the transcript (structured `list[Todo]` on the
+result) for a free audit trail and automatic resume/handoff recovery. The model
+decides when a checklist helps; trivial tasks get none, at zero overhead.
+
+Watch progress live by filtering events:
+
+```python
+from lovia import events
+
+async for ev in Runner.stream(agent, task):
+    if isinstance(ev, events.ToolCallCompleted) and ev.call.name == "todo_write":
+        for t in ev.result:                # list[Todo]
+            print(t.status, "-", t.content)
+```
+
+Writing your own plugin is just `setup()` returning what it contributes:
+
+```python
+from lovia import InputEntry
+from lovia.plugins import PluginInstance
+
+class StayTerse:
+    name = "stay_terse"
+
+    def setup(self) -> PluginInstance:
+        def remind(ctx):
+            return [InputEntry(role="user", content="<reminder>Be concise.</reminder>")]
+        # A PluginInstance may also carry: tools, instructions, hooks.
+        return PluginInstance(view_injectors=[remind])
+```
+
+`view_injectors` run every turn and append transient entries to that one model
+call only — the general seam behind ephemeral reminders.
+
 ## Built-in tools
 
 Practical tools live under `lovia.tools` — nothing is imported automatically,
@@ -547,6 +605,7 @@ safe markdown rendering · Jinja2-rendered no-build UI.
 | `examples/05_handoff.py` | agent handoff |
 | `examples/08_skills.py` | Skills capability |
 | `examples/11_approval.py` | tool approval |
+| `examples/27_todos.py` | todo plugin / checklist |
 | `examples/16_web_serve.py` | web UI |
 | `examples/22_workspace.py` | direct workspace session |
 | `examples/23_workspace_agent.py` | coding agent |

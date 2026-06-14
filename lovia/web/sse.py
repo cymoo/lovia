@@ -15,12 +15,20 @@ from pydantic import BaseModel
 
 from .._types import JsonObject, JsonValue
 from .. import events
+from ..todos import Todo
 from ..transcript import (
     AssistantTextEntry,
     ReasoningEntry,
     ToolCallEntry,
     TranscriptEntry,
 )
+
+
+def _todo_payload(todos: list[Todo]) -> list[JsonObject]:
+    return [
+        {"content": t.content, "status": t.status, "active_form": t.active_form}
+        for t in todos
+    ]
 
 
 class _ModelEncoder(json.JSONEncoder):
@@ -113,6 +121,26 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             ),
         }
     if isinstance(ev, events.ToolCallCompleted):
+        # A todo-plugin result is a structured list[Todo]; surface it as a
+        # dedicated `todo` event the UI renders as a checklist, rather than a
+        # raw tool result. Detected by type, so it works under any tool name.
+        result = ev.result
+        if (
+            not ev.is_error
+            and isinstance(result, list)
+            and result
+            and all(isinstance(t, Todo) for t in result)
+        ):
+            return {
+                "event": "todo",
+                "data": json.dumps(
+                    {
+                        "call_id": ev.call.id,
+                        "name": ev.call.name,
+                        "todos": _todo_payload(result),
+                    }
+                ),
+            }
         return {
             "event": "tool_result",
             "data": json.dumps(

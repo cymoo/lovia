@@ -15,6 +15,7 @@ export const store = {
   reasoningNode: null,
   reasoningStart: 0,
   reasoningEnd: 0,
+  todoNode: null,
   lastMessage: null,
   theme: localStorage.getItem("lovia-theme") || "light",
 

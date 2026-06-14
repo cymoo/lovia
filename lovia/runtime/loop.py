@@ -18,13 +18,16 @@ module owns the orchestration. All mutable run state lives in
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections import Counter
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
+    from ..hooks import AgentHooks
     from ..messages import Message
+    from ..plugins import ViewInjector
     from ..workspace.protocol import WorkspaceSession
 
 from .. import events
@@ -98,21 +101,21 @@ class RunLoop:
         initial_agent: Agent,
         user_input: "str | list[Message]",
         context: object,
-        session: Session | None,
-        session_id: str | None,
+        output_type_override: object | None = None,
+        append_instructions: "str | None" = None,
         max_turns: int,
-        parent_usage: Usage | None = None,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         retry: RetryPolicy | None = None,
-        checkpointer: Checkpointer | None = None,
         context_policy: ContextPolicy | None = None,
+        session: Session | None,
+        session_id: str | None,
+        checkpointer: Checkpointer | None = None,
         run_id: str | None = None,
-        resume_from: RunSnapshot | None = None,
-        append_instructions: "str | None" = None,
-        output_type_override: object | None = None,
-        delete_checkpoint_on_success: bool = False,
         if_run_exists: IfRunExists = "resume",
+        delete_checkpoint_on_success: bool = False,
+        resume_from: RunSnapshot | None = None,
+        parent_usage: Usage | None = None,
     ) -> None:
         if session is not None and session_id is None:
             raise UserError("session_id is required when session is provided")
@@ -352,13 +355,18 @@ class RunLoop:
 
         mcp_tools = await self._connect_mcp(agent, resources)
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
-        tools_by_name = self._collect_tools(agent, mcp_tools, workspace_tools)
+        plugin_tools, plugin_injectors, plugin_instructions, plugin_hooks = (
+            self._activate_plugins(agent)
+        )
+        tools_by_name = self._collect_tools(
+            agent, mcp_tools, workspace_tools, plugin_tools
+        )
 
         if self.resume_from is not None:
             transcript: list[TranscriptEntry] = list(self.resume_from.entries)
         else:
             transcript = await self._build_initial_entries(
-                agent, structured_output, system_extra
+                agent, structured_output, system_extra, plugin_instructions
             )
 
         run_ctx = RunContext(
@@ -379,7 +387,32 @@ class RunLoop:
             providers=providers,
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
+            view_injectors=plugin_injectors,
+            plugin_instructions=plugin_instructions,
+            plugin_hooks=plugin_hooks,
         )
+
+    def _activate_plugins(
+        self, agent: Agent
+    ) -> tuple[list[Tool], list["ViewInjector"], list[str], list["AgentHooks"]]:
+        """Activate ``agent.plugins`` for one run, collecting their contributions.
+
+        ``setup`` is called once per plugin so any run-scoped state is fresh and
+        all of a plugin's contributions (tool, injector, ...) share it.
+        """
+        tools: list[Tool] = []
+        injectors: list[ViewInjector] = []
+        instructions: list[str] = []
+        hooks: list[AgentHooks] = []
+        for plugin in agent.plugins:
+            inst = plugin.setup()
+            tools.extend(inst.tools)
+            injectors.extend(inst.view_injectors)
+            if inst.instructions:
+                instructions.append(inst.instructions)
+            if inst.hooks is not None:
+                hooks.append(inst.hooks)
+        return tools, injectors, instructions, hooks
 
     async def _drain_pending_calls(
         self,
@@ -446,6 +479,7 @@ class RunLoop:
             yield await self._emit(
                 state, self._compacted_event(state, view, ctx_result, reactive=False)
             )
+        view = await self._augment_view(state, view)
 
         forwarded = False
         try:
@@ -476,10 +510,39 @@ class RunLoop:
         yield await self._emit(
             state, self._compacted_event(state, view, ctx_result, reactive=True)
         )
+        view = await self._augment_view(state, view)
         turn.assistant = None
         turn.turn_entries = []
         async for ev in self._call_model(state, providers, view, turn, tracer):
             yield ev
+
+    async def _augment_view(
+        self, state: RunState, view: list[TranscriptEntry]
+    ) -> list[TranscriptEntry]:
+        """Append transient per-turn entries from plugin view injectors.
+
+        Injected entries are used for this one model call only — never added to
+        ``state.transcript`` or the Session, so they don't accumulate as turns
+        grow and don't bust the cached system-prompt prefix. A raising injector
+        is logged and skipped (fail-open): a broken reminder must never abort a
+        run. A fresh list is returned whenever anything is injected, so the live
+        transcript is never mutated in place.
+        """
+        if not state.view_injectors:
+            return view
+        injected: list[TranscriptEntry] = []
+        for inject in state.view_injectors:
+            try:
+                result = inject(state.run_ctx)
+                if inspect.isawaitable(result):
+                    result = await result
+                if result:
+                    injected.extend(result)
+            except Exception:
+                logger.warning("view injector failed; skipping", exc_info=True)
+        if not injected:
+            return view
+        return [*view, *injected]
 
     async def _call_model(
         self,
@@ -543,8 +606,14 @@ class RunLoop:
                 target, resources
             )
             state.run_ctx.workspace = workspace
+            plugin_tools, plugin_injectors, plugin_instructions, plugin_hooks = (
+                self._activate_plugins(target)
+            )
+            state.view_injectors = plugin_injectors
+            state.plugin_instructions = plugin_instructions
+            state.plugin_hooks = plugin_hooks
             state.tools_by_name = self._collect_tools(
-                target, mcp_tools, workspace_tools
+                target, mcp_tools, workspace_tools, plugin_tools
             )
             await self._reset_transcript_for_handoff(state, signal.handoff)
 
@@ -611,9 +680,12 @@ class RunLoop:
     # ------------------------------------------------------------------ #
 
     async def _emit(self, state: RunState, ev: events.Event) -> events.Event:
-        """Dispatch ``ev`` to the active agent's hooks, then hand it back to
-        be yielded to the stream consumer (``yield await self._emit(...)``)."""
+        """Dispatch ``ev`` to the active agent's hooks and any plugin hooks,
+        then hand it back to be yielded to the stream consumer
+        (``yield await self._emit(...)``)."""
         await dispatch(state.agent.hooks, ev)
+        for hooks in state.plugin_hooks:
+            await dispatch(hooks, ev)
         return ev
 
     def _check_limits(self, state: RunState) -> None:
@@ -701,10 +773,14 @@ class RunLoop:
         agent: Agent,
         structured_output: StructuredOutput | None,
         system_extra: str | None,
+        plugin_instructions: list[str] | None = None,
     ) -> list[TranscriptEntry]:
         entries: list[TranscriptEntry] = []
         system_text = await self._system_prompt(
-            agent, structured_output, extra=system_extra
+            agent,
+            structured_output,
+            extra=system_extra,
+            plugin_instructions=plugin_instructions,
         )
         entries.extend(self._system_entry(system_text))
 
@@ -724,12 +800,13 @@ class RunLoop:
         structured_output: StructuredOutput | None,
         *,
         extra: "str | None" = None,
+        plugin_instructions: list[str] | None = None,
     ) -> str:
         """Render the full system prompt for ``agent``.
 
         Concatenates the agent's instructions (plus the optional per-run
-        ``extra`` addendum), workspace and skills instructions, and — for
-        providers without native ``response_format`` support — the
+        ``extra`` addendum), workspace, skills, and plugin instructions, and —
+        for providers without native ``response_format`` support — the
         structured-output contract.
         """
         parts = [await agent.render_instructions(self.context, extra=extra)]
@@ -737,6 +814,8 @@ class RunLoop:
             parts.append(agent.workspace.instructions())
         if agent.skills is not None:
             parts.append(agent.skills.instructions())
+        for instructions in plugin_instructions or []:
+            parts.append(instructions)
         if structured_output is not None and not structured_output.use_native:
             parts.append(format_output_instructions(structured_output))
         return "\n\n".join(part for part in parts if part).strip()
@@ -751,7 +830,10 @@ class RunLoop:
         the body round-tripped through the (lossy, message-shaped) filter API.
         """
         new_system = await self._system_prompt(
-            state.agent, state.structured_output, extra=state.system_extra
+            state.agent,
+            state.structured_output,
+            extra=state.system_extra,
+            plugin_instructions=state.plugin_instructions,
         )
         body: list[TranscriptEntry] = list(state.transcript)
         if body and isinstance(body[0], InputEntry) and body[0].role == "system":
@@ -769,6 +851,7 @@ class RunLoop:
         agent: Agent,
         mcp_tools: list[Tool],
         workspace_tools: list[Tool],
+        plugin_tools: list[Tool] | None = None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -788,6 +871,8 @@ class RunLoop:
 
         for t in agent.tools:
             add_tool("agent.tools", t)
+        for t in plugin_tools or []:
+            add_tool("plugin", t)
         for t in workspace_tools:
             add_tool("agent.workspace", t)
         for t in mcp_tools:
@@ -874,7 +959,10 @@ class RunLoop:
         if view and isinstance(view[0], InputEntry) and view[0].role == "system":
             return view
         system_text = await self._system_prompt(
-            state.agent, state.structured_output, extra=state.system_extra
+            state.agent,
+            state.structured_output,
+            extra=state.system_extra,
+            plugin_instructions=state.plugin_instructions,
         )
         return [*self._system_entry(system_text), *view]
 

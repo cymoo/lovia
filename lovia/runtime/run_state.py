@@ -32,6 +32,8 @@ from ..transcript import TranscriptEntry, to_json_safe
 
 if TYPE_CHECKING:
     from ..handoff import _HandoffSignal
+    from ..hooks import AgentHooks
+    from ..plugins import ViewInjector
 
 # Where the run's final output contract came from: the active agent's own
 # ``output_type``, or a run-wide ``Runner.run(..., output_type=...)`` override.
@@ -126,6 +128,13 @@ class RunState:
     system_extra: str | None = None
     # Set by the tool phase when a handoff tool fired; consumed by the loop.
     pending_handoff: "_HandoffSignal | None" = None
+    # Per-run plugin contributions (rebuilt at bootstrap and on each handoff).
+    # ``view_injectors`` run every turn to append transient entries to the
+    # model view; ``plugin_instructions`` are folded into the system prompt;
+    # ``plugin_hooks`` receive every event alongside the agent's own hooks.
+    view_injectors: list["ViewInjector"] = field(default_factory=list)
+    plugin_instructions: list[str] = field(default_factory=list)
+    plugin_hooks: list["AgentHooks"] = field(default_factory=list)
 
     @property
     def agent(self) -> Agent:

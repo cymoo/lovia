@@ -16,6 +16,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ..agent import Agent
 from ..context import Compaction, ContextPolicy
 from ..providers import Provider
+from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
 from .approvals import ApprovalRegistry
 from .routes import build_router
@@ -51,6 +52,9 @@ def create_app(
     title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
+    max_turns: int = 50,
+    budget: RunBudget | None = None,
+    retry: RetryPolicy | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -66,6 +70,10 @@ def create_app(
 
     ``context_policy`` defaults to :class:`Compaction` with a
     64 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
+
+    Run limits apply to every chat turn the server drives: ``max_turns`` caps
+    the agent loop per request, ``budget`` (a :class:`RunBudget`) bounds token
+    spend, and ``retry`` (a :class:`RetryPolicy`) governs provider retries.
     """
     agents = _normalise(agent_or_agents)
 
@@ -94,6 +102,9 @@ def create_app(
             title_model=title_model,
             generate_titles=generate_titles,
             title=title,
+            max_turns=max_turns,
+            budget=budget,
+            retry=retry,
         )
     )
     app.mount(
@@ -121,9 +132,17 @@ def serve(
     title_model: str | Provider | list[str | Provider] | None = None,
     generate_titles: bool = True,
     title: str = "lovia",
+    max_turns: int = 50,
+    budget: RunBudget | None = None,
+    retry: RetryPolicy | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:
-    """Convenience: build the app and run it under uvicorn (blocking)."""
+    """Convenience: build the app and run it under uvicorn (blocking).
+
+    ``max_turns`` / ``budget`` / ``retry`` set the per-request run limits (see
+    :func:`create_app`); any remaining keyword arguments are forwarded to
+    ``uvicorn.run`` (e.g. ``log_level``, ``reload``, ``workers``).
+    """
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover - depends on optional env
@@ -140,5 +159,8 @@ def serve(
         title_model=title_model,
         generate_titles=generate_titles,
         title=title,
+        max_turns=max_turns,
+        budget=budget,
+        retry=retry,
     )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

@@ -124,7 +124,9 @@ from .transcript import (
     messages_to_entries,
 )
 from .output import DefaultOutputRepair, OutputRepairStrategy
+from .plugins import Plugin, PluginInstance, ViewInjector
 from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
+from .todos import Todo, TodoInput, TodoList, TodoStatus, todo_plugin
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
 
 # ---------------------------------------------------------------------------
@@ -223,6 +225,8 @@ __all__ = [
     "DefaultOutputRepair",
     "FilePart",
     "OutputValidationError",
+    "Plugin",
+    "PluginInstance",
     "Provider",
     "ProviderError",
     "ReasoningDelta",
@@ -248,6 +252,10 @@ __all__ = [
     "LocalDirSkillSource",
     "TextPart",
     "TextDelta",
+    "Todo",
+    "TodoInput",
+    "TodoList",
+    "TodoStatus",
     "Tool",
     "ToolCall",
     "ToolCallDelta",
@@ -259,6 +267,7 @@ __all__ = [
     "Tracer",
     "Usage",
     "UsageDelta",
+    "ViewInjector",
     "FinishDelta",
     "UserError",
     "agent_as_tool",
@@ -275,6 +284,7 @@ __all__ = [
     "safe_window",
     "messages_to_entries",
     "system",
+    "todo_plugin",
     "tool",
     "user",
 ]

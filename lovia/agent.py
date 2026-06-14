@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .memory import Memory
     from .messages import Message, ToolCall
     from .output import OutputRepairStrategy
+    from .plugins import Plugin
     from .runtime.result import RunHandle, RunResult
     from .skills import Skills
     from .tools import ToolResultRenderer
@@ -126,6 +127,11 @@ class Agent(Generic[TContext]):
     skills: "Skills | None" = None
     mcp_servers: list["MCPServerLike"] = field(default_factory=list)
     workspace: "WorkspaceLike | None" = None
+    # Declarative features that bundle tools, per-turn view injectors, static
+    # system-prompt text, and event hooks. Each is activated once per run (and
+    # per agent on a handoff). See :mod:`lovia.plugins` and
+    # :func:`lovia.todos.todo_plugin`.
+    plugins: list["Plugin"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)

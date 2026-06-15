@@ -65,13 +65,13 @@ class Runner:
           drops the new ``input``. For conversational continuity use ``session``.
         * ``"restart"`` — ignore any stored run and start fresh, overwriting it.
         * ``"fail"`` — raise if a run already exists under ``run_id``.
-        * ``"require"`` — resume an existing run, **raising** if nothing is
+        * ``"resume_only"`` — resume an existing run, **raising** if nothing is
           stored. This is how you continue a known run by id without new input::
 
               async for ev in Runner.stream(
                   agent,
                   [],
-                  checkpoint=CheckpointOptions(cp, rid, if_run_exists="require"),
+                  checkpoint=CheckpointOptions(cp, rid, if_run_exists="resume_only"),
               ):
                   ...
 

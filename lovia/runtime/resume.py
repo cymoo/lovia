@@ -25,17 +25,18 @@ from .result import RunResult
 # * ``resume``  — continue an existing run, else start fresh (default).
 # * ``restart`` — ignore any stored run and start fresh, overwriting it.
 # * ``fail``    — raise if a run already exists.
-# * ``require`` — continue an existing run, else raise (resume a known run_id).
+# * ``resume_only`` — continue an existing run, else raise (resume a known run_id).
 def check_resumable(agent: Agent, snapshot: RunSnapshot) -> None:
     """Gate a resume against ``agent`` before any work happens.
 
-    Raises :class:`UserError` if the snapshot belongs to a different agent or
-    is in a ``failed`` state. A ``completed`` snapshot passes this gate; the
-    caller short-circuits it separately.
+    # TODO: the comments below are stale
+    Raises :class:`UserError` if the snapshot belongs to a different agent.
+    A ``completed`` snapshot passes this gate; the caller short-circuits it
+    separately. ``failed`` snapshots are allowed through — the underlying
+    cause may have been fixed by the caller (e.g. a permission error after
+    the user corrected directory access).
     """
     _validate_snapshot_agent(agent, snapshot)
-    if snapshot.status == "failed":
-        _raise_failed_snapshot(snapshot)
 
 
 def result_from_completed_snapshot(
@@ -75,18 +76,8 @@ def _validate_snapshot_agent(agent: Agent, snapshot: RunSnapshot) -> None:
     )
 
 
-def _raise_failed_snapshot(snapshot: RunSnapshot) -> None:
-    err = snapshot.error or {}
-    error_type = err.get("type", "error")
-    message = err.get("message", "Run failed before completion.")
-    raise UserError(
-        f"Checkpoint {snapshot.run_id!r} is failed ({error_type}: {message}).",
-        hint="Start a new run or inspect the checkpoint error payload.",
-    )
-
-
 __all__ = [
-    "IfRunExists",
     "check_resumable",
+    "IfRunExists",
     "result_from_completed_snapshot",
 ]

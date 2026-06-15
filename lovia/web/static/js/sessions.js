@@ -156,6 +156,12 @@ export async function switchSession(id) {
     const data = await res.json();
     if (chatTitleEl) chatTitleEl.textContent = data.title || 'New chat';
     store.emit('render-history', data.entries || []);
+    // Auto-reconnect when the session has an unfinished run (e.g. page refresh
+    // mid-stream). The SSE continuation streams into a new assistant bubble
+    // appended after the already-rendered checkpoint history.
+    if (data.active_run_id && !store.streaming) {
+      store.emit('reconnect', id);
+    }
   } catch (err) {
     transcript.innerHTML = `<div class="empty-state"><h2>Couldn't load chat</h2><p>${err.message ?? err}</p></div>`;
   }

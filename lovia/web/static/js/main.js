@@ -1,7 +1,7 @@
 // Entry point — wires together all modules.
 import { store } from './store.js';
 import { initTheme, initSidebarToggle } from './ui.js';
-import { initComposer, cancelStream, renderHistory, resetChatForNewSession } from './chat.js';
+import { initComposer, cancelStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 
 // ---- Page config --------------------------------------------------------
@@ -60,6 +60,10 @@ store.on('retry', () => {
 });
 
 store.on('reset-chat-view', resetChatForNewSession);
+
+store.on('reconnect', (sessionId) => {
+  if (!store.streaming) runReconnect(sessionId);
+});
 
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {

@@ -13,13 +13,15 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..checkpointer import Checkpointer
 from ..types import JsonObject
 from ..session import Session
-from ..stores import InMemorySession, SQLiteSession
+from ..stores import InMemoryCheckpointer, InMemorySession, SQLiteCheckpointer, SQLiteSession
 from ..stores._sqlite import SQLiteStore
 
 __all__ = ["ChatMeta", "ChatStore"]
@@ -31,7 +33,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     title TEXT,
     agent TEXT,
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    active_run_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
@@ -75,21 +78,48 @@ class ChatStore:
         session: Session,
         *,
         meta_path: str | Path,
+        checkpointer: Checkpointer | None = None,
     ) -> None:
         self.session = session
         self._meta = SQLiteStore(str(meta_path), _META_SCHEMA)
+        self.checkpointer: Checkpointer | None = checkpointer
+        # Migrate existing databases that predate the active_run_id column.
+        self._migrate()
+
+    def _migrate(self) -> None:
+        # ALTER TABLE is idempotent: OperationalError means the column already
+        # exists (fresh DB gets it from _META_SCHEMA; existing DB needs the ALTER).
+        conn = self._meta._connect()
+        try:
+            try:
+                conn.execute(
+                    "ALTER TABLE chat_sessions ADD COLUMN active_run_id TEXT"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        finally:
+            self._meta._release(conn)
 
     # ---- factories ------------------------------------------------------
 
     @classmethod
     def sqlite(cls, path: str | Path) -> "ChatStore":
-        """Persistent store: both transcripts and metadata in one file."""
-        return cls(SQLiteSession(path), meta_path=path)
+        """Persistent store: transcripts, metadata, and checkpoints in one file."""
+        return cls(
+            SQLiteSession(path),
+            meta_path=path,
+            checkpointer=SQLiteCheckpointer(path),
+        )
 
     @classmethod
     def in_memory(cls) -> "ChatStore":
         """Volatile store for tests and one-off demos."""
-        return cls(InMemorySession(), meta_path=":memory:")
+        return cls(
+            InMemorySession(),
+            meta_path=":memory:",
+            checkpointer=InMemoryCheckpointer(),
+        )
 
     # ---- metadata -------------------------------------------------------
 
@@ -222,3 +252,53 @@ class ChatStore:
     async def list(self, *, limit: int = 200) -> list[ChatMeta]:
         """Return chat metadata ordered by most recent activity."""
         return await self.list_all(limit=limit)
+
+    # ---- active run tracking --------------------------------------------
+
+    async def get_active_run_id(self, session_id: str) -> str | None:
+        """Return the run_id of the most recent unfinished run, or None."""
+
+        def _impl() -> str | None:
+            conn = self._meta._connect()
+            try:
+                row = conn.execute(
+                    "SELECT active_run_id FROM chat_sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()
+                return row[0] if row else None
+            finally:
+                self._meta._release(conn)
+
+        return await self._meta._run(_impl)
+
+    async def set_active_run_id(self, session_id: str, run_id: str) -> None:
+        """Record that ``run_id`` is the active (potentially interrupted) run."""
+
+        def _impl() -> None:
+            conn = self._meta._connect()
+            try:
+                conn.execute(
+                    "UPDATE chat_sessions SET active_run_id = ? WHERE id = ?",
+                    (run_id, session_id),
+                )
+                conn.commit()
+            finally:
+                self._meta._release(conn)
+
+        await self._meta._run(_impl)
+
+    async def clear_active_run_id(self, session_id: str) -> None:
+        """Clear the active run pointer (run completed or was abandoned)."""
+
+        def _impl() -> None:
+            conn = self._meta._connect()
+            try:
+                conn.execute(
+                    "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?",
+                    (session_id,),
+                )
+                conn.commit()
+            finally:
+                self._meta._release(conn)
+
+        await self._meta._run(_impl)

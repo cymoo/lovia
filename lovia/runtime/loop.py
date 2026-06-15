@@ -343,7 +343,7 @@ class RunLoop:
             snapshot = await self.checkpointer.load(self.run_id)
 
         if snapshot is None:
-            if self.if_run_exists == "require":
+            if self.if_run_exists == "resume_only":
                 raise UserError(f"No snapshot found for run_id={self.run_id!r}")
             return None  # nothing stored yet — start fresh
 

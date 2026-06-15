@@ -926,6 +926,82 @@ export async function runStream(message) {
   }
 }
 
+export async function runReconnect(sessionId) {
+  store.streaming = true;
+  sendBtn.style.display = 'none';
+  if (stopBtn) stopBtn.style.display = '';
+  const { node: turn, bubble } = startAssistantTurn();
+  const streamEpoch = store.chatEpoch;
+
+  _resumeAutoScroll();
+  _streamAbortController = new AbortController();
+
+  try {
+    const res = await fetch(
+      `/api/chat/reconnect?session_id=${encodeURIComponent(sessionId)}`,
+      {
+        method: 'POST',
+        headers: { accept: 'text/event-stream' },
+        signal: _streamAbortController.signal,
+      }
+    );
+
+    if (!res.ok || !res.body) {
+      // 404 = nothing to reconnect, 409 = already running or agent gone.
+      // Either way: silently remove the empty placeholder and let the user
+      // see the already-rendered history without an error message.
+      if (turn) turn.remove();
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let raw = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value?.length) {
+        raw += dec.decode(value, { stream: !done });
+        raw = raw.replace(/\r\n/g, '\n');
+        let idx;
+        while ((idx = raw.indexOf('\n\n')) >= 0) {
+          const chunk = raw.slice(0, idx);
+          raw = raw.slice(idx + 2);
+          const ev = parseSSE(chunk);
+          if (store.chatEpoch !== streamEpoch) {
+            _streamAbortController?.abort();
+            return;
+          }
+          if (ev) await handleEvent(ev);
+        }
+      }
+      if (done) break;
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      ensureBody();
+      store.rawText += `\n\n> ⚠️ **Error:** ${err.message ?? err}`;
+      flushRender();
+    }
+  } finally {
+    clearTimeout(_renderTimer);
+    if (store.body && store.rawText) {
+      store.body.dataset.raw = store.rawText;
+      flushRender();
+    }
+    if (turn) {
+      turn.classList.remove('streaming');
+      addCopyButton(bubble);
+    }
+    store.streaming = false;
+    _streamAbortController = null;
+    sendBtn.style.display = '';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (promptEl) promptEl.focus();
+    if (turnProgressEl) turnProgressEl.classList.add('hidden');
+    loadSessions();
+  }
+}
+
 export function resetChatForNewSession() {
   resetChatView({ cancel: true });
   _resumeAutoScroll();

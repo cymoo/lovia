@@ -116,7 +116,7 @@ async def test_resume_completed_snapshot_returns_without_rerunning_provider() ->
 
     await Runner.run(agent, "hi", checkpoint=ckpt(cp, "done"))
     result = await Runner.run(
-        agent, [], checkpoint=ckpt(cp, "done", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "done", if_run_exists="resume_only")
     )
 
     assert result.output == "done"
@@ -161,7 +161,7 @@ async def test_resume_completed_snapshot_can_delete_checkpoint() -> None:
             cp,
             "done-delete",
             delete_on_success=True,
-            if_run_exists="require",
+            if_run_exists="resume_only",
         ),
     )
 
@@ -180,7 +180,7 @@ async def test_resume_completed_structured_snapshot_rehydrates_output() -> None:
 
     await Runner.run(agent, "hi", checkpoint=ckpt(cp, "typed"))
     result = await Runner.run(
-        agent, [], checkpoint=ckpt(cp, "typed", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "typed", if_run_exists="resume_only")
     )
 
     assert isinstance(result.output, Out)
@@ -201,7 +201,7 @@ async def test_resume_completed_snapshot_with_run_level_output_type() -> None:
     result = await Runner.run(
         agent,
         [],
-        checkpoint=ckpt(cp, "override", if_run_exists="require"),
+        checkpoint=ckpt(cp, "override", if_run_exists="resume_only"),
         output_type=Out,
     )
     assert isinstance(result.output, Out)
@@ -231,7 +231,7 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
 
     with pytest.raises(Exception, match="not JSON-safe"):
         await Runner.run(
-            agent, [], checkpoint=ckpt(cp, "bad-output", if_run_exists="require")
+            agent, [], checkpoint=ckpt(cp, "bad-output", if_run_exists="resume_only")
         )
 
 
@@ -251,7 +251,7 @@ async def test_resume_completed_snapshot_does_not_write_session() -> None:
     result = await Runner.run(
         agent,
         [],
-        checkpoint=ckpt(cp, "done-session", if_run_exists="require"),
+        checkpoint=ckpt(cp, "done-session", if_run_exists="resume_only"),
         session=session,
         session_id="s1",
     )
@@ -350,7 +350,7 @@ async def test_retryable_provider_failure_saves_interrupted_snapshot() -> None:
     assert snap.error["type"] == "ProviderError"
 
     result = await Runner.run(
-        agent, [], checkpoint=ckpt(cp, "interrupted", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "interrupted", if_run_exists="resume_only")
     )
     assert result.output == "recovered"
     assert provider.calls == 2
@@ -358,7 +358,7 @@ async def test_retryable_provider_failure_saves_interrupted_snapshot() -> None:
 
 @pytest.mark.asyncio
 async def test_resume_streams_events() -> None:
-    # if_run_exists="require" returns a RunHandle, so a resumed run can be
+    # if_run_exists="resume_only" returns a RunHandle, so a resumed run can be
     # consumed as a live event stream — not just awaited for the RunResult.
     cp = InMemoryCheckpointer()
     provider = FlakyProvider()
@@ -368,7 +368,7 @@ async def test_resume_streams_events() -> None:
         await Runner.run(agent, "hi", checkpoint=ckpt(cp, "stream-resume"))
 
     handle = Runner.stream(
-        agent, [], checkpoint=ckpt(cp, "stream-resume", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "stream-resume", if_run_exists="resume_only")
     )
     seen: list[type] = []
     async for ev in handle:
@@ -381,14 +381,14 @@ async def test_resume_streams_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_require_missing_run_id_raises_when_driven() -> None:
+async def test_resume_only_missing_run_id_raises_when_driven() -> None:
     # The snapshot loads lazily, so a missing run_id surfaces when the handle
     # is first driven rather than from the stream() call itself.
     cp = InMemoryCheckpointer()
     agent = Agent(name="a", model=ScriptedProvider([]))
 
     handle = Runner.stream(
-        agent, [], checkpoint=ckpt(cp, "missing", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "missing", if_run_exists="resume_only")
     )
     with pytest.raises(Exception, match="No snapshot found"):
         await handle
@@ -434,7 +434,7 @@ async def test_resume_continues_from_snapshot() -> None:
     agent = Agent(name="a", model=provider, tools=[clock])
 
     result = await Runner.run(
-        agent, [], checkpoint=ckpt(cp, "r2", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "r2", if_run_exists="resume_only")
     )
     assert result.output == "It is noon."
     # The first three entries survive the resume verbatim.
@@ -470,7 +470,7 @@ async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
     agent = Agent(name="a", model=provider, tools=[clock])
 
     result = await Runner.run(
-        agent, [], checkpoint=ckpt(cp, "pending-tool", if_run_exists="require")
+        agent, [], checkpoint=ckpt(cp, "pending-tool", if_run_exists="resume_only")
     )
 
     assert result.output == "It is noon."
@@ -536,7 +536,7 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
     result = await Runner.run(
         spanish,
         [],
-        checkpoint=ckpt(cp, "handoff", if_run_exists="require"),
+        checkpoint=ckpt(cp, "handoff", if_run_exists="resume_only"),
         output_type=Out,
     )
     assert isinstance(result.output, Out)
@@ -570,12 +570,12 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
 
 
 @pytest.mark.asyncio
-async def test_require_missing_run_id_raises() -> None:
+async def test_resume_only_missing_run_id_raises() -> None:
     cp = InMemoryCheckpointer()
     agent = Agent(name="a", model=ScriptedProvider([]))
     with pytest.raises(Exception, match="No snapshot"):
         await Runner.run(
-            agent, [], checkpoint=ckpt(cp, "missing", if_run_exists="require")
+            agent, [], checkpoint=ckpt(cp, "missing", if_run_exists="resume_only")
         )
 
 

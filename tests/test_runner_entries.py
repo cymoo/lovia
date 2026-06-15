@@ -210,7 +210,7 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
     provider = ScriptedProvider([text("you're welcome")])
     agent = Agent(name="t", instructions="be helpful", model=provider)
     result = await Runner.run(
-        agent, [], checkpoint=CheckpointOptions(cp, "r1", if_run_exists="require")
+        agent, [], checkpoint=CheckpointOptions(cp, "r1", if_run_exists="resume_only")
     )
     assert _normalize(entries_to_messages(result.entries)) == _normalize(
         result.messages

@@ -174,7 +174,7 @@ async def test_budget_exceeded_is_interrupted_and_resumable() -> None:
     # Resume without the tight budget: the pending call drains, then the
     # remaining script completes the run.
     result = await Runner.run(
-        agent, [], checkpoint=CheckpointOptions(cp, "budgeted", if_run_exists="require")
+        agent, [], checkpoint=CheckpointOptions(cp, "budgeted", if_run_exists="resume_only")
     )
     assert result.output == "done"
 
@@ -270,7 +270,7 @@ async def test_resume_persists_session_history() -> None:
     result = await Runner.run(
         agent,
         [],
-        checkpoint=CheckpointOptions(cp, "sessioned", if_run_exists="require"),
+        checkpoint=CheckpointOptions(cp, "sessioned", if_run_exists="resume_only"),
         session=session,
         session_id="s1",
     )

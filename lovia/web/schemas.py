@@ -56,6 +56,7 @@ class SessionDetail(BaseModel):
     created_at: float
     updated_at: float
     entries: list[MessageOut] = Field(default_factory=list)
+    active_run_id: str | None = None
 
 
 class ChatSessionInfo(BaseModel):

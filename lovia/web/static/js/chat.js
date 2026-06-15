@@ -737,6 +737,22 @@ async function handleEvent({ event, data }) {
       scrollDown();
       break;
 
+    case 'output_discarded':
+      // A transient mid-stream error discarded this turn's partial output; a
+      // fresh stream that replaces it follows. Drop what's on screen so the
+      // retry's text doesn't append to the abandoned attempt. Only text and
+      // reasoning can be live here — tool_call events fire after the model
+      // stream — and store.reasoningNode is null between turns, so it only
+      // ever refers to the current interrupted turn.
+      clearTimeout(_renderTimer);
+      if (store.body) { store.body.remove(); store.body = null; }
+      store.rawText = '';
+      if (store.reasoningNode) { store.reasoningNode.remove(); store.reasoningNode = null; }
+      store.reasoningText = '';
+      store.reasoningStart = 0;
+      store.reasoningEnd = 0;
+      break;
+
     case 'message_completed':
       clearTimeout(_renderTimer);
       if (store.body && store.rawText) flushRender();

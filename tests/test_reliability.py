@@ -16,12 +16,14 @@ from lovia import (
     RunBudget,
     RunCancelled,
     Runner,
+    events,
     tool,
 )
 from lovia.transcript import (
     FinishDelta,
     ModelDelta,
     TextDelta,
+    ToolCallDelta,
     UsageDelta,
 )
 from lovia.messages import AssistantTurn, Usage
@@ -190,3 +192,171 @@ async def test_provider_fallback_chain_uses_backup() -> None:
     result = await Runner.run(agent, "hi", retry=retry)
     assert result.output == "recovered"
     assert primary.attempts == 2  # exhausted retries on primary then fell over
+
+
+# ---------- restart-on-partial (mid-stream) recovery ----------
+
+
+class _PartialThenSucceedProvider:
+    """Streams a TextDelta, fails once, then re-streams a clean answer."""
+
+    name = "partial-then-ok"
+    model = "fake-model"
+
+    def __init__(self, *, retryable: bool | None = None) -> None:
+        self.retryable = retryable
+        self.attempts = 0
+
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ModelDelta]:
+        self.attempts += 1
+        if self.attempts == 1:
+            yield TextDelta(text="partial-")
+            raise ProviderError("mid-stream boom", retryable=self.retryable)
+        yield TextDelta(text="final answer")
+        yield UsageDelta(usage=Usage())
+        yield FinishDelta(reason="stop")
+
+
+class _PartialToolThenSucceedProvider:
+    """Streams a tool-call fragment (not user-visible), fails, then succeeds."""
+
+    name = "partial-tool-then-ok"
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ModelDelta]:
+        self.attempts += 1
+        if self.attempts == 1:
+            yield ToolCallDelta(index=0, call_id="c1", name="ping", arguments="{}")
+            raise ProviderError("mid-stream boom")
+        yield TextDelta(text="done")
+        yield UsageDelta(usage=Usage())
+        yield FinishDelta(reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_restart_on_partial_discards_and_replaces() -> None:
+    provider = _PartialThenSucceedProvider()
+    agent = Agent(name="a", model=provider)
+    retry = RetryPolicy(
+        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
+
+    seen: list[events.Event] = []
+    handle = Runner.stream(agent, "hi", retry=retry)
+    async for ev in handle:
+        if isinstance(
+            ev, (events.TextDelta, events.OutputDiscarded, events.MessageCompleted)
+        ):
+            seen.append(ev)
+    result = await handle.result()
+
+    assert provider.attempts == 2
+    # partial text is invalidated, then the turn re-streams from scratch.
+    assert [type(ev).__name__ for ev in seen] == [
+        "TextDelta",
+        "OutputDiscarded",
+        "TextDelta",
+        "MessageCompleted",
+    ]
+    assert seen[0].delta == "partial-"
+    assert seen[2].delta == "final answer"
+    # No duplication: the abandoned "partial-" is gone from the final output.
+    assert result.output == "final answer"
+
+
+@pytest.mark.asyncio
+async def test_restart_on_partial_disabled_propagates() -> None:
+    provider = _PartialThenSucceedProvider()
+    agent = Agent(name="a", model=provider)
+    retry = RetryPolicy(
+        max_retries=5,
+        backoff_base=0.0,
+        restart_on_partial=False,
+        sleep=lambda _d: asyncio.sleep(0),
+    )
+
+    with pytest.raises(ProviderError):
+        await Runner.run(agent, "hi", retry=retry)
+    # Conservative behavior: a mid-stream error is not re-streamed.
+    assert provider.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_only_partial_resets_without_discard_event() -> None:
+    provider = _PartialToolThenSucceedProvider()
+    agent = Agent(name="a", model=provider)
+    retry = RetryPolicy(
+        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
+
+    discarded = 0
+    handle = Runner.stream(agent, "hi", retry=retry)
+    async for ev in handle:
+        if isinstance(ev, events.OutputDiscarded):
+            discarded += 1
+    result = await handle.result()
+
+    assert provider.attempts == 2
+    # The discarded attempt showed nothing to the user, so reset is silent.
+    assert discarded == 0
+    assert result.output == "done"
+
+
+class _AlwaysPartialProvider:
+    """Streams a TextDelta then fails on every attempt (retryable)."""
+
+    name = "always-partial"
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def stream(self, *a: Any, **kw: Any) -> AsyncIterator[ModelDelta]:
+        self.attempts += 1
+        yield TextDelta(text="partial-")
+        raise ProviderError("mid-stream boom", retryable=True)
+
+
+@pytest.mark.asyncio
+async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
+    provider = _AlwaysPartialProvider()
+    agent = Agent(name="a", model=provider)
+    retry = RetryPolicy(
+        max_retries=3, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
+
+    discarded = 0
+    with pytest.raises(ProviderError):
+        async for ev in Runner.stream(agent, "hi", retry=retry):
+            if isinstance(ev, events.OutputDiscarded):
+                discarded += 1
+
+    assert provider.attempts == 3
+    # One reset before each of the two retries — none after the final failure.
+    assert discarded == 2
+
+
+@pytest.mark.asyncio
+async def test_partial_then_provider_fallback_emits_discard() -> None:
+    primary = _PartialThenSucceedProvider(retryable=False)
+    backup = ScriptedProvider([text("recovered")])
+    agent = Agent(name="a", model=[primary, backup])
+    retry = RetryPolicy(
+        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+    )
+
+    discarded = 0
+    handle = Runner.stream(agent, "hi", retry=retry)
+    async for ev in handle:
+        if isinstance(ev, events.OutputDiscarded):
+            discarded += 1
+    result = await handle.result()
+
+    # Non-retryable: one shot on primary, then the partial is discarded and the
+    # backup replaces it.
+    assert primary.attempts == 1
+    assert discarded == 1
+    assert result.output == "recovered"

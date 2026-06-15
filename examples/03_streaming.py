@@ -27,6 +27,11 @@ async def main() -> None:
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
             console.print(ev.delta, end="", soft_wrap=True, markup=False)
+        elif isinstance(ev, events.OutputDiscarded):
+            # A transient mid-stream error discarded the partial output; the
+            # turn restarts. A plain stdout consumer can't unprint, so just
+            # mark the reset — what follows replaces everything above it.
+            console.print("\n[dim][output reset — retrying][/dim]\n", markup=True)
     result = await handle.result()
     console.print(
         f"\n[dim]done · turns={result.turns} · output tokens={result.usage.output_tokens}[/dim]"

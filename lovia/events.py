@@ -102,6 +102,21 @@ class ReasoningDelta(DeltaEvent):
 
 
 @dataclass
+class OutputDiscarded(DeltaEvent):
+    """The partial output streamed so far for the current turn was discarded.
+
+    Emitted when the runner recovers from a transient mid-stream error by
+    retrying or falling back to another provider (see
+    :attr:`~lovia.RetryPolicy.restart_on_partial`). Streamed deltas are
+    provisional until :class:`MessageCompleted`; this event invalidates every
+    :class:`TextDelta` / :class:`ReasoningDelta` emitted since the turn began.
+    A consumer that renders deltas live must clear what it has shown for the
+    current turn — a fresh stream that replaces it follows. The persistent
+    transcript is unaffected (it is assembled only once the turn completes).
+    """
+
+
+@dataclass
 class MessageCompleted(MessageEvent):
     """One assistant turn fully assembled.
 

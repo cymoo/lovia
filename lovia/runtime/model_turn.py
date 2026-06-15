@@ -47,6 +47,24 @@ class _ToolCallSlot:
     arguments: str = ""
 
 
+@dataclass
+class _StreamReset:
+    """Internal signal: discard partial output assembled so far and restart.
+
+    Yielded by :func:`stream_with_fallback` when it retries or falls back
+    after a provider already streamed part of a turn. Not a provider-emitted
+    delta and never leaves this module — :func:`stream_model_turn` clears its
+    accumulation buffers on receipt so the re-streamed turn is not duplicated.
+
+    ``visible`` is ``True`` when the discarded attempt produced user-facing
+    text or reasoning; only then does the runner surface an
+    :class:`~lovia.events.OutputDiscarded` event. A tool-call-only attempt
+    pollutes the internal buffers but shows nothing, so it resets silently.
+    """
+
+    visible: bool = False
+
+
 async def stream_model_turn(
     *,
     agent: Agent,
@@ -87,6 +105,20 @@ async def stream_model_turn(
             settings=agent.settings,
             retry=retry,
         ):
+            if isinstance(delta, _StreamReset):
+                # A failed attempt streamed partial output; discard everything
+                # accumulated for this turn so the re-stream replaces it rather
+                # than appending. Surface OutputDiscarded only when the user
+                # actually saw text/reasoning (tool-call-only resets silently).
+                text_buf.clear()
+                reasoning_buf.clear()
+                completed_entries.clear()
+                tool_slots.clear()
+                usage = Usage()
+                finish_reason = None
+                if delta.visible:
+                    yield events.OutputDiscarded()
+                continue
             if isinstance(delta, TextDelta):
                 text_buf.append(delta.text)
                 yield events.TextDelta(delta=delta.text)
@@ -196,23 +228,34 @@ async def stream_with_fallback(
     response_format: JsonObject | None,
     settings: ModelSettings | None,
     retry: RetryPolicy | None,
-) -> AsyncIterator[ModelDelta]:
+) -> AsyncIterator[ModelDelta | _StreamReset]:
     """Stream from the first provider that succeeds.
 
     Each provider is retried per ``retry`` (``max_retries`` counts attempts,
     so ``None`` means a single attempt), then the next provider in the chain
-    is tried. Retries and fallback are only safe before any delta has been
-    forwarded; once output reached the caller, a mid-stream error propagates
-    to avoid duplicating partial assistant output. Cancellation and
+    is tried. When ``retry.restart_on_partial`` is set (the default), a failure
+    *after* output has been forwarded is also recovered: a :class:`_StreamReset`
+    is yielded so the caller discards the partial output, and the turn is
+    re-streamed from scratch (replace semantics). With ``restart_on_partial``
+    off, a mid-stream error propagates immediately, as before. Cancellation and
     :class:`ContextOverflowError` always propagate immediately.
     """
     last_exc: Exception | None = None
     max_attempts = retry.max_retries if retry is not None else 1
+    restart_on_partial = retry.restart_on_partial if retry is not None else False
+    # Set when a failed attempt already streamed output and another attempt
+    # (retry or provider fallback) will follow; flushed once at the start of
+    # that next attempt so each real restart emits exactly one reset.
+    pending_reset: _StreamReset | None = None
     for provider in providers:
         attempt = 0
         while True:
             attempt += 1
-            committed = False
+            if pending_reset is not None:
+                yield pending_reset
+                pending_reset = None
+            produced_any = False
+            produced_visible = False
             try:
                 async for delta in provider.stream(
                     input_entries,
@@ -220,14 +263,16 @@ async def stream_with_fallback(
                     response_format=response_format,
                     settings=settings,
                 ):
-                    committed = True
+                    produced_any = True
+                    if isinstance(delta, (TextDelta, ReasoningDelta)):
+                        produced_visible = True
                     yield delta
                 return
             except (asyncio.CancelledError, ContextOverflowError):
                 raise
             except Exception as exc:
                 last_exc = exc
-                if committed:
+                if produced_any and not restart_on_partial:
                     logger.warning(
                         "run.retry_skipped: mid-stream error after partial output,"
                         " not retrying provider=%s error=%s(%s)",
@@ -236,6 +281,12 @@ async def stream_with_fallback(
                         truncate_repr(str(exc)),
                     )
                     raise
+                # We will retry this provider or fall back to the next one; if
+                # this attempt streamed anything, the next one must replace it.
+                # Armed here, emitted before that next attempt actually runs
+                # (so a final give-up never emits an orphan reset).
+                if produced_any:
+                    pending_reset = _StreamReset(visible=produced_visible)
                 if retry is not None and attempt < max_attempts and retry.retry_on(exc):
                     delay = retry.backoff_delay(attempt)
                     logger.warning(

@@ -128,9 +128,14 @@ class RetryPolicy:
     """Exponential-backoff retry policy applied around provider calls.
 
     The runner retries each call to :meth:`Provider.stream` according to this
-    policy, but **only before the first response delta reaches the caller**.
-    Once streaming output has been forwarded, a mid-stream error propagates
-    immediately to avoid duplicating partial assistant output.
+    policy. By default (``restart_on_partial=True``) it also recovers from
+    errors that strike **after** streaming has begun, using *replace*
+    semantics: the partial output is discarded (the runner emits
+    :class:`~lovia.events.OutputDiscarded`) and the turn is re-streamed from
+    scratch. Streamed deltas are provisional until :class:`~lovia.events.MessageCompleted`;
+    only then is the assistant turn durable. Set ``restart_on_partial=False``
+    to keep the conservative behavior where a mid-stream error propagates
+    immediately rather than re-streaming.
 
     ``retry_on`` decides which exceptions are transient. ``backoff_base`` and
     ``backoff_max`` define the exponential schedule; a small jitter is added
@@ -145,6 +150,7 @@ class RetryPolicy:
     """
 
     max_retries: int = 3
+    restart_on_partial: bool = True
     backoff_base: float = 0.5
     backoff_max: float = 8.0
     retry_on: RetryPredicate = field(default=_default_retry_on)

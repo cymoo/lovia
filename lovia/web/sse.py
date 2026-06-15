@@ -108,6 +108,8 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         return {"event": "text_delta", "data": json.dumps({"delta": ev.delta})}
     if isinstance(ev, events.ReasoningDelta):
         return {"event": "reasoning_delta", "data": json.dumps({"delta": ev.delta})}
+    if isinstance(ev, events.OutputDiscarded):
+        return {"event": "output_discarded", "data": "{}"}
     if isinstance(ev, events.MessageCompleted):
         return {
             "event": "message_completed",

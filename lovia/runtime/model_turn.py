@@ -231,7 +231,7 @@ async def stream_with_fallback(
 ) -> AsyncIterator[ModelDelta | _StreamReset]:
     """Stream from the first provider that succeeds.
 
-    Each provider is retried per ``retry`` (``max_retries`` counts attempts,
+    Each provider is retried per ``retry`` (``max_attempts`` counts attempts,
     so ``None`` means a single attempt), then the next provider in the chain
     is tried. When ``retry.restart_on_partial`` is set (the default), a failure
     *after* output has been forwarded is also recovered: a :class:`_StreamReset`
@@ -241,7 +241,7 @@ async def stream_with_fallback(
     :class:`ContextOverflowError` always propagate immediately.
     """
     last_exc: Exception | None = None
-    max_attempts = retry.max_retries if retry is not None else 1
+    max_attempts = retry.max_attempts if retry is not None else 1
     restart_on_partial = retry.restart_on_partial if retry is not None else False
     # Set when a failed attempt already streamed output and another attempt
     # (retry or provider fallback) will follow; flushed once at the start of

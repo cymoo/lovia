@@ -414,7 +414,7 @@ result = await Runner.run(
     agent,
     "Analyze these logs.",
     budget=RunBudget(max_tool_calls=20, max_seconds=60),
-    retry=RetryPolicy(max_retries=3),
+    retry=RetryPolicy(max_attempts=3),
 )
 ```
 

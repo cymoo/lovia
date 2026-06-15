@@ -141,15 +141,16 @@ class RetryPolicy:
     ``backoff_max`` define the exponential schedule; a small jitter is added
     so concurrent retries don't synchronize.
 
-    ``max_retries`` is the total number of *attempts* (the first call counts
-    as attempt 1), so ``max_retries=3`` means at most two retries.
+    ``max_attempts`` is the total number of calls to :meth:`Provider.stream`
+    (the first call counts as attempt 1), so ``max_attempts=3`` means at most
+    two retries and ``max_attempts=1`` disables retrying.
 
     If you supply :class:`Agent.model` as a list, the policy is applied
     *per-provider*; the runner moves to the next provider once retries on the
     current one are exhausted.
     """
 
-    max_retries: int = 3
+    max_attempts: int = 3
     restart_on_partial: bool = True
     backoff_base: float = 0.5
     backoff_max: float = 8.0

@@ -147,7 +147,7 @@ async def test_retry_recovers_from_transient_error() -> None:
     provider = _FailingProvider(fail_times=2, answer=text("ok"))
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     result = await Runner.run(agent, "hi", retry=retry)
@@ -160,7 +160,7 @@ async def test_retry_gives_up_after_max_attempts() -> None:
     provider = _FailingProvider(fail_times=99, answer=text("never"))
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
     with pytest.raises(ProviderError):
         await Runner.run(agent, "hi", retry=retry)
@@ -172,7 +172,7 @@ async def test_retry_does_not_retry_explicit_non_retryable_error() -> None:
     provider = _FailingProvider(fail_times=99, answer=text("never"), retryable=False)
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     with pytest.raises(ProviderError):
@@ -186,7 +186,7 @@ async def test_provider_fallback_chain_uses_backup() -> None:
     backup = ScriptedProvider([text("recovered")])
     agent = Agent(name="a", model=[primary, backup])
     retry = RetryPolicy(
-        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     result = await Runner.run(agent, "hi", retry=retry)
@@ -241,7 +241,7 @@ async def test_restart_on_partial_discards_and_replaces() -> None:
     provider = _PartialThenSucceedProvider()
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     seen: list[events.Event] = []
@@ -272,7 +272,7 @@ async def test_restart_on_partial_disabled_propagates() -> None:
     provider = _PartialThenSucceedProvider()
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=5,
+        max_attempts=5,
         backoff_base=0.0,
         restart_on_partial=False,
         sleep=lambda _d: asyncio.sleep(0),
@@ -289,7 +289,7 @@ async def test_tool_only_partial_resets_without_discard_event() -> None:
     provider = _PartialToolThenSucceedProvider()
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=5, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     discarded = 0
@@ -325,7 +325,7 @@ async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
     provider = _AlwaysPartialProvider()
     agent = Agent(name="a", model=provider)
     retry = RetryPolicy(
-        max_retries=3, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=3, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     discarded = 0
@@ -345,7 +345,7 @@ async def test_partial_then_provider_fallback_emits_discard() -> None:
     backup = ScriptedProvider([text("recovered")])
     agent = Agent(name="a", model=[primary, backup])
     retry = RetryPolicy(
-        max_retries=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
+        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
     )
 
     discarded = 0

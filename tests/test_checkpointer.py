@@ -18,6 +18,7 @@ from lovia import (
     AssistantTextEntry,
     ModelDelta,
     ProviderError,
+    RetryPolicy,
     Runner,
     RunSnapshot,
     TextPart,
@@ -268,8 +269,12 @@ async def test_run_idempotent_resumes_existing_run() -> None:
     provider = FlakyProvider()
     agent = Agent(name="a", model=provider)
 
+    # max_attempts=1 disables in-process retry so the transient failure surfaces
+    # and gets checkpointed; the resume path (not retry) is what's under test.
     with pytest.raises(ProviderError):
-        await Runner.run(agent, "hi", checkpoint=ckpt(cp, "job"))
+        await Runner.run(
+            agent, "hi", checkpoint=ckpt(cp, "job"), retry=RetryPolicy(max_attempts=1)
+        )
 
     result = await Runner.run(agent, "hi", checkpoint=ckpt(cp, "job"))
     assert result.output == "recovered"
@@ -339,8 +344,15 @@ async def test_retryable_provider_failure_saves_interrupted_snapshot() -> None:
     provider = FlakyProvider()
     agent = Agent(name="a", model=provider)
 
+    # max_attempts=1 disables in-process retry so the transient failure surfaces
+    # and gets checkpointed; the resume path (not retry) is what's under test.
     with pytest.raises(ProviderError):
-        await Runner.run(agent, "hi", checkpoint=ckpt(cp, "interrupted"))
+        await Runner.run(
+            agent,
+            "hi",
+            checkpoint=ckpt(cp, "interrupted"),
+            retry=RetryPolicy(max_attempts=1),
+        )
 
     snap = await cp.load("interrupted")
     assert snap is not None
@@ -364,8 +376,15 @@ async def test_resume_streams_events() -> None:
     provider = FlakyProvider()
     agent = Agent(name="a", model=provider)
 
+    # max_attempts=1 disables in-process retry so the transient failure surfaces
+    # and gets checkpointed; the resume path (not retry) is what's under test.
     with pytest.raises(ProviderError):
-        await Runner.run(agent, "hi", checkpoint=ckpt(cp, "stream-resume"))
+        await Runner.run(
+            agent,
+            "hi",
+            checkpoint=ckpt(cp, "stream-resume"),
+            retry=RetryPolicy(max_attempts=1),
+        )
 
     handle = Runner.stream(
         agent, [], checkpoint=ckpt(cp, "stream-resume", if_run_exists="resume_only")

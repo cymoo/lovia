@@ -55,7 +55,7 @@ async def main() -> None:
         max_tool_calls=10,
         max_seconds=60,
     )
-    retry = RetryPolicy(max_retries=3)
+    retry = RetryPolicy(max_attempts=3)
     cancel = CancelToken()
 
     # Cancel the run after 5 seconds from another task.

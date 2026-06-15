@@ -228,6 +228,13 @@ async def stream_with_fallback(
             except Exception as exc:
                 last_exc = exc
                 if committed:
+                    logger.warning(
+                        "run.retry_skipped: mid-stream error after partial output,"
+                        " not retrying provider=%s error=%s(%s)",
+                        getattr(provider, "name", repr(provider)),
+                        type(exc).__name__,
+                        truncate_repr(str(exc)),
+                    )
                     raise
                 if retry is not None and attempt < max_attempts and retry.retry_on(exc):
                     delay = retry.backoff_delay(attempt)

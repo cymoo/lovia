@@ -127,7 +127,11 @@ def _default_retry_on(exc: BaseException) -> bool:
 class RetryPolicy:
     """Exponential-backoff retry policy applied around provider calls.
 
-    The runner wraps every call to :meth:`Provider.stream` with this policy.
+    The runner retries each call to :meth:`Provider.stream` according to this
+    policy, but **only before the first response delta reaches the caller**.
+    Once streaming output has been forwarded, a mid-stream error propagates
+    immediately to avoid duplicating partial assistant output.
+
     ``retry_on`` decides which exceptions are transient. ``backoff_base`` and
     ``backoff_max`` define the exponential schedule; a small jitter is added
     so concurrent retries don't synchronize.
@@ -150,25 +154,3 @@ class RetryPolicy:
         """Jittered exponential delay before retrying after ``attempt`` failures."""
         delay = min(self.backoff_max, self.backoff_base * (2 ** (attempt - 1)))
         return delay * (0.5 + random.random())
-
-    async def run(
-        self,
-        op: Callable[[], Awaitable[None]],
-        *,
-        on_error: Callable[[BaseException], None] | None = None,
-    ) -> None:
-        """Run ``op`` with retries. ``op`` must be re-callable on failure."""
-        attempt = 0
-        while True:
-            try:
-                await op()
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                attempt += 1
-                if attempt >= self.max_retries or not self.retry_on(exc):
-                    raise
-                if on_error is not None:
-                    on_error(exc)
-                await self.sleep(self.backoff_delay(attempt))

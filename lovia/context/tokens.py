@@ -23,7 +23,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Sequence
 
-from ..content import FilePart, ImagePart, TextPart
+from ..parts import FilePart, ImagePart, TextPart
 from ..providers.base import TokenEstimator
 from ..transcript import (
     AssistantTextEntry,

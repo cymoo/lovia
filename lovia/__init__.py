@@ -42,7 +42,7 @@ from .stores import (
     SQLiteCheckpointer,
     SQLiteSession,
 )
-from .content import (
+from .parts import (
     ContentPart,
     FilePart,
     ImagePart,

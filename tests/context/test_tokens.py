@@ -6,7 +6,7 @@ import weakref
 
 import pytest
 
-from lovia.content import ImagePart, TextPart
+from lovia.parts import ImagePart, TextPart
 from lovia.context import TokenBudget, TokenCounter
 from lovia.transcript import (
     AssistantTextEntry,
@@ -17,7 +17,6 @@ from lovia.transcript import (
 )
 
 from .helpers import user
-
 
 # ---------------------------------------------------------------------------
 # TokenCounter estimates

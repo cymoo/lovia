@@ -7,7 +7,7 @@ import binascii
 from typing import cast
 
 from .._types import JsonArray, JsonObject, JsonValue
-from ..content import ContentPart, FilePart, ImagePart, TextPart
+from ..parts import ContentPart, FilePart, ImagePart, TextPart
 from ..exceptions import UserError
 
 

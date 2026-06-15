@@ -19,7 +19,7 @@ from .prompts import (
     SUMMARY_FOLD_TEMPLATE,
     SUMMARY_SYSTEM_PROMPT,
 )
-from ..content import ContentPart, text_of
+from ..parts import ContentPart, text_of
 from ..providers.base import ModelSettings, Provider
 from ..transcript import (
     AssistantTextEntry,

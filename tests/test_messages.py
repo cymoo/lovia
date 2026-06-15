@@ -7,10 +7,9 @@ from typing import Any
 import pytest
 
 from lovia import FilePart, ImagePart, TextPart, user
-from lovia.content import normalize_content, text_of
+from lovia.parts import normalize_content, text_of
 from lovia.messages import AssistantTurn, Message, Usage
 from lovia.providers.openai_chat import message_to_openai
-
 
 # ---------- TextPart / ImagePart / FilePart ----------
 

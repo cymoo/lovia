@@ -20,7 +20,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from ..content import TextPart
+from ..parts import TextPart
 from ..transcript import (
     AssistantTextEntry,
     InputEntry,

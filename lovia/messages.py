@@ -13,8 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .content import ContentPart, FilePart, ImagePart, TextPart, text_of
-
+from .parts import ContentPart, FilePart, ImagePart, TextPart, text_of
 
 Role = Literal["system", "user", "assistant", "tool"]
 

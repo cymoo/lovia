@@ -49,7 +49,7 @@ def _normalize(msgs: list[Message]) -> list[tuple]:
     ``content`` may be a list[ContentPart] which would compare structurally;
     flattening keeps the assertion focused on the structure we care about.
     """
-    from lovia.content import text_of
+    from lovia.parts import text_of
 
     out: list[tuple] = []
     for m in msgs:

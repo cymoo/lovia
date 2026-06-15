@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, Runner, tool
+from lovia import Agent, CheckpointOptions, Runner, tool
 from lovia.exceptions import BudgetExceeded, ContextOverflowError
 from lovia.plugins.mcp import mcp
 from lovia.messages import AssistantTurn, ToolCall, Usage
@@ -163,8 +163,7 @@ async def test_budget_exceeded_is_interrupted_and_resumable() -> None:
         await Runner.run(
             agent,
             "go",
-            checkpointer=cp,
-            run_id="budgeted",
+            checkpoint=CheckpointOptions(cp, "budgeted"),
             budget=RunBudget(max_tool_calls=1),
         )
 
@@ -175,7 +174,7 @@ async def test_budget_exceeded_is_interrupted_and_resumable() -> None:
     # Resume without the tight budget: the pending call drains, then the
     # remaining script completes the run.
     result = await Runner.run(
-        agent, [], checkpointer=cp, run_id="budgeted", if_run_exists="require"
+        agent, [], checkpoint=CheckpointOptions(cp, "budgeted", if_run_exists="require")
     )
     assert result.output == "done"
 
@@ -262,8 +261,7 @@ async def test_resume_persists_session_history() -> None:
         await Runner.run(
             agent,
             "go",
-            checkpointer=cp,
-            run_id="sessioned",
+            checkpoint=CheckpointOptions(cp, "sessioned"),
             session=session,
             session_id="s1",
             budget=RunBudget(max_tool_calls=1),
@@ -272,11 +270,9 @@ async def test_resume_persists_session_history() -> None:
     result = await Runner.run(
         agent,
         [],
-        checkpointer=cp,
-        run_id="sessioned",
+        checkpoint=CheckpointOptions(cp, "sessioned", if_run_exists="require"),
         session=session,
         session_id="s1",
-        if_run_exists="require",
     )
 
     assert result.output == "done"
@@ -308,7 +304,7 @@ async def test_cancelled_run_persists_interrupted_snapshot() -> None:
     cp = InMemoryCheckpointer()
 
     with pytest.raises(asyncio.CancelledError):
-        await Runner.run(agent, "go", checkpointer=cp, run_id="cancelled")
+        await Runner.run(agent, "go", checkpoint=CheckpointOptions(cp, "cancelled"))
 
     snap = await cp.load("cancelled")
     assert snap is not None

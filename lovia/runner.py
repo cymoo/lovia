@@ -13,13 +13,12 @@ import asyncio
 from typing import Any, TypeVar
 
 from .agent import Agent
-from .checkpointer import Checkpointer
+from .checkpointer import CheckpointOptions
 from .context import ContextPolicy
 from .exceptions import UserError
 from .messages import Message, Usage
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runtime.loop import RunLoop
-from .runtime.resume import IfRunExists
 from .runtime.result import RunHandle, RunResult
 from .session import Session
 
@@ -44,10 +43,7 @@ class Runner:
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
         session_id: str | None = None,
-        checkpointer: Checkpointer | None = None,
-        run_id: str | None = None,
-        if_run_exists: IfRunExists = "resume",
-        delete_checkpoint_on_success: bool = False,
+        checkpoint: CheckpointOptions | None = None,
         # Framework-internal: sub-agent runs (agent-as-tool) fold their usage
         # into the parent run's accumulator. Not part of the public contract.
         _parent_usage: Usage | None = None,
@@ -57,8 +53,8 @@ class Runner:
         The handle is both awaitable (for the final :class:`RunResult`) and
         async-iterable (for the event stream).
 
-        **Idempotent runs.** When both ``checkpointer`` and ``run_id`` are
-        given, ``if_run_exists`` decides what happens if that ``run_id`` already
+        **Idempotent runs.** When ``checkpoint`` is given,
+        ``checkpoint.if_run_exists`` decides what happens if that run id already
         has a snapshot — so a crashed worker can just re-issue the same call:
 
         * ``"resume"`` (default) — continue the existing run (or replay it if it
@@ -73,7 +69,9 @@ class Runner:
           stored. This is how you continue a known run by id without new input::
 
               async for ev in Runner.stream(
-                  agent, [], checkpointer=cp, run_id=rid, if_run_exists="require"
+                  agent,
+                  [],
+                  checkpoint=CheckpointOptions(cp, rid, if_run_exists="require"),
               ):
                   ...
 
@@ -95,10 +93,7 @@ class Runner:
             context_policy=context_policy,
             session=session,
             session_id=session_id,
-            checkpointer=checkpointer,
-            run_id=run_id,
-            if_run_exists=if_run_exists,
-            delete_checkpoint_on_success=delete_checkpoint_on_success,
+            checkpoint=checkpoint,
             parent_usage=_parent_usage,
         )
         return RunHandle(loop.stream(), loop.approvals)
@@ -118,10 +113,7 @@ class Runner:
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
         session_id: str | None = None,
-        checkpointer: Checkpointer | None = None,
-        run_id: str | None = None,
-        if_run_exists: IfRunExists = "resume",
-        delete_checkpoint_on_success: bool = False,
+        checkpoint: CheckpointOptions | None = None,
         _parent_usage: Usage | None = None,  # framework-internal; see stream()
     ) -> RunResult:
         """Run ``agent`` to completion and return the final result.
@@ -142,10 +134,7 @@ class Runner:
             context_policy=context_policy,
             session=session,
             session_id=session_id,
-            checkpointer=checkpointer,
-            run_id=run_id,
-            if_run_exists=if_run_exists,
-            delete_checkpoint_on_success=delete_checkpoint_on_success,
+            checkpoint=checkpoint,
             max_turns=max_turns,
             _parent_usage=_parent_usage,
         ).result()

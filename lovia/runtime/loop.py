@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 from .. import events
 from .checkpoint import CheckpointWriter
-from .resume import IfRunExists, check_resumable, result_from_completed_snapshot
+from .resume import check_resumable, result_from_completed_snapshot
 from .model_turn import stream_model_turn
 from .run_state import ModelTurnResult, ResumeState, RunState
 from .utils import (
@@ -45,7 +45,7 @@ from .utils import (
 from .tool_calls import ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
-from ..checkpointer import Checkpointer, RunSnapshot
+from ..checkpointer import CheckpointOptions
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
 from ..exceptions import (
     ContextOverflowError,
@@ -132,11 +132,7 @@ class RunLoop:
         context_policy: ContextPolicy | None = None,
         session: Session | None,
         session_id: str | None,
-        checkpointer: Checkpointer | None = None,
-        run_id: str | None = None,
-        if_run_exists: IfRunExists = "resume",
-        delete_checkpoint_on_success: bool = False,
-        resume_from: RunSnapshot | None = None,
+        checkpoint: CheckpointOptions | None = None,
         parent_usage: Usage | None = None,
     ) -> None:
         if session is not None and session_id is None:
@@ -152,21 +148,26 @@ class RunLoop:
         self.cancel_token = cancel_token
         self.retry = retry
         self.context_policy: ContextPolicy = context_policy or Compaction()
-        self.run_id = run_id or (resume_from.run_id if resume_from else None)
-        self.checkpointer = checkpointer
+        self.checkpoint = checkpoint
+        self.run_id = checkpoint.resolved_run_id if checkpoint is not None else None
+        self.checkpointer = checkpoint.checkpointer if checkpoint is not None else None
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
-        self.resume_from = resume_from
-        self.if_run_exists = if_run_exists
+        self.resume_from = checkpoint.resume_from if checkpoint is not None else None
+        self.if_run_exists = (
+            checkpoint.if_run_exists if checkpoint is not None else "resume"
+        )
         self.append_instructions = append_instructions
         # ``output_type=None`` means "use the active agent's output_type";
         # any other value is a run-wide final-output contract.
         self.output_type_override = output_type_override
         self.approvals = ApprovalChannel()
         self.checkpoints = CheckpointWriter(
-            checkpointer=checkpointer,
+            checkpointer=self.checkpointer,
             run_id=self.run_id,
-            delete_on_success=delete_checkpoint_on_success,
+            delete_on_success=checkpoint.delete_on_success
+            if checkpoint is not None
+            else False,
         )
 
     # ------------------------------------------------------------------ #
@@ -350,7 +351,10 @@ class RunLoop:
             raise UserError(
                 f"A run already exists for run_id={self.run_id!r} "
                 f"(status={snapshot.status!r}).",
-                hint="Pass if_run_exists='resume' to continue it, or 'restart' to overwrite it.",
+                hint=(
+                    "Use CheckpointOptions(..., if_run_exists='resume') to "
+                    "continue it, or 'restart' to overwrite it."
+                ),
             )
 
         check_resumable(

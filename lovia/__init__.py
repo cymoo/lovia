@@ -29,7 +29,13 @@ from typing import TextIO
 from . import events
 from .agent import Agent
 from .approvals import ApprovalChannel
-from .checkpointer import Checkpointer, RunSnapshot, RunStatus
+from .checkpointer import (
+    Checkpointer,
+    CheckpointOptions,
+    IfRunExists,
+    RunSnapshot,
+    RunStatus,
+)
 from .stores import (
     InMemoryCheckpointer,
     InMemorySession,
@@ -197,6 +203,7 @@ __all__ = [
     "CancelToken",
     "Message",
     "Checkpointer",
+    "CheckpointOptions",
     "CompactionRequest",
     "ConsoleTracer",
     "ContentPart",
@@ -211,6 +218,7 @@ __all__ = [
     "InMemoryCheckpointer",
     "InMemorySession",
     "InMemoryTracer",
+    "IfRunExists",
     "InputGuardrail",
     "InputEntry",
     "TranscriptEntry",

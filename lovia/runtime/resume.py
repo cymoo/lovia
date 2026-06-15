@@ -9,13 +9,14 @@ whole start-vs-resume decision without a facade <-> runtime import cycle.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from ..agent import Agent
-from ..checkpointer import RunSnapshot
+from ..checkpointer import IfRunExists, RunSnapshot
 from ..exceptions import UserError
 from ..schema import coerce_output
 from .result import RunResult
+
 
 # Policy for ``stream``/``run`` when ``run_id`` already has a snapshot in the
 # checkpointer. ``run_id`` is meant as a per-run idempotency key (not a session
@@ -25,9 +26,6 @@ from .result import RunResult
 # * ``restart`` — ignore any stored run and start fresh, overwriting it.
 # * ``fail``    — raise if a run already exists.
 # * ``require`` — continue an existing run, else raise (resume a known run_id).
-IfRunExists = Literal["resume", "restart", "fail", "require"]
-
-
 def check_resumable(agent: Agent, snapshot: RunSnapshot, *, output_type: Any) -> None:
     """Gate a resume against ``agent`` before any work happens.
 
@@ -54,7 +52,7 @@ def result_from_completed_snapshot(
     if output is None and (snapshot.error or {}).get("type") == "OutputNotSerializable":
         raise UserError(
             f"Checkpoint {snapshot.run_id!r} completed, but its output is not JSON-safe.",
-            hint="Rerun the task or use `delete_checkpoint_on_success=True` for non-serializable outputs.",
+            hint="Rerun the task or use `CheckpointOptions(..., delete_on_success=True)` for non-serializable outputs.",
         )
     if target_output_type is not str:
         output = coerce_output(target_output_type, output)

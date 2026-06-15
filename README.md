@@ -332,6 +332,7 @@ result = await Runner.run(agent, "What is my project called?", session=session, 
 Checkpoints are for crash recovery and idempotent long runs:
 
 ```python
+from lovia import CheckpointOptions
 from lovia.stores import SQLiteCheckpointer
 
 checkpoint = SQLiteCheckpointer("runs.db")
@@ -339,8 +340,7 @@ checkpoint = SQLiteCheckpointer("runs.db")
 result = await Runner.run(
     agent,
     "Migrate the report format.",
-    checkpointer=checkpoint,
-    run_id="report-migration-42",
+    checkpoint=CheckpointOptions(checkpoint, "report-migration-42"),
 )
 ```
 

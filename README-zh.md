@@ -304,6 +304,7 @@ result = await Runner.run(agent, "我的项目叫什么？", session=session, se
 Checkpoint 用于长任务的崩溃恢复和幂等运行：
 
 ```python
+from lovia import CheckpointOptions
 from lovia.stores import SQLiteCheckpointer
 
 checkpoint = SQLiteCheckpointer("runs.db")
@@ -311,8 +312,7 @@ checkpoint = SQLiteCheckpointer("runs.db")
 result = await Runner.run(
     agent,
     "迁移报告格式。",
-    checkpointer=checkpoint,
-    run_id="report-migration-42",
+    checkpoint=CheckpointOptions(checkpoint, "report-migration-42"),
 )
 ```
 

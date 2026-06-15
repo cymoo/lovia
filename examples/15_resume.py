@@ -2,7 +2,7 @@
 
 The runner snapshots the transcript at the end of every turn when a
 :class:`Checkpointer` is provided. Re-issuing the run under the same
-``run_id`` (or passing ``if_run_exists="require"`` to resume a known one)
+``run_id`` (or passing ``if_run_exists="require"`` in ``CheckpointOptions``)
 rehydrates the saved state and continues the loop — useful for long-running
 agents that might be interrupted by a crash, deploy, or queue worker hand-off.
 
@@ -17,7 +17,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, tool
+from lovia import Agent, CheckpointOptions, Runner, tool
 from lovia.stores.checkpointer import SQLiteCheckpointer
 
 load_dotenv()
@@ -44,8 +44,7 @@ async def main() -> None:
     result = await Runner.run(
         agent,
         "Use lookup('lovia') and summarise the result in one sentence.",
-        checkpointer=cp,
-        run_id=run_id,
+        checkpoint=CheckpointOptions(cp, run_id),
     )
     print("first run:", result.output)
 
@@ -57,7 +56,7 @@ async def main() -> None:
     print(f"snapshot: {len(snap.entries)} entries, {snap.turns} turns")
 
     resumed = await Runner.run(
-        agent, [], checkpointer=cp, run_id=run_id, if_run_exists="require"
+        agent, [], checkpoint=CheckpointOptions(cp, run_id, if_run_exists="require")
     )
     print("resumed output:", resumed.output)
 

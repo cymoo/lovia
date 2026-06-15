@@ -20,10 +20,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from ._types import JsonObject
+from .exceptions import UserError
 from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
 from .messages import Usage
 
 RunStatus = Literal["running", "interrupted", "completed", "failed"]
+IfRunExists = Literal["resume", "restart", "fail", "require"]
+
+_IF_RUN_EXISTS: set[str] = {"resume", "restart", "fail", "require"}
 
 
 @dataclass
@@ -97,3 +101,54 @@ class Checkpointer(Protocol):
     async def load(self, run_id: str) -> RunSnapshot | None: ...
 
     async def delete(self, run_id: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointOptions:
+    """Checkpoint/resume configuration for a single runner invocation.
+
+    A normal durable run supplies ``checkpointer`` and ``run_id``. Advanced
+    callers may pass ``resume_from`` directly; when ``run_id`` is omitted, the
+    snapshot's own id becomes the run id.
+    """
+
+    checkpointer: Checkpointer | None = None
+    run_id: str | None = None
+    if_run_exists: IfRunExists = "resume"
+    delete_on_success: bool = False
+    resume_from: RunSnapshot | None = None
+
+    def __post_init__(self) -> None:
+        if self.if_run_exists not in _IF_RUN_EXISTS:
+            raise UserError(
+                f"if_run_exists must be one of {sorted(_IF_RUN_EXISTS)!r}",
+            )
+        if self.run_id is not None and (
+            not isinstance(self.run_id, str) or not self.run_id.strip()
+        ):
+            raise UserError("checkpoint run_id must be a non-empty string")
+        if self.resume_from is None:
+            if self.checkpointer is None:
+                raise UserError(
+                    "checkpoint requires both checkpointer and run_id, "
+                    "or a resume_from snapshot"
+                )
+            if self.run_id is None:
+                raise UserError("checkpoint run_id is required with checkpointer")
+        elif self.run_id is not None and self.run_id != self.resume_from.run_id:
+            raise UserError(
+                f"checkpoint run_id {self.run_id!r} does not match "
+                f"resume_from.run_id {self.resume_from.run_id!r}"
+            )
+        if self.checkpointer is None and self.delete_on_success:
+            raise UserError(
+                "checkpoint delete_on_success requires a checkpointer",
+            )
+
+    @property
+    def resolved_run_id(self) -> str:
+        """The id used for tracing, snapshot lookup, and snapshot writes."""
+        if self.run_id is not None:
+            return self.run_id
+        assert self.resume_from is not None
+        return self.resume_from.run_id

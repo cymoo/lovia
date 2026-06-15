@@ -13,7 +13,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..checkpointer import Checkpointer, RunSnapshot, RunStatus
 from ..exceptions import (
     BudgetExceeded,

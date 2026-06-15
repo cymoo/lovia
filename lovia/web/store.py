@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..session import Session
 from ..stores import InMemorySession, SQLiteSession
 from ..stores._sqlite import SQLiteStore

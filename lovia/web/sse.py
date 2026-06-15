@@ -13,7 +13,7 @@ from typing import AsyncIterator
 
 from pydantic import BaseModel
 
-from .._types import JsonObject, JsonValue
+from ..types import JsonObject, JsonValue
 from .. import events
 from ..plugins import Todo
 from ..transcript import (

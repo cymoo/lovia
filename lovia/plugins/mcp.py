@@ -49,7 +49,7 @@ from typing import (
     runtime_checkable,
 )
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..exceptions import MCPError, UserError
 from ..run_context import RunContext
 from ..tools import ApprovalPredicate, Tool, ToolResultRenderer

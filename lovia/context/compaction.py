@@ -33,7 +33,7 @@ from .stages import (
 )
 from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
-from .._types import JsonObject
+from ..types import JsonObject
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry
 

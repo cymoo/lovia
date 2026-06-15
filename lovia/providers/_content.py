@@ -6,7 +6,7 @@ import base64
 import binascii
 from typing import cast
 
-from .._types import JsonArray, JsonObject, JsonValue
+from ..types import JsonArray, JsonObject, JsonValue
 from ..parts import ContentPart, FilePart, ImagePart, TextPart
 from ..exceptions import UserError
 

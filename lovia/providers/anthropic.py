@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,

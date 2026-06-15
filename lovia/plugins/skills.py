@@ -50,7 +50,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import yaml  # type: ignore[import-untyped]
 
-from .._types import JsonValue
+from ..types import JsonValue
 from ..exceptions import UserError
 from ..tools import Tool
 from .base import Plugin, PluginInstance

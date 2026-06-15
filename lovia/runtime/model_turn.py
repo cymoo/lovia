@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator
 
-from .._types import JsonObject
+from ..types import JsonObject
 from .. import events
 from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage

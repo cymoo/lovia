@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ._types import JsonObject
+from .types import JsonObject
 from .transcript import TranscriptEntry
 from .messages import ToolCall
 

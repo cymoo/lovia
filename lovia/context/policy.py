@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..providers.base import Provider
 from ..transcript import TranscriptEntry
 

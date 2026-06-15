@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from ._types import JsonObject
+from .types import JsonObject
 from .exceptions import UserError
 from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
 from .messages import Usage

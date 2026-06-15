@@ -35,7 +35,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from .._types import JsonObject, JsonSchema
+from ..types import JsonObject, JsonSchema
 from ..exceptions import UserError
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args

@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Callable, Literal, Union
 
-from ._types import JsonObject
+from .types import JsonObject
 from .parts import ContentPart, FilePart, ImagePart, TextPart
 from .messages import AssistantTurn, Message, ToolCall, Usage
 

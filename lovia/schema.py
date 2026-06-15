@@ -29,7 +29,7 @@ from typing import Annotated, Callable, cast, get_args, get_origin, get_type_hin
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 
-from ._types import JsonObject, JsonSchema
+from .types import JsonObject, JsonSchema
 
 
 def _is_context_annotation(annotation: object) -> bool:

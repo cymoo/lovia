@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from ._types import JsonObject
+from .types import JsonObject
 from .messages import Message
 from .tools import Tool
 

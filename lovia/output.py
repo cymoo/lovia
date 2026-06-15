@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ._types import JsonObject, JsonSchema, JsonValue
+from .types import JsonObject, JsonSchema, JsonValue
 from .exceptions import OutputValidationError
 from .schema import coerce_output, model_json_schema
 

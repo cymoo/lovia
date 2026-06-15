@@ -27,7 +27,7 @@ import json
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Protocol, runtime_checkable
 
-from .._types import JsonObject
+from ..types import JsonObject
 from ..transcript import TranscriptEntry, ModelDelta, entry_to_dict
 
 

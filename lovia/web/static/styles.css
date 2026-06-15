@@ -19,6 +19,9 @@
   --accent-hover: #24735b;
   --accent-soft: #edf7f3;
   --accent-text: #1d6b54;
+  --user-surface: #eef3f8;
+  --user-border: #d4e0ec;
+  --user-shadow: 0 1px 2px rgba(47, 78, 108, 0.06);
   --warn: #b86e1b;
   --warn-soft: #fef9f2;
   --warn-border: #f0c98a;
@@ -58,6 +61,9 @@
   --accent-hover: #4dca9e;
   --accent-soft: #152b22;
   --accent-text: #5ccaa0;
+  --user-surface: #1c2630;
+  --user-border: #334556;
+  --user-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
   --warn: #e0a44e;
   --warn-soft: #252016;
   --warn-border: #6b5018;
@@ -487,13 +493,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   min-width: min(220px, 100%);
   max-width: min(680px, 82%);
   padding: 14px 18px;
-  background: var(--accent-soft);
-  border-color: rgba(45, 138, 110, 0.24);
-  box-shadow: 0 1px 2px rgba(45, 138, 110, 0.05);
-}
-[data-theme="dark"] .turn.user .bubble {
-  background: rgba(61, 186, 142, 0.12);
-  border-color: rgba(61, 186, 142, 0.28);
+  background: var(--user-surface);
+  border-color: var(--user-border);
+  box-shadow: var(--user-shadow);
 }
 .turn .bubble:hover {
   border-color: var(--border-strong);
@@ -502,15 +504,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .turn-footer {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   margin-top: 12px;
   min-height: 26px;
-}
-.turn.user .turn-footer {
-  justify-content: flex-end;
-}
-.turn.assistant .turn-footer {
-  justify-content: flex-start;
+  width: 100%;
 }
 .turn .timestamp {
   font-size: 11px;
@@ -727,27 +725,29 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .btn-copy {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
   margin: 0;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  font-size: 11.5px;
-  font-weight: 500;
+  padding: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
   color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 0;
   transition: all 0.15s;
-  letter-spacing: 0.01em;
+  opacity: 0;
+  pointer-events: none;
+}
+.turn .bubble:hover .btn-copy,
+.btn-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 .btn-copy:hover {
-  background: var(--surface-3);
   color: var(--ink);
-  border-color: var(--border-strong);
 }
 .btn-copy.copied {
   color: var(--ok);
-  border-color: var(--accent);
-  background: var(--accent-soft);
 }
 
 /* ---- Reasoning -------------------------------------------------------- */

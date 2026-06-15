@@ -94,8 +94,15 @@ function cloneTemplate(id) {
 function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
   node.classList.add(role);
-  node.dataset.timestamp = formatTimestamp(ts);
+  setTurnTimestamp(node, ts);
   return node;
+}
+
+function setTurnTimestamp(turn, ts = Date.now()) {
+  if (!turn) return;
+  turn.dataset.timestamp = formatTimestamp(ts);
+  const timestamp = turn.querySelector('.turn-footer .timestamp');
+  if (timestamp) timestamp.textContent = turn.dataset.timestamp;
 }
 
 function formatTimestamp(ts) {
@@ -168,6 +175,7 @@ export function appendUserTurn(text) {
   const bubble = node.querySelector('.bubble');
   appendBubbleContent(bubble, body);
   ensureFooter(bubble);
+  addCopyButton(bubble);
   transcriptEl.appendChild(node);
   scrollDown();
 }
@@ -502,15 +510,15 @@ function addCopyButton(bubble) {
   btn.addEventListener('click', async () => {
     const ok = await copyToClipboard(markdown);
     if (ok) {
-      btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied';
+      btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
       btn.classList.add('copied');
       setTimeout(() => {
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
+        btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
         btn.classList.remove('copied');
       }, 1500);
     }
   });
-  footer?.insertBefore(btn, footer.firstChild);
+  footer?.appendChild(btn);
 }
 
 // ---- History rendering --------------------------------------------------
@@ -542,6 +550,7 @@ export function renderHistory(entries) {
       const bubble = turn.querySelector('.bubble');
       appendBubbleContent(bubble, body);
       ensureFooter(bubble);
+      addCopyButton(bubble);
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
@@ -910,6 +919,7 @@ export async function runStream(message) {
     }
     if (turn) {
       turn.classList.remove('streaming');
+      setTurnTimestamp(turn);
       // Add copy button to final bubble
       addCopyButton(bubble);
     }
@@ -1006,6 +1016,7 @@ export async function runReconnect(sessionId) {
     }
     if (turn) {
       turn.classList.remove('streaming');
+      setTurnTimestamp(turn);
       addCopyButton(bubble);
     }
     store.streaming = false;

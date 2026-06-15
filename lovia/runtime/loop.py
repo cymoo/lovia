@@ -35,7 +35,7 @@ from .. import events
 from .checkpoint import CheckpointWriter
 from .resume import check_resumable, result_from_completed_snapshot
 from .model_turn import stream_model_turn
-from .run_state import ModelTurnResult, ResumeState, RunState
+from .run_state import ModelTurnResult, RunState
 from .utils import (
     agent_model_label,
     input_preview,
@@ -357,9 +357,7 @@ class RunLoop:
                 ),
             )
 
-        check_resumable(
-            self.initial_agent, snapshot, output_type=self.output_type_override
-        )
+        check_resumable(self.initial_agent, snapshot)
         if snapshot.status == "completed":
             return result_from_completed_snapshot(
                 self.initial_agent, snapshot, output_type=self.output_type_override
@@ -370,14 +368,9 @@ class RunLoop:
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
         """Connect tools, build the initial transcript, and assemble RunState."""
         agent = self.initial_agent
-        resume_state = (
-            ResumeState.from_dict(self.resume_from.resume_state)
-            if self.resume_from is not None
-            else ResumeState()
-        )
         providers = self._resolve_providers(agent, resources)
         structured_output = resolve_structured_output(
-            self._resolve_output_type(agent, resume_state),
+            self._resolve_output_type(agent),
             supports_json_schema(providers),
         )
         system_extra = self.append_instructions
@@ -407,10 +400,17 @@ class RunLoop:
             run_ctx=run_ctx,
             tools_by_name=tools_by_name,
             structured_output=structured_output,
-            resume_state=resume_state,
             providers=providers,
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
+            last_input_tokens=(
+                self.resume_from.last_input_tokens if self.resume_from is not None else None
+            ),
+            context_policy_state=(
+                dict(self.resume_from.context_policy_state)
+                if self.resume_from is not None
+                else {}
+            ),
             view_injectors=plugins.view_injectors,
             plugin_instructions=plugins.instructions,
             plugin_hooks=plugins.hooks,
@@ -493,11 +493,11 @@ class RunLoop:
             entries=state.transcript,
             provider=primary,
             model=getattr(primary, "model", None),
-            last_input_tokens=state.resume_state.last_input_tokens,
+            last_input_tokens=state.last_input_tokens,
             session_id=self.session_id,
             run_id=self.run_id,
             overflow=False,
-            scratch=state.resume_state.compaction_scratch,
+            scratch=state.context_policy_state,
             workspace=state.run_ctx.workspace,
             tool_names=frozenset(state.tools_by_name),
         )
@@ -626,7 +626,7 @@ class RunLoop:
             state.system_extra = None
             state.providers = self._resolve_providers(target, resources)
             state.structured_output = resolve_structured_output(
-                self._resolve_output_type(target, state.resume_state),
+                self._resolve_output_type(target),
                 supports_json_schema(state.providers),
             )
             workspace, workspace_tools = await self._connect_workspace(
@@ -660,11 +660,11 @@ class RunLoop:
         try:
             return self._parse_output(state, assistant.content or "")
         except OutputValidationError as exc:
-            attempt = state.resume_state.output_repair_attempts + 1
+            attempt = state.output_repair_attempts + 1
             repair_prompt = self._build_repair_prompt(state.agent, exc, attempt)
             if repair_prompt is None or state.structured_output is None:
                 raise
-            state.resume_state.output_repair_attempts = attempt
+            state.output_repair_attempts = attempt
             logger.warning(
                 "run.output_repair: agent=%r attempt=%d schema=%s error=%s",
                 state.agent.name,
@@ -738,11 +738,11 @@ class RunLoop:
         # ContextPolicy can size compaction against actual usage rather
         # than the chars/4 heuristic.
         if assistant.usage and assistant.usage.input_tokens:
-            state.resume_state.last_input_tokens = assistant.usage.input_tokens
+            state.last_input_tokens = assistant.usage.input_tokens
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 
-    def _resolve_output_type(self, agent: Agent, resume_state: ResumeState) -> object:
+    def _resolve_output_type(self, agent: Agent) -> object:
         """Return the output type to use for ``agent``.
 
         A Runner-level override is a run-wide final-output contract. When no
@@ -750,9 +750,7 @@ class RunLoop:
         ``output_type``.
         """
         if self.output_type_override is not None:
-            resume_state.output_type_source = "run_override"
             return self.output_type_override
-        resume_state.output_type_source = "agent"
         return agent.output_type
 
     def _parse_output(self, state: RunState, content: str) -> object:

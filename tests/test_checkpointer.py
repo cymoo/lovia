@@ -189,7 +189,7 @@ async def test_resume_completed_structured_snapshot_rehydrates_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_completed_snapshot_requires_run_level_output_type() -> None:
+async def test_resume_completed_snapshot_with_run_level_output_type() -> None:
     class Out(BaseModel):
         value: int
 
@@ -198,14 +198,6 @@ async def test_resume_completed_snapshot_requires_run_level_output_type() -> Non
     agent = Agent(name="a", model=provider)
 
     await Runner.run(agent, "hi", output_type=Out, checkpoint=ckpt(cp, "override"))
-    snap = await cp.load("override")
-    assert snap is not None
-    assert snap.resume_state["output_type_source"] == "run_override"
-    with pytest.raises(Exception, match="run-level output_type"):
-        await Runner.run(
-            agent, [], checkpoint=ckpt(cp, "override", if_run_exists="require")
-        )
-
     result = await Runner.run(
         agent,
         [],
@@ -540,14 +532,6 @@ async def test_handoff_preserves_run_level_output_type_contract() -> None:
     )
 
     await Runner.run(english, "Hola", output_type=Out, checkpoint=ckpt(cp, "handoff"))
-    snap = await cp.load("handoff")
-    assert snap is not None
-    assert snap.resume_state["output_type_source"] == "run_override"
-
-    with pytest.raises(Exception, match="run-level output_type"):
-        await Runner.run(
-            spanish, [], checkpoint=ckpt(cp, "handoff", if_run_exists="require")
-        )
 
     result = await Runner.run(
         spanish,
@@ -583,8 +567,6 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
 
     assert isinstance(result.output, Out)
     assert result.output.value == 9
-    assert snap is not None
-    assert snap.resume_state["output_type_source"] == "agent"
 
 
 @pytest.mark.asyncio
@@ -641,14 +623,14 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
         turns=1,
         status="completed",
         output={"ok": True},
-        resume_state={"last_input_tokens": 3},
+        last_input_tokens=3,
     )
     payload = snap.to_dict()
     restored = RunSnapshot.from_dict(payload)
     assert restored.run_id == snap.run_id
     assert restored.status == "completed"
     assert restored.output == {"ok": True}
-    assert restored.resume_state["last_input_tokens"] == 3
+    assert restored.last_input_tokens == 3
     assert restored.usage.cache_read_tokens == 1
     first = restored.entries[0]
     assert isinstance(first, InputEntry)

@@ -129,7 +129,8 @@ class CheckpointWriter:
                 status=status,
                 output=output,
                 error=error,
-                resume_state=state.resume_state.to_dict(),
+                last_input_tokens=state.last_input_tokens,
+                context_policy_state=state.context_policy_state,
             )
         )
 

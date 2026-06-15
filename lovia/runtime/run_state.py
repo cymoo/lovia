@@ -1,6 +1,6 @@
 """Mutable state owned by the run loop.
 
-Three layers, by lifetime:
+Two layers, by lifetime:
 
 * :class:`RunState` — everything that changes while a run executes (active
   agent, transcript, resolved tools, turn counter, ...). A handoff mutates
@@ -8,9 +8,6 @@ Three layers, by lifetime:
   (the public surface handed to tools/guardrails/hooks) and adds the loop's
   private machinery around it; ``agent`` and ``transcript`` are thin views
   onto the embedded context, not separate storage.
-* :class:`ResumeState` — the small, JSON-serializable slice of runner state
-  that must survive a checkpoint/resume cycle. It round-trips through
-  :attr:`~lovia.checkpointer.RunSnapshot.resume_state`.
 * :class:`ModelTurnResult` — scratch for a single model call, populated by
   :func:`~lovia.runtime.model_turn.stream_model_turn` (an async generator
   cannot ``return`` a value, so it fills in an accumulator instead).
@@ -19,83 +16,21 @@ Three layers, by lifetime:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
-from .._types import JsonObject
 from ..agent import Agent
 from ..messages import AssistantTurn
 from ..output import StructuredOutput
 from ..providers.base import Provider
 from ..run_context import RunContext
 from ..tools import Tool
-from ..transcript import TranscriptEntry, to_json_safe
+from ..transcript import TranscriptEntry
 
 if TYPE_CHECKING:
     from ..guardrails import GuardrailFn
     from ..handoff import _HandoffSignal
     from ..hooks import AgentHooks
     from ..plugins import ViewInjector
-
-# Where the run's final output contract came from: the active agent's own
-# ``output_type``, or a run-wide ``Runner.run(..., output_type=...)`` override.
-OutputTypeSource = Literal["agent", "run_override"]
-
-
-@dataclass
-class ResumeState:
-    """Runner-owned accumulators persisted in a checkpoint's ``resume_state``.
-
-    These are live values the loop reads and updates each turn; they are
-    grouped here (rather than scattered across :class:`RunState`) because they
-    share one trait: each must survive a checkpoint/resume as a JSON-safe unit.
-
-    Attributes:
-        last_input_tokens: Input-token count reported by the previous model
-            call, so the :class:`~lovia.ContextPolicy` can size compaction
-            against real usage instead of the chars/4 heuristic.
-        compaction_scratch: Per-run cache the context policy may use for
-            derived state (e.g. a running summary). Owned here so it cannot
-            leak across runs.
-        output_repair_attempts: How many output-repair prompts were already
-            appended this run.
-        output_type_source: Whether the structured-output contract came from
-            the agent or a run-level override (validated on resume).
-    """
-
-    last_input_tokens: int | None = None
-    compaction_scratch: dict[str, Any] = field(default_factory=dict)
-    output_repair_attempts: int = 0
-    output_type_source: OutputTypeSource = "agent"
-
-    def to_dict(self) -> JsonObject:
-        data = to_json_safe(
-            {
-                "last_input_tokens": self.last_input_tokens,
-                "compaction_scratch": self.compaction_scratch,
-                "output_repair_attempts": self.output_repair_attempts,
-                "output_type_source": self.output_type_source,
-            }
-        )
-        assert isinstance(data, dict)
-        return data
-
-    @classmethod
-    def from_dict(cls, data: JsonObject) -> "ResumeState":
-        """Rebuild from a snapshot, tolerating missing or malformed keys."""
-        state = cls()
-        last_input = data.get("last_input_tokens")
-        if isinstance(last_input, int) and not isinstance(last_input, bool):
-            state.last_input_tokens = last_input
-        scratch = data.get("compaction_scratch")
-        if isinstance(scratch, dict):
-            state.compaction_scratch = dict(scratch)
-        attempts = data.get("output_repair_attempts")
-        if isinstance(attempts, int) and not isinstance(attempts, bool):
-            state.output_repair_attempts = attempts
-        source = data.get("output_type_source")
-        if source in ("agent", "run_override"):
-            state.output_type_source = source
-        return state
 
 
 @dataclass
@@ -116,7 +51,11 @@ class RunState:
     run_ctx: RunContext[Any]
     tools_by_name: dict[str, Tool]
     structured_output: StructuredOutput | None
-    resume_state: ResumeState
+    # Persisted to RunSnapshot and restored on resume.
+    last_input_tokens: int | None = None
+    context_policy_state: dict[str, Any] = field(default_factory=dict)
+    # Not persisted; resets on resume (bounded by max_turns).
+    output_repair_attempts: int = 0
     # The active agent's resolved provider fallback chain. Resolved once per
     # agent (at bootstrap and on each handoff) so HTTP clients are reused
     # across turns; providers built from string specs are closed when the run
@@ -169,4 +108,4 @@ class ModelTurnResult:
     turn_entries: list[TranscriptEntry] = field(default_factory=list)
 
 
-__all__ = ["ModelTurnResult", "OutputTypeSource", "ResumeState", "RunState"]
+__all__ = ["ModelTurnResult", "RunState"]

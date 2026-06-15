@@ -6,8 +6,6 @@ import json
 
 from lovia.context import CompactionState, OffloadRecord, SummaryState
 from lovia.context.state import fingerprint
-from lovia.runtime.run_state import ResumeState
-
 from .helpers import call, out, user
 
 
@@ -32,12 +30,11 @@ def test_state_round_trips_through_scratch():
 
 
 def test_state_round_trips_through_checkpoint_json():
-    """Exact checkpoint path: ResumeState.to_dict → JSON → from_dict."""
+    """Exact checkpoint path: context_policy_state serialized as JSON and back."""
     scratch: dict = {}
     _full_state().save(scratch)
-    resume_state = ResumeState(compaction_scratch=scratch)
-    revived = ResumeState.from_dict(json.loads(json.dumps(resume_state.to_dict())))
-    loaded = CompactionState.load(revived.compaction_scratch)
+    revived = json.loads(json.dumps(scratch))
+    loaded = CompactionState.load(revived)
     assert loaded == _full_state()
 
 

@@ -3,9 +3,9 @@
 A :class:`Checkpointer` snapshots the parts of a run that are safe to
 serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
 active agent's name, the accumulated usage, the turn counter, run status,
-JSON-safe output/error payloads, and small runner-owned resume state. The opaque
-``RunContext.context`` value is *not* snapshotted — callers re-supply it on
-resume.
+JSON-safe output/error payloads, the last observed input-token count, and the
+context policy's opaque per-run state. The opaque ``RunContext.context`` value
+is *not* snapshotted — callers re-supply it on resume.
 
 Concrete implementations live in :mod:`lovia.stores`:
 :class:`~lovia.stores.InMemoryCheckpointer` for in-process use and
@@ -42,10 +42,14 @@ class RunSnapshot:
     status: RunStatus = "running"
     output: Any | None = None
     error: JsonObject | None = None
-    # Serialized form of the runtime ``ResumeState``: small, JSON-safe
-    # runner-owned accumulators that must survive resume (e.g. the context
-    # policy's compaction scratch). See ``lovia.runtime.run_state.ResumeState``.
-    resume_state: JsonObject = field(default_factory=dict)
+    # Last observed provider input-token count; lets the context policy
+    # calibrate its estimates on the first post-resume turn.
+    last_input_tokens: int | None = None
+    # Opaque per-run state owned by the context policy (sticky compaction
+    # decisions, calibrated ratio, running summary, …). The runner never
+    # inspects this — it round-trips it through checkpoints so the policy
+    # can pick up where it left off after a resume.
+    context_policy_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     # ----- (de)serialization helpers, used by store implementations -----
@@ -65,7 +69,8 @@ class RunSnapshot:
             "status": self.status,
             "output": to_json_safe(self.output),
             "error": to_json_safe(self.error),
-            "resume_state": to_json_safe(self.resume_state) or {},
+            "last_input_tokens": self.last_input_tokens,
+            "context_policy_state": to_json_safe(self.context_policy_state) or {},
             "updated_at": self.updated_at,
         }
 
@@ -80,7 +85,8 @@ class RunSnapshot:
             status=data["status"],
             output=data.get("output"),
             error=data.get("error"),
-            resume_state=data.get("resume_state", {}),
+            last_input_tokens=data.get("last_input_tokens"),
+            context_policy_state=data.get("context_policy_state", {}),
             updated_at=data.get("updated_at", time.time()),
         )
 

@@ -48,6 +48,9 @@ class RunState:
     transcript have a single source of truth.
     """
 
+    # TODO: 这个里面属性太多了，似乎除了某些是必须的：run_ctx, turns, last_input_tokens, context_policy_state等
+    # TODO: 其他可以收敛吗，比如新增一个current_agent，其他属性可以从它计算而来
+
     run_ctx: RunContext[Any]
     tools_by_name: dict[str, Tool]
     structured_output: StructuredOutput | None

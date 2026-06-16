@@ -373,6 +373,7 @@ class RunLoop:
             self._resolve_output_type(agent),
             supports_json_schema(providers),
         )
+        # TODO: 名字应该统一，比如都叫extra_instructions
         system_extra = self.append_instructions
 
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
@@ -558,6 +559,9 @@ class RunLoop:
         run. A fresh list is returned whenever anything is injected, so the live
         transcript is never mutated in place.
         """
+        # TODO: 似乎也有些问题：
+        # TODO: 1. 不进入session的话，以后从session或快照恢复对话，就丢失了上下文，因为模型的回复还是会进入
+        # TODO: 2. 插入的内容实在compaction后，有可能会引起context overflow
         if not state.view_injectors:
             return view
         injected: list[TranscriptEntry] = []
@@ -617,6 +621,8 @@ class RunLoop:
         the previous agent's run-scoped connections stay open until the run
         ends (closing them eagerly would add failure modes for no gain).
         """
+        # TODO: 太复杂了，不易维护
+        # TODO: 是否可以定义一个currrent_agent，很多属性可以它计算得到（类似于计算属性）
         signal = state.pending_handoff
         assert signal is not None
         state.pending_handoff = None
@@ -626,6 +632,7 @@ class RunLoop:
         with tracer.span("handoff", from_agent=prev_agent.name, to_agent=target.name):
             state.agent = target
             # The per-call addendum applies to the initial agent only.
+            # TODO: system_extra似乎也对后续agent生效，不该设为为None
             state.system_extra = None
             state.providers = self._resolve_providers(target, resources)
             state.structured_output = resolve_structured_output(

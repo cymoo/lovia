@@ -147,9 +147,10 @@ class RunLoop:
         self.budget = budget
         self.cancel_token = cancel_token
         self.retry = retry
-        self.context_policy: ContextPolicy = context_policy or Compaction()
+        self.context_policy: ContextPolicy = context_policy or Compaction(200_000)
         self.checkpoint = checkpoint
         self.run_id = checkpoint.resolved_run_id if checkpoint is not None else None
+        # TODO: 重命名为 checkpoint_options，要不然后后面的太像了
         self.checkpointer = checkpoint.checkpointer if checkpoint is not None else None
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
@@ -157,6 +158,7 @@ class RunLoop:
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
+        # TODO: 改名为extra_instructions
         self.append_instructions = append_instructions
         # ``output_type=None`` means "use the active agent's output_type";
         # any other value is a run-wide final-output contract.
@@ -477,6 +479,7 @@ class RunLoop:
         if state.pending_handoff is not None:
             async for ev in self._apply_handoff(state, resources, tracer):
                 yield ev
+        # TODO: 此处snapshot是否冗余呢
         await self.checkpoints.save_running(state)
 
     async def _model_phase(
@@ -522,6 +525,7 @@ class RunLoop:
             if forwarded:
                 # Partial output already reached the consumer; retrying the
                 # turn would stream it again.
+                # TODO: 是否应该log下，让用户知道为什么raise
                 raise
             logger.warning(
                 "context.overflow: provider raised; rebuilding a more "

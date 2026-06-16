@@ -66,6 +66,8 @@ def result_from_completed_snapshot(
     )
 
 
+# TODO: 似乎有个BUG
+# 如果发生了handoff，snapshot中agent_name就变了，无法通过验证
 def _validate_snapshot_agent(agent: Agent, snapshot: RunSnapshot) -> None:
     if snapshot.agent_name == agent.name:
         return

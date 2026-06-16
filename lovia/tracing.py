@@ -34,6 +34,9 @@ _depth: contextvars.ContextVar[int] = contextvars.ContextVar(
 class Span(Protocol):
     """A live span. Methods are best-effort — adapters may no-op some of them."""
 
+    # TODO: 只有set_attribute太简单了
+    # TODO: 是否需要预定义一些可以span的东西，好处：类型安全 & 通过此文件就知道哪些值得span & 易维护
+    # TODO: 优先级较低，待主要功能完成
     def set_attribute(self, key: str, value: object) -> None: ...
     def record_exception(self, exc: BaseException) -> None: ...
 

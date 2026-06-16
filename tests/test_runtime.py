@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, CheckpointOptions, Runner, tool
-from lovia.exceptions import BudgetExceeded, ContextOverflowError
+from lovia import Agent, CheckpointOptions, Handoff, Runner, drop_stale_tool_calls, tool
+from lovia.exceptions import BudgetExceeded, ContextOverflowError, UserError
 from lovia.plugins.mcp import mcp
-from lovia.messages import AssistantTurn, ToolCall, Usage
+from lovia.messages import AssistantTurn, Message, ToolCall, Usage
 from lovia.reliability import RunBudget
 from lovia.stores import InMemoryCheckpointer, InMemorySession
 from lovia.context import CompactionRequest, ContextResult
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
+    ReasoningEntry,
     TextDelta,
     entries_to_messages,
 )
@@ -110,7 +112,7 @@ async def test_invalid_tool_arguments_reported_to_model() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Compacted views keep the per-run append_instructions addendum
+# Compacted views keep the per-run extra_instructions addendum
 # ---------------------------------------------------------------------------
 
 
@@ -126,14 +128,14 @@ class _DropSystemPolicy:
         return ContextResult(entries=entries, changed=True, reason="test")
 
 
-async def test_compacted_view_keeps_append_instructions() -> None:
+async def test_compacted_view_keeps_extra_instructions() -> None:
     provider = ScriptedProvider([text("ok")])
     agent = Agent(name="t", instructions="base prompt", model=provider)
 
     await Runner.run(
         agent,
         "hi",
-        append_instructions="SECRET-ADDENDUM",
+        extra_instructions="SECRET-ADDENDUM",
         context_policy=_DropSystemPolicy(),
     )
 
@@ -174,7 +176,9 @@ async def test_budget_exceeded_is_interrupted_and_resumable() -> None:
     # Resume without the tight budget: the pending call drains, then the
     # remaining script completes the run.
     result = await Runner.run(
-        agent, [], checkpoint=CheckpointOptions(cp, "budgeted", if_run_exists="resume_only")
+        agent,
+        [],
+        checkpoint=CheckpointOptions(cp, "budgeted", if_run_exists="resume_only"),
     )
     assert result.output == "done"
 
@@ -309,3 +313,217 @@ async def test_cancelled_run_persists_interrupted_snapshot() -> None:
     snap = await cp.load("cancelled")
     assert snap is not None
     assert snap.status == "interrupted"
+
+
+# ---------------------------------------------------------------------------
+# A run that handed off resumes as the *target* agent (handoff-graph resolution)
+# ---------------------------------------------------------------------------
+
+
+@tool
+async def specialist_only(x: int) -> int:
+    """A tool only the specialist agent registers."""
+    return x * 10
+
+
+def _triage_to_specialist() -> tuple[Agent, Agent]:
+    """Triage that immediately transfers to a specialist with its own tool."""
+    specialist = Agent(
+        name="Specialist",
+        instructions="SPECIALIST-BASE",
+        model=ScriptedProvider(
+            [
+                call("specialist_only", {"x": 2}, call_id="s1"),
+                text("done by specialist"),
+            ]
+        ),
+        tools=[specialist_only],
+    )
+    triage = Agent(
+        name="Triage",
+        instructions="TRIAGE-BASE",
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "needs help"}, call_id="t1")]
+        ),
+        handoffs=[specialist],
+    )
+    return triage, specialist
+
+
+async def test_resume_after_handoff_continues_as_target_agent() -> None:
+    triage, specialist = _triage_to_specialist()
+    cp = InMemoryCheckpointer()
+
+    # max_tool_calls=1: the transfer consumes the budget, so the specialist's
+    # own tool call trips it — interrupting *after* the handoff, with a snapshot
+    # whose active agent is the specialist.
+    with pytest.raises(BudgetExceeded):
+        await Runner.run(
+            triage,
+            "go",
+            checkpoint=CheckpointOptions(cp, "h1"),
+            budget=RunBudget(max_tool_calls=1),
+        )
+
+    snap = await cp.load("h1")
+    assert snap is not None
+    assert snap.status == "interrupted"
+    # The snapshot records the *target* agent — the case that used to make
+    # resume impossible.
+    assert snap.agent_name == "Specialist"
+
+    # Resume with the entry agent: the loop resolves the active agent from the
+    # handoff graph, drains the pending specialist tool call against the
+    # specialist's tools, and completes as the specialist.
+    result = await Runner.run(
+        triage,
+        [],
+        checkpoint=CheckpointOptions(cp, "h1", if_run_exists="resume_only"),
+    )
+    assert result.output == "done by specialist"
+    assert result.final_agent.name == "Specialist"
+
+
+async def test_resume_with_unreachable_entry_agent_raises() -> None:
+    triage, _ = _triage_to_specialist()
+    cp = InMemoryCheckpointer()
+    with pytest.raises(BudgetExceeded):
+        await Runner.run(
+            triage,
+            "go",
+            checkpoint=CheckpointOptions(cp, "h2"),
+            budget=RunBudget(max_tool_calls=1),
+        )
+
+    # An unrelated entry agent cannot reach "Specialist" through its handoffs,
+    # so resume fails fast with a clear error instead of silently mis-running.
+    other = Agent(name="Other", model=ScriptedProvider([text("noop")]))
+    with pytest.raises(UserError, match="not reachable"):
+        await Runner.run(
+            other,
+            [],
+            checkpoint=CheckpointOptions(cp, "h2", if_run_exists="resume_only"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# extra_instructions is run-scoped and carries across a handoff
+# ---------------------------------------------------------------------------
+
+
+async def test_extra_instructions_persist_across_handoff() -> None:
+    specialist = Agent(
+        name="Specialist",
+        instructions="SPECIALIST-BASE",
+        model=ScriptedProvider([text("ok")]),
+    )
+    triage = Agent(
+        name="Triage",
+        instructions="TRIAGE-BASE",
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="t1")]
+        ),
+        handoffs=[specialist],
+    )
+
+    await Runner.run(triage, "go", extra_instructions="RUN-ADDENDUM")
+
+    # The specialist's first model call must see a system prompt carrying both
+    # its own instructions and the run-level addendum (not just the triage's).
+    system_msg = specialist.model.calls[0][0]  # type: ignore[attr-defined]
+    assert system_msg.role == "system"
+    assert "SPECIALIST-BASE" in system_msg.content
+    assert "RUN-ADDENDUM" in system_msg.content
+
+
+# ---------------------------------------------------------------------------
+# A handoff input_filter receives rich TranscriptEntry objects (no round-trip)
+# ---------------------------------------------------------------------------
+
+
+async def test_handoff_input_filter_receives_rich_entries() -> None:
+    captured: list[Any] = []
+
+    def recording_filter(entries: list[Any]) -> list[Any]:
+        captured.extend(entries)
+        return drop_stale_tool_calls(entries)
+
+    specialist = Agent(name="Specialist", model=ScriptedProvider([text("done")]))
+    # One assistant turn carrying reasoning + text + the transfer tool call, so
+    # the transcript body the filter sees has rich entries to preserve.
+    mixed = AssistantTurn(
+        content="let me hand this off",
+        tool_calls=[
+            ToolCall(
+                id="t1",
+                name="transfer_to_specialist",
+                arguments=json.dumps({"reason": "x"}),
+            )
+        ],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    setattr(mixed, "_scripted_reasoning_content", "internal reasoning")
+    triage = Agent(
+        name="Triage",
+        model=ScriptedProvider([mixed]),
+        handoffs=[Handoff(target=specialist, input_filter=recording_filter)],
+    )
+
+    result = await Runner.run(triage, "go")
+    assert result.output == "done"
+
+    # A ReasoningEntry has no flat-Message representation, so its presence proves
+    # the filter received entries directly — the lossy round-trip is gone.
+    assert any(isinstance(e, ReasoningEntry) for e in captured)
+    assert any(isinstance(e, AssistantTextEntry) for e in captured)
+    assert not any(isinstance(e, Message) for e in captured)
+
+    # drop_stale_tool_calls dropped the tool-call/result entries; the specialist
+    # sees no tool messages and no dangling tool_calls, but kept the text.
+    specialist_inbox = specialist.model.calls[0]  # type: ignore[attr-defined]
+    assert all(m.role != "tool" for m in specialist_inbox)
+    assert all(not (m.role == "assistant" and m.tool_calls) for m in specialist_inbox)
+
+
+# ---------------------------------------------------------------------------
+# A completed multi-hop handoff run replays as the deepest agent
+# ---------------------------------------------------------------------------
+
+
+async def test_completed_multi_hop_handoff_replays_as_deepest_agent() -> None:
+    third = Agent(name="Third", model=ScriptedProvider([text("done by third")]))
+    second = Agent(
+        name="Second",
+        model=ScriptedProvider(
+            [call("transfer_to_third", {"reason": "x"}, call_id="h2")]
+        ),
+        handoffs=[third],
+    )
+    first = Agent(
+        name="First",
+        model=ScriptedProvider(
+            [call("transfer_to_second", {"reason": "x"}, call_id="h1")]
+        ),
+        handoffs=[second],
+    )
+    cp = InMemoryCheckpointer()
+
+    result = await Runner.run(first, "go", checkpoint=CheckpointOptions(cp, "multi"))
+    assert result.output == "done by third"
+    assert result.final_agent.name == "Third"
+
+    snap = await cp.load("multi")
+    assert snap is not None
+    assert snap.status == "completed"
+    assert snap.agent_name == "Third"
+
+    # Replaying the completed run resolves the deepest agent (First→Second→Third)
+    # from the entry agent's handoff graph for final_agent and output coercion —
+    # without touching the (already-exhausted) providers.
+    replay = await Runner.run(
+        first,
+        "ignored",
+        checkpoint=CheckpointOptions(cp, "multi", if_run_exists="resume"),
+    )
+    assert replay.output == "done by third"
+    assert replay.final_agent.name == "Third"

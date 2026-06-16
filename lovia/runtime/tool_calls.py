@@ -50,10 +50,11 @@ class ToolCallProcessor:
             # rejected just below (unknown tool, malformed args, denied) — so a
             # model stuck spamming a bad tool name still hits the cap.
             self.budget.record_tool_call()
-            # TODO: 这个需要check吗，turn开始的检查下应该就够了吧，不求100%准确
+            # The only place the per-call cap is enforced mid-turn (turn-start
+            # and post-model checks cover token caps, not the tool-call count).
             self.budget.check(state.run_ctx.usage)
 
-        tool = state.tools_by_name.get(call.name)
+        tool = state.active.tools_by_name.get(call.name)
         if tool is None:
             err = f"Tool {call.name!r} is not available."
             state.transcript.append(
@@ -141,7 +142,7 @@ class ToolCallProcessor:
 
         if isinstance(result, _HandoffSignal):
             state.pending_handoff = result
-            result_text = f"Transferred to {result.target.name}" + (
+            result_text = f"Transferred to {result.handoff.target.name}" + (
                 f" ({result.reason})" if result.reason else ""
             )
         else:

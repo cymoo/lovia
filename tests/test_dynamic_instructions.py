@@ -1,4 +1,4 @@
-"""Tests for dynamic instructions: @agent.system_prompt + append_instructions."""
+"""Tests for dynamic instructions: @agent.system_prompt + extra_instructions."""
 
 from __future__ import annotations
 
@@ -50,10 +50,10 @@ async def test_system_prompt_skips_empty_fragments() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runner_append_instructions_str() -> None:
+async def test_runner_extra_instructions_str() -> None:
     provider = ScriptedProvider([text("ok")])
     agent = Agent(name="a", instructions="BASE", model=provider)
-    await Runner.run(agent, "hi", append_instructions="Be concise.")
+    await Runner.run(agent, "hi", extra_instructions="Be concise.")
     sys_msg = provider.calls[0][0]
     assert sys_msg.role == "system"
     assert "BASE" in sys_msg.content

@@ -1,7 +1,7 @@
 """Dynamic system prompts via the @agent.system_prompt decorator.
 
 Each registered fragment is rendered with the run context and appended to
-the base instructions in registration order. ``Runner.run(..., append_instructions=...)``
+the base instructions in registration order. ``Runner.run(..., extra_instructions=...)``
 adds one more layer per call without mutating the agent.
 
 Run::
@@ -50,7 +50,7 @@ async def main() -> None:
         agent,
         "Recommend one thing to do this evening.",
         context=Deps(user_name="Alex", locale="en-GB"),
-        append_instructions="Use under 25 words.",
+        extra_instructions="Use under 25 words.",
     )
     print(result.output)
 

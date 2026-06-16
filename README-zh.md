@@ -196,7 +196,7 @@ agent = Agent(
 handoff 让一个 agent 把控制权交给专家 agent。transcript 会跟随移交，也可以通过 filter 清理。
 
 ```python
-from lovia import Agent, Handoff, Runner, drop_stale_tool_calls
+from lovia import Agent, Handoff, Runner
 
 billing = Agent(name="billing", instructions="处理账单问题。", model="deepseek-v4-pro")
 support = Agent(name="support", instructions="处理技术问题。", model="deepseek-v4-pro")

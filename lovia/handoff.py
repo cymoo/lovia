@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .types import JsonObject
-from .messages import Message
 from .tools import Tool
+from .transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -30,21 +30,23 @@ if TYPE_CHECKING:
 HANDOFF_TOOL_PREFIX = "transfer_to_"
 
 
-# TODO: handoff中也有target，该类是否有必要存在，把reason放到Handoff里？
 # Internal sentinel that the runner recognises in a tool result to mean
-# "switch the active agent to ``target`` and continue".
+# "switch the active agent to ``handoff.target`` and continue". ``reason`` is
+# per-invocation (from the model's tool arguments), so it rides on the signal
+# rather than the shared ``Handoff`` config.
 @dataclass
 class _HandoffSignal:
-    target: "Agent"
     handoff: "Handoff"
     reason: str | None = None
 
 
 # A function that rewrites the conversation transcript when control is
-# transferred. Receives the body of the transcript (everything except the
+# transferred. Receives the body of the transcript as rich
+# :class:`~lovia.transcript.TranscriptEntry` objects (everything except the
 # leading system prompt, which is re-rendered by the new agent) and returns a
-# possibly-filtered version.
-HandoffInputFilter = Callable[[list[Message]], list[Message]]
+# possibly-filtered version. Operating on entries keeps reasoning, server-side
+# tool calls, and provider metadata intact through the rewrite.
+HandoffInputFilter = Callable[[list[TranscriptEntry]], list[TranscriptEntry]]
 
 
 @dataclass
@@ -69,36 +71,23 @@ class Handoff:
     on_handoff: (
         Callable[[dict[str, Any], "RunContext"], Awaitable[None] | None] | None
     ) = None
-    # TODO: 经过input_filter后的entries，session和checkpoint里存不存？
     input_filter: HandoffInputFilter | None = None
 
 
-def drop_stale_tool_calls(messages: list[Message]) -> list[Message]:
-    """Strip tool calls and tool responses from a transcript.
+def drop_stale_tool_calls(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
+    """Strip tool calls and tool results from a transcript.
 
-    A safe default ``input_filter`` for handoffs: keeps user messages,
-    assistant text replies, and system messages, but drops references to
-    tools the new agent may not have registered. Assistant turns that only
-    carried tool calls (no text content) are dropped entirely.
+    A safe default ``input_filter`` for handoffs: keeps user input, assistant
+    text, reasoning, and system entries, but drops the tool-call and tool-result
+    entries that reference tools the new agent may not have registered.
     """
-    out: list[Message] = []
-    for m in messages:
-        if m.role == "tool":
-            continue
-        if m.role == "assistant" and m.tool_calls:
-            if m.content:
-                # Preserve text but drop the dangling tool_calls.
-                out.append(Message(role="assistant", content=m.content))
-            continue
-        out.append(m)
-    return out
+    return [e for e in entries if not isinstance(e, (ToolCallEntry, ToolResultEntry))]
 
 
 def build_handoff_tool(handoff: Handoff) -> Tool:
     """Build the ``transfer_to_<name>`` tool that triggers ``handoff``."""
     target = handoff.target
     tool_name = handoff.name or f"{HANDOFF_TOOL_PREFIX}{_slug(target.name)}"
-    # TODO: description is too simple...
     description = (
         handoff.description
         or f"Transfer the conversation to the {target.name} agent. Use this when the request matches that agent's specialty."
@@ -109,11 +98,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
             result = handoff.on_handoff(args, ctx)
             if hasattr(result, "__await__"):
                 await result  # type: ignore[misc]
-        return _HandoffSignal(
-            target=target,
-            handoff=handoff,
-            reason=args.get("reason"),
-        )
+        return _HandoffSignal(handoff=handoff, reason=args.get("reason"))
 
     parameters: JsonObject = {
         "type": "object",

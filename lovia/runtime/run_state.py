@@ -1,13 +1,16 @@
 """Mutable state owned by the run loop.
 
-Two layers, by lifetime:
+Three layers, by lifetime:
 
-* :class:`RunState` — everything that changes while a run executes (active
-  agent, transcript, resolved tools, turn counter, ...). A handoff mutates
-  this in place. It *embeds* the run's :class:`~lovia.run_context.RunContext`
-  (the public surface handed to tools/guardrails/hooks) and adds the loop's
-  private machinery around it; ``agent`` and ``transcript`` are thin views
-  onto the embedded context, not separate storage.
+* :class:`ActiveAgent` — everything *derived from the active agent*: its
+  resolved provider chain, tool set, structured-output contract, workspace
+  session, and plugin contributions. A handoff rebuilds this wholesale and
+  swaps it in a single assignment, so per-agent state can never drift apart.
+* :class:`RunState` — everything that changes while a run executes but is
+  *not* tied to one agent (the transcript, turn counter, token bookkeeping,
+  the per-run instruction addendum, ...). It *embeds* the run's
+  :class:`~lovia.run_context.RunContext` (the public surface handed to
+  tools/guardrails/hooks) and holds the current :class:`ActiveAgent`.
 * :class:`ModelTurnResult` — scratch for a single model call, populated by
   :func:`~lovia.runtime.model_turn.stream_model_turn` (an async generator
   cannot ``return`` a value, so it fills in an accumulator instead).
@@ -31,66 +34,74 @@ if TYPE_CHECKING:
     from ..handoff import _HandoffSignal
     from ..hooks import AgentHooks
     from ..plugins import ViewInjector
+    from ..workspace.protocol import WorkspaceSession
+
+
+@dataclass
+class ActiveAgent:
+    """All state resolved from the currently active agent.
+
+    Built once at bootstrap and rebuilt wholesale on each handoff (see
+    :meth:`RunLoop._resolve_active`). Bundling it means a handoff swaps a single
+    field instead of hand-assigning a half-dozen related ones that must stay in
+    sync. ``RunContext.agent``/``RunContext.workspace`` mirror ``agent`` and
+    ``workspace`` here so user code sees the same active agent and workspace;
+    :meth:`RunState.activate` keeps the two in step.
+
+    ``providers`` is the active agent's resolved fallback chain (resolved once
+    per agent so HTTP clients are reused across turns; providers built from
+    string specs are closed when the run ends, user-supplied instances are left
+    to their owner). ``view_injectors`` run every turn to append transient
+    entries to the model view; ``plugin_instructions`` are folded into the
+    system prompt; ``plugin_hooks`` receive every event alongside the agent's
+    own hooks; the plugin guardrails are merged with the agent's own at the
+    loop's existing input/output checkpoints (the loop keeps the abort).
+    """
+
+    agent: Agent
+    providers: list[Provider]
+    structured_output: StructuredOutput | None
+    tools_by_name: dict[str, Tool]
+    workspace: "WorkspaceSession | None" = None
+    view_injectors: list["ViewInjector"] = field(default_factory=list)
+    plugin_instructions: list[str] = field(default_factory=list)
+    plugin_hooks: list["AgentHooks"] = field(default_factory=list)
+    plugin_input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    plugin_output_guardrails: list["GuardrailFn"] = field(default_factory=list)
 
 
 @dataclass
 class RunState:
-    """Everything that changes while one run executes.
+    """Everything that changes while one run executes, minus per-agent state.
 
-    The loop creates this in its bootstrap phase and mutates it in place; a
-    handoff swaps ``agent``, ``tools_by_name``, ``structured_output``, and
-    rewrites ``transcript`` for the new agent.
-
-    The split from :class:`~lovia.run_context.RunContext` is by audience:
-    ``run_ctx`` is the public surface user code (tools, guardrails, hooks)
-    receives; everything else here is private loop machinery. ``agent`` and
-    ``transcript`` are views onto ``run_ctx`` so the active agent and the live
-    transcript have a single source of truth.
+    The loop creates this in its bootstrap phase and mutates it in place. The
+    split from :class:`~lovia.run_context.RunContext` is by audience: ``run_ctx``
+    is the public surface user code (tools, guardrails, hooks) receives;
+    everything else here is private loop machinery. State derived from the
+    active agent lives in :class:`ActiveAgent` (``active``) and is swapped as a
+    unit on handoff; ``agent`` and ``transcript`` are views so the active agent
+    and the live transcript have a single source of truth.
     """
 
-    # TODO: 这个里面属性太多了，似乎除了某些是必须的：run_ctx, turns, last_input_tokens, context_policy_state等
-    # TODO: 其他可以收敛吗，比如新增一个current_agent，其他属性可以从它计算而来
-
     run_ctx: RunContext[Any]
-    tools_by_name: dict[str, Tool]
-    structured_output: StructuredOutput | None
+    active: ActiveAgent
     # Persisted to RunSnapshot and restored on resume.
     last_input_tokens: int | None = None
     context_policy_state: dict[str, Any] = field(default_factory=dict)
     # Not persisted; resets on resume (bounded by max_turns).
     output_repair_attempts: int = 0
-    # The active agent's resolved provider fallback chain. Resolved once per
-    # agent (at bootstrap and on each handoff) so HTTP clients are reused
-    # across turns; providers built from string specs are closed when the run
-    # ends, user-supplied Provider instances are left to their owner.
-    providers: list[Provider] = field(default_factory=list)
     turns: int = 0
-    # Per-call system-prompt addendum (``append_instructions``). Applied to
-    # the initial agent only; cleared on the first handoff so subsequent
-    # agents use their own instructions verbatim.
-    system_extra: str | None = None
+    # Per-run system-prompt addendum (``extra_instructions``). Run-scoped: it is
+    # appended to every active agent's instructions, including agents reached
+    # via handoff.
+    extra_instructions: str | None = None
     # Set by the tool phase when a handoff tool fired; consumed by the loop.
     pending_handoff: "_HandoffSignal | None" = None
-    # Per-run plugin contributions (rebuilt at bootstrap and on each handoff).
-    # ``view_injectors`` run every turn to append transient entries to the
-    # model view; ``plugin_instructions`` are folded into the system prompt;
-    # ``plugin_hooks`` receive every event alongside the agent's own hooks.
-    view_injectors: list["ViewInjector"] = field(default_factory=list)
-    plugin_instructions: list[str] = field(default_factory=list)
-    plugin_hooks: list["AgentHooks"] = field(default_factory=list)
-    # Guardrails contributed by plugins, merged with the agent's own at the
-    # loop's existing input/output checkpoints (the loop keeps the abort).
-    plugin_input_guardrails: list["GuardrailFn"] = field(default_factory=list)
-    plugin_output_guardrails: list["GuardrailFn"] = field(default_factory=list)
 
     @property
     def agent(self) -> Agent:
-        """The active agent. Single source of truth: ``run_ctx.agent``."""
-        return self.run_ctx.agent
-
-    @agent.setter
-    def agent(self, value: Agent) -> None:
-        self.run_ctx.agent = value
+        """The active agent. Mirror of ``active.agent`` / ``run_ctx.agent``."""
+        return self.active.agent
 
     @property
     def transcript(self) -> list[TranscriptEntry]:
@@ -102,6 +113,17 @@ class RunState:
         """
         return self.run_ctx.entries
 
+    def activate(self, active: ActiveAgent) -> None:
+        """Swap the active agent and mirror its public surface onto ``run_ctx``.
+
+        The single mutation point for a handoff: it replaces all per-agent
+        derived state at once and keeps ``RunContext.agent``/``workspace`` (what
+        user code sees) in step.
+        """
+        self.active = active
+        self.run_ctx.agent = active.agent
+        self.run_ctx.workspace = active.workspace
+
 
 @dataclass
 class ModelTurnResult:
@@ -111,4 +133,4 @@ class ModelTurnResult:
     turn_entries: list[TranscriptEntry] = field(default_factory=list)
 
 
-__all__ = ["ModelTurnResult", "RunState"]
+__all__ = ["ActiveAgent", "ModelTurnResult", "RunState"]

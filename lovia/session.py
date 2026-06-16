@@ -28,9 +28,6 @@ class Session(Protocol):
 
     async def load(self, session_id: str) -> list[TranscriptEntry]: ...
 
-    # TODO: 似乎没用到 append，所有更新都是 replace
-    async def append(self, session_id: str, entries: list[TranscriptEntry]) -> None: ...
-
     async def replace(self, session_id: str, entries: list[TranscriptEntry]) -> None:
         """Atomically replace the stored transcript for ``session_id``.
 

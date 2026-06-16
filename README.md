@@ -223,7 +223,7 @@ Handoff lets one agent transfer control to a specialist. The transcript follows
 the handoff, optionally filtered.
 
 ```python
-from lovia import Agent, Handoff, Runner, drop_stale_tool_calls
+from lovia import Agent, Handoff, Runner
 
 billing = Agent(name="billing", instructions="Handle billing issues.", model="deepseek-v4-pro")
 support = Agent(name="support", instructions="Handle technical issues.", model="deepseek-v4-pro")

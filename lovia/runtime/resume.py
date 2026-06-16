@@ -2,9 +2,10 @@
 
 The write side (persisting snapshots) lives in :mod:`lovia.runtime.checkpoint`.
 This module is its counterpart — the pure functions :class:`RunLoop` uses to
-gate a resume and to reconstruct the terminal result of an already-completed
-run. Keeping them here (rather than in the public facade) lets the loop own the
-whole start-vs-resume decision without a facade <-> runtime import cycle.
+resolve which agent a resume continues as and to reconstruct the terminal
+result of an already-completed run. Keeping them here (rather than in the public
+facade) lets the loop own the whole start-vs-resume decision without a facade
+<-> runtime import cycle.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 from ..agent import Agent
 from ..checkpointer import IfRunExists, RunSnapshot
 from ..exceptions import UserError
+from ..handoff import Handoff
 from ..schema import coerce_output
 from .result import RunResult
 
@@ -26,17 +28,58 @@ from .result import RunResult
 # * ``restart`` — ignore any stored run and start fresh, overwriting it.
 # * ``fail``    — raise if a run already exists.
 # * ``resume_only`` — continue an existing run, else raise (resume a known run_id).
-def check_resumable(agent: Agent, snapshot: RunSnapshot) -> None:
-    """Gate a resume against ``agent`` before any work happens.
 
-    # TODO: the comments below are stale
-    Raises :class:`UserError` if the snapshot belongs to a different agent.
-    A ``completed`` snapshot passes this gate; the caller short-circuits it
-    separately. ``failed`` snapshots are allowed through — the underlying
-    cause may have been fixed by the caller (e.g. a permission error after
-    the user corrected directory access).
+
+def reachable_agents(entry: Agent) -> dict[str, Agent]:
+    """Map every agent reachable from ``entry`` via handoffs, keyed by name.
+
+    Walks the static handoff graph (``Agent.handoffs``, each item an ``Agent``
+    or a :class:`~lovia.handoff.Handoff`), following targets transitively and
+    guarding against cycles. ``entry`` itself is always included. When two
+    distinct agents share a name the first reached wins — the same ambiguity
+    already affects ``transfer_to_<name>`` tool naming.
     """
-    _validate_snapshot_agent(agent, snapshot)
+    found: dict[str, Agent] = {}
+    stack = [entry]
+    while stack:
+        agent = stack.pop()
+        if agent.name in found:
+            continue
+        found[agent.name] = agent
+        for h in agent.handoffs:
+            stack.append(h.target if isinstance(h, Handoff) else h)
+    return found
+
+
+def resolve_resume_agent(entry: Agent, snapshot: RunSnapshot) -> Agent:
+    """Resolve the agent a resumed run must continue as.
+
+    A run is always resumed by passing the **entry** agent to the runner, but
+    the snapshot records whichever agent was *active* when it was written —
+    after a handoff that is a different agent. Find it by name in the entry
+    agent's reachable handoff graph so the rebuilt run continues with the right
+    tools, providers, and system prompt.
+
+    Raises :class:`UserError` when the snapshot's active agent is not reachable
+    from ``entry`` (resuming with the wrong entry agent, or a handoff graph that
+    changed since the snapshot was written). A ``completed`` snapshot resolves
+    here too; the caller short-circuits it separately. ``failed`` snapshots are
+    allowed through — the underlying cause may have been fixed by the caller
+    (e.g. a permission error corrected after the fact).
+    """
+    agents = reachable_agents(entry)
+    active = agents.get(snapshot.agent_name)
+    if active is None:
+        raise UserError(
+            f"Snapshot {snapshot.run_id!r} was last active on agent "
+            f"{snapshot.agent_name!r}, which is not reachable from the handoff "
+            f"graph of entry agent {entry.name!r}.",
+            hint=(
+                "Resume this run_id with the same entry agent you started it "
+                "with (the one whose handoffs reach the recorded agent)."
+            ),
+        )
+    return active
 
 
 def result_from_completed_snapshot(
@@ -45,7 +88,12 @@ def result_from_completed_snapshot(
     *,
     output_type: Any = None,
 ) -> RunResult:
-    """Rebuild the :class:`RunResult` of an already-completed snapshot."""
+    """Rebuild the :class:`RunResult` of an already-completed snapshot.
+
+    ``agent`` is the snapshot's *active* agent (resolved via
+    :func:`resolve_resume_agent`), so ``final_agent`` and the output-type
+    coercion reflect the agent that actually finished the run.
+    """
     target_output_type = output_type if output_type is not None else agent.output_type
     output = snapshot.output
     if output is None and (snapshot.error or {}).get("type") == "OutputNotSerializable":
@@ -66,20 +114,9 @@ def result_from_completed_snapshot(
     )
 
 
-# TODO: 似乎有个BUG
-# 如果发生了handoff，snapshot中agent_name就变了，无法通过验证
-def _validate_snapshot_agent(agent: Agent, snapshot: RunSnapshot) -> None:
-    if snapshot.agent_name == agent.name:
-        return
-    raise UserError(
-        f"Snapshot {snapshot.run_id!r} belongs to active agent "
-        f"{snapshot.agent_name!r}, not {agent.name!r}.",
-        hint="Resume this run_id with the agent recorded in the checkpoint.",
-    )
-
-
 __all__ = [
-    "check_resumable",
     "IfRunExists",
+    "reachable_agents",
+    "resolve_resume_agent",
     "result_from_completed_snapshot",
 ]

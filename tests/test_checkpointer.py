@@ -586,6 +586,8 @@ async def test_handoff_without_override_uses_target_agent_output_type() -> None:
 
     assert isinstance(result.output, Out)
     assert result.output.value == 9
+    # The completed snapshot records the *active* agent — the handoff target.
+    assert snap is not None and snap.agent_name == "Spanish"
 
 
 @pytest.mark.asyncio

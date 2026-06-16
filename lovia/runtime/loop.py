@@ -33,9 +33,9 @@ if TYPE_CHECKING:
 
 from .. import events
 from .checkpoint import CheckpointWriter
-from .resume import check_resumable, result_from_completed_snapshot
+from .resume import resolve_resume_agent, result_from_completed_snapshot
 from .model_turn import stream_model_turn
-from .run_state import ModelTurnResult, RunState
+from .run_state import ActiveAgent, ModelTurnResult, RunState
 from .utils import (
     agent_model_label,
     input_preview,
@@ -124,7 +124,7 @@ class RunLoop:
         user_input: "str | list[Message]",
         context: object,
         output_type_override: object | None = None,
-        append_instructions: "str | None" = None,
+        extra_instructions: "str | None" = None,
         max_turns: int,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
@@ -147,19 +147,22 @@ class RunLoop:
         self.budget = budget
         self.cancel_token = cancel_token
         self.retry = retry
-        self.context_policy: ContextPolicy = context_policy or Compaction(200_000)
-        self.checkpoint = checkpoint
+        self.context_policy: ContextPolicy = context_policy or Compaction(
+            context_window=200_000
+        )
         self.run_id = checkpoint.resolved_run_id if checkpoint is not None else None
-        # TODO: 重命名为 checkpoint_options，要不然后后面的太像了
         self.checkpointer = checkpoint.checkpointer if checkpoint is not None else None
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
         self.resume_from = checkpoint.resume_from if checkpoint is not None else None
+        # The active agent to resume as, resolved from ``initial_agent``'s
+        # handoff graph by ``_resolve_resume`` (the snapshot's agent may be a
+        # handoff target, not the entry agent). ``None`` for a fresh run.
+        self._resume_agent: Agent | None = None
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
-        # TODO: 改名为extra_instructions
-        self.append_instructions = append_instructions
+        self.extra_instructions = extra_instructions
         # ``output_type=None`` means "use the active agent's output_type";
         # any other value is a run-wide final-output contract.
         self.output_type_override = output_type_override
@@ -226,7 +229,7 @@ class RunLoop:
                 # transcript. Skip on resume — they already ran on the
                 # original input.
                 input_guardrails = (
-                    state.agent.input_guardrails + state.plugin_input_guardrails
+                    state.agent.input_guardrails + state.active.plugin_input_guardrails
                 )
                 if input_guardrails and self.resume_from is None:
                     await check_input_guardrails(
@@ -333,7 +336,7 @@ class RunLoop:
         (the caller replays it); otherwise returns ``None`` and, for a resumable
         snapshot, sets ``self.resume_from`` so :meth:`_bootstrap` rehydrates it.
         Raises :class:`UserError` for an unresumable snapshot or a policy
-        conflict (``require`` with nothing stored, or ``fail`` with a run already
+        conflict (``resume_only`` with nothing stored, or ``fail`` with a run already
         present).
         """
         snapshot = self.resume_from
@@ -359,63 +362,90 @@ class RunLoop:
                 ),
             )
 
-        check_resumable(self.initial_agent, snapshot)
+        active_agent = resolve_resume_agent(self.initial_agent, snapshot)
         if snapshot.status == "completed":
             return result_from_completed_snapshot(
-                self.initial_agent, snapshot, output_type=self.output_type_override
+                active_agent, snapshot, output_type=self.output_type_override
             )
         self.resume_from = snapshot
+        self._resume_agent = active_agent
         return None
 
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
-        """Connect tools, build the initial transcript, and assemble RunState."""
-        agent = self.initial_agent
-        providers = self._resolve_providers(agent, resources)
-        structured_output = resolve_structured_output(
-            self._resolve_output_type(agent),
-            supports_json_schema(providers),
-        )
-        # TODO: 名字应该统一，比如都叫extra_instructions
-        system_extra = self.append_instructions
+        """Resolve the active agent, build the initial transcript, assemble RunState.
 
-        workspace, workspace_tools = await self._connect_workspace(agent, resources)
-        plugins = await self._activate_plugins(agent, resources)
-        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
+        On resume the active agent is the one recorded in the snapshot — which
+        may be a handoff target rather than the entry agent; ``_resolve_resume``
+        resolved it from the entry agent's handoff graph. A fresh run starts on
+        the entry agent.
+        """
+        snapshot = self.resume_from
+        if snapshot is not None:
+            assert self._resume_agent is not None  # set by _resolve_resume
+            agent = self._resume_agent
+        else:
+            agent = self.initial_agent
+        active = await self._resolve_active(agent, resources)
+        extra_instructions = self.extra_instructions
 
-        if self.resume_from is not None:
-            transcript: list[TranscriptEntry] = list(self.resume_from.entries)
+        if snapshot is not None:
+            transcript: list[TranscriptEntry] = list(snapshot.entries)
         else:
             transcript = await self._build_initial_entries(
-                agent, structured_output, system_extra, plugins.instructions
+                active.agent,
+                active.structured_output,
+                extra_instructions,
+                active.plugin_instructions,
             )
 
         run_ctx = RunContext(
             context=self.context,
             entries=transcript,
-            agent=agent,
+            agent=active.agent,
             session_id=self.session_id,
-            workspace=workspace,
+            workspace=active.workspace,
         )
-        if self.resume_from is not None:
-            run_ctx.usage.add(self.resume_from.usage)
+        if snapshot is not None:
+            run_ctx.usage.add(snapshot.usage)
 
         return RunState(
             run_ctx=run_ctx,
-            tools_by_name=tools_by_name,
-            structured_output=structured_output,
-            providers=providers,
-            turns=self.resume_from.turns if self.resume_from is not None else 0,
-            system_extra=system_extra,
+            active=active,
+            turns=snapshot.turns if snapshot is not None else 0,
+            extra_instructions=extra_instructions,
             last_input_tokens=(
-                self.resume_from.last_input_tokens
-                if self.resume_from is not None
-                else None
+                snapshot.last_input_tokens if snapshot is not None else None
             ),
             context_policy_state=(
-                dict(self.resume_from.context_policy_state)
-                if self.resume_from is not None
-                else {}
+                dict(snapshot.context_policy_state) if snapshot is not None else {}
             ),
+        )
+
+    async def _resolve_active(
+        self, agent: Agent, resources: AsyncExitStack
+    ) -> ActiveAgent:
+        """Resolve everything derived from ``agent`` into one swappable bundle.
+
+        Called at bootstrap and on every handoff. Providers, workspace, and
+        plugin connections are run-scoped: they are opened here and torn down
+        when the run ends (a handoff leaves the previous agent's connections
+        open until then — closing them eagerly would add failure modes for no
+        gain).
+        """
+        providers = self._resolve_providers(agent, resources)
+        structured_output = resolve_structured_output(
+            self._resolve_output_type(agent),
+            supports_json_schema(providers),
+        )
+        workspace, workspace_tools = await self._connect_workspace(agent, resources)
+        plugins = await self._activate_plugins(agent, resources)
+        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
+        return ActiveAgent(
+            agent=agent,
+            providers=providers,
+            structured_output=structured_output,
+            tools_by_name=tools_by_name,
+            workspace=workspace,
             view_injectors=plugins.view_injectors,
             plugin_instructions=plugins.instructions,
             plugin_hooks=plugins.hooks,
@@ -479,7 +509,6 @@ class RunLoop:
         if state.pending_handoff is not None:
             async for ev in self._apply_handoff(state, resources, tracer):
                 yield ev
-        # TODO: 此处snapshot是否冗余呢
         await self.checkpoints.save_running(state)
 
     async def _model_phase(
@@ -493,7 +522,7 @@ class RunLoop:
         chance to produce a more aggressive view and the call is retried; a
         second overflow — or one after partial output — propagates.
         """
-        providers = state.providers
+        providers = state.active.providers
         primary = providers[0]
         request = CompactionRequest(
             entries=state.transcript,
@@ -505,7 +534,7 @@ class RunLoop:
             overflow=False,
             scratch=state.context_policy_state,
             workspace=state.run_ctx.workspace,
-            tool_names=frozenset(state.tools_by_name),
+            tool_names=frozenset(state.active.tools_by_name),
         )
         ctx_result = await self.context_policy.compact(request)
         view = await self._build_view(state, ctx_result)
@@ -524,8 +553,12 @@ class RunLoop:
         except ContextOverflowError as overflow:
             if forwarded:
                 # Partial output already reached the consumer; retrying the
-                # turn would stream it again.
-                # TODO: 是否应该log下，让用户知道为什么raise
+                # turn would stream it again, so surface the overflow instead.
+                logger.warning(
+                    "context.overflow: provider raised after partial output "
+                    "already streamed; cannot retry this turn (%s)",
+                    overflow,
+                )
                 raise
             logger.warning(
                 "context.overflow: provider raised; rebuilding a more "
@@ -562,14 +595,20 @@ class RunLoop:
         is logged and skipped (fail-open): a broken reminder must never abort a
         run. A fresh list is returned whenever anything is injected, so the live
         transcript is never mutated in place.
+
+        Two consequences are deliberate, not bugs. (1) Because injected entries
+        never enter the transcript, a resume from session/snapshot will not
+        replay them — injectors are expected to regenerate their content each
+        turn (reminders, clock, todo list), so this is by design. (2) Entries
+        are appended after the context policy has already shaped ``view``, so
+        very large injected content could push a turn over the window;
+        injectors are meant to be small, and the provider's overflow path still
+        applies.
         """
-        # TODO: 似乎也有些问题：
-        # TODO: 1. 不进入session的话，以后从session或快照恢复对话，就丢失了上下文，因为模型的回复还是会进入
-        # TODO: 2. 插入的内容实在compaction后，有可能会引起context overflow
-        if not state.view_injectors:
+        if not state.active.view_injectors:
             return view
         injected: list[TranscriptEntry] = []
-        for inject in state.view_injectors:
+        for inject in state.active.view_injectors:
             try:
                 result = inject(state.run_ctx)
                 if inspect.isawaitable(result):
@@ -594,8 +633,8 @@ class RunLoop:
             agent=state.agent,
             providers=providers,
             input_entries=view,
-            tools_by_name=state.tools_by_name,
-            structured_output=state.structured_output,
+            tools_by_name=state.active.tools_by_name,
+            structured_output=state.active.structured_output,
             tracer=tracer,
             turn=state.turns,
             result=turn,
@@ -613,49 +652,30 @@ class RunLoop:
         for call in calls:
             async for ev in processor.process(call, state=state, tracer=tracer):
                 yield await self._emit(state, ev)
-            # TODO: 能否把快照保存都收敛到 _stream_inner中？
+            # Persist after each tool result so a crash mid tool-execution can
+            # resume by draining the calls that still have no matching result.
             await self.checkpoints.save_running(state)
 
     async def _apply_handoff(
         self, state: RunState, resources: AsyncExitStack, tracer: Tracer
     ) -> AsyncIterator[events.Event]:
-        """Switch the active agent in place and rebuild agent-specific state.
+        """Switch the active agent and rebuild its derived state as one unit.
 
-        The new agent gets its own MCP/workspace connections and tool set;
-        the previous agent's run-scoped connections stay open until the run
-        ends (closing them eagerly would add failure modes for no gain).
+        The new agent gets its own provider/workspace/plugin connections and
+        tool set, bundled into a fresh :class:`ActiveAgent` and swapped in via
+        :meth:`RunState.activate`. The previous agent's run-scoped connections
+        stay open until the run ends (closing them eagerly would add failure
+        modes for no gain). ``extra_instructions`` is run-scoped and carries
+        over to the new agent.
         """
-        # TODO: 太复杂了，不易维护
-        # TODO: 是否可以定义一个currrent_agent，很多属性可以它计算得到（类似于计算属性）
         signal = state.pending_handoff
         assert signal is not None
         state.pending_handoff = None
         prev_agent = state.agent
-        target = signal.target
+        target = signal.handoff.target
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
         with tracer.span("handoff", from_agent=prev_agent.name, to_agent=target.name):
-            state.agent = target
-            # The per-call addendum applies to the initial agent only.
-            # TODO: system_extra似乎也对后续agent生效，不该设为为None
-            state.system_extra = None
-            state.providers = self._resolve_providers(target, resources)
-            state.structured_output = resolve_structured_output(
-                self._resolve_output_type(target),
-                supports_json_schema(state.providers),
-            )
-            workspace, workspace_tools = await self._connect_workspace(
-                target, resources
-            )
-            state.run_ctx.workspace = workspace
-            plugins = await self._activate_plugins(target, resources)
-            state.view_injectors = plugins.view_injectors
-            state.plugin_instructions = plugins.instructions
-            state.plugin_hooks = plugins.hooks
-            state.plugin_input_guardrails = plugins.input_guardrails
-            state.plugin_output_guardrails = plugins.output_guardrails
-            state.tools_by_name = self._collect_tools(
-                target, workspace_tools, plugins.tools
-            )
+            state.activate(await self._resolve_active(target, resources))
             await self._reset_transcript_for_handoff(state, signal.handoff)
 
         ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=target)
@@ -672,12 +692,13 @@ class RunLoop:
         prompt so the loop rolls another turn.
         """
         try:
-            return self._parse_output(state, assistant.content or "")
+            return self._parse_output(
+                state.active.structured_output, assistant.content or ""
+            )
         except OutputValidationError as exc:
             attempt = state.output_repair_attempts + 1
             repair_prompt = self._build_repair_prompt(state.agent, exc, attempt)
-            # TODO: 第二个条件是冗余的吧
-            if repair_prompt is None or state.structured_output is None:
+            if repair_prompt is None:
                 raise
             state.output_repair_attempts = attempt
             logger.warning(
@@ -695,7 +716,7 @@ class RunLoop:
     ) -> RunResult:
         """Run output guardrails, persistence, and usage propagation."""
         output_guardrails = (
-            state.agent.output_guardrails + state.plugin_output_guardrails
+            state.agent.output_guardrails + state.active.plugin_output_guardrails
         )
         if output_guardrails:
             await check_output_guardrails(output_guardrails, output, state.run_ctx)
@@ -727,7 +748,7 @@ class RunLoop:
         then hand it back to be yielded to the stream consumer
         (``yield await self._emit(...)``)."""
         await dispatch(state.agent.hooks, ev)
-        for hooks in state.plugin_hooks:
+        for hooks in state.active.plugin_hooks:
             await dispatch(hooks, ev)
         return ev
 
@@ -749,14 +770,15 @@ class RunLoop:
 
     def _record_usage(self, state: RunState, assistant: AssistantTurn) -> None:
         state.run_ctx.usage.add(assistant.usage)
-        # Remember the real input-token count so the next turn's
-        # ContextPolicy can size compaction against actual usage rather
-        # than the chars/4 heuristic.
-        # TODO: 似乎不需要再检查 assistant.usage.input_tokens
+        # Remember the real input-token count so the next turn's ContextPolicy
+        # can size compaction against actual usage rather than the chars/4
+        # heuristic.
         if assistant.usage and assistant.usage.input_tokens:
             state.last_input_tokens = assistant.usage.input_tokens
-        # TODO: budget.check 放在这里不合适吧
-        # TODO: 在每轮开始的时候检查次就行了吧
+        # Enforce the budget against this turn's tokens. The turn-start check
+        # (``_check_limits``) ran before the model call, so on a final turn that
+        # produces output without tool calls this is the only place an
+        # output-token overrun is caught before the run completes.
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 
@@ -771,9 +793,10 @@ class RunLoop:
             return self.output_type_override
         return agent.output_type
 
-    # TODO: 接收structured_output即可，无需整个state
-    def _parse_output(self, state: RunState, content: str) -> object:
-        if state.structured_output is None:
+    def _parse_output(
+        self, structured_output: StructuredOutput | None, content: str
+    ) -> object:
+        if structured_output is None:
             return content
         # The model either used the native ``response_format`` path or was
         # instructed via the system prompt to reply with schema-shaped JSON.
@@ -781,17 +804,15 @@ class RunLoop:
         # type; failures surface as ``OutputValidationError`` and may be
         # repaired in the main loop if the agent opts in.
         try:
-            return parse_structured_output(
-                state.structured_output, loads_lenient(content)
-            )
+            return parse_structured_output(structured_output, loads_lenient(content))
         except OutputValidationError as exc:
-            # TODO: 需要log不，或者其他地方已经log了？
-            # TODO: 如下判断是多余的
+            # ``loads_lenient`` raises before the target type is known, so name
+            # it for the error message when the parse step didn't already.
             if exc.output_type_name is None:
                 exc.output_type_name = getattr(
-                    state.structured_output.output_type,
+                    structured_output.output_type,
                     "__name__",
-                    str(state.structured_output.output_type),
+                    str(structured_output.output_type),
                 )
             raise
 
@@ -870,24 +891,23 @@ class RunLoop:
     ) -> None:
         """Swap the leading system message for the new active agent.
 
-        Operates on entries directly so nothing is lost in translation. Only
-        when the originating :class:`Handoff` declares an ``input_filter`` is
-        the body round-tripped through the (lossy, message-shaped) filter API.
-        TODO: input_filter 应该接受 TranscriptEntry 列表而不是 Message 列表，这样就不需要来回转换了
+        Operates on entries directly so nothing is lost in translation: the
+        optional :class:`Handoff` ``input_filter`` receives and returns
+        :class:`TranscriptEntry` objects, so the rich transcript (reasoning,
+        server-side tool calls, provider metadata) survives the rewrite and the
+        Session/checkpoint keep full fidelity.
         """
         new_system = await self._system_prompt(
             state.agent,
-            state.structured_output,
-            extra=state.system_extra,
-            plugin_instructions=state.plugin_instructions,
+            state.active.structured_output,
+            extra=state.extra_instructions,
+            plugin_instructions=state.active.plugin_instructions,
         )
         body: list[TranscriptEntry] = list(state.transcript)
         if body and isinstance(body[0], InputEntry) and body[0].role == "system":
             body = body[1:]
         if handoff is not None and handoff.input_filter is not None:
-            body = messages_to_entries(
-                list(handoff.input_filter(entries_to_messages(body)))
-            )
+            body = list(handoff.input_filter(body))
         head = self._system_entry(new_system)
         # In-place so RunContext.entries keeps observing the same list.
         state.transcript[:] = [*head, *body]
@@ -936,7 +956,11 @@ class RunLoop:
         # NOTE: this pairs each provider with its spec positionally, which is
         # correct only while Agent.resolve_providers() returns providers 1:1 in
         # agent.model order. If it ever dedups or reorders, the run-owned (built
-        # from a string spec) vs caller-owned distinction below would be wrong.
+        # from a string spec) vs caller-owned distinction below would be wrong;
+        # the assert fails loudly if that invariant is ever broken.
+        assert len(providers) == len(specs), (
+            "resolve_providers() must return one provider per model spec"
+        )
         for spec, provider in zip(specs, providers):
             if isinstance(spec, str):
                 aclose = getattr(provider, "aclose", None)
@@ -987,9 +1011,9 @@ class RunLoop:
             return view
         system_text = await self._system_prompt(
             state.agent,
-            state.structured_output,
-            extra=state.system_extra,
-            plugin_instructions=state.plugin_instructions,
+            state.active.structured_output,
+            extra=state.extra_instructions,
+            plugin_instructions=state.active.plugin_instructions,
         )
         return [*self._system_entry(system_text), *view]
 

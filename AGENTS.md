@@ -42,7 +42,7 @@ lovia/
     loop.py         #   RunLoop — the only module with mutable state
     model_turn.py   #   Calls the provider, assembles deltas → AssistantTurn
     tool_calls.py   #   Dispatches tool calls, handoff, approval, final_output
-    run_state.py    #   RunState (mutable per-run) + ResumeState (JSON-safe slice)
+    run_state.py    #   RunState (mutable per-run) + ActiveAgent (per-agent derived state)
     checkpoint.py   #   CheckpointWriter
     result.py       #   RunHandle (async iterator + awaitable) and RunResult
   tools/            # @tool decorator, Tool type, and opt-in tool factories
@@ -126,18 +126,18 @@ A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled
 
 Handoffs use a **sentinel pattern** across three modules. When a handoff tool is invoked (`transfer_to_<name>`):
 
-1. `handoff.py:build_handoff_tool()` — the tool's invoke returns a `_HandoffSignal(target=..., handoff=...)` dataclass instead of a normal result.
-2. `runtime/tool_calls.py:ToolCallProcessor.process()` — detects `_HandoffSignal` via `isinstance()`, sets `state.handoff_signal`, and writes a text result to the transcript.
-3. `runtime/loop.py:RunLoop._stream_inner()` — checks `state.handoff_signal` after processing all tool calls; if set, calls `_handoff_phase()` which swaps the active agent, rebuilds tools, and resets the transcript via `_reset_for_handoff()`.
+1. `handoff.py:build_handoff_tool()` — the tool's invoke returns a `_HandoffSignal(handoff=...)` dataclass (carrying the per-call `reason`) instead of a normal result.
+2. `runtime/tool_calls.py:ToolCallProcessor.process()` — detects `_HandoffSignal` via `isinstance()`, sets `state.pending_handoff`, and writes a text result to the transcript.
+3. `runtime/loop.py:RunLoop._apply_handoff()` — after the tool calls are processed, the loop checks `state.pending_handoff`; if set, it resolves a fresh `ActiveAgent` for the target via `_resolve_active()` (its own providers, tools, structured output, workspace, and plugin contributions) and swaps it in atomically with `RunState.activate()`, then rewrites the leading system message via `_reset_transcript_for_handoff()`.
 
-This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type.
+This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type. The optional `Handoff.input_filter` rewrites the transcript body as `TranscriptEntry` objects (not flattened `Message`s), so reasoning, server-side tool calls, and provider metadata survive the rewrite. The run-level `extra_instructions` addendum is re-applied to every agent reached by a handoff.
 
 ### Session vs Checkpointer
 
 Two persistence concepts that serve different purposes:
 
 - **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start and persists the **full** transcript after each run — context compaction never writes to the Session.
-- **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + agent_name) keyed by `run_id`. Used for crash recovery / pause-and-resume. The runner snapshots after every turn via `_snapshot()`.
+- **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + `agent_name`) keyed by `run_id`. Used for crash recovery / pause-and-resume; the loop writes a snapshot after the model output and after each tool call via `CheckpointWriter.save_running()`. `agent_name` records the *active* agent — after a handoff that is the target, not the entry agent. On resume `RunLoop` resolves that agent by name from the entry agent's handoff graph (`runtime/resume.py:resolve_resume_agent`) and rebuilds the run as that agent, so multi-agent runs resume correctly.
 
 Long-term cross-session **memory** is deliberately *not* a core concept — there is no `Memory` protocol or `Agent.memory` field. Wire it as a user plugin over your own store (see the `MemoryPlugin` example in the README).
 

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 HANDOFF_TOOL_PREFIX = "transfer_to_"
 
 
+# TODO: handoff中也有target，该类是否有必要存在，把reason放到Handoff里？
 # Internal sentinel that the runner recognises in a tool result to mean
 # "switch the active agent to ``target`` and continue".
 @dataclass
@@ -68,6 +69,7 @@ class Handoff:
     on_handoff: (
         Callable[[dict[str, Any], "RunContext"], Awaitable[None] | None] | None
     ) = None
+    # TODO: 经过input_filter后的entries，session和checkpoint里存不存？
     input_filter: HandoffInputFilter | None = None
 
 
@@ -96,6 +98,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
     """Build the ``transfer_to_<name>`` tool that triggers ``handoff``."""
     target = handoff.target
     tool_name = handoff.name or f"{HANDOFF_TOOL_PREFIX}{_slug(target.name)}"
+    # TODO: description is too simple...
     description = (
         handoff.description
         or f"Transfer the conversation to the {target.name} agent. Use this when the request matches that agent's specialty."

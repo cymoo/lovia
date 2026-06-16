@@ -50,6 +50,7 @@ class ToolCallProcessor:
             # rejected just below (unknown tool, malformed args, denied) — so a
             # model stuck spamming a bad tool name still hits the cap.
             self.budget.record_tool_call()
+            # TODO: 这个需要check吗，turn开始的检查下应该就够了吧，不求100%准确
             self.budget.check(state.run_ctx.usage)
 
         tool = state.tools_by_name.get(call.name)

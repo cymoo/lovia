@@ -165,9 +165,9 @@ class RunLoop:
         self.checkpoints = CheckpointWriter(
             checkpointer=self.checkpointer,
             run_id=self.run_id,
-            delete_on_success=checkpoint.delete_on_success
-            if checkpoint is not None
-            else False,
+            delete_on_success=(
+                checkpoint.delete_on_success if checkpoint is not None else False
+            ),
         )
 
     # ------------------------------------------------------------------ #
@@ -404,7 +404,9 @@ class RunLoop:
             turns=self.resume_from.turns if self.resume_from is not None else 0,
             system_extra=system_extra,
             last_input_tokens=(
-                self.resume_from.last_input_tokens if self.resume_from is not None else None
+                self.resume_from.last_input_tokens
+                if self.resume_from is not None
+                else None
             ),
             context_policy_state=(
                 dict(self.resume_from.context_policy_state)
@@ -603,6 +605,7 @@ class RunLoop:
         for call in calls:
             async for ev in processor.process(call, state=state, tracer=tracer):
                 yield await self._emit(state, ev)
+            # TODO: 能否把快照保存都收敛到 _stream_inner中？
             await self.checkpoints.save_running(state)
 
     async def _apply_handoff(
@@ -662,6 +665,7 @@ class RunLoop:
         except OutputValidationError as exc:
             attempt = state.output_repair_attempts + 1
             repair_prompt = self._build_repair_prompt(state.agent, exc, attempt)
+            # TODO: 第二个条件是冗余的吧
             if repair_prompt is None or state.structured_output is None:
                 raise
             state.output_repair_attempts = attempt
@@ -737,8 +741,11 @@ class RunLoop:
         # Remember the real input-token count so the next turn's
         # ContextPolicy can size compaction against actual usage rather
         # than the chars/4 heuristic.
+        # TODO: 似乎不需要再检查 assistant.usage.input_tokens
         if assistant.usage and assistant.usage.input_tokens:
             state.last_input_tokens = assistant.usage.input_tokens
+        # TODO: budget.check 放在这里不合适吧
+        # TODO: 在每轮开始的时候检查次就行了吧
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 
@@ -753,6 +760,7 @@ class RunLoop:
             return self.output_type_override
         return agent.output_type
 
+    # TODO: 接收structured_output即可，无需整个state
     def _parse_output(self, state: RunState, content: str) -> object:
         if state.structured_output is None:
             return content
@@ -766,6 +774,8 @@ class RunLoop:
                 state.structured_output, loads_lenient(content)
             )
         except OutputValidationError as exc:
+            # TODO: 需要log不，或者其他地方已经log了？
+            # TODO: 如下判断是多余的
             if exc.output_type_name is None:
                 exc.output_type_name = getattr(
                     state.structured_output.output_type,
@@ -852,6 +862,7 @@ class RunLoop:
         Operates on entries directly so nothing is lost in translation. Only
         when the originating :class:`Handoff` declares an ``input_filter`` is
         the body round-tripped through the (lossy, message-shaped) filter API.
+        TODO: input_filter 应该接受 TranscriptEntry 列表而不是 Message 列表，这样就不需要来回转换了
         """
         new_system = await self._system_prompt(
             state.agent,

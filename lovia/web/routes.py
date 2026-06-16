@@ -391,7 +391,7 @@ def build_router(
 
     @router.post("/api/chat/reconnect")
     async def chat_reconnect(
-        session_id: str = Query(...), request: Request = None
+        request: Request, session_id: str = Query(...)
     ) -> EventSourceResponse:
         """Resume an interrupted run for ``session_id``.
 

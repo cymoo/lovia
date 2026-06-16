@@ -24,8 +24,6 @@ from .exceptions import UserError
 from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
 from .messages import Usage
 
-# TODO: 搞清楚 failed 的语义，以及何时会出现。
-# 例如：非重试 ProviderError, GuardrailError, 输出验证失败, hooks / instructions 回调抛错, 框架自身 bug
 RunStatus = Literal["running", "interrupted", "completed", "failed"]
 IfRunExists = Literal["resume", "restart", "fail", "resume_only"]
 

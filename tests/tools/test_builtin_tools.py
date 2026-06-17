@@ -13,7 +13,7 @@ from lovia.exceptions import ToolError, UserError
 from lovia.run_context import RunContext
 from lovia.tools.http import html_to_text, http_fetch
 from lovia.tools.human import HumanChannel, ask_human
-from lovia.tools.search import SearchResult, duckduckgo_search_tool, web_search
+from lovia.tools.search import SearchResult, duckduckgo_search, web_search
 from lovia.tools.time import now, sleep
 
 
@@ -156,7 +156,7 @@ def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) 
         ),
     )
     with pytest.raises(UserError) as exc_info:
-        duckduckgo_search_tool()
+        duckduckgo_search()
     assert "lovia[ddg]" in str(exc_info.value)
 
 

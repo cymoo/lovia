@@ -1,20 +1,22 @@
 # `lovia.tools` examples
 
-One self-contained snippet per tool. Each is a runnable Python file
-that depends only on a model API key (most use OpenAI by default).
+Each file is a small runnable script for one built-in tool family. Tools are
+never added to an agent implicitly; these examples show the explicit opt-in
+style lovia uses everywhere.
 
-| File | Tool |
-| --- | --- |
-| `01_http.py`   | `lovia.tools.http.http_fetch` |
-| `02_time.py`   | `lovia.tools.time.now`, `sleep` |
-| `07_search.py` | `lovia.tools.search.web_search` (DuckDuckGo) |
-| `09_human.py`  | `lovia.tools.human.HumanChannel` + `ask_human` |
+| File | Tool | Notes |
+| --- | --- | --- |
+| `01_http.py` | `lovia.tools.http.http_fetch` | Fetch a URL and let the model summarize it |
+| `02_time.py` | `lovia.tools.time.now`, `sleep` | Give the model controlled access to time |
+| `07_search.py` | `lovia.tools.search.duckduckgo_search_tool` | Requires `pip install "lovia[ddg]"` |
+| `09_human.py` | `HumanChannel` + `ask_human` | Let the model ask an operator for missing information |
 
-For the filesystem and shell tools (`read_file`, `write_file`, `edit_file`,
+For filesystem and shell tools (`read_file`, `write_file`, `edit_file`,
 `list_files`, `grep_files`, `shell`), see `examples/22_workspace.py` and
-`examples/23_workspace_agent.py` — they are wired automatically when an
-agent has `workspace=Workspace.local(...)` configured.
+`examples/23_workspace_agent.py`. They are wired automatically when an agent
+has `workspace=Workspace.local(...)` configured, so path and command policy
+live in one place.
 
-Run any of them with::
-
-    python examples/tools/01_http.py
+```bash
+python examples/tools/01_http.py
+```

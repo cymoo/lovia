@@ -2,7 +2,21 @@
 
 [English README](./README.md)
 
-lovia 是一个轻量的 Python Agent 框架，适合那些想要“一个清楚可靠的 agent loop”，而不是一整套平台的人。它提供工具调用、流式输出、结构化输出、会话、handoff、护栏、审批、workspace、skills、plugins、MCP 和一个小型 Web UI，同时保持核心代码可读、可替换、可扩展。
+lovia 是一个优雅、克制的 Python Agent 框架，适合希望自己掌控 agent loop，
+同时又不想从零拼装所有基础设施的开发者。它提供真实应用迟早会遇到的能力：
+工具调用、流式输出、结构化输出、会话、handoff、审批、护栏、workspace、
+skills、MCP、上下文压缩、checkpoint/resume 和一个小型 Web UI；同时保持核心
+足够直接，方便阅读、替换和扩展。
+
+核心抽象很少：
+
+- `Agent` 是不可变的运行配置；
+- `Runner` 负责执行一次 run；
+- `@tool` 就是一个带类型注解的 Python 函数；
+- `Handoff` 和 `agent.as_tool()` 是组合多 agent 的两个原子抽象；
+- plugin 用来打包可复用能力，但不接管控制流。MCP、Skills、Todo、长期记忆等都可以通过 plugin 实现。
+
+这就是 lovia 的取舍：把 agent 应用里真正反复出现的部分做扎实，但不把框架做成一套庞大的平台。
 
 ```bash
 pip install lovia
@@ -10,49 +24,116 @@ pip install lovia
 
 ```python
 import asyncio
-from lovia import Agent, Runner, tool
+from lovia import Agent, Runner, Skills, Todo, tool
+from lovia.workspace import Workspace
 
 
 @tool
-def add(a: int, b: int) -> int:
-    """把两个整数相加。"""
-    return a + b
+def lookup_ticket(ticket_id: str) -> str:
+    """查询内部工单状态。"""
+    return f"{ticket_id}: waiting for customer reply"
 
 
 async def main() -> None:
     agent = Agent(
-        name="calculator",
-        instructions="需要时使用工具，回答要简短。",
+        name="operator",
+        instructions=(
+            "你是客户支持运营助手。回复客户前先确认工单状态，"
+            "再根据团队政策给出清晰、克制、可执行的处理方案。"
+        ),
         model="deepseek-v4-pro",
-        tools=[add],
+        tools=[lookup_ticket],
+        plugins=[Todo(), Skills("./skills")],
+        workspace=Workspace.local(".", mode="trusted"),
     )
-    result = await Runner.run(agent, "21 + 21 等于多少？")
+    result = await Runner.run(agent, "查看工单 T-1001，并根据团队规范草拟回复。")
     print(result.output)
 
 
 asyncio.run(main())
 ```
 
-使用 OpenAI 官方接口时设置 `OPENAI_API_KEY`；如果你用的是 OpenAI 兼容接口，设置 `OPENAI_BASE_URL` 即可。Anthropic 也内置支持：`model="anthropic:claude-4-5-sonnet"`。
+这里的 `./skills` 指向 skills 目录；如果暂时没有 skill，可以先删掉
+`Skills("./skills")`。
+
+使用 OpenAI 官方接口时设置 `OPENAI_API_KEY`；如果你用 DeepSeek、Ollama、
+vLLM 等 OpenAI 兼容接口，设置 `OPENAI_BASE_URL` 即可。Anthropic 也内置支持：
+`model="anthropic:claude-4-8-opus"`。
 
 ## 为什么是 lovia
 
-很多 Agent 框架很快会变成“另一个平台”。lovia 的取舍不一样：框架应该小到你能理解它，也应该认真到可以拿去做产品。
+lovia 更关心可组合的基础抽象，而不是把所有事情包装成一套新体系。它尽量贴近
+Python 本来的样子：dataclass、Protocol、async function、显式组合。
 
-- **心智模型很小。** `Agent` 描述行为，`Runner` 负责执行，`@tool` 暴露 Python 函数。大多数能力都从这三个概念自然展开。
-- **模型中立。** 内置 OpenAI Chat Completions 和 Anthropic Messages 适配器，直接用 `httpx` 请求；自定义 provider 只需要实现一个小 `Protocol`。
-- **Python 原生扩展。** Agent 是 dataclass，provider、session、plugin、skill、workspace 都是协议形状。你是在接入自己的代码，不是在继承一座框架大厦。
-- **默认轻量。** 核心安装保持克制。搜索、MCP、Web UI、示例脚本的美化依赖、编排集成都放在 extras 里。
-- **生产原语齐全。** 审批、护栏、重试、预算、取消、checkpoint/resume、上下文压缩、生命周期 hooks、带策略的 workspace 工具，需要时都能拿出来用。
+- **代码可读。** `lovia/runner.py` 只是门面；真正的可变运行状态集中在
+  `lovia/runtime/loop.py`。当行为不符合预期时，你能沿着很短的路径读进去。
+- **模型中立，没有沉重适配层。** 内置 provider 直接用 `httpx` 调 OpenAI
+  Chat Completions 和 Anthropic Messages；自定义 provider 只需要实现一个
+  `Protocol`。
+- **上下文管理可以替换。** 默认 `Compaction` 只改变“下一次发给模型的视图”，
+  session 和 checkpoint 仍保存完整 transcript；高级用户也可以实现自己的
+  `ContextPolicy`。
+- **多 agent 组合很克制。** Handoff 适合把控制权交给另一个专家 agent；
+  agent-as-tool 适合把某个 agent 当成可委派的子任务。两者都只是原子抽象，
+  不要求你接受一整套编排 DSL。
+- **生产能力是明确的接口，不是姿态。** 审批、预算、取消、重试、hooks、
+  受权限约束的 workspace 工具、checkpoint/resume 都是你可以接进自己产品的
+  显式旋钮。
+- **只有一条扩展轴。** Plugin 可以打包工具、系统提示、每轮 view injector、
+  hooks、guardrails 和清理逻辑。Skills、MCP、todo list 和长期记忆都可以用
+  同一套机制表达。
+
+## 从小脚本长到真实应用
+
+lovia 可以只是一次模型调用的薄包装，也可以随着需求逐步加能力。
+
+| 当你需要…… | 加上…… |
+| --- | --- |
+| 快速脚本或 notebook helper | `Agent.run_sync(...)` |
+| 工具调用 | `@tool` 函数 |
+| 类型化最终结果 | `output_type=YourModel` |
+| 实时 UI 输出 | `Runner.stream(...)` 和类型化事件 |
+| 多轮聊天 | `SQLiteSession` 或你自己的 `Session` |
+| 长任务恢复 | `CheckpointOptions` |
+| 多 agent 路由或委派 | `handoffs=[...]` 或 `agent.as_tool()` |
+| 人类审批 | `@tool(needs_approval=True)` |
+| 文件和 shell | `Workspace.local(...)` |
+| 长上下文生存 | `Compaction` 加可选的 `recall_tool_result` |
+| 自定义上下文策略 | 实现自己的 `ContextPolicy` |
+| 可复用能力包 | `PluginInstance`、`Skills`、`Todo` 或 `MCP` |
 
 ## 设计哲学
 
-lovia 的优先级：
+lovia 的优先级如下。顺序很重要。
 
 1. **Concise 简洁。** 一个功能应该能装进脑子里。公共 API 要直观，必要时也能读懂内部实现。
 2. **Lightweight 轻量。** 核心应该安装干净、导入迅速，不把你没要的基础设施带进来。
 3. **Extensible 易扩展。** 真实应用一定会有自己的 provider、存储、策略、工具和 UI。lovia 提供扩展点，而不是锁死路径。
 4. **General-purpose 通用。** 内置能力是实用工具，也是扩展点的示范；你可以用同样的接口替换它们。
+
+它有意保持克制。如果一个功能可以是用户侧十来行代码，就不应该变成框架 API；
+如果确实属于框架，也应该接进现有 loop，而不是另起一套控制流。
+
+## 运行时怎么拼起来
+
+每次 run 的形状基本一样：
+
+```text
+Agent + input
+  -> RunLoop 加载 session/checkpoint 状态
+  -> plugins 贡献 tools、instructions、hooks、guardrails、view injectors
+  -> context policy 渲染本次发给模型的 view
+  -> provider 流式产出类型化 delta
+  -> tools、approval、handoff、guardrails、hooks 在明确检查点运行
+  -> 完整 transcript 写回 session/checkpoint
+```
+
+两个边界尤其重要：
+
+- **Session 和 checkpoint 不同。** `Session` 是多次调用之间的对话记忆；
+  checkpoint 是一次幂等长任务的崩溃恢复快照。
+- **Transcript 和 view 不同。** Transcript 是事实来源；上下文压缩只渲染更小的
+  provider view，让长对话继续跑下去，但不重写历史。
 
 ## 核心 API
 
@@ -93,6 +174,12 @@ result = await Runner.run(agent, "写一段 release note。")
 print(result.output)
 ```
 
+脚本和 REPL 里可以直接从 agent 调用：
+
+```python
+result = agent.run_sync("总结这个文件。")
+```
+
 `stream()` 返回的 handle 既可以异步迭代，也可以 await：
 
 ```python
@@ -105,12 +192,6 @@ async for ev in handle:
         print(ev.delta, end="", flush=True)
 
 result = await handle.result()
-```
-
-脚本场景可以用同步包装：
-
-```python
-result = Runner.run_sync(agent, "总结这个文件。")
 ```
 
 ### Tools
@@ -180,7 +261,7 @@ from lovia import Agent, ModelSettings
 agent = Agent(
     name="assistant",
     model=[
-        "anthropic:claude-4-5-sonnet",
+        "anthropic:claude-4-8-opus",
         "deepseek-v4-pro",
     ],
     settings=ModelSettings(temperature=0.2, max_tokens=800),
@@ -230,7 +311,7 @@ manager = Agent(
 )
 ```
 
-子 agent 会在独立 loop 中运行，最终输出作为工具结果返回。
+子 agent 会在独立 loop 中运行，最终输出作为工具结果返回。父 agent 不会持有它的上下文。
 
 ## 人类控制
 
@@ -263,7 +344,8 @@ async for ev in handle:
 服务端也可以设置程序化策略：
 
 ```python
-agent = agent.clone(
+agent = Agent(
+    ...,
     approval_handler=lambda call, ctx: "ask" if call.name == "refund" else "allow"
 )
 ```
@@ -316,11 +398,9 @@ result = await Runner.run(
 )
 ```
 
-跨 session 的长期记忆不是核心概念——没有 `Memory` 类型。把它做成一个 plugin、包裹你自己的存储即可（见下方 Plugins 里的 `MemoryPlugin` 示例）。
-
 ## 上下文管理
 
-长对话默认使用 `Compaction`。它只改变“本次发给模型的视图”：完整 transcript 仍保存在 session/checkpoint 中；在 token 压力下，模型调用视图可以归档超大工具结果、清理较旧工具结果，必要时总结旧历史。
+长对话默认使用 `Compaction`。它只改变“本次发给模型的视图”：完整 transcript 仍保存在 session/checkpoint 中；在上下文有压力时，模型调用前归档超大工具结果、清理较旧工具结果，必要时总结旧历史。
 
 ```python
 from lovia import Compaction, Runner
@@ -406,13 +486,12 @@ agent = agent.clone(hooks=hooks)
 
 ```python
 from lovia.tools.http import http_fetch
-from lovia.tools.time import now
-from lovia.tools.search import duckduckgo_search_tool
+from lovia.tools.search import duckduckgo_search
 
 agent = Agent(
-    name="researcher",
-    model="deepseek-v4-pro",
-    tools=[http_fetch, now, duckduckgo_search_tool()],
+  name="researcher",
+  model="deepseek-v4-pro",
+  tools=[http_fetch, duckduckgo_search()],
 )
 ```
 
@@ -426,7 +505,13 @@ pip install "lovia[ddg]"
 
 ## Plugins
 
-**Plugin** 是 lovia 唯一的扩展轴，用来把一个功能打包成一个对象。单个 plugin 可以贡献任意组合：`tools`、系统提示 `instructions`、每轮注入的 `view_injectors`（临时提醒，永不写入 transcript）、事件 `hooks`，以及 `input_guardrails` / `output_guardrails`。runner 在**每次 run**（以及 handoff 时每个 agent）通过 await 其异步 `setup()` 来激活每个 plugin，并在 run 结束时通过 `aclose()` 释放它打开的资源。Plugin 是纯增量的——它们不驱动控制流；中止、重试、handoff 始终由 loop 掌控。下面的 Skills、MCP 和 todo 列表都是内置 plugin。
+**Plugin** 是 lovia 唯一的扩展轴，用来把一个功能打包成一个对象。
+
+单个 plugin 可以贡献任意组合：`tools`、系统提示 `instructions`、每轮注入的 `view_injectors`（临时提醒，永不写入 transcript）、事件 `hooks`，以及 `input_guardrails` / `output_guardrails`。
+
+runner 在**每次 run**（以及 handoff 时每个 agent）通过 await 其异步 `setup()` 来激活每个 plugin，并在 run 结束时通过 `aclose()` 释放它打开的资源。
+
+Plugin 是纯增量的——它们不驱动控制流；中止、重试、handoff 始终由 loop 掌控。下面的 Skills、MCP 和 todo 列表都是内置 plugin。
 
 ### Todo 列表
 
@@ -504,7 +589,11 @@ async with server.session() as conn:
 
 ### 编写 plugin
 
-一个 plugin 就是任意带有 `name` 和返回 `PluginInstance` 的 `async setup()` 的对象。需要**每次 run 全新**的状态放在 `setup` 内部（如上面的 todo 列表）；需要**跨 run、跨 session 持久化**的状态则挂在 plugin 上、在构造时传入。下面是一个长期记忆 plugin——它包裹一个你自己实现、只创建一次、被每次 run 共享的后端，于是 agent 能在下一次对话里回忆起上一次的事实：
+一个 plugin 就是任意带有 `name` 和返回 `PluginInstance` 的 `async setup()` 的对象
+
+需要**每次 run 全新**的状态放在 `setup` 内部（如上面的 todo 列表）；需要**跨 run、跨 session 持久化**的状态则挂在 plugin 上、在构造时传入。
+
+下面是一个长期记忆 plugin——它包裹一个你自己实现、只创建一次、被每次 run 共享的后端，于是 agent 能在下一次对话里回忆起上一次的事实：
 
 ```python
 from dataclasses import dataclass
@@ -600,7 +689,7 @@ agent = Agent(
 | `coding` | 读取工具 + `write_file`、`edit_file`、默认需审批的 `shell` |
 | `trusted` | coding 工具 + 默认允许的 `shell` |
 
-Workspace 路径都是 root-relative；绝对路径、`..` 逃逸和符号链接逃逸都会被拒绝。本地 shell 仍以宿主机用户身份运行；如果你需要强隔离，请使用容器或远程 workspace backend。
+Workspace 路径都是 root-relative；绝对路径、`..` 逃逸和符号链接逃逸都会被拒绝。本地 shell 仍以宿主机用户身份运行；如果你需要强隔离，请自行实现容器或远程 workspace backend。
 
 ## Web UI
 
@@ -615,6 +704,33 @@ from lovia.web import serve
 
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
+
+## 示例
+
+`examples/` 目录是一组可直接运行的脚本，可以按下面的顺序浏览：
+
+| 路径 | 展示内容 |
+| --- | --- |
+| `examples/01_hello.py` | 最小 agent |
+| `examples/02_tools.py` | 工具调用 |
+| `examples/03_streaming.py` | 流式事件 |
+| `examples/04_structured_output.py` | 校验后的结构化输出 |
+| `examples/05_handoff.py` | 专家 agent handoff |
+| `examples/06_agent_as_tool.py` | 把 agent 当作工具委派 |
+| `examples/07_session.py` | 持久化聊天历史 |
+| `examples/08_skills.py` | 可复用 skill 指令包 |
+| `examples/10_hooks.py` | 生命周期事件 hooks |
+| `examples/11_approval.py` | 人类审批 |
+| `examples/14_guardrails.py` | 输入/输出护栏 |
+| `examples/15_resume.py` | checkpoint 与 resume |
+| `examples/16_web_serve.py` | 内置 Web UI |
+| `examples/18_context_policy.py` | 只改变视图的上下文压缩 |
+| `examples/21_dx.py` | 同步调用、临时输出类型等 DX 快捷方式 |
+| `examples/23_workspace_agent.py` | 受权限约束的代码 workspace |
+| `examples/25_data_analysis.py` | 数据分析 agent |
+| `examples/26_mcp.py` | MCP server 工具 |
+| `examples/27_todos.py` | todo plugin 和每轮提醒 |
+| `examples/workflows/` | prompt chaining、routing、parallelization、evaluator loop、自主 agent |
 
 ## 安装 Extras
 

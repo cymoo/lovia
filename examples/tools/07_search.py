@@ -16,7 +16,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events
-from lovia.tools.search import duckduckgo_search_tool
+from lovia.tools.search import duckduckgo_search
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -27,7 +27,7 @@ async def main() -> None:
         name="Researcher",
         instructions="Use web_search to find sources; cite the top result.",
         model=MODEL,
-        tools=[duckduckgo_search_tool()],
+        tools=[duckduckgo_search()],
     )
     handle = Runner.stream(agent, "Who wrote the SQLite engine?")
     async for ev in handle:

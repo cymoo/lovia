@@ -37,7 +37,7 @@ from .search import (
     DuckDuckGoSearch,
     SearchResult,
     WebSearch,
-    duckduckgo_search_tool,
+    duckduckgo_search,
     web_search,
 )
 from .shell import shell
@@ -57,7 +57,7 @@ __all__ = [
     "apply_tool_policies",
     "ask_human",
     "default_result_renderer",
-    "duckduckgo_search_tool",
+    "duckduckgo_search",
     "edit_file",
     "grep_files",
     "http_fetch",

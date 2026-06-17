@@ -30,7 +30,7 @@ __all__ = [
     "DuckDuckGoSearch",
     "SearchResult",
     "WebSearch",
-    "duckduckgo_search_tool",
+    "duckduckgo_search",
     "web_search",
 ]
 
@@ -131,6 +131,6 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     return _search
 
 
-def duckduckgo_search_tool(*, name: str = "web_search") -> Tool:
+def duckduckgo_search(*, name: str = "web_search") -> Tool:
     """Build a ``web_search`` tool using the optional DuckDuckGo backend."""
     return web_search(DuckDuckGoSearch(), name=name)

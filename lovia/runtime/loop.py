@@ -22,20 +22,17 @@ import inspect
 import logging
 from collections import Counter
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
-    from ..hooks import AgentHooks
     from ..messages import Message
-    from ..plugins import ViewInjector
     from ..workspace.protocol import WorkspaceSession
 
 from .. import events
 from .checkpoint import CheckpointWriter
 from .resume import resolve_resume_agent, result_from_completed_snapshot
 from .model_turn import stream_model_turn
-from .run_state import ActiveAgent, ModelTurnResult, RunState
+from .run_state import ActiveAgent, ModelTurnResult, PluginActivation, RunState
 from .utils import (
     agent_model_label,
     input_preview,
@@ -54,7 +51,6 @@ from ..exceptions import (
     UserError,
 )
 from ..guardrails import (
-    GuardrailFn,
     check_input_guardrails,
     check_output_guardrails,
 )
@@ -90,23 +86,6 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
-
-
-@dataclass
-class _PluginActivation:
-    """Aggregated per-run contributions from all of an agent's plugins.
-
-    Built by :meth:`RunLoop._activate_plugins`; each field maps to one fixed
-    slot in the loop (tool merge, system prompt, per-turn view, event dispatch,
-    input/output guardrail checkpoints).
-    """
-
-    tools: "list[Tool]" = field(default_factory=list)
-    view_injectors: "list[ViewInjector]" = field(default_factory=list)
-    instructions: list[str] = field(default_factory=list)
-    hooks: "list[AgentHooks]" = field(default_factory=list)
-    input_guardrails: "list[GuardrailFn]" = field(default_factory=list)
-    output_guardrails: "list[GuardrailFn]" = field(default_factory=list)
 
 
 class RunLoop:
@@ -229,7 +208,8 @@ class RunLoop:
                 # transcript. Skip on resume — they already ran on the
                 # original input.
                 input_guardrails = (
-                    state.agent.input_guardrails + state.active.plugin_input_guardrails
+                    state.agent.input_guardrails
+                    + state.active.plugins.input_guardrails
                 )
                 if input_guardrails and self.resume_from is None:
                     await check_input_guardrails(
@@ -395,7 +375,7 @@ class RunLoop:
                 active.agent,
                 active.structured_output,
                 extra_instructions,
-                active.plugin_instructions,
+                active.plugins.instructions,
             )
 
         run_ctx = RunContext(
@@ -446,16 +426,12 @@ class RunLoop:
             structured_output=structured_output,
             tools_by_name=tools_by_name,
             workspace=workspace,
-            view_injectors=plugins.view_injectors,
-            plugin_instructions=plugins.instructions,
-            plugin_hooks=plugins.hooks,
-            plugin_input_guardrails=plugins.input_guardrails,
-            plugin_output_guardrails=plugins.output_guardrails,
+            plugins=plugins,
         )
 
     async def _activate_plugins(
         self, agent: Agent, resources: AsyncExitStack
-    ) -> _PluginActivation:
+    ) -> PluginActivation:
         """Activate ``agent.plugins`` for one run, collecting their contributions.
 
         ``setup`` is awaited once per plugin so any run-scoped state (and async
@@ -463,7 +439,7 @@ class RunLoop:
         contributions (tool, injector, ...) share it. Each instance's ``aclose``
         is registered for best-effort teardown when the run ends (LIFO).
         """
-        act = _PluginActivation()
+        act = PluginActivation()
         for plugin in agent.plugins:
             inst = await plugin.setup()
             act.tools.extend(inst.tools)
@@ -605,10 +581,10 @@ class RunLoop:
         injectors are meant to be small, and the provider's overflow path still
         applies.
         """
-        if not state.active.view_injectors:
+        if not state.active.plugins.view_injectors:
             return view
         injected: list[TranscriptEntry] = []
-        for inject in state.active.view_injectors:
+        for inject in state.active.plugins.view_injectors:
             try:
                 result = inject(state.run_ctx)
                 if inspect.isawaitable(result):
@@ -716,7 +692,7 @@ class RunLoop:
     ) -> RunResult:
         """Run output guardrails, persistence, and usage propagation."""
         output_guardrails = (
-            state.agent.output_guardrails + state.active.plugin_output_guardrails
+            state.agent.output_guardrails + state.active.plugins.output_guardrails
         )
         if output_guardrails:
             await check_output_guardrails(output_guardrails, output, state.run_ctx)
@@ -747,7 +723,7 @@ class RunLoop:
         then hand it back to be yielded to the stream consumer
         (``yield await self._emit(...)``)."""
         await dispatch(state.agent.hooks, ev)
-        for hooks in state.active.plugin_hooks:
+        for hooks in state.active.plugins.hooks:
             await dispatch(hooks, ev)
         return ev
 
@@ -900,7 +876,7 @@ class RunLoop:
             state.agent,
             state.active.structured_output,
             extra=state.extra_instructions,
-            plugin_instructions=state.active.plugin_instructions,
+            plugin_instructions=state.active.plugins.instructions,
         )
         body: list[TranscriptEntry] = list(state.transcript)
         if body and isinstance(body[0], InputEntry) and body[0].role == "system":
@@ -1012,7 +988,7 @@ class RunLoop:
             state.agent,
             state.active.structured_output,
             extra=state.extra_instructions,
-            plugin_instructions=state.active.plugin_instructions,
+            plugin_instructions=state.active.plugins.instructions,
         )
         return [*self._system_entry(system_text), *view]
 

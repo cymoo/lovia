@@ -38,6 +38,29 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class PluginActivation:
+    """Aggregated per-run contributions from all of an agent's plugins.
+
+    Built by :meth:`RunLoop._activate_plugins`, which awaits each plugin's
+    ``setup`` and concatenates the resulting :class:`~lovia.plugins.PluginInstance`
+    contributions into one bundle per active agent. Each field maps to one fixed
+    slot in the loop: ``tools`` are merged into the active agent's tool set;
+    ``view_injectors`` run every turn to append transient entries to the model
+    view; ``instructions`` are folded into the system prompt; ``hooks`` receive
+    every event alongside the agent's own; the guardrails are merged with the
+    agent's own at the loop's existing input/output checkpoints (the loop keeps
+    the abort).
+    """
+
+    tools: list[Tool] = field(default_factory=list)
+    view_injectors: list["ViewInjector"] = field(default_factory=list)
+    instructions: list[str] = field(default_factory=list)
+    hooks: list["AgentHooks"] = field(default_factory=list)
+    input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    output_guardrails: list["GuardrailFn"] = field(default_factory=list)
+
+
+@dataclass
 class ActiveAgent:
     """All state resolved from the currently active agent.
 
@@ -51,11 +74,9 @@ class ActiveAgent:
     ``providers`` is the active agent's resolved fallback chain (resolved once
     per agent so HTTP clients are reused across turns; providers built from
     string specs are closed when the run ends, user-supplied instances are left
-    to their owner). ``view_injectors`` run every turn to append transient
-    entries to the model view; ``plugin_instructions`` are folded into the
-    system prompt; ``plugin_hooks`` receive every event alongside the agent's
-    own hooks; the plugin guardrails are merged with the agent's own at the
-    loop's existing input/output checkpoints (the loop keeps the abort).
+    to their owner). ``plugins`` bundles every plugin contribution for this
+    agent — see :class:`PluginActivation`; ``plugins.tools`` have already been
+    merged into ``tools_by_name``.
     """
 
     agent: Agent
@@ -63,11 +84,7 @@ class ActiveAgent:
     structured_output: StructuredOutput | None
     tools_by_name: dict[str, Tool]
     workspace: "WorkspaceSession | None" = None
-    view_injectors: list["ViewInjector"] = field(default_factory=list)
-    plugin_instructions: list[str] = field(default_factory=list)
-    plugin_hooks: list["AgentHooks"] = field(default_factory=list)
-    plugin_input_guardrails: list["GuardrailFn"] = field(default_factory=list)
-    plugin_output_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    plugins: PluginActivation = field(default_factory=PluginActivation)
 
 
 @dataclass
@@ -133,4 +150,4 @@ class ModelTurnResult:
     turn_entries: list[TranscriptEntry] = field(default_factory=list)
 
 
-__all__ = ["ActiveAgent", "ModelTurnResult", "RunState"]
+__all__ = ["ActiveAgent", "ModelTurnResult", "PluginActivation", "RunState"]

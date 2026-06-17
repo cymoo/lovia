@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypedDict
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from lovia import RunContext
 from lovia.schema import (

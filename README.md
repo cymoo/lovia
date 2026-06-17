@@ -477,13 +477,13 @@ The built-in todo plugin gives the model a checklist tool and re-shows the
 current list every turn, without bloating the persisted transcript:
 
 ```python
-from lovia import Agent, Runner, todos
+from lovia import Agent, Runner, Todo
 
 agent = Agent(
     name="builder",
     instructions="Complete multi-step work carefully.",
     model="deepseek-v4-pro",
-    plugins=[todos()],
+    plugins=[Todo()],
 )
 
 await Runner.run(agent, "Implement a small REST API with tests and docs.")
@@ -496,13 +496,13 @@ specification. lovia exposes skill metadata up front, then lets the model load
 full instructions and referenced files only when needed.
 
 ```python
-from lovia import Agent, skills
+from lovia import Agent, Skills
 
 agent = Agent(
     name="support",
     instructions="Help customers using the right policy.",
     model="deepseek-v4-pro",
-    plugins=[skills("./skills")],
+    plugins=[Skills("./skills")],
 )
 ```
 
@@ -511,11 +511,11 @@ A skill directory holds `SKILL.md` with YAML frontmatter, plus optional
 scope the catalog with a filter:
 
 ```python
-plugins=[skills("./skills", "./team-skills")]
-plugins=[skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
+plugins=[Skills("./skills", "./team-skills")]
+plugins=[Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
 ```
 
-For a custom backend, pass a `SkillSource` (or a pre-built `Skills`) instead of
+For a custom backend, pass a `SkillSource` (or a pre-built `SkillCategory`) instead of
 paths.
 
 ### MCP
@@ -529,13 +529,13 @@ pip install "lovia[mcp]"
 
 ```python
 from lovia import Agent
-from lovia.plugins.mcp import MCPServerStdio, mcp
+from lovia.plugins.mcp import MCPServerStdio, MCP
 
 agent = Agent(
     name="assistant",
     model="deepseek-v4-pro",
     plugins=[
-        mcp(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
+        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
 )
 ```
@@ -547,11 +547,11 @@ runs, open a session and pass the live connection instead:
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:
-    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[mcp(conn)])
+    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MCP(conn)])
     await Runner.run(agent, "Fetch https://example.com and summarize it.")
 ```
 
-`mcp()` takes several servers — `mcp(a, b)` — and `MCPServer.name` prefixes a
+`MCP()` takes several servers — `MCP(a, b)` — and `MCPServer.name` prefixes a
 server's tools (`web__fetch`) to keep names unique.
 
 ### Writing a plugin

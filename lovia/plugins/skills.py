@@ -94,39 +94,40 @@ class SkillsError(Exception):
 # Name / description validation
 # ---------------------------------------------------------------------------
 
-_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$")
 _NAME_MAX_LENGTH = 64
 _DESCRIPTION_MAX_LENGTH = 1024
 _CLOSING_FM = re.compile(r"\n---[ \t\r]*(?:\n|$)")
 
 
 def _validate_name(name: str) -> str:
-    """Validate *name* follows the Agent Skills spec (kebab-case, ≤ 64 chars)."""
+    """Validate *name* (letters, digits, hyphens and underscores, ≤ 64 chars)."""
     if not name:
         raise SkillsError(
             "Skill name must not be empty.",
             skill_name=name,
-            hint="Provide a non-empty kebab-case name, e.g. 'refund-policy'.",
+            hint="Provide a non-empty name, e.g. 'refund-policy'.",
         )
     if len(name) > _NAME_MAX_LENGTH:
         raise SkillsError(
             f"Skill name {name!r} is too long ({len(name)} > {_NAME_MAX_LENGTH}).",
             skill_name=name,
-            hint="Use a shorter kebab-case name.",
+            hint="Use a shorter name.",
         )
     # Security: reject path separators and traversal before format check
     if "/" in name or "\\" in name or ".." in name:
         raise SkillsError(
             f"Skill name {name!r} must not contain path separators or '..'.",
             skill_name=name,
-            hint="Use a flat kebab-case name.",
+            hint="Use a flat name without path characters.",
         )
     if not _NAME_PATTERN.match(name):
         raise SkillsError(
-            f"Skill name {name!r} must be kebab-case: "
-            f"lowercase letters, digits, and single hyphens only.",
+            f"Skill name {name!r} is invalid: "
+            f"only letters, digits, hyphens, and underscores; no consecutive or "
+            f"leading/trailing separators.",
             skill_name=name,
-            hint="Rename to something like 'my-skill-name'.",
+            hint="Rename to something like 'my-skill-name' or 'My_Skill'.",
         )
     return name
 

@@ -54,24 +54,22 @@ class TestValidateName:
         with pytest.raises(SkillsError, match="too long"):
             _validate_name(long_name)
 
-    def test_uppercase_raises(self) -> None:
-        with pytest.raises(SkillsError, match="kebab-case"):
-            _validate_name("RefundPolicy")
+    def test_uppercase_accepted(self) -> None:
+        assert _validate_name("RefundPolicy") == "RefundPolicy"
 
-    def test_underscores_raises(self) -> None:
-        with pytest.raises(SkillsError, match="kebab-case"):
-            _validate_name("refund_policy")
+    def test_underscores_accepted(self) -> None:
+        assert _validate_name("refund_policy") == "refund_policy"
 
     def test_consecutive_hyphens_raises(self) -> None:
-        with pytest.raises(SkillsError, match="kebab-case"):
+        with pytest.raises(SkillsError, match="invalid"):
             _validate_name("refund--policy")
 
     def test_leading_hyphen_raises(self) -> None:
-        with pytest.raises(SkillsError, match="kebab-case"):
+        with pytest.raises(SkillsError, match="invalid"):
             _validate_name("-refund")
 
     def test_trailing_hyphen_raises(self) -> None:
-        with pytest.raises(SkillsError, match="kebab-case"):
+        with pytest.raises(SkillsError, match="invalid"):
             _validate_name("refund-")
 
     def test_path_separator_raises(self) -> None:
@@ -357,9 +355,9 @@ class TestLocalDirSkillSource:
         """Invalid name logs a warning and is skipped."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "BadName").mkdir()
-            (root / "BadName" / "SKILL.md").write_text(
-                "---\nname: BadName\ndescription: Invalid name.\n---\n# Body"
+            (root / "bad.name").mkdir()
+            (root / "bad.name" / "SKILL.md").write_text(
+                "---\nname: bad.name\ndescription: Invalid name.\n---\n# Body"
             )
             with caplog.at_level(logging.WARNING):
                 source = LocalDirSkillSource(root)

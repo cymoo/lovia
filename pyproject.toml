@@ -61,3 +61,15 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/cymoo/lovia"
 Repository = "https://github.com/cymoo/lovia"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["lovia"]
+
+# Optional third-party deps without type stubs. ``strict`` enables
+# warn_unused_ignores, so prefer module-level suppression here over inline
+# ``# type: ignore`` comments that go stale when the dep is installed.
+[[tool.mypy.overrides]]
+module = ["ddgs.*"]
+ignore_missing_imports = true

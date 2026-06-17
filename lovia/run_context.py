@@ -20,7 +20,7 @@ Example::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from .messages import Message, Usage
 from .reliability import CancelToken
@@ -60,7 +60,7 @@ class RunContext(Generic[TContext]):
 
     context: TContext | None
     entries: list[TranscriptEntry]
-    agent: "Agent"
+    agent: "Agent[Any]"
     usage: Usage = field(default_factory=Usage)
     session_id: str | None = None
     workspace: "WorkspaceSession | None" = None

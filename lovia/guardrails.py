@@ -17,7 +17,7 @@ indicates the value is acceptable.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Awaitable, Callable, Protocol, Union, cast, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, Union
 
 from .exceptions import GuardrailTripped
 from .messages import Message
@@ -28,7 +28,6 @@ GuardrailVerdict = Union[None, str, bool]
 """``None``/``False`` mean OK; a non-empty string or ``True`` triggers a violation."""
 
 
-@runtime_checkable
 class InputGuardrail(Protocol):
     """A callable invoked with the initial transcript."""
 
@@ -37,7 +36,6 @@ class InputGuardrail(Protocol):
     ) -> GuardrailVerdict: ...
 
 
-@runtime_checkable
 class OutputGuardrail(Protocol):
     """A callable invoked with the run's final output value."""
 
@@ -58,7 +56,7 @@ async def _run_guardrail(
     """Execute a guardrail; raise :class:`GuardrailTripped` on violation."""
     verdict = guard(arg, ctx)
     if inspect.isawaitable(verdict):
-        verdict = await cast(Awaitable[GuardrailVerdict], verdict)
+        verdict = await verdict
     if verdict is None or verdict is False:
         return
     if verdict is True:

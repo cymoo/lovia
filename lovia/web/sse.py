@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import AsyncIterator
+from typing import AsyncIterator, cast
 
 from pydantic import BaseModel
 
@@ -96,7 +96,7 @@ def _coerce(value: object) -> JsonValue:
     """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
     dump = getattr(value, "model_dump", None)
     if callable(dump):
-        return dump()
+        return cast(JsonValue, dump())
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)

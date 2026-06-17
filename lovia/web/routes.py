@@ -411,14 +411,6 @@ def build_router(
             await store.clear_active_run_id(session_id)
             raise HTTPException(status_code=404, detail="no resumable run")
 
-        # Web layer treats "failed" as a dead end: clear and ask the client
-        # to start fresh.  (The core library now allows resuming failed runs
-        # for callers who know what they're doing; we stay conservative here.)
-        if snapshot.status == "failed":
-            await store.checkpointer.delete(run_id)
-            await store.clear_active_run_id(session_id)
-            raise HTTPException(status_code=409, detail="run failed; start a new conversation")
-
         agent_name = snapshot.agent_name
         if agent_name not in agents:
             await store.checkpointer.delete(run_id)

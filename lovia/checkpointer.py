@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol
 
 from .types import JsonObject
 from .exceptions import UserError
@@ -98,7 +98,6 @@ class RunSnapshot:
         return cls.from_dict(json.loads(payload))
 
 
-@runtime_checkable
 class Checkpointer(Protocol):
     """Persist :class:`RunSnapshot` instances keyed by ``run_id``."""
 

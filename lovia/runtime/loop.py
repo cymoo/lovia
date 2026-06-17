@@ -22,7 +22,7 @@ import inspect
 import logging
 from collections import Counter
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
     from ..messages import Message
@@ -99,7 +99,7 @@ class RunLoop:
     def __init__(
         self,
         *,
-        initial_agent: Agent,
+        initial_agent: Agent[Any],
         user_input: "str | list[Message]",
         context: object,
         output_type_override: object | None = None,
@@ -142,7 +142,7 @@ class RunLoop:
         # The active agent to resume as, resolved from ``initial_agent``'s
         # handoff graph by ``_resolve_resume`` (the snapshot's agent may be a
         # handoff target, not the entry agent). ``None`` for a fresh run.
-        self._resume_agent: Agent | None = None
+        self._resume_agent: Agent[Any] | None = None
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
@@ -167,7 +167,7 @@ class RunLoop:
         agent = self.initial_agent
         tracer: Tracer = agent.tracer or NoopTracer()
 
-        with run_span(tracer, agent=agent.name, run_id=self.run_id) as span:
+        with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
             async for ev in self._stream_inner(tracer, span):
                 yield ev
 
@@ -408,7 +408,7 @@ class RunLoop:
         )
 
     async def _resolve_active(
-        self, agent: Agent, resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack
     ) -> ActiveAgent:
         """Resolve everything derived from ``agent`` into one swappable bundle.
 
@@ -436,7 +436,7 @@ class RunLoop:
         )
 
     async def _activate_plugins(
-        self, agent: Agent, resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack
     ) -> PluginActivation:
         """Activate ``agent.plugins`` for one run, collecting their contributions.
 
@@ -762,7 +762,7 @@ class RunLoop:
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 
-    def _resolve_output_type(self, agent: Agent) -> object:
+    def _resolve_output_type(self, agent: Agent[Any]) -> object:
         """Return the output type to use for ``agent``.
 
         A Runner-level override is a run-wide final-output contract. When no
@@ -797,7 +797,7 @@ class RunLoop:
             raise
 
     def _build_repair_prompt(
-        self, agent: Agent, exc: OutputValidationError, attempt: int
+        self, agent: Agent[Any], exc: OutputValidationError, attempt: int
     ) -> str | None:
         """Resolve the agent's :attr:`output_repair` policy for one failure.
 
@@ -818,7 +818,7 @@ class RunLoop:
 
     async def _build_initial_entries(
         self,
-        agent: Agent,
+        agent: Agent[Any],
         structured_output: StructuredOutput | None,
         system_extra: str | None,
         plugin_instructions: list[str] | None = None,
@@ -844,7 +844,7 @@ class RunLoop:
 
     async def _system_prompt(
         self,
-        agent: Agent,
+        agent: Agent[Any],
         structured_output: StructuredOutput | None,
         *,
         extra: "str | None" = None,
@@ -894,7 +894,7 @@ class RunLoop:
 
     def _collect_tools(
         self,
-        agent: Agent,
+        agent: Agent[Any],
         workspace_tools: list[Tool],
         plugin_tools: list[Tool] | None = None,
     ) -> dict[str, Tool]:
@@ -922,7 +922,7 @@ class RunLoop:
         return tools
 
     def _resolve_providers(
-        self, agent: Agent, resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack
     ) -> list[Provider]:
         """Resolve ``agent``'s provider chain once for the rest of the run.
 
@@ -949,7 +949,7 @@ class RunLoop:
         return providers
 
     async def _connect_workspace(
-        self, agent: Agent, resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack
     ) -> "tuple[WorkspaceSession | None, list[Tool]]":
         """Open the agent's workspace and return its session and tool bundle.
 

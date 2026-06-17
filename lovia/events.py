@@ -68,18 +68,18 @@ class ContextEvent(Event):
 
 @dataclass
 class RunStarted(RunEvent):
-    agent: "Agent"
+    agent: "Agent[Any]"
 
 
 @dataclass
 class TurnStarted(TurnEvent):
-    agent: "Agent"
+    agent: "Agent[Any]"
     turn: int
 
 
 @dataclass
 class TurnEnded(TurnEvent):
-    agent: "Agent"
+    agent: "Agent[Any]"
     turn: int
 
 
@@ -143,8 +143,8 @@ class ToolCallCompleted(ToolEvent):
 
 @dataclass
 class HandoffOccurred(TransitionEvent):
-    from_agent: "Agent"
-    to_agent: "Agent"
+    from_agent: "Agent[Any]"
+    to_agent: "Agent[Any]"
 
 
 @dataclass

@@ -77,7 +77,7 @@ class DuckDuckGoSearch:
         ddgs_cls: _DDGSFactory
         try:
             try:
-                from ddgs import DDGS as ddgs_impl  # type: ignore[import-not-found]
+                from ddgs import DDGS as ddgs_impl
 
                 ddgs_cls = ddgs_impl
             except ImportError:

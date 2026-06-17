@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Mapping, Protocol
 
 from .policy import WorkspacePolicy
 from .types import (
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 __all__ = ["WorkspaceLike", "WorkspaceSession"]
 
 
-@runtime_checkable
 class WorkspaceSession(Protocol):
     """Filesystem + process execution surface rooted at a workspace.
 
@@ -98,7 +97,6 @@ class WorkspaceSession(Protocol):
         ...
 
 
-@runtime_checkable
 class WorkspaceLike(Protocol):
     """Configuration object accepted by ``Agent.workspace``."""
 

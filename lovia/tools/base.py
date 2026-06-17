@@ -42,14 +42,14 @@ from ..schema import function_args_schema, validate_args
 
 # Predicate that may inspect the parsed arguments and current context to decide
 # whether a tool invocation needs human approval.
-ApprovalPredicate = Callable[[dict[str, Any], "RunContext"], bool]
+ApprovalPredicate = Callable[[dict[str, Any], "RunContext[Any]"], bool]
 
 # A ``wrap`` callable receives the underlying ``invoke``, the validated args,
 # and the run context. It must return (or await) the tool result. Use it to
 # insert custom behaviour around a single attempt (caching, mocking, custom
 # auth, redaction). Retries and timeout, when configured, are applied *around*
 # wrap — i.e. wrap sees one attempt at a time.
-ToolInvoker = Callable[[dict[str, Any], "RunContext"], Awaitable[Any]]
+ToolInvoker = Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[Any]]
 
 
 class ToolPolicy(Protocol):
@@ -65,13 +65,13 @@ class ToolPolicy(Protocol):
         self,
         invoke: ToolInvoker,
         args: dict[str, Any],
-        ctx: "RunContext",
+        ctx: "RunContext[Any]",
     ) -> Awaitable[Any]: ...
 
 
 # Render the raw return value as the string the model receives. ``None`` uses
 # the default renderer (str for strings, json.dumps for everything else).
-ToolResultRenderer = Callable[[Any, "RunContext"], "str | Awaitable[str]"]
+ToolResultRenderer = Callable[[Any, "RunContext[Any]"], "str | Awaitable[str]"]
 
 
 @dataclass
@@ -105,7 +105,7 @@ class Tool:
     _wants_context: bool = field(default=False, repr=False)
     _context_param: str | None = field(default=None, repr=False)
 
-    def requires_approval(self, args: dict[str, Any], ctx: "RunContext") -> bool:
+    def requires_approval(self, args: dict[str, Any], ctx: "RunContext[Any]") -> bool:
         if callable(self.needs_approval):
             return bool(self.needs_approval(args, ctx))
         return bool(self.needs_approval)
@@ -196,7 +196,7 @@ def default_result_renderer(result: Any) -> str:
 async def run_tool(
     tool: "Tool",
     args: dict[str, Any],
-    ctx: "RunContext",
+    ctx: "RunContext[Any]",
     *,
     default_retries: int = 0,
     default_timeout: float | None = None,
@@ -212,7 +212,7 @@ async def run_tool(
 
     policies = tool.policies
 
-    async def one_attempt(a: dict[str, Any], c: "RunContext") -> Any:
+    async def one_attempt(a: dict[str, Any], c: "RunContext[Any]") -> Any:
         return await apply_tool_policies(tool.invoke, policies, a, c)
 
     last_exc: BaseException | None = None
@@ -239,7 +239,7 @@ async def apply_tool_policies(
     invoke: ToolInvoker,
     policies: tuple[ToolPolicy, ...],
     args: dict[str, Any],
-    ctx: "RunContext",
+    ctx: "RunContext[Any]",
 ) -> Any:
     """Apply ``policies`` in order around ``invoke``."""
 
@@ -249,7 +249,7 @@ async def apply_tool_policies(
 
         async def wrapped(
             a: dict[str, Any],
-            c: "RunContext",
+            c: "RunContext[Any]",
             *,
             _policy: ToolPolicy = policy,
             _inner: ToolInvoker = inner,
@@ -263,7 +263,7 @@ async def apply_tool_policies(
 async def render_tool_result(
     tool: "Tool",
     result: Any,
-    ctx: "RunContext",
+    ctx: "RunContext[Any]",
     *,
     default: ToolResultRenderer | None = None,
 ) -> str:
@@ -368,7 +368,7 @@ def tool(
         context_param = _find_context_param(func)
         is_async = inspect.iscoroutinefunction(func)
 
-        async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
+        async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
             kwargs = validate_args(func, args)
             if context_param is not None:
                 kwargs[context_param] = ctx

@@ -13,7 +13,7 @@ The default implementation is :class:`~lovia.context.Compaction`; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..types import JsonObject
 from ..providers.base import Provider
@@ -95,7 +95,6 @@ class ContextResult:
     metadata: JsonObject = field(default_factory=dict)
 
 
-@runtime_checkable
 class ContextPolicy(Protocol):
     """Strategy that produces the per-call view of the transcript."""
 

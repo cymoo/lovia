@@ -64,7 +64,7 @@ def _normalize_annotation(annotation: object) -> object:
             new_meta.append(Field(description=item))
         else:
             new_meta.append(item)
-    return Annotated[(base, *new_meta)]  # type: ignore[valid-type]
+    return Annotated[(base, *new_meta)]
 
 
 def _iter_arg_params(

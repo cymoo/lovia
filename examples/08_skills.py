@@ -46,7 +46,7 @@ async def main() -> None:
             "Use the `shell` tool to run scripts when needed."
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-        tools=[shell()],
+        tools=[shell],
         plugins=[Skills(SKILLS_DIR)],
     )
 

@@ -79,7 +79,7 @@ class ActiveAgent:
     merged into ``tools_by_name``.
     """
 
-    agent: Agent
+    agent: Agent[Any]
     providers: list[Provider]
     structured_output: StructuredOutput | None
     tools_by_name: dict[str, Tool]
@@ -116,7 +116,7 @@ class RunState:
     pending_handoff: "_HandoffSignal | None" = None
 
     @property
-    def agent(self) -> Agent:
+    def agent(self) -> Agent[Any]:
         """The active agent. Mirror of ``active.agent`` / ``run_ctx.agent``."""
         return self.active.agent
 

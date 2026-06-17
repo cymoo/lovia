@@ -23,7 +23,7 @@ class RunResult:
 
     output: Any
     entries: list[TranscriptEntry]
-    final_agent: Agent
+    final_agent: Agent[Any]
     usage: Usage
     turns: int
 

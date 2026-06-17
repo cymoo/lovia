@@ -292,7 +292,7 @@ def to_json_safe(value: object) -> Any:
         return value if math.isfinite(value) else None
     if hasattr(value, "model_dump"):
         try:
-            return to_json_safe(value.model_dump(mode="json"))  # type: ignore[attr-defined]
+            return to_json_safe(value.model_dump(mode="json"))
         except Exception:
             return None
     if is_dataclass(value) and not isinstance(value, type):
@@ -411,7 +411,7 @@ def input_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
         if m.role not in ("system", "user"):
             raise ValueError(f"input_to_entries: unexpected role {m.role!r}")
         content = m.content if m.content is not None else ""
-        out.append(InputEntry(role=m.role, content=content))  # type: ignore[arg-type]
+        out.append(InputEntry(role=m.role, content=content))
     return out
 
 
@@ -425,7 +425,7 @@ def messages_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
     for m in messages:
         if m.role in ("system", "user"):
             content = m.content if m.content is not None else ""
-            out.append(InputEntry(role=m.role, content=content))  # type: ignore[arg-type]
+            out.append(InputEntry(role=m.role, content=content))
         elif m.role == "assistant":
             if m.reasoning:
                 out.append(ReasoningEntry(content=m.reasoning))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from ..agent import Agent
 from ..messages import Message
 from ..providers.base import Provider
@@ -20,7 +22,7 @@ def truncate_repr(value: object, max_len: int = _LOG_REPR_MAX) -> str:
     return text[:max_len] + f"... <+{len(text) - max_len} chars>"
 
 
-def agent_model_label(agent: Agent) -> str:
+def agent_model_label(agent: Agent[Any]) -> str:
     """Best-effort one-line description of the agent's model(s) for logging."""
     model = agent.model
     if isinstance(model, str):

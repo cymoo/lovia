@@ -140,7 +140,7 @@ class TokenCounter:
         self.file_tokens = file_tokens
         self.entry_overhead = entry_overhead
         self._memo_size = memo_size
-        self._memo: dict[int, tuple[weakref.ref, int]] = {}
+        self._memo: dict[int, tuple[weakref.ref[TranscriptEntry], int]] = {}
 
     def count(self, entries: Sequence[TranscriptEntry]) -> int:
         """Estimated prompt tokens for ``entries``."""

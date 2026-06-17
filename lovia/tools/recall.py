@@ -20,7 +20,7 @@ This tool is opt-in — add it to an agent that works with large tool outputs::
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from ..run_context import RunContext
 from ..transcript import ToolResultEntry
@@ -31,7 +31,7 @@ __all__ = ["recall_tool_result"]
 
 @tool
 def recall_tool_result(
-    ctx: RunContext,
+    ctx: RunContext[Any],
     call_id: Annotated[
         str, "The call_id shown in the '[Earlier tool result omitted ...]' marker."
     ],

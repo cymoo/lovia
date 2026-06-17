@@ -68,11 +68,11 @@ class Handoff:
             references to tools the new agent doesn't have.
     """
 
-    target: "Agent"
+    target: "Agent[Any]"
     name: str | None = None
     description: str | None = None
     on_handoff: (
-        Callable[[dict[str, Any], "RunContext"], Awaitable[None] | None] | None
+        Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[None] | None] | None
     ) = None
     input_filter: HandoffInputFilter | None = None
 
@@ -96,7 +96,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
         or f"Transfer the conversation to the {target.name} agent. Use this when the request matches that agent's specialty."
     )
 
-    async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
+    async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
         if handoff.on_handoff is not None:
             result = handoff.on_handoff(args, ctx)
             if hasattr(result, "__await__"):
@@ -124,7 +124,7 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
 
 
 def agent_as_tool(
-    agent: "Agent",
+    agent: "Agent[Any]",
     *,
     name: str | None = None,
     description: str | None = None,
@@ -158,7 +158,7 @@ def agent_as_tool(
         description or f"Delegate a task to the {agent.name} agent and get its answer."
     )
 
-    async def invoke(args: dict[str, Any], ctx: "RunContext") -> Any:
+    async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
         # Imported here to avoid a circular import at module load time.
         from .runner import Runner
 

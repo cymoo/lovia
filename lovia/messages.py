@@ -115,7 +115,7 @@ def user(
         return Message(role="user", content=content)
     if isinstance(content, (TextPart, ImagePart, FilePart)):
         return Message(role="user", content=[content])
-    return Message(role="user", content=list(content))  # type: ignore[arg-type]
+    return Message(role="user", content=list(content))
 
 
 def assistant(text: str) -> Message:

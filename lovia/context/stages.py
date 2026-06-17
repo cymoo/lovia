@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, Sequence
 
 from .policy import CompactionRequest
 from .render import clear_marker, offload_marker, render_entries
@@ -62,7 +62,6 @@ class StageContext:
         return int(raw_tokens * self.state.ratio)
 
 
-@runtime_checkable
 class Stage(Protocol):
     """One compaction strategy in a :class:`~lovia.context.Compaction`."""
 

@@ -10,7 +10,7 @@ a handful of new entries per burst, not the whole prefix.
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from .policy import CompactionRequest
 from .prompts import (
@@ -33,7 +33,6 @@ from ..transcript import (
 logger = logging.getLogger(__name__)
 
 
-@runtime_checkable
 class Summarizer(Protocol):
     """Summarization backend used by the summarize stage."""
 

@@ -57,7 +57,6 @@ def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:
     return out
 
 
-@runtime_checkable
 class Provider(Protocol):
     """The minimal interface every LLM backend must implement.
 

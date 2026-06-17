@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from ..types import JsonObject
 from .. import events
@@ -67,7 +67,7 @@ class _StreamReset:
 
 async def stream_model_turn(
     *,
-    agent: Agent,
+    agent: Agent[Any],
     providers: list[Provider],
     input_entries: list[TranscriptEntry],
     tools_by_name: dict[str, Tool],

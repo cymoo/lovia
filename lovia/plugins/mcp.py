@@ -46,14 +46,13 @@ from typing import (
     Callable,
     Protocol,
     cast,
-    runtime_checkable,
 )
 
 from ..types import JsonObject
 from ..exceptions import MCPError, UserError
 from ..run_context import RunContext
 from ..tools import ApprovalPredicate, Tool, ToolResultRenderer
-from .base import Plugin, PluginInstance
+from .base import PluginInstance
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ def _render_block(block: Any) -> str:
         resource = getattr(block, "resource", None)
         text = getattr(resource, "text", None)
         if text is not None:
-            return text
+            return str(text)
         uri = getattr(resource, "uri", "") or ""
         mime = getattr(resource, "mimeType", None) or "application/octet-stream"
         size = _human_size(_approx_bytes(getattr(resource, "blob", None)))
@@ -383,7 +382,6 @@ class MCPConnection:
 # --------------------------------------------------------------------------- #
 # Server config (frozen, factory)
 # --------------------------------------------------------------------------- #
-@runtime_checkable
 class MCPServerLike(Protocol):
     """What the :class:`MCP` plugin needs from each server entry.
 

@@ -160,4 +160,4 @@ class RetryPolicy:
     def backoff_delay(self, attempt: int) -> float:
         """Jittered exponential delay before retrying after ``attempt`` failures."""
         delay = min(self.backoff_max, self.backoff_base * (2 ** (attempt - 1)))
-        return delay * (0.5 + random.random())
+        return float(delay * (0.5 + random.random()))

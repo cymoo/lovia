@@ -15,4 +15,4 @@ _MARKDOWN = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable("
 def render_markdown(text: str) -> str:
     """Render user/model markdown while escaping raw HTML."""
 
-    return _MARKDOWN.render(text)
+    return str(_MARKDOWN.render(text))

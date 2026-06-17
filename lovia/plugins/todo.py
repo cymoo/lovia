@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from ..run_context import RunContext
 from ..tools import Tool, tool
 from ..transcript import InputEntry, ToolCallEntry, TranscriptEntry
-from .base import Plugin, PluginInstance, ViewInjector
+from .base import PluginInstance, ViewInjector
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
 
@@ -160,14 +160,14 @@ _INSTRUCTIONS = (
 
 
 def _make_tool(store: TodoList, tool_name: str) -> Tool:
-    def render_result(result: list[TodoItem], ctx: RunContext) -> str:
+    def render_result(result: list[TodoItem], ctx: RunContext[Any]) -> str:
         if not result:
             return "Todo list cleared."
         return "Updated todo list:\n" + render_todos(result)
 
     @tool(name=tool_name, description=_TOOL_DESCRIPTION, result_renderer=render_result)
     async def todo_write(
-        ctx: RunContext,
+        ctx: RunContext[Any],
         todos: Annotated[
             list[TodoItem],
             "The complete todo list. Replaces the previous list entirely.",
@@ -181,7 +181,7 @@ def _make_tool(store: TodoList, tool_name: str) -> Tool:
 def _make_injector(store: TodoList, tool_name: str) -> ViewInjector:
     reconciled = False
 
-    def inject(ctx: RunContext) -> list[TranscriptEntry] | None:
+    def inject(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
         nonlocal reconciled
         if not reconciled:
             reconciled = True

@@ -15,7 +15,7 @@ Third-party packages can register additional vendor prefixes through the
 from __future__ import annotations
 
 from importlib.metadata import EntryPoint
-from typing import Callable
+from typing import Callable, cast
 
 from .base import ModelSettings, Provider
 from .anthropic import AnthropicProvider
@@ -99,7 +99,7 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
 
         return _factory
     if callable(obj):
-        return obj
+        return cast("Callable[[str], Provider]", obj)
     raise ValueError(
         f"Provider plugin {vendor!r} must be a provider class or callable factory"
     )

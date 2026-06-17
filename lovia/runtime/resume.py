@@ -30,7 +30,7 @@ from .result import RunResult
 # * ``resume_only`` — continue an existing run, else raise (resume a known run_id).
 
 
-def reachable_agents(entry: Agent) -> dict[str, Agent]:
+def reachable_agents(entry: Agent[Any]) -> dict[str, Agent[Any]]:
     """Map every agent reachable from ``entry`` via handoffs, keyed by name.
 
     Walks the static handoff graph (``Agent.handoffs``, each item an ``Agent``
@@ -39,7 +39,7 @@ def reachable_agents(entry: Agent) -> dict[str, Agent]:
     distinct agents share a name the first reached wins — the same ambiguity
     already affects ``transfer_to_<name>`` tool naming.
     """
-    found: dict[str, Agent] = {}
+    found: dict[str, Agent[Any]] = {}
     stack = [entry]
     while stack:
         agent = stack.pop()
@@ -51,7 +51,7 @@ def reachable_agents(entry: Agent) -> dict[str, Agent]:
     return found
 
 
-def resolve_resume_agent(entry: Agent, snapshot: RunSnapshot) -> Agent:
+def resolve_resume_agent(entry: Agent[Any], snapshot: RunSnapshot) -> Agent[Any]:
     """Resolve the agent a resumed run must continue as.
 
     A run is always resumed by passing the **entry** agent to the runner, but
@@ -83,7 +83,7 @@ def resolve_resume_agent(entry: Agent, snapshot: RunSnapshot) -> Agent:
 
 
 def result_from_completed_snapshot(
-    agent: Agent,
+    agent: Agent[Any],
     snapshot: RunSnapshot,
     *,
     output_type: Any = None,

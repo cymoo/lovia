@@ -53,7 +53,7 @@ import yaml  # type: ignore[import-untyped]
 from ..types import JsonValue
 from ..exceptions import UserError
 from ..tools import Tool
-from .base import Plugin, PluginInstance
+from .base import PluginInstance
 
 logger = logging.getLogger(__name__)
 

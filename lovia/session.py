@@ -17,12 +17,11 @@ entries via :func:`lovia.transcript.entries_to_messages`.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from .transcript import TranscriptEntry
 
 
-@runtime_checkable
 class Session(Protocol):
     """A conversation transcript store keyed by ``session_id``."""
 

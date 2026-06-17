@@ -60,7 +60,7 @@ ApprovalDecision = Union[bool, Literal["allow", "deny", "ask"]]
 # ``needs_approval``. May be sync or async (the runner awaits the result
 # either way).
 ApprovalHandler = Callable[
-    ["ToolCall", "RunContext"],
+    ["ToolCall", "RunContext[Any]"],
     "ApprovalDecision | Awaitable[ApprovalDecision]",
 ]
 
@@ -116,7 +116,7 @@ class Agent(Generic[TContext]):
     # or pass an :class:`~lovia.output.OutputRepairStrategy` instance for
     # custom retry policies (multi-attempt, localised prompts, etc.).
     output_repair: "bool | OutputRepairStrategy" = True
-    handoffs: list["Agent | Handoff"] = field(default_factory=list)
+    handoffs: list["Agent[Any] | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
     workspace: "WorkspaceLike | None" = None
     # Declarative features that bundle tools, per-turn view injectors, static
@@ -222,7 +222,7 @@ class Agent(Generic[TContext]):
             if callable(fragment):
                 result = fragment(context)
                 if hasattr(result, "__await__"):
-                    return str(await result)  # type: ignore[arg-type]
+                    return str(await result)
                 return str(result)
             return str(fragment)
 

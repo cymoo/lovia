@@ -39,7 +39,7 @@ See :class:`lovia.plugins.Todo` for the first concrete plugin.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
 
 if TYPE_CHECKING:
     from ..guardrails import GuardrailFn
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 # ``None`` to inject nothing. May be sync or async. A raising injector is
 # logged and skipped — the model call still proceeds.
 ViewInjector = Callable[
-    ["RunContext"],
+    ["RunContext[Any]"],
     "list[TranscriptEntry] | None | Awaitable[list[TranscriptEntry] | None]",
 ]
 
@@ -83,7 +83,6 @@ class PluginInstance:
     aclose: Callable[[], Awaitable[None]] = _noop_aclose
 
 
-@runtime_checkable
 class Plugin(Protocol):
     """A declarative feature that contributes capabilities to an agent run.
 

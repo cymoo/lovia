@@ -16,7 +16,7 @@ from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
 from ..tools import render_tool_result, run_tool, truncate_tool_output
-from ..tracing import Tracer
+from ..tracing import Tracer, tool_call_span
 from ..transcript import ToolResultEntry
 
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ class ToolCallProcessor:
         )
 
         try:
-            with tracer.span("tool", name=tool.name, call_id=call.id):
+            with tool_call_span(tracer, name=tool.name, call_id=call.id):
                 result = await run_tool(
                     tool,
                     args,

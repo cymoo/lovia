@@ -83,7 +83,7 @@ from ..run_context import RunContext
 from .result import RunResult
 from ..session import Session
 from ..tools import Tool
-from ..tracing import NoopTracer, Span, Tracer
+from ..tracing import NoopTracer, Span, Tracer, handoff_span, record_run_end, run_span
 
 logger = logging.getLogger(__name__)
 
@@ -183,16 +183,16 @@ class RunLoop:
         agent = self.initial_agent
         tracer: Tracer = agent.tracer or NoopTracer()
 
-        with tracer.span("run", agent=agent.name, run_id=self.run_id) as run_span:
-            async for ev in self._stream_inner(tracer, run_span):
+        with run_span(tracer, agent=agent.name, run_id=self.run_id) as span:
+            async for ev in self._stream_inner(tracer, span):
                 yield ev
 
     async def _stream_inner(
-        self, tracer: Tracer, run_span: Span
+        self, tracer: Tracer, span: Span
     ) -> AsyncIterator[events.Event]:
         async with AsyncExitStack() as resources:
             completed = await self._resolve_resume()
-            run_span.set_attribute(
+            span.set_attribute(
                 "resumed", completed is not None or self.resume_from is not None
             )
             if completed is not None:
@@ -295,7 +295,7 @@ class RunLoop:
                             yield ev
                     await self.checkpoints.save_running(state)
 
-                result = await self._finalize_run(state, output, run_span)
+                result = await self._finalize_run(state, output, span)
                 await self.checkpoints.complete(state, result.output)
                 run_completed = True
 
@@ -674,7 +674,7 @@ class RunLoop:
         prev_agent = state.agent
         target = signal.handoff.target
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
-        with tracer.span("handoff", from_agent=prev_agent.name, to_agent=target.name):
+        with handoff_span(tracer, from_agent=prev_agent.name, to_agent=target.name):
             state.activate(await self._resolve_active(target, resources))
             await self._reset_transcript_for_handoff(state, signal.handoff)
 
@@ -712,7 +712,7 @@ class RunLoop:
             return _UNSET
 
     async def _finalize_run(
-        self, state: RunState, output: object, run_span: Span
+        self, state: RunState, output: object, span: Span
     ) -> RunResult:
         """Run output guardrails, persistence, and usage propagation."""
         output_guardrails = (
@@ -735,8 +735,7 @@ class RunLoop:
         if self.parent_usage is not None:
             self.parent_usage.add(state.run_ctx.usage)
 
-        run_span.set_attribute("turns", state.turns)
-        run_span.set_attribute("total_tokens", state.run_ctx.usage.total_tokens)
+        record_run_end(span, turns=state.turns, total_tokens=state.run_ctx.usage.total_tokens)
         return result
 
     # ------------------------------------------------------------------ #

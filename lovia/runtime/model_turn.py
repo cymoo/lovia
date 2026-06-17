@@ -16,7 +16,7 @@ from ..providers.base import ModelSettings, Provider
 from ..reliability import RetryPolicy
 from .run_state import ModelTurnResult
 from .utils import truncate_repr
-from ..tracing import Tracer
+from ..tracing import Tracer, model_call_span
 from ..transcript import (
     AssistantTextEntry,
     EntryCompletedDelta,
@@ -92,7 +92,7 @@ async def stream_model_turn(
     usage = Usage()
     finish_reason: str | None = None
 
-    with tracer.span("model_call", model=model_label, turn=turn):
+    with model_call_span(tracer, model=model_label, turn=turn):
         async for delta in stream_with_fallback(
             providers,
             input_entries,

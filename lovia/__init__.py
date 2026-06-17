@@ -139,7 +139,7 @@ from .plugins import (
     todos,
 )
 from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
-from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, Tracer
+from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, SpanName, Tracer
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -252,6 +252,7 @@ __all__ = [
     "RunResult",
     "RunSnapshot",
     "RunStatus",
+    "SpanName",
     "Runner",
     "SQLiteCheckpointer",
     "SQLiteSession",

@@ -35,13 +35,13 @@ async def test_in_memory_tracer_records_spans() -> None:
     # We expect exactly one run, two model_calls (one per turn), one tool call.
     assert names.count("run") == 1
     assert names.count("model_call") == 2
-    assert names.count("tool") == 1
+    assert names.count("tool_call") == 1
 
     run_span = next(s for s in tracer.spans if s.name == "run")
     assert run_span.attrs["agent"] == "t"
     assert run_span.attrs["turns"] == 2
 
-    tool_span = next(s for s in tracer.spans if s.name == "tool")
+    tool_span = next(s for s in tracer.spans if s.name == "tool_call")
     assert tool_span.attrs["name"] == "add"
     assert tool_span.exception is None
 
@@ -87,6 +87,6 @@ async def test_tool_span_records_exception() -> None:
     agent = Agent(name="t", model=provider, tools=[boom], tracer=tracer)
     await Runner.run(agent, "go")
 
-    tool_span = next(s for s in tracer.spans if s.name == "tool")
+    tool_span = next(s for s in tracer.spans if s.name == "tool_call")
     assert tool_span.exception is not None
     assert "kaboom" in str(tool_span.exception)

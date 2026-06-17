@@ -22,6 +22,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import ContextManager, Iterator, Protocol
 
 # Per-task indent depth, used by ConsoleTracer to render nesting. A contextvar
@@ -31,12 +32,29 @@ _depth: contextvars.ContextVar[int] = contextvars.ContextVar(
 )
 
 
+class SpanName(str, Enum):
+    """Stable names for the spans lovia emits.
+
+    Using these constants (rather than bare strings) at call sites gives
+    type-checking, IDE completion, and a single place to see what lovia
+    considers part of its observable contract.
+    """
+
+    RUN = "run"
+    MODEL_CALL = "model_call"
+    TOOL_CALL = "tool_call"
+    HANDOFF = "handoff"
+
+    def __str__(self) -> str:
+        return self.value
+
+    def __format__(self, format_spec: str) -> str:
+        return self.value.__format__(format_spec)
+
+
 class Span(Protocol):
     """A live span. Methods are best-effort — adapters may no-op some of them."""
 
-    # TODO: 只有set_attribute太简单了
-    # TODO: 是否需要预定义一些可以span的东西，好处：类型安全 & 通过此文件就知道哪些值得span & 易维护
-    # TODO: 优先级较低，待主要功能完成
     def set_attribute(self, key: str, value: object) -> None: ...
     def record_exception(self, exc: BaseException) -> None: ...
 
@@ -172,3 +190,39 @@ class InMemoryTracer:
             raise
         finally:
             rec.duration_ms = (time.perf_counter() - start) * 1000
+
+
+# ---------------------------------------------------------------------------
+# Typed span helpers — the public span contract
+#
+# Each function encodes required attributes in its signature so callers get
+# type-checking and IDE completion instead of free-form keyword dicts.
+# ---------------------------------------------------------------------------
+
+
+def run_span(tracer: Tracer, *, agent: str, run_id: str) -> ContextManager[Span]:
+    return tracer.span(SpanName.RUN, agent=agent, run_id=run_id)
+
+
+def model_call_span(
+    tracer: Tracer, *, model: str | None, turn: int
+) -> ContextManager[Span]:
+    return tracer.span(SpanName.MODEL_CALL, model=model, turn=turn)
+
+
+def tool_call_span(
+    tracer: Tracer, *, name: str, call_id: str
+) -> ContextManager[Span]:
+    return tracer.span(SpanName.TOOL_CALL, name=name, call_id=call_id)
+
+
+def handoff_span(
+    tracer: Tracer, *, from_agent: str, to_agent: str
+) -> ContextManager[Span]:
+    return tracer.span(SpanName.HANDOFF, from_agent=from_agent, to_agent=to_agent)
+
+
+def record_run_end(span: Span, *, turns: int, total_tokens: int) -> None:
+    """Set end-of-run metrics on a run span."""
+    span.set_attribute("turns", turns)
+    span.set_attribute("total_tokens", total_tokens)

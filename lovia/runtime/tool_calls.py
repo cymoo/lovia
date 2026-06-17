@@ -5,13 +5,14 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 from .. import events
 from ..approvals import ApprovalChannel
 from ..handoff import _HandoffSignal
 from ..messages import ToolCall
+from ..exceptions import RunCancelled
 from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ToolCallProcessor:
     approvals: ApprovalChannel
-    cancel_token: CancelToken | None = None
+    cancel_token: CancelToken = field(default_factory=CancelToken)
     budget: RunBudget | None = None
 
     async def process(
@@ -43,8 +44,7 @@ class ToolCallProcessor:
         records its signal in ``state.pending_handoff``.
         """
 
-        if self.cancel_token is not None:
-            self.cancel_token.check()
+        self.cancel_token.check()
         if self.budget is not None:
             # Every requested call counts toward max_tool_calls, including ones
             # rejected just below (unknown tool, malformed args, denied) — so a
@@ -128,6 +128,13 @@ class ToolCallProcessor:
                     default_timeout=state.agent.default_tool_timeout,
                 )
             is_error = False
+        except RunCancelled:
+            # A run-control signal, not a tool failure — let it propagate so the
+            # run terminates instead of being swallowed into a tool-error result.
+            # Consistent with the pre-tool ``cancel_token.check()`` above, and the
+            # path an agent-as-tool sub-run takes when it inherits and trips the
+            # parent's token.
+            raise
         except Exception as exc:
             result = f"Tool error: {exc}"
             is_error = True

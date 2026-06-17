@@ -111,6 +111,22 @@ def test_cancel_token_uncancelled_check_is_silent() -> None:
     CancelToken().check()  # no-op
 
 
+@pytest.mark.asyncio
+async def test_tool_raising_run_cancelled_propagates() -> None:
+    # RunCancelled is a run-control signal, not a tool failure: a tool that
+    # raises it must terminate the run, not have it swallowed into a tool-error
+    # result the model continues past. (The token is never tripped here, so
+    # nothing else would re-raise it — this isolates the tool-phase behaviour.)
+    @tool
+    async def trip() -> str:
+        raise RunCancelled("stop now")
+
+    provider = ScriptedProvider([call("trip", {}), text("never reached")])
+    agent = Agent(name="a", model=provider, tools=[trip])
+    with pytest.raises(RunCancelled):
+        await Runner.run(agent, "go")
+
+
 # ---------- RetryPolicy + fallback chain ----------
 
 

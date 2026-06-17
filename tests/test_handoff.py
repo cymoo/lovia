@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from lovia import Agent, Runner
+import pytest
+
+from lovia import Agent, CancelToken, RunCancelled, RunContext, Runner, tool
 
 from .scripted_provider import ScriptedProvider, call, text
 
@@ -69,3 +71,56 @@ async def test_agent_as_tool_forwards_max_turns() -> None:
     result = await Runner.run(parent, "delegate")
     # The expert's "done" is never reached; the parent recovers and answers.
     assert result.output == "ok"
+
+
+async def test_agent_as_tool_inherits_cancel_token() -> None:
+    # The sub-run must see the *same* token instance the parent run was given,
+    # so a cancel() can reach it while the parent is blocked awaiting the child.
+    token = CancelToken()
+    seen: list[CancelToken] = []
+
+    @tool
+    async def record(ctx: RunContext) -> str:
+        seen.append(ctx.cancel_token)
+        return "noted"
+
+    child = Agent(
+        name="Child",
+        model=ScriptedProvider([call("record", {}), text("child done")]),
+        tools=[record],
+    )
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [call("ask_child", {"input": "go"}, call_id="c1"), text("ok")]
+        ),
+        tools=[child.as_tool()],
+    )
+    result = await Runner.run(parent, "delegate", cancel_token=token)
+    assert result.output == "ok"
+    assert seen == [token]  # the child's tool saw the parent's exact token
+
+
+async def test_cancel_inside_sub_run_terminates_parent() -> None:
+    # A cancel issued from within the sub-run (via the inherited token) must
+    # propagate up and terminate the parent run — not be swallowed into a
+    # tool-error result the way an arbitrary tool exception would be.
+    @tool
+    async def stop(ctx: RunContext) -> str:
+        ctx.cancel_token.cancel("child decided to stop")
+        return "stopping"
+
+    child = Agent(
+        name="Child",
+        model=ScriptedProvider([call("stop", {}), text("never reached")]),
+        tools=[stop],
+    )
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [call("ask_child", {"input": "go"}, call_id="c1"), text("never reached")]
+        ),
+        tools=[child.as_tool()],
+    )
+    with pytest.raises(RunCancelled):
+        await Runner.run(parent, "delegate")

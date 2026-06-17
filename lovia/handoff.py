@@ -147,13 +147,11 @@ def agent_as_tool(
     loops on its own, and the run default is generous. The sub-run inherits the
     parent's ``context`` and accumulates into its :class:`Usage` automatically.
 
-    TODO(cancel_token): the sub-run does not yet inherit the parent's
-    cancellation. Cancellation is cooperative (``CancelToken.check()`` only
-    fires at turn boundaries and before tool calls), so calling ``cancel()``
-    while the parent is blocked awaiting this sub-run does *not* interrupt it —
-    the child has no token, never checks, and runs to completion. Fix requires
-    exposing ``cancel_token`` on ``RunContext`` and forwarding it here; tracked
-    as a separate change.
+    The sub-run also inherits the parent's ``cancel_token``: cancellation is
+    cooperative, so while the parent is blocked awaiting this sub-run only the
+    child is checking the token. Sharing the instance lets a ``cancel()`` trip
+    the child at its next turn boundary; the resulting :class:`RunCancelled`
+    propagates straight up through the tool call and terminates the parent run.
     """
     tool_name = name or f"ask_{_slug(agent.name)}"
     tool_desc = (
@@ -171,6 +169,7 @@ def agent_as_tool(
             context=ctx.context,
             max_turns=max_turns,
             budget=budget,
+            cancel_token=ctx.cancel_token,
             retry=retry,
             context_policy=context_policy,
             _parent_usage=ctx.usage,

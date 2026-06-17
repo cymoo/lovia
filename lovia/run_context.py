@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from .messages import Message, Usage
+from .reliability import CancelToken
 from .transcript import TranscriptEntry, entries_to_messages
 
 if TYPE_CHECKING:
@@ -51,6 +52,10 @@ class RunContext(Generic[TContext]):
         workspace: The active agent's live workspace session, when the agent
             has ``workspace=`` configured. The built-in file/shell tools read
             it here; custom tools may too. Swapped on handoff.
+        cancel_token: The run's cooperative cancellation signal. Always present
+            (the runner creates one when the caller didn't pass it), so a tool
+            or hook can call ``cancel()`` to request the run terminate at the
+            next safe point, and an agent-as-tool sub-run can inherit it.
     """
 
     context: TContext | None
@@ -59,6 +64,7 @@ class RunContext(Generic[TContext]):
     usage: Usage = field(default_factory=Usage)
     session_id: str | None = None
     workspace: "WorkspaceSession | None" = None
+    cancel_token: CancelToken = field(default_factory=CancelToken)
 
     @property
     def messages(self) -> list[Message]:

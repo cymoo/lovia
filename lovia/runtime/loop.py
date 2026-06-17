@@ -124,7 +124,12 @@ class RunLoop:
         self.max_turns = max_turns
         self.parent_usage = parent_usage
         self.budget = budget
-        self.cancel_token = cancel_token
+        # Always hold a token so it can be exposed on RunContext (for tools and
+        # hooks to call cancel()) and inherited by agent-as-tool sub-runs. When
+        # the caller didn't pass one, a fresh token is never cancelled, so this
+        # is behaviourally identical to the old None for callers who don't reach
+        # for it.
+        self.cancel_token = cancel_token or CancelToken()
         self.retry = retry
         self.context_policy: ContextPolicy = context_policy or Compaction(
             context_window=200_000
@@ -384,6 +389,7 @@ class RunLoop:
             agent=active.agent,
             session_id=self.session_id,
             workspace=active.workspace,
+            cancel_token=self.cancel_token,
         )
         if snapshot is not None:
             run_ctx.usage.add(snapshot.usage)
@@ -738,8 +744,7 @@ class RunLoop:
             raise MaxTurnsExceeded(
                 f"Run exceeded max_turns={self.max_turns} without producing output"
             )
-        if self.cancel_token is not None:
-            self.cancel_token.check()
+        self.cancel_token.check()
         if self.budget is not None:
             self.budget.check(state.run_ctx.usage)
 

@@ -32,12 +32,11 @@ from dotenv import load_dotenv
 from lovia import (
     Agent,
     AgentHooks,
-    AssistantTextEntry,
     Compaction,
-    InputEntry,
     Runner,
     events,
 )
+from lovia.transcript import AssistantTextEntry, InputEntry
 from lovia.stores import InMemorySession
 from lovia.tools import recall_tool_result
 

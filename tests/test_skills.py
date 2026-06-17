@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from lovia import Agent, SkillCategory, SkillsError, UserError, Skills
+from lovia import Agent, SkillsError, UserError, Skills
+from lovia.plugins import SkillCategory
 from lovia.run_context import RunContext
 from lovia.plugins.skills import (
     LocalDirSkillSource,

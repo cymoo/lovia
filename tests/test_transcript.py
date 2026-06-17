@@ -5,19 +5,21 @@ from __future__ import annotations
 import pytest
 
 from lovia import (
-    FinishDelta,
     FilePart,
     ImagePart,
+    TextPart,
+    Usage,
+)
+from lovia.transcript import (
+    FinishDelta,
     InputEntry,
     AssistantTextEntry,
     ReasoningDelta,
     ReasoningEntry,
-    TextPart,
     TextDelta,
     ToolCallDelta,
     ToolCallEntry,
     ToolResultEntry,
-    Usage,
     UsageDelta,
     entry_from_dict,
     entry_to_dict,

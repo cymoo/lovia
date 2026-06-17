@@ -8,11 +8,11 @@ import pytest
 
 from lovia import (
     Agent,
-    DefaultOutputRepair,
     OutputValidationError,
     Runner,
     tool,
 )
+from lovia.output import DefaultOutputRepair
 
 from .scripted_provider import ScriptedProvider, call, text
 

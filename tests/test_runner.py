@@ -199,7 +199,8 @@ async def test_stream_handle_double_iteration_raises() -> None:
 
 
 async def test_handoff_input_filter_drops_stale_tool_calls() -> None:
-    from lovia import Handoff, drop_stale_tool_calls
+    from lovia import Handoff
+    from lovia.handoff import drop_stale_tool_calls
 
     specialist = Agent(name="specialist", model=ScriptedProvider([text("final")]))
     triage_provider = ScriptedProvider(

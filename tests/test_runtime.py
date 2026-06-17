@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, CheckpointOptions, Handoff, Runner, drop_stale_tool_calls, tool
+from lovia import Agent, CheckpointOptions, Handoff, Runner, tool
+from lovia.handoff import drop_stale_tool_calls
 from lovia.exceptions import BudgetExceeded, ContextOverflowError, UserError
 from lovia.plugins.mcp import MCP
 from lovia.messages import AssistantTurn, Message, ToolCall, Usage

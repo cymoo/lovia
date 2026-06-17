@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from lovia import InputEntry, AssistantTextEntry
+from lovia.transcript import InputEntry, AssistantTextEntry
 from lovia.stores import InMemorySession, SQLiteSession
 
 

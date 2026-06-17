@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lovia import InputEntry, ToolCallEntry, ToolResultEntry, safe_window
+from lovia.transcript import InputEntry, ToolCallEntry, ToolResultEntry, safe_window
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,8 @@ import logging
 
 import pytest
 
-from lovia import Agent, InMemoryTracer, Runner, tool
+from lovia import Agent, Runner, tool
+from lovia.tracing import InMemoryTracer
 from lovia.tracing import ConsoleTracer, NoopTracer
 
 from .scripted_provider import ScriptedProvider, call, text

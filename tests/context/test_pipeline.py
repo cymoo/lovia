@@ -9,15 +9,13 @@ import pytest
 
 from lovia import (
     Agent,
-    AssistantTextEntry,
     ContextOverflowError,
     Compaction,
     InMemorySession,
-    InputEntry,
-    NoopContextPolicy,
     Runner,
 )
-from lovia.context import CompactionState
+from lovia.transcript import AssistantTextEntry, InputEntry
+from lovia.context import CompactionState, NoopContextPolicy
 from lovia.events import ContextCompacted
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 

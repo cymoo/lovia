@@ -22,7 +22,6 @@ from lovia import (
     CheckpointOptions,
     Handoff,
     Runner,
-    entries_to_messages,
     tool,
 )
 from lovia.transcript import (
@@ -36,6 +35,7 @@ from lovia.transcript import (
     ToolCallEntry,
     ToolResultEntry,
     UsageDelta,
+    entries_to_messages,
 )
 from lovia.messages import Message, Usage
 from lovia.stores import InMemorySession
@@ -189,7 +189,8 @@ async def test_entries_mirror_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_entries_mirror_resume_from_snapshot() -> None:
     """Resume rebuilds the transcript from the snapshot's entries; the
     mirror must still round-trip."""
-    from lovia import InputEntry, AssistantTextEntry, InMemoryCheckpointer
+    from lovia import InMemoryCheckpointer
+    from lovia.transcript import InputEntry, AssistantTextEntry
     from lovia.checkpointer import RunSnapshot
     from lovia.messages import Usage
 

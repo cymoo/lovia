@@ -20,22 +20,21 @@ import pytest
 
 from lovia import (
     Agent,
-    AssistantTextEntry,
     ContextOverflowError,
     Compaction,
     InMemorySession,
-    InputEntry,
     ModelSettings,
-    NoopContextPolicy,
     Runner,
     events,
-    provider_from_string,
 )
+from lovia.providers import provider_from_string
+from lovia.transcript import AssistantTextEntry, InputEntry
 from lovia.context import (
     REQUIRED_SECTIONS,
     ClearToolResults,
     CompactionRequest,
     LLMSummarizer,
+    NoopContextPolicy,
     OffloadToolResults,
     SummarizeHistory,
 )

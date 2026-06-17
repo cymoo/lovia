@@ -508,8 +508,6 @@ class MCPServerStreamableHTTP(MCPServer):
 # --------------------------------------------------------------------------- #
 # Plugin factory
 # --------------------------------------------------------------------------- #
-@dataclass
-@dataclass
 class MCP:
     """Mount one or more MCP servers' tools on an agent, as a plugin.
 
@@ -528,8 +526,7 @@ class MCP:
         )
     """
 
-    servers: tuple[MCPServerLike, ...] = field(init=False)
-    name: str = field(default="mcp", init=False)
+    name: str = "mcp"
 
     def __init__(self, *servers: MCPServerLike, name: str = "mcp") -> None:
         self.servers = tuple(servers)

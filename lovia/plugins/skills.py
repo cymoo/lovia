@@ -682,7 +682,36 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+def _resolve_catalog(
+    *sources: "str | Path | SkillSource | SkillCategory",
+    usage_rules: str | None = None,
+    filter: "SkillFilter | None" = None,
+) -> SkillCategory:
+    """Resolve one or more sources into a :class:`SkillCategory`."""
+    if not sources:
+        raise UserError(
+            "Skills() needs at least one skill directory or source.",
+            hint='e.g. Skills("./skills") or Skills(MySkillSource()).',
+        )
+    first = sources[0]
+    if len(sources) == 1 and isinstance(first, SkillCategory):
+        if usage_rules is not None or filter is not None:
+            raise UserError(
+                "Configure usage_rules=/filter= on the SkillCategory you build, "
+                "not on Skills() — they would be ignored when a SkillCategory is passed.",
+            )
+        return first
+    if len(sources) == 1 and isinstance(first, SkillSource):
+        return SkillCategory(first, usage_rules=usage_rules, filter=filter)
+    paths = [s for s in sources if isinstance(s, (str, Path))]
+    if len(paths) != len(sources):
+        raise UserError(
+            "Skills() takes skill directories, or a single SkillSource / "
+            "SkillCategory — not a mix of the two.",
+        )
+    return SkillCategory.from_dir(*paths, usage_rules=usage_rules, filter=filter)
+
+
 class Skills:
     """Expose skills to an agent as a plugin.
 
@@ -706,7 +735,6 @@ class Skills:
     tools and the Level-1 skill index (a system-prompt fragment).
     """
 
-    catalog: SkillCategory
     name: str = "skills"
 
     def __init__(
@@ -715,31 +743,7 @@ class Skills:
         usage_rules: str | None = None,
         filter: "SkillFilter | None" = None,
     ) -> None:
-        if not sources:
-            raise UserError(
-                "Skills() needs at least one skill directory or source.",
-                hint='e.g. Skills("./skills") or Skills(MySkillSource()).',
-            )
-        first = sources[0]
-        if len(sources) == 1 and isinstance(first, SkillCategory):
-            if usage_rules is not None or filter is not None:
-                raise UserError(
-                    "Configure usage_rules=/filter= on the SkillCategory you build, "
-                    "not on Skills() — they would be ignored when a SkillCategory is passed.",
-                )
-            catalog = first
-        elif len(sources) == 1 and isinstance(first, SkillSource):
-            catalog = SkillCategory(first, usage_rules=usage_rules, filter=filter)
-        else:
-            paths = [s for s in sources if isinstance(s, (str, Path))]
-            if len(paths) != len(sources):
-                raise UserError(
-                    "Skills() takes skill directories, or a single SkillSource / "
-                    "SkillCategory — not a mix of the two.",
-                )
-            catalog = SkillCategory.from_dir(*paths, usage_rules=usage_rules, filter=filter)
-        self.catalog = catalog
-        self.name = "skills"
+        self.catalog = _resolve_catalog(*sources, usage_rules=usage_rules, filter=filter)
 
     async def setup(self) -> PluginInstance:
         return PluginInstance(

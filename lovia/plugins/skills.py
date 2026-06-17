@@ -30,9 +30,9 @@ Three layers of progressive disclosure:
   ``read_skill_file``. The body names the files it needs, so the model never
   has to guess paths.
 
-:class:`SkillCategory` mirrors the :class:`~lovia.workspace.Workspace` pattern — both
-expose ``instructions()`` (system prompt fragment) and ``tools()`` (model-facing
-tools), making them peer capabilities on an :class:`~lovia.Agent`.
+:class:`SkillCategory` is a catalog that provides ``instructions()`` and
+``tools()``. Wrap it with the :class:`Skills` plugin to attach it to an
+:class:`~lovia.Agent`, or use it standalone for programmatic access.
 
 Extension: implement the :class:`SkillSource` protocol to serve skills from
 databases, APIs, MCP servers, or any other backend.
@@ -418,29 +418,20 @@ SkillFilter = Callable[[SkillMetadata], bool]
 
 
 class SkillCategory:
-    """A collection of skills exposed to the model as a capability.
+    """A collection of skills — a catalog that produces instructions and tools.
 
-    Mirrors the :class:`~lovia.workspace.Workspace` pattern: both provide
-    ``instructions()`` (system prompt fragment) and ``tools()`` (model-facing
-    tools). Attach to an :class:`~lovia.Agent` via the ``skills`` field.
+    Typically used through the :class:`Skills` plugin::
 
-    Usage::
+        agent = Agent(..., plugins=[Skills("./skills")])
 
-        agent = Agent(
-            name="bot",
-            instructions="Be helpful.",
-            skills=SkillCategory.from_dir("./skills"),
+    For programmatic access, build one directly::
+
+        catalog = SkillCategory.from_dir("./skills")
+        catalog = SkillCategory.from_dir("./skills", "./team-skills")
+        catalog = SkillCategory(
+            MySkillSource(),
+            filter=lambda m: "internal" not in m.extra.get("tags", []),
         )
-
-    Multiple directories may be merged (earlier wins on name conflicts)::
-
-        skills=SkillCategory.from_dir("./skills", "./team-skills")
-
-    A ``filter`` predicate scopes which skills are exposed — useful for
-    per-tenant or permission-based catalogs. Filtered-out skills are hidden
-    from the index *and* cannot be loaded::
-
-        skills=SkillCategory.from_dir("./skills", filter=lambda m: "internal" not in m.extra.get("tags", []))
     """
 
     def __init__(

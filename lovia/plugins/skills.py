@@ -459,7 +459,7 @@ class SkillCategory:
 
         ``usage_rules`` and ``filter`` are keyword-only so any number of
         directories can be passed positionally:
-        ``Skills.from_dir(dir1, dir2, usage_rules=..., filter=...)``.
+        ``SkillCategory.from_dir(dir1, dir2, usage_rules=..., filter=...)``.
         """
         return cls(LocalDirSkillSource(*paths), usage_rules=usage_rules, filter=filter)
 

@@ -75,9 +75,9 @@ lovia/
   plugins/          # Declarative capability plugins — the one extension axis
     base.py         #   Plugin protocol (async setup + aclose) + PluginInstance
                     #   (tools/instructions/view_injectors/hooks/guardrails)
-    todos/          #   todos() plugin: todo_write + per-turn reminder injector
-    skills.py       #   skills() plugin + Skills/SkillSource (SKILL.md disclosure)
-    mcp.py          #   mcp() plugin + MCP client (lazy; requires mcp package)
+    todo.py         #   Todo plugin: todo_write + per-turn reminder injector
+    skills.py       #   Skills plugin + SkillCategory/SkillSource (SKILL.md disclosure)
+    mcp.py          #   MCP plugin + MCP client (lazy; requires mcp package)
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
   providers/        # LLM provider adapters (OpenAI, Anthropic, …)
@@ -118,7 +118,7 @@ Tools from several sources are merged in `RunLoop._collect_tools()` with name-co
 
 ### Plugins and view injectors
 
-A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `mcp()`, `skills()`, and `todos()` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
+A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `MCP`, `Skills`, and `Todo` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
 
 `ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`plugins/todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
 

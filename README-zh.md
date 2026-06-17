@@ -433,13 +433,13 @@ pip install "lovia[ddg]"
 内置 todo plugin 给模型一个清单工具，并在每一轮重新展示当前清单，同时不会让持久化的 transcript 膨胀：
 
 ```python
-from lovia import Agent, Runner, todos
+from lovia import Agent, Runner, Todo
 
 agent = Agent(
     name="builder",
     instructions="认真完成多步骤任务。",
     model="deepseek-v4-pro",
-    plugins=[todos()],
+    plugins=[Todo()],
 )
 
 await Runner.run(agent, "实现一个小型 REST API，包含测试和文档。")
@@ -450,24 +450,24 @@ await Runner.run(agent, "实现一个小型 REST API，包含测试和文档。"
 Skills 是遵循 Agent Skills 规范的可复用指令包。lovia 会先暴露轻量 metadata，让模型判断是否需要；完整指令和引用文件只在需要时加载。
 
 ```python
-from lovia import Agent, skills
+from lovia import Agent, Skills
 
 agent = Agent(
     name="support",
     instructions="根据正确政策帮助客户。",
     model="deepseek-v4-pro",
-    plugins=[skills("./skills")],
+    plugins=[Skills("./skills")],
 )
 ```
 
 一个 skill 目录包含带 YAML frontmatter 的 `SKILL.md`，也可以包含 `references/`、`scripts/`、`assets/`。可以传入多个目录，或用 filter 控制哪些 skill 暴露给模型：
 
 ```python
-plugins=[skills("./skills", "./team-skills")]
-plugins=[skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
+plugins=[Skills("./skills", "./team-skills")]
+plugins=[Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
 ```
 
-如需自定义后端，把 `SkillSource`（或预先构建的 `Skills`）传给 `skills()` 而不是路径。
+如需自定义后端，把 `SkillSource`（或预先构建的 `SkillCategory`）传给 `Skills()` 而不是路径。
 
 ### MCP
 
@@ -479,13 +479,13 @@ pip install "lovia[mcp]"
 
 ```python
 from lovia import Agent
-from lovia.plugins.mcp import MCPServerStdio, mcp
+from lovia.plugins.mcp import MCPServerStdio, MCP
 
 agent = Agent(
     name="assistant",
     model="deepseek-v4-pro",
     plugins=[
-        mcp(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
+        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
 )
 ```
@@ -496,11 +496,11 @@ agent = Agent(
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:
-    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[mcp(conn)])
+    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MCP(conn)])
     await Runner.run(agent, "抓取 https://example.com 并总结。")
 ```
 
-`mcp()` 接受多个 server——`mcp(a, b)`——而 `MCPServer.name` 会给某个 server 的工具加前缀（`web__fetch`）以避免冲突。
+`MCP()` 接受多个 server——`MCP(a, b)`——而 `MCPServer.name` 会给某个 server 的工具加前缀（`web__fetch`）以避免冲突。
 
 ### 编写 plugin
 

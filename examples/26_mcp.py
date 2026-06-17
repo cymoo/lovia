@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from lovia import Agent, Runner, events
-from lovia.plugins.mcp import MCPServerStdio, mcp
+from lovia.plugins.mcp import MCPServerStdio, MCP
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -40,7 +40,7 @@ server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async def main() -> None:
     # Open the MCP connection once and reuse it across runs. (Passing the bare
-    # ``server`` to ``mcp()`` instead would open/close it per run.)
+    # ``server`` to ``MCP()`` instead would open/close it per run.)
     async with server.session() as conn:
         tools = conn.tools()
         console.print(
@@ -54,7 +54,7 @@ async def main() -> None:
                 "tool, then replying concisely from the response data."
             ),
             model=MODEL,
-            plugins=[mcp(conn)],
+            plugins=[MCP(conn)],
         )
 
         url = f"https://wttr.in/{CITY}?format=j1"

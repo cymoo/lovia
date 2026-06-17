@@ -128,6 +128,7 @@ from .plugins import (
     SkillFilter,
     SkillMetadata,
     SkillSource,
+    SkillCategory,
     Skills,
     SkillsError,
     Todo,
@@ -135,7 +136,6 @@ from .plugins import (
     TodoList,
     TodoStatus,
     ViewInjector,
-    skills,
 )
 from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, SpanName, Tracer
@@ -260,6 +260,7 @@ __all__ = [
     "SkillMetadata",
     "SkillSource",
     "SkillFilter",
+    "SkillCategory",
     "Skills",
     "SkillsError",
     "LocalDirSkillSource",
@@ -296,7 +297,6 @@ __all__ = [
     "provider_from_string",
     "safe_window",
     "messages_to_entries",
-    "skills",
     "system",
     "tool",
     "user",

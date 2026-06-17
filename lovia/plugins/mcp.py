@@ -14,12 +14,12 @@ Lifecycle::
 
     # Per-run (default): the runtime opens a fresh connection each run and
     # closes it afterwards. Just hand the server to the ``mcp`` plugin:
-    agent = Agent(..., plugins=[mcp(MCPServerStdio(command="...", args=[...]))])
+    agent = Agent(..., plugins=[MCP(MCPServerStdio(command="...", args=[...]))])
 
     # Persistent: open once, reuse across runs, close when done:
     server = MCPServerStdio(command="...", args=[...])
     async with server.session() as conn:
-        agent = Agent(..., plugins=[mcp(conn)])
+        agent = Agent(..., plugins=[MCP(conn)])
         await Runner.run(agent, "...")   # reuses the live connection
         await Runner.run(agent, "...")   # reused again
 
@@ -206,7 +206,7 @@ class MCPConnection:
     Created by :meth:`MCPServer.open` / :meth:`MCPServer.session`; not usually
     constructed directly. Implements the same minimal surface the runtime needs
     from a server (``close_after_run`` + :meth:`open`), so a persistent connection
-    can be passed directly to :func:`mcp`.
+    can be passed directly to :class:`MCP`.
     """
 
     transport: Callable[[], Any]
@@ -385,7 +385,7 @@ class MCPConnection:
 # --------------------------------------------------------------------------- #
 @runtime_checkable
 class MCPServerLike(Protocol):
-    """What the :func:`mcp` plugin needs from each server entry.
+    """What the :class:`MCP` plugin needs from each server entry.
 
     Satisfied by both :class:`MCPServer` config (``close_after_run=True``) and a
     live :class:`MCPConnection` (``close_after_run=False``).
@@ -509,9 +509,31 @@ class MCPServerStreamableHTTP(MCPServer):
 # Plugin factory
 # --------------------------------------------------------------------------- #
 @dataclass
-class _MCPPlugin:
-    servers: tuple[MCPServerLike, ...]
-    name: str = "mcp"
+@dataclass
+class MCP:
+    """Mount one or more MCP servers' tools on an agent, as a plugin.
+
+    Each ``server`` is opened once per run; a config :class:`MCPServer` is closed
+    when the run ends, while a live :class:`MCPConnection` (from
+    ``async with server.session()``) is left open for its owner. Disambiguate
+    overlapping tool names with ``MCPServer.name`` (which prefixes ``name__tool``).
+
+    Example::
+
+        from lovia.plugins.mcp import MCP, MCPServerStdio
+
+        agent = Agent(
+            ...,
+            plugins=[MCP(MCPServerStdio(command="uvx", args=["mcp-server-fetch"]))],
+        )
+    """
+
+    servers: tuple[MCPServerLike, ...] = field(init=False)
+    name: str = field(default="mcp", init=False)
+
+    def __init__(self, *servers: MCPServerLike, name: str = "mcp") -> None:
+        self.servers = tuple(servers)
+        self.name = name
 
     async def setup(self) -> PluginInstance:
         tools: list[Tool] = []
@@ -532,27 +554,8 @@ class _MCPPlugin:
         return PluginInstance(tools=tools, aclose=aclose)
 
 
-def mcp(*servers: MCPServerLike, name: str = "mcp") -> Plugin:
-    """Mount one or more MCP servers' tools on an agent, as a plugin.
-
-    Each ``server`` is opened once per run; a config :class:`MCPServer` is closed
-    when the run ends, while a live :class:`MCPConnection` (from
-    ``async with server.session()``) is left open for its owner. Disambiguate
-    overlapping tool names with ``MCPServer.name`` (which prefixes ``name__tool``).
-
-    Example::
-
-        from lovia.plugins.mcp import mcp, MCPServerStdio
-
-        agent = Agent(
-            ...,
-            plugins=[mcp(MCPServerStdio(command="uvx", args=["mcp-server-fetch"]))],
-        )
-    """
-    return _MCPPlugin(servers=tuple(servers), name=name)
-
-
 __all__ = [
+    "MCP",
     "MCPConnection",
     "MCPError",
     "MCPServer",
@@ -560,7 +563,6 @@ __all__ = [
     "MCPServerStdio",
     "MCPServerStreamableHTTP",
     "MCPToolResult",
-    "mcp",
     "normalize_schema",
     "render_mcp_content",
 ]

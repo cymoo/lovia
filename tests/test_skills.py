@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from lovia import Agent, Skills, SkillsError, UserError, skills
+from lovia import Agent, SkillCategory, SkillsError, UserError, Skills
 from lovia.run_context import RunContext
 from lovia.plugins.skills import (
     LocalDirSkillSource,
@@ -20,7 +20,7 @@ from lovia.plugins.skills import (
     _parse_frontmatter,
     _validate_description,
     _validate_name,
-    Skills as SkillsCapability,
+    SkillCategory as SkillsCapability,
 )
 
 
@@ -863,7 +863,7 @@ class TestScopeFilter:
 
 class TestDynamicReload:
     def test_rescan_picks_up_new_skill(self) -> None:
-        """rescan() refreshes the catalog, and Skills.metadata reads through
+        """rescan() refreshes the catalog, and SkillCategory.metadata reads through
         to the source so a running agent sees the change."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1052,10 +1052,10 @@ class TestAgentIntegration:
             agent = Agent(
                 name="test",
                 instructions="Help the customer.",
-                plugins=[skills(root)],
+                plugins=[Skills(root)],
             )
             assert agent.plugins
-            text = Skills.from_dir(root).instructions()
+            text = SkillCategory.from_dir(root).instructions()
             assert "refund-policy" in text
             assert "Process refunds" in text
 
@@ -1071,11 +1071,11 @@ class TestAgentIntegration:
                 "---\nname: deploy\ndescription: Deploy the application.\n---\n# Deploy\n..."
             )
 
-            catalog = Skills.from_dir(root)
+            catalog = SkillCategory.from_dir(root)
             agent = Agent(
                 name="test",
                 instructions="You are helpful.",
-                plugins=[skills(catalog)],
+                plugins=[Skills(catalog)],
             )
             await agent.render_instructions(None)
             # The skill index is rendered into the system prompt by the run loop
@@ -1092,17 +1092,17 @@ class TestAgentIntegration:
             (root / "deploy" / "SKILL.md").write_text(
                 "---\nname: deploy\ndescription: Deploy the app.\n---\n# Deploy\n..."
             )
-            # New DX: pass the directory straight to skills().
-            inst = await skills(root).setup()
+            # New DX: pass the directory straight to Skills().
+            inst = await Skills(root).setup()
             assert "deploy" in (inst.instructions or "")
             assert {t.name for t in inst.tools} == {"load_skill", "read_skill_file"}
-            # A SkillSource is wrapped without Skills(...) boilerplate.
-            inst2 = await skills(LocalDirSkillSource(str(root))).setup()
+            # A SkillSource is wrapped without SkillCategory(...) boilerplate.
+            inst2 = await Skills(LocalDirSkillSource(str(root))).setup()
             assert "deploy" in (inst2.instructions or "")
 
     def test_skills_factory_requires_a_source(self) -> None:
         with pytest.raises(UserError):
-            skills()
+            Skills()
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ Three layers of progressive disclosure:
   ``read_skill_file``. The body names the files it needs, so the model never
   has to guess paths.
 
-:class:`Skills` mirrors the :class:`~lovia.workspace.Workspace` pattern — both
+:class:`SkillCategory` mirrors the :class:`~lovia.workspace.Workspace` pattern — both
 expose ``instructions()`` (system prompt fragment) and ``tools()`` (model-facing
 tools), making them peer capabilities on an :class:`~lovia.Agent`.
 
@@ -414,10 +414,10 @@ Each skill listed above has a description — use it to decide which are relevan
 # ---------------------------------------------------------------------------
 
 SkillFilter = Callable[[SkillMetadata], bool]
-"""Predicate scoping which skills a :class:`Skills` exposes (and can load)."""
+"""Predicate scoping which skills a :class:`SkillCategory` exposes (and can load)."""
 
 
-class Skills:
+class SkillCategory:
     """A collection of skills exposed to the model as a capability.
 
     Mirrors the :class:`~lovia.workspace.Workspace` pattern: both provide
@@ -429,18 +429,18 @@ class Skills:
         agent = Agent(
             name="bot",
             instructions="Be helpful.",
-            skills=Skills.from_dir("./skills"),
+            skills=SkillCategory.from_dir("./skills"),
         )
 
     Multiple directories may be merged (earlier wins on name conflicts)::
 
-        skills=Skills.from_dir("./skills", "./team-skills")
+        skills=SkillCategory.from_dir("./skills", "./team-skills")
 
     A ``filter`` predicate scopes which skills are exposed — useful for
     per-tenant or permission-based catalogs. Filtered-out skills are hidden
     from the index *and* cannot be loaded::
 
-        skills=Skills.from_dir("./skills", filter=lambda m: "internal" not in m.extra.get("tags", []))
+        skills=SkillCategory.from_dir("./skills", filter=lambda m: "internal" not in m.extra.get("tags", []))
     """
 
     def __init__(
@@ -462,8 +462,8 @@ class Skills:
         *paths: str | Path,
         usage_rules: str | None = None,
         filter: SkillFilter | None = None,
-    ) -> "Skills":
-        """Scan one or more directories for ``*/SKILL.md`` and build a :class:`Skills`.
+    ) -> "SkillCategory":
+        """Scan one or more directories for ``*/SKILL.md`` and build a :class:`SkillCategory`.
 
         ``usage_rules`` and ``filter`` are keyword-only so any number of
         directories can be passed positionally:
@@ -683,64 +683,66 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 @dataclass
-class _SkillsPlugin:
-    catalog: Skills
+class Skills:
+    """Expose skills to an agent as a plugin.
+
+    The common case is one or more directories, each holding ``<name>/SKILL.md``
+    folders — pass the paths straight in::
+
+        agent = Agent(..., plugins=[Skills("./skills")])
+        agent = Agent(..., plugins=[Skills("./skills", "./team-skills")])
+
+    Scope or relabel the catalog with keyword options (forwarded to
+    :meth:`SkillCategory.from_dir`)::
+
+        plugins=[Skills("./skills", filter=lambda m: "beta" not in m.extra.get("tags", []))]
+
+    For a custom backend, pass a :class:`SkillSource` (or a pre-built
+    :class:`SkillCategory`) instead of paths::
+
+        plugins=[Skills(MyDatabaseSkillSource())]
+
+    Either way the plugin contributes the ``load_skill`` / ``read_skill_file``
+    tools and the Level-1 skill index (a system-prompt fragment).
+    """
+
+    catalog: SkillCategory
     name: str = "skills"
+
+    def __init__(
+        self,
+        *sources: "str | Path | SkillSource | SkillCategory",
+        usage_rules: str | None = None,
+        filter: "SkillFilter | None" = None,
+    ) -> None:
+        if not sources:
+            raise UserError(
+                "Skills() needs at least one skill directory or source.",
+                hint='e.g. Skills("./skills") or Skills(MySkillSource()).',
+            )
+        first = sources[0]
+        if len(sources) == 1 and isinstance(first, SkillCategory):
+            if usage_rules is not None or filter is not None:
+                raise UserError(
+                    "Configure usage_rules=/filter= on the SkillCategory you build, "
+                    "not on Skills() — they would be ignored when a SkillCategory is passed.",
+                )
+            catalog = first
+        elif len(sources) == 1 and isinstance(first, SkillSource):
+            catalog = SkillCategory(first, usage_rules=usage_rules, filter=filter)
+        else:
+            paths = [s for s in sources if isinstance(s, (str, Path))]
+            if len(paths) != len(sources):
+                raise UserError(
+                    "Skills() takes skill directories, or a single SkillSource / "
+                    "SkillCategory — not a mix of the two.",
+                )
+            catalog = SkillCategory.from_dir(*paths, usage_rules=usage_rules, filter=filter)
+        self.catalog = catalog
+        self.name = "skills"
 
     async def setup(self) -> PluginInstance:
         return PluginInstance(
             tools=self.catalog.tools(),
             instructions=self.catalog.instructions() or None,
         )
-
-
-def skills(
-    *sources: "str | Path | SkillSource | Skills",
-    usage_rules: str | None = None,
-    filter: "SkillFilter | None" = None,
-) -> Plugin:
-    """Expose skills to an agent as a plugin.
-
-    The common case is one or more directories, each holding ``<name>/SKILL.md``
-    folders — pass the paths straight in::
-
-        agent = Agent(..., plugins=[skills("./skills")])
-        agent = Agent(..., plugins=[skills("./skills", "./team-skills")])
-
-    Scope or relabel the catalog with keyword options (forwarded to
-    :meth:`Skills.from_dir`)::
-
-        plugins=[skills("./skills", filter=lambda m: "beta" not in m.extra.get("tags", []))]
-
-    For a custom backend, pass a :class:`SkillSource` (or a pre-built
-    :class:`Skills`) instead of paths::
-
-        plugins=[skills(MyDatabaseSkillSource())]
-
-    Either way the plugin contributes the ``load_skill`` / ``read_skill_file``
-    tools and the Level-1 skill index (a system-prompt fragment).
-    """
-    if not sources:
-        raise UserError(
-            "skills() needs at least one skill directory or source.",
-            hint='e.g. skills("./skills") or skills(MySkillSource()).',
-        )
-    first = sources[0]
-    if len(sources) == 1 and isinstance(first, Skills):
-        if usage_rules is not None or filter is not None:
-            raise UserError(
-                "Configure usage_rules=/filter= on the Skills you build, not on "
-                "skills() — they would be ignored when a Skills is passed.",
-            )
-        catalog = first
-    elif len(sources) == 1 and isinstance(first, SkillSource):
-        catalog = Skills(first, usage_rules=usage_rules, filter=filter)
-    else:
-        paths = [s for s in sources if isinstance(s, (str, Path))]
-        if len(paths) != len(sources):
-            raise UserError(
-                "skills() takes skill directories, or a single SkillSource / "
-                "Skills — not a mix of the two.",
-            )
-        catalog = Skills.from_dir(*paths, usage_rules=usage_rules, filter=filter)
-    return _SkillsPlugin(catalog=catalog)

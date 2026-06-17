@@ -20,11 +20,14 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .types import JsonObject
 from .tools import Tool
+from .reliability import RetryPolicy
 from .transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
     from .agent import Agent
     from .run_context import RunContext
+    from .reliability import RunBudget
+    from .context.policy import ContextPolicy
 
 
 HANDOFF_TOOL_PREFIX = "transfer_to_"
@@ -125,6 +128,10 @@ def agent_as_tool(
     *,
     name: str | None = None,
     description: str | None = None,
+    max_turns: int = 50,
+    budget: "RunBudget | None" = None,
+    retry: "RetryPolicy | None" = RetryPolicy(),
+    context_policy: "ContextPolicy | None" = None,
 ) -> Tool:
     """Wrap ``agent`` as a tool callable by another agent.
 
@@ -132,6 +139,21 @@ def agent_as_tool(
     tool's return value (stringified by the runner as usual). Token usage
     from the sub-run is accumulated into the parent's :class:`Usage` so cost
     reports stay consistent.
+
+    The execution-policy keywords (``max_turns``, ``budget``, ``retry``,
+    ``context_policy``) are fixed here by the developer and forwarded to the
+    sub-run; they are *not* exposed to the model, which only controls the
+    free-form ``input``. Bound ``max_turns`` especially: a delegated sub-agent
+    loops on its own, and the run default is generous. The sub-run inherits the
+    parent's ``context`` and accumulates into its :class:`Usage` automatically.
+
+    TODO(cancel_token): the sub-run does not yet inherit the parent's
+    cancellation. Cancellation is cooperative (``CancelToken.check()`` only
+    fires at turn boundaries and before tool calls), so calling ``cancel()``
+    while the parent is blocked awaiting this sub-run does *not* interrupt it —
+    the child has no token, never checks, and runs to completion. Fix requires
+    exposing ``cancel_token`` on ``RunContext`` and forwarding it here; tracked
+    as a separate change.
     """
     tool_name = name or f"ask_{_slug(agent.name)}"
     tool_desc = (
@@ -147,6 +169,10 @@ def agent_as_tool(
             agent,
             prompt,
             context=ctx.context,
+            max_turns=max_turns,
+            budget=budget,
+            retry=retry,
+            context_policy=context_policy,
             _parent_usage=ctx.usage,
         )
         return result.output

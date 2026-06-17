@@ -26,13 +26,16 @@ from typing import (
 
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
+from .reliability import RetryPolicy
 from .run_context import RunContext
 from .tools import Tool
 
 if TYPE_CHECKING:
+    from .context.policy import ContextPolicy
     from .guardrails import GuardrailFn
     from .hooks import AgentHooks
     from .messages import Message, ToolCall
+    from .reliability import RunBudget
     from .output import OutputRepairStrategy
     from .plugins import Plugin
     from .runtime.result import RunHandle, RunResult
@@ -241,9 +244,25 @@ class Agent(Generic[TContext]):
         *,
         name: str | None = None,
         description: str | None = None,
+        max_turns: int = 50,
+        budget: "RunBudget | None" = None,
+        retry: "RetryPolicy | None" = RetryPolicy(),
+        context_policy: "ContextPolicy | None" = None,
     ) -> Tool:
-        """Expose this agent as a :class:`Tool` callable by other agents."""
-        return agent_as_tool(self, name=name, description=description)
+        """Expose this agent as a :class:`Tool` callable by other agents.
+
+        The execution-policy keywords are forwarded to the sub-run; see
+        :func:`~lovia.handoff.agent_as_tool`.
+        """
+        return agent_as_tool(
+            self,
+            name=name,
+            description=description,
+            max_turns=max_turns,
+            budget=budget,
+            retry=retry,
+            context_policy=context_policy,
+        )
 
     def clone(self, **overrides: Any) -> "Agent[TContext]":
         """Return a copy of this agent with selected fields overridden.

@@ -45,3 +45,27 @@ async def test_agent_as_tool() -> None:
     )
     result = await Runner.run(parent, "delegate to expert")
     assert result.output == "Got it: 42"
+
+
+async def test_agent_as_tool_forwards_max_turns() -> None:
+    # The expert keeps calling a (missing) tool; only on its third turn would
+    # it produce "done". max_turns=1 caps the sub-run before then, so the
+    # sub-run raises MaxTurnsExceeded. The parent catches that as a tool error
+    # and continues to its own next message.
+    expert = Agent(
+        name="Expert",
+        model=ScriptedProvider(
+            [call("noop", {}), call("noop", {}), text("done")]
+        ),
+    )
+    tool = expert.as_tool(max_turns=1)
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [call(tool.name, {"input": "go"}, call_id="c1"), text("ok")]
+        ),
+        tools=[tool],
+    )
+    result = await Runner.run(parent, "delegate")
+    # The expert's "done" is never reached; the parent recovers and answers.
+    assert result.output == "ok"

@@ -53,10 +53,11 @@ async def main() -> None:
     # picks up after the last turn — usually a no-op if the run completed,
     # but illustrative.)
     snap = await cp.load(run_id)
+    assert snap is not None
     print(f"snapshot: {len(snap.entries)} entries, {snap.turns} turns")
 
     resumed = await Runner.run(
-        agent, [], checkpoint=CheckpointOptions(cp, run_id, if_run_exists="require")
+        agent, [], checkpoint=CheckpointOptions(cp, run_id, if_run_exists="resume_only")
     )
     print("resumed output:", resumed.output)
 

@@ -100,7 +100,13 @@ class WorkspaceSession(Protocol):
 class WorkspaceLike(Protocol):
     """Configuration object accepted by ``Agent.workspace``."""
 
-    close_after_run: bool
+    # Read-only so frozen-dataclass configs (e.g. ``Workspace``) satisfy the
+    # protocol. A plain ``close_after_run: bool`` would demand a *settable*
+    # attribute, which a ``@dataclass(frozen=True)`` field is not.
+    @property
+    def close_after_run(self) -> bool:
+        """Whether the runner should close sessions it opened for a run."""
+        ...
 
     async def open(self) -> WorkspaceSession:
         """Open a workspace session."""

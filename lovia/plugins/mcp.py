@@ -389,7 +389,11 @@ class MCPServerLike(Protocol):
     live :class:`MCPConnection` (``close_after_run=False``).
     """
 
-    close_after_run: bool
+    # Read-only so frozen-dataclass configs (e.g. ``MCPServer``) satisfy the
+    # protocol. A plain ``close_after_run: bool`` would demand a *settable*
+    # attribute, which a ``@dataclass(frozen=True)`` field is not.
+    @property
+    def close_after_run(self) -> bool: ...
 
     async def open(self) -> MCPConnection: ...
 

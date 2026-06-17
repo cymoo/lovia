@@ -33,7 +33,7 @@ The instance also carries an ``aclose`` coroutine the runner invokes (LIFO, best
 effort) when the run ends, so a plugin that opens a resource in ``setup`` (an MCP
 connection, an HTTP client) tears it down cleanly.
 
-See :func:`lovia.plugins.todos` for the first concrete plugin.
+See :class:`lovia.plugins.Todo` for the first concrete plugin.
 """
 
 from __future__ import annotations

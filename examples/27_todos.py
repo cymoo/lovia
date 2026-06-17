@@ -1,6 +1,6 @@
 """Todo plugin: the agent externalizes a plan and keeps it visible every turn.
 
-``todos()`` is the first :class:`~lovia.plugins.Plugin`. Attaching it adds a
+``Todo`` is the first :class:`~lovia.plugins.Plugin`. Attaching it adds a
 ``todo_write`` tool plus a per-turn ``<system-reminder>`` that re-shows the
 current list to the model — without ever bloating the persisted transcript.
 
@@ -15,7 +15,7 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, Todo, events, todos
+from lovia import Agent, Runner, TodoItem, Todo, events
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -26,7 +26,7 @@ async def main() -> None:
         name="Builder",
         instructions="You complete multi-step engineering tasks carefully.",
         model=MODEL,
-        plugins=[todos()],
+        plugins=[Todo()],
     )
 
     task = (
@@ -38,7 +38,7 @@ async def main() -> None:
     # Stream events and surface the live todo list as it changes.
     async for event in Runner.stream(agent, task):
         if isinstance(event, events.ToolCallCompleted) and event.call.name == "todo_write":
-            items: list[Todo] = event.result  # structured list[Todo]
+            items: list[TodoItem] = event.result  # structured list[TodoItem]
             print("\n— todo list —")
             for t in items:
                 box = {"pending": " ", "in_progress": "~", "completed": "x"}[t.status]

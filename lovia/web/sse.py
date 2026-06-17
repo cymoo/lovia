@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from ..types import JsonObject, JsonValue
 from .. import events
-from ..plugins import Todo
+from ..plugins import TodoItem
 from ..transcript import (
     AssistantTextEntry,
     ReasoningEntry,
@@ -24,7 +24,7 @@ from ..transcript import (
 )
 
 
-def _todo_payload(todos: list[Todo]) -> list[JsonObject]:
+def _todo_payload(todos: list[TodoItem]) -> list[JsonObject]:
     return [
         {"content": t.content, "status": t.status, "active_form": t.active_form}
         for t in todos
@@ -131,7 +131,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             not ev.is_error
             and isinstance(result, list)
             and result
-            and all(isinstance(t, Todo) for t in result)
+            and all(isinstance(t, TodoItem) for t in result)
         ):
             return {
                 "event": "todo",

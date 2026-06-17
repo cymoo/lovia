@@ -6,7 +6,7 @@ runner activates each once per run (and once per agent on a handoff) via the
 async :meth:`Plugin.setup`, and tears down any resources via
 :attr:`PluginInstance.aclose` when the run ends.
 
-Built-in plugins live in this package — currently :func:`todos`.
+Built-in plugins live in this package — currently :class:`Todo`.
 """
 
 from __future__ import annotations
@@ -22,13 +22,12 @@ from .skills import (
     SkillsError,
     skills,
 )
-from .todos import (
+from .todo import (
     Todo,
-    TodoInput,
+    TodoItem,
     TodoList,
     TodoStatus,
     render_todos,
-    todos,
     todos_from_entries,
 )
 
@@ -45,10 +44,9 @@ __all__ = [
     "SkillsError",
     "skills",
     "Todo",
-    "TodoInput",
+    "TodoItem",
     "TodoList",
     "TodoStatus",
     "render_todos",
-    "todos",
     "todos_from_entries",
 ]

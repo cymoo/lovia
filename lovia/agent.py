@@ -119,7 +119,7 @@ class Agent(Generic[TContext]):
     # Declarative features that bundle tools, per-turn view injectors, static
     # system-prompt text, and event hooks. Each is activated once per run (and
     # per agent on a handoff). See :mod:`lovia.plugins` and
-    # :func:`lovia.plugins.todos`.
+    # :func:`lovia.plugins.todo`.
     plugins: list["Plugin"] = field(default_factory=list)
     hooks: "AgentHooks | None" = None
     approval_handler: ApprovalHandler | None = None

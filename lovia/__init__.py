@@ -131,12 +131,11 @@ from .plugins import (
     Skills,
     SkillsError,
     Todo,
-    TodoInput,
+    TodoItem,
     TodoList,
     TodoStatus,
     ViewInjector,
     skills,
-    todos,
 )
 from .tools import Tool, ToolPolicy, ToolResultRenderer, tool
 from .tracing import ConsoleTracer, InMemoryTracer, NoopTracer, SpanName, Tracer
@@ -267,7 +266,7 @@ __all__ = [
     "TextPart",
     "TextDelta",
     "Todo",
-    "TodoInput",
+    "TodoItem",
     "TodoList",
     "TodoStatus",
     "Tool",
@@ -299,7 +298,6 @@ __all__ = [
     "messages_to_entries",
     "skills",
     "system",
-    "todos",
     "tool",
     "user",
 ]

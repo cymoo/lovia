@@ -2,12 +2,12 @@
 
 The :class:`WebSearch` :class:`typing.Protocol` is the extension point —
 implement it for whatever backend you like. A convenience
-:func:`duckduckgo_search_tool` factory is provided behind the optional
+:func:`duckduckgo_search` factory is provided behind the optional
 ``lovia[ddg]`` extra so users can get started without an API key::
 
-    from lovia.tools.search import duckduckgo_search_tool, web_search
+    from lovia.tools.search import duckduckgo_search, web_search
 
-    search = duckduckgo_search_tool()         # requires lovia[ddg]
+    search = duckduckgo_search()         # requires lovia[ddg]
     custom = web_search(MySearchBackend())    # or your own implementation
     agent = Agent(name="x", tools=[search])
 
@@ -115,7 +115,7 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
 
     Pass an explicit backend so optional dependencies fail at construction
     time instead of during a later agent run. Use
-    :func:`duckduckgo_search_tool` for the bundled DuckDuckGo backend.
+    :func:`duckduckgo_search` for the bundled DuckDuckGo backend.
     """
 
     @tool(name=name)

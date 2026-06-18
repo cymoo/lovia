@@ -27,9 +27,9 @@ async def test_in_memory_tracer_records_spans() -> None:
             text("3"),
         ]
     )
-    agent = Agent(name="t", model=provider, tools=[add], tracer=tracer)
+    agent = Agent(name="t", model=provider, tools=[add])
 
-    result = await Runner.run(agent, "go")
+    result = await Runner.run(agent, "go", tracer=tracer)
     assert result.output == "3"
 
     names = [s.name for s in tracer.spans]
@@ -51,10 +51,10 @@ async def test_in_memory_tracer_records_spans() -> None:
 async def test_console_tracer_emits_log_lines(caplog: pytest.LogCaptureFixture) -> None:
     tracer = ConsoleTracer(logger=logging.getLogger("lovia.trace.test"))
     provider = ScriptedProvider([text("hi")])
-    agent = Agent(name="t", model=provider, tracer=tracer)
+    agent = Agent(name="t", model=provider)
 
     with caplog.at_level(logging.INFO, logger="lovia.trace.test"):
-        await Runner.run(agent, "go")
+        await Runner.run(agent, "go", tracer=tracer)
 
     # At least the run + one model_call line.
     messages = [r.message for r in caplog.records]
@@ -64,11 +64,11 @@ async def test_console_tracer_emits_log_lines(caplog: pytest.LogCaptureFixture) 
 
 @pytest.mark.asyncio
 async def test_noop_tracer_runs_cleanly() -> None:
-    # The runner falls back to NoopTracer when ``agent.tracer`` is None;
+    # The runner falls back to NoopTracer when no ``tracer=`` is passed;
     # NoopTracer should also be explicitly assignable.
     provider = ScriptedProvider([text("ok")])
-    agent = Agent(name="t", model=provider, tracer=NoopTracer())
-    result = await Runner.run(agent, "go")
+    agent = Agent(name="t", model=provider)
+    result = await Runner.run(agent, "go", tracer=NoopTracer())
     assert result.output == "ok"
 
 
@@ -85,8 +85,8 @@ async def test_tool_span_records_exception() -> None:
             text("done"),
         ]
     )
-    agent = Agent(name="t", model=provider, tools=[boom], tracer=tracer)
-    await Runner.run(agent, "go")
+    agent = Agent(name="t", model=provider, tools=[boom])
+    await Runner.run(agent, "go", tracer=tracer)
 
     tool_span = next(s for s in tracer.spans if s.name == "tool_call")
     assert tool_span.exception is not None

@@ -51,7 +51,6 @@ def main() -> None:
         tools=[add, send_email],
         plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),
-        tracer=ConsoleTracer(),
     )
     # Default policy: cheap moves first (archive/clear old tool results),
     # an incremental LLM summary as the last resort, all decisions sticky so
@@ -59,7 +58,13 @@ def main() -> None:
     # provider for the active model's window and fall back to the reactive
     # overflow path when the window is unknown.
     policy = Compaction(context_window=200_000)
-    serve(agent, host="127.0.0.1", port=8000, context_policy=policy)
+    serve(
+        agent,
+        host="127.0.0.1",
+        port=8000,
+        context_policy=policy,
+        tracer=ConsoleTracer(),
+    )
 
 
 if __name__ == "__main__":

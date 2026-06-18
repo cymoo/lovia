@@ -59,7 +59,10 @@ class Handoff:
     Attributes:
         target: The agent to transfer control to.
         name: Override for the ``transfer_to_<name>`` tool name.
-        description: Override for the tool description shown to the model.
+        description: Override for the tool description shown to the model. This
+            is the routing signal the parent agent sees — set it to the target's
+            specialty when the default ("Transfer to the <name> agent...") is too
+            thin to route on reliably.
         on_handoff: Optional callback invoked when the handoff fires; receives
             the parsed arguments (a single ``reason`` string by default) and
             the run context.
@@ -91,6 +94,11 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
     """Build the ``transfer_to_<name>`` tool that triggers ``handoff``."""
     target = handoff.target
     tool_name = handoff.name or f"{HANDOFF_TOOL_PREFIX}{_slug(target.name)}"
+    # The default description is deliberately generic: the agent name alone is a
+    # thin routing signal. When the parent must choose between similar agents,
+    # set ``Handoff.description`` with the target's specialty — that is the knob
+    # for routing, rather than embedding ``target.instructions`` (which may be a
+    # callable or a large system prompt and would bloat the parent's schema).
     description = (
         handoff.description
         or f"Transfer the conversation to the {target.name} agent. Use this when the request matches that agent's specialty."

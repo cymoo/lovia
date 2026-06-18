@@ -54,9 +54,16 @@ class ToolCallProcessor:
             # and post-model checks cover token caps, not the tool-call count).
             self.budget.check(state.run_ctx.usage)
 
+        # Unknown tool and the malformed-arguments case below are *model-input*
+        # errors, not runtime failures: they are fed back to the model as an
+        # error tool-result and surfaced to observers via
+        # ``ToolCallCompleted(is_error=True)`` — not as ``ErrorOccurred``, which
+        # carries a ``BaseException`` (there is none here). No ``ToolCallStarted``
+        # precedes them because the tool never starts; see the event docstrings.
         tool = state.active.tools_by_name.get(call.name)
         if tool is None:
             err = f"Tool {call.name!r} is not available."
+            logger.warning("tool.unknown: %s call_id=%s", call.name, call.id)
             state.transcript.append(
                 ToolResultEntry(call_id=call.id, output=err, is_error=True)
             )
@@ -94,6 +101,15 @@ class ToolCallProcessor:
                     if inspect.isawaitable(decision):
                         decision = await decision
                 except Exception as exc:
+                    # ``Runner.run`` callers never see events, so the log is the
+                    # only durable signal that the handler failed (and the call
+                    # was therefore denied below).
+                    logger.warning(
+                        "approval_handler.error: call_id=%s (%s: %s)",
+                        call.id,
+                        type(exc).__name__,
+                        exc,
+                    )
                     yield events.ErrorOccurred(error=exc)
                     decision = False
                 self._apply_handler_decision(call.id, decision)
@@ -195,10 +211,13 @@ class ToolCallProcessor:
         yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
 
     def _apply_handler_decision(self, call_id: str, decision: object) -> None:
+        # String decisions follow the declared ``ApprovalDecision`` contract
+        # (``"allow"`` / ``"deny"`` / ``"ask"``). ``"deny"`` and anything
+        # unrecognised resolve to deny, matching the run's fail-closed posture.
         if isinstance(decision, str):
             token = decision.strip().lower()
             if token == "ask":
                 return  # defer; falls through to the default-deny check
-            self.approvals.resolve(call_id, token in ("allow", "approve", "yes"))
+            self.approvals.resolve(call_id, token == "allow")
         else:
             self.approvals.resolve(call_id, bool(decision))

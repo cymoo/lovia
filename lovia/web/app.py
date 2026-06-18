@@ -19,6 +19,7 @@ from ..context import Compaction, ContextPolicy
 from ..providers import Provider
 from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
+from ..tracing import Tracer
 from .approvals import ApprovalRegistry
 from .routes import build_router
 from .store import ChatStore
@@ -56,6 +57,7 @@ def create_app(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    tracer: Tracer | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
@@ -111,6 +113,7 @@ def create_app(
             max_turns=max_turns,
             budget=budget,
             retry=retry,
+            tracer=tracer,
             empty_title=empty_title,
             empty_description=empty_description,
         )
@@ -125,6 +128,7 @@ def create_app(
     app.state.session = chat_store.session
     app.state.approvals = approvals
     app.state.context_policy = effective_policy
+    app.state.tracer = tracer
     return app
 
 
@@ -143,6 +147,7 @@ def serve(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    tracer: Tracer | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
@@ -172,6 +177,7 @@ def serve(
         max_turns=max_turns,
         budget=budget,
         retry=retry,
+        tracer=tracer,
         empty_title=empty_title,
         empty_description=empty_description,
     )

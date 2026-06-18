@@ -29,6 +29,7 @@ from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..plugins import todos_from_entries
 from ..transcript import entries_to_messages, InputEntry
 from ..runner import Runner
+from ..tracing import Tracer
 from .approvals import ApprovalRegistry
 from .schemas import (
     AgentInfo,
@@ -66,6 +67,7 @@ def build_router(
     max_turns: int = 50,
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
+    tracer: Tracer | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
 ) -> APIRouter:
@@ -167,6 +169,7 @@ def build_router(
             max_turns=max_turns,
             budget=budget,
             retry=retry,
+            tracer=tracer,
         )
         if is_new and generate_titles:
             asyncio.create_task(
@@ -225,6 +228,7 @@ def build_router(
                 max_turns=max_turns,
                 budget=budget,
                 retry=retry,
+                tracer=tracer,
                 checkpoint=checkpoint_opts,
             )
             # Tell the client its session id up front so reconnects work.
@@ -447,6 +451,7 @@ def build_router(
                 max_turns=max_turns,
                 budget=budget,
                 retry=retry,
+                tracer=tracer,
                 checkpoint=checkpoint_opts,
             )
             yield {"event": "session", "data": json.dumps({"session_id": session_id})}

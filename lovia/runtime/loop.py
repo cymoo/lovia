@@ -112,6 +112,7 @@ class RunLoop:
         session: Session | None,
         session_id: str | None,
         checkpoint: CheckpointOptions | None = None,
+        tracer: Tracer | None = None,
         parent_usage: Usage | None = None,
     ) -> None:
         if session is not None and session_id is None:
@@ -130,6 +131,11 @@ class RunLoop:
         # is behaviourally identical to the old None for callers who don't reach
         # for it.
         self.cancel_token = cancel_token or CancelToken()
+        # Run-scoped observability. ``None`` → NoopTracer at stream() time, so
+        # instrumentation stays free. A run-level knob (like budget/cancel_token),
+        # not a per-agent one: it applies across handoffs to whatever agent is
+        # active, which a field on the initial agent could not express.
+        self.tracer = tracer
         self.retry = retry
         self.context_policy: ContextPolicy = context_policy or Compaction(
             context_window=200_000
@@ -165,7 +171,7 @@ class RunLoop:
 
     async def stream(self) -> AsyncIterator[events.Event]:
         agent = self.initial_agent
-        tracer: Tracer = agent.tracer or NoopTracer()
+        tracer: Tracer = self.tracer or NoopTracer()
 
         with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
             async for ev in self._stream_inner(tracer, span):

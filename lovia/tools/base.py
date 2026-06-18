@@ -40,12 +40,21 @@ from ..exceptions import UserError
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
+# Argument contract for the callables below. ``ApprovalPredicate``,
+# ``ToolInvoker``, and ``ToolPolicy`` all receive the *raw* arguments parsed
+# from the model's tool call (``json.loads(call.arguments or "{}")``). Pydantic
+# coercion, defaults, and validation happen only at the function boundary, inside
+# the generated ``invoke`` (via :func:`validate_args`). This is deliberate:
+# validation is bound to the target function's signature, which only the innermost
+# ``invoke`` knows, so the surrounding wrappers stay schema-agnostic. A predicate
+# or policy that needs coerced/defaulted values should apply its own validation.
+#
 # Predicate that may inspect the parsed arguments and current context to decide
 # whether a tool invocation needs human approval.
 ApprovalPredicate = Callable[[dict[str, Any], "RunContext[Any]"], bool]
 
-# A ``wrap`` callable receives the underlying ``invoke``, the validated args,
-# and the run context. It must return (or await) the tool result. Use it to
+# A ``wrap`` callable receives the underlying ``invoke``, the raw (unvalidated)
+# args, and the run context. It must return (or await) the tool result. Use it to
 # insert custom behaviour around a single attempt (caching, mocking, custom
 # auth, redaction). Retries and timeout, when configured, are applied *around*
 # wrap — i.e. wrap sees one attempt at a time.
@@ -55,10 +64,10 @@ ToolInvoker = Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[Any]]
 class ToolPolicy(Protocol):
     """Composable behavior around one tool attempt.
 
-    Policies receive the next callable in the chain plus validated arguments
-    and context. They can mutate arguments, short-circuit, retry internally,
-    redact results, cache, rate-limit, etc. Runner-level retries/timeouts are
-    still applied around the composed attempt.
+    Policies receive the next callable in the chain plus the raw (unvalidated)
+    arguments and context. They can mutate arguments, short-circuit, retry
+    internally, redact results, cache, rate-limit, etc. Runner-level
+    retries/timeouts are still applied around the composed attempt.
     """
 
     def __call__(
@@ -198,10 +207,13 @@ async def run_tool(
     args: dict[str, Any],
     ctx: "RunContext[Any]",
     *,
+    # Passed explicitly rather than read from ``ctx.agent`` so this stays a pure,
+    # agent-agnostic helper — easy to test and not coupled to Agent's field
+    # names. The runner supplies them from ``state.agent``.
     default_retries: int = 0,
     default_timeout: float | None = None,
 ) -> Any:
-    """Invoke ``tool`` honouring policy chain / retries / timeout.
+    """Invoke ``tool`` honoring policy chain / retries / timeout.
 
     Retries and timeout are applied *around* the per-attempt policy chain so
     each policy sees a single attempt unless it intentionally loops itself.
@@ -265,6 +277,9 @@ async def render_tool_result(
     result: Any,
     ctx: "RunContext[Any]",
     *,
+    # Passed explicitly rather than read from ``ctx.agent.tool_result_renderer``,
+    # keeping this helper agent-agnostic and consistent with ``run_tool`` above.
+    # The runner supplies it from ``state.agent``.
     default: ToolResultRenderer | None = None,
 ) -> str:
     """Convert a raw tool result into the string the model receives.

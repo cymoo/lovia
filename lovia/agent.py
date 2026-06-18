@@ -41,7 +41,6 @@ if TYPE_CHECKING:
     from .runtime.result import RunHandle, RunResult
     from .tools import ToolResultRenderer
     from .workspace import WorkspaceLike
-    from .tracing import Tracer
 
 
 TContext = TypeVar("TContext")
@@ -112,7 +111,7 @@ class Agent(Generic[TContext]):
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
     # When ``True`` (default), a failed structured-output parse triggers one
-    # English repair prompt before giving up. Set to ``False`` to fail fast,
+    # repair prompt before giving up. Set to ``False`` to fail fast,
     # or pass an :class:`~lovia.output.OutputRepairStrategy` instance for
     # custom retry policies (multi-attempt, localised prompts, etc.).
     output_repair: "bool | OutputRepairStrategy" = True
@@ -140,15 +139,14 @@ class Agent(Generic[TContext]):
     # ``recall_tool_result`` tool sees the truncated version too); tools that
     # need full-fidelity recovery should write to the workspace themselves.
     # ``None`` (default) stores outputs in full. Per-tool ``max_output_chars``
-    # overrides this.
+    # overrides this. Lossless-by-default is deliberate: this is a framework, so
+    # the safe default is to never silently drop a tool's output — opt into a cap
+    # (here or per-tool) when you need to bound transcript/checkpoint/token cost.
     max_tool_output_chars: int | None = None
     # Optional agent-wide renderer applied to any tool whose own
     # ``result_renderer`` is ``None``. Useful for things like always
-    # JSON-serialising via a custom encoder.
+    # JSON-serializing via a custom encoder.
     tool_result_renderer: "ToolResultRenderer | None" = None
-    # Optional tracer. When ``None`` the runner uses a no-op tracer, so
-    # instrumentation is free.
-    tracer: "Tracer | None" = None
     # Dynamic system-prompt fragments registered via @agent.system_prompt.
     # Rendered in registration order and appended after ``instructions``.
     # Not a public field — use the decorator or ``with_system_prompt`` instead.

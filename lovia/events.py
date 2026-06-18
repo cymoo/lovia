@@ -131,11 +131,26 @@ class MessageCompleted(MessageEvent):
 
 @dataclass
 class ToolCallStarted(ToolEvent):
+    """Emitted just before a tool actually runs.
+
+    Only fires for calls that reach execution. Calls rejected beforehand —
+    unknown tool, malformed arguments, or denied approval — skip straight to
+    :class:`ToolCallCompleted` with ``is_error=True`` and never emit this event.
+    """
+
     call: ToolCall
 
 
 @dataclass
 class ToolCallCompleted(ToolEvent):
+    """Emitted once a tool call reaches a terminal outcome.
+
+    May arrive **without** a preceding :class:`ToolCallStarted` when the call was
+    rejected before execution (see above), so consumers must not assume the two
+    pair up. ``is_error`` plus ``result`` distinguish the outcomes (e.g. the
+    "is not available" / "Invalid JSON" / "was not approved" messages).
+    """
+
     call: ToolCall
     result: Any
     is_error: bool = False

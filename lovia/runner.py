@@ -21,6 +21,7 @@ from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runtime.loop import RunLoop
 from .runtime.result import RunHandle, RunResult
 from .session import Session
+from .tracing import Tracer
 
 TContext = TypeVar("TContext")
 
@@ -44,6 +45,7 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         checkpoint: CheckpointOptions | None = None,
+        tracer: Tracer | None = None,
         # Framework-internal: sub-agent runs (agent-as-tool) fold their usage
         # into the parent run's accumulator. Not part of the public contract.
         _parent_usage: Usage | None = None,
@@ -94,6 +96,7 @@ class Runner:
             session=session,
             session_id=session_id,
             checkpoint=checkpoint,
+            tracer=tracer,
             parent_usage=_parent_usage,
         )
         return RunHandle(loop.stream(), loop.approvals)
@@ -114,6 +117,7 @@ class Runner:
         session: Session | None = None,
         session_id: str | None = None,
         checkpoint: CheckpointOptions | None = None,
+        tracer: Tracer | None = None,
         _parent_usage: Usage | None = None,  # framework-internal; see stream()
     ) -> RunResult:
         """Run ``agent`` to completion and return the final result.
@@ -136,6 +140,7 @@ class Runner:
             session_id=session_id,
             checkpoint=checkpoint,
             max_turns=max_turns,
+            tracer=tracer,
             _parent_usage=_parent_usage,
         ).result()
 

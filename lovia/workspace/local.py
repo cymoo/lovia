@@ -167,6 +167,11 @@ class LocalWorkspaceSession:
                 with p.open("rb") as fh:
                     raw = fh.read(self.limits.max_file_read_bytes)
                 text = raw.decode("utf-8", errors="replace")
+                hint = (
+                    "Large file: only its leading portion was read (line numbers "
+                    "and total are for that portion). Use the shell, e.g. "
+                    "sed -n, to read arbitrary ranges of very large files."
+                )
             else:
                 text = p.read_text(encoding="utf-8", errors="replace")
             lines = text.splitlines(keepends=True)

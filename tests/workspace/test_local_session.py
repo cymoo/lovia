@@ -109,6 +109,20 @@ async def test_read_with_line_ranges_and_truncation(tmp_path) -> None:
     assert "truncated" in clipped.content
 
 
+async def test_read_guards_against_oversized_files(tmp_path) -> None:
+    (tmp_path / "huge.txt").write_text(
+        "\n".join(f"line{i}" for i in range(1, 2001)), encoding="utf-8"
+    )
+    # A tiny byte cap forces the oversized path without a real huge file.
+    session = await _session(
+        tmp_path, limits=WorkspaceLimits(max_file_read_bytes=200)
+    )
+    result = await session.read_text("huge.txt")
+    assert result.truncated is True
+    # Only a bounded prefix was read, so far fewer than the 2000 real lines.
+    assert 0 < result.total_lines < 2000
+
+
 async def test_write_create_only_and_nested_dirs(tmp_path) -> None:
     session = await _session(tmp_path)
     created = await session.write_text("a/b/new.txt", "data", create_only=True)
@@ -345,3 +359,14 @@ async def test_workspace_inherit_env_defaults_to_trusted(tmp_path) -> None:
     # ...but the default is overridable either way.
     forced = Workspace.local(str(tmp_path), mode="coding", inherit_env=True)
     assert forced.config.inherit_env is True
+
+
+async def test_workspace_factory_guards() -> None:
+    from lovia.exceptions import UserError
+
+    # Workspace is a factory facade, not a backend you instantiate.
+    with pytest.raises(UserError):
+        Workspace()
+    # docker backend is a documented placeholder for now.
+    with pytest.raises(NotImplementedError):
+        Workspace.docker()

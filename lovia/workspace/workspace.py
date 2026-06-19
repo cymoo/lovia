@@ -38,24 +38,7 @@ from .types import WorkspaceLimits, WorkspaceMode
 if TYPE_CHECKING:
     from ..tools import Tool
 
-__all__ = ["LocalWorkspace", "Workspace", "WorkspaceConfig"]
-
-
-@dataclass(frozen=True)
-class WorkspaceConfig:
-    """Backend-agnostic workspace configuration.
-
-    The shared config every backend composes (``LocalWorkspace`` today, a
-    future ``DockerWorkspace`` tomorrow), so policy, environment, timeout, and
-    size limits are defined once and reused regardless of how the session is
-    actually backed.
-    """
-
-    policy: WorkspacePolicy = field(default_factory=WorkspacePolicy.coding)
-    env: Mapping[str, str] | None = None
-    inherit_env: bool = False
-    shell_timeout: float | None = 300.0
-    limits: WorkspaceLimits = field(default_factory=WorkspaceLimits)
+__all__ = ["LocalWorkspace", "Workspace"]
 
 
 @dataclass(frozen=True)
@@ -69,24 +52,22 @@ class LocalWorkspace:
     """
 
     root: str
-    config: WorkspaceConfig = field(default_factory=WorkspaceConfig)
+    policy: WorkspacePolicy = field(default_factory=WorkspacePolicy.coding)
+    env: Mapping[str, str] | None = None
+    shell_timeout: float | None = 300.0
+    limits: WorkspaceLimits = field(default_factory=WorkspaceLimits)
+    inherit_env: bool = False
     close_after_run: bool = True
-
-    @property
-    def policy(self) -> WorkspacePolicy:
-        """Convenience accessor for ``config.policy`` (read by tools/prompt)."""
-        return self.config.policy
 
     async def open(self) -> LocalWorkspaceSession:
         """Open a live workspace session."""
-        c = self.config
         return LocalWorkspaceSession(
             root=self.root,
-            policy=c.policy,
-            env=c.env,
-            shell_timeout=c.shell_timeout,
-            limits=c.limits,
-            inherit_env=c.inherit_env,
+            policy=self.policy,
+            env=self.env,
+            shell_timeout=self.shell_timeout,
+            limits=self.limits,
+            inherit_env=self.inherit_env,
         )
 
     @asynccontextmanager
@@ -232,14 +213,14 @@ class Workspace:
             # runs shell without approval may as well see the host env;
             # everything else defaults to the minimal allowlist.
             inherit_env = bool(policy.allow_shell and policy.shell_default == "allow")
-        config = WorkspaceConfig(
+        return LocalWorkspace(
+            root=str(root),
             policy=policy,
             env=dict(env) if env is not None else None,
-            inherit_env=inherit_env,
             shell_timeout=shell_timeout,
             limits=limits if limits is not None else WorkspaceLimits(),
+            inherit_env=inherit_env,
         )
-        return LocalWorkspace(root=str(root), config=config)
 
     @classmethod
     def docker(cls, *args: object, **kwargs: object) -> NoReturn:

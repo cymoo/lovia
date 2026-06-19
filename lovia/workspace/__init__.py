@@ -29,7 +29,7 @@ from .types import (
     WorkspaceMode,
 )
 from ..tools.base import clip_text
-from .workspace import LocalWorkspace, Workspace, WorkspaceConfig
+from .workspace import LocalWorkspace, Workspace
 
 __all__ = [
     "CommandResult",
@@ -47,7 +47,6 @@ __all__ = [
     "Workspace",
     "WorkspaceBackendError",
     "WorkspaceClosedError",
-    "WorkspaceConfig",
     "WorkspaceError",
     "WorkspaceLike",
     "WorkspaceLimits",

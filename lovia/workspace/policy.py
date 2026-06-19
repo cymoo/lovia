@@ -189,7 +189,9 @@ class WorkspacePolicy:
     def _decide_segment(self, segment: str) -> Decision:
         if self.command_decider is not None:
             verdict = self.command_decider(segment)
-            if verdict is not None:
+            # Ignore anything that isn't a valid Decision (incl. None): fall
+            # through to the static rules rather than crash on a bad hook.
+            if verdict in ("allow", "ask", "deny"):
                 return verdict
         words = segment.split()
         for rule in self.command_rules:

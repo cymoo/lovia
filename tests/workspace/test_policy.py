@@ -160,3 +160,11 @@ def test_command_decider_overrides_then_falls_through() -> None:
     assert policy.decide_command("echo hi") == "allow"  # falls through to default
     # Most-restrictive-wins still composes with the hook across segments.
     assert policy.decide_command("echo hi && danger") == "deny"
+
+
+def test_command_decider_invalid_return_falls_through() -> None:
+    # A hook returning a non-Decision must not crash; it falls through.
+    policy = WorkspacePolicy(
+        shell_default="ask", command_decider=lambda seg: "maybe"
+    )
+    assert policy.decide_command("anything") == "ask"

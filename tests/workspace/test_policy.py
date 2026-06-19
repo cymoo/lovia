@@ -113,3 +113,58 @@ def test_presets() -> None:
     assert trusted.shell_default == "allow"
     assert trusted.decide_command("rm -rf x") == "deny"
     assert trusted.decide_command("echo ok") == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Correctness fixes + the command_decider hook
+# ---------------------------------------------------------------------------
+
+
+def test_newline_is_a_command_separator() -> None:
+    # A newline splits segments too, so an allowed first line can't shelter a
+    # denied second line (`git status\nrm -rf /`).
+    policy = WorkspacePolicy(
+        shell_default="ask",
+        command_rules=(CommandRule("git", "allow"), CommandRule("rm -rf", "deny")),
+    )
+    assert policy.decide_command("git status\nrm -rf /") == "deny"
+
+
+def test_denied_paths_match_nested_files_and_directories() -> None:
+    policy = WorkspacePolicy(denied_paths=(".env*", "secrets"))
+    # A bare glob catches the dotfile at any depth, not just at the root.
+    assert policy.path_is_denied("config/.env.local")
+    with pytest.raises(PermissionDeniedError):
+        policy.check_path("a/b/.env", write=False)
+    # A bare directory name denies the dir and everything beneath it, anywhere.
+    assert policy.path_is_denied("secrets")
+    assert policy.path_is_denied("secrets/prod/key.pem")
+    assert policy.path_is_denied("vendor/secrets/key")
+    # Unrelated paths stay allowed.
+    assert not policy.path_is_denied("src/app.py")
+
+
+def test_command_decider_overrides_then_falls_through() -> None:
+    def decider(segment: str):
+        if segment.startswith("danger"):
+            return "deny"
+        return None  # fall through to static rules / default
+
+    policy = WorkspacePolicy(
+        shell_default="allow",
+        command_rules=(CommandRule("rm", "ask"),),
+        command_decider=decider,
+    )
+    assert policy.decide_command("danger --now") == "deny"  # hook wins
+    assert policy.decide_command("rm file") == "ask"  # falls through to a rule
+    assert policy.decide_command("echo hi") == "allow"  # falls through to default
+    # Most-restrictive-wins still composes with the hook across segments.
+    assert policy.decide_command("echo hi && danger") == "deny"
+
+
+def test_command_decider_invalid_return_falls_through() -> None:
+    # A hook returning a non-Decision must not crash; it falls through.
+    policy = WorkspacePolicy(
+        shell_default="ask", command_decider=lambda seg: "maybe"
+    )
+    assert policy.decide_command("anything") == "ask"

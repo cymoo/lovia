@@ -25,10 +25,11 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    WorkspaceLimits,
     WorkspaceMode,
-    clip_text,
 )
-from .workspace import Workspace
+from ..tools.base import clip_text
+from .workspace import LocalWorkspace, Workspace
 
 __all__ = [
     "CommandResult",
@@ -39,6 +40,7 @@ __all__ = [
     "FileChange",
     "FileContent",
     "GrepMatch",
+    "LocalWorkspace",
     "LocalWorkspaceSession",
     "PathOutsideWorkspaceError",
     "PermissionDeniedError",
@@ -47,6 +49,7 @@ __all__ = [
     "WorkspaceClosedError",
     "WorkspaceError",
     "WorkspaceLike",
+    "WorkspaceLimits",
     "WorkspaceMode",
     "WorkspacePolicy",
     "WorkspaceSession",

@@ -154,7 +154,7 @@ async def test_readonly_workspace_exposes_no_shell_or_write(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_file_tools_without_workspace_fail_with_hint(tmp_path) -> None:
-    from lovia.tools import read_file
+    from lovia.workspace.tools import read_file
 
     provider = ScriptedProvider(
         [call("read_file", {"path": "x.txt"}, call_id="r"), text("done")]

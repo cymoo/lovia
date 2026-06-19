@@ -12,6 +12,7 @@ from lovia.workspace import (
     Workspace,
     WorkspaceClosedError,
     WorkspaceError,
+    WorkspaceLimits,
     WorkspacePolicy,
 )
 
@@ -97,7 +98,7 @@ async def test_read_with_line_ranges_and_truncation(tmp_path) -> None:
     (tmp_path / "big.txt").write_text(
         "\n".join(f"line{i}" for i in range(1, 101)), encoding="utf-8"
     )
-    session = await _session(tmp_path, max_read_chars=30)
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_file_read_chars=30))
     page = await session.read_text("big.txt", start=2, end=3)
     assert page.content == "line2\nline3\n"
     assert page.start == 2 and page.end == 3 and page.total_lines == 100
@@ -106,6 +107,20 @@ async def test_read_with_line_ranges_and_truncation(tmp_path) -> None:
     clipped = await session.read_text("big.txt")
     assert clipped.truncated is True
     assert "truncated" in clipped.content
+
+
+async def test_read_guards_against_oversized_files(tmp_path) -> None:
+    (tmp_path / "huge.txt").write_text(
+        "\n".join(f"line{i}" for i in range(1, 2001)), encoding="utf-8"
+    )
+    # A tiny byte cap forces the oversized path without a real huge file.
+    session = await _session(
+        tmp_path, limits=WorkspaceLimits(max_file_read_bytes=200)
+    )
+    result = await session.read_text("huge.txt")
+    assert result.truncated is True
+    # Only a bounded prefix was read, so far fewer than the 2000 real lines.
+    assert 0 < result.total_lines < 2000
 
 
 async def test_write_create_only_and_nested_dirs(tmp_path) -> None:
@@ -168,12 +183,14 @@ async def test_list_with_glob_pattern(tmp_path) -> None:
     assert [e.path for e in entries] == ["src/a.py", "top.py"]
 
 
-async def test_list_glob_too_many_matches_raises(tmp_path) -> None:
+async def test_list_glob_too_many_matches_truncates(tmp_path) -> None:
     for i in range(5):
         (tmp_path / f"f{i}.txt").write_text("x", encoding="utf-8")
     session = await _session(tmp_path)
-    with pytest.raises(WorkspaceError, match="Too many"):
-        await session.list_files(".", pattern="*.txt", max_results=3)
+    matched = await session.list_files(".", pattern="*.txt", max_results=3)
+    # Truncate-and-flag rather than raising, so the model still gets results.
+    assert len(matched) == 3
+    assert getattr(matched, "truncated", False) is True
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +231,33 @@ async def test_grep_invalid_regex_raises(tmp_path) -> None:
         await session.grep("(unclosed")
 
 
+async def test_list_truncates_instead_of_raising(tmp_path) -> None:
+    for i in range(10):
+        (tmp_path / f"f{i}.txt").write_text("x", encoding="utf-8")
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_list_results=4))
+    children = await session.list_files(".")
+    assert len(children) == 4  # capped, not an error
+    assert getattr(children, "truncated", False) is True
+    matched = await session.list_files(".", pattern="*.txt")
+    assert len(matched) == 4
+    assert getattr(matched, "truncated", False) is True
+
+
+async def test_grep_include_hidden_and_skips_escaping_symlink(tmp_path) -> None:
+    (tmp_path / ".secret.txt").write_text("token", encoding="utf-8")
+    (tmp_path / "visible.txt").write_text("token", encoding="utf-8")
+    session = await _session(tmp_path)
+    assert [m.path for m in await session.grep("token")] == ["visible.txt"]
+    incl = await session.grep("token", include_hidden=True)
+    assert {m.path for m in incl} == {".secret.txt", "visible.txt"}
+
+    # A symlinked file pointing outside the root is not searched through.
+    outside = tmp_path.parent / "outside_secret.txt"
+    outside.write_text("token", encoding="utf-8")
+    (tmp_path / "link.txt").symlink_to(outside)
+    assert "link.txt" not in {m.path for m in await session.grep("token")}
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -234,12 +278,36 @@ async def test_run_timeout_kills_process(tmp_path) -> None:
 
 
 async def test_run_output_clipped_head_and_tail(tmp_path) -> None:
-    session = await _session(tmp_path, max_output_chars=200)
+    session = await _session(
+        tmp_path, limits=WorkspaceLimits(max_shell_output_chars=200)
+    )
     result = await session.run("seq 1 2000")
     assert result.truncated is True
     assert "truncated" in result.stdout
     assert result.stdout.startswith("1\n")  # head kept
     assert result.stdout.rstrip().endswith("2000")  # tail kept
+
+
+async def test_shell_env_excludes_host_secrets_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "leaked-value-123")
+    session = await _session(tmp_path)  # inherit_env defaults to False
+    result = await session.run('echo "[$SUPER_SECRET_TOKEN]"')
+    assert "leaked-value-123" not in result.stdout
+    # ...but a working PATH is still present, so commands run.
+    assert (await session.run("echo hi")).stdout.strip() == "hi"
+
+
+async def test_shell_inherit_env_passes_host_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "leaked-value-123")
+    session = await _session(tmp_path, inherit_env=True)
+    result = await session.run('echo "[$SUPER_SECRET_TOKEN]"')
+    assert "leaked-value-123" in result.stdout
+
+
+async def test_shell_env_explicit_passthrough(tmp_path) -> None:
+    session = await _session(tmp_path, env={"MY_VAR": "hello-env"})
+    result = await session.run('echo "[$MY_VAR]"')
+    assert "hello-env" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +349,24 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
 
     trusted = Workspace.local(str(tmp_path), mode="trusted")
     assert "without approval" in trusted.instructions()
+
+
+async def test_workspace_inherit_env_defaults_to_trusted(tmp_path) -> None:
+    # trusted runs shell without approval, so it inherits the host env;
+    # coding (approval-gated) defaults to the minimal allowlist.
+    assert Workspace.local(str(tmp_path), mode="trusted").inherit_env is True
+    assert Workspace.local(str(tmp_path), mode="coding").inherit_env is False
+    # ...but the default is overridable either way.
+    forced = Workspace.local(str(tmp_path), mode="coding", inherit_env=True)
+    assert forced.inherit_env is True
+
+
+async def test_workspace_factory_guards() -> None:
+    from lovia.exceptions import UserError
+
+    # Workspace is a factory facade, not a backend you instantiate.
+    with pytest.raises(UserError):
+        Workspace()
+    # docker backend is a documented placeholder for now.
+    with pytest.raises(NotImplementedError):
+        Workspace.docker()

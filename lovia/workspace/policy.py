@@ -7,13 +7,16 @@ A :class:`WorkspacePolicy` decides what the built-in workspace tools may do:
   use the session directly — is gated.
 * **Command rules** decide whether a shell command runs freely (``allow``),
   goes through the human-approval channel (``ask``), or is rejected outright
-  (``deny``).
+  (``deny``). The static rules are deliberately simple (word-boundary
+  prefixes); anything richer routes through the optional ``command_decider``
+  hook.
 
 Honesty note: command rules are a *policy gate*, not a security boundary.
-On the local backend an allowed command runs as the host user and can do
-anything that user can. Hard isolation requires a sandboxed backend (e.g. a
-container); the session protocol is abstracted so one can be added without
-touching the tools.
+Segmentation is lexical, so command substitution, ``eval``, or an interpreter
+one-liner can still smuggle work past the rules; and on the local backend an
+allowed command runs as the host user and can do anything that user can. Hard
+isolation requires a sandboxed backend (e.g. a container); the session
+protocol is abstracted so one can be added without touching the tools.
 """
 
 from __future__ import annotations
@@ -21,20 +24,46 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import Literal
+from typing import Callable, Literal
 
 from .errors import PermissionDeniedError
 
 Decision = Literal["allow", "ask", "deny"]
+
+# A per-segment command decider: given one command segment it returns a
+# Decision to override the static rules, or None to fall through to them. A
+# lightweight, complete extension point — the static command_rules are
+# prefix-only by design, so route anything richer (regex, allow-lists,
+# context-aware checks) through this hook.
+CommandDecider = Callable[[str], "Decision | None"]
 
 # Most-restrictive-wins ordering for compound commands.
 _SEVERITY = {"allow": 0, "ask": 1, "deny": 2}
 
 # Splits a shell command on control operators so each segment is judged on
 # its own: `git status && rm -rf /` must not ride on a `git status` allow
-# rule. Quoting is intentionally ignored — a quoted `;` may cause a harmless
+# rule. Newlines count as separators too (a shell runs each line), closing a
+# bypass where `allowed\nrm -rf /` would ride on the first line's rule.
+# Quoting is intentionally ignored — a quoted separator may cause a harmless
 # extra split, which can only make the decision stricter, never looser.
-_COMMAND_SPLIT = re.compile(r"(?:\|\||&&|[;|&])")
+_COMMAND_SPLIT = re.compile(r"(?:\|\||&&|[;\n\r|&])")
+
+
+def _path_matches(rel_path: str, pattern: str) -> bool:
+    """Best-effort gitignore-style match of a workspace-relative POSIX path.
+
+    A pattern containing ``/`` is matched against the whole path (and its
+    children, so a directory pattern denies everything beneath it);
+    ``fnmatch``'s ``*`` already spans ``/``. A bare pattern (no ``/``) matches
+    the basename of the path *or any ancestor segment*, so ``".env*"`` catches
+    ``"sub/.env"`` and a denied directory name denies everything under it.
+    """
+    pat = pattern.rstrip("/")
+    if not pat:
+        return False
+    if "/" in pat:
+        return fnmatch(rel_path, pat) or fnmatch(rel_path, pat + "/*")
+    return any(fnmatch(segment, pat) for segment in rel_path.split("/"))
 
 
 @dataclass(frozen=True)
@@ -60,11 +89,16 @@ class WorkspacePolicy:
             decision is ``deny``.
         shell_default: Decision for commands no rule matches.
         command_rules: Evaluated first-match-wins per command segment;
-            compound commands (``;``, ``&&``, ``||``, ``|``) take the most
-            restrictive decision across their segments.
-        denied_paths: ``fnmatch`` globs over workspace-relative paths that
-            file tools may neither read nor write (e.g. ``".env*"``,
-            ``"secrets/**"``).
+            compound commands (``;``, ``&&``, ``||``, ``|``, ``&``, newlines)
+            take the most restrictive decision across their segments.
+        denied_paths: globs over workspace-relative paths that file tools may
+            neither read nor write. Matched gitignore-style: a bare glob
+            (e.g. ``".env*"``) matches that name at any depth and a directory
+            name denies everything beneath it; a glob with ``/``
+            (e.g. ``"secrets/**"``) is matched against the full path.
+        command_decider: optional per-segment hook consulted *before* the
+            static ``command_rules``; return a :data:`Decision` to override or
+            ``None`` to fall through. See :data:`CommandDecider`.
     """
 
     allow_write: bool = True
@@ -72,6 +106,7 @@ class WorkspacePolicy:
     shell_default: Decision = "ask"
     command_rules: tuple[CommandRule, ...] = ()
     denied_paths: tuple[str, ...] = ()
+    command_decider: "CommandDecider | None" = None
 
     # ------------------------------------------------------------------ #
     # Presets
@@ -93,12 +128,14 @@ class WorkspacePolicy:
         *,
         command_rules: tuple[CommandRule, ...] = (),
         denied_paths: tuple[str, ...] = (),
+        command_decider: "CommandDecider | None" = None,
     ) -> "WorkspacePolicy":
         """Full file access; shell commands require approval by default."""
         return cls(
             shell_default="ask",
             command_rules=command_rules,
             denied_paths=denied_paths,
+            command_decider=command_decider,
         )
 
     @classmethod
@@ -107,12 +144,14 @@ class WorkspacePolicy:
         *,
         command_rules: tuple[CommandRule, ...] = (),
         denied_paths: tuple[str, ...] = (),
+        command_decider: "CommandDecider | None" = None,
     ) -> "WorkspacePolicy":
         """Full file access; shell commands run without approval by default."""
         return cls(
             shell_default="allow",
             command_rules=command_rules,
             denied_paths=denied_paths,
+            command_decider=command_decider,
         )
 
     # ------------------------------------------------------------------ #
@@ -126,6 +165,11 @@ class WorkspacePolicy:
         judged independently; the most restrictive decision wins, so an
         ``allow`` rule can never whitelist a compound command that smuggles
         in something stricter.
+
+        Best-effort by design: segmentation is lexical, so command
+        substitution (``$(...)``, backticks), ``eval``, or an interpreter
+        one-liner can still hide work from the rules. This is a policy gate,
+        not a security boundary — see the module docstring.
         """
         if not self.allow_shell:
             return "deny"
@@ -143,6 +187,12 @@ class WorkspacePolicy:
         return decision
 
     def _decide_segment(self, segment: str) -> Decision:
+        if self.command_decider is not None:
+            verdict = self.command_decider(segment)
+            # Ignore anything that isn't a valid Decision (incl. None): fall
+            # through to the static rules rather than crash on a bad hook.
+            if verdict in ("allow", "ask", "deny"):
+                return verdict
         words = segment.split()
         for rule in self.command_rules:
             pattern_words = rule.pattern.split()
@@ -161,14 +211,14 @@ class WorkspacePolicy:
                 hint="Use mode='coding' (or allow_write=True) to enable writes.",
             )
         for pattern in self.denied_paths:
-            if fnmatch(rel_path, pattern):
+            if _path_matches(rel_path, pattern):
                 raise PermissionDeniedError(
                     f"Path {rel_path!r} is denied by workspace policy ({pattern!r}).",
                 )
 
     def path_is_denied(self, rel_path: str) -> bool:
         """Non-raising variant of the denied-path check (used by listings)."""
-        return any(fnmatch(rel_path, pattern) for pattern in self.denied_paths)
+        return any(_path_matches(rel_path, pattern) for pattern in self.denied_paths)
 
 
-__all__ = ["CommandRule", "Decision", "WorkspacePolicy"]
+__all__ = ["CommandDecider", "CommandRule", "Decision", "WorkspacePolicy"]

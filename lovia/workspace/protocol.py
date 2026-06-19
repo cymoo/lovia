@@ -59,13 +59,14 @@ class WorkspaceSession(Protocol):
         *,
         pattern: str | None = None,
         include_hidden: bool = False,
-        max_results: int = 500,
+        max_results: int | None = None,
     ) -> list[DirEntry]:
         """List entries under ``path``.
 
         Without ``pattern``, returns the direct children of ``path``. With a
         glob ``pattern`` (relative to ``path``), returns matching paths
-        recursively per the pattern.
+        recursively per the pattern. ``max_results`` defaults to the session's
+        configured limit; results past the cap are dropped (not an error).
         """
         ...
 
@@ -76,9 +77,14 @@ class WorkspaceSession(Protocol):
         path: str = ".",
         glob: str | None = None,
         ignore_case: bool = False,
-        max_matches: int = 100,
+        include_hidden: bool = False,
+        max_matches: int | None = None,
     ) -> list[GrepMatch]:
-        """Search file contents under ``path`` with a regular expression."""
+        """Search file contents under ``path`` with a regular expression.
+
+        ``max_matches`` defaults to the session's configured limit; matches
+        past the cap are dropped (not an error).
+        """
         ...
 
     async def run(

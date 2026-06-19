@@ -25,10 +25,11 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    WorkspaceLimits,
     WorkspaceMode,
 )
 from ..tools.base import clip_text
-from .workspace import LocalWorkspace, Workspace
+from .workspace import LocalWorkspace, Workspace, WorkspaceConfig
 
 __all__ = [
     "CommandResult",
@@ -46,8 +47,10 @@ __all__ = [
     "Workspace",
     "WorkspaceBackendError",
     "WorkspaceClosedError",
+    "WorkspaceConfig",
     "WorkspaceError",
     "WorkspaceLike",
+    "WorkspaceLimits",
     "WorkspaceMode",
     "WorkspacePolicy",
     "WorkspaceSession",

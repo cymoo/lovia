@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import re
 import signal
@@ -26,21 +27,20 @@ from .errors import PermissionDeniedError, WorkspaceClosedError, WorkspaceError
 from .paths import normalize_relative_path, resolve_existing, resolve_parent
 from .policy import WorkspacePolicy
 from .types import (
+    ClippedList,
     CommandResult,
     DirEntry,
     EditResult,
     FileChange,
     FileContent,
     GrepMatch,
+    WorkspaceLimits,
 )
 from ..tools.base import clip_text
 
 __all__ = ["LocalWorkspaceSession"]
 
-# Files larger than this are skipped by grep (binary blobs, build artifacts).
-_GREP_MAX_FILE_BYTES = 5_000_000
-# Matched lines are clipped so one minified file can't flood the result.
-_GREP_MAX_LINE_CHARS = 400
+logger = logging.getLogger(__name__)
 
 # Host env vars passed to shell commands by default: a minimal, non-secret
 # base (a working PATH/locale) that deliberately excludes credentials —
@@ -63,8 +63,7 @@ class LocalWorkspaceSession:
     policy: WorkspacePolicy = field(default_factory=WorkspacePolicy)
     env: Mapping[str, str] | None = None
     shell_timeout: float | None = 300.0
-    max_read_chars: int = 50_000
-    max_output_chars: int = 30_000
+    limits: WorkspaceLimits = field(default_factory=WorkspaceLimits)
     inherit_env: bool = False
     id: str = field(default_factory=lambda: f"local-{uuid.uuid4().hex[:8]}")
     _root: Path = field(init=False, repr=False)
@@ -155,16 +154,28 @@ class LocalWorkspaceSession:
             raise WorkspaceError("end must be >= start.")
 
         def _read() -> FileContent:
-            text = p.read_text(encoding="utf-8", errors="replace")
+            hint = "Use start/end to read the rest in pages."
+            # Guard against loading a pathologically large file fully into
+            # memory: read only a bounded prefix. Line ranges beyond that
+            # prefix aren't reachable here — use the shell (e.g. sed -n) for
+            # arbitrary ranges in very large files.
+            try:
+                oversized = p.stat().st_size > self.limits.max_file_read_bytes
+            except OSError:
+                oversized = False
+            if oversized:
+                with p.open("rb") as fh:
+                    raw = fh.read(self.limits.max_file_read_bytes)
+                text = raw.decode("utf-8", errors="replace")
+            else:
+                text = p.read_text(encoding="utf-8", errors="replace")
             lines = text.splitlines(keepends=True)
             total = len(lines)
             start_line = start or 1
             end_line = end or total
             selected = "".join(lines[start_line - 1 : end_line])
             content, clipped = clip_text(
-                selected,
-                self.max_read_chars,
-                hint="Use start/end to read the rest in pages.",
+                selected, self.limits.max_file_read_chars, hint=hint
             )
             return FileContent(
                 path=rel,
@@ -172,7 +183,7 @@ class LocalWorkspaceSession:
                 start=start_line,
                 end=min(end_line, total),
                 total_lines=total,
-                truncated=clipped or end_line < total,
+                truncated=clipped or end_line < total or oversized,
             )
 
         return await asyncio.to_thread(_read)
@@ -265,23 +276,24 @@ class LocalWorkspaceSession:
         *,
         pattern: str | None = None,
         include_hidden: bool = False,
-        max_results: int = 500,
+        max_results: int | None = None,
     ) -> list[DirEntry]:
         self._check_open()
+        cap = self.limits.max_list_results if max_results is None else max_results
         rel, base = self._resolve_for_read(path)
         if not base.is_dir():
             raise WorkspaceError(f"Not a directory: {path}")
         if pattern is None:
             return await asyncio.to_thread(
-                self._list_children, rel, base, include_hidden, max_results
+                self._list_children, rel, base, include_hidden, cap
             )
         return await asyncio.to_thread(
-            self._list_matching, base, pattern, include_hidden, max_results
+            self._list_matching, base, pattern, include_hidden, cap
         )
 
     def _list_children(
         self, rel: str, base: Path, include_hidden: bool, max_results: int
-    ) -> list[DirEntry]:
+    ) -> ClippedList[DirEntry]:
         entries: list[DirEntry] = []
         truncated = False
         with os.scandir(base) as it:
@@ -298,8 +310,8 @@ class LocalWorkspaceSession:
                     stat = entry.stat()
                     size = stat.st_size if entry.is_file() else None
                     mtime = stat.st_mtime
-                except OSError:
-                    # TODO: 是否应该log，或更好的处理方式？
+                except OSError as exc:
+                    logger.debug("list_files: stat failed for %s (%s)", entry_rel, exc)
                     size, mtime = None, None
                 entries.append(
                     DirEntry(
@@ -310,21 +322,16 @@ class LocalWorkspaceSession:
                     )
                 )
         entries.sort(key=lambda e: (not e.is_dir, e.path))
-        # TODO: 这个应该先判断吧
-        if truncated:
-            raise WorkspaceError(
-                f"Too many directory entries (> {max_results}).",
-                hint="List a narrower path or raise max_results.",
-            )
-        return entries
+        return ClippedList(entries, truncated=truncated)
 
     def _list_matching(
         self, base: Path, pattern: str, include_hidden: bool, max_results: int
-    ) -> list[DirEntry]:
+    ) -> ClippedList[DirEntry]:
         rel_pattern = normalize_relative_path(pattern)
         if rel_pattern == ".":
             raise WorkspaceError(f"Invalid glob pattern: {pattern!r}")
         results: dict[str, DirEntry] = {}
+        truncated = False
         for p in base.glob(rel_pattern):
             resolved = p.resolve()
             try:
@@ -336,10 +343,8 @@ class LocalWorkspaceSession:
             if self.policy.path_is_denied(entry_rel):
                 continue
             if len(results) >= max_results:
-                raise WorkspaceError(
-                    f"Too many matches (> {max_results}).",
-                    hint="Use a narrower pattern or raise max_results.",
-                )
+                truncated = True
+                break
             try:
                 stat = resolved.stat()
                 is_dir = resolved.is_dir()
@@ -350,7 +355,8 @@ class LocalWorkspaceSession:
             results[entry_rel] = DirEntry(
                 path=entry_rel, is_dir=is_dir, size=size, mtime=mtime
             )
-        return [results[key] for key in sorted(results)]
+        ordered = [results[key] for key in sorted(results)]
+        return ClippedList(ordered, truncated=truncated)
 
     async def grep(
         self,
@@ -359,24 +365,33 @@ class LocalWorkspaceSession:
         path: str = ".",
         glob: str | None = None,
         ignore_case: bool = False,
-        max_matches: int = 100,
+        include_hidden: bool = False,
+        max_matches: int | None = None,
     ) -> list[GrepMatch]:
         self._check_open()
+        cap = self.limits.max_grep_matches if max_matches is None else max_matches
         rel, base = self._resolve_for_read(path)
         try:
             regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
             raise WorkspaceError(f"Invalid regular expression: {exc}") from exc
 
-        def _search() -> list[GrepMatch]:
+        def _search() -> ClippedList[GrepMatch]:
             matches: list[GrepMatch] = []
-            for file_rel, file_path in self._walk_files(rel, base):
+            for file_rel, file_path in self._walk_files(rel, base, include_hidden):
                 if glob is not None and not (
                     fnmatch(file_rel, glob) or fnmatch(os.path.basename(file_rel), glob)
                 ):
                     continue
+                # A symlinked file can point outside the root; grep must not
+                # read through it (read_text already refuses such escapes).
                 try:
-                    if file_path.stat().st_size > _GREP_MAX_FILE_BYTES:
+                    if not file_path.resolve().is_relative_to(self._root):
+                        continue
+                except OSError:
+                    continue
+                try:
+                    if file_path.stat().st_size > self.limits.max_grep_file_bytes:
                         continue
                     with open(file_path, "rb") as fh:
                         head = fh.read(1024)
@@ -392,33 +407,37 @@ class LocalWorkspaceSession:
                             GrepMatch(
                                 path=file_rel,
                                 line=line_no,
-                                text=line.strip()[:_GREP_MAX_LINE_CHARS],
+                                text=line.strip()[: self.limits.max_grep_line_chars],
                             )
                         )
-                        if len(matches) >= max_matches:
-                            return matches
-            return matches
+                        if len(matches) >= cap:
+                            return ClippedList(matches, truncated=True)
+            return ClippedList(matches, truncated=False)
 
         return await asyncio.to_thread(_search)
 
-    def _walk_files(self, rel: str, base: Path) -> Iterator[tuple[str, Path]]:
+    def _walk_files(
+        self, rel: str, base: Path, include_hidden: bool = False
+    ) -> Iterator[tuple[str, Path]]:
         """Yield (workspace-relative path, absolute path) for searchable files.
 
-        Hidden and policy-denied paths are skipped. Symlinked directories are
-        not followed, so the walk cannot escape the root.
+        Policy-denied paths are skipped (and dotfiles too unless
+        ``include_hidden``). Symlinked directories are not followed, so the
+        walk itself cannot descend out of the root; callers still re-check
+        individual symlinked files before reading them.
         """
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
             dir_rel = Path(dirpath).relative_to(self._root).as_posix()
             dirnames[:] = sorted(
                 d
                 for d in dirnames
-                if not d.startswith(".")
+                if (include_hidden or not d.startswith("."))
                 and not self.policy.path_is_denied(
                     d if dir_rel == "." else f"{dir_rel}/{d}"
                 )
             )
             for name in sorted(filenames):
-                if name.startswith("."):
+                if not include_hidden and name.startswith("."):
                     continue
                 file_rel = name if dir_rel == "." else f"{dir_rel}/{name}"
                 if self.policy.path_is_denied(file_rel):
@@ -488,13 +507,13 @@ class LocalWorkspaceSession:
         hint = "Re-run with a filter (e.g. pipe through grep/head) for more."
         stdout, stdout_clipped = clip_text(
             stdout_b.decode("utf-8", errors="replace"),
-            self.max_output_chars,
+            self.limits.max_shell_output_chars,
             hint=hint,
             keep_tail=True,
         )
         stderr, stderr_clipped = clip_text(
             stderr_b.decode("utf-8", errors="replace"),
-            self.max_output_chars,
+            self.limits.max_shell_output_chars,
             hint=hint,
             keep_tail=True,
         )

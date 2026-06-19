@@ -115,6 +115,7 @@ async def read_file(
     return await require_workspace(ctx).read_text(path, start=start, end=end)
 
 
+# TODO write_file, edit_file不需要result_renderer吗?
 @tool(
     name="write_file",
     description=(

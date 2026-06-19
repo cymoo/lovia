@@ -22,6 +22,7 @@ __all__ = ["shell"]
 
 def _shell_needs_approval(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
     workspace = ctx.workspace
+    # TODO 返回false的意思是不需要approval（see lovia/runtime/tool_calls.py），直接放行，怎么这里有例外？
     if workspace is None:
         return False  # the tool itself will fail with a setup hint
     command = args.get("command")

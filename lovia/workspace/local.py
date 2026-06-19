@@ -275,6 +275,7 @@ class LocalWorkspaceSession:
                     size = stat.st_size if entry.is_file() else None
                     mtime = stat.st_mtime
                 except OSError:
+                    # TODO: 是否应该log，或更好的处理方式？
                     size, mtime = None, None
                 entries.append(
                     DirEntry(
@@ -285,6 +286,7 @@ class LocalWorkspaceSession:
                     )
                 )
         entries.sort(key=lambda e: (not e.is_dir, e.path))
+        # TODO: 这个应该先判断吧
         if truncated:
             raise WorkspaceError(
                 f"Too many directory entries (> {max_results}).",

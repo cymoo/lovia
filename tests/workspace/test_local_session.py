@@ -242,6 +242,28 @@ async def test_run_output_clipped_head_and_tail(tmp_path) -> None:
     assert result.stdout.rstrip().endswith("2000")  # tail kept
 
 
+async def test_shell_env_excludes_host_secrets_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "leaked-value-123")
+    session = await _session(tmp_path)  # inherit_env defaults to False
+    result = await session.run('echo "[$SUPER_SECRET_TOKEN]"')
+    assert "leaked-value-123" not in result.stdout
+    # ...but a working PATH is still present, so commands run.
+    assert (await session.run("echo hi")).stdout.strip() == "hi"
+
+
+async def test_shell_inherit_env_passes_host_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "leaked-value-123")
+    session = await _session(tmp_path, inherit_env=True)
+    result = await session.run('echo "[$SUPER_SECRET_TOKEN]"')
+    assert "leaked-value-123" in result.stdout
+
+
+async def test_shell_env_explicit_passthrough(tmp_path) -> None:
+    session = await _session(tmp_path, env={"MY_VAR": "hello-env"})
+    result = await session.run('echo "[$MY_VAR]"')
+    assert "hello-env" in result.stdout
+
+
 # ---------------------------------------------------------------------------
 # Workspace config
 # ---------------------------------------------------------------------------
@@ -281,3 +303,13 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
 
     trusted = Workspace.local(str(tmp_path), mode="trusted")
     assert "without approval" in trusted.instructions()
+
+
+async def test_workspace_inherit_env_defaults_to_trusted(tmp_path) -> None:
+    # trusted runs shell without approval, so it inherits the host env;
+    # coding (approval-gated) defaults to the minimal allowlist.
+    assert Workspace.local(str(tmp_path), mode="trusted").inherit_env is True
+    assert Workspace.local(str(tmp_path), mode="coding").inherit_env is False
+    # ...but the default is overridable either way.
+    forced = Workspace.local(str(tmp_path), mode="coding", inherit_env=True)
+    assert forced.inherit_env is True

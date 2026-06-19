@@ -42,6 +42,14 @@ _GREP_MAX_FILE_BYTES = 5_000_000
 # Matched lines are clipped so one minified file can't flood the result.
 _GREP_MAX_LINE_CHARS = 400
 
+# Host env vars passed to shell commands by default: a minimal, non-secret
+# base (a working PATH/locale) that deliberately excludes credentials —
+# API keys, tokens — living in the parent process's environment. Widen with
+# inherit_env=True, or pass specific vars via env=.
+_ENV_PASSTHROUGH = frozenset(
+    {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "TMPDIR"}
+)
+
 
 def _has_hidden_segment(rel: str) -> bool:
     return any(seg.startswith(".") for seg in rel.split("/") if seg)
@@ -57,6 +65,7 @@ class LocalWorkspaceSession:
     shell_timeout: float | None = 300.0
     max_read_chars: int = 50_000
     max_output_chars: int = 30_000
+    inherit_env: bool = False
     id: str = field(default_factory=lambda: f"local-{uuid.uuid4().hex[:8]}")
     _root: Path = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
@@ -111,6 +120,21 @@ class LocalWorkspaceSession:
                 lock = asyncio.Lock()
                 self._locks[rel] = lock
             return lock
+
+    def _base_env(self) -> dict[str, str]:
+        """Environment for shell commands.
+
+        By default a minimal allowlist so commands get a working PATH/locale
+        without inheriting the parent process's secrets (API keys, tokens).
+        ``inherit_env=True`` passes the full host environment instead.
+        """
+        if self.inherit_env:
+            return dict(os.environ)
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if key in _ENV_PASSTHROUGH or key.startswith("LC_")
+        }
 
     # ------------------------------------------------------------------ #
     # Files
@@ -426,7 +450,10 @@ class LocalWorkspaceSession:
         run_cwd = resolve_existing(self._root, rel_cwd)
         if not run_cwd.is_dir():
             raise WorkspaceError(f"Not a directory: {cwd}")
-        merged_env = dict(os.environ)
+        merged_env = self._base_env()
+        # PWD should reflect the command's actual working directory, not the
+        # host process's; set it before user overrides so env= can still win.
+        merged_env["PWD"] = str(run_cwd)
         if self.env:
             merged_env.update(self.env)
         if env:

@@ -57,6 +57,7 @@ class LocalWorkspace:
     shell_timeout: float | None = 300.0
     max_read_chars: int = 50_000
     max_output_chars: int = 30_000
+    inherit_env: bool = False
     close_after_run: bool = True
 
     async def open(self) -> LocalWorkspaceSession:
@@ -68,6 +69,7 @@ class LocalWorkspace:
             shell_timeout=self.shell_timeout,
             max_read_chars=self.max_read_chars,
             max_output_chars=self.max_output_chars,
+            inherit_env=self.inherit_env,
         )
 
     @asynccontextmanager
@@ -159,12 +161,20 @@ class Workspace:
         command_rules: tuple[CommandRule, ...] = (),
         env: Mapping[str, str] | None = None,
         shell_timeout: float | None = 300.0,
+        inherit_env: bool | None = None,
     ) -> LocalWorkspace:
         """Create a local-filesystem workspace rooted at ``root``.
 
         ``mode`` selects a policy preset (optionally refined with
         ``denied_paths`` / ``command_rules``); pass an explicit ``policy`` to
         take full control instead of using a preset.
+
+        ``inherit_env`` controls the shell environment: by default only a
+        minimal, non-secret allowlist is passed to commands so credentials in
+        the host environment (API keys, tokens) don't leak. Leave it ``None``
+        to inherit the full host env only for ``trusted`` workspaces; set it
+        explicitly to force the behaviour either way. Add specific variables
+        with ``env=`` regardless.
         """
         if policy is not None:
             if denied_paths or command_rules:
@@ -188,11 +198,17 @@ class Workspace:
             )
         else:
             raise UserError(f"Unknown workspace mode: {mode!r}")
+        if inherit_env is None:
+            # Tie env inheritance to the "trusted" posture: a workspace that
+            # runs shell without approval may as well see the host env;
+            # everything else defaults to the minimal allowlist.
+            inherit_env = bool(policy.allow_shell and policy.shell_default == "allow")
         return LocalWorkspace(
             root=str(root),
             policy=policy,
             env=dict(env) if env is not None else None,
             shell_timeout=shell_timeout,
+            inherit_env=inherit_env,
         )
 
     @classmethod

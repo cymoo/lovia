@@ -180,7 +180,7 @@ async def write_file(
         bool,
         Field(default=False, description="If true, never overwrite an existing file."),
     ] = False,
-) -> object:
+) -> FileChange:
     return await require_workspace(ctx).write_text(
         path, content, create_only=create_only
     )
@@ -209,7 +209,7 @@ async def edit_file(
         bool,
         Field(default=False, description="Replace every occurrence of old."),
     ] = False,
-) -> object:
+) -> EditResult:
     return await require_workspace(ctx).edit_text(
         path, old, new, replace_all=replace_all
     )

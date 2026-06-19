@@ -26,6 +26,7 @@ from lovia.events import (
     RunStarted,
     RunCompleted,
 )
+from lovia.workspace import Workspace
 
 load_dotenv()
 
@@ -34,8 +35,6 @@ SKILLS_DIR = Path(__file__).parent / "skills"
 
 async def main() -> None:
     # Provide a shell tool so the model can execute skill scripts.
-    from lovia.tools.shell import shell
-
     agent = Agent(
         name="SupportBot",
         instructions=(
@@ -46,7 +45,7 @@ async def main() -> None:
             "Use the `shell` tool to run scripts when needed."
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-        tools=[shell],
+        workspace=Workspace.local('.', mode="trusted"),
         plugins=[Skills(SKILLS_DIR)],
     )
 

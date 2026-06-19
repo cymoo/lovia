@@ -1,7 +1,8 @@
 """User-facing workspace configuration.
 
-A :class:`Workspace` scopes an agent's file and shell tools to a directory
-and a :class:`~lovia.workspace.policy.WorkspacePolicy`::
+:class:`Workspace` is a thin **factory facade**: it does not hold state
+itself, it builds a backend-specific configuration that implements
+:class:`~lovia.workspace.protocol.WorkspaceLike`::
 
     from lovia.workspace import Workspace
 
@@ -10,11 +11,15 @@ and a :class:`~lovia.workspace.policy.WorkspacePolicy`::
         workspace=Workspace.local(".", mode="coding"),
     )
 
+``Workspace.local(...)`` returns a :class:`LocalWorkspace` (the local-FS
+backend). Future backends grow as sibling factories — ``Workspace.docker(...)``
+etc. — each returning its own ``WorkspaceLike`` config. The runner only ever
+depends on the protocol, so adding a backend touches neither the runner nor
+the tools.
+
 The runner opens a session per run, injects it into ``RunContext.workspace``
 (where the built-in tools find it), and closes sessions it owns. Use
-:meth:`session` to keep one session alive across runs. Custom execution
-environments (containers, remote machines) implement the
-:class:`~lovia.workspace.protocol.WorkspaceLike` protocol directly.
+:meth:`LocalWorkspace.session` to keep one session alive across runs.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Mapping
+from typing import TYPE_CHECKING, AsyncIterator, Mapping, NoReturn
 
 from ..exceptions import UserError
 from .local import LocalWorkspaceSession
@@ -33,17 +38,17 @@ from .types import WorkspaceMode
 if TYPE_CHECKING:
     from ..tools import Tool
 
-__all__ = ["Workspace"]
+__all__ = ["LocalWorkspace", "Workspace"]
 
 
 @dataclass(frozen=True)
-class Workspace:
+class LocalWorkspace:
     """A local directory the agent's file/shell tools operate in.
 
-    ``Workspace`` is a lightweight config/factory: the runner opens a session
-    for each run and closes the sessions it owns. The policy gates what the
-    tools may do; it is honest scoping, not OS-level isolation — see
-    :mod:`lovia.workspace.policy`.
+    A lightweight config/factory implementing ``WorkspaceLike``: the runner
+    opens a session for each run and closes the sessions it owns. The policy
+    gates what the tools may do; it is honest scoping, not OS-level isolation
+    — see :mod:`lovia.workspace.policy`. Build one via :meth:`Workspace.local`.
     """
 
     root: str
@@ -53,53 +58,6 @@ class Workspace:
     max_read_chars: int = 50_000
     max_output_chars: int = 30_000
     close_after_run: bool = True
-
-    @classmethod
-    def local(
-        cls,
-        root: str = ".",
-        *,
-        mode: WorkspaceMode = "coding",
-        policy: WorkspacePolicy | None = None,
-        denied_paths: tuple[str, ...] = (),
-        command_rules: tuple[CommandRule, ...] = (),
-        env: Mapping[str, str] | None = None,
-        shell_timeout: float | None = 300.0,
-    ) -> "Workspace":
-        """Create a workspace rooted at ``root``.
-
-        ``mode`` selects a policy preset (optionally refined with
-        ``denied_paths`` / ``command_rules``); pass an explicit ``policy`` to
-        take full control instead of using a preset.
-        """
-        if policy is not None:
-            if denied_paths or command_rules:
-                raise UserError(
-                    "Pass either policy= or denied_paths/command_rules, not both.",
-                    hint="Put the rules inside your WorkspacePolicy.",
-                )
-        elif mode == "readonly":
-            if command_rules:
-                raise UserError(
-                    "mode='readonly' has no shell; command_rules are unused."
-                )
-            policy = WorkspacePolicy.readonly(denied_paths=denied_paths)
-        elif mode == "coding":
-            policy = WorkspacePolicy.coding(
-                denied_paths=denied_paths, command_rules=command_rules
-            )
-        elif mode == "trusted":
-            policy = WorkspacePolicy.trusted(
-                denied_paths=denied_paths, command_rules=command_rules
-            )
-        else:
-            raise UserError(f"Unknown workspace mode: {mode!r}")
-        return cls(
-            root=str(root),
-            policy=policy,
-            env=dict(env) if env is not None else None,
-            shell_timeout=shell_timeout,
-        )
 
     async def open(self) -> LocalWorkspaceSession:
         """Open a live workspace session."""
@@ -127,14 +85,14 @@ class Workspace:
 
     def tools(self) -> list["Tool"]:
         """Return the built-in tool bundle permitted by this policy."""
-        from ..tools.files import (
+        from .tools import (
             edit_file,
             grep_files,
             list_files,
             read_file,
+            shell,
             write_file,
         )
-        from ..tools.shell import shell
 
         bundle: list["Tool"] = [read_file, list_files, grep_files]
         if self.policy.allow_write:
@@ -176,11 +134,89 @@ class Workspace:
         return "\n".join(lines)
 
 
+class Workspace:
+    """Factory facade for workspace backends.
+
+    Not instantiated directly — use a backend factory such as
+    :meth:`local`. Each factory returns a config object implementing
+    :class:`~lovia.workspace.protocol.WorkspaceLike`.
+    """
+
+    def __init__(self) -> None:  # pragma: no cover - guard against misuse
+        raise UserError(
+            "Workspace is a factory, not a backend.",
+            hint="Use Workspace.local(...) (or another backend factory).",
+        )
+
+    @classmethod
+    def local(
+        cls,
+        root: str = ".",
+        *,
+        mode: WorkspaceMode = "coding",
+        policy: WorkspacePolicy | None = None,
+        denied_paths: tuple[str, ...] = (),
+        command_rules: tuple[CommandRule, ...] = (),
+        env: Mapping[str, str] | None = None,
+        shell_timeout: float | None = 300.0,
+    ) -> LocalWorkspace:
+        """Create a local-filesystem workspace rooted at ``root``.
+
+        ``mode`` selects a policy preset (optionally refined with
+        ``denied_paths`` / ``command_rules``); pass an explicit ``policy`` to
+        take full control instead of using a preset.
+        """
+        if policy is not None:
+            if denied_paths or command_rules:
+                raise UserError(
+                    "Pass either policy= or denied_paths/command_rules, not both.",
+                    hint="Put the rules inside your WorkspacePolicy.",
+                )
+        elif mode == "readonly":
+            if command_rules:
+                raise UserError(
+                    "mode='readonly' has no shell; command_rules are unused."
+                )
+            policy = WorkspacePolicy.readonly(denied_paths=denied_paths)
+        elif mode == "coding":
+            policy = WorkspacePolicy.coding(
+                denied_paths=denied_paths, command_rules=command_rules
+            )
+        elif mode == "trusted":
+            policy = WorkspacePolicy.trusted(
+                denied_paths=denied_paths, command_rules=command_rules
+            )
+        else:
+            raise UserError(f"Unknown workspace mode: {mode!r}")
+        return LocalWorkspace(
+            root=str(root),
+            policy=policy,
+            env=dict(env) if env is not None else None,
+            shell_timeout=shell_timeout,
+        )
+
+    @classmethod
+    def docker(cls, *args: object, **kwargs: object) -> NoReturn:
+        """Placeholder for a future container backend (real OS isolation).
+
+        The :class:`~lovia.workspace.protocol.WorkspaceSession` /
+        ``WorkspaceLike`` protocols are the extension point — a container
+        backend implements them without touching the runner or the tools.
+        """
+        raise NotImplementedError(
+            "Workspace.docker() is not implemented yet. The local backend "
+            "(Workspace.local) is an honest policy gate, not OS isolation; a "
+            "container backend implementing the WorkspaceSession/WorkspaceLike "
+            "protocols (see lovia.workspace.protocol) is the path to real "
+            "isolation."
+        )
+
+
 @dataclass(frozen=True)
 class _WorkspaceSessionBinding:
     """A user-owned live session accepted by ``Agent.workspace``."""
 
-    workspace: Workspace
+    workspace: LocalWorkspace
     _session: WorkspaceSession
     close_after_run: bool = False
 

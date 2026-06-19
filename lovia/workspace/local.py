@@ -32,8 +32,8 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
-    clip_text,
 )
+from ..tools.base import clip_text
 
 __all__ = ["LocalWorkspaceSession"]
 

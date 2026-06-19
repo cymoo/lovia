@@ -19,8 +19,7 @@ import httpx
 from pydantic import Field
 
 from ..exceptions import ToolError
-from ..workspace.types import clip_text
-from .base import tool
+from .base import clip_text, tool
 
 __all__ = ["http_fetch"]
 

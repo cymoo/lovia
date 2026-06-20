@@ -81,6 +81,13 @@ _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
 _DEFAULT_MAX_CHARS = 2000
 
+# Sentinel for ``Memory.archive``: distinguishes "build the default archive"
+# (the field was left untouched) from an explicit ``archive=None`` ("no cold
+# tier"). Without it, ``None`` would be ambiguous and could not disable the
+# archive when ``notes`` is a path. Typed ``Any`` so the public field annotation
+# stays ``MemoryArchive | None``.
+_DEFAULT_ARCHIVE: Any = object()
+
 
 # ---------------------------------------------------------------------------
 # Notes body helpers — the canonical hot-tier format is one fact per line,
@@ -668,14 +675,15 @@ class Memory:
 
     ``Memory("./dir")`` (or ``Memory()``) builds both default stores under that
     root. Pass ``notes=`` / ``archive=`` to supply custom backends; set
-    ``archive=None`` (with an explicit ``notes=``) for a notes-only memory with
-    no ``recall`` tool.
+    ``archive=None`` for a notes-only memory with no ``recall`` tool.
 
     Fields:
         notes: A :class:`NotesStore`, or a root directory path under which the
             default :class:`FileNotesStore` (+ :class:`SQLiteMemoryArchive`) are
             created.
-        archive: A :class:`MemoryArchive`, or ``None`` to disable the cold tier.
+        archive: A :class:`MemoryArchive`; ``None`` to disable the cold tier.
+            Left unset, the default :class:`SQLiteMemoryArchive` is built under
+            the notes root when ``notes`` is a path (and omitted otherwise).
         inject: When ``True`` (default), the Notes block is injected into the
             system prompt each run.
         auto_extract: When ``True`` (default), the plugin promotes durable facts
@@ -691,7 +699,7 @@ class Memory:
     """
 
     notes: "NotesStore | str | os.PathLike[str]" = _DEFAULT_ROOT
-    archive: "MemoryArchive | None" = None
+    archive: "MemoryArchive | None" = _DEFAULT_ARCHIVE
     inject: bool = True
     auto_extract: bool = True
     summarize_recall: bool = True
@@ -700,11 +708,19 @@ class Memory:
     name: str = "memory"
 
     def __post_init__(self) -> None:
+        # ``archive`` left untouched → build the default archive under the notes
+        # root (when ``notes`` is a path); an explicit ``archive=None`` always
+        # disables the cold tier.
+        archive_is_default = self.archive is _DEFAULT_ARCHIVE
         if isinstance(self.notes, (str, os.PathLike)):
             root = Path(self.notes)
             self.notes = FileNotesStore(root / _NOTES_FILENAME)
-            if self.archive is None:
+            if archive_is_default:
                 self.archive = SQLiteMemoryArchive(root / _ARCHIVE_FILENAME)
+        if self.archive is _DEFAULT_ARCHIVE:
+            # Custom notes store (no root to anchor a default archive) and no
+            # explicit archive → notes-only, matching the old behavior.
+            self.archive = None
 
     def _resolve_model(
         self, ctx: RunContext[Any] | None

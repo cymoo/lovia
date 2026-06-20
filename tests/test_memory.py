@@ -249,6 +249,14 @@ def test_memory_path_form_builds_default_stores(tmp_path) -> None:
     assert isinstance(mem.archive, SQLiteMemoryArchive)
 
 
+def test_memory_path_form_archive_none_disables_cold_tier(tmp_path) -> None:
+    # Explicit archive=None must disable the cold tier even with a path notes
+    # root (it would otherwise be overridden by the default archive).
+    mem = Memory(str(tmp_path / "mem"), archive=None)
+    assert isinstance(mem.notes, FileNotesStore)
+    assert mem.archive is None
+
+
 def test_memory_custom_notes_no_archive(tmp_path) -> None:
     notes = FileNotesStore(tmp_path / "MEMORY.md")
     mem = Memory(notes=notes, archive=None)

@@ -661,6 +661,11 @@ markdown notes file plus a SQLite FTS5 archive:
 └── archive.db     # cold tier: searchable past conversations
 ```
 
+> **Privacy.** The Archive persists user and assistant message text to disk, so
+> it can retain sensitive content. Store the memory directory somewhere with
+> appropriate access control, and pass `archive=None` to keep no searchable
+> record of past conversations.
+
 Behavior is tuned with optional flags:
 
 | Field | Default | Effect |
@@ -687,9 +692,9 @@ from lovia import Agent, Memory
 agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, archive=my_archive)])
 ```
 
-Pass `archive=None` (with an explicit `notes=`) for a notes-only memory with no
-`recall` tool. Custom backends are long-lived and shared by every run, so they
-must be safe for concurrent use; the plugin never closes them.
+Pass `archive=None` for a notes-only memory with no `recall` tool. Custom
+backends are long-lived and shared by every run, so they must be safe for
+concurrent use; the plugin never closes them.
 
 ### Writing a plugin
 

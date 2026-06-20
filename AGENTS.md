@@ -139,7 +139,7 @@ Two persistence concepts that serve different purposes:
 - **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start and persists the **full** transcript after each run — context compaction never writes to the Session.
 - **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + `agent_name`) keyed by `run_id`. Used for crash recovery / pause-and-resume; the loop writes a snapshot after the model output and after each tool call via `CheckpointWriter.save_running()`. `agent_name` records the *active* agent — after a handoff that is the target, not the entry agent. On resume `RunLoop` resolves that agent by name from the entry agent's handoff graph (`runtime/resume.py:resolve_resume_agent`) and rebuilds the run as that agent, so multi-agent runs resume correctly.
 
-Long-term cross-session **memory** is deliberately *not* a core concept — there is no `Memory` protocol or `Agent.memory` field. Wire it as a user plugin over your own store (see the `MemoryPlugin` example in the README).
+Long-term cross-session **memory** is deliberately *not* a core runtime primitive — there is no `Memory` protocol baked into the loop or `Agent.memory` field. It ships instead as a first-class **plugin** (`Memory`, in `plugins/memory.py`), built entirely on existing plugin seams (injected instructions, tools, a view-injector for `session_id`, and a `RunCompleted` hook); see the **Memory** section in the README. The same seams let you wire your own memory over a custom store.
 
 ### Context compaction
 

@@ -12,6 +12,14 @@ Built-in plugins live in this package.
 from __future__ import annotations
 
 from .base import Plugin, PluginInstance, ViewInjector
+from .memory import (
+    ArchiveHit,
+    FileNotesStore,
+    Memory,
+    MemoryArchive,
+    NotesStore,
+    SQLiteMemoryArchive,
+)
 from .skills import (
     LocalDirSkillSource,
     Skill,
@@ -35,6 +43,12 @@ __all__ = [
     "Plugin",
     "PluginInstance",
     "ViewInjector",
+    "ArchiveHit",
+    "FileNotesStore",
+    "Memory",
+    "MemoryArchive",
+    "NotesStore",
+    "SQLiteMemoryArchive",
     "LocalDirSkillSource",
     "Skill",
     "SkillCategory",

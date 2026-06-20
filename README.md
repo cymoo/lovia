@@ -630,6 +630,72 @@ async with server.session() as conn:
 `MCP()` takes several servers — `MCP(a, b)` — and `MCPServer.name` prefixes a
 server's tools (`web__fetch`) to keep names unique.
 
+### Memory
+
+`Memory` gives an agent long-term memory that persists across runs and sessions,
+built from two tiers and three verbs the model already understands:
+
+- **Notes** (the *hot* tier) — a tiny, char-budgeted block that is **always
+  injected** into the system prompt: the user's stable preferences and durable
+  facts. The model curates it with `remember(fact)` / `forget(fact)`, and (by
+  default) the plugin promotes durable facts into it automatically at run end.
+- **Archive** (the *cold* tier) — a full-text-searchable store of past
+  conversations, pulled in only on demand with `recall(query)`.
+
+```python
+from lovia import Agent, Memory
+
+agent = Agent(
+    name="assistant",
+    model="deepseek-v4-pro",
+    plugins=[Memory("./.lovia/memory")],
+)
+```
+
+`Memory("./dir")` (or `Memory()`) builds the defaults under that root — a
+markdown notes file plus a SQLite FTS5 archive:
+
+```
+.lovia/memory/
+├── MEMORY.md      # hot tier: one durable fact per line, always in context
+└── archive.db     # cold tier: searchable past conversations
+```
+
+> **Privacy.** The Archive persists user and assistant message text to disk, so
+> it can retain sensitive content. Store the memory directory somewhere with
+> appropriate access control, and pass `archive=None` to keep no searchable
+> record of past conversations.
+
+Behavior is tuned with optional flags:
+
+| Field | Default | Effect |
+| --- | --- | --- |
+| `inject` | `True` | Inject the Notes block into the system prompt each run |
+| `auto_extract` | `True` | At run end, promote durable facts into Notes (one model call) and consolidate Notes over budget |
+| `summarize_recall` | `True` | `recall` returns a model-written summary of the hits, not raw excerpts |
+| `recall_k` | `5` | How many archive hits `recall` retrieves |
+| `model` | host model | Model used for the curation side-queries |
+
+The curation and recall side-queries dogfood `Runner.run` with a tool-less,
+plugin-less sub-agent and structured output — so they reuse your provider chain
+and can't recurse. Because lovia's transcript is durable and compaction is
+view-only, extraction runs once at run end over the complete transcript: it is
+curation (promoting the few durable facts into the small hot tier), not rescue.
+
+**Bring your own backend.** Each tier sits behind a small protocol
+(`NotesStore`, `MemoryArchive`), so you can swap either one — Redis, a vector
+DB, Postgres — while keeping the same tools and instructions:
+
+```python
+from lovia import Agent, Memory
+
+agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, archive=my_archive)])
+```
+
+Pass `archive=None` for a notes-only memory with no `recall` tool. Custom
+backends are long-lived and shared by every run, so they must be safe for
+concurrent use; the plugin never closes them.
+
 ### Writing a plugin
 
 A plugin is any object with a `name` and an `async setup()` that returns a `PluginInstance`.
@@ -638,8 +704,9 @@ State that should be **fresh per run** is built inside `setup`
 (like the todo list above); state that should **persist across runs and
 sessions** is held on the plugin and passed in at construction.
 
-Here is a long-term memory plugin — it wraps a backend you supply, created once and shared
-by every run, so the agent can recall a fact from one conversation in the next:
+Here is a glossary plugin — it wraps a backend you supply, created once and
+shared by every run, so a term defined in one conversation is known in the next.
+(This is exactly the pattern the built-in `Memory` plugin above is built on.)
 
 ```python
 from dataclasses import dataclass
@@ -648,47 +715,37 @@ from typing import Protocol
 from lovia import Agent, PluginInstance, tool
 
 
-class MemoryStore(Protocol):
-    """Your long-term backend — implement it over a vector DB, SQLite, etc."""
+class Glossary(Protocol):
+    """Your shared backend — a DB, a file, an in-memory dict."""
 
-    async def add(self, fact: str) -> None: ...
-    async def search(self, query: str, k: int) -> list[str]: ...
+    async def define(self, term: str, meaning: str) -> None: ...
+    async def lookup(self, term: str) -> str | None: ...
 
 
 @dataclass
-class MemoryPlugin:
-    """Cross-session long-term memory the agent can write to and search."""
+class GlossaryPlugin:
+    """Cross-session glossary the agent can write to and read back."""
 
-    store: MemoryStore  # long-lived, shared by every run — not rebuilt per run
-    name: str = "memory"
+    store: Glossary  # long-lived, shared by every run — not rebuilt per run
+    name: str = "glossary"
 
     async def setup(self) -> PluginInstance:
         store = self.store
 
         @tool
-        async def remember(fact: str) -> str:
-            """Save a durable fact to recall in any later session."""
-            await store.add(fact)
-            return "Saved to long-term memory."
-
-        @tool
-        async def recall(query: str) -> str:
-            """Search long-term memory for facts relevant to the query."""
-            hits = await store.search(query, k=5)
-            return "\n".join(f"- {h}" for h in hits) or "(nothing relevant)"
+        async def define(term: str, meaning: str) -> str:
+            """Record what a domain term means, for this and later sessions."""
+            await store.define(term, meaning)
+            return f"Noted: {term}."
 
         return PluginInstance(
-            tools=[remember, recall],
-            instructions=(
-                "You have long-term memory that persists across sessions. Call "
-                "`recall` to check it before answering, and `remember` to store "
-                "durable facts or preferences the user shares."
-            ),
+            tools=[define],
+            instructions="Use `define` to record domain terms the user explains.",
         )
 
 
-store = MyVectorStore()  # your MemoryStore: just async add() and search()
-agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MemoryPlugin(store)])
+store = MyGlossary()  # your Glossary backend: just async define() and lookup()
+agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[GlossaryPlugin(store)])
 ```
 
 Because that backend is shared across (possibly concurrent) runs it must be safe

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, Skills, AgentHooks, RunContext
+from lovia import Agent, Runner, Skills
 from lovia.events import (
     TextDelta,
     ReasoningDelta,

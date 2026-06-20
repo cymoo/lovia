@@ -17,7 +17,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, Skills
+from lovia import Agent, Runner, Skills, AgentHooks, RunContext
 from lovia.events import (
     TextDelta,
     ReasoningDelta,
@@ -32,18 +32,11 @@ load_dotenv()
 
 SKILLS_DIR = Path(__file__).parent / "skills"
 
-
 async def main() -> None:
     # Provide a shell tool so the model can execute skill scripts.
     agent = Agent(
         name="SupportBot",
-        instructions=(
-            "You are a customer support agent. "
-            "Use the skills system to access company policies. "
-            "Call `load_skill` when a policy is relevant, "
-            "and `read_skill_file` for supplementary details. "
-            "Use the `shell` tool to run scripts when needed."
-        ),
+        instructions= "You are a customer support agent.",
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
         workspace=Workspace.local('.', mode="trusted"),
         plugins=[Skills(SKILLS_DIR)],

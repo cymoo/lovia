@@ -33,6 +33,7 @@ from lovia import (
     Agent,
     AgentHooks,
     Compaction,
+    RunContext,
     Runner,
     events,
 )
@@ -62,7 +63,7 @@ async def main() -> None:
     hooks = AgentHooks()
 
     @hooks.on(events.ContextCompacted)
-    async def _record(ev: events.ContextCompacted) -> None:
+    async def _record(ev: events.ContextCompacted, ctx: RunContext) -> None:
         print(
             f"[compacted] reason={ev.reason} "
             f"tokens={ev.metadata.get('tokens_before')}→{ev.metadata.get('tokens_after')}"

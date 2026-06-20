@@ -60,7 +60,7 @@ lovia/
   events.py         # Streaming event types
   output.py         # Structured output handling (native JSON Schema / final_output fallback)
   handoff.py        # Handoff + agent_as_tool
-  hooks.py          # AgentHooks subscriber
+  hooks.py          # AgentHooks subscriber (handlers called as handler(event, ctx))
   guardrails.py     # input/output guardrail protocol
   session.py        # Session protocol
   context/          # Context-window management (see "Context compaction" below)
@@ -118,7 +118,7 @@ Tools from several sources are merged in `RunLoop._collect_tools()` with name-co
 
 ### Plugins and view injectors
 
-A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `MCP`, `Skills`, and `Todo` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
+A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `MCP`, `Skills`, and `Todo` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`; each handler is called `handler(event, ctx)` with the live `RunContext`, like guardrails/view-injectors), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
 
 `ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`plugins/todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
 
@@ -139,7 +139,7 @@ Two persistence concepts that serve different purposes:
 - **`Session`** (`session.py`) — stores the conversation transcript (as `TranscriptEntry` list) keyed by `session_id`. Used for multi-turn chat. The runner loads history at the start and persists the **full** transcript after each run — context compaction never writes to the Session.
 - **`Checkpointer`** (`checkpointer.py`) — snapshots full run state (`RunSnapshot`: entries + usage + turns + `agent_name`) keyed by `run_id`. Used for crash recovery / pause-and-resume; the loop writes a snapshot after the model output and after each tool call via `CheckpointWriter.save_running()`. `agent_name` records the *active* agent — after a handoff that is the target, not the entry agent. On resume `RunLoop` resolves that agent by name from the entry agent's handoff graph (`runtime/resume.py:resolve_resume_agent`) and rebuilds the run as that agent, so multi-agent runs resume correctly.
 
-Long-term cross-session **memory** is deliberately *not* a core runtime primitive — there is no `Memory` protocol baked into the loop or `Agent.memory` field. It ships instead as a first-class **plugin** (`Memory`, in `plugins/memory.py`), built entirely on existing plugin seams (injected instructions, tools, a view-injector for `session_id`, and a `RunCompleted` hook); see the **Memory** section in the README. The same seams let you wire your own memory over a custom store.
+Long-term cross-session **memory** is deliberately *not* a core runtime primitive — there is no `Memory` protocol baked into the loop or `Agent.memory` field. It ships instead as a first-class **plugin** (`Memory`, in `plugins/memory.py`), built entirely on existing plugin seams (injected instructions, tools, and a `RunCompleted` hook that reads `session_id` and the active agent off the `RunContext` passed to every handler); see the **Memory** section in the README. The same seams let you wire your own memory over a custom store.
 
 ### Context compaction
 

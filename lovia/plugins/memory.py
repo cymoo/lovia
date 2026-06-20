@@ -36,8 +36,8 @@ small ``Protocol`` so the backends are swappable::
     #  + SQLiteMemoryArchive("./.lovia/memory/archive.db")
 
 Backends are long-lived and shared by every run (held on the plugin, never
-rebuilt per run, never closed by the plugin); only the per-run capture holder is
-built inside :meth:`Memory.setup`.
+rebuilt per run, never closed by the plugin); :meth:`Memory.setup` only
+assembles the per-run tools, instructions, and the ``RunCompleted`` hook.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ from ..run_context import RunContext
 from ..stores._sqlite import SQLiteStore
 from ..tools import Tool, tool
 from ..transcript import TranscriptEntry, entries_to_messages
-from .base import PluginInstance, ViewInjector
+from .base import PluginInstance
 
 if TYPE_CHECKING:
     from ..providers import Provider
@@ -563,26 +563,6 @@ async def _summarize(
 # ---------------------------------------------------------------------------
 
 
-class _RunCtx:
-    """Per-run holder. The capture injector stashes the live ``RunContext`` here
-    so the end-of-run hook can read ``session_id`` and the host model — neither
-    of which is available on :class:`~lovia.RunResult` or the event."""
-
-    def __init__(self) -> None:
-        self.ctx: RunContext[Any] | None = None
-        self.finalized = False
-
-
-def _make_capture(holder: _RunCtx) -> ViewInjector:
-    """A no-op injector: it records ``ctx`` for the hook and injects nothing."""
-
-    def capture(ctx: RunContext[Any]) -> None:
-        holder.ctx = ctx
-        return None
-
-    return capture
-
-
 _REMEMBER_DESCRIPTION = (
     "Save a durable fact to long-term memory so you can recall it in future "
     "sessions. Use it for stable preferences, corrections, or lasting details "
@@ -626,7 +606,7 @@ def _make_forget(notes: NotesStore) -> Tool:
     return forget
 
 
-def _make_recall(plugin: "Memory", archive: MemoryArchive, holder: _RunCtx) -> Tool:
+def _make_recall(plugin: "Memory", archive: MemoryArchive) -> Tool:
     @tool(name="recall", description=_RECALL_DESCRIPTION)
     async def recall(
         ctx: RunContext[Any],
@@ -636,12 +616,10 @@ def _make_recall(plugin: "Memory", archive: MemoryArchive, holder: _RunCtx) -> T
         if not hits:
             return "(nothing relevant found in long-term memory)"
         if plugin.summarize_recall:
-            model = plugin._resolve_model(ctx)
-            if model is not None:
-                try:
-                    return await _summarize(hits, query, model)
-                except Exception:
-                    logger.exception("memory: recall summary failed; returning raw hits")
+            try:
+                return await _summarize(hits, query, plugin._resolve_model(ctx))
+            except Exception:
+                logger.exception("memory: recall summary failed; returning raw hits")
         return "\n\n".join(f"- {h.text}" for h in hits)
 
     return recall
@@ -723,22 +701,20 @@ class Memory:
             self.archive = None
 
     def _resolve_model(
-        self, ctx: RunContext[Any] | None
-    ) -> "str | Provider | list[str | Provider] | None":
-        if self.model is not None:
-            return self.model
-        if ctx is not None and ctx.agent is not None:
-            return ctx.agent.model
-        return None
+        self, ctx: RunContext[Any]
+    ) -> "str | Provider | list[str | Provider]":
+        # ``self.model`` overrides; otherwise reuse the host agent's model. Both
+        # callers (the recall tool and the RunCompleted hook) pass a live
+        # context, and ``RunContext.agent`` / ``Agent.model`` are always set.
+        return self.model if self.model is not None else ctx.agent.model
 
     async def setup(self) -> PluginInstance:
         notes = cast(NotesStore, self.notes)
         archive = self.archive
-        holder = _RunCtx()
 
         tools: list[Tool] = [_make_remember(notes), _make_forget(notes)]
         if archive is not None:
-            tools.append(_make_recall(self, archive, holder))
+            tools.append(_make_recall(self, archive))
 
         instructions = _build_instructions(archive is not None)
         if self.inject:
@@ -746,39 +722,36 @@ class Memory:
 
         return PluginInstance(
             tools=tools,
-            view_injectors=[_make_capture(holder)],
             instructions=instructions,
-            hooks=self._make_hooks(notes, archive, holder),
+            hooks=self._make_hooks(notes, archive),
         )
 
     def _make_hooks(
-        self, notes: NotesStore, archive: "MemoryArchive | None", holder: _RunCtx
+        self, notes: NotesStore, archive: "MemoryArchive | None"
     ) -> AgentHooks:
         hooks = AgentHooks()
+        finalized = False
 
         @hooks.on(RunCompleted)
-        async def _on_completed(ev: RunCompleted) -> None:
+        async def _on_completed(ev: RunCompleted, ctx: RunContext[Any]) -> None:
+            # Every hook receives the run's live RunContext; it carries the
+            # ``session_id`` and active agent, neither of which is on the event
+            # or :class:`~lovia.RunResult`.
+            nonlocal finalized
             # Guard against any double-dispatch; RunCompleted is once per run.
-            if holder.finalized:
+            if finalized:
                 return
-            holder.finalized = True
-            ctx = holder.ctx
-            result = ev.result
-            entries = result.entries
-            session_id = ctx.session_id if ctx is not None else None
+            finalized = True
+            entries = ev.result.entries
 
             if archive is not None:
                 try:
-                    await archive.ingest(session_id, entries)
+                    await archive.ingest(ctx.session_id, entries)
                 except Exception:
                     logger.exception("memory: archive ingest failed")
 
             if self.auto_extract:
-                model = self._resolve_model(ctx)
-                if model is None and result.final_agent is not None:
-                    model = result.final_agent.model
-                if model is not None:
-                    await self._curate_notes(notes, entries, model)
+                await self._curate_notes(notes, entries, self._resolve_model(ctx))
 
         return hooks
 

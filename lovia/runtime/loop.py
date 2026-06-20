@@ -668,7 +668,7 @@ class RunLoop:
 
         ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=target)
         if prev_agent.hooks is not None and prev_agent.hooks is not target.hooks:
-            await dispatch(prev_agent.hooks, ev)
+            await dispatch(prev_agent.hooks, ev, state.run_ctx)
         yield await self._emit(state, ev)
 
     async def _finalize_output(
@@ -734,9 +734,9 @@ class RunLoop:
         """Dispatch ``ev`` to the active agent's hooks and any plugin hooks,
         then hand it back to be yielded to the stream consumer
         (``yield await self._emit(...)``)."""
-        await dispatch(state.agent.hooks, ev)
+        await dispatch(state.agent.hooks, ev, state.run_ctx)
         for hooks in state.active.plugins.hooks:
-            await dispatch(hooks, ev)
+            await dispatch(hooks, ev, state.run_ctx)
         return ev
 
     def _check_limits(self, state: RunState) -> None:

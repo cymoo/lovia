@@ -492,18 +492,26 @@ result = await Runner.run(
 )
 ```
 
-Lifecycle hooks receive the same typed events used by streaming:
+Lifecycle hooks receive the same typed events used by streaming. Each handler is
+called as `handler(event, ctx)` — it gets the event plus the run's live
+`RunContext` (the dynamic run state: `session_id`, the active agent, cumulative
+usage, ...):
 
 ```python
-from lovia import events
+from lovia import RunContext, events
 from lovia.hooks import AgentHooks
 
 hooks = AgentHooks()
 
 
 @hooks.on(events.ToolCallStarted)
-async def log_tool(ev):
+async def log_tool(ev, ctx: RunContext):
     print(ev.call.name, ev.call.arguments)
+
+
+@hooks.on(events.RunCompleted)
+async def on_done(ev, ctx: RunContext):
+    print("done:", ctx.session_id, ev.result.usage)
 
 
 agent = agent.clone(hooks=hooks)

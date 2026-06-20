@@ -151,7 +151,7 @@ async def test_plugin_hooks_receive_events() -> None:
     hooks = AgentHooks()
 
     @hooks.on_any
-    def record(ev) -> None:
+    def record(ev, ctx) -> None:
         seen.append(type(ev).__name__)
 
     agent = Agent(name="t", model=provider, plugins=[_plugin(hooks=hooks)])

@@ -24,10 +24,8 @@ from lovia.plugins.memory import (
     _drop_fact,
     _format_facts,
     _fts5_available,
-    _make_capture,
     _meter,
     _parse_facts,
-    _RunCtx,
 )
 from lovia.transcript import (
     AssistantTextEntry,
@@ -273,7 +271,9 @@ async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
     assert "NOTES" in inst.instructions
     assert "user prefers dark mode" in inst.instructions
     assert "recall" in inst.instructions
-    assert len(inst.view_injectors) == 1
+    # The RunCompleted hook reads session_id straight off the injected
+    # RunContext, so no capture view-injector is needed anymore.
+    assert inst.view_injectors == []
     assert inst.hooks is not None
 
 
@@ -286,14 +286,6 @@ async def test_setup_inject_false_and_no_archive(tmp_path) -> None:
     assert "secret note" not in inst.instructions  # notes not injected
     assert "remember" in inst.instructions  # usage guidance still present
     assert "recall" not in inst.instructions  # no archive guidance
-
-
-def test_capture_injector_records_ctx_and_injects_nothing() -> None:
-    holder = _RunCtx()
-    inject = _make_capture(holder)
-    sentinel = object()
-    assert inject(sentinel) is None  # injects nothing
-    assert holder.ctx is sentinel  # but recorded the ctx
 
 
 # ---------------------------------------------------------------------------

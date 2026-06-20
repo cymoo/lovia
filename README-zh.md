@@ -463,18 +463,25 @@ result = await Runner.run(
 )
 ```
 
-生命周期 hooks 接收的就是流式输出同一套类型化事件：
+生命周期 hooks 接收的就是流式输出同一套类型化事件。每个 handler 都以
+`handler(event, ctx)` 形式被调用——既拿到事件，也拿到本次运行的 `RunContext`
+（运行时动态状态：`session_id`、当前 agent、累计用量……）：
 
 ```python
-from lovia import events
+from lovia import RunContext, events
 from lovia.hooks import AgentHooks
 
 hooks = AgentHooks()
 
 
 @hooks.on(events.ToolCallStarted)
-async def log_tool(ev):
+async def log_tool(ev, ctx: RunContext):
     print(ev.call.name, ev.call.arguments)
+
+
+@hooks.on(events.RunCompleted)
+async def on_done(ev, ctx: RunContext):
+    print("done:", ctx.session_id, ev.result.usage)
 
 
 agent = agent.clone(hooks=hooks)

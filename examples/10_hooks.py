@@ -3,6 +3,11 @@
 Hooks see every event (text deltas, tool calls, handoffs, ...) so you can
 plug into Logfire, OpenTelemetry, or your own logger without changing the
 agent definition.
+
+Each handler is called as ``handler(event, ctx)``: it receives the event and
+the run's live ``RunContext`` — the dynamic run state (``session_id``, the
+active agent, cumulative usage, ...). Handlers that only need the event ignore
+``ctx``.
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from lovia import Agent, AgentHooks, Runner, events, tool
+from lovia import Agent, AgentHooks, RunContext, Runner, events, tool
 
 from dotenv import load_dotenv
 
@@ -27,18 +32,20 @@ hooks = AgentHooks()
 
 
 @hooks.on(events.ToolCallStarted)
-async def log_tool_started(ev: events.ToolCallStarted) -> None:
+async def log_tool_started(ev: events.ToolCallStarted, ctx: RunContext) -> None:
     print(f"[tool] -> {ev.call.name}({ev.call.arguments})")
 
 
 @hooks.on(events.ToolCallCompleted)
-async def log_tool_completed(ev: events.ToolCallCompleted) -> None:
+async def log_tool_completed(ev: events.ToolCallCompleted, ctx: RunContext) -> None:
     print(f"[tool] <- {ev.call.name}: {ev.result}")
 
 
 @hooks.on(events.RunCompleted)
-async def log_done(ev: events.RunCompleted) -> None:
-    print(f"[done] usage={ev.result.usage}")
+async def log_done(ev: events.RunCompleted, ctx: RunContext) -> None:
+    # Every handler also receives the run's live RunContext, so it can read
+    # run-scoped state the event doesn't carry — here the session key.
+    print(f"[done] session={ctx.session_id} usage={ev.result.usage}")
 
 
 async def main() -> None:

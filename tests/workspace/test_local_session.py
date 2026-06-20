@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
+import os
+
 import pytest
 
 from lovia.workspace import (
@@ -123,6 +127,63 @@ async def test_read_guards_against_oversized_files(tmp_path) -> None:
     assert 0 < result.total_lines < 2000
 
 
+async def test_read_oversized_appends_note_when_not_char_clipped(tmp_path) -> None:
+    # The byte cap cuts the file, but the prefix fits under the char cap so
+    # clip_text adds nothing — read_text must still flag the partial read.
+    (tmp_path / "huge.txt").write_text(
+        "\n".join(f"line{i}" for i in range(1, 2001)), encoding="utf-8"
+    )
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_file_read_bytes=200))
+    result = await session.read_text("huge.txt")
+    assert result.truncated is True
+    assert "leading portion" in result.content
+
+
+async def test_read_past_eof_is_empty_not_backwards(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    result = await session.read_text("f.txt", start=10)
+    assert result.content == "" and result.total_lines == 3 and result.start == 10
+
+
+async def test_read_empty_file(tmp_path) -> None:
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+    session = await _session(tmp_path)
+    result = await session.read_text("empty.txt")
+    assert result.content == "" and result.total_lines == 0
+
+
+async def test_read_file_without_trailing_newline(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("one\ntwo", encoding="utf-8")  # no final newline
+    session = await _session(tmp_path)
+    result = await session.read_text("f.txt")
+    assert result.total_lines == 2 and result.content == "one\ntwo"
+    assert result.truncated is False
+
+
+async def test_read_end_beyond_total_clamps(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    result = await session.read_text("f.txt", start=1, end=999)
+    assert result.content == "a\nb\nc\n" and result.end == 3
+    assert result.truncated is False
+
+
+async def test_read_invalid_ranges_raise(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("a\nb\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    for kwargs in ({"start": 0}, {"end": 0}, {"start": 3, "end": 2}):
+        with pytest.raises(WorkspaceError):
+            await session.read_text("f.txt", **kwargs)  # type: ignore[arg-type]
+
+
+async def test_read_directory_raises(tmp_path) -> None:
+    (tmp_path / "dir").mkdir()
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Not a file"):
+        await session.read_text("dir")
+
+
 async def test_write_create_only_and_nested_dirs(tmp_path) -> None:
     session = await _session(tmp_path)
     created = await session.write_text("a/b/new.txt", "data", create_only=True)
@@ -155,6 +216,38 @@ async def test_edit_empty_old_is_rejected(tmp_path) -> None:
     session = await _session(tmp_path)
     result = await session.edit_text("a.txt", "", "new")
     assert result.ok is False and "must not be empty" in (result.message or "")
+
+
+async def test_edit_noop_when_old_equals_new(tmp_path) -> None:
+    (tmp_path / "a.txt").write_text("hello\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    result = await session.edit_text("a.txt", "hello", "hello")
+    assert result.ok is True and result.changed is False and result.replacements == 1
+
+
+async def test_edit_refuses_non_utf8_and_leaves_bytes_intact(tmp_path) -> None:
+    raw = b"caf\xe9 = 1\n"  # lone 0xe9 is not valid UTF-8
+    (tmp_path / "bin.txt").write_bytes(raw)
+    session = await _session(tmp_path)
+    result = await session.edit_text("bin.txt", "= 1", "= 2")
+    assert result.ok is False and "UTF-8" in (result.message or "")
+    # The original bytes must be untouched, not rewritten with U+FFFD.
+    assert (tmp_path / "bin.txt").read_bytes() == raw
+
+
+async def test_write_to_root_is_rejected(tmp_path) -> None:
+    session = await _session(tmp_path)
+    with pytest.raises(PathOutsideWorkspaceError):
+        await session.write_text(".", "data")
+
+
+async def test_write_overwrite_and_unicode_roundtrip(tmp_path) -> None:
+    session = await _session(tmp_path)
+    first = await session.write_text("f.txt", "one")
+    assert first.action == "created"
+    second = await session.write_text("f.txt", "二 🚀")
+    assert second.action == "updated"
+    assert (await session.read_text("f.txt")).content == "二 🚀"
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +351,105 @@ async def test_grep_include_hidden_and_skips_escaping_symlink(tmp_path) -> None:
     assert "link.txt" not in {m.path for m in await session.grep("token")}
 
 
+async def test_grep_skips_oversized_files(tmp_path) -> None:
+    (tmp_path / "big.txt").write_text("needle\n" + "x\n" * 1000, encoding="utf-8")
+    (tmp_path / "small.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_grep_file_bytes=50))
+    assert [m.path for m in await session.grep("needle")] == ["small.txt"]
+
+
+async def test_grep_clips_long_lines(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("needle " + "z" * 1000 + "\n", encoding="utf-8")
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_grep_line_chars=20))
+    matches = await session.grep("needle")
+    assert len(matches) == 1 and len(matches[0].text) <= 20
+
+
+async def test_grep_reports_nested_relative_paths(tmp_path) -> None:
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "deep.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    assert [m.path for m in await session.grep("needle")] == ["a/b/deep.txt"]
+
+
+async def test_grep_skips_denied_directories(tmp_path) -> None:
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "k.txt").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secrets",)))
+    assert [m.path for m in await session.grep("needle")] == ["ok.txt"]
+
+
+async def test_grep_glob_matches_by_path(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "test_app.py").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    only_src = await session.grep("needle", glob="src/*.py")
+    assert [m.path for m in only_src] == ["src/app.py"]
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses file permissions",
+)
+async def test_grep_skips_unreadable_file(tmp_path) -> None:
+    bad = tmp_path / "locked.txt"
+    bad.write_text("needle\n", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("needle\n", encoding="utf-8")
+    bad.chmod(0o000)
+    try:
+        session = await _session(tmp_path)
+        # The unreadable file is skipped (logged at debug), not a crash.
+        assert [m.path for m in await session.grep("needle")] == ["ok.txt"]
+    finally:
+        bad.chmod(0o644)
+
+
+# ---------------------------------------------------------------------------
+# concurrency & lock lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrent_edits_do_not_corrupt(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    # Each edit is an atomic read-modify-write under the per-path lock, so three
+    # concurrent edits to distinct lines all land (no lost update).
+    await asyncio.gather(
+        session.edit_text("f.txt", "a", "A"),
+        session.edit_text("f.txt", "b", "B"),
+        session.edit_text("f.txt", "c", "C"),
+    )
+    assert (tmp_path / "f.txt").read_text() == "A\nB\nC\n"
+
+
+async def test_concurrent_read_during_writes_is_never_torn(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("A" * 5000, encoding="utf-8")
+    session = await _session(tmp_path)
+    valid = {"A" * 5000, "B" * 5000}
+
+    async def writer() -> None:
+        for i in range(40):
+            await session.write_text("f.txt", ("B" if i % 2 else "A") * 5000)
+
+    async def reader() -> None:
+        for _ in range(40):
+            # Read shares the write lock, so it sees a complete old-or-new file.
+            assert (await session.read_text("f.txt")).content in valid
+
+    await asyncio.gather(writer(), reader(), reader())
+
+
+async def test_lock_map_evicts_after_use(tmp_path) -> None:
+    session = await _session(tmp_path)
+    for i in range(20):
+        await session.write_text(f"f{i}.txt", "x")
+    gc.collect()
+    # Weak-valued map: no entry survives once its op is done — no unbounded growth.
+    assert len(session._locks) == 0
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -351,14 +543,16 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
     assert "without approval" in trusted.instructions()
 
 
-async def test_workspace_inherit_env_defaults_to_trusted(tmp_path) -> None:
-    # trusted runs shell without approval, so it inherits the host env;
-    # coding (approval-gated) defaults to the minimal allowlist.
-    assert Workspace.local(str(tmp_path), mode="trusted").inherit_env is True
+async def test_workspace_inherit_env_defaults_off(tmp_path) -> None:
+    # Every mode defaults to the minimal allowlist; inheriting the host env is
+    # opt-in (even for trusted) so host secrets never leak unless asked for.
+    assert Workspace.local(str(tmp_path), mode="trusted").inherit_env is False
     assert Workspace.local(str(tmp_path), mode="coding").inherit_env is False
-    # ...but the default is overridable either way.
+    # ...but it is overridable either way.
     forced = Workspace.local(str(tmp_path), mode="coding", inherit_env=True)
     assert forced.inherit_env is True
+    trusted_on = Workspace.local(str(tmp_path), mode="trusted", inherit_env=True)
+    assert trusted_on.inherit_env is True
 
 
 async def test_workspace_factory_guards() -> None:

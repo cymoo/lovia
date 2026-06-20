@@ -146,3 +146,54 @@ async def test_shell_renderer_formats_result(session) -> None:
 
     quiet = await shell.invoke({"command": "true"}, ctx)
     assert "(no output)" in await render_tool_result(shell, quiet, ctx)
+
+
+@pytest.mark.asyncio
+async def test_read_file_renders_empty_and_past_eof(tmp_path) -> None:
+    (tmp_path / "empty.txt").write_text("", encoding="utf-8")
+    (tmp_path / "small.txt").write_text("a\nb\n", encoding="utf-8")
+    ctx = _ctx(LocalWorkspaceSession(root=str(tmp_path)))
+
+    empty = await read_file.invoke({"path": "empty.txt"}, ctx)
+    assert await render_tool_result(read_file, empty, ctx) == "empty.txt (empty file)"
+
+    past = await read_file.invoke({"path": "small.txt", "start": 99}, ctx)
+    rendered = await render_tool_result(read_file, past, ctx)
+    assert "past the last line" in rendered and "(2)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_read_file_renders_oversized_note(tmp_path) -> None:
+    (tmp_path / "huge.txt").write_text(
+        "\n".join(f"line{i}" for i in range(1, 2001)), encoding="utf-8"
+    )
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), limits=WorkspaceLimits(max_file_read_bytes=200)
+    )
+    ctx = _ctx(session)
+    raw = await read_file.invoke({"path": "huge.txt"}, ctx)
+    # A partial read must be visible to the model even when not char-clipped.
+    assert "leading portion" in await render_tool_result(read_file, raw, ctx)
+
+
+@pytest.mark.asyncio
+async def test_edit_file_refuses_non_utf8(tmp_path) -> None:
+    (tmp_path / "bin.txt").write_bytes(b"caf\xe9 x\n")
+    ctx = _ctx(LocalWorkspaceSession(root=str(tmp_path)))
+    raw = await edit_file.invoke({"path": "bin.txt", "old": "x", "new": "y"}, ctx)
+    assert raw.ok is False
+    assert "UTF-8" in await render_tool_result(edit_file, raw, ctx)
+    assert (tmp_path / "bin.txt").read_bytes() == b"caf\xe9 x\n"
+
+
+@pytest.mark.asyncio
+async def test_grep_tool_honors_workspace_limit(tmp_path) -> None:
+    (tmp_path / "f.txt").write_text("hit\n" * 8, encoding="utf-8")
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), limits=WorkspaceLimits(max_grep_matches=3)
+    )
+    ctx = _ctx(session)
+    # No explicit max_matches -> the workspace limit applies (it was ignored
+    # while the tool hardcoded a default).
+    matches = await grep_files.invoke({"pattern": "hit"}, ctx)
+    assert len(matches) == 3

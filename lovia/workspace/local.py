@@ -17,6 +17,7 @@ import os
 import re
 import signal
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -68,8 +69,11 @@ class LocalWorkspaceSession:
     id: str = field(default_factory=lambda: f"local-{uuid.uuid4().hex[:8]}")
     _root: Path = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
-    _locks: dict[str, asyncio.Lock] = field(
-        default_factory=dict, init=False, repr=False
+    # Per-path write locks, weak-valued so an entry disappears once no in-flight
+    # operation references its lock — the map can't grow without bound across a
+    # long-lived session.
+    _locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = field(
+        default_factory=weakref.WeakValueDictionary, init=False, repr=False
     )
     _locks_guard: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -182,6 +186,11 @@ class LocalWorkspaceSession:
             content, clipped = clip_text(
                 selected, self.limits.max_file_read_chars, hint=hint
             )
+            if oversized and selected and not clipped:
+                # The byte cap cut the file mid-content, but the returned slice
+                # still fit under the char cap, so clip_text added no notice.
+                # Say so explicitly, or the model thinks it read the whole file.
+                content = f"{content}\n[... {hint}]"
             return FileContent(
                 path=rel,
                 content=content,
@@ -191,7 +200,11 @@ class LocalWorkspaceSession:
                 truncated=clipped or end_line < total or oversized,
             )
 
-        return await asyncio.to_thread(_read)
+        # Take the per-path lock so a read never observes a half-written file
+        # (write_text/edit_text hold the same lock).
+        lock = await self._lock_for(rel)
+        async with lock:
+            return await asyncio.to_thread(_read)
 
     async def write_text(
         self, path: str, content: str, *, create_only: bool = False
@@ -239,7 +252,20 @@ class LocalWorkspaceSession:
         async with lock:
 
             def _edit() -> EditResult:
-                text = p.read_text(encoding="utf-8", errors="replace")
+                # Strict decode: editing reads then writes the file back, so a
+                # lenient (errors="replace") read would persist U+FFFD and
+                # destroy the original bytes. Refuse instead of corrupting.
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    return EditResult(
+                        ok=False,
+                        path=rel,
+                        message=(
+                            "file is not valid UTF-8; cannot edit safely "
+                            "(use the shell for binary/encoded files)"
+                        ),
+                    )
                 count = text.count(old)
                 if count == 0:
                     return EditResult(
@@ -375,7 +401,7 @@ class LocalWorkspaceSession:
     ) -> list[GrepMatch]:
         self._check_open()
         cap = self.limits.max_grep_matches if max_matches is None else max_matches
-        rel, base = self._resolve_for_read(path)
+        _, base = self._resolve_for_read(path)
         try:
             regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
@@ -383,17 +409,27 @@ class LocalWorkspaceSession:
 
         def _search() -> ClippedList[GrepMatch]:
             matches: list[GrepMatch] = []
-            for file_rel, file_path in self._walk_files(rel, base, include_hidden):
+            for file_rel, file_path in self._walk_files(base, include_hidden):
+                # Filename-glob semantics: match the relative path or its
+                # basename. Deliberately NOT policy._path_matches, which is
+                # gitignore *deny* matching (a bare name matches any path
+                # segment), so e.g. glob="utils" would match every file under a
+                # utils/ directory — wrong for a filename filter.
                 if glob is not None and not (
                     fnmatch(file_rel, glob) or fnmatch(os.path.basename(file_rel), glob)
                 ):
                     continue
-                # A symlinked file can point outside the root; grep must not
-                # read through it (read_text already refuses such escapes).
+                # _walk_files only yields files in real dirs under the root
+                # (os.walk does not follow symlinked dirs), so only a symlinked
+                # *file* can escape — resolve just those, not every file.
                 try:
-                    if not file_path.resolve().is_relative_to(self._root):
+                    if (
+                        file_path.is_symlink()
+                        and not file_path.resolve().is_relative_to(self._root)
+                    ):
                         continue
-                except OSError:
+                except OSError as exc:
+                    logger.debug("grep: resolve failed for %s (%s)", file_rel, exc)
                     continue
                 try:
                     if file_path.stat().st_size > self.limits.max_grep_file_bytes:
@@ -403,7 +439,8 @@ class LocalWorkspaceSession:
                         if b"\0" in head:
                             continue  # binary
                         data = head + fh.read()
-                except OSError:
+                except OSError as exc:
+                    logger.debug("grep: read failed for %s (%s)", file_rel, exc)
                     continue
                 text = data.decode("utf-8", errors="replace")
                 for line_no, line in enumerate(text.splitlines(), start=1):
@@ -422,17 +459,24 @@ class LocalWorkspaceSession:
         return await asyncio.to_thread(_search)
 
     def _walk_files(
-        self, rel: str, base: Path, include_hidden: bool = False
+        self, base: Path, include_hidden: bool = False
     ) -> Iterator[tuple[str, Path]]:
         """Yield (workspace-relative path, absolute path) for searchable files.
 
         Policy-denied paths are skipped (and dotfiles too unless
-        ``include_hidden``). Symlinked directories are not followed, so the
-        walk itself cannot descend out of the root; callers still re-check
-        individual symlinked files before reading them.
+        ``include_hidden``). ``os.walk(followlinks=False)`` does not descend
+        through symlinked directories, so the walk itself cannot leave the root;
+        a symlinked *file* is still listed, so grep re-checks each one before
+        reading (the ``is_symlink`` guard in :meth:`grep`).
         """
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            # base is resolved and confined under the root and links aren't
+            # followed, so every dirpath is textually under the root —
+            # relative_to cannot raise here.
             dir_rel = Path(dirpath).relative_to(self._root).as_posix()
+            # In-place assignment (note the [:]) prunes os.walk's recursion:
+            # hidden/denied subdirs are never descended into; the rest are
+            # walked in sorted order. Rebinding dirnames would not prune.
             dirnames[:] = sorted(
                 d
                 for d in dirnames

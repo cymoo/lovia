@@ -102,6 +102,10 @@ class WorkspaceLimits:
         max_grep_matches: Default cap on matches returned by ``grep``.
     """
 
+    # Two different axes, hence the very different magnitudes:
+    #   *_chars — how much text is returned to the model (a context budget; the
+    #             result is paginated/clipped and flagged ``truncated``).
+    #   *_bytes — how much is loaded from disk (a memory/OOM guard).
     max_file_read_chars: int = 50_000
     max_file_read_bytes: int = 10_000_000
     max_shell_output_chars: int = 30_000

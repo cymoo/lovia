@@ -167,7 +167,7 @@ class Workspace:
         command_rules: tuple[CommandRule, ...] = (),
         env: Mapping[str, str] | None = None,
         shell_timeout: float | None = 300.0,
-        inherit_env: bool | None = None,
+        inherit_env: bool = False,
         limits: WorkspaceLimits | None = None,
     ) -> LocalWorkspace:
         """Create a local-filesystem workspace rooted at ``root``.
@@ -176,12 +176,12 @@ class Workspace:
         ``denied_paths`` / ``command_rules``); pass an explicit ``policy`` to
         take full control instead of using a preset.
 
-        ``inherit_env`` controls the shell environment: by default only a
-        minimal, non-secret allowlist is passed to commands so credentials in
-        the host environment (API keys, tokens) don't leak. Leave it ``None``
-        to inherit the full host env only for ``trusted`` workspaces; set it
-        explicitly to force the behaviour either way. Add specific variables
-        with ``env=`` regardless.
+        ``inherit_env`` controls the shell environment. By default (``False``)
+        only a minimal, non-secret allowlist is passed to commands so
+        credentials in the host environment (API keys, tokens) don't leak; pass
+        ``inherit_env=True`` to hand the full host env to commands — opt-in for
+        every mode, ``trusted`` included. Add specific variables with ``env=``
+        regardless.
 
         ``limits`` tunes the tool size/count caps (read pagination, shell
         output, grep/listing); omit for sensible defaults.
@@ -208,11 +208,6 @@ class Workspace:
             )
         else:
             raise UserError(f"Unknown workspace mode: {mode!r}")
-        if inherit_env is None:
-            # Tie env inheritance to the "trusted" posture: a workspace that
-            # runs shell without approval may as well see the host env;
-            # everything else defaults to the minimal allowlist.
-            inherit_env = bool(policy.allow_shell and policy.shell_default == "allow")
         return LocalWorkspace(
             root=str(root),
             policy=policy,

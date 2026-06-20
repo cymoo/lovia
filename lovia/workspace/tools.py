@@ -62,11 +62,20 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
 def _render_file_content(result: Any, ctx: RunContext[Any]) -> Any:
     if not isinstance(result, FileContent):
         return result
+    if result.total_lines == 0:
+        return f"{result.path} (empty file)"
+    if not result.content:
+        # The requested start is past the last line — don't print a backwards
+        # range like "lines 1000-10 of 10".
+        return (
+            f"{result.path}: start line {result.start} is past the last line "
+            f"({result.total_lines})."
+        )
+    # Truncation is already visible: end < total_lines (more to page), the clip
+    # notice inside content, or the oversized note appended by read_text.
     header = (
         f"{result.path} (lines {result.start}-{result.end} of {result.total_lines})"
     )
-    if not result.content:
-        return f"{header}\n(empty)"
     return f"{header}\n{result.content}"
 
 
@@ -238,9 +247,18 @@ async def list_files(
     include_hidden: Annotated[
         bool, Field(default=False, description="Include dotfiles/directories.")
     ] = False,
+    max_results: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            le=1000,
+            description="Maximum results returned (defaults to the workspace limit, 500).",
+        ),
+    ] = None,
 ) -> list[DirEntry]:
     return await require_workspace(ctx).list_files(
-        path, pattern=pattern, include_hidden=include_hidden
+        path, pattern=pattern, include_hidden=include_hidden, max_results=max_results
     )
 
 
@@ -277,8 +295,14 @@ async def grep_files(
         bool, Field(default=False, description="Also search dotfiles/dirs.")
     ] = False,
     max_matches: Annotated[
-        int, Field(default=100, ge=1, le=1000, description="Maximum matches returned.")
-    ] = 100,
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            le=1000,
+            description="Maximum matches returned (defaults to the workspace limit, 100).",
+        ),
+    ] = None,
 ) -> list[GrepMatch]:
     return await require_workspace(ctx).grep(
         pattern,
@@ -317,7 +341,10 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
     if result.stdout.strip():
         parts.append(result.stdout.rstrip("\n"))
     if result.stderr.strip():
-        parts.append(f"--- stderr ---\n{result.stderr.rstrip(chr(10))}")
+        # Hoisted to a local: a backslash inside an f-string expression is a
+        # SyntaxError on Python 3.10/3.11 (allowed only from 3.12 / PEP 701).
+        stderr_body = result.stderr.rstrip("\n")
+        parts.append(f"--- stderr ---\n{stderr_body}")
     if len(parts) == 1:
         parts.append("(no output)")
     return "\n".join(parts)

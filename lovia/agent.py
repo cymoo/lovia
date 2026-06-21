@@ -76,9 +76,10 @@ class Agent(Generic[TContext]):
     Fields:
         name: Human-readable agent name; also used to derive handoff tool names.
         instructions: A static base system prompt, or a callable that
-            receives the run ``context`` and returns one (sync or async).
-            Additional dynamic fragments can be registered with the
-            :meth:`instruction` decorator and appended at render time.
+            receives the run's :class:`RunContext` (reach user deps via
+            ``ctx.deps``) and returns one (sync or async). Additional dynamic
+            fragments can be registered with the :meth:`instruction` decorator
+            and appended at render time.
         model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.4"``)
             or a pre-built :class:`Provider` instance.
         tools: Tools the agent may call.

@@ -5,9 +5,18 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, Runner
+from lovia import Agent, RunContext, Runner, tool
 
-from .scripted_provider import ScriptedProvider, text
+from .scripted_provider import ScriptedProvider, call, text
+
+
+def _ctx(agent: Agent) -> RunContext:
+    """A minimal RunContext for direct ``render_system_prompt()`` calls.
+
+    ``render_system_prompt`` now takes the same handle the runner passes, so the
+    unit tests exercise the real signature instead of ``None``.
+    """
+    return RunContext(context=None, entries=[], agent=agent)
 
 
 @pytest.mark.asyncio
@@ -19,7 +28,7 @@ async def test_instruction_decorator_appends_fragment() -> None:
     def add_tier(ctx) -> str:  # type: ignore[no-untyped-def]
         return "tier=gold"
 
-    rendered = await agent.render_system_prompt(None)
+    rendered = await agent.render_system_prompt(_ctx(agent))
     assert rendered == "BASE\n\ntier=gold"
 
 
@@ -31,7 +40,7 @@ async def test_instruction_supports_async() -> None:
     async def addn(ctx) -> str:  # type: ignore[no-untyped-def]
         return "ASYNC"
 
-    assert await agent.render_system_prompt(None) == "BASE\n\nASYNC"
+    assert await agent.render_system_prompt(_ctx(agent)) == "BASE\n\nASYNC"
 
 
 @pytest.mark.asyncio
@@ -46,7 +55,7 @@ async def test_instruction_skips_empty_fragments() -> None:
     def good(ctx) -> str:  # type: ignore[no-untyped-def]
         return "GOOD"
 
-    assert await agent.render_system_prompt(None) == "BASE\n\nGOOD"
+    assert await agent.render_system_prompt(_ctx(agent)) == "BASE\n\nGOOD"
 
 
 @pytest.mark.asyncio
@@ -68,7 +77,7 @@ async def test_render_system_prompt_combines_base_fragments_extra() -> None:
     def frag(ctx) -> str:  # type: ignore[no-untyped-def]
         return "FRAG"
 
-    out = await agent.render_system_prompt(None, extra="EXTRA")
+    out = await agent.render_system_prompt(_ctx(agent), extra="EXTRA")
     assert out == "BASE\n\nFRAG\n\nEXTRA"
 
 
@@ -86,8 +95,8 @@ async def test_clone_copies_fragments_independently() -> None:
     def f2(ctx) -> str:  # type: ignore[no-untyped-def]
         return "F2"
 
-    assert await agent.render_system_prompt(None) == "BASE\n\nF1"
-    assert await twin.render_system_prompt(None) == "BASE\n\nF1\n\nF2"
+    assert await agent.render_system_prompt(_ctx(agent)) == "BASE\n\nF1"
+    assert await twin.render_system_prompt(_ctx(twin)) == "BASE\n\nF1\n\nF2"
 
 
 @pytest.mark.asyncio
@@ -99,8 +108,8 @@ async def test_with_instructions_returns_clone() -> None:
 
     twin = agent.with_instructions(frag)
 
-    assert await agent.render_system_prompt(None) == "BASE"
-    assert await twin.render_system_prompt(None) == "BASE\n\nFRAG"
+    assert await agent.render_system_prompt(_ctx(agent)) == "BASE"
+    assert await twin.render_system_prompt(_ctx(twin)) == "BASE\n\nFRAG"
 
 
 @pytest.mark.asyncio
@@ -118,6 +127,48 @@ async def test_instruction_fragment_receives_run_context() -> None:
     sys_msg = provider.calls[0][0]
     assert sys_msg.role == "system"
     assert "user=Mei turn=0" in sys_msg.content
+
+
+@pytest.mark.asyncio
+async def test_compaction_reuses_stored_system_entry() -> None:
+    """When compaction drops the system head, the view re-prepends the stored
+    entry (rendered once at turn 0) instead of re-running fragments at a later
+    turn — so every turn's provider input carries the same system text."""
+    from lovia.context import CompactionRequest, ContextResult
+    from lovia.transcript import InputEntry
+
+    class DropSystem:
+        name = "drop-system"
+
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            body = [
+                e
+                for e in req.entries
+                if not (isinstance(e, InputEntry) and e.role == "system")
+            ]
+            return ContextResult(entries=body, changed=True)
+
+    @tool
+    def noop() -> str:
+        return "ok"
+
+    # Turn 1 calls a tool, turn 2 answers — so _build_view runs on a turn where
+    # ctx.turn has advanced past 0.
+    provider = ScriptedProvider([call("noop", {}), text("done")])
+    agent = Agent(name="a", instructions="BASE", model=provider, tools=[noop])
+
+    @agent.instruction
+    def stamp(ctx) -> str:  # type: ignore[no-untyped-def]
+        return f"render_turn={ctx.turn}"
+
+    await Runner.run(agent, "go", context_policy=DropSystem())
+
+    # Every turn saw a system message, all carrying the turn-0 render — not a
+    # per-turn re-render (which would read render_turn=1, render_turn=2, ...).
+    assert len(provider.calls) == 2
+    for messages in provider.calls:
+        assert messages[0].role == "system"
+        assert "render_turn=0" in messages[0].content
 
 
 class _Out(BaseModel):

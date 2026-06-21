@@ -1018,21 +1018,24 @@ class RunLoop:
 
         Compaction is view-only: ``state.transcript`` is never mutated. When
         the policy dropped the leading system message (e.g. it summarized the
-        head), re-prepend it so provider adapters still see one.
+        head), re-prepend the system entry already stored at the head of the
+        transcript so provider adapters still see one.
         """
         if not result.changed:
             return state.transcript
         view = result.entries
         if view and isinstance(view[0], InputEntry) and view[0].role == "system":
             return view
-        system_text = await self._system_prompt(
-            state.agent,
-            state.active.structured_output,
-            ctx=state.run_ctx,
-            extra=state.extra_instructions,
-            plugin_instructions=state.active.plugins.instructions,
-        )
-        return [*self._system_entry(system_text), *view]
+        # The compacted view dropped the leading system entry. Re-prepend the
+        # *existing* one from the transcript rather than re-rendering: a fresh
+        # render would re-run dynamic instruction fragments at a later
+        # ``ctx.turn`` and could diverge from both the stored entry and what
+        # ``RunContext.system_prompt`` reports — this keeps the view's system
+        # text identical to what every other turn (and the property) sees.
+        head = state.transcript[0] if state.transcript else None
+        if isinstance(head, InputEntry) and head.role == "system":
+            return [head, *view]
+        return view
 
     def _compacted_event(
         self,

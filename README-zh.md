@@ -5,8 +5,8 @@
 lovia 是一个优雅、克制的 Python Agent 框架，适合希望自己掌控 agent loop，
 同时又不想从零拼装所有基础设施的开发者。它提供真实应用迟早会遇到的能力：
 工具调用、流式输出、结构化输出、会话、handoff、审批、护栏、workspace、
-skills、MCP、上下文压缩、checkpoint/resume 和一个小型 Web UI；同时保持核心
-足够直接，方便阅读、替换和扩展。
+skills、MCP、上下文压缩、checkpoint/resume 和一个轻量 Web UI；同时保持核心
+简洁，方便阅读、替换和扩展。
 
 核心抽象很少：
 
@@ -712,6 +712,49 @@ from lovia.web import serve
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
+### 用 API 自建 UI
+
+HTTP API 与内置聊天页面是解耦的，你可以保留 JSON + SSE 接口、换上自己的前端。
+既可以关掉内置 UI：
+
+```python
+from lovia.web import create_app
+
+app = create_app(agent, ui=False)   # 不挂载 GET / 与 /static，只暴露 API
+```
+
+也可以把这套无 UI 的 router 挂进你自己的 FastAPI 应用：
+
+```python
+from fastapi import FastAPI
+from lovia.web import RouterDeps, build_api_router, ChatStore
+from lovia.web.approvals import ApprovalRegistry
+
+deps = RouterDeps(
+    agents={"bot": agent},
+    store=ChatStore.in_memory(),
+    approvals=ApprovalRegistry(),
+)
+app = FastAPI()
+app.include_router(build_api_router(deps))
+```
+
+主要接口（完整 schema 见 `/api/docs`）：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/info` | 服务标题、agents、版本、能力开关 |
+| `GET /api/agents`、`GET /api/agents/{name}` | 列出 / 获取 agent |
+| `POST /api/chat` | 一次阻塞式回合 → `{output, session_id, usage}` |
+| `POST /api/chat/stream` | 回合的 SSE 流（`text_delta`、`tool_call`、`done` 等） |
+| `POST /api/chat/approve`、`POST /api/chat/cancel` | 处理审批 / 停止流 |
+| `GET /api/sessions` | 会话列表（`?q=` 搜索、`?limit=`）；`DELETE` 清空全部 |
+| `GET`/`PATCH`/`DELETE /api/sessions/{id}` | transcript / 重命名 / 删除 |
+| `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出会话 |
+
+`lovia/web/static/js/api.js` 是一个开箱即用的浏览器客户端（含 SSE 读取器）——
+直接 import，或作为任意语言的参考实现。
+
 ## 示例
 
 `examples/` 目录是一组可直接运行的脚本，可以按下面的顺序浏览：
@@ -731,6 +774,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `examples/14_guardrails.py` | 输入/输出护栏 |
 | `examples/15_resume.py` | checkpoint 与 resume |
 | `examples/16_web_serve.py` | 内置 Web UI |
+| `examples/17_web_api.py` | 仅 API 的服务 + 自建前端 |
 | `examples/18_context_policy.py` | 只改变视图的上下文压缩 |
 | `examples/20_custom_provider.py` | 实现 `Provider` 协议（离线可跑） |
 | `examples/21_dx.py` | 同步调用、临时输出类型等 DX 快捷方式 |

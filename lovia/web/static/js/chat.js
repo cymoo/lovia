@@ -1,7 +1,8 @@
 // Chat streaming, SSE handling, message rendering.
 import { store } from './store.js';
+import { api, readSSE } from './api.js';
 import { copyToClipboard } from './ui.js';
-import { loadSessions, updateSessionInSidebar } from './sessions.js';
+import { loadSessions } from './sessions.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
 marked.setOptions({ gfm: true, breaks: false });
@@ -408,11 +409,7 @@ function appendApproval(call) {
   const resolve = async (decision) => {
     node.classList.add('resolved');
     try {
-      await fetch('/api/chat/approve', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ session_id: store.sessionId, call_id: call.id, decision }),
-      });
+      await api.approve({ session_id: store.sessionId, call_id: call.id, decision });
     } catch (err) { console.error(err); }
   };
   node.querySelector('.approve').addEventListener('click', () => resolve('approve'));
@@ -562,7 +559,7 @@ export function renderHistory(entries) {
         const details = document.createElement('details');
         details.className = 'reasoning done';
         const summary = document.createElement('summary');
-        summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Reasoning</span>';
+        summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Thinking</span>';
         details.appendChild(summary);
         const rc = document.createElement('div');
         rc.className = 'reasoning-content';
@@ -707,19 +704,6 @@ export function renderEmptyState() {
 }
 
 // ---- SSE ---------------------------------------------------------------
-function parseSSE(chunk) {
-  const lines = chunk.split('\n');
-  let event = 'message', data = '';
-  for (const line of lines) {
-    if (line.startsWith(':')) continue;
-    if (line.startsWith('event:')) event = line.slice(6).trim();
-    else if (line.startsWith('data:')) data += (data ? '\n' : '') + line.slice(5).replace(/^ /, '');
-  }
-  if (!data) return null;
-  try { return { event, data: JSON.parse(data) }; }
-  catch { return { event, data }; }
-}
-
 const turnProgressEl = document.getElementById('turn-progress');
 
 async function handleEvent({ event, data }) {
@@ -826,13 +810,6 @@ async function handleEvent({ event, data }) {
       appendContextCompacted(data);
       break;
 
-    case 'title':
-      if (data.title) {
-        document.getElementById('chat-title').textContent = data.title;
-        updateSessionInSidebar(store.sessionId, data.title);
-      }
-      break;
-
     case 'error':
       ensureBody();
       store.rawText += `\n\n> ⚠️ **Error:** ${data.message}`;
@@ -865,12 +842,10 @@ export async function runStream(message) {
   _streamAbortController = new AbortController();
 
   try {
-    const res = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ message, agent: store.agent, session_id: store.sessionId }),
-      signal: _streamAbortController.signal,
-    });
+    const res = await api.streamChat(
+      { message, agent: store.agent, session_id: store.sessionId },
+      { signal: _streamAbortController.signal }
+    );
 
     if (!res.ok || !res.body) {
       ensureBody().innerHTML = `<span class="error-text">Error: ${res.status} ${res.statusText}</span>`;
@@ -878,27 +853,12 @@ export async function runStream(message) {
       return;
     }
 
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let raw = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (value?.length) {
-        raw += dec.decode(value, { stream: !done });
-        raw = raw.replace(/\r\n/g, '\n');
-        let idx;
-        while ((idx = raw.indexOf('\n\n')) >= 0) {
-          const chunk = raw.slice(0, idx);
-          raw = raw.slice(idx + 2);
-          const ev = parseSSE(chunk);
-          if (store.chatEpoch !== streamEpoch) {
-            _streamAbortController?.abort();
-            return;
-          }
-          if (ev) await handleEvent(ev);
-        }
+    for await (const ev of readSSE(res)) {
+      if (store.chatEpoch !== streamEpoch) {
+        _streamAbortController?.abort();
+        return;
       }
-      if (done) break;
+      await handleEvent(ev);
     }
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -963,14 +923,9 @@ export async function runReconnect(sessionId) {
   _streamAbortController = new AbortController();
 
   try {
-    const res = await fetch(
-      `/api/chat/reconnect?session_id=${encodeURIComponent(sessionId)}`,
-      {
-        method: 'POST',
-        headers: { accept: 'text/event-stream' },
-        signal: _streamAbortController.signal,
-      }
-    );
+    const res = await api.reconnect(sessionId, {
+      signal: _streamAbortController.signal,
+    });
 
     if (!res.ok || !res.body) {
       // 404 = nothing to reconnect, 409 = already running or agent gone.
@@ -980,27 +935,12 @@ export async function runReconnect(sessionId) {
       return;
     }
 
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let raw = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (value?.length) {
-        raw += dec.decode(value, { stream: !done });
-        raw = raw.replace(/\r\n/g, '\n');
-        let idx;
-        while ((idx = raw.indexOf('\n\n')) >= 0) {
-          const chunk = raw.slice(0, idx);
-          raw = raw.slice(idx + 2);
-          const ev = parseSSE(chunk);
-          if (store.chatEpoch !== streamEpoch) {
-            _streamAbortController?.abort();
-            return;
-          }
-          if (ev) await handleEvent(ev);
-        }
+    for await (const ev of readSSE(res)) {
+      if (store.chatEpoch !== streamEpoch) {
+        _streamAbortController?.abort();
+        return;
       }
-      if (done) break;
+      await handleEvent(ev);
     }
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -1039,7 +979,7 @@ export async function cancelStream() {
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
     try {
-      await fetch(`/api/chat/cancel?session_id=${encodeURIComponent(store.sessionId)}`, { method: 'POST' });
+      await api.cancel(store.sessionId);
     } catch { /* ignore */ }
   }
 }

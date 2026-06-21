@@ -1,5 +1,6 @@
 // Session sidebar: list, search, switch, rename, delete, export.
 import { store } from './store.js';
+import { api } from './api.js';
 import { promptDialog, confirmDialog } from './ui.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -10,11 +11,7 @@ const exportBtn = document.getElementById('export-btn');
 // ---- Load ----------------------------------------------------------------
 export async function loadSessions(query = '') {
   try {
-    const url = query
-      ? `/api/sessions?q=${encodeURIComponent(query)}`
-      : '/api/sessions';
-    const res = await fetch(url);
-    store.sessions = await res.json();
+    store.sessions = await api.listSessions({ q: query });
     renderSessions();
   } catch (err) {
     console.error('loadSessions:', err);
@@ -111,11 +108,7 @@ async function renameSession(s) {
   const title = await promptDialog('Rename chat:', s.title || '');
   if (!title) return;
   try {
-    await fetch(`/api/sessions/${s.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title }),
-    });
+    await api.renameSession(s.id, title);
     updateSessionInSidebar(s.id, title);
   } catch (err) {
     console.error(err);
@@ -126,7 +119,7 @@ export async function deleteSession(id) {
   const ok = await confirmDialog('Delete this chat?');
   if (!ok) return;
   try {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    await api.deleteSession(id);
   } catch (err) {
     console.error(err);
   }
@@ -151,9 +144,7 @@ export async function switchSession(id) {
   renderSessions();
 
   try {
-    const res = await fetch(`/api/sessions/${id}`);
-    if (!res.ok) throw new Error(res.statusText);
-    const data = await res.json();
+    const data = await api.getSession(id);
     if (chatTitleEl) chatTitleEl.textContent = data.title || 'New chat';
     store.emit('render-history', data.entries || []);
     // Auto-reconnect when the session has an unfinished run (e.g. page refresh
@@ -181,7 +172,7 @@ export function clearChat() {
 export async function exportSession(format = 'md') {
   if (!store.sessionId) return;
   try {
-    const res = await fetch(`/api/sessions/${store.sessionId}/export?format=${format}`);
+    const res = await fetch(api.exportUrl(store.sessionId, format));
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -215,9 +206,6 @@ function formatTime(ts) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-
-// Expose for title SSE event
-export { updateSessionInSidebar };
 
 // ---- Init ----------------------------------------------------------------
 export function initSessions() {

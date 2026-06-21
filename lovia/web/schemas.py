@@ -13,6 +13,16 @@ class AgentInfo(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
 
+class ServerInfo(BaseModel):
+    """Server-level capabilities, for a custom UI to introspect on load."""
+
+    title: str
+    agents: list[str] = Field(default_factory=list)
+    default_agent: str | None = None
+    version: str | None = None
+    features: dict[str, bool] = Field(default_factory=dict)
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None

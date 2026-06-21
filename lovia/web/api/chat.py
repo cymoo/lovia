@@ -1,0 +1,275 @@
+"""Chat routes: blocking turn, SSE stream, approval, cancel, and reconnect."""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
+
+try:
+    from fastapi import APIRouter, HTTPException, Query, Request
+    from sse_starlette.sse import EventSourceResponse
+except ImportError as exc:  # pragma: no cover - depends on optional env
+    from .._deps import raise_missing_web_extra
+
+    raise_missing_web_extra(exc)
+
+from ... import events
+from ...checkpointer import CheckpointOptions
+from ...reliability import CancelToken
+from ...runner import Runner
+from ...runtime.result import RunHandle
+from ..schemas import ApprovalRequest, ChatRequest, ChatResponse
+from ..sse import _coerce, event_to_sse, usage_dict
+from .deps import RouterDeps
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class _DriveResult:
+    """Out-parameter for :func:`drive_stream` (a generator can't also return)."""
+
+    succeeded: bool = False
+    final_output: Any = None
+
+
+async def drive_stream(
+    handle: RunHandle,
+    *,
+    sid: str,
+    request: Request,
+    cancel: CancelToken,
+    deps: RouterDeps,
+    out: _DriveResult,
+) -> AsyncIterator[dict[str, str]]:
+    """Drive a Runner stream to SSE payloads, recording the result in ``out``.
+
+    Shared by ``/chat/stream`` and ``/chat/reconnect``; the only behavioural
+    difference between them — scheduling a title for brand-new sessions — is left
+    to the caller, which runs it after this generator is exhausted.
+    """
+    # Tell the client its session id up front so reconnects work.
+    yield {"event": "session", "data": json.dumps({"session_id": sid})}
+    try:
+        async for ev in handle:
+            if await request.is_disconnected():
+                cancel.cancel("client disconnected")
+                break
+            approval_ev = ev if isinstance(ev, events.ApprovalRequired) else None
+            if approval_ev is not None:
+                deps.approvals.register(sid, approval_ev)
+            payload = event_to_sse(ev)
+            if payload is not None:
+                yield payload
+            if isinstance(ev, events.RunCompleted):
+                out.succeeded = True
+                out.final_output = ev.result.output
+            if approval_ev is not None:
+                await deps.approvals.await_decision(sid, approval_ev)
+    except Exception as exc:
+        # Fatal run errors (MaxTurnsExceeded, provider failure, …) are already
+        # surfaced to the client as an `error` event by the loop before it
+        # re-raises; swallow the re-raise here so the SSE stream closes cleanly
+        # instead of faulting the ASGI response.
+        log.warning("stream %s ended with error: %s", sid, exc)
+    finally:
+        await deps.approvals.release(sid)
+        deps.cancel_tokens.pop(sid, None)
+        # On success the checkpoint was already deleted (delete_on_success).
+        # Clear the DB pointer so the reconnect endpoint finds nothing.
+        if out.succeeded and deps.store.checkpointer is not None:
+            await deps.store.clear_active_run_id(sid)
+
+
+def build_chat_router(deps: RouterDeps) -> APIRouter:
+    router = APIRouter()
+    store = deps.store
+    session = deps.session
+
+    @router.post("/api/chat", response_model=ChatResponse)
+    async def chat(req: ChatRequest) -> ChatResponse:
+        agent = deps.pick(req.agent)
+        sid = req.session_id or uuid.uuid4().hex
+        is_new = (await store.get(sid)) is None
+        await store.upsert(sid, agent=agent.name)
+        result = await Runner.run(
+            agent,
+            req.message,
+            session=session,
+            session_id=sid,
+            context_policy=deps.context_policy,
+            max_turns=deps.max_turns,
+            budget=deps.budget,
+            retry=deps.retry,
+            tracer=deps.tracer,
+        )
+        if is_new:
+            deps.schedule_title(sid, req.message, result.output, agent.name)
+        return ChatResponse(
+            output=_coerce(result.output),
+            session_id=sid,
+            usage=usage_dict(result.usage),
+        )
+
+    @router.post("/api/chat/stream")
+    async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
+        agent = deps.pick(req.agent)
+        sid = req.session_id or uuid.uuid4().hex
+        is_new = (await store.get(sid)) is None
+        await store.upsert(sid, agent=agent.name)
+
+        # A new message always starts a fresh run. Delete any checkpoint left by
+        # a previous interrupted run so the reconnect endpoint won't pick up a
+        # stale snapshot for this session.
+        if store.checkpointer is not None:
+            old_run_id = await store.get_active_run_id(sid)
+            if old_run_id:
+                await store.checkpointer.delete(old_run_id)
+
+        # Cancel any previous stream on this session.
+        if sid in deps.cancel_tokens:
+            deps.cancel_tokens[sid].cancel("new stream started")
+
+        run_id = uuid.uuid4().hex
+        cancel = CancelToken()
+        deps.cancel_tokens[sid] = cancel
+
+        checkpoint_opts: CheckpointOptions | None = None
+        if store.checkpointer is not None:
+            await store.set_active_run_id(sid, run_id)
+            checkpoint_opts = CheckpointOptions(
+                checkpointer=store.checkpointer,
+                run_id=run_id,
+                delete_on_success=True,
+            )
+
+        async def gen() -> AsyncIterator[dict[str, str]]:
+            handle = Runner.stream(
+                agent,
+                req.message,
+                session=session,
+                session_id=sid,
+                context_policy=deps.context_policy,
+                cancel_token=cancel,
+                max_turns=deps.max_turns,
+                budget=deps.budget,
+                retry=deps.retry,
+                tracer=deps.tracer,
+                checkpoint=checkpoint_opts,
+            )
+            out = _DriveResult()
+            async for payload in drive_stream(
+                handle, sid=sid, request=request, cancel=cancel, deps=deps, out=out
+            ):
+                yield payload
+            if is_new and out.succeeded:
+                deps.schedule_title(sid, req.message, out.final_output, agent.name)
+
+        return EventSourceResponse(gen())
+
+    @router.post("/api/chat/approve")
+    async def approve(req: ApprovalRequest) -> dict[str, bool]:
+        ok = await deps.approvals.resolve(
+            req.session_id, req.call_id, req.decision == "approve"
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="no pending approval matches")
+        return {"ok": True}
+
+    @router.post("/api/chat/cancel")
+    async def cancel_stream(session_id: str = Query(...)) -> dict[str, bool]:
+        """Cancel an in-progress stream for ``session_id``."""
+        token = deps.cancel_tokens.get(session_id)
+        if token is None:
+            raise HTTPException(status_code=404, detail="no active stream")
+        token.cancel("user requested stop")
+        # User explicitly stopped: delete the checkpoint and clear the pointer so
+        # a subsequent page reload doesn't trigger an unwanted reconnect.
+        if store.checkpointer is not None:
+            run_id = await store.get_active_run_id(session_id)
+            if run_id:
+                await store.checkpointer.delete(run_id)
+            await store.clear_active_run_id(session_id)
+        return {"ok": True}
+
+    @router.post("/api/chat/reconnect")
+    async def chat_reconnect(
+        request: Request, session_id: str = Query(...)
+    ) -> EventSourceResponse:
+        """Resume an interrupted run for ``session_id``.
+
+        Called automatically by the frontend after a page refresh when the
+        session endpoint returns a non-null ``active_run_id``. The resumed run
+        picks up from the last checkpoint turn; no new user input is needed.
+        """
+        if store.checkpointer is None:
+            raise HTTPException(status_code=404, detail="no checkpointer configured")
+
+        run_id = await store.get_active_run_id(session_id)
+        if run_id is None:
+            raise HTTPException(status_code=404, detail="no interrupted run")
+
+        snapshot = await store.checkpointer.load(run_id)
+        if snapshot is None or snapshot.status not in ("interrupted", "running"):
+            await store.clear_active_run_id(session_id)
+            raise HTTPException(status_code=404, detail="no resumable run")
+
+        agent_name = snapshot.agent_name
+        if agent_name not in deps.agents:
+            await store.checkpointer.delete(run_id)
+            await store.clear_active_run_id(session_id)
+            raise HTTPException(
+                status_code=409,
+                detail=f"agent {agent_name!r} is no longer registered",
+            )
+
+        agent = deps.agents[agent_name]
+
+        if session_id in deps.cancel_tokens:
+            raise HTTPException(
+                status_code=409, detail="a stream is already in progress"
+            )
+
+        cancel = CancelToken()
+        deps.cancel_tokens[session_id] = cancel
+
+        # Pass the pre-loaded snapshot directly to avoid a race between our check
+        # above and the Runner's own checkpointer lookup.
+        checkpoint_opts = CheckpointOptions(
+            checkpointer=store.checkpointer,
+            resume_from=snapshot,
+            delete_on_success=True,
+        )
+
+        async def gen() -> AsyncIterator[dict[str, str]]:
+            handle = Runner.stream(
+                agent,
+                [],  # input is ignored on resume; transcript already has it
+                session=session,
+                session_id=session_id,
+                context_policy=deps.context_policy,
+                cancel_token=cancel,
+                max_turns=deps.max_turns,
+                budget=deps.budget,
+                retry=deps.retry,
+                tracer=deps.tracer,
+                checkpoint=checkpoint_opts,
+            )
+            out = _DriveResult()
+            async for payload in drive_stream(
+                handle,
+                sid=session_id,
+                request=request,
+                cancel=cancel,
+                deps=deps,
+                out=out,
+            ):
+                yield payload
+
+        return EventSourceResponse(gen())
+
+    return router

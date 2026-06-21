@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from lovia import Agent, RunContext, Runner, UserError, tool
 from lovia.tools import default_result_renderer, render_tool_result, run_tool
 
-from .scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, call, text
 
 
 @pytest.mark.asyncio

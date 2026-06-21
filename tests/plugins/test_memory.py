@@ -34,7 +34,7 @@ from lovia.transcript import (
     ToolResultEntry,
 )
 
-from .scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, call, text
 
 requires_fts = pytest.mark.skipif(
     not _fts5_available(), reason="SQLite built without FTS5"
@@ -507,7 +507,7 @@ async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:
 
 
 def _load_env_file() -> None:
-    env_path = Path(__file__).resolve().parents[1] / ".env"
+    env_path = Path(__file__).resolve().parents[2] / ".env"
     if not env_path.exists():
         return
     for line in env_path.read_text().splitlines():

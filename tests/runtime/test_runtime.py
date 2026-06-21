@@ -25,7 +25,7 @@ from lovia.transcript import (
     entries_to_messages,
 )
 
-from .scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, call, text
 
 
 @tool

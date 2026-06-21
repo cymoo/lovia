@@ -8,6 +8,7 @@ import os
 
 import pytest
 
+from lovia.exceptions import UserError
 from lovia.workspace import (
     CommandRule,
     LocalWorkspaceSession,
@@ -556,11 +557,110 @@ async def test_workspace_inherit_env_defaults_off(tmp_path) -> None:
 
 
 async def test_workspace_factory_guards() -> None:
-    from lovia.exceptions import UserError
-
     # Workspace is a factory facade, not a backend you instantiate.
     with pytest.raises(UserError):
         Workspace()
     # docker backend is a documented placeholder for now.
     with pytest.raises(NotImplementedError):
         Workspace.docker()
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap / lifecycle edges
+# ---------------------------------------------------------------------------
+
+
+async def test_nonexistent_root_is_rejected(tmp_path) -> None:
+    with pytest.raises(UserError, match="does not exist"):
+        LocalWorkspaceSession(root=str(tmp_path / "ghost"))
+
+
+async def test_async_context_manager_closes_on_exit(tmp_path) -> None:
+    async with LocalWorkspaceSession(root=str(tmp_path)) as s:
+        await s.list_files()
+    with pytest.raises(WorkspaceClosedError):
+        await s.read_text("anything")
+
+
+# ---------------------------------------------------------------------------
+# File-op argument guards
+# ---------------------------------------------------------------------------
+
+
+async def test_edit_text_on_missing_file_raises(tmp_path) -> None:
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Not a file"):
+        await session.edit_text("ghost.txt", "a", "b")
+
+
+async def test_list_files_on_a_file_raises(tmp_path) -> None:
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Not a directory"):
+        await session.list_files("a.txt")
+
+
+async def test_list_files_invalid_glob_pattern(tmp_path) -> None:
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Invalid glob"):
+        await session.list_files(".", pattern=".")
+
+
+# ---------------------------------------------------------------------------
+# Listing / grep filters (hidden + policy-denied)
+# ---------------------------------------------------------------------------
+
+
+async def test_glob_skips_hidden_unless_requested(tmp_path) -> None:
+    (tmp_path / ".env").write_text("secret", encoding="utf-8")
+    session = await _session(tmp_path)
+    assert await session.list_files(".", pattern=".*", include_hidden=False) == []
+    shown = await session.list_files(".", pattern=".*", include_hidden=True)
+    assert any(e.path == ".env" for e in shown)
+
+
+async def test_glob_skips_denied_paths(tmp_path) -> None:
+    (tmp_path / "secret.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("y", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",)))
+    paths = {e.path for e in await session.list_files(".", pattern="*")}
+    assert "ok.txt" in paths
+    assert "secret.txt" not in paths
+
+
+async def test_glob_excludes_symlinks_escaping_root(tmp_path) -> None:
+    # Security: a glob that traverses a symlink pointing outside the workspace
+    # must not surface paths from outside the root.
+    outside = tmp_path.parent / "escape_target"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("leak", encoding="utf-8")
+    (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
+
+    session = await _session(tmp_path)
+    entries = await session.list_files(".", pattern="escape/*", include_hidden=True)
+    assert entries == []
+
+
+async def test_grep_skips_denied_files(tmp_path) -> None:
+    (tmp_path / "secret.txt").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("needle\n", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",)))
+    hits = await session.grep("needle")
+    assert {m.path for m in hits} == {"ok.txt"}
+
+
+# ---------------------------------------------------------------------------
+# Shell cwd + env
+# ---------------------------------------------------------------------------
+
+
+async def test_run_rejects_non_directory_cwd(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    with pytest.raises(WorkspaceError, match="Not a directory"):
+        await session.run("echo hi", cwd="ghostdir")
+
+
+async def test_run_applies_env_override(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    result = await session.run('echo "$MYVAR"', env={"MYVAR": "from-test"})
+    assert "from-test" in result.stdout

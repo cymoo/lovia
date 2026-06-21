@@ -10,7 +10,27 @@ from lovia.tools import (
     render_tool_result,
 )
 from lovia.workspace import LocalWorkspaceSession, WorkspaceLimits
-from lovia.workspace.tools import read_file, write_file, edit_file, list_files, grep_files, shell
+from lovia.workspace.types import (
+    CommandResult,
+    DirEntry,
+    EditResult,
+    FileChange,
+    GrepMatch,
+)
+from lovia.workspace.tools import (
+    read_file,
+    write_file,
+    edit_file,
+    list_files,
+    grep_files,
+    shell,
+    _render_command_result,
+    _render_edit_result,
+    _render_entries,
+    _render_file_change,
+    _render_matches,
+    _shell_needs_approval,
+)
 
 
 def _ctx(session: LocalWorkspaceSession | None = None) -> RunContext:
@@ -197,3 +217,68 @@ async def test_grep_tool_honors_workspace_limit(tmp_path) -> None:
     # while the tool hardcoded a default).
     matches = await grep_files.invoke({"pattern": "hit"}, ctx)
     assert len(matches) == 3
+
+
+# ---------------------------------------------------------------------------
+# Renderers: type guards and edge messages (pure functions)
+# ---------------------------------------------------------------------------
+
+
+def test_render_entries_passes_through_non_entry_results() -> None:
+    ctx = _ctx(None)
+    # Not a list of DirEntry -> returned unchanged for the default renderer.
+    assert _render_entries("already a string", ctx) == "already a string"
+
+
+def test_render_entries_empty_and_size_variants() -> None:
+    ctx = _ctx(None)
+    assert _render_entries([], ctx) == "(no entries)"
+    out = _render_entries(
+        [
+            DirEntry(path="dir", is_dir=True),
+            DirEntry(path="big.txt", is_dir=False, size=12),
+            DirEntry(path="nosize", is_dir=False, size=None),
+        ],
+        ctx,
+    )
+    assert out == "dir/\nbig.txt  (12 bytes)\nnosize"
+
+
+def test_render_matches_passes_through_non_matches() -> None:
+    assert _render_matches(42, _ctx(None)) == 42
+    assert _render_matches([GrepMatch(path="f", line=1, text="x")], _ctx(None)) == "f:1: x"
+
+
+def test_render_file_change_guard_and_messages() -> None:
+    ctx = _ctx(None)
+    assert _render_file_change("raw", ctx) == "raw"  # not a FileChange
+    failed = FileChange(ok=False, path="f", action="created", message="boom")
+    assert _render_file_change(failed, ctx) == "boom"
+    unchanged = FileChange(ok=True, path="f.txt", action="unchanged")
+    assert _render_file_change(unchanged, ctx) == "f.txt unchanged"
+
+
+def test_render_edit_result_guard() -> None:
+    assert _render_edit_result(["not", "an", "edit"], _ctx(None)) == ["not", "an", "edit"]
+    failed = EditResult(ok=False, path="f", message="edit failed")
+    assert _render_edit_result(failed, _ctx(None)) == "edit failed"
+
+
+def test_render_command_result_timeout() -> None:
+    res = CommandResult(exit_code=None, stdout="", stderr="killed", timed_out=True)
+    assert _render_command_result(res, _ctx(None)) == "command timed out\nkilled"
+
+
+# ---------------------------------------------------------------------------
+# Shell approval gate (fail-closed)
+# ---------------------------------------------------------------------------
+
+
+def test_shell_needs_approval_fails_closed_without_workspace() -> None:
+    assert _shell_needs_approval({"command": "ls"}, _ctx(None)) is True
+
+
+def test_shell_needs_approval_fails_closed_on_bad_args(session) -> None:
+    # Missing / non-string command -> ask rather than run something unjudged.
+    assert _shell_needs_approval({}, _ctx(session)) is True
+    assert _shell_needs_approval({"command": 123}, _ctx(session)) is True

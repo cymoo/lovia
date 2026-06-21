@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lovia.workspace import CommandRule, PermissionDeniedError, WorkspacePolicy
+from lovia.workspace.policy import _path_matches
 
 
 # ---------------------------------------------------------------------------
@@ -168,3 +169,26 @@ def test_command_decider_invalid_return_falls_through() -> None:
         shell_default="ask", command_decider=lambda seg: "maybe"
     )
     assert policy.decide_command("anything") == "ask"
+
+
+# ---------------------------------------------------------------------------
+# _path_matches helper
+# ---------------------------------------------------------------------------
+
+
+def test_path_matches_bare_pattern_hits_any_segment() -> None:
+    assert _path_matches("sub/.env", ".env*")
+    assert _path_matches("a/secrets/b", "secrets")
+    assert not _path_matches("src/app.py", ".env*")
+
+
+def test_path_matches_slash_pattern_covers_subtree() -> None:
+    assert _path_matches("build", "build")
+    assert _path_matches("build/out.js", "build/*")
+
+
+def test_path_matches_empty_pattern_never_matches() -> None:
+    # A pattern that is only slashes normalizes to "" and must match nothing
+    # (rather than matching every path).
+    assert _path_matches("anything/at/all", "/") is False
+    assert _path_matches("anything", "") is False

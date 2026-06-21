@@ -11,7 +11,7 @@ from lovia.run_context import RunContext
 from lovia.tools import tool
 from lovia.transcript import InputEntry
 
-from .scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, call, text
 
 
 def _reminder_injector(text_value: str):

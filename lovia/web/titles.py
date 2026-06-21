@@ -80,10 +80,15 @@ async def generate_title(
 
 def _clean(s: str) -> str:
     s = " ".join(s.strip().splitlines()[0:1]).strip()  # first line only
-    s = s.strip("\"'`")
-    for prefix in ("Title:", "title:", "TITLE:"):
-        if s.startswith(prefix):
-            s = s[len(prefix) :].strip()
+    # Strip wrapping quotes and a leading "Title:" prefix, repeating until
+    # stable. Doing it once misses the common ``Title: "Foo"`` shape, where
+    # the quotes only become outermost after the prefix is removed.
+    prev = None
+    while s != prev:
+        prev = s
+        s = s.strip("\"'`").strip()
+        if s[:6].lower() == "title:":
+            s = s[6:].strip()
     s = s.rstrip(".!?,;:")
     return s[:120]
 

@@ -10,7 +10,7 @@ from lovia import Agent, Runner, TodoItem, Todo
 from lovia.plugins.todo import TodoList, render_todos
 from lovia.transcript import InputEntry, ToolCallEntry
 
-from .scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, call, text
 
 
 def _inputs(*items: dict) -> list[TodoItem]:

@@ -14,7 +14,7 @@ from lovia import Agent, Todo, tool  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
-from .scripted_provider import ScriptedProvider, call, text  # noqa: E402
+from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 
 _TODOS = {
     "todos": [

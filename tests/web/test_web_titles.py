@@ -10,7 +10,7 @@ from lovia import Agent  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.titles import _clean, _fallback_title, generate_title  # noqa: E402
 
-from .scripted_provider import ScriptedProvider, text  # noqa: E402
+from ..scripted_provider import ScriptedProvider, text  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -23,6 +23,12 @@ from .scripted_provider import ScriptedProvider, text  # noqa: E402
         ("title: foo bar.", "foo bar"),
         ("Line one\nLine two", "Line one"),
         ("Trailing punctuation!", "Trailing punctuation"),
+        # Regression: a quoted title behind a "Title:" prefix must be fully
+        # unwrapped — stripping quotes only once left a stray leading quote.
+        ('Title: "Foo Bar"', "Foo Bar"),
+        ('title: "hello world"', "hello world"),
+        ('"Title: Foo Bar"', "Foo Bar"),
+        ("Title: Title: Doubled", "Doubled"),
     ],
 )
 def test_clean(raw: str, expected: str) -> None:

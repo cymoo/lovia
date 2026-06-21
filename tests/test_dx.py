@@ -9,14 +9,22 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel, Field
 
-from lovia import Agent, Runner, tool
+from lovia import (
+    Agent,
+    CheckpointOptions,
+    RunBudget,
+    RunContext,
+    Runner,
+    tool,
+)
 from lovia.exceptions import (
     LoviaError,
     OutputValidationError,
     UserError,
 )
+from lovia.stores import InMemoryCheckpointer
 
-from .scripted_provider import ScriptedProvider, text
+from .scripted_provider import ScriptedProvider, call, text
 
 
 @pytest.mark.asyncio
@@ -106,6 +114,76 @@ def test_loviaerror_hint_appears_in_str() -> None:
 
 class _Out(BaseModel):
     n: int
+
+
+def _probe_agent(captured: dict, script, **agent_kwargs) -> Agent:
+    """An agent whose first turn calls a ``probe`` tool that snapshots the ctx."""
+
+    @tool
+    def probe(ctx: RunContext) -> str:
+        captured["deps"] = ctx.deps
+        captured["context"] = ctx.context
+        captured["run_id"] = ctx.run_id
+        captured["turn"] = ctx.turn
+        captured["budget"] = ctx.budget
+        captured["system_prompt"] = ctx.system_prompt
+        return "probed"
+
+    return Agent(model=ScriptedProvider(script), tools=[probe], **agent_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_run_context_exposes_deps_turn_and_system_prompt() -> None:
+    captured: dict = {}
+    agent = _probe_agent(
+        captured,
+        [call("probe", {}), text("done")],
+        name="a",
+        instructions="You are a careful calculator.",
+    )
+    deps = {"db": object()}
+    result = await Runner.run(agent, "go", context=deps)
+
+    assert result.output == "done"
+    # deps is the friendly alias of context — same object.
+    assert captured["deps"] is deps
+    assert captured["context"] is deps
+    # turn is 1-based and set before the tool runs on the first turn.
+    assert captured["turn"] == 1
+    # system_prompt is the rendered leading system text.
+    assert "careful calculator" in captured["system_prompt"]
+    # No checkpoint / budget configured.
+    assert captured["run_id"] is None
+    assert captured["budget"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_context_run_id_from_checkpoint() -> None:
+    captured: dict = {}
+    agent = _probe_agent(captured, [call("probe", {}), text("ok")], name="a")
+    cp = InMemoryCheckpointer()
+    await Runner.run(agent, "go", checkpoint=CheckpointOptions(cp, "run-42"))
+    assert captured["run_id"] == "run-42"
+
+
+@pytest.mark.asyncio
+async def test_run_context_exposes_budget_instance() -> None:
+    captured: dict = {}
+    agent = _probe_agent(captured, [call("probe", {}), text("ok")], name="a")
+    budget = RunBudget(max_tool_calls=10)
+    await Runner.run(agent, "go", budget=budget)
+    assert captured["budget"] is budget
+
+
+def test_run_result_repr_is_compact() -> None:
+    provider = ScriptedProvider([text("a short answer")])
+    agent = Agent(name="a", model=provider)
+    result = Runner.run_sync(agent, "hi")
+    r = repr(result)
+    assert "RunResult(" in r
+    assert "turns=" in r and "tokens=" in r
+    # The noisy ``entries`` list must not be dumped into the repr.
+    assert "entries=" not in r
 
 
 @pytest.mark.asyncio

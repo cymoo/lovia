@@ -14,12 +14,15 @@ Third-party packages can register additional vendor prefixes through the
 
 from __future__ import annotations
 
+import logging
 from importlib.metadata import EntryPoint
 from typing import Callable, cast
 
 from .base import ModelSettings, Provider
 from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
+
+logger = logging.getLogger("lovia")
 
 __all__ = [
     "ModelSettings",
@@ -112,9 +115,19 @@ def provider_from_string(spec: str) -> Provider:
     ``anthropic`` (alias ``claude``). Additional vendors can be plugged in via
     :func:`register_provider` or the
     ``lovia.providers`` entry-point group. A bare model name defaults to
-    OpenAI Chat Completions.
+    OpenAI Chat Completions (the intended path for OpenAI-compatible endpoints
+    such as DeepSeek/Ollama/vLLM via ``OPENAI_BASE_URL``). A bare name that
+    looks like an Anthropic model is almost certainly a missing ``anthropic:``
+    prefix, so we log a warning rather than silently misroute it.
     """
     if ":" not in spec:
+        if spec.lower().startswith("claude"):
+            logger.warning(
+                "Model %r has no vendor prefix and will be routed to the "
+                "OpenAI-compatible provider; did you mean 'anthropic:%s'?",
+                spec,
+                spec,
+            )
         return OpenAIChatProvider(model=spec)
     vendor, model = spec.split(":", 1)
     vendor = vendor.lower()

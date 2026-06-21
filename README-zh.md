@@ -23,8 +23,7 @@ pip install lovia
 ```
 
 ```python
-import asyncio
-from lovia import Agent, Runner, Skills, Todo, tool
+from lovia import Agent, Skills, Todo, tool
 from lovia.workspace import Workspace
 
 
@@ -34,23 +33,22 @@ def lookup_ticket(ticket_id: str) -> str:
     return f"{ticket_id}: waiting for customer reply"
 
 
-async def main() -> None:
-    agent = Agent(
-        name="operator",
-        instructions=(
-            "你是客户支持运营助手。回复客户前先确认工单状态，"
-            "再根据团队政策给出清晰、克制、可执行的处理方案。"
-        ),
-        model="deepseek-v4-pro",
-        tools=[lookup_ticket],
-        plugins=[Todo(), Skills("./skills")],
-        workspace=Workspace.local(".", mode="trusted"),
-    )
-    result = await Runner.run(agent, "查看工单 T-1001，并根据团队规范草拟回复。")
-    print(result.output)
+agent = Agent(
+    name="operator",
+    instructions=(
+        "你是客户支持运营助手。回复客户前先确认工单状态，"
+        "再根据团队政策给出清晰、克制、可执行的处理方案。"
+    ),
+    model="deepseek-v4-pro",
+    tools=[lookup_ticket],
+    plugins=[Todo(), Skills("./skills")],
+    workspace=Workspace.local(".", mode="trusted"),
+)
 
-
-asyncio.run(main())
+# run_sync() 省去脚本/notebook 里的 asyncio 样板；异步代码里改用
+# `await Runner.run(agent, ...)`（见下方 Runner 一节）。
+result = agent.run_sync("查看工单 T-1001，并根据团队规范草拟回复。")
+print(result.output)
 ```
 
 这里的 `./skills` 指向 skills 目录；如果暂时没有 skill，可以先删掉
@@ -151,12 +149,13 @@ agent = Agent(
 )
 ```
 
-动态系统提示可以读取每次运行传入的 context：
+动态指令片段会收到本次运行的 `RunContext`（与 tools/hooks 拿到的是同一个句柄，
+通过 `ctx.deps` 读取你的依赖对象）：
 
 ```python
-@agent.system_prompt
+@agent.instruction
 async def user_tier(ctx) -> str:
-    return f"用户等级：{ctx.context['tier']}"
+    return f"用户等级：{ctx.deps['tier']}"
 ```
 
 需要临时变体时，用 `clone()`，原 agent 不会被修改：
@@ -422,7 +421,8 @@ from lovia.tools import recall_tool_result
 agent = agent.clone(tools=[*agent.tools, recall_tool_result])
 ```
 
-传入 `NoopContextPolicy()` 可以关闭自动压缩。
+关闭自动压缩：`from lovia.context import NoopContextPolicy`，并传入
+`context_policy=NoopContextPolicy()`。
 
 ## 护栏、可靠性与 Hooks
 
@@ -732,11 +732,13 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `examples/15_resume.py` | checkpoint 与 resume |
 | `examples/16_web_serve.py` | 内置 Web UI |
 | `examples/18_context_policy.py` | 只改变视图的上下文压缩 |
+| `examples/20_custom_provider.py` | 实现 `Provider` 协议（离线可跑） |
 | `examples/21_dx.py` | 同步调用、临时输出类型等 DX 快捷方式 |
 | `examples/23_workspace_agent.py` | 受权限约束的代码 workspace |
 | `examples/25_data_analysis.py` | 数据分析 agent |
 | `examples/26_mcp.py` | MCP server 工具 |
 | `examples/27_todos.py` | todo plugin 和每轮提醒 |
+| `examples/28_memory.py` | 用 `Memory` plugin 跨 run 的长期记忆 |
 | `examples/workflows/` | prompt chaining、routing、parallelization、evaluator loop、自主 agent |
 
 ## 安装 Extras

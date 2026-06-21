@@ -183,6 +183,13 @@ class Workspace:
         every mode, ``trusted`` included. Add specific variables with ``env=``
         regardless.
 
+        .. warning::
+           ``inherit_env=True`` exposes **every** host environment variable —
+           including ``OPENAI_API_KEY``, cloud credentials, and tokens — to any
+           command the model runs. Prefer the default and pass only what a
+           command needs via ``env={...}``; reserve ``inherit_env=True`` for
+           trusted code in a sandboxed/throwaway environment.
+
         ``limits`` tunes the tool size/count caps (read pagination, shell
         output, grep/listing); omit for sensible defaults.
         """

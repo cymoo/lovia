@@ -269,7 +269,7 @@ async def test_output_repair_disabled_raises() -> None:
 
 
 async def test_agent_as_tool_propagates_usage() -> None:
-    from lovia import agent_as_tool
+    from lovia.handoff import agent_as_tool
 
     child = Agent(name="child", model=ScriptedProvider([text("42")]))
     child_tool = agent_as_tool(child)

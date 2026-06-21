@@ -239,6 +239,9 @@ class RunLoop:
                 while output is _UNSET:
                     self._check_limits(state)
                     state.turns += 1
+                    # Mirror the turn counter onto the public context so a tool
+                    # or hook can tell which step of the loop it is running in.
+                    state.run_ctx.turn = state.turns
                     yield await self._emit(
                         state, events.TurnStarted(agent=state.agent, turn=state.turns)
                     )
@@ -379,26 +382,32 @@ class RunLoop:
         active = await self._resolve_active(agent, resources)
         extra_instructions = self.extra_instructions
 
-        if snapshot is not None:
-            transcript: list[TranscriptEntry] = list(snapshot.entries)
-        else:
-            transcript = await self._build_initial_entries(
-                active.agent,
-                active.structured_output,
-                extra_instructions,
-                active.plugins.instructions,
-            )
-
-        run_ctx = RunContext(
+        # Build the context first (with an empty transcript) so the initial
+        # system prompt can be rendered against the live ``run_ctx`` — dynamic
+        # instruction fragments then see the same handle tools/hooks receive.
+        run_ctx: RunContext[Any] = RunContext(
             context=self.context,
-            entries=transcript,
+            entries=[],
             agent=active.agent,
             session_id=self.session_id,
+            run_id=self.run_id,
+            budget=self.budget,
             workspace=active.workspace,
             cancel_token=self.cancel_token,
         )
         if snapshot is not None:
+            run_ctx.entries.extend(snapshot.entries)
             run_ctx.usage.add(snapshot.usage)
+        else:
+            run_ctx.entries.extend(
+                await self._build_initial_entries(
+                    active.agent,
+                    active.structured_output,
+                    extra_instructions,
+                    active.plugins.instructions,
+                    run_ctx,
+                )
+            )
 
         return RunState(
             run_ctx=run_ctx,
@@ -842,12 +851,14 @@ class RunLoop:
         agent: Agent[Any],
         structured_output: StructuredOutput | None,
         system_extra: str | None,
-        plugin_instructions: list[str] | None = None,
+        plugin_instructions: list[str] | None,
+        run_ctx: "RunContext[Any]",
     ) -> list[TranscriptEntry]:
         entries: list[TranscriptEntry] = []
         system_text = await self._system_prompt(
             agent,
             structured_output,
+            ctx=run_ctx,
             extra=system_extra,
             plugin_instructions=plugin_instructions,
         )
@@ -868,6 +879,7 @@ class RunLoop:
         agent: Agent[Any],
         structured_output: StructuredOutput | None,
         *,
+        ctx: "RunContext[Any]",
         extra: "str | None" = None,
         plugin_instructions: list[str] | None = None,
     ) -> str:
@@ -876,9 +888,11 @@ class RunLoop:
         Concatenates the agent's instructions (plus the optional per-run
         ``extra`` addendum), workspace, and plugin instructions, and —
         for providers without native ``response_format`` support — the
-        structured-output contract.
+        structured-output contract. ``ctx`` is the run's :class:`RunContext`,
+        forwarded to dynamic instruction fragments so they see the same handle
+        tools and hooks receive.
         """
-        parts = [await agent.render_instructions(self.context, extra=extra)]
+        parts = [await agent.render_system_prompt(ctx, extra=extra)]
         if agent.workspace is not None:
             parts.append(agent.workspace.instructions())
         for instructions in plugin_instructions or []:
@@ -901,6 +915,7 @@ class RunLoop:
         new_system = await self._system_prompt(
             state.agent,
             state.active.structured_output,
+            ctx=state.run_ctx,
             extra=state.extra_instructions,
             plugin_instructions=state.active.plugins.instructions,
         )
@@ -1013,6 +1028,7 @@ class RunLoop:
         system_text = await self._system_prompt(
             state.agent,
             state.active.structured_output,
+            ctx=state.run_ctx,
             extra=state.extra_instructions,
             plugin_instructions=state.active.plugins.instructions,
         )

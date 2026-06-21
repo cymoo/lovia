@@ -26,8 +26,7 @@ pip install lovia
 ```
 
 ```python
-import asyncio
-from lovia import Agent, Runner, Skills, Todo, tool
+from lovia import Agent, Skills, Todo, tool
 from lovia.workspace import Workspace
 
 
@@ -37,27 +36,25 @@ def lookup_ticket(ticket_id: str) -> str:
     return f"{ticket_id}: waiting for customer reply"
 
 
-async def main() -> None:
-    agent = Agent(
-        name="operator",
-        instructions=(
-            "You are a customer-support operator. "
-            "Before replying, confirm the ticket state, then use team policy "
-            "to give a clear, restrained, actionable response."
-        ),
-        model="deepseek-v4-pro",
-        tools=[lookup_ticket],
-        plugins=[Todo(), Skills("./skills")],
-        workspace=Workspace.local(".", mode="trusted"),
-    )
-    result = await Runner.run(
-        agent,
-        "Check ticket T-1001 and draft a reply using our team guidelines.",
-    )
-    print(result.output)
+agent = Agent(
+    name="operator",
+    instructions=(
+        "You are a customer-support operator. "
+        "Before replying, confirm the ticket state, then use team policy "
+        "to give a clear, restrained, actionable response."
+    ),
+    model="deepseek-v4-pro",
+    tools=[lookup_ticket],
+    plugins=[Todo(), Skills("./skills")],
+    workspace=Workspace.local(".", mode="trusted"),
+)
 
-
-asyncio.run(main())
+# run_sync() drops the asyncio boilerplate for scripts and notebooks; from
+# async code use `await Runner.run(agent, ...)` instead (see Runner below).
+result = agent.run_sync(
+    "Check ticket T-1001 and draft a reply using our team guidelines.",
+)
+print(result.output)
 ```
 
 Here `./skills` points at your team's skill directory; remove
@@ -172,9 +169,9 @@ agent = Agent(
 Dynamic prompt fragments can depend on per-run context:
 
 ```python
-@agent.system_prompt
+@agent.instruction
 async def user_tier(ctx) -> str:
-    return f"User tier: {ctx.context['tier']}"
+    return f"User tier: {ctx.deps['tier']}"
 ```
 
 Create request-specific variants with `clone()`:
@@ -450,7 +447,8 @@ from lovia.tools import recall_tool_result
 agent = agent.clone(tools=[*agent.tools, recall_tool_result])
 ```
 
-Use `NoopContextPolicy()` to disable automatic compaction.
+Disable automatic compaction with `from lovia.context import NoopContextPolicy`
+and pass `context_policy=NoopContextPolicy()`.
 
 ## Guardrails, Reliability, Hooks
 
@@ -844,7 +842,9 @@ The `examples/` directory is a set of runnable scripts. A useful reading order:
 | `examples/15_resume.py` | checkpoint and resume |
 | `examples/16_web_serve.py` | built-in web UI |
 | `examples/18_context_policy.py` | view-only context compaction |
+| `examples/20_custom_provider.py` | implement the `Provider` protocol (runs offline) |
 | `examples/21_dx.py` | sync calls, per-call output types, and other DX shortcuts |
+| `examples/28_memory.py` | long-term memory across runs with the `Memory` plugin |
 | `examples/23_workspace_agent.py` | scoped coding workspace |
 | `examples/25_data_analysis.py` | data analysis agent |
 | `examples/26_mcp.py` | MCP server tools |

@@ -6,7 +6,7 @@ but never mutates it. This makes agents safe to share across requests and
 trivial to clone for per-request tweaks.
 
 The one exception to "no runtime state" is the ``_fragments`` tuple populated
-by the :meth:`system_prompt` decorator — but it's still configuration, not
+by the :meth:`instruction` decorator — but it's still configuration, not
 session data, and clone operations copy it immutably.
 """
 
@@ -40,15 +40,16 @@ if TYPE_CHECKING:
     from .plugins import Plugin
     from .runtime.result import RunHandle, RunResult
     from .tools import ToolResultRenderer
-    from .workspace import WorkspaceLike
+    from .workspace.protocol import WorkspaceLike
 
 
 TContext = TypeVar("TContext")
 
 
-# An instructions callable receives the optional user-supplied context and
-# returns the system prompt. May be sync or async.
-InstructionsFn = Callable[[Any], "str | Awaitable[str]"]
+# An instructions callable receives the run's ``RunContext`` (the same handle
+# tools, hooks, and guardrails get — reach the user deps via ``ctx.deps``) and
+# returns a system-prompt fragment. May be sync or async.
+InstructionsFn = Callable[["RunContext[Any]"], "str | Awaitable[str]"]
 
 # A programmatic approval decision: ``True``/``"allow"`` permits the call,
 # ``False``/``"deny"`` blocks it, and ``"ask"`` defers to the streaming
@@ -77,7 +78,7 @@ class Agent(Generic[TContext]):
         instructions: A static base system prompt, or a callable that
             receives the run ``context`` and returns one (sync or async).
             Additional dynamic fragments can be registered with the
-            :meth:`system_prompt` decorator and appended at render time.
+            :meth:`instruction` decorator and appended at render time.
         model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.4"``)
             or a pre-built :class:`Provider` instance.
         tools: Tools the agent may call.
@@ -147,9 +148,9 @@ class Agent(Generic[TContext]):
     # ``result_renderer`` is ``None``. Useful for things like always
     # JSON-serializing via a custom encoder.
     tool_result_renderer: "ToolResultRenderer | None" = None
-    # Dynamic system-prompt fragments registered via @agent.system_prompt.
+    # Dynamic instruction fragments registered via @agent.instruction.
     # Rendered in registration order and appended after ``instructions``.
-    # Not a public field — use the decorator or ``with_system_prompt`` instead.
+    # Not a public field — use the decorator or ``with_instructions`` instead.
     _fragments: tuple[InstructionsFn, ...] = field(
         default_factory=tuple, repr=False, compare=False
     )
@@ -177,40 +178,45 @@ class Agent(Generic[TContext]):
     # Dynamic system-prompt fragments
     # ------------------------------------------------------------------ #
 
-    def system_prompt(self, fn: InstructionsFn) -> InstructionsFn:
-        """Register a dynamic system-prompt fragment.
+    def instruction(self, fn: InstructionsFn) -> InstructionsFn:
+        """Register a dynamic instructions fragment.
 
         The decorated callable receives the run context and returns (or
         awaits) a string. All fragments are concatenated to ``instructions``
-        at render time, in registration order, separated by blank lines.
-        Returning an empty string skips the fragment.
+        at render time, in registration order, separated by blank lines —
+        together they make up the rendered system prompt the model sees
+        (observable afterwards as :attr:`RunContext.system_prompt`). Returning
+        an empty string skips the fragment.
 
         Example::
 
             agent = Agent(name="x", instructions="You are helpful.")
 
-            @agent.system_prompt
+            @agent.instruction
             async def add_user_tier(ctx) -> str:
-                return f"User tier: {ctx.context.tier}"
+                return f"User tier: {ctx.deps.tier}"
         """
         self._fragments = (*self._fragments, fn)
         return fn
 
-    def with_system_prompt(self, fn: InstructionsFn) -> "Agent[TContext]":
-        """Return a clone with one additional dynamic system-prompt fragment."""
+    def with_instructions(self, fn: InstructionsFn) -> "Agent[TContext]":
+        """Return a clone with one additional dynamic instructions fragment."""
         new = self.clone()
         new._fragments = (*self._fragments, fn)
         return new
 
-    async def render_instructions(
-        self, context: Any, *, extra: "str | InstructionsFn | None" = None
+    async def render_system_prompt(
+        self, ctx: "RunContext[Any]", *, extra: "str | InstructionsFn | None" = None
     ) -> str:
         """Materialize the system prompt for a given run.
 
         Concatenates: the base ``instructions`` (str or callable), every
-        fragment registered via :meth:`system_prompt`, and finally ``extra``
-        (a per-call addendum supplied by the runner). Empty results are
-        skipped so users can return ``""`` to opt out conditionally.
+        fragment registered via :meth:`instruction`, and finally ``extra``
+        (a per-call addendum supplied by the runner). Every callable receives
+        ``ctx`` (a :class:`RunContext` — read user deps via ``ctx.deps``), the
+        same handle tools and hooks get. Empty results are skipped so users can
+        return ``""`` to opt out conditionally. The returned string is what
+        surfaces as :attr:`RunContext.system_prompt`.
         """
         parts: list[str] = []
 
@@ -218,7 +224,7 @@ class Agent(Generic[TContext]):
             if fragment is None:
                 return ""
             if callable(fragment):
-                result = fragment(context)
+                result = fragment(ctx)
                 if hasattr(result, "__await__"):
                     return str(await result)
                 return str(result)

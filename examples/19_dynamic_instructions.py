@@ -1,8 +1,9 @@
-"""Dynamic system prompts via the @agent.system_prompt decorator.
+"""Dynamic system prompts via the @agent.instruction decorator.
 
-Each registered fragment is rendered with the run context and appended to
-the base instructions in registration order. ``Runner.run(..., extra_instructions=...)``
-adds one more layer per call without mutating the agent.
+Each registered fragment receives the run's ``RunContext`` (reach your deps via
+``ctx.deps``) and is appended to the base instructions in registration order.
+``Runner.run(..., extra_instructions=...)`` adds one more layer per call without
+mutating the agent.
 
 Run::
 
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner
+from lovia import Agent, RunContext, Runner
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
@@ -36,15 +37,13 @@ async def main() -> None:
         model=MODEL,
     )
 
-    @agent.system_prompt
-    def greet(ctx) -> str:  # type: ignore[no-untyped-def]
-        # TODO: ctx should be RunContext, not Deps; make the full context available in system prompts
-        # return f"Address the user as {ctx.context.user_name}."
-        return f"Address the user as {ctx.user_name}."
+    @agent.instruction
+    def greet(ctx: RunContext[Deps]) -> str:
+        return f"Address the user as {ctx.deps.user_name}."
 
-    @agent.system_prompt
-    async def localise(ctx) -> str:  # type: ignore[no-untyped-def]
-        return f"Reply in locale: {ctx.locale}."
+    @agent.instruction
+    async def localise(ctx: RunContext[Deps]) -> str:
+        return f"Reply in locale: {ctx.deps.locale}."
 
     result = await Runner.run(
         agent,

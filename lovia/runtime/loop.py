@@ -450,7 +450,22 @@ class RunLoop:
         resources like MCP connections) is fresh and all of a plugin's
         contributions (tool, injector, ...) share it. Each instance's ``aclose``
         is registered for best-effort teardown when the run ends (LIFO).
+
+        A plugin's ``name`` is its identity: it must be unique within an agent.
+        Validated up front (before any ``setup``) so a duplicate is rejected
+        without opening — then tearing down — a plugin's resources.
         """
+        seen: set[str] = set()
+        for plugin in agent.plugins:
+            if plugin.name in seen:
+                raise UserError(
+                    f"Duplicate plugin name {plugin.name!r} on agent "
+                    f"{agent.name!r}.",
+                    hint="A plugin's name is its identity and must be unique "
+                    "per agent; each is activated once per run. Remove the "
+                    "duplicate or give one plugin a distinct name.",
+                )
+            seen.add(plugin.name)
         act = PluginActivation()
         for plugin in agent.plugins:
             inst = await plugin.setup()

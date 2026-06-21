@@ -92,6 +92,12 @@ class Plugin(Protocol):
     It is ``async`` so a plugin may open resources (e.g. an MCP connection)
     during activation; pair that with :attr:`PluginInstance.aclose` for
     teardown.
+
+    ``name`` is the plugin's identity: it must be **unique** among an agent's
+    plugins (the runner rejects an agent carrying two plugins of the same name)
+    and **stable** — treat it as set at construction and never reassign it, the
+    way the built-in plugins do. The runner reads it once, when activating the
+    agent's plugins.
     """
 
     name: str

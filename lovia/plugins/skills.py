@@ -734,8 +734,12 @@ class Skills:
         *sources: "str | Path | SkillSource | SkillCategory",
         usage_rules: str | None = None,
         filter: "SkillFilter | None" = None,
+        name: str = "skills",
     ) -> None:
         self.catalog = _resolve_catalog(*sources, usage_rules=usage_rules, filter=filter)
+        # Identity within an agent (see lovia.plugins.Plugin). Defaults to the
+        # type name; override to mount two Skills plugins on one agent.
+        self.name = name
 
     async def setup(self) -> PluginInstance:
         return PluginInstance(

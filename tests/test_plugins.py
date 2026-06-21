@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lovia import Agent, AgentHooks, Runner
+from lovia.exceptions import UserError
 from lovia.plugins import Plugin, PluginInstance
 from lovia.run_context import RunContext
 from lovia.tools import tool
@@ -90,6 +91,20 @@ async def test_multiple_injectors_append_in_order() -> None:
     joined = "\n".join(m.content or "" for m in provider.calls[0])
     assert "FIRST-MARK" in joined and "SECOND-MARK" in joined
     assert joined.index("FIRST-MARK") < joined.index("SECOND-MARK")
+
+
+@pytest.mark.asyncio
+async def test_duplicate_plugin_name_is_rejected() -> None:
+    # A plugin's name is its identity: two plugins sharing a name on one agent
+    # is a config error, surfaced as a UserError before the run does any work.
+    provider = ScriptedProvider([text("hi")])
+    agent = Agent(
+        name="t",
+        model=provider,
+        plugins=[_plugin(name="dup"), _plugin(name="dup")],
+    )
+    with pytest.raises(UserError, match="Duplicate plugin name 'dup'"):
+        await Runner.run(agent, "go")
 
 
 @pytest.mark.asyncio

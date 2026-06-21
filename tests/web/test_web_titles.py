@@ -83,12 +83,16 @@ def test_chat_triggers_background_title_generation() -> None:
     )
     sid = res.json()["session_id"]
 
-    # The background task may have completed inside the TestClient's loop already;
-    # if not, list_sessions still works and the title shows up shortly.
+    # A new session gets a provisional title (the user's message) immediately;
+    # the background task then refines it. Depending on whether that task has
+    # run inside the TestClient's loop yet, either is valid.
     metas = c.get("/api/sessions").json()
     assert any(m["id"] == sid for m in metas)
     titled = next(m for m in metas if m["id"] == sid)
-    assert titled["title"] in {None, "Programming Language Pick"}
+    assert titled["title"] in {
+        "Which programming language should I learn?",  # provisional
+        "Programming Language Pick",  # LLM-generated
+    }
 
 
 def test_stream_schedules_background_title() -> None:
@@ -116,6 +120,22 @@ def test_stream_schedules_background_title() -> None:
     sid = next(e[1]["session_id"] for e in events if e[0] == "session")
     metas = c.get("/api/sessions").json()
     titled = next(m for m in metas if m["id"] == sid)
-    # The background task may or may not have completed inside the test runner's
-    # event loop, so we accept either outcome.
-    assert titled["title"] in {None, "Greeting The User"}
+    # Provisional title is set immediately; the background task may or may not
+    # have refined it yet inside the test runner's loop, so accept either.
+    assert titled["title"] in {"say hi", "Greeting The User"}
+
+
+def test_new_session_gets_provisional_title_immediately() -> None:
+    """Even with LLM title-gen disabled, a new session is never blank — the
+    sidebar shows the user's first message until (if ever) a better title lands."""
+    app = create_app(
+        Agent(name="bot", model=ScriptedProvider([text("hi")])),
+        generate_titles=False,
+    )
+    c = TestClient(app)
+    sid = c.post(
+        "/api/chat", json={"message": "How do I write a TCP server?"}
+    ).json()["session_id"]
+    metas = c.get("/api/sessions").json()
+    titled = next(m for m in metas if m["id"] == sid)
+    assert titled["title"] == "How do I write a TCP server?"

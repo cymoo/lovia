@@ -526,7 +526,9 @@ def test_ui_false_serves_api_without_html() -> None:
 
 def test_ui_true_serves_bundled_page_and_static() -> None:
     c = TestClient(_app(_make_agent([text("hi")])))  # ui defaults to True
-    assert "<html" in c.get("/").text.lower()
+    page = c.get("/").text
+    assert "<html" in page.lower()
+    assert "mermaid" in page.lower()  # diagram rendering library is bundled in
     assert c.get("/static/js/api.js").status_code == 200
 
 

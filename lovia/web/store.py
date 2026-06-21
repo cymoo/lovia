@@ -180,18 +180,24 @@ class ChatStore:
         session_id: str,
         *,
         agent: str | None = None,
+        title: str | None = None,
     ) -> None:
-        """Insert a row if missing, otherwise bump ``updated_at``."""
+        """Insert a row if missing, otherwise bump ``updated_at``.
+
+        ``title`` is applied only on insert (a provisional title for a brand-new
+        session); on conflict the existing title is left untouched so a
+        background-generated title is never clobbered.
+        """
         now = time.time()
         await self._write(
             """
             INSERT INTO chat_sessions (id, title, agent, created_at, updated_at)
-            VALUES (?, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent)
             """,
-            (session_id, agent, now, now),
+            (session_id, (title.strip()[:120] if title else None), agent, now, now),
         )
 
     async def set_title(self, session_id: str, title: str) -> None:

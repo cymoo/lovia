@@ -18,7 +18,7 @@ from ..agent import Agent
 from ..providers import Provider
 from ..runner import Runner
 
-__all__ = ["generate_title", "TITLE_INSTRUCTIONS"]
+__all__ = ["generate_title", "provisional_title", "TITLE_INSTRUCTIONS"]
 
 log = logging.getLogger(__name__)
 
@@ -96,3 +96,13 @@ def _clean(s: str) -> str:
 def _fallback_title(user_message: str) -> str:
     head = user_message.strip().split("\n", 1)[0]
     return _truncate(head, 60) or "New chat"
+
+
+def provisional_title(user_message: str) -> str:
+    """A title to show *immediately*, before the LLM produces a better one.
+
+    Derived synchronously from the user's first message so a brand-new session
+    never sits blank in the sidebar while the (possibly slow) background title
+    task runs. :func:`generate_title` overwrites it once ready.
+    """
+    return _fallback_title(user_message)

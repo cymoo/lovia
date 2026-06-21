@@ -1,5 +1,6 @@
 // Entry point — wires together all modules.
 import { store } from './store.js';
+import { api } from './api.js';
 import { initTheme, initSidebarToggle } from './ui.js';
 import { initComposer, cancelStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
@@ -24,8 +25,7 @@ async function loadAgents() {
   const select = document.getElementById('agent-select');
   const switcher = document.getElementById('agent-switcher');
   try {
-    const res = await fetch('/api/agents');
-    store.agents = await res.json();
+    store.agents = await api.listAgents();
     store.agent = store.agents[0]?.name ?? null;
 
     if (select && store.agents.length > 1) {

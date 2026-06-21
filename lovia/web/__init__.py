@@ -12,11 +12,27 @@ Public surface::
     serve({"writer": a, "researcher": b})
 
     app = create_app(agents)           # raw ASGI app — run with any server
+    app = create_app(agents, ui=False) # JSON + SSE only — bring your own UI
+
+Bring your own UI: mount the UI-free API router into your own FastAPI app::
+
+    from fastapi import FastAPI
+    from lovia.web import RouterDeps, build_api_router, ChatStore
+    from lovia.web.approvals import ApprovalRegistry
+
+    deps = RouterDeps(
+        agents={"bot": agent},
+        store=ChatStore.in_memory(),
+        approvals=ApprovalRegistry(),
+    )
+    app = FastAPI()
+    app.include_router(build_api_router(deps))
 """
 
 from __future__ import annotations
 
 try:
+    from .api import RouterDeps, build_api_router
     from .app import create_app, serve
     from .store import ChatMeta, ChatStore
 except ImportError as exc:  # pragma: no cover - depends on optional env
@@ -24,4 +40,11 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-__all__ = ["ChatMeta", "ChatStore", "create_app", "serve"]
+__all__ = [
+    "ChatMeta",
+    "ChatStore",
+    "RouterDeps",
+    "build_api_router",
+    "create_app",
+    "serve",
+]

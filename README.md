@@ -822,6 +822,49 @@ from lovia.web import serve
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
+### Build your own UI
+
+The HTTP API is decoupled from the bundled chat page, so you can keep the JSON +
+SSE endpoints and drop in your own front-end. Either turn the bundled UI off:
+
+```python
+from lovia.web import create_app
+
+app = create_app(agent, ui=False)   # no GET / and no /static — API only
+```
+
+…or mount the UI-free router into your own FastAPI app:
+
+```python
+from fastapi import FastAPI
+from lovia.web import RouterDeps, build_api_router, ChatStore
+from lovia.web.approvals import ApprovalRegistry
+
+deps = RouterDeps(
+    agents={"bot": agent},
+    store=ChatStore.in_memory(),
+    approvals=ApprovalRegistry(),
+)
+app = FastAPI()
+app.include_router(build_api_router(deps))
+```
+
+Key endpoints (browse the full schema at `/api/docs`):
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/info` | server title, agents, version, capabilities |
+| `GET /api/agents`, `GET /api/agents/{name}` | list / fetch agents |
+| `POST /api/chat` | one blocking turn → `{output, session_id, usage}` |
+| `POST /api/chat/stream` | SSE stream of a turn (`text_delta`, `tool_call`, `done`, …) |
+| `POST /api/chat/approve`, `POST /api/chat/cancel` | resolve an approval / stop a stream |
+| `GET /api/sessions` | list chats (`?q=` search, `?limit=`); `DELETE` clears all |
+| `GET`/`PATCH`/`DELETE /api/sessions/{id}` | transcript / rename / delete |
+| `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
+
+`lovia/web/static/js/api.js` is a ready-made browser client (including an SSE
+reader) — import it, or read it as a reference for any language.
+
 ## Examples
 
 The `examples/` directory is a set of runnable scripts. A useful reading order:
@@ -841,6 +884,7 @@ The `examples/` directory is a set of runnable scripts. A useful reading order:
 | `examples/14_guardrails.py` | input/output guardrails |
 | `examples/15_resume.py` | checkpoint and resume |
 | `examples/16_web_serve.py` | built-in web UI |
+| `examples/17_web_api.py` | API-only server + a custom front-end |
 | `examples/18_context_policy.py` | view-only context compaction |
 | `examples/20_custom_provider.py` | implement the `Provider` protocol (runs offline) |
 | `examples/21_dx.py` | sync calls, per-call output types, and other DX shortcuts |

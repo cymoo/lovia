@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from ..types import JsonObject, JsonValue
 from .. import events
+from ..messages import Usage
 from ..plugins import TodoItem
 from ..transcript import (
     AssistantTextEntry,
@@ -22,6 +23,15 @@ from ..transcript import (
     ToolCallEntry,
     TranscriptEntry,
 )
+
+
+def usage_dict(usage: Usage) -> dict[str, int]:
+    """The ``{input,output,total}`` token shape shared by REST + SSE responses."""
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens,
+    }
 
 
 def _todo_payload(todos: list[TodoItem]) -> list[JsonObject]:
@@ -200,11 +210,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "data": json.dumps(
                 {
                     "output": _coerce(ev.result.output),
-                    "usage": {
-                        "input_tokens": ev.result.usage.input_tokens,
-                        "output_tokens": ev.result.usage.output_tokens,
-                        "total_tokens": ev.result.usage.total_tokens,
-                    },
+                    "usage": usage_dict(ev.result.usage),
                 }
             ),
         }

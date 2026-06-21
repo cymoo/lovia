@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, TypeVar
 
 from ..checkpointer import Checkpointer
 from ..types import JsonObject
@@ -25,6 +27,11 @@ from ..stores import InMemoryCheckpointer, InMemorySession, SQLiteCheckpointer, 
 from ..stores._sqlite import SQLiteStore
 
 __all__ = ["ChatMeta", "ChatStore"]
+
+_T = TypeVar("_T")
+
+# Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
+_META_COLS = "id, title, agent, created_at, updated_at"
 
 
 _META_SCHEMA = """
@@ -50,6 +57,11 @@ class ChatMeta:
     agent: str | None
     created_at: float
     updated_at: float
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ChatMeta":
+        """Build from a ``_META_COLS`` row."""
+        return cls(row[0], row[1], row[2], row[3], row[4])
 
     def to_dict(self) -> JsonObject:
         return {
@@ -101,6 +113,46 @@ class ChatStore:
         finally:
             self._meta._release(conn)
 
+    # ---- low-level helpers ----------------------------------------------
+    # One connect/commit/release dance, shared by every metadata method.
+
+    async def _write(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        def _impl() -> None:
+            conn = self._meta._connect()
+            try:
+                conn.execute(sql, params)
+                conn.commit()
+            finally:
+                self._meta._release(conn)
+
+        await self._meta._run(_impl)
+
+    async def _read_one(
+        self, sql: str, params: tuple[Any, ...], map_row: Callable[[Any], _T]
+    ) -> _T | None:
+        def _impl() -> _T | None:
+            conn = self._meta._connect()
+            try:
+                row = conn.execute(sql, params).fetchone()
+                return map_row(row) if row is not None else None
+            finally:
+                self._meta._release(conn)
+
+        return await self._meta._run(_impl)
+
+    async def _read_all(
+        self, sql: str, params: tuple[Any, ...], map_row: Callable[[Any], _T]
+    ) -> list[_T]:
+        def _impl() -> list[_T]:
+            conn = self._meta._connect()
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                return [map_row(r) for r in rows]
+            finally:
+                self._meta._release(conn)
+
+        return await self._meta._run(_impl)
+
     # ---- factories ------------------------------------------------------
 
     @classmethod
@@ -131,174 +183,85 @@ class ChatStore:
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``."""
         now = time.time()
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO chat_sessions (id, title, agent, created_at, updated_at)
-                    VALUES (?, NULL, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        updated_at = excluded.updated_at,
-                        agent = COALESCE(chat_sessions.agent, excluded.agent)
-                    """,
-                    (session_id, agent, now, now),
-                )
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write(
+            """
+            INSERT INTO chat_sessions (id, title, agent, created_at, updated_at)
+            VALUES (?, NULL, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                updated_at = excluded.updated_at,
+                agent = COALESCE(chat_sessions.agent, excluded.agent)
+            """,
+            (session_id, agent, now, now),
+        )
 
     async def set_title(self, session_id: str, title: str) -> None:
         title = title.strip()[:120]
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute(
-                    "UPDATE chat_sessions SET title = ? WHERE id = ?",
-                    (title, session_id),
-                )
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write(
+            "UPDATE chat_sessions SET title = ? WHERE id = ?", (title, session_id)
+        )
 
     async def get(self, session_id: str) -> ChatMeta | None:
-        def _impl() -> ChatMeta | None:
-            conn = self._meta._connect()
-            try:
-                row = conn.execute(
-                    "SELECT id, title, agent, created_at, updated_at "
-                    "FROM chat_sessions WHERE id = ?",
-                    (session_id,),
-                ).fetchone()
-                if row is None:
-                    return None
-                return ChatMeta(row[0], row[1], row[2], row[3], row[4])
-            finally:
-                self._meta._release(conn)
-
-        return await self._meta._run(_impl)
+        return await self._read_one(
+            f"SELECT {_META_COLS} FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            ChatMeta.from_row,
+        )
 
     async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
-        def _impl() -> list[ChatMeta]:
-            conn = self._meta._connect()
-            try:
-                rows = conn.execute(
-                    "SELECT id, title, agent, created_at, updated_at "
-                    "FROM chat_sessions ORDER BY updated_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-                return [ChatMeta(r[0], r[1], r[2], r[3], r[4]) for r in rows]
-            finally:
-                self._meta._release(conn)
-
-        return await self._meta._run(_impl)
+        return await self._read_all(
+            f"SELECT {_META_COLS} FROM chat_sessions "
+            "ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+            ChatMeta.from_row,
+        )
 
     async def delete(self, session_id: str) -> None:
         """Remove transcript AND metadata for ``session_id``."""
         await self.session.clear(session_id)
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts and metadata."""
-        metas = await self.list_all()
-        for m in metas:
+        for m in await self.list_all():
             await self.session.clear(m.id)
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute("DELETE FROM chat_sessions")
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write("DELETE FROM chat_sessions")
 
     async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
         """Search sessions whose title or id contains ``query``."""
-
-        def _impl() -> list[ChatMeta]:
-            conn = self._meta._connect()
-            try:
-                pattern = f"%{query}%"
-                rows = conn.execute(
-                    "SELECT id, title, agent, created_at, updated_at "
-                    "FROM chat_sessions "
-                    "WHERE title LIKE ? OR id LIKE ? "
-                    "ORDER BY updated_at DESC LIMIT ?",
-                    (pattern, pattern, limit),
-                ).fetchall()
-                return [ChatMeta(r[0], r[1], r[2], r[3], r[4]) for r in rows]
-            finally:
-                self._meta._release(conn)
-
-        return await self._meta._run(_impl)
+        pattern = f"%{query}%"
+        return await self._read_all(
+            f"SELECT {_META_COLS} FROM chat_sessions "
+            "WHERE title LIKE ? OR id LIKE ? ORDER BY updated_at DESC LIMIT ?",
+            (pattern, pattern, limit),
+            ChatMeta.from_row,
+        )
 
     async def list(self, *, limit: int = 200) -> list[ChatMeta]:
-        """Return chat metadata ordered by most recent activity."""
+        """Return chat metadata ordered by most recent activity.
+
+        Alias of :meth:`list_all`; both names are part of the public surface.
+        """
         return await self.list_all(limit=limit)
 
     # ---- active run tracking --------------------------------------------
 
     async def get_active_run_id(self, session_id: str) -> str | None:
         """Return the run_id of the most recent unfinished run, or None."""
-
-        def _impl() -> str | None:
-            conn = self._meta._connect()
-            try:
-                row = conn.execute(
-                    "SELECT active_run_id FROM chat_sessions WHERE id = ?",
-                    (session_id,),
-                ).fetchone()
-                return row[0] if row else None
-            finally:
-                self._meta._release(conn)
-
-        return await self._meta._run(_impl)
+        return await self._read_one(
+            "SELECT active_run_id FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            lambda row: row[0],
+        )
 
     async def set_active_run_id(self, session_id: str, run_id: str) -> None:
         """Record that ``run_id`` is the active (potentially interrupted) run."""
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute(
-                    "UPDATE chat_sessions SET active_run_id = ? WHERE id = ?",
-                    (run_id, session_id),
-                )
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write(
+            "UPDATE chat_sessions SET active_run_id = ? WHERE id = ?",
+            (run_id, session_id),
+        )
 
     async def clear_active_run_id(self, session_id: str) -> None:
         """Clear the active run pointer (run completed or was abandoned)."""
-
-        def _impl() -> None:
-            conn = self._meta._connect()
-            try:
-                conn.execute(
-                    "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?",
-                    (session_id,),
-                )
-                conn.commit()
-            finally:
-                self._meta._release(conn)
-
-        await self._meta._run(_impl)
+        await self._write(
+            "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?", (session_id,)
+        )

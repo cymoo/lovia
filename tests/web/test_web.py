@@ -405,3 +405,146 @@ def test_max_turns_caps_the_agent_loop() -> None:
     assert len(provider.calls) <= 2
     # The cap surfaces as a clean `error` event, not a faulted response.
     assert any(e == "error" for (e, _) in evs)
+
+
+# ---------------------------------------------------------------- export -
+
+
+def test_export_md_renders_reasoning_as_visible_blockquote() -> None:
+    c = TestClient(_app(_make_agent([text("the answer", reasoning="step one\nstep two")])))
+    c.post("/api/chat", json={"message": "go", "session_id": "s1"})
+    body = c.get("/api/sessions/s1/export?format=md").text
+    # No collapsed HTML disclosure widget (it would hide reasoning in PDF).
+    assert "<details>" not in body
+    assert "<summary>" not in body
+    # Reasoning is a visible blockquote with the new label, and every line is quoted.
+    assert "> **💭 Thinking**" in body
+    assert "> step one" in body
+    assert "> step two" in body
+    # Thinking comes before the answer (the model reasons first), under one heading.
+    assert body.index("### Assistant") < body.index("💭 Thinking") < body.index("the answer")
+
+
+def test_export_md_quotes_blank_lines_within_reasoning() -> None:
+    c = TestClient(_app(_make_agent([text("ok", reasoning="para one\n\npara two")])))
+    c.post("/api/chat", json={"message": "go", "session_id": "s1"})
+    body = c.get("/api/sessions/s1/export?format=md").text
+    # The blank line stays inside the blockquote as a bare `>` so it doesn't break.
+    assert "> para one\n>\n> para two" in body
+
+
+def test_export_md_omits_thinking_block_when_no_reasoning() -> None:
+    c = TestClient(_app(_make_agent([text("just an answer")])))
+    c.post("/api/chat", json={"message": "go", "session_id": "s1"})
+    body = c.get("/api/sessions/s1/export?format=md").text
+    assert "💭 Thinking" not in body
+    assert "just an answer" in body
+
+
+# ----------------------------------------------------------- server info -
+
+
+def test_info_single_agent_capabilities() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))
+    data = c.get("/api/info").json()
+    assert data["title"] == "lovia"
+    assert data["agents"] == ["bot"]
+    assert data["default_agent"] == "bot"
+    # ChatStore.in_memory() wires an InMemoryCheckpointer.
+    assert data["features"]["checkpointing"] is True
+    # _app disables title generation.
+    assert data["features"]["titles"] is False
+
+
+def test_info_multi_agent_has_no_default() -> None:
+    app = _app({"alpha": _make_agent([text("a")]), "beta": _make_agent([text("b")])})
+    data = TestClient(app).get("/api/info").json()
+    assert sorted(data["agents"]) == ["alpha", "beta"]
+    assert data["default_agent"] is None
+
+
+def test_info_reflects_custom_title_and_title_flag() -> None:
+    app = _app(_make_agent([text("hi")]), title="My Bot", generate_titles=True)
+    data = TestClient(app).get("/api/info").json()
+    assert data["title"] == "My Bot"
+    assert data["features"]["titles"] is True
+
+
+def test_get_agent_by_name() -> None:
+    agent = Agent(
+        name="writer",
+        model=ScriptedProvider([text("hi")]),
+        instructions="be helpful",
+    )
+    c = TestClient(_app(agent))
+    assert c.get("/api/agents/writer").json() == {
+        "name": "writer",
+        "instructions": "be helpful",
+        "tools": [],
+    }
+    assert c.get("/api/agents/nope").status_code == 404
+
+
+# ----------------------------------------------------- delete-all + limit -
+
+
+def test_delete_all_sessions() -> None:
+    c = TestClient(_app(_make_agent([text("a"), text("b")])))
+    c.post("/api/chat", json={"message": "one"})
+    c.post("/api/chat", json={"message": "two"})
+    assert len(c.get("/api/sessions").json()) == 2
+
+    r = c.delete("/api/sessions")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    assert c.get("/api/sessions").json() == []
+
+
+def test_sessions_limit_caps_results() -> None:
+    c = TestClient(_app(_make_agent([text(str(i)) for i in range(3)])))
+    for i in range(3):
+        c.post("/api/chat", json={"message": f"m{i}"})
+    assert len(c.get("/api/sessions").json()) == 3
+    assert len(c.get("/api/sessions?limit=2").json()) == 2
+
+
+# ------------------------------------------------------- API/UI decoupling -
+
+
+def test_ui_false_serves_api_without_html() -> None:
+    app = create_app(
+        _make_agent([text("hi")]),
+        ui=False,
+        store=ChatStore.in_memory(),
+        generate_titles=False,
+    )
+    c = TestClient(app)
+    assert c.get("/").status_code == 404  # no bundled chat page
+    assert c.get("/static/js/api.js").status_code == 404  # no /static mount
+    assert c.get("/api/agents").status_code == 200  # API still works
+
+
+def test_ui_true_serves_bundled_page_and_static() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))  # ui defaults to True
+    assert "<html" in c.get("/").text.lower()
+    assert c.get("/static/js/api.js").status_code == 200
+
+
+def test_build_api_router_is_embeddable() -> None:
+    from fastapi import FastAPI
+
+    from lovia.web import RouterDeps, build_api_router
+    from lovia.web.approvals import ApprovalRegistry
+
+    deps = RouterDeps(
+        agents={"bot": _make_agent([text("hi")])},
+        store=ChatStore.in_memory(),
+        approvals=ApprovalRegistry(),
+    )
+    app = FastAPI()
+    app.include_router(build_api_router(deps))
+    c = TestClient(app)
+    assert c.get("/healthz").json() == {"status": "ok"}
+    assert c.get("/api/agents").json() == [
+        {"name": "bot", "instructions": "", "tools": []}
+    ]

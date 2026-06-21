@@ -20,9 +20,10 @@ from ..providers import Provider
 from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
 from ..tracing import Tracer
+from .api import RouterDeps, build_api_router
 from .approvals import ApprovalRegistry
-from .routes import build_router
 from .store import ChatStore
+from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -58,6 +59,7 @@ def create_app(
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
+    ui: bool = True,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
@@ -80,6 +82,11 @@ def create_app(
     the agent loop per request, ``budget`` (a :class:`RunBudget`) bounds token
     spend, and ``retry`` (a :class:`RetryPolicy`) governs provider retries.
 
+    ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
+    app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
+    JSON + SSE server you drive from your own front-end (see
+    :func:`lovia.web.build_api_router`).
+
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines.
     """
@@ -100,27 +107,35 @@ def create_app(
 
     approvals = ApprovalRegistry()
 
+    deps = RouterDeps(
+        agents=agents,
+        store=chat_store,
+        approvals=approvals,
+        title=title,
+        context_policy=effective_policy,
+        title_model=title_model,
+        generate_titles=generate_titles,
+        max_turns=max_turns,
+        budget=budget,
+        retry=retry,
+        tracer=tracer,
+    )
+
     app = FastAPI(title=title, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    app.include_router(
-        build_router(
-            agents,
-            chat_store,
-            approvals,
-            context_policy=effective_policy,
-            title_model=title_model,
-            generate_titles=generate_titles,
-            title=title,
-            max_turns=max_turns,
-            budget=budget,
-            retry=retry,
-            tracer=tracer,
-            empty_title=empty_title,
-            empty_description=empty_description,
+    app.include_router(build_api_router(deps))
+    if ui:
+        app.include_router(
+            build_ui_router(
+                title=title,
+                empty_title=empty_title,
+                empty_description=empty_description,
+            )
         )
-    )
-    app.mount(
-        "/static", StaticFiles(directory=str(_STATIC), check_dir=False), name="static"
-    )
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(_STATIC), check_dir=False),
+            name="static",
+        )
 
     # Stash for tests / introspection.
     app.state.agents = agents
@@ -129,6 +144,7 @@ def create_app(
     app.state.approvals = approvals
     app.state.context_policy = effective_policy
     app.state.tracer = tracer
+    app.state.deps = deps
     return app
 
 
@@ -148,6 +164,7 @@ def serve(
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
+    ui: bool = True,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
@@ -155,8 +172,9 @@ def serve(
     """Convenience: build the app and run it under uvicorn (blocking).
 
     ``max_turns`` / ``budget`` / ``retry`` set the per-request run limits (see
-    :func:`create_app`); any remaining keyword arguments are forwarded to
-    ``uvicorn.run`` (e.g. ``log_level``, ``reload``, ``workers``).
+    :func:`create_app`); ``ui=False`` serves the JSON + SSE API only; any
+    remaining keyword arguments are forwarded to ``uvicorn.run`` (e.g.
+    ``log_level``, ``reload``, ``workers``).
     """
     try:
         import uvicorn
@@ -178,6 +196,7 @@ def serve(
         budget=budget,
         retry=retry,
         tracer=tracer,
+        ui=ui,
         empty_title=empty_title,
         empty_description=empty_description,
     )

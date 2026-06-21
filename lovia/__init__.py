@@ -105,6 +105,7 @@ def enable_logging(
     format: str = "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     datefmt: str = "%H:%M:%S",
     stream: TextIO | None = None,
+    propagate: bool = False,
 ) -> _logging.Logger:
     """Configure the ``lovia`` logger for quick interactive use.
 
@@ -112,6 +113,12 @@ def enable_logging(
     :class:`~logging.StreamHandler` to the ``lovia`` logger with a sensible
     default format and sets its level. Idempotent — calling more than once
     replaces the previously attached handler so log lines aren't duplicated.
+
+    By default the ``lovia`` logger's :attr:`~logging.Logger.propagate` is set
+    to ``False`` so records aren't *also* emitted by the root logger — which
+    would double-print whenever the app has configured root logging (e.g. via
+    :func:`logging.basicConfig` or under uvicorn). Pass ``propagate=True`` to
+    keep propagating to ancestor handlers as well.
 
     For production deployments configure :mod:`logging` yourself; nothing in
     ``lovia`` calls this function automatically.
@@ -121,14 +128,17 @@ def enable_logging(
         format: ``logging`` format string.
         datefmt: ``logging`` date format string.
         stream: Optional stream override (defaults to ``sys.stderr``).
+        propagate: Whether the ``lovia`` logger should also forward records to
+            ancestor (root) handlers. Defaults to ``False`` to avoid duplicate
+            output.
 
     Returns:
         The configured ``lovia`` logger.
     """
     log = _logging.getLogger("lovia")
-    # Strip handlers we've previously attached so successive calls don't pile
-    # up duplicate StreamHandlers — but keep the NullHandler so logging stays
-    # well-behaved if the user later calls ``logging.disable`` etc.
+    # Strip only the handlers we attached on a previous call, so successive
+    # calls don't pile up duplicate StreamHandlers. The NullHandler and any
+    # handlers the user added themselves are left untouched.
     for h in list(log.handlers):
         if getattr(h, "_lovia_managed", False):
             log.removeHandler(h)
@@ -137,6 +147,7 @@ def enable_logging(
     handler._lovia_managed = True  # type: ignore[attr-defined]
     log.addHandler(handler)
     log.setLevel(level)
+    log.propagate = propagate
     return log
 
 

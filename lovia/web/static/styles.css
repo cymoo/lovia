@@ -9,6 +9,9 @@
   --surface: #ffffff;
   --surface-2: #f5f4f1;
   --surface-3: #eeede9;
+  /* Diagrams always render on a light "paper" (mermaid's light theme), even in
+     dark mode — defined once here and intentionally NOT overridden for dark. */
+  --diagram-paper: #fbfaf8;
   --border: #e8e5e0;
   --border-strong: #d5d2cc;
   --ink: #181716;
@@ -662,6 +665,114 @@ body.sidebar-collapsed .sidebar-expand-btn {
   background: var(--accent-soft);
 }
 
+/* ---- Mermaid diagrams ------------------------------------------------- */
+.turn .body .mermaid-diagram {
+  position: relative;
+  margin: 1em 0;
+  padding: 16px;
+  overflow-x: auto;
+  text-align: center;
+  cursor: zoom-in;
+  background: var(--diagram-paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.turn .body .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-expand {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  opacity: 0;
+  transition: all 0.15s;
+  cursor: pointer;
+  z-index: 2;
+}
+.mermaid-diagram:hover .mermaid-expand,
+.mermaid-expand:focus-visible {
+  opacity: 1;
+}
+.mermaid-expand:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+/* Fullscreen diagram viewer (zoom + pan) */
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.62); /* fixed dark scrim — the light paper pops in both themes */
+  backdrop-filter: blur(3px);
+}
+.mermaid-lightbox-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.mermaid-lightbox-stage.grabbing {
+  cursor: grabbing;
+}
+.mermaid-sheet {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 24px;
+  background: var(--diagram-paper);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  will-change: transform;
+}
+.mermaid-sheet svg {
+  display: block;
+}
+.mermaid-lightbox-bar {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.mermaid-lightbox-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.mermaid-lightbox-btn:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
 /* ---- Blockquote ------------------------------------------------------- */
 .turn .body blockquote {
   margin: 0.7em 0;
@@ -858,13 +969,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .tool summary:hover {
   background: var(--surface-3);
 }
-.tool .tool-label {
-  font-weight: 600;
-  color: var(--ink-2);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 .tool .tool-name {
   font-family: var(--mono);
   color: var(--accent-text);
@@ -982,6 +1086,17 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .error-text {
   color: var(--danger);
   font-weight: 500;
+}
+
+/* Quiet inline notice for a recovered run-level error (e.g. a tool that raised). */
+.error-notice {
+  margin: 8px 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--danger-soft, var(--surface-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 /* ---- Composer --------------------------------------------------------- */

@@ -3,6 +3,7 @@ import { store } from './store.js';
 import { api, readSSE } from './api.js';
 import { copyToClipboard } from './ui.js';
 import { loadSessions } from './sessions.js';
+import { renderMermaid } from './diagrams.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
 marked.setOptions({ gfm: true, breaks: false });
@@ -16,6 +17,7 @@ function renderMarkdown(text) {
 function highlightCode(container) {
   if (typeof hljs === 'undefined') return;
   container.querySelectorAll('pre code').forEach((el) => {
+    if (el.classList.contains('language-mermaid')) return; // rendered as a diagram instead
     if (!el.dataset.highlighted) {
       hljs.highlightElement(el);
       el.dataset.highlighted = '1';
@@ -27,6 +29,7 @@ function highlightCode(container) {
 // ---- Code block copy buttons -------------------------------------------
 function addCodeBlockControls(container) {
   container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.querySelector('code.language-mermaid')) return; // diagram, not a code block
     if (pre.querySelector('.btn-copy-code')) return; // already added
 
     // Detect language from highlight.js class
@@ -84,6 +87,7 @@ function flushRender() {
   store.body.dataset.raw = store.rawText;
   store.body.innerHTML = renderMarkdown(store.rawText);
   highlightCode(store.body);
+  renderMermaid(store.body);
   scrollDown();
 }
 
@@ -442,6 +446,22 @@ function appendRetry() {
   appendBubbleContent(store.bubble, node);
 }
 
+// A run-level error that the run itself recovers from — most commonly a tool
+// raising, which lovia feeds back to the model to handle. Show it as a quiet
+// inline notice (no Retry: re-sending the whole turn doesn't retry the tool,
+// and the model usually copes on its own).
+function appendErrorNotice(message) {
+  if (!store.bubble) return;
+  const note = document.createElement('div');
+  note.className = 'error-notice';
+  note.textContent = `⚠️ ${message}`;
+  appendBubbleContent(store.bubble, note);
+  // Begin a fresh body so any recovery text doesn't merge into the pre-error one.
+  store.body = null;
+  store.rawText = '';
+  scrollDown();
+}
+
 function cleanMarkdownForCopy(markdown) {
   const lines = markdown.trim().split('\n');
   let openFence = null;
@@ -574,6 +594,7 @@ export function renderHistory(entries) {
         body.innerHTML = renderMarkdown(text);
         appendBubbleContent(currentBubble, body);
         highlightCode(body);
+        renderMermaid(body);
       }
       if (it.tool_calls) {
         for (const call of it.tool_calls) {
@@ -708,10 +729,15 @@ const turnProgressEl = document.getElementById('turn-progress');
 
 async function handleEvent({ event, data }) {
   switch (event) {
-    case 'session':
+    case 'session': {
+      const known = store.sessions.some((s) => s.id === data.session_id);
       store.sessionId = data.session_id;
       store.syncURL(data.session_id);
+      // Surface a brand-new session in the sidebar right away — with its
+      // provisional title — instead of waiting for the run to finish.
+      if (!known) loadSessions();
       break;
+    }
 
     case 'text_delta':
       finalizeReasoning();
@@ -811,10 +837,7 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'error':
-      ensureBody();
-      store.rawText += `\n\n> ⚠️ **Error:** ${data.message}`;
-      flushRender();
-      appendRetry();
+      appendErrorNotice(data.message);
       break;
 
     case 'done':

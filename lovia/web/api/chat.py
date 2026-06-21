@@ -24,6 +24,7 @@ from ...runner import Runner
 from ...runtime.result import RunHandle
 from ..schemas import ApprovalRequest, ChatRequest, ChatResponse
 from ..sse import _coerce, event_to_sse, usage_dict
+from ..titles import provisional_title
 from .deps import RouterDeps
 
 log = logging.getLogger(__name__)
@@ -95,7 +96,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         agent = deps.pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
         is_new = (await store.get(sid)) is None
-        await store.upsert(sid, agent=agent.name)
+        await store.upsert(
+            sid,
+            agent=agent.name,
+            title=provisional_title(req.message) if is_new else None,
+        )
         result = await Runner.run(
             agent,
             req.message,
@@ -120,7 +125,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         agent = deps.pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
         is_new = (await store.get(sid)) is None
-        await store.upsert(sid, agent=agent.name)
+        await store.upsert(
+            sid,
+            agent=agent.name,
+            title=provisional_title(req.message) if is_new else None,
+        )
 
         # A new message always starts a fresh run. Delete any checkpoint left by
         # a previous interrupted run so the reconnect endpoint won't pick up a

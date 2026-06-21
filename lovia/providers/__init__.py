@@ -22,7 +22,7 @@ from .base import ModelSettings, Provider
 from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
 
-logger = logging.getLogger("lovia")
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ModelSettings",

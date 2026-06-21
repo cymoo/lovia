@@ -32,6 +32,22 @@ class RunResult:
         """Lossy message view derived from :attr:`entries`."""
         return entries_to_messages(self.entries)
 
+    def __repr__(self) -> str:
+        """Compact summary — the full ``entries`` list is too noisy to dump.
+
+        Shows the output (truncated), turn count, and token totals so an
+        interactive ``print(result)`` is informative without flooding the REPL.
+        """
+        # ``repr`` of the output handles both cases cleanly: a str renders
+        # quoted ('hi'), a model/dataclass renders as its own repr (Brief(...)).
+        shown = repr(self.output)
+        if len(shown) > 80:
+            shown = shown[:77] + "..."
+        return (
+            f"RunResult(output={shown}, agent={self.final_agent.name!r}, "
+            f"turns={self.turns}, tokens={self.usage.total_tokens})"
+        )
+
 
 class RunHandle:
     """Awaitable, async-iterable handle to a streamed run.

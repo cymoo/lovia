@@ -700,6 +700,16 @@ class Memory:
             # explicit archive → notes-only, matching the old behavior.
             self.archive = None
 
+    @property
+    def has_archive(self) -> bool:
+        """Whether the cold-tier searchable archive (the ``recall`` tool) is on.
+
+        ``False`` when constructed with ``archive=None`` (notes-only). Lets
+        callers branch — e.g. a UI that only shows a "search history" affordance
+        when recall is available — without poking at the sentinel default.
+        """
+        return self.archive is not None
+
     def _resolve_model(
         self, ctx: RunContext[Any]
     ) -> "str | Provider | list[str | Provider]":

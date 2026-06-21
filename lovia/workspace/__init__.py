@@ -17,7 +17,12 @@ from .errors import (
 )
 from .local import LocalWorkspaceSession
 from .policy import CommandRule, Decision, WorkspacePolicy
-from .protocol import WorkspaceLike, WorkspaceSession
+
+# ``WorkspaceLike`` / ``WorkspaceSession`` are the extension protocols for
+# authoring a custom backend; they stay importable from here (and from
+# ``lovia.workspace.protocol``) but are kept out of ``__all__`` so the
+# advertised surface is the handful of types day-to-day users actually touch.
+from .protocol import WorkspaceLike, WorkspaceSession  # noqa: F401
 from .types import (
     CommandResult,
     DirEntry,
@@ -48,10 +53,8 @@ __all__ = [
     "WorkspaceBackendError",
     "WorkspaceClosedError",
     "WorkspaceError",
-    "WorkspaceLike",
     "WorkspaceLimits",
     "WorkspaceMode",
     "WorkspacePolicy",
-    "WorkspaceSession",
     "clip_text",
 ]

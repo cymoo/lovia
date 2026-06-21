@@ -108,6 +108,16 @@ class WorkspacePolicy:
     denied_paths: tuple[str, ...] = ()
     command_decider: "CommandDecider | None" = None
 
+    def __post_init__(self) -> None:
+        # ``allow_shell=False`` already forces every command to ``deny`` in
+        # :meth:`decide_command`, so a permissive ``shell_default`` alongside it
+        # is a contradiction. Normalize it to ``"deny"`` (rather than raise) so
+        # the object's fields can't misrepresent what the policy actually does —
+        # e.g. ``WorkspacePolicy(allow_shell=False)`` no longer reads as if it
+        # would ``ask``. Frozen dataclass, hence ``object.__setattr__``.
+        if not self.allow_shell and self.shell_default != "deny":
+            object.__setattr__(self, "shell_default", "deny")
+
     # ------------------------------------------------------------------ #
     # Presets
     # ------------------------------------------------------------------ #

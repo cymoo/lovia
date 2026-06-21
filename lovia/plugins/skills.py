@@ -43,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -414,8 +414,17 @@ Each skill listed above has a description — use it to decide which are relevan
 # Skills — capability container
 # ---------------------------------------------------------------------------
 
-SkillFilter = Callable[[SkillMetadata], bool]
-"""Predicate scoping which skills a :class:`SkillCategory` exposes (and can load)."""
+class SkillFilter(Protocol):
+    """Predicate scoping which skills a :class:`SkillCategory` exposes.
+
+    Called once per skill with its :class:`SkillMetadata`. **Return ``True`` to
+    keep the skill, ``False`` to hide it** (the same polarity as the built-in
+    :func:`filter`). A plain function or lambda satisfies this protocol::
+
+        Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))
+    """
+
+    def __call__(self, meta: SkillMetadata) -> bool: ...
 
 
 class SkillCategory:

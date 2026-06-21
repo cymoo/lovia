@@ -1076,10 +1076,10 @@ class TestAgentIntegration:
                 instructions="You are helpful.",
                 plugins=[Skills(catalog)],
             )
-            await agent.render_instructions(None)
+            await agent.render_system_prompt(None)
             # The skill index is rendered into the system prompt by the run loop
             # via the skills plugin's instructions(), not by
-            # agent.render_instructions(). Verify it's available from the catalog.
+            # agent.render_system_prompt(). Verify it's available from the catalog.
             index = catalog.instructions()
             assert "deploy" in index
             assert "Deploy the application" in index

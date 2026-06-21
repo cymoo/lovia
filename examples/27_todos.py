@@ -15,7 +15,8 @@ import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, TodoItem, Todo, events
+from lovia import Agent, Runner, Todo, events
+from lovia.plugins import TodoItem
 
 load_dotenv()
 MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")

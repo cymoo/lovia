@@ -593,13 +593,62 @@ async with server.session() as conn:
 
 `MCP()` 接受多个 server——`MCP(a, b)`——而 `MCPServer.name` 会给某个 server 的工具加前缀（`web__fetch`）以避免冲突。
 
+### 长期记忆
+
+`Memory` 为 agent 提供可跨 run、跨 session 保留的长期记忆。它分为两个层级，并暴露三个模型很容易理解的动作：
+
+- **Notes**（*热*层）——一小段有字符预算的笔记，**每次都会注入**系统提示，用来保存用户的稳定偏好和长期事实。模型可以通过 `remember(fact)` / `forget(fact)` 主动维护它；默认情况下，plugin 也会在 run 结束时自动提取值得长期保存的事实，写入 Notes。
+- **Archive**（*冷*层）——支持全文检索的历史对话归档。它不会默认进入上下文，只在模型调用 `recall(query)` 时按需取回相关内容。
+
+```python
+from lovia import Agent, Memory
+
+agent = Agent(
+    name="assistant",
+    model="deepseek-v4-pro",
+    plugins=[Memory("./.lovia/memory")],
+)
+```
+
+`Memory("./dir")`（或 `Memory()`）会在指定根目录下创建默认实现：一个 Markdown 笔记文件，以及一个 SQLite FTS5 归档库。
+
+```
+.lovia/memory/
+├── MEMORY.md      # 热层：一行一条长期事实，始终放进上下文
+└── archive.db     # 冷层：可检索的历史对话归档
+```
+
+> **隐私。** Archive 会把用户和助手的消息文本持久化到磁盘，因此可能保存敏感内容。请把记忆目录放在访问控制合适的位置；如果不希望保留可检索的历史对话记录，请传入 `archive=None`。
+
+可以用可选参数调整行为：
+
+| 字段 | 默认值 | 作用 |
+| --- | --- | --- |
+| `inject` | `True` | 每次 run 都把 Notes 注入系统提示 |
+| `auto_extract` | `True` | run 结束时用一次模型调用提取长期事实写入 Notes；超出预算时会合并整理 Notes |
+| `summarize_recall` | `True` | `recall` 返回由模型整理过的命中摘要，而不是原始片段 |
+| `recall_k` | `5` | `recall` 从 Archive 中取回的命中数量 |
+| `model` | host 模型 | 用于提取、整理和召回摘要的模型 |
+
+提取、整理和召回摘要这些内部请求，会通过一个没有工具、没有 plugin 的子 agent 调用 `Runner.run`，并使用结构化输出。因此它们能复用同一条 provider 链，又不会递归触发 `Memory` 自身。lovia 的 transcript 会完整保留，context compaction 只影响传给模型的视图，所以事实提取只需要在 run 结束时针对完整 transcript 跑一次：它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后补救。
+
+**自带后端。** 两个层级背后各有一个小协议（`NotesStore`、`MemoryArchive`），所以你可以把任意一层换成自己的实现，比如 Redis、向量库或 Postgres，同时保留同一套工具和 instructions：
+
+```python
+from lovia import Agent, Memory
+
+agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, archive=my_archive)])
+```
+
+传入 `archive=None` 可以得到只有 Notes、没有 `recall` 工具的记忆。自定义后端是长生命周期对象，会被每次 run 共享，因此需要保证并发安全；plugin 不会替你关闭它们。
+
 ### 编写 plugin
 
-一个 plugin 就是任意带有 `name` 和返回 `PluginInstance` 的 `async setup()` 的对象
+一个 plugin 就是任意带有 `name` 和返回 `PluginInstance` 的 `async setup()` 的对象。
 
 需要**每次 run 全新**的状态放在 `setup` 内部（如上面的 todo 列表）；需要**跨 run、跨 session 持久化**的状态则挂在 plugin 上、在构造时传入。
 
-下面是一个长期记忆 plugin——它包裹一个你自己实现、只创建一次、被每次 run 共享的后端，于是 agent 能在下一次对话里回忆起上一次的事实：
+下面是一个术语表 plugin——它包裹一个你自己提供、只创建一次、被每次 run 共享的后端，于是在一次对话里定义的术语，在下一次对话里依然可知。（这正是上面内置 `Memory` plugin 所基于的模式。）
 
 ```python
 from dataclasses import dataclass
@@ -608,46 +657,37 @@ from typing import Protocol
 from lovia import Agent, PluginInstance, tool
 
 
-class MemoryStore(Protocol):
-    """你的长期后端——用向量库、SQLite 等实现它。"""
+class Glossary(Protocol):
+    """你的共享后端——一个数据库、一个文件、一个内存字典。"""
 
-    async def add(self, fact: str) -> None: ...
-    async def search(self, query: str, k: int) -> list[str]: ...
+    async def define(self, term: str, meaning: str) -> None: ...
+    async def lookup(self, term: str) -> str | None: ...
 
 
 @dataclass
-class MemoryPlugin:
-    """跨 session 的长期记忆，agent 可以写入并检索。"""
+class GlossaryPlugin:
+    """跨 session 的术语表，agent 可以写入并读回。"""
 
-    store: MemoryStore  # 长生命周期，被每次 run 共享——不在每次 run 重建
-    name: str = "memory"
+    store: Glossary  # 长生命周期，被每次 run 共享——不在每次 run 重建
+    name: str = "glossary"
 
     async def setup(self) -> PluginInstance:
         store = self.store
 
         @tool
-        async def remember(fact: str) -> str:
-            """保存一条持久事实，供以后任意 session 回忆。"""
-            await store.add(fact)
-            return "已存入长期记忆。"
-
-        @tool
-        async def recall(query: str) -> str:
-            """在长期记忆中检索与 query 相关的事实。"""
-            hits = await store.search(query, k=5)
-            return "\n".join(f"- {h}" for h in hits) or "（没有相关内容）"
+        async def define(term: str, meaning: str) -> str:
+            """记录某个领域术语的含义，供本次及以后的 session 使用。"""
+            await store.define(term, meaning)
+            return f"已记录：{term}。"
 
         return PluginInstance(
-            tools=[remember, recall],
-            instructions=(
-                "你拥有跨 session 持久的长期记忆。回答前先用 `recall` 查一查，"
-                "并用 `remember` 存下用户透露的持久事实或偏好。"
-            ),
+            tools=[define],
+            instructions="用 `define` 记录用户解释的领域术语。",
         )
 
 
-store = MyVectorStore()  # 你的 MemoryStore：只需两个异步方法 add() 和 search()
-agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MemoryPlugin(store)])
+store = MyGlossary()  # 你的 Glossary 后端：只需异步的 define() 和 lookup()
+agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[GlossaryPlugin(store)])
 ```
 
 由于该后端被（可能并发的）多个 run 共享，它必须支持并发访问；而且 plugin 不会关闭它——它的生命周期属于创建它的人。（对比 todo plugin：它的 store 在每次 run 的 `setup` 里重建。）

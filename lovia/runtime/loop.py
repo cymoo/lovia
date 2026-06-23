@@ -292,6 +292,14 @@ class RunLoop:
                 result = await self._finalize_run(state, output, span)
                 await self.checkpoints.complete(state, result.output)
                 run_completed = True
+                # Append to the Session only AFTER the checkpoint is finalized.
+                # Resume reloads history from the Session, so a run that is both
+                # persisted there AND still resumable would double-count on
+                # resume. Finalizing the checkpoint first keeps the run in
+                # exactly one place; ``run_completed`` is already set, so a
+                # failure here can't un-complete the checkpoint (no save_terminal).
+                if self.session is not None:
+                    await self._persist_session(state)
 
                 yield await self._emit(state, events.RunCompleted(result=result))
                 logger.info(
@@ -338,7 +346,10 @@ class RunLoop:
             if self.checkpointer is None or self.run_id is None:
                 return None
             if self.if_run_exists == "restart":
-                return None  # ignore any stored run and start fresh
+                # Discard the stored run's rows so fresh turns don't append to
+                # them, then start fresh.
+                await self.checkpoints.delete()
+                return None
             snapshot = await self.checkpointer.load(self.run_id)
 
         if snapshot is None:
@@ -395,23 +406,31 @@ class RunLoop:
             workspace=active.workspace,
             cancel_token=self.cancel_token,
         )
+        # The transcript is [system] + prior session history + this run's own
+        # entries. ``run_start`` marks the boundary; on resume the run's own
+        # entries come from the snapshot (the checkpoint stores only those), so
+        # we rebuild the system/history prefix fresh and append them.
+        prefix = await self._build_prefix(
+            active.agent,
+            active.structured_output,
+            extra_instructions,
+            active.plugins.instructions,
+            run_ctx,
+        )
+        run_start = len(prefix)
+        run_ctx.entries.extend(prefix)
         if snapshot is not None:
             run_ctx.entries.extend(snapshot.entries)
             run_ctx.usage.add(snapshot.usage)
+            # These entries are already in the checkpoint; only persist new ones.
+            self.checkpoints.resume_at(len(snapshot.entries))
         else:
-            run_ctx.entries.extend(
-                await self._build_initial_entries(
-                    active.agent,
-                    active.structured_output,
-                    extra_instructions,
-                    active.plugins.instructions,
-                    run_ctx,
-                )
-            )
+            run_ctx.entries.extend(self._user_input_entries())
 
         return RunState(
             run_ctx=run_ctx,
             active=active,
+            run_start=run_start,
             turns=snapshot.turns if snapshot is not None else 0,
             extra_instructions=extra_instructions,
             last_input_tokens=(
@@ -726,7 +745,12 @@ class RunLoop:
     async def _finalize_run(
         self, state: RunState, output: object, span: Span
     ) -> RunResult:
-        """Run output guardrails, persistence, and usage propagation."""
+        """Run output guardrails and usage propagation, and build the result.
+
+        Session persistence is deliberately NOT done here — the loop appends to
+        the Session only after the checkpoint is finalized (see ``_stream_inner``)
+        so a crash between the two can't leave a run both persisted and resumable.
+        """
         output_guardrails = (
             state.agent.output_guardrails + state.active.plugins.output_guardrails
         )
@@ -740,9 +764,6 @@ class RunLoop:
             usage=state.run_ctx.usage,
             turns=state.turns,
         )
-
-        if self.session is not None:
-            await self._persist_session(state.transcript)
 
         if self.parent_usage is not None:
             self.parent_usage.add(state.run_ctx.usage)
@@ -846,7 +867,7 @@ class RunLoop:
         """Wrap rendered system text as a leading entry (``[]`` when blank)."""
         return [InputEntry(role="system", content=system_text)] if system_text else []
 
-    async def _build_initial_entries(
+    async def _build_prefix(
         self,
         agent: Agent[Any],
         structured_output: StructuredOutput | None,
@@ -854,6 +875,11 @@ class RunLoop:
         plugin_instructions: list[str] | None,
         run_ctx: "RunContext[Any]",
     ) -> list[TranscriptEntry]:
+        """The run's non-run prefix: the system entry plus prior session history.
+
+        Everything appended after this prefix is the run's own contribution; its
+        length is the run's :attr:`RunState.run_start` boundary.
+        """
         entries: list[TranscriptEntry] = []
         system_text = await self._system_prompt(
             agent,
@@ -867,12 +893,13 @@ class RunLoop:
         if self.session is not None:
             assert self.session_id is not None  # validated in __init__
             entries.extend(await self.session.load(self.session_id))
-
-        if isinstance(self.user_input, str):
-            entries.append(InputEntry(role="user", content=self.user_input))
-        else:
-            entries.extend(messages_to_entries(self.user_input))
         return entries
+
+    def _user_input_entries(self) -> list[TranscriptEntry]:
+        """This run's opening input, as transcript entries (the start of the run)."""
+        if isinstance(self.user_input, str):
+            return [InputEntry(role="user", content=self.user_input)]
+        return list(messages_to_entries(self.user_input))
 
     async def _system_prompt(
         self,
@@ -912,6 +939,12 @@ class RunLoop:
         server-side tool calls, provider metadata) survives the rewrite and the
         Session/checkpoint keep full fidelity.
         """
+        # Freeze this run's entries from the current segment BEFORE the rewrite:
+        # an input_filter may drop or transform body entries (including prior
+        # session history), so capture the run's true, unfiltered contribution
+        # now — that, not the filtered view, is what the Session/checkpoint store.
+        state.pre_handoff_entries.extend(state.transcript[state.run_start :])
+
         new_system = await self._system_prompt(
             state.agent,
             state.active.structured_output,
@@ -927,6 +960,8 @@ class RunLoop:
         head = self._system_entry(new_system)
         # In-place so RunContext.entries keeps observing the same list.
         state.transcript[:] = [*head, *body]
+        # Everything appended from here is the next segment's run contribution.
+        state.run_start = len(state.transcript)
 
     def _collect_tools(
         self,
@@ -999,17 +1034,20 @@ class RunLoop:
             _push_cleanup(resources, session.close)
         return session, agent.workspace.tools()
 
-    async def _persist_session(self, transcript: list[TranscriptEntry]) -> None:
-        # Replace stored transcript with the latest (simple and predictable).
-        # System prompts are agent-owned and re-rendered each run, so any
-        # system :class:`InputEntry` is excluded from the persisted history.
+    async def _persist_session(self, state: RunState) -> None:
+        # Append this run's own entries as one segment. Prior history is already
+        # in the Session and stays immutable; ``run_entries`` excludes the system
+        # entry (it lives before ``run_start``).
         assert self.session is not None and self.session_id is not None
-        body = [
-            entry
-            for entry in transcript
-            if not (isinstance(entry, InputEntry) and entry.role == "system")
-        ]
-        await self.session.replace(self.session_id, body)
+        run_entries = state.run_entries
+        if run_entries:
+            # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
+            # argument; ``None`` when not checkpointing -> the store generates one).
+            # Append is idempotent on it, so a resumed completion that the
+            # crash-window left re-runnable can never double-write the run.
+            await self.session.append(
+                self.session_id, run_entries, run_id=self.run_id
+            )
 
     async def _build_view(
         self, state: RunState, result: ContextResult

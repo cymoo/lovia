@@ -194,9 +194,9 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
     from lovia.checkpointer import RunSnapshot
     from lovia.messages import Usage
 
-    # Build a snapshot mid-conversation: system + user + assistant + user.
+    # The checkpoint stores the run's OWN entries (no system: it is agent-owned
+    # and re-rendered on resume). Mid-conversation: user + assistant + user.
     snap_entries = [
-        InputEntry(role="system", content="be helpful"),
         InputEntry(role="user", content="2+2?"),
         AssistantTextEntry(content="4"),
         InputEntry(role="user", content="thanks"),
@@ -206,7 +206,7 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
         run_id="r1", agent_name="t", entries=snap_entries, usage=Usage(), turns=1
     )
     cp = InMemoryCheckpointer()
-    await cp.save(snap)
+    await cp.append(snap.run_id, snap.entries, snap.head)
 
     provider = ScriptedProvider([text("you're welcome")])
     agent = Agent(name="t", instructions="be helpful", model=provider)
@@ -216,7 +216,7 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
     assert _normalize(entries_to_messages(result.entries)) == _normalize(
         result.messages
     )
-    # Snapshot contributed 4 entries; the assistant turn adds 1.
+    # Rebuilt system prompt (1) + 3 snapshot entries + 1 assistant turn = 5.
     assert len(result.entries) == 5
 
 

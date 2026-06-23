@@ -12,7 +12,8 @@ import asyncio
 import pytest
 
 from lovia import Agent
-from lovia.checkpointer import RunSnapshot
+from lovia.checkpointer import RunHead
+from lovia.transcript import TranscriptEntry
 from lovia.exceptions import (
     BudgetExceeded,
     MaxTurnsExceeded,
@@ -96,7 +97,7 @@ async def test_complete_persists_serializable_output() -> None:
 
 async def test_complete_with_delete_on_success_removes_snapshot() -> None:
     cp = InMemoryCheckpointer()
-    await cp.save(RunSnapshot(run_id="r1", agent_name="a", entries=[], usage=Usage(), turns=1))
+    await cp.append("r1", [], RunHead(agent_name="a", usage=Usage(), turns=1))
     writer = CheckpointWriter(checkpointer=cp, run_id="r1", delete_on_success=True)
     await writer.complete(_state(), "out")
     assert await cp.load("r1") is None
@@ -116,7 +117,9 @@ async def test_complete_flags_non_serializable_output() -> None:
 
 async def test_save_terminal_swallows_backend_failure() -> None:
     class _BoomCheckpointer(InMemoryCheckpointer):
-        async def save(self, snapshot: RunSnapshot) -> None:
+        async def append(
+            self, run_id: str, entries: list[TranscriptEntry], head: RunHead
+        ) -> None:
             raise RuntimeError("disk full")
 
     writer = CheckpointWriter(checkpointer=_BoomCheckpointer(), run_id="r1")

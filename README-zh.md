@@ -122,7 +122,7 @@ Agent + input
   -> context policy 渲染本次发给模型的 view
   -> provider 流式产出类型化 delta
   -> tools、approval、handoff、guardrails、hooks 在明确检查点运行
-  -> 完整 transcript 写回 session/checkpoint
+  -> 把本次 run 自己的 entries 追加进 session；并对该 run 做 checkpoint
 ```
 
 两个边界尤其重要：
@@ -395,6 +395,8 @@ result = await Runner.run(
     checkpoint=CheckpointOptions(checkpoint, "report-migration-42"),
 )
 ```
+
+两个 store 都是 **append-only**：`Session` 累积已完成的 run（每个 run 一个 segment），checkpoint 保存进行中的那个 run，所以完整 transcript = `session.load()` 加上进行中的 snapshot。历史不可变 —— 每个 run 只追加自己的 entries，从不重写。请给每个 run 一个在单个 checkpointer 内唯一的 `run_id`（如 `uuid4().hex`）——它是 checkpoint 的唯一键，且不像 session 那样按 `session_id` 限定作用域。
 
 ## 上下文管理
 

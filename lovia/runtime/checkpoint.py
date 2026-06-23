@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 
 from ..types import JsonObject
-from ..checkpointer import Checkpointer, RunSnapshot, RunStatus
+from ..checkpointer import Checkpointer, RunHead, RunStatus
 from ..exceptions import (
     BudgetExceeded,
     MaxTurnsExceeded,
@@ -38,11 +38,24 @@ class CheckpointWriter:
     checkpointer: Checkpointer | None
     run_id: str | None
     delete_on_success: bool = False
+    # Count of this run's entries already appended to the checkpoint, so each
+    # save persists only the new tail. On resume the loop seeds this with the
+    # restored snapshot's entry count.
+    _persisted: int = 0
+
+    def resume_at(self, persisted: int) -> None:
+        """Seed how many of this run's entries are already in the checkpoint.
+
+        Called by the loop on resume so the next ``append`` persists only the
+        entries produced after the restored snapshot.
+        """
+        self._persisted = persisted
 
     async def delete(self) -> None:
         """Drop this run's snapshot (no-op when checkpointing is off)."""
         if self.checkpointer is not None and self.run_id is not None:
             await self.checkpointer.delete(self.run_id)
+        self._persisted = 0
 
     async def save_running(self, state: RunState) -> None:
         await self._save(state, status="running")
@@ -115,24 +128,25 @@ class CheckpointWriter:
         output: object | None = None,
         error: JsonObject | None = None,
     ) -> None:
-        """Persist a snapshot. ``output`` must already be JSON-safe: ``complete``
-        pre-serializes it; ``save_running``/``save_terminal`` pass ``None``."""
+        """Append this run's new entries and refresh the head. ``output`` must
+        already be JSON-safe: ``complete`` pre-serializes it;
+        ``save_running``/``save_terminal`` pass ``None``."""
         if self.checkpointer is None or self.run_id is None:
             return
-        await self.checkpointer.save(
-            RunSnapshot(
-                run_id=self.run_id,
-                agent_name=state.agent.name,
-                entries=list(state.transcript),
-                usage=state.run_ctx.usage.clone(),
-                turns=state.turns,
-                status=status,
-                output=output,
-                error=error,
-                last_input_tokens=state.last_input_tokens,
-                context_policy_state=state.context_policy_state,
-            )
+        run_entries = state.run_entries
+        delta = run_entries[self._persisted :]
+        head = RunHead(
+            agent_name=state.agent.name,
+            usage=state.run_ctx.usage.clone(),
+            turns=state.turns,
+            status=status,
+            output=output,
+            error=error,
+            last_input_tokens=state.last_input_tokens,
+            context_policy_state=state.context_policy_state,
         )
+        await self.checkpointer.append(self.run_id, delta, head)
+        self._persisted = len(run_entries)
 
 
 def error_payload(exc: BaseException) -> JsonObject:

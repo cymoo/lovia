@@ -138,7 +138,7 @@ Agent + input
   -> context policy renders a per-call model view
   -> provider streams typed deltas
   -> tools, approvals, handoff, guardrails, and hooks run at explicit checkpoints
-  -> full transcript is persisted back to session/checkpoint
+  -> the run's own entries are appended to the session; the run is checkpointed
 ```
 
 Two boundaries are worth remembering:
@@ -418,6 +418,13 @@ result = await Runner.run(
     checkpoint=CheckpointOptions(checkpoint, "report-migration-42"),
 )
 ```
+
+Both stores are **append-only**: a `Session` accumulates completed runs (one
+segment each) while a checkpoint holds the in-flight run, so the full transcript
+is `session.load()` plus the in-flight snapshot. History is immutable — each run
+appends its own entries; nothing is ever rewritten. Give each run a `run_id`
+that is unique per checkpointer (e.g. `uuid4().hex`) — it is the checkpoint's
+only key and, unlike a session, is not scoped by `session_id`.
 
 ## Context Management
 

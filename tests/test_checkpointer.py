@@ -20,7 +20,7 @@ from lovia import (
     events,
     tool,
 )
-from lovia.checkpointer import RunSnapshot
+from lovia.checkpointer import RunHead, RunSnapshot
 from lovia.transcript import (
     FinishDelta,
     InputEntry,
@@ -28,6 +28,7 @@ from lovia.transcript import (
     ModelDelta,
     ToolCallEntry,
     ToolResultEntry,
+    TranscriptEntry,
     TextDelta,
     UsageDelta,
 )
@@ -41,14 +42,23 @@ def ckpt(cp: Any, run_id: str, **kwargs: Any) -> CheckpointOptions:
     return CheckpointOptions(cp, run_id, **kwargs)
 
 
+async def _seed(cp: Any, snap: RunSnapshot) -> None:
+    """Seed a checkpointer with a whole snapshot via the append API."""
+    await cp.append(snap.run_id, snap.entries, snap.head)
+
+
 class RecordingCheckpointer(InMemoryCheckpointer):
     def __init__(self) -> None:
         super().__init__()
         self.saved: list[RunSnapshot] = []
 
-    async def save(self, snapshot: RunSnapshot) -> None:
-        self.saved.append(snapshot)
-        await super().save(snapshot)
+    async def append(
+        self, run_id: str, entries: list[TranscriptEntry], head: RunHead
+    ) -> None:
+        await super().append(run_id, entries, head)
+        snap = await self.load(run_id)
+        assert snap is not None
+        self.saved.append(snap)
 
 
 class FlakyProvider:
@@ -215,7 +225,8 @@ async def test_resume_completed_snapshot_with_run_level_output_type() -> None:
 @pytest.mark.asyncio
 async def test_resume_completed_snapshot_rejects_unserializable_output() -> None:
     cp = InMemoryCheckpointer()
-    await cp.save(
+    await _seed(
+        cp,
         RunSnapshot(
             run_id="bad-output",
             agent_name="a",
@@ -437,7 +448,8 @@ async def test_resume_continues_from_snapshot() -> None:
         ToolCallEntry(call_id="c1", name="clock", arguments="{}"),
         ToolResultEntry(call_id="c1", output="12:00"),
     ]
-    await cp.save(
+    await _seed(
+        cp,
         RunSnapshot(
             run_id="r2",
             agent_name="a",
@@ -470,7 +482,8 @@ async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
         InputEntry(role="user", content="What is the time?"),
         ToolCallEntry(call_id="c1", name="clock", arguments="{}"),
     ]
-    await cp.save(
+    await _seed(
+        cp,
         RunSnapshot(
             run_id="pending-tool",
             agent_name="a",
@@ -528,10 +541,13 @@ async def test_handoff_snapshot_records_target_agent_after_switch() -> None:
         if snap.status == "running" and snap.agent_name == "Spanish"
     ]
     assert handoff_snapshots
+    # The snapshot stores the run's own entries (the system prompt is agent-owned
+    # and re-rendered on resume, never persisted), and the head records the
+    # handoff target — asserted by the ``agent_name == "Spanish"`` filter above.
     first_entry = handoff_snapshots[0].entries[0]
     assert isinstance(first_entry, InputEntry)
-    assert first_entry.role == "system"
-    assert "reply in Spanish" in first_entry.content
+    assert first_entry.role == "user"
+    assert first_entry.content == "Hola"
 
 
 @pytest.mark.asyncio

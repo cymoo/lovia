@@ -30,13 +30,26 @@ IfRunExists = Literal["resume", "restart", "fail", "resume_only"]
 _IF_RUN_EXISTS: set[str] = {"resume", "restart", "fail", "resume_only"}
 
 
-@dataclass
-class RunSnapshot:
-    """A serializable snapshot of a run between turns."""
+def _usage_to_dict(usage: Usage) -> JsonObject:
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
+    }
 
-    run_id: str
+
+@dataclass
+class RunHead:
+    """The mutable, non-entry state of a run — everything a snapshot carries
+    except its ``run_id`` and ``entries``.
+
+    A checkpoint stores entries append-only (one batch per turn) and overwrites
+    this small head each turn. Splitting it out keeps :meth:`Checkpointer.append`
+    a plain "append these entries, refresh the head" call.
+    """
+
     agent_name: str
-    entries: list[TranscriptEntry]
     usage: Usage
     turns: int
     status: RunStatus = "running"
@@ -52,19 +65,10 @@ class RunSnapshot:
     context_policy_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
-    # ----- (de)serialization helpers, used by store implementations -----
-
     def to_dict(self) -> JsonObject:
         return {
-            "run_id": self.run_id,
             "agent_name": self.agent_name,
-            "entries": [entry_to_dict(entry) for entry in self.entries],
-            "usage": {
-                "input_tokens": self.usage.input_tokens,
-                "output_tokens": self.usage.output_tokens,
-                "cache_read_tokens": self.usage.cache_read_tokens,
-                "cache_write_tokens": self.usage.cache_write_tokens,
-            },
+            "usage": _usage_to_dict(self.usage),
             "turns": self.turns,
             "status": self.status,
             "output": to_json_safe(self.output),
@@ -75,11 +79,9 @@ class RunSnapshot:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RunSnapshot":
+    def from_dict(cls, data: dict[str, Any]) -> "RunHead":
         return cls(
-            run_id=data["run_id"],
             agent_name=data["agent_name"],
-            entries=[entry_from_dict(entry) for entry in data["entries"]],
             usage=Usage(**data.get("usage", {})),
             turns=data.get("turns", 0),
             status=data["status"],
@@ -94,14 +96,111 @@ class RunSnapshot:
         return json.dumps(self.to_dict(), ensure_ascii=False)
 
     @classmethod
+    def from_json(cls, payload: str) -> "RunHead":
+        return cls.from_dict(json.loads(payload))
+
+
+@dataclass
+class RunSnapshot:
+    """A serializable snapshot of a run between turns.
+
+    ``entries`` is the run's **own** transcript (the input plus everything it
+    produced) — *not* the prior session history, which lives in the
+    :class:`~lovia.session.Session`. The full transcript on resume is
+    ``session.load() + snapshot.entries``.
+    """
+
+    run_id: str
+    agent_name: str
+    entries: list[TranscriptEntry]
+    usage: Usage
+    turns: int
+    status: RunStatus = "running"
+    output: Any | None = None
+    error: JsonObject | None = None
+    last_input_tokens: int | None = None
+    context_policy_state: JsonObject = field(default_factory=dict)
+    updated_at: float = field(default_factory=time.time)
+
+    # ----- head <-> snapshot, used by store implementations -----
+
+    @property
+    def head(self) -> RunHead:
+        """The non-entry state, bundled for :meth:`Checkpointer.append`."""
+        return RunHead(
+            agent_name=self.agent_name,
+            usage=self.usage,
+            turns=self.turns,
+            status=self.status,
+            output=self.output,
+            error=self.error,
+            last_input_tokens=self.last_input_tokens,
+            context_policy_state=self.context_policy_state,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_parts(
+        cls, run_id: str, entries: list[TranscriptEntry], head: RunHead
+    ) -> "RunSnapshot":
+        """Rebuild a snapshot from its stored entries and head."""
+        return cls(
+            run_id=run_id,
+            entries=entries,
+            agent_name=head.agent_name,
+            usage=head.usage,
+            turns=head.turns,
+            status=head.status,
+            output=head.output,
+            error=head.error,
+            last_input_tokens=head.last_input_tokens,
+            context_policy_state=head.context_policy_state,
+            updated_at=head.updated_at,
+        )
+
+    # ----- whole-snapshot (de)serialization (tests / direct callers) -----
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "run_id": self.run_id,
+            "entries": [entry_to_dict(entry) for entry in self.entries],
+            **self.head.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RunSnapshot":
+        return cls.from_parts(
+            run_id=data["run_id"],
+            entries=[entry_from_dict(entry) for entry in data["entries"]],
+            head=RunHead.from_dict(data),
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False)
+
+    @classmethod
     def from_json(cls, payload: str) -> "RunSnapshot":
         return cls.from_dict(json.loads(payload))
 
 
 class Checkpointer(Protocol):
-    """Persist :class:`RunSnapshot` instances keyed by ``run_id``."""
+    """Persist a run keyed by ``run_id`` as an append-only entry log + head.
 
-    async def save(self, snapshot: RunSnapshot) -> None: ...
+    Symmetric with :class:`~lovia.session.Session`: ``append`` adds a turn's
+    entries and refreshes the small mutable :class:`RunHead`; ``load``
+    reconstructs the whole :class:`RunSnapshot`.
+    """
+
+    async def append(
+        self, run_id: str, entries: list[TranscriptEntry], head: RunHead
+    ) -> None:
+        """Append this turn's ``entries`` and overwrite the run's ``head``.
+
+        ``entries`` may be empty (a head-only refresh, e.g. on completion).
+        Entries already stored for ``run_id`` are never rewritten — the run's
+        transcript only grows.
+        """
+        ...
 
     async def load(self, run_id: str) -> RunSnapshot | None: ...
 

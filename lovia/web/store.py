@@ -13,7 +13,6 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -95,23 +94,6 @@ class ChatStore:
         self.session = session
         self._meta = SQLiteStore(str(meta_path), _META_SCHEMA)
         self.checkpointer: Checkpointer | None = checkpointer
-        # Migrate existing databases that predate the active_run_id column.
-        self._migrate()
-
-    def _migrate(self) -> None:
-        # ALTER TABLE is idempotent: OperationalError means the column already
-        # exists (fresh DB gets it from _META_SCHEMA; existing DB needs the ALTER).
-        conn = self._meta._connect()
-        try:
-            try:
-                conn.execute(
-                    "ALTER TABLE chat_sessions ADD COLUMN active_run_id TEXT"
-                )
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # column already exists
-        finally:
-            self._meta._release(conn)
 
     # ---- low-level helpers ----------------------------------------------
     # One connect/commit/release dance, shared by every metadata method.

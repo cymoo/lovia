@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -41,13 +42,13 @@ async def test_sqlite_session_round_trip() -> None:
 # ------------------------------------------------------- InMemorySession ---
 
 
-async def test_in_memory_replace_overwrites() -> None:
+async def test_in_memory_append_accumulates_segments() -> None:
     s = InMemorySession()
-    await s.append("u1", [InputEntry(role="user", content="old")])
-    await s.replace("u1", [InputEntry(role="user", content="new")])
+    await s.append("u1", [InputEntry(role="user", content="one")])
+    await s.append("u1", [AssistantTextEntry(content="two")])
     entries = await s.load("u1")
-    assert len(entries) == 1
-    assert entries[0].content == "new"  # type: ignore[union-attr]
+    # Append-only: each run is a segment; load concatenates them in order.
+    assert [e.content for e in entries] == ["one", "two"]  # type: ignore[union-attr]
 
 
 async def test_in_memory_sessions_are_isolated() -> None:
@@ -70,35 +71,68 @@ async def test_in_memory_load_returns_a_copy() -> None:
     assert len(await s.load("u1")) == 1
 
 
-async def test_in_memory_replace_copies_input_list() -> None:
+async def test_in_memory_append_copies_input_list() -> None:
     s = InMemorySession()
     src = [InputEntry(role="user", content="hi")]
-    await s.replace("u1", src)
+    await s.append("u1", src)
     src.append(InputEntry(role="user", content="late"))
-    # Mutating the caller's list after replace must not affect the store.
+    # Mutating the caller's list after append must not affect the store.
     assert len(await s.load("u1")) == 1
 
 
 # --------------------------------------------------------- SQLiteSession ---
 
 
-async def test_sqlite_replace_and_clear() -> None:
+async def test_sqlite_append_segments_and_clear() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         s = SQLiteSession(Path(tmp) / "s.db")
         await s.append("u1", [InputEntry(role="user", content="old")])
-        await s.replace("u1", [InputEntry(role="user", content="new")])
+        await s.append("u1", [InputEntry(role="user", content="new")])
         entries = await s.load("u1")
-        assert [e.content for e in entries] == ["new"]  # type: ignore[union-attr]
+        assert [e.content for e in entries] == ["old", "new"]  # type: ignore[union-attr]
         await s.clear("u1")
         assert await s.load("u1") == []
 
 
-async def test_sqlite_replace_to_empty_clears() -> None:
+async def test_sqlite_append_persists_run_id_and_meta() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         s = SQLiteSession(Path(tmp) / "s.db")
-        await s.append("u1", [InputEntry(role="user", content="x")])
-        await s.replace("u1", [])
-        assert await s.load("u1") == []
+        rid = await s.append(
+            "u1", [InputEntry(role="user", content="x")], run_id="r1", meta={"k": "v"}
+        )
+        assert rid == "r1"
+        # run_id is a first-class column; meta is opaque, persisted verbatim.
+        conn = s._connect()
+        try:
+            row = conn.execute(
+                "SELECT run_id, meta_json FROM session_runs WHERE session_id = ?",
+                ("u1",),
+            ).fetchone()
+        finally:
+            s._release(conn)
+        assert row[0] == "r1"
+        assert json.loads(row[1]) == {"k": "v"}
+
+
+async def test_sqlite_append_is_idempotent_per_run_id() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        s = SQLiteSession(Path(tmp) / "s.db")
+        await s.append("u1", [InputEntry(role="user", content="a")], run_id="r1")
+        # Re-appending the same run_id is a no-op (first write wins).
+        again = await s.append(
+            "u1", [InputEntry(role="user", content="DUP")], run_id="r1"
+        )
+        assert again == "r1"
+        assert [e.content for e in await s.load("u1")] == ["a"]  # type: ignore[union-attr]
+
+
+async def test_append_generates_run_id_when_absent() -> None:
+    s = InMemorySession()
+    r1 = await s.append("u1", [InputEntry(role="user", content="one")])
+    r2 = await s.append("u1", [InputEntry(role="user", content="two")])
+    # Each omitted run_id gets a distinct generated id; both segments persist.
+    assert r1 and r2 and r1 != r2
+    assert [e.content for e in await s.load("u1")] == ["one", "two"]  # type: ignore[union-attr]
 
 
 async def test_sqlite_sessions_are_isolated_and_ordered() -> None:

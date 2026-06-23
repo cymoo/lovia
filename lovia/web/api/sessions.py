@@ -70,12 +70,16 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     "interrupted",
                     "running",
                 ):
-                    # Strip the system entry; it's re-generated on each run.
-                    entries = [
+                    # The checkpoint holds only the in-flight run's own entries;
+                    # prepend the persisted history for the full conversation.
+                    # (Strip any system entry defensively — it's re-generated.)
+                    history = await session.load(session_id)
+                    run_entries = [
                         e
                         for e in snapshot.entries
                         if not (isinstance(e, InputEntry) and e.role == "system")
                     ]
+                    entries = history + run_entries
                     active_run_id = candidate
                 else:
                     # Stale pointer (failed, completed, or deleted): clean up.

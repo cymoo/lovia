@@ -422,7 +422,9 @@ result = await Runner.run(
 Both stores are **append-only**: a `Session` accumulates completed runs (one
 segment each) while a checkpoint holds the in-flight run, so the full transcript
 is `session.load()` plus the in-flight snapshot. History is immutable — each run
-appends its own entries; nothing is ever rewritten.
+appends its own entries; nothing is ever rewritten. Give each run a `run_id`
+that is unique per checkpointer (e.g. `uuid4().hex`) — it is the checkpoint's
+only key and, unlike a session, is not scoped by `session_id`.
 
 ## Context Management
 

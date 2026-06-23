@@ -44,9 +44,10 @@ class RunHead:
     """The mutable, non-entry state of a run — everything a snapshot carries
     except its ``run_id`` and ``entries``.
 
-    A checkpoint stores entries append-only (one batch per turn) and overwrites
-    this small head each turn. Splitting it out keeps :meth:`Checkpointer.append`
-    a plain "append these entries, refresh the head" call.
+    A checkpoint stores entries append-only (one batch per ``append`` call) and
+    overwrites this small head on each call. Splitting it out keeps
+    :meth:`Checkpointer.append` a plain "append these entries, refresh the head"
+    call.
     """
 
     agent_name: str
@@ -186,15 +187,20 @@ class RunSnapshot:
 class Checkpointer(Protocol):
     """Persist a run keyed by ``run_id`` as an append-only entry log + head.
 
-    Symmetric with :class:`~lovia.session.Session`: ``append`` adds a turn's
-    entries and refreshes the small mutable :class:`RunHead`; ``load``
-    reconstructs the whole :class:`RunSnapshot`.
+    Symmetric with :class:`~lovia.session.Session`: ``append`` adds a batch of
+    entries (those since the last append — the loop appends several times per
+    turn) and refreshes the small mutable :class:`RunHead`; ``load`` reconstructs
+    the whole :class:`RunSnapshot`.
+
+    ``run_id`` is the sole, global key — it is not scoped by ``session_id`` (a
+    checkpointed run need not belong to a Session), so callers sharing one
+    checkpointer must keep it unique across sessions.
     """
 
     async def append(
         self, run_id: str, entries: list[TranscriptEntry], head: RunHead
     ) -> None:
-        """Append this turn's ``entries`` and overwrite the run's ``head``.
+        """Append a batch of ``entries`` and overwrite the run's ``head``.
 
         ``entries`` may be empty (a head-only refresh, e.g. on completion).
         Entries already stored for ``run_id`` are never rewritten — the run's

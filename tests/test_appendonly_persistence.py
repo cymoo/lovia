@@ -8,7 +8,8 @@ These tests pin the contract that makes that split correct:
 * the checkpoint stores ONLY the run's own entries — never the prior history;
 * resume reloads history from the Session and appends the run's delta exactly
   once (history stays immutable);
-* the SQLite checkpoint grows turn-by-turn (append-only) with a single head.
+* the SQLite checkpoint grows append-by-append (one row per non-empty append,
+  never rewritten) with a single head.
 """
 
 from __future__ import annotations
@@ -152,7 +153,8 @@ async def test_sqlite_checkpoint_appends_turns_incrementally(tmp_path: Any) -> N
         RunHead(agent_name="x", usage=Usage(), turns=2, status="completed"),
     )
 
-    # Append-only: one row per turn (old rows never rewritten), one head row.
+    # Append-only: one row per non-empty append (old rows never rewritten),
+    # one head row.
     conn = cp._connect()
     try:
         n_turns = conn.execute(

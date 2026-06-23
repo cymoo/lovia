@@ -1,10 +1,12 @@
 """Checkpointer implementations: in-memory and SQLite-backed.
 
 Both store a run as an **append-only entry log plus a small mutable head**:
-:meth:`append` adds one turn's entries and overwrites the head, so a long run
-never rewrites the entries it already persisted. :class:`SQLiteCheckpointer`
-keeps one row per turn (``snapshot_turns``) and one head row
-(``snapshot_heads``); :class:`InMemoryCheckpointer` keeps them in dicts.
+:meth:`append` adds a batch of new entries and overwrites the head, so a long
+run never rewrites the entries it already persisted. The loop appends several
+times per turn — after the model message and after each tool result — each call
+storing only the entries since the last. :class:`SQLiteCheckpointer` keeps one
+row per non-empty append in ``snapshot_turns`` (ordered by ``seq``) and one head
+row in ``snapshot_heads``; :class:`InMemoryCheckpointer` keeps them in dicts.
 """
 
 from __future__ import annotations

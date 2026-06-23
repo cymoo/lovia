@@ -943,7 +943,7 @@ class RunLoop:
         # an input_filter may drop or transform body entries (including prior
         # session history), so capture the run's true, unfiltered contribution
         # now — that, not the filtered view, is what the Session/checkpoint store.
-        state.carried_run_entries.extend(state.transcript[state.run_start :])
+        state.pre_handoff_entries.extend(state.transcript[state.run_start :])
 
         new_system = await self._system_prompt(
             state.agent,
@@ -1037,13 +1037,13 @@ class RunLoop:
     async def _persist_session(self, state: RunState) -> None:
         # Append this run's own entries as one segment. Prior history is already
         # in the Session and stays immutable; ``run_entries`` excludes the system
-        # entry (it lives before ``run_start``). ``run_id`` rides in ``meta`` so a
-        # segment can later be tied back to its run (None when not checkpointing).
+        # entry (it lives before ``run_start``).
         assert self.session is not None and self.session_id is not None
         run_entries = state.run_entries
         if run_entries:
-            # Key the segment by the run's id (None -> the store generates one).
-            # Append is idempotent on run_id, so a resumed completion that the
+            # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
+            # argument; ``None`` when not checkpointing -> the store generates one).
+            # Append is idempotent on it, so a resumed completion that the
             # crash-window left re-runnable can never double-write the run.
             await self.session.append(
                 self.session_id, run_entries, run_id=self.run_id

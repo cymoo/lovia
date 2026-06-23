@@ -396,7 +396,7 @@ result = await Runner.run(
 )
 ```
 
-两个 store 都是 **append-only**：`Session` 累积已完成的 run（每个 run 一个 segment），checkpoint 保存进行中的那个 run，所以完整 transcript = `session.load()` 加上进行中的 snapshot。历史不可变 —— 每个 run 只追加自己的 entries，从不重写。
+两个 store 都是 **append-only**：`Session` 累积已完成的 run（每个 run 一个 segment），checkpoint 保存进行中的那个 run，所以完整 transcript = `session.load()` 加上进行中的 snapshot。历史不可变 —— 每个 run 只追加自己的 entries，从不重写。请给每个 run 一个在单个 checkpointer 内唯一的 `run_id`（如 `uuid4().hex`）——它是 checkpoint 的唯一键，且不像 session 那样按 `session_id` 限定作用域。
 
 ## 上下文管理
 

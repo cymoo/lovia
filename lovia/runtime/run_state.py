@@ -116,14 +116,15 @@ class RunState:
     pending_handoff: "_HandoffSignal | None" = None
     # Boundary between prior session history and THIS run's own entries in the
     # live transcript. ``run_start`` indexes where the current handoff segment's
-    # run entries begin; ``carried_run_entries`` holds run entries frozen just
-    # before each handoff rewrote the view (an ``input_filter`` may drop history,
-    # so we capture the run's true contribution first). Together — see
-    # ``run_entries`` — they are what the Session and checkpoint persist. Neither
-    # is itself persisted: on resume the checkpoint's entries are this run's
-    # entries, so ``run_start`` is just re-derived past the reloaded history.
+    # run entries begin; ``pre_handoff_entries`` holds this run's entries from
+    # earlier segments, captured just before each handoff rewrote the view (an
+    # ``input_filter`` may drop history, so we save the run's true contribution
+    # first). Together — see ``run_entries`` — they are what the Session and
+    # checkpoint persist. Neither is itself persisted: on resume the checkpoint's
+    # entries are this run's entries, so ``run_start`` is just re-derived past the
+    # reloaded history.
     run_start: int = 0
-    carried_run_entries: list[TranscriptEntry] = field(default_factory=list)
+    pre_handoff_entries: list[TranscriptEntry] = field(default_factory=list)
 
     @property
     def agent(self) -> Agent[Any]:
@@ -145,11 +146,11 @@ class RunState:
         """This run's own entries (input + everything it produced), across handoffs.
 
         Excludes the prior session history (that lives in the Session). Built
-        from the entries carried before each handoff plus the live tail since the
-        last handoff (or bootstrap). This is exactly what the Session appends and
-        the checkpoint stores.
+        from the entries captured before each handoff (``pre_handoff_entries``)
+        plus the live tail since the last handoff (or bootstrap). This is exactly
+        what the Session appends and the checkpoint stores.
         """
-        return [*self.carried_run_entries, *self.transcript[self.run_start :]]
+        return [*self.pre_handoff_entries, *self.transcript[self.run_start :]]
 
     def activate(self, active: ActiveAgent) -> None:
         """Swap the active agent and mirror its public surface onto ``run_ctx``.

@@ -86,7 +86,6 @@ from .plugins import (
 from .tools import Tool, tool
 from .log_config import enable_logging
 
-
 __all__ = [
     "Agent",
     "AgentHooks",
@@ -142,4 +141,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.7.3"
+__version__ = "0.7.4"

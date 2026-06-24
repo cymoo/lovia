@@ -70,6 +70,24 @@ store.on('reconnect', (sessionId) => {
   if (!store.streaming) runReconnect(sessionId);
 });
 
+// ---- Keyboard shortcuts -------------------------------------------------
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'k') {
+      e.preventDefault(); // focus the chat filter
+      const search = document.getElementById('session-search');
+      search?.focus();
+      search?.select();
+    } else if (key === 'o' && e.shiftKey) {
+      e.preventDefault(); // start a new chat
+      clearChat();
+      document.getElementById('prompt')?.focus();
+    }
+  });
+}
+
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
   loadPageConfig();
@@ -77,6 +95,7 @@ store.on('reconnect', (sessionId) => {
   initSidebarToggle();
   initComposer();
   initSessions();
+  initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();
 

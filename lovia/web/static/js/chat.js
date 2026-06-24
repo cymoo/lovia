@@ -633,10 +633,14 @@ let _programmaticScroll = false;
 let _scrollFrame = null;
 let _userScrollPauseUntil = 0;
 let _lastScrollTop = 0;
+const scrollBtn = document.getElementById('scroll-bottom');
 function _isAtBottom() {
   const el = document.getElementById('transcript');
   if (!el) return true;
   return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL_PX;
+}
+function updateScrollButton() {
+  scrollBtn?.classList.toggle('visible', !_isAtBottom());
 }
 function _isUserScrollPaused() {
   return Date.now() < _userScrollPauseUntil;
@@ -668,6 +672,7 @@ function scrollDown() {
       _programmaticScroll = false;
       _lastScrollTop = el.scrollTop;
       _stickToBottom = !_isUserScrollPaused() && _isAtBottom();
+      updateScrollButton();
     });
   });
 }
@@ -695,7 +700,13 @@ transcriptEl?.addEventListener('scroll', () => {
   } else {
     _stickToBottom = false;
   }
+  updateScrollButton();
 }, { passive: true });
+
+scrollBtn?.addEventListener('click', () => {
+  _resumeAutoScroll();
+  scrollDown();
+});
 
 export function renderEmptyState() {
   const transcript = document.getElementById('transcript');

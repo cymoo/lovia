@@ -55,6 +55,7 @@ async def drive_stream(
     """
     # Tell the client its session id up front so reconnects work.
     yield {"event": "session", "data": json.dumps({"session_id": sid})}
+    error_seen = False
     try:
         async for ev in handle:
             if await request.is_disconnected():
@@ -65,6 +66,8 @@ async def drive_stream(
                 deps.approvals.register(sid, approval_ev)
             payload = event_to_sse(ev)
             if payload is not None:
+                if payload["event"] == "error":
+                    error_seen = True
                 yield payload
             if isinstance(ev, events.RunCompleted):
                 out.succeeded = True
@@ -72,11 +75,19 @@ async def drive_stream(
             if approval_ev is not None:
                 await deps.approvals.await_decision(sid, approval_ev)
     except Exception as exc:
-        # Fatal run errors (MaxTurnsExceeded, provider failure, …) are already
+        # Fatal run errors (MaxTurnsExceeded, provider failure, …) are usually
         # surfaced to the client as an `error` event by the loop before it
-        # re-raises; swallow the re-raise here so the SSE stream closes cleanly
-        # instead of faulting the ASGI response.
+        # re-raises. If we reach here without having forwarded one (e.g. a
+        # failure in the SSE layer itself), emit a terminal `error` so the
+        # client shows a clear notice instead of a silently truncated reply.
+        # Either way, swallow the re-raise so the stream closes cleanly rather
+        # than faulting the ASGI response.
         log.warning("stream %s ended with error: %s", sid, exc)
+        if not error_seen:
+            yield {
+                "event": "error",
+                "data": json.dumps({"type": type(exc).__name__, "message": str(exc)}),
+            }
     finally:
         await deps.approvals.release(sid)
         deps.cancel_tokens.pop(sid, None)

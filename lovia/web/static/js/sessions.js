@@ -20,8 +20,21 @@ export async function loadSessions(query = '') {
 }
 
 // ---- Render --------------------------------------------------------------
+// A cheap fingerprint of what renderSessions() draws, so repeated polls with
+// identical data don't tear down and rebuild the whole sidebar.
+let _lastRenderSig = null;
+function sessionsSignature() {
+  return JSON.stringify([
+    store.sessionId,
+    store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at]),
+  ]);
+}
+
 function renderSessions() {
   if (!sessionsList) return;
+  const sig = sessionsSignature();
+  if (sig === _lastRenderSig) return; // nothing changed — keep the DOM as-is
+  _lastRenderSig = sig;
   sessionsList.innerHTML = '';
 
   if (!store.sessions.length) {

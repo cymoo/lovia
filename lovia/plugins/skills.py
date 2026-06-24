@@ -360,7 +360,7 @@ class LocalDirSkillSource:
                     _validate_description(name, description)
                     if name in self._metadata:
                         logger.warning(
-                            f"Duplicate skill name {name!r} in {entry}, skipped."
+                            "skill.duplicate: %r in %s, skipped", name, entry
                         )
                         continue
                     extra = {
@@ -373,11 +373,9 @@ class LocalDirSkillSource:
                     )
                     self._dirs[name] = entry
                 except OSError as exc:
-                    logger.warning(
-                        f"Skipping unreadable skill directory {entry}: {exc}"
-                    )
+                    logger.warning("skill.unreadable: %s (%s)", entry, exc)
                 except SkillsError as exc:
-                    logger.warning(f"Skipping invalid skill in {entry}: {exc}")
+                    logger.warning("skill.invalid: %s (%s)", entry, exc)
 
     def _read_body(self, name: str) -> str:
         """Read and return the ``SKILL.md`` body for *name*, stripping frontmatter."""

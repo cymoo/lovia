@@ -619,7 +619,12 @@ def _make_recall(plugin: "Memory", archive: MemoryArchive) -> Tool:
             try:
                 return await _summarize(hits, query, plugin._resolve_model(ctx))
             except Exception:
-                logger.exception("memory: recall summary failed; returning raw hits")
+                # Fail-open: fall back to raw hits, so this degrades output but
+                # doesn't fail the tool — WARNING, not ERROR (keep traceback).
+                logger.warning(
+                    "memory: recall summary failed; returning raw hits",
+                    exc_info=True,
+                )
         return "\n\n".join(f"- {h.text}" for h in hits)
 
     return recall
@@ -758,7 +763,9 @@ class Memory:
                 try:
                     await archive.ingest(ctx.session_id, entries)
                 except Exception:
-                    logger.exception("memory: archive ingest failed")
+                    # Best-effort background curation: the run already
+                    # completed, so a failure here is WARNING, not ERROR.
+                    logger.warning("memory: archive ingest failed", exc_info=True)
 
             if self.auto_extract:
                 await self._curate_notes(notes, entries, self._resolve_model(ctx))
@@ -777,7 +784,8 @@ class Memory:
             for fact in await _extract(entries, current, model):
                 await notes.add(fact)
         except Exception:
-            logger.exception("memory: note extraction failed")
+            # Best-effort curation (run already completed) — WARNING, not ERROR.
+            logger.warning("memory: note extraction failed", exc_info=True)
             return
         # 2) Consolidate when Notes exceed the store's char budget.
         try:
@@ -788,7 +796,8 @@ class Memory:
                 if facts:
                     await notes.replace(_format_facts(facts))
         except Exception:
-            logger.exception("memory: note consolidation failed")
+            # Best-effort curation (run already completed) — WARNING, not ERROR.
+            logger.warning("memory: note consolidation failed", exc_info=True)
 
 
 __all__ = [

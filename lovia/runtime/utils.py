@@ -12,14 +12,30 @@ _LOG_REPR_MAX = 200
 
 
 def truncate_repr(value: object, max_len: int = _LOG_REPR_MAX) -> str:
-    """Render ``value`` for a single log line, clipping to ``max_len`` chars."""
+    """Render ``value`` for a single log line, clipping to ``max_len`` chars.
+
+    String values are kept unquoted, but line breaks and tabs are collapsed to
+    escapes first so a multi-line value can't shatter the one-record-per-line
+    log format; non-strings go through ``repr`` (which already escapes them).
+    """
     try:
         text = value if isinstance(value, str) else repr(value)
     except Exception:
         text = "<unrepr>"
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + f"... <+{len(text) - max_len} chars>"
+    # Clip *before* sanitizing so the escape-replacement below only ever scans a
+    # bounded slice. truncate_repr runs on every tool.start/tool.done — and its
+    # argument is evaluated even when the level would drop the record — so it
+    # must stay cheap no matter how large the value is.
+    overflow = len(text) - max_len
+    if overflow > 0:
+        text = text[:max_len]
+    text = (
+        text.replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\t", " ")
+    )
+    return text if overflow <= 0 else f"{text}... <+{overflow} chars>"
 
 
 def agent_model_label(agent: Agent[Any]) -> str:

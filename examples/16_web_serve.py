@@ -20,7 +20,6 @@ from dotenv import load_dotenv
 
 from lovia import Agent, Compaction, Todo, tool, enable_logging
 from lovia.workspace import Workspace
-from lovia.tracing import ConsoleTracer
 from lovia.web import serve
 
 load_dotenv()
@@ -63,7 +62,6 @@ def main() -> None:
         host="127.0.0.1",
         port=8000,
         context_policy=policy,
-        tracer=ConsoleTracer(),
     )
 
 

@@ -879,16 +879,25 @@ async function pollForTitle(sessionId) {
   if (store.sessionId !== sessionId) return; // user moved on
   const provisional = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
   let attempt = 0;
-  const tick = async () => {
+
+  // Keep the timer callback synchronous and swallow rejections so a failed
+  // poll can never surface as an unhandled promise rejection.
+  const schedule = (ms) => {
+    _titlePollTimer = setTimeout(() => void tick().catch(() => {}), ms);
+  };
+
+  async function tick() {
     _titlePollTimer = null;
     if (store.sessionId !== sessionId) return;
     await loadSessions();
     const current = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
     const landed = current && current !== provisional;
-    if (landed || attempt >= _TITLE_POLL_BACKOFF_MS.length) return;
-    _titlePollTimer = setTimeout(tick, _TITLE_POLL_BACKOFF_MS[attempt++]);
-  };
-  _titlePollTimer = setTimeout(tick, _TITLE_POLL_BACKOFF_MS[attempt++]);
+    if (!landed && attempt < _TITLE_POLL_BACKOFF_MS.length) {
+      schedule(_TITLE_POLL_BACKOFF_MS[attempt++]);
+    }
+  }
+
+  schedule(_TITLE_POLL_BACKOFF_MS[attempt++]);
 }
 
 // ---- Streaming ---------------------------------------------------------

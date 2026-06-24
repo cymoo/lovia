@@ -480,10 +480,42 @@ body.sidebar-collapsed .sidebar-expand-btn {
   background: var(--accent);
   opacity: 0.55;
 }
-.loading {
-  color: var(--muted-2);
-  padding: 24px;
-  font-size: 13px;
+/* Loading skeleton — placeholder bubbles while a chat's history loads. */
+.chat-skeleton {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+.skeleton-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.skeleton-turn.user {
+  align-items: flex-end;
+}
+.skeleton-line {
+  height: 12px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
 }
 
 /* ---- Turns / Messages ------------------------------------------------- */
@@ -1376,6 +1408,10 @@ dialog.custom-dialog::backdrop {
 }
 
 /* ---- Scrollbar -------------------------------------------------------- */
+html {
+  scrollbar-width: thin; /* Firefox parity with the webkit thumb below */
+  scrollbar-color: var(--border-strong) transparent;
+}
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -1389,6 +1425,11 @@ dialog.custom-dialog::backdrop {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted-2);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 /* ---- Responsive ------------------------------------------------------- */

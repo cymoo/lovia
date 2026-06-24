@@ -157,7 +157,9 @@ export async function switchSession(id) {
   const emptyState = document.getElementById('empty-state');
   if (emptyState) emptyState.remove();
 
-  transcript.innerHTML = '<div class="loading">Loading…</div>';
+  transcript.replaceChildren(
+    document.getElementById('tmpl-skeleton').content.cloneNode(true),
+  );
   renderSessions();
 
   try {

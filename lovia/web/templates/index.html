@@ -144,6 +144,22 @@
   </div>
 </template>
 
+<template id="tmpl-skeleton">
+  <div class="chat-skeleton" aria-hidden="true">
+    <div class="skeleton-turn user"><span class="skeleton-line" style="width:36%"></span></div>
+    <div class="skeleton-turn">
+      <span class="skeleton-line" style="width:72%"></span>
+      <span class="skeleton-line" style="width:90%"></span>
+      <span class="skeleton-line" style="width:58%"></span>
+    </div>
+    <div class="skeleton-turn user"><span class="skeleton-line" style="width:28%"></span></div>
+    <div class="skeleton-turn">
+      <span class="skeleton-line" style="width:80%"></span>
+      <span class="skeleton-line" style="width:50%"></span>
+    </div>
+  </div>
+</template>
+
 <script type="module" src="{{ url_for('static', path='js/main.js') }}"></script>
 </body>
 </html>

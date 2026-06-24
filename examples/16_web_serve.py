@@ -19,16 +19,11 @@ import os
 from dotenv import load_dotenv
 
 from lovia import Agent, Compaction, Todo, tool, enable_logging
+from lovia.tools import duckduckgo_search
 from lovia.workspace import Workspace
 from lovia.web import serve
 
 load_dotenv()
-
-
-@tool
-async def add(a: float, b: float) -> float:
-    """Add two numbers."""
-    return a + b
 
 
 @tool(needs_approval=True)
@@ -47,7 +42,7 @@ def main() -> None:
             "Keep replies short and conversational. Ask for clarification if the question is ambiguous."
         ),
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-        tools=[add, send_email],
+        tools=[send_email, duckduckgo_search()],
         plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),
     )
@@ -56,7 +51,7 @@ def main() -> None:
     # the prompt prefix stays cache-friendly. Omit context_window to ask the
     # provider for the active model's window and fall back to the reactive
     # overflow path when the window is unknown.
-    policy = Compaction(context_window=200_000)
+    policy = Compaction(context_window=1_000_000)
     serve(
         agent,
         host="127.0.0.1",

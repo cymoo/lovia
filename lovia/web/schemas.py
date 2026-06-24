@@ -24,7 +24,9 @@ class ServerInfo(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    # A generous ceiling: guards against a pathological request body, not real
+    # prompts — comfortably fits a 1M-token input in any language.
+    message: str = Field(max_length=10_000_000)
     session_id: str | None = None
     agent: str | None = None
 

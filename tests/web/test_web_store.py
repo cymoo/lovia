@@ -32,6 +32,26 @@ async def test_set_title_and_truncate() -> None:
     assert len(meta.title) <= 120
 
 
+async def test_set_title_if_unchanged_applies_when_provisional_intact() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("s1", title="Provisional")
+    await store.set_title_if_unchanged("s1", "Generated Title", expected="Provisional")
+    meta = await store.get("s1")
+    assert meta is not None
+    assert meta.title == "Generated Title"
+
+
+async def test_set_title_if_unchanged_skips_after_manual_rename() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("s1", title="Provisional")
+    # User renames before the background-generated title lands.
+    await store.set_title("s1", "My Name")
+    await store.set_title_if_unchanged("s1", "Generated Title", expected="Provisional")
+    meta = await store.get("s1")
+    assert meta is not None
+    assert meta.title == "My Name"  # not clobbered
+
+
 async def test_upsert_bumps_updated_at() -> None:
     store = ChatStore.in_memory()
     await store.upsert("s1")

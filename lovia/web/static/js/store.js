@@ -23,7 +23,15 @@ export const store = {
   todoCollapsed: false,
   todos: [],
   lastMessage: null,
-  theme: localStorage.getItem("lovia-theme") || "light",
+  // Set when the current run created a brand-new session whose title is being
+  // generated server-side, so the chat view knows to poll for it.
+  titlePending: false,
+  // Saved preference wins; otherwise follow the OS on first load.
+  theme:
+    localStorage.getItem("lovia-theme") ||
+    (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light"),
 
   on(event, fn) {
     if (!_listeners.has(event)) _listeners.set(event, []);

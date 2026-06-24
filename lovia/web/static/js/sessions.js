@@ -2,6 +2,7 @@
 import { store } from './store.js';
 import { api } from './api.js';
 import { promptDialog, confirmDialog } from './ui.js';
+import { toast } from './toast.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
@@ -112,6 +113,7 @@ async function renameSession(s) {
     updateSessionInSidebar(s.id, title);
   } catch (err) {
     console.error(err);
+    toast('Couldn’t rename chat', { type: 'error' });
   }
 }
 
@@ -122,6 +124,8 @@ export async function deleteSession(id) {
     await api.deleteSession(id);
   } catch (err) {
     console.error(err);
+    toast('Couldn’t delete chat', { type: 'error' });
+    return; // leave the view untouched if the delete didn't land
   }
   if (store.sessionId === id) {
     store.sessionId = null;
@@ -154,7 +158,14 @@ export async function switchSession(id) {
       store.emit('reconnect', id);
     }
   } catch (err) {
-    transcript.innerHTML = `<div class="empty-state"><h2>Couldn't load chat</h2><p>${err.message ?? err}</p></div>`;
+    const errState = document.createElement('div');
+    errState.className = 'empty-state';
+    const h2 = document.createElement('h2');
+    h2.textContent = "Couldn't load chat";
+    const p = document.createElement('p');
+    p.textContent = err.message ?? String(err);
+    errState.append(h2, p);
+    transcript.replaceChildren(errState);
   }
 }
 
@@ -173,6 +184,7 @@ export async function exportSession(format = 'md') {
   if (!store.sessionId) return;
   try {
     const res = await fetch(api.exportUrl(store.sessionId, format));
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -180,8 +192,10 @@ export async function exportSession(format = 'md') {
     a.download = `lovia-chat.${format}`;
     a.click();
     URL.revokeObjectURL(url);
+    toast('Chat exported');
   } catch (err) {
     console.error('export:', err);
+    toast('Export failed', { type: 'error' });
   }
 }
 

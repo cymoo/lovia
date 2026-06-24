@@ -733,8 +733,11 @@ async function handleEvent({ event, data }) {
       const known = store.sessions.some((s) => s.id === data.session_id);
       store.sessionId = data.session_id;
       store.syncURL(data.session_id);
-      // Surface a brand-new session in the sidebar right away — with its
-      // provisional title — instead of waiting for the run to finish.
+      // A brand-new session gets a server-generated title shortly after the
+      // first turn; flag it so the stream's end polls for it (see pollForTitle).
+      store.titlePending = !known;
+      // Surface it in the sidebar right away — with its provisional title —
+      // instead of waiting for the run to finish.
       if (!known) loadSessions();
       break;
     }
@@ -846,6 +849,37 @@ async function handleEvent({ event, data }) {
   }
 }
 
+// ---- Title polling -----------------------------------------------------
+// A new chat's title is produced by a background task on the server after the
+// first turn. Poll the session list with bounded back-off until the
+// provisional title is replaced, then stop. Only one poller runs at a time —
+// previous unbounded pollers could pile up and churn the sidebar forever.
+const _TITLE_POLL_BACKOFF_MS = [600, 800, 1500, 3000, 5000, 8000, 12000];
+let _titlePollTimer = null;
+
+function stopTitlePolling() {
+  clearTimeout(_titlePollTimer);
+  _titlePollTimer = null;
+}
+
+async function pollForTitle(sessionId) {
+  stopTitlePolling();
+  await loadSessions(); // ensure the provisional title is on screen first
+  if (store.sessionId !== sessionId) return; // user moved on
+  const provisional = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
+  let attempt = 0;
+  const tick = async () => {
+    _titlePollTimer = null;
+    if (store.sessionId !== sessionId) return;
+    await loadSessions();
+    const current = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
+    const landed = current && current !== provisional;
+    if (landed || attempt >= _TITLE_POLL_BACKOFF_MS.length) return;
+    _titlePollTimer = setTimeout(tick, _TITLE_POLL_BACKOFF_MS[attempt++]);
+  };
+  _titlePollTimer = setTimeout(tick, _TITLE_POLL_BACKOFF_MS[attempt++]);
+}
+
 // ---- Streaming ---------------------------------------------------------
 const sendBtn = document.getElementById('send');
 const stopBtn = document.getElementById('stop');
@@ -856,6 +890,8 @@ let _streamAbortController = null;
 export async function runStream(message) {
   store.streaming = true;
   store.lastMessage = message;
+  store.titlePending = false; // set true by the `session` event for new chats
+  stopTitlePolling();
   sendBtn.style.display = 'none';
   if (stopBtn) stopBtn.style.display = '';
   const { node: turn, bubble } = startAssistantTurn();
@@ -912,26 +948,14 @@ export async function runStream(message) {
     if (stopBtn) stopBtn.style.display = 'none';
     if (promptEl) promptEl.focus();
     if (turnProgressEl) turnProgressEl.classList.add('hidden');
-    // Title is generated in a background task after the stream closes.
-    // Poll with back-off: 0.6, 1.2, 2.0, 3.5, 6, 12 s, then every
-    // 10 s until the user switches sessions.  This covers both fast
-    // title generation (1-2 s) and slow/queued LLM calls (30+ s).
-    let _pollAttempt = 0;
-    const _pollSid = store.sessionId;
-    const _doPoll = () => {
-      if (!_pollSid || store.sessionId !== _pollSid) return;
-      _pollAttempt++;
+    // A new chat's title is generated server-side just after the first turn —
+    // poll for it (bounded). Other turns only need one refresh so the session
+    // jumps to the top of the list.
+    if (store.titlePending) {
+      pollForTitle(store.sessionId);
+    } else {
       loadSessions();
-      let next;
-      if (_pollAttempt <= 6) {
-        next = [600, 600, 800, 1500, 2500, 6000][_pollAttempt - 1];
-      } else {
-        next = 10_000; // keep checking every 10 s forever
-      }
-      setTimeout(_doPoll, next);
-    };
-    loadSessions();
-    setTimeout(_doPoll, 600);
+    }
   }
 }
 

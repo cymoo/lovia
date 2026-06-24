@@ -56,7 +56,11 @@ export function initSidebarToggle() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && sidebarOpen) closeSidebar();
   });
-  window.addEventListener('resize', () => applySidebarCollapsed(store.sidebarCollapsed));
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => applySidebarCollapsed(store.sidebarCollapsed), 120);
+  });
 }
 
 // ---- Native Dialog -----------------------------------------------------
@@ -72,7 +76,9 @@ export function showDialog({ body, actions, onClose } = {}) {
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'dialog-body';
-  if (typeof body === 'string') bodyEl.innerHTML = body;
+  // A string is treated as plain text, never HTML — callers pass an element
+  // when they need markup.
+  if (typeof body === 'string') bodyEl.textContent = body;
   else if (body instanceof HTMLElement) bodyEl.appendChild(body);
   content.appendChild(bodyEl);
 
@@ -98,7 +104,9 @@ export function showDialog({ body, actions, onClose } = {}) {
 
 export function confirmDialog(message) {
   return new Promise((resolve) => {
-    const body = `<p>${message}</p>`;
+    const body = document.createElement('p');
+    body.style.margin = '0';
+    body.textContent = message;
     const actions = document.createElement('div');
     actions.style.display = 'flex';
     actions.style.gap = '8px';
@@ -123,7 +131,10 @@ export function confirmDialog(message) {
 export function promptDialog(message, defaultValue = '') {
   return new Promise((resolve) => {
     const body = document.createElement('div');
-    body.innerHTML = `<p style="margin:0 0 8px">${message}</p>`;
+    const label = document.createElement('p');
+    label.style.margin = '0 0 8px';
+    label.textContent = message;
+    body.appendChild(label);
 
     const input = document.createElement('input');
     input.type = 'text';

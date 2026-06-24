@@ -348,7 +348,7 @@ class TestLocalDirSkillSource:
             )
             with caplog.at_level(logging.WARNING):
                 source = LocalDirSkillSource(root)
-            assert "Duplicate" in caplog.text
+            assert "skill.duplicate" in caplog.text
             assert len(source.metadata) == 1
             assert source.metadata[0].description == "First."
 
@@ -362,7 +362,7 @@ class TestLocalDirSkillSource:
             )
             with caplog.at_level(logging.WARNING):
                 source = LocalDirSkillSource(root)
-            assert "Skipping invalid" in caplog.text
+            assert "skill.invalid" in caplog.text
             assert source.metadata == []
 
     def test_missing_description_skipped(self, caplog) -> None:
@@ -373,7 +373,7 @@ class TestLocalDirSkillSource:
             (root / "test" / "SKILL.md").write_text("---\nname: test\n---\n# Body")
             with caplog.at_level(logging.WARNING):
                 source = LocalDirSkillSource(root)
-            assert "Skipping invalid" in caplog.text
+            assert "skill.invalid" in caplog.text
             assert source.metadata == []
 
     def test_metadata_property(self) -> None:
@@ -685,7 +685,7 @@ class TestMultipleDirs:
                 source = LocalDirSkillSource(r1, r2)
             assert len(source.metadata) == 1
             assert source.metadata[0].description == "From r1."
-            assert "Duplicate skill name" in caplog.text
+            assert "skill.duplicate" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -1136,7 +1136,7 @@ class TestErrorIsolation:
                     source = LocalDirSkillSource(root)
                 assert len(source.metadata) == 1
                 assert source.metadata[0].name == "good-skill"
-                assert "Skipping unreadable" in caplog.text
+                assert "skill.unreadable" in caplog.text
             finally:
                 # Restore permissions so tempfile can clean up
                 os.chmod(broken_md, 0o644)

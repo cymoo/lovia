@@ -122,10 +122,14 @@ async def _call_handler(
         if result is not None and hasattr(result, "__await__"):
             await result
     except Exception:
-        logger.exception(
-            "hook handler %r failed for %s; continuing",
+        # Fail-open: a crashing user hook must not abort the run, so this is a
+        # WARNING (the run continues correctly) rather than an ERROR — but keep
+        # the traceback via exc_info.
+        logger.warning(
+            "hook.error: handler %r failed for %s; continuing",
             getattr(fn, "__qualname__", fn),
             type(event).__name__,
+            exc_info=True,
         )
 
 

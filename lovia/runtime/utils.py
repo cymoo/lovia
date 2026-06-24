@@ -12,14 +12,23 @@ _LOG_REPR_MAX = 200
 
 
 def truncate_repr(value: object, max_len: int = _LOG_REPR_MAX) -> str:
-    """Render ``value`` for a single log line, clipping to ``max_len`` chars."""
+    """One-line log preview of ``value``; the raw value is clipped to ``max_len``."""
     try:
         text = value if isinstance(value, str) else repr(value)
     except Exception:
         text = "<unrepr>"
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + f"... <+{len(text) - max_len} chars>"
+    # Clip before sanitizing so the replacements scan a bounded slice: this runs
+    # on every tool.start/tool.done, even when the level would drop the record.
+    overflow = len(text) - max_len
+    if overflow > 0:
+        text = text[:max_len]
+    text = (
+        text.replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\t", " ")
+    )
+    return text if overflow <= 0 else f"{text}... <+{overflow} chars>"
 
 
 def agent_model_label(agent: Agent[Any]) -> str:

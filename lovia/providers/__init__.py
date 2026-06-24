@@ -123,7 +123,7 @@ def provider_from_string(spec: str) -> Provider:
     if ":" not in spec:
         if spec.lower().startswith("claude"):
             logger.warning(
-                "Model %r has no vendor prefix and will be routed to the "
+                "provider.no_vendor_prefix: model %r routed to the "
                 "OpenAI-compatible provider; did you mean 'anthropic:%s'?",
                 spec,
                 spec,

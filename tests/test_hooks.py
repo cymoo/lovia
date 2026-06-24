@@ -112,14 +112,14 @@ async def test_handler_exception_is_logged_and_swallowed(
 
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider, hooks=hooks)
-    with caplog.at_level("ERROR", logger="lovia.hooks"):
+    with caplog.at_level("WARNING", logger="lovia.hooks"):
         result = await Runner.run(agent, "go")
 
-    # The run completes, subsequent handlers still fire, and the failure
-    # is logged with its traceback.
+    # The run completes, subsequent handlers still fire, and the failure is
+    # logged at WARNING (fail-open: the run is unaffected) with its traceback.
     assert result.output == "hi"
     assert seen == ["later"]
-    assert any(r.exc_info for r in caplog.records)
+    assert any(r.levelname == "WARNING" and r.exc_info for r in caplog.records)
 
 
 @pytest.mark.asyncio

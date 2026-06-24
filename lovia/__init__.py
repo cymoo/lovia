@@ -23,9 +23,6 @@ Typical use::
 
 from __future__ import annotations
 
-import logging as _logging
-from typing import TextIO
-
 from . import events
 from .agent import Agent
 from .checkpointer import CheckpointOptions
@@ -87,68 +84,7 @@ from .plugins import (
     Todo,
 )
 from .tools import Tool, tool
-
-# ---------------------------------------------------------------------------
-# Logging setup
-#
-# Library best practice: attach a NullHandler so applications that don't
-# configure logging don't see ``No handlers could be found`` warnings, but
-# also don't get unsolicited output. Users opt in via ``logging.basicConfig``
-# or :func:`enable_logging`.
-# ---------------------------------------------------------------------------
-_logging.getLogger("lovia").addHandler(_logging.NullHandler())
-
-
-def enable_logging(
-    level: int | str = _logging.INFO,
-    *,
-    format: str = "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    datefmt: str = "%H:%M:%S",
-    stream: TextIO | None = None,
-    propagate: bool = False,
-) -> _logging.Logger:
-    """Configure the ``lovia`` logger for quick interactive use.
-
-    Convenience for scripts and notebooks. Attaches a single
-    :class:`~logging.StreamHandler` to the ``lovia`` logger with a sensible
-    default format and sets its level. Idempotent — calling more than once
-    replaces the previously attached handler so log lines aren't duplicated.
-
-    By default the ``lovia`` logger's :attr:`~logging.Logger.propagate` is set
-    to ``False`` so records aren't *also* emitted by the root logger — which
-    would double-print whenever the app has configured root logging (e.g. via
-    :func:`logging.basicConfig` or under uvicorn). Pass ``propagate=True`` to
-    keep propagating to ancestor handlers as well.
-
-    For production deployments configure :mod:`logging` yourself; nothing in
-    ``lovia`` calls this function automatically.
-
-    Args:
-        level: Logger level (e.g. ``logging.DEBUG``, ``"INFO"``).
-        format: ``logging`` format string.
-        datefmt: ``logging`` date format string.
-        stream: Optional stream override (defaults to ``sys.stderr``).
-        propagate: Whether the ``lovia`` logger should also forward records to
-            ancestor (root) handlers. Defaults to ``False`` to avoid duplicate
-            output.
-
-    Returns:
-        The configured ``lovia`` logger.
-    """
-    log = _logging.getLogger("lovia")
-    # Strip only the handlers we attached on a previous call, so successive
-    # calls don't pile up duplicate StreamHandlers. The NullHandler and any
-    # handlers the user added themselves are left untouched.
-    for h in list(log.handlers):
-        if getattr(h, "_lovia_managed", False):
-            log.removeHandler(h)
-    handler = _logging.StreamHandler(stream)
-    handler.setFormatter(_logging.Formatter(format, datefmt=datefmt))
-    handler._lovia_managed = True  # type: ignore[attr-defined]
-    log.addHandler(handler)
-    log.setLevel(level)
-    log.propagate = propagate
-    return log
+from .log_config import enable_logging
 
 
 __all__ = [

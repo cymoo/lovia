@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from collections import Counter
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
@@ -206,7 +207,8 @@ class RunLoop:
 
             yield await self._emit(state, events.RunStarted(agent=state.agent))
             logger.info(
-                "run.start: agent=%r model=%s input=%s",
+                # Quote the free-text input so its spaces/"=" don't read as fields.
+                "run.start: agent=%r model=%s input='%s'",
                 state.agent.name,
                 agent_model_label(state.agent),
                 truncate_repr(input_preview(self.user_input)),
@@ -253,6 +255,15 @@ class RunLoop:
 
                     turn_durable = False
                     turn = ModelTurnResult()
+                    # Bracket the model call the way tool.start/tool.done bracket a
+                    # tool, so a slow or hung provider is visible at INFO — not
+                    # only after it returns.
+                    logger.info(
+                        "model.start: turn=%d model=%s",
+                        state.turns,
+                        agent_model_label(state.agent),
+                    )
+                    model_started = time.perf_counter()
                     async for ev in self._model_phase(state, turn, tracer):
                         yield ev
                     assistant = turn.assistant
@@ -263,6 +274,17 @@ class RunLoop:
                             "Provider stream ended without final message"
                         )
                     self._record_usage(state, assistant)
+                    logger.info(
+                        "model.done: turn=%d tokens=%d(in=%d out=%d) finish=%s "
+                        "tool_calls=%d dur=%.2fs",
+                        state.turns,
+                        assistant.usage.total_tokens,
+                        assistant.usage.input_tokens,
+                        assistant.usage.output_tokens,
+                        assistant.finish_reason,
+                        len(assistant.tool_calls),
+                        time.perf_counter() - model_started,
+                    )
                     state.transcript.extend(turn.turn_entries)
                     yield await self._emit(
                         state, events.MessageCompleted(entries=turn.turn_entries)
@@ -318,6 +340,21 @@ class RunLoop:
                     if not turn_durable:
                         # The in-flight turn left nothing in the transcript.
                         state.turns = max(0, state.turns - 1)
+                    # Symmetric with run.done: a run that ends by exception is
+                    # logged too, keyed off the same classifier the checkpoint
+                    # uses so the level matches the snapshot status. No exc_info —
+                    # the exception is re-raised below, so the caller still gets
+                    # the traceback; this just adds the run-scoped summary it lacks.
+                    status = self.checkpoints.classify(exc)
+                    emit = logger.warning if status == "interrupted" else logger.error
+                    emit(
+                        "run.%s: agent=%r turn=%d (%s: %s)",
+                        status,
+                        state.agent.name,
+                        state.turns,
+                        type(exc).__name__,
+                        truncate_repr(str(exc)),
+                    )
                     # Shield the terminal save: a run cancelled via
                     # wait_for/timeout must still leave an ``interrupted``
                     # snapshot. Without the shield, awaiting here could itself
@@ -786,12 +823,10 @@ class RunLoop:
 
     def _check_limits(self, state: RunState) -> None:
         if state.turns >= self.max_turns:
-            logger.warning(
-                "run.max_turns: agent=%r turns=%d/%d",
-                state.agent.name,
-                state.turns,
-                self.max_turns,
-            )
+            # No log here: the run.interrupted boundary log already records the
+            # MaxTurnsExceeded (with run context), and the cancel/budget checks
+            # below likewise just raise — keep the "why it ended" line in one
+            # place instead of double-logging this case.
             raise MaxTurnsExceeded(
                 f"Run exceeded max_turns={self.max_turns} without producing output"
             )

@@ -38,6 +38,25 @@ def test_truncate_repr_survives_a_raising_repr() -> None:
     assert truncate_repr(Boom()) == "<unrepr>"
 
 
+def test_truncate_repr_collapses_newlines_to_one_line() -> None:
+    # A multi-line string value must not shatter the one-record-per-line format.
+    out = truncate_repr("line1\nline2\r\nline3\rline4")
+    assert "\n" not in out and "\r" not in out
+    assert out == "line1\\nline2\\nline3\\nline4"
+
+
+def test_truncate_repr_collapses_tabs_to_spaces() -> None:
+    assert truncate_repr("a\tb") == "a b"
+
+
+def test_truncate_repr_clips_before_sanitizing() -> None:
+    # Clipping happens first (bounded work on huge inputs); the slice is then
+    # escaped, and "+N chars" counts the raw characters dropped.
+    out = truncate_repr("\n" * 300, max_len=200)
+    assert "\n" not in out
+    assert out.endswith("<+100 chars>")
+
+
 # --------------------------------------------------------- agent_model_label
 
 

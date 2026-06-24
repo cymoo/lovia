@@ -115,10 +115,9 @@ _LEVEL_COLORS = {
 # string's field width and break alignment).
 _LEVEL_WIDTH = 7
 
-# Leading ``area.event:`` token of a message (``tool.start:``, ``model.done:``,
-# ``run.turn.start:``); bolded so the event type stands out in a dense stream.
-# Requires at least one dot, so bare prefixes like ``memory:`` are left alone.
-_EVENT_RE = re.compile(r"^([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+:)")
+# Leading ``area.event:`` token (e.g. ``tool.start:``, ``memory:``), bolded so it
+# stands out in a dense stream. The ``[a-z]`` start leaves ordinary prose alone.
+_EVENT_RE = re.compile(r"^([a-z][a-z0-9_.]*:)")
 
 
 class ColorFormatter(logging.Formatter):

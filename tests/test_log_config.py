@@ -8,7 +8,7 @@ import logging
 import pytest
 
 import lovia
-from lovia.log_config import ColorFormatter, supports_color
+from lovia.log_config import _BOLD, _RESET, ColorFormatter, supports_color
 
 
 def _record(
@@ -64,10 +64,19 @@ def test_color_formatter_pads_level_to_align_columns() -> None:
     assert visible == "INFO   |"
 
 
-def test_color_formatter_leaves_undotted_prefix_alone() -> None:
-    # "memory:" has no dotted event token, so nothing in the message is bolded.
+def test_color_formatter_bolds_bare_prefix() -> None:
+    # A bare ``area:`` prefix (no event suffix, e.g. "memory:") is an event token
+    # too, so it is bolded like the dotted ones.
     out = ColorFormatter("%(message)s").format(_record(msg="memory: hi", args=None))
-    assert out == "memory: hi"
+    assert out == f"{_BOLD}memory:{_RESET} hi"
+
+
+def test_color_formatter_leaves_prose_alone() -> None:
+    # A message that doesn't open with a lowercase ``word:`` token is untouched.
+    out = ColorFormatter("%(message)s").format(
+        _record(msg="Provider stream ended", args=None)
+    )
+    assert out == "Provider stream ended"
 
 
 # ------------------------------------------------------------- supports_color

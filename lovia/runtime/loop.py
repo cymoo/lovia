@@ -207,7 +207,8 @@ class RunLoop:
 
             yield await self._emit(state, events.RunStarted(agent=state.agent))
             logger.info(
-                "run.start: agent=%r model=%s input=%s",
+                # Quote the free-text input so its spaces/"=" don't read as fields.
+                "run.start: agent=%r model=%s input='%s'",
                 state.agent.name,
                 agent_model_label(state.agent),
                 truncate_repr(input_preview(self.user_input)),

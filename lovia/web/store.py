@@ -188,6 +188,21 @@ class ChatStore:
             "UPDATE chat_sessions SET title = ? WHERE id = ?", (title, session_id)
         )
 
+    async def set_title_if_unchanged(
+        self, session_id: str, title: str, *, expected: str | None
+    ) -> None:
+        """Set the title only if it still equals ``expected``.
+
+        Used by the background title task: if the user renamed the chat in the
+        meantime, ``expected`` (the provisional title) no longer matches and the
+        generated title is dropped rather than clobbering the user's choice.
+        """
+        title = title.strip()[:120]
+        await self._write(
+            "UPDATE chat_sessions SET title = ? WHERE id = ? AND title IS ?",
+            (title, session_id, expected),
+        )
+
     async def get(self, session_id: str) -> ChatMeta | None:
         return await self._read_one(
             f"SELECT {_META_COLS} FROM chat_sessions WHERE id = ?",

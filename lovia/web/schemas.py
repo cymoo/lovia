@@ -24,7 +24,12 @@ class ServerInfo(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    # Sanity bound on message size, deliberately generous: this server is driven
+    # with very large prompts (up to ~1M-token contexts), so a small cap would
+    # reject legitimate input. Not a fast-fail DoS guard — Starlette buffers the
+    # body before validation — so true body-size limits belong at the ASGI layer
+    # (behind a reverse proxy).
+    message: str = Field(max_length=10_000_000)
     session_id: str | None = None
     agent: str | None = None
 

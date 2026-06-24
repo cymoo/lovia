@@ -71,6 +71,9 @@
       </div>
     </section>
     <aside id="todo-panel" class="todo-panel hidden" aria-label="Current plan" aria-live="polite"></aside>
+    <button id="scroll-bottom" class="scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+    </button>
   </div>
 
   <form id="composer" class="composer" autocomplete="off">
@@ -138,6 +141,22 @@
 <template id="tmpl-retry">
   <div class="retry-row">
     <button type="button" class="btn btn-ghost btn-sm retry-btn">Retry</button>
+  </div>
+</template>
+
+<template id="tmpl-skeleton">
+  <div class="chat-skeleton" aria-hidden="true">
+    <div class="skeleton-turn user"><span class="skeleton-line" style="width:36%"></span></div>
+    <div class="skeleton-turn">
+      <span class="skeleton-line" style="width:72%"></span>
+      <span class="skeleton-line" style="width:90%"></span>
+      <span class="skeleton-line" style="width:58%"></span>
+    </div>
+    <div class="skeleton-turn user"><span class="skeleton-line" style="width:28%"></span></div>
+    <div class="skeleton-turn">
+      <span class="skeleton-line" style="width:80%"></span>
+      <span class="skeleton-line" style="width:50%"></span>
+    </div>
   </div>
 </template>
 

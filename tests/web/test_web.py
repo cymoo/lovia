@@ -508,6 +508,56 @@ def test_sessions_limit_caps_results() -> None:
     assert len(c.get("/api/sessions?limit=2").json()) == 2
 
 
+async def test_reconnect_view_does_not_duplicate_user_message() -> None:
+    """An interrupted run's user input appears exactly once.
+
+    get_session rebuilds the view as ``session.load() + snapshot.entries``. The
+    in-flight input lives only in the checkpoint until the run succeeds, so the
+    two halves are disjoint — the user message must not be doubled.
+    """
+    import httpx
+
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+    from lovia.transcript import AssistantTextEntry, InputEntry
+
+    app = _app(_make_agent([text("done")]))
+    store: ChatStore = app.state.store
+    sid = "sess-reconnect"
+
+    # A prior, already-persisted exchange.
+    await store.session.append(
+        sid,
+        [
+            InputEntry(role="user", content="first question"),
+            AssistantTextEntry(content="first answer"),
+        ],
+    )
+    await store.upsert(sid, agent="bot")
+    # An interrupted run: its own input + partial output live in the checkpoint,
+    # not yet in the session.
+    await store.checkpointer.append(
+        "run-1",
+        [
+            InputEntry(role="user", content="second question"),
+            AssistantTextEntry(content="partial answer"),
+        ],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id(sid, "run-1")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        res = await ac.get(f"/api/sessions/{sid}")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["active_run_id"] == "run-1"
+    user_msgs = [e["content"] for e in data["entries"] if e["role"] == "user"]
+    assert user_msgs == ["first question", "second question"]  # not doubled
+    assert any("partial answer" in str(e["content"]) for e in data["entries"])
+
+
 # ------------------------------------------------------- API/UI decoupling -
 
 

@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { initTheme, initSidebarToggle } from './ui.js';
 import { initComposer, cancelStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
+import { toast } from './toast.js';
 
 // ---- Page config --------------------------------------------------------
 function loadPageConfig() {
@@ -30,9 +31,12 @@ async function loadAgents() {
 
     if (select && store.agents.length > 1) {
       select.style.display = '';
-      select.innerHTML = store.agents.map(
-        a => `<option value="${a.name}">${a.name}</option>`
-      ).join('');
+      select.replaceChildren(...store.agents.map((a) => {
+        const opt = document.createElement('option');
+        opt.value = a.name;
+        opt.textContent = a.name;
+        return opt;
+      }));
       select.value = store.agent;
       if (switcher) switcher.classList.remove('hidden');
       select.addEventListener('change', () => {
@@ -45,6 +49,7 @@ async function loadAgents() {
     }
   } catch (err) {
     console.error('loadAgents:', err);
+    toast('Couldn’t load agents', { type: 'error' });
   }
 }
 
@@ -65,6 +70,24 @@ store.on('reconnect', (sessionId) => {
   if (!store.streaming) runReconnect(sessionId);
 });
 
+// ---- Keyboard shortcuts -------------------------------------------------
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'k') {
+      e.preventDefault(); // focus the chat filter
+      const search = document.getElementById('session-search');
+      search?.focus();
+      search?.select();
+    } else if (key === 'o' && e.shiftKey) {
+      e.preventDefault(); // start a new chat
+      clearChat();
+      document.getElementById('prompt')?.focus();
+    }
+  });
+}
+
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
   loadPageConfig();
@@ -72,6 +95,7 @@ store.on('reconnect', (sessionId) => {
   initSidebarToggle();
   initComposer();
   initSessions();
+  initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();
 

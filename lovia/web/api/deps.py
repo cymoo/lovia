@@ -30,7 +30,7 @@ from ...session import Session
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
 from ..store import ChatStore
-from ..titles import generate_title
+from ..titles import generate_title, provisional_title
 
 log = logging.getLogger(__name__)
 
@@ -90,18 +90,29 @@ class RouterDeps:
         """Generate a chat title in the background; failures never propagate."""
         if not self.generate_titles:
             return
+        # The provisional title the session was inserted with. The generated
+        # title is only applied if this is still in place — see _run_title.
+        provisional = provisional_title(user_msg).strip()[:120]
         task = asyncio.create_task(
-            self._run_title(session_id, user_msg, output, agent_name)
+            self._run_title(session_id, user_msg, output, agent_name, provisional)
         )
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
     async def _run_title(
-        self, session_id: str, user_msg: str, output: Any, agent_name: str
+        self,
+        session_id: str,
+        user_msg: str,
+        output: Any,
+        agent_name: str,
+        provisional: str,
     ) -> None:
         model = self.title_model or self.agents[agent_name].model
         try:
             title = await generate_title(user_msg, output, model=model)
-            await self.store.set_title(session_id, title)
+            # Compare-and-set: skip if the user renamed the chat meanwhile.
+            await self.store.set_title_if_unchanged(
+                session_id, title, expected=provisional
+            )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("title generation for %s failed: %s", session_id, exc)

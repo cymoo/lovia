@@ -18,25 +18,55 @@ entries via :func:`lovia.transcript.entries_to_messages`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from .types import JsonObject
 from .transcript import TranscriptEntry
 
 
+@dataclass
+class Segment:
+    """One completed run's contribution to a session.
+
+    A session is an append-only log of these: each finished run appends its own
+    ``entries`` as one segment keyed by ``run_id``, with opaque per-run ``meta``
+    (e.g. a context policy's cross-run carryover, or a per-run summary). Stores
+    persist ``meta`` verbatim and never interpret it.
+    """
+
+    run_id: str
+    entries: list[TranscriptEntry]
+    meta: JsonObject | None = None
+
+
 class Session(Protocol):
     """A conversation transcript store keyed by ``session_id``.
 
     The contract is **append-only**: each finished run appends its own entries
-    as one segment, ``load`` returns the flat concatenation of all segments,
-    and stored history is never mutated. There is deliberately no ``replace`` —
-    immutable history is what lets the runner persist only a run's delta and
-    keeps cross-run state (run boundaries, future per-run metadata) consistent.
+    as one segment, ``segments`` returns them in run order, and stored history
+    is never mutated. :meth:`segments` is the read primitive; :meth:`load` is a
+    derived flat concatenation — a concrete default is provided, so an
+    implementation that *subclasses* :class:`Session` only needs ``segments``,
+    ``append``, and ``clear``. There is deliberately no ``replace`` — immutable
+    history is what lets the runner persist only a run's delta and keeps
+    cross-run state (run boundaries, per-run ``meta``) consistent.
     """
 
-    async def load(self, session_id: str) -> list[TranscriptEntry]:
-        """Return the full transcript for ``session_id`` as one flat list."""
+    async def segments(self, session_id: str) -> list[Segment]:
+        """Return every run :class:`Segment` for ``session_id``, in run order."""
         ...
+
+    async def load(self, session_id: str) -> list[TranscriptEntry]:
+        """Return the full transcript for ``session_id`` as one flat list.
+
+        Defaults to flattening :meth:`segments`; a store may override it with a
+        cheaper read.
+        """
+        out: list[TranscriptEntry] = []
+        for seg in await self.segments(session_id):
+            out.extend(seg.entries)
+        return out
 
     async def append(
         self,

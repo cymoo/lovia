@@ -33,14 +33,14 @@ from lovia.context import (
     REQUIRED_SECTIONS,
     ClearToolResults,
     CompactionRequest,
+    InMemoryResultStore,
     LLMSummarizer,
     NoopContextPolicy,
     OffloadToolResults,
     SummarizeHistory,
 )
-from lovia.tools import recall_tool_result, tool
+from lovia.tools import tool
 from lovia.transcript import ToolCallEntry, ToolResultEntry
-from lovia.workspace import Workspace
 
 pytestmark = pytest.mark.live_provider
 
@@ -266,10 +266,10 @@ async def test_live_recall_after_clearing():
         seeded.append(ToolResultEntry(call_id=f"c{i}", output=payload))
     await sess.append("s1", seeded)
 
+    # recall_tool_result is provided automatically by the compacting policy.
     agent = _agent(
         model,
         "You can retrieve dropped tool outputs with recall_tool_result.",
-        tools=[recall_tool_result],
     )
     policy = Compaction(
         context_window=2_500,
@@ -296,7 +296,7 @@ async def test_live_recall_after_clearing():
 # ---------------------------------------------------------------------------
 
 
-async def test_live_offload_archives_to_workspace(tmp_path):
+async def test_live_offload_archives_to_store():
     model = _live_model()
     big = ("measurement row 42,17,93; " * 300) + "final checksum: CHK-7741"
     sess = InMemorySession()
@@ -309,16 +309,14 @@ async def test_live_offload_archives_to_workspace(tmp_path):
             ToolResultEntry(call_id="d2", output=big),
         ],
     )
-    agent = _agent(
-        model,
-        "You are a concise assistant.",
-        workspace=Workspace.local(str(tmp_path)),
-    )
+    agent = _agent(model, "You are a concise assistant.")
+    store = InMemoryResultStore()
     policy = Compaction(
         context_window=3_000,
         reserve_output_tokens=500,
         compact_at=0.5,
         compact_to=0.25,
+        store=store,
         stages=[
             OffloadToolResults(min_chars=2_000, keep_last=1),
             ClearToolResults(),
@@ -336,8 +334,7 @@ async def test_live_offload_archives_to_workspace(tmp_path):
     assert result.output
     compacted = _compactions(seen)
     assert compacted and any("offload" in e.reason for e in compacted)
-    archived = tmp_path / ".context" / "tool-d1.txt"
-    assert archived.exists() and archived.read_text() == big
+    assert await store.get("d1") == big
 
 
 # ---------------------------------------------------------------------------

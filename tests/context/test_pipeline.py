@@ -15,7 +15,12 @@ from lovia import (
     Runner,
 )
 from lovia.transcript import AssistantTextEntry, InputEntry
-from lovia.context import CompactionState, NoopContextPolicy
+from lovia.context import (
+    CompactionState,
+    NoopContextPolicy,
+    OffloadRecord,
+    SummaryState,
+)
 from lovia.events import ContextCompacted
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 
@@ -23,8 +28,8 @@ from ..scripted_provider import ScriptedProvider, text
 from .helpers import (
     FailingSummarizer,
     FakeProviderWithWindow,
+    FakeResultStore,
     FakeSummarizer,
-    FakeWorkspace,
     call,
     out,
     req,
@@ -64,6 +69,18 @@ async def test_noop_policy_returns_same_list_object():
     res = await NoopContextPolicy().compact(req(entries))
     assert res.entries is entries
     assert res.changed is False and res.compacted is False
+
+
+def test_counter_cache_keyed_by_provider_identity():
+    # Guards the id()-reuse hazard: the counter cache must key on the provider
+    # object (strong ref), not id(), so a collected provider's id can't be
+    # reused by a different provider and hand back the wrong tokenizer.
+    pipeline = Compaction(context_window=1_000)
+    p1, p2 = FakeProviderWithWindow(), FakeProviderWithWindow()
+    c1 = pipeline._counter_for(p1)
+    assert pipeline._counter[0] is p1  # cached by identity, not id()
+    assert pipeline._counter_for(p1) is c1  # same object -> reuse
+    assert pipeline._counter_for(p2) is not c1  # distinct object -> rebuild
 
 
 async def test_under_trigger_no_compaction_and_no_quality_loss():
@@ -119,7 +136,7 @@ async def test_over_trigger_summarizes_prefix_and_keeps_token_tail():
         context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
     )
     entries = [user(f"m{i}" + "x" * 98) for i in range(30)]
-    res = await pipeline.compact(req(entries, session_id="s", run_id="r"))
+    res = await pipeline.compact(req(entries))
 
     assert res.compacted is True
     assert res.reason == "summary"
@@ -233,20 +250,23 @@ async def test_decisions_are_monotonic_and_prefix_stable_across_growth():
 
 async def test_offload_then_summary_through_pipeline():
     summarizer = FakeSummarizer("S")
-    workspace = FakeWorkspace()
+    store = FakeResultStore()
     pipeline = _pipeline(
-        context_window=4_000, compact_at=0.5, compact_to=0.25, summarizer=summarizer
+        context_window=4_000,
+        compact_at=0.5,
+        compact_to=0.25,
+        summarizer=summarizer,
+        store=store,
     )
     entries: list = [user("task")]
     for i in range(4):
         entries += [call(f"c{i}"), out(f"c{i}", "A" * 6_000)]
-    res = await pipeline.compact(req(entries, workspace=workspace))
+    res = await pipeline.compact(req(entries))
 
     assert res.compacted is True
     assert "offload" in res.reason
-    assert workspace.files  # something was archived
-    for path, content in workspace.files.items():
-        assert path.startswith(".context/tool-")
+    assert store.data  # something was archived
+    for content in store.data.values():
         assert content == "A" * 6_000
 
 
@@ -503,89 +523,77 @@ async def test_compaction_does_not_modify_session():
 
 
 # ---------------------------------------------------------------------------
-# Cross-run session state cache
+# Cross-run carryover (decisions persisted in the session segment meta)
 # ---------------------------------------------------------------------------
 
 
-async def test_session_cache_carries_decisions_across_runs():
-    """A new run (fresh scratch) on the same session resumes prior decisions
-    instead of re-summarizing the whole prefix."""
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(
-        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
+def test_carryover_keeps_decisions_drops_calibration():
+    state = CompactionState(
+        cleared={"a", "b"},
+        offloaded={"c": OffloadRecord(preview="p", chars=99)},
+        summary=SummaryState(text="S", covered=3, fingerprint="fp"),
+        ratio=2.5,
+        last_view_estimate=999,
+        summary_failures=2,
     )
-    entries = [user("x" * 100) for _ in range(30)]
-    first = await pipeline.compact(req(entries, scratch={}, session_id="chat-1"))
-    assert first.compacted is True and len(summarizer.calls) == 1
+    scratch: dict = {}
+    state.save(scratch)
+    cv = Compaction().carryover(scratch)
+    assert cv is not None
+    reloaded = CompactionState.load(cv)
+    # Decisions survive...
+    assert reloaded.cleared == {"a", "b"}
+    assert set(reloaded.offloaded) == {"c"}
+    assert reloaded.summary is not None and reloaded.summary.covered == 3
+    # ...per-run calibration and the circuit breaker reset to defaults.
+    assert reloaded.ratio == 1.0
+    assert reloaded.last_view_estimate is None
+    assert reloaded.summary_failures == 0
 
-    # Same session, brand-new run scratch, slightly grown history.
-    grown = entries + [user("a follow-up question")]
-    second = await pipeline.compact(req(grown, scratch={}, session_id="chat-1"))
-    assert second.compacted is False  # sticky replay from the session cache
-    assert second.reason == "sticky_replay"
-    assert len(summarizer.calls) == 1  # no re-summarization
+
+def test_carryover_none_when_no_decisions():
+    assert Compaction().carryover({}) is None
+    # Calibration-only state (no decisions) carries nothing either.
+    scratch: dict = {}
+    CompactionState(ratio=3.0, last_view_estimate=42, summary_failures=1).save(scratch)
+    assert Compaction().carryover(scratch) is None
 
 
-async def test_session_cache_isolated_between_sessions():
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(
-        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
+async def test_carryover_resumes_summary_across_runs_durably():
+    """A *fresh* policy instance on the second run inherits the first run's
+    summary from the session segment meta — durable carryover, not an
+    in-process cache — so the long prefix is not re-summarized."""
+    from lovia.runtime.loop import CARRYOVER_META_KEY
+
+    sess = InMemorySession()
+    await sess.append("s1", [user(f"m{i}" + "x" * 98) for i in range(30)])
+    provider = ScriptedProvider([text("a1"), text("a2")])
+    agent = Agent(name="t", instructions="x", model=provider)
+    summarizer = FakeSummarizer("History summarized.")
+
+    def fresh_policy() -> Compaction:
+        return Compaction(
+            context_window=1_000,
+            reserve_output_tokens=0,
+            compact_at=0.5,
+            compact_to=0.3,
+            summarizer=summarizer,
+        )
+
+    await Runner.run(
+        agent, "q1", context_policy=fresh_policy(), session=sess, session_id="s1"
     )
-    entries = [user("x" * 100) for _ in range(30)]
-    await pipeline.compact(req(entries, scratch={}, session_id="chat-1"))
-    await pipeline.compact(req(entries, scratch={}, session_id="chat-2"))
-    # Different session: decisions re-derived (summarized from scratch).
-    assert summarizer.priors == [None, None]
+    calls_after_first = len(summarizer.calls)
+    assert calls_after_first >= 1  # run 1 summarized the long prefix
 
+    # The completed run wrote its carryover into the latest segment meta.
+    segs = await sess.segments("s1")
+    assert segs[-1].meta and CARRYOVER_META_KEY in segs[-1].meta
 
-async def test_session_cache_resets_on_rewritten_history():
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(
-        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
+    await Runner.run(
+        agent, "q2", context_policy=fresh_policy(), session=sess, session_id="s1"
     )
-    entries = [user("x" * 100) for _ in range(30)]
-    await pipeline.compact(req(entries, scratch={}, session_id="chat-1"))
-    different = [user("y" * 120) for _ in range(30)]
-    res = await pipeline.compact(req(different, scratch={}, session_id="chat-1"))
-    # Fingerprint mismatch → cached summary dropped, fresh one built.
-    assert res.compacted is True
-    assert summarizer.priors == [None, None]
-
-
-async def test_session_cache_disabled_and_bounded():
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(
-        context_window=1_000,
-        compact_at=0.5,
-        compact_to=0.3,
-        summarizer=summarizer,
-        session_state_cache=0,
-    )
-    entries = [user("x" * 100) for _ in range(30)]
-    await pipeline.compact(req(entries, scratch={}, session_id="chat-1"))
-    await pipeline.compact(req(entries, scratch={}, session_id="chat-1"))
-    assert summarizer.priors == [None, None]  # cache off: re-derived
-
-    bounded = _pipeline(
-        context_window=1_000,
-        compact_at=0.5,
-        compact_to=0.3,
-        summarizer=FakeSummarizer(),
-        session_state_cache=2,
-    )
-    for sid in ("a", "b", "c"):
-        await bounded.compact(req(entries, scratch={}, session_id=sid))
-    assert len(bounded._session_states) == 2  # oldest evicted
-
-
-async def test_anonymous_runs_never_touch_session_cache():
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(
-        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
-    )
-    entries = [user("x" * 100) for _ in range(30)]
-    await pipeline.compact(req(entries, scratch={}))  # no session_id
-    assert pipeline._session_states == {}
+    assert len(summarizer.calls) == calls_after_first  # inherited; no re-summarize
 
 
 # ---------------------------------------------------------------------------
@@ -606,37 +614,6 @@ async def test_reactive_recovers_when_latest_tool_result_is_the_problem():
     )
     assert "cleared to save context" in marker.output
     assert res.tokens_after < res.tokens_before
-
-
-# ---------------------------------------------------------------------------
-# Marker tailoring by tool availability
-# ---------------------------------------------------------------------------
-
-
-async def test_markers_omit_recall_hint_when_tool_absent():
-    summarizer = FakeSummarizer()
-    pipeline = _pipeline(context_window=10_000, summarizer=summarizer)
-    entries: list = [user("task")]
-    for i in range(20):
-        entries += [call(f"c{i}"), out(f"c{i}", "r" * 2_000)]
-
-    res = await pipeline.compact(req(entries, tool_names=frozenset({"other_tool"})))
-    markers = [
-        e.output
-        for e in res.entries
-        if getattr(e, "output", "").startswith("[Earlier tool result cleared")
-    ]
-    assert markers and all("recall_tool_result" not in m for m in markers)
-
-    res2 = await pipeline.compact(
-        req(entries, tool_names=frozenset({"recall_tool_result"}))
-    )
-    markers2 = [
-        e.output
-        for e in res2.entries
-        if getattr(e, "output", "").startswith("[Earlier tool result cleared")
-    ]
-    assert markers2 and all("recall_tool_result" in m for m in markers2)
 
 
 # ---------------------------------------------------------------------------

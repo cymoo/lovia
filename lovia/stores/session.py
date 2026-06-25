@@ -12,39 +12,34 @@ dependencies — SQLite goes through the stdlib :mod:`sqlite3` driver and
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from ..session import Segment, Session
 from ..types import JsonObject
 from ..transcript import TranscriptEntry, entry_from_dict, entry_to_dict
 from ._sqlite import SQLiteStore
 
 
-@dataclass
-class _Segment:
-    """One run's entries plus opaque per-run metadata, keyed by ``run_id``."""
-
-    run_id: str
-    entries: list[TranscriptEntry]
-    meta: JsonObject | None = None
-
-
-class InMemorySession:
+class InMemorySession(Session):
     """A :class:`~lovia.session.Session` that keeps per-run segments in a dict."""
 
     def __init__(self) -> None:
-        self._segments: dict[str, list[_Segment]] = defaultdict(list)
+        self._segments: dict[str, list[Segment]] = defaultdict(list)
         self._lock = asyncio.Lock()
 
-    async def load(self, session_id: str) -> list[TranscriptEntry]:
+    async def segments(self, session_id: str) -> list[Segment]:
         async with self._lock:
-            out: list[TranscriptEntry] = []
-            for seg in self._segments.get(session_id, []):
-                out.extend(seg.entries)
-            return out
+            # Copy entries (list) and meta (deep) so a caller mutating the
+            # returned segments can't corrupt stored state through the read API
+            # — matching the snapshot semantics SQLiteSession gets via JSON.
+            return [
+                Segment(seg.run_id, list(seg.entries), copy.deepcopy(seg.meta))
+                for seg in self._segments.get(session_id, [])
+            ]
 
     async def append(
         self,
@@ -59,7 +54,11 @@ class InMemorySession:
             rid = run_id if run_id is not None else uuid4().hex
             if any(seg.run_id == rid for seg in segs):
                 return rid  # idempotent: this run is already stored
-            segs.append(_Segment(run_id=rid, entries=list(entries), meta=meta))
+            # Snapshot meta on write so a caller mutating/reusing the dict after
+            # append can't retroactively change stored state (append-only).
+            segs.append(
+                Segment(run_id=rid, entries=list(entries), meta=copy.deepcopy(meta))
+            )
             return rid
 
     async def clear(self, session_id: str) -> None:
@@ -82,31 +81,36 @@ CREATE INDEX IF NOT EXISTS idx_session_runs_sid
 """
 
 
-class SQLiteSession(SQLiteStore):
+class SQLiteSession(SQLiteStore, Session):
     """A :class:`~lovia.session.Session` persisted to a SQLite file.
 
     One row per run in ``session_runs``, keyed by ``(session_id, run_id)``:
     append is a single ``INSERT OR IGNORE`` (idempotent per ``run_id``) and an
-    old row is never rewritten. ``load`` concatenates each run's entries in
-    insertion order (the autoincrement ``id``, since ``run_id`` is opaque).
+    old row is never rewritten. ``segments`` returns each run in insertion
+    order (the autoincrement ``id``, since ``run_id`` is opaque); ``load``
+    (inherited) flattens them.
     """
 
     def __init__(self, path: str | Path) -> None:
         super().__init__(path, _SESSION_SCHEMA)
 
-    async def load(self, session_id: str) -> list[TranscriptEntry]:
-        def _impl() -> list[TranscriptEntry]:
+    async def segments(self, session_id: str) -> list[Segment]:
+        def _impl() -> list[Segment]:
             conn = self._connect()
             try:
                 rows = conn.execute(
-                    "SELECT entries_json FROM session_runs "
+                    "SELECT run_id, entries_json, meta_json FROM session_runs "
                     "WHERE session_id = ? ORDER BY id ASC",
                     (session_id,),
                 ).fetchall()
-                out: list[TranscriptEntry] = []
-                for r in rows:
-                    out.extend(entry_from_dict(d) for d in json.loads(r[0]))
-                return out
+                return [
+                    Segment(
+                        run_id=r[0],
+                        entries=[entry_from_dict(d) for d in json.loads(r[1])],
+                        meta=json.loads(r[2]) if r[2] is not None else None,
+                    )
+                    for r in rows
+                ]
             finally:
                 self._release(conn)
 

@@ -70,14 +70,11 @@ def test_cleared_marker_preserves_call_id_and_error_flag():
     assert 'recall_tool_result("c1")' in marker.output
 
 
-def test_offload_marker_mentions_path_preview_and_recall():
-    record = OffloadRecord(
-        path=".context/tool-c1.txt", preview="first lines", chars=9000
-    )
+def test_offload_marker_mentions_preview_and_recall():
+    record = OffloadRecord(preview="first lines", chars=9000)
     entries = [call("c1"), out("c1", "x" * 9000)]
     view = render_view(entries, CompactionState(offloaded={"c1": record}))
     marker = view[1]
-    assert ".context/tool-c1.txt" in marker.output
     assert "first lines" in marker.output
     assert 'recall_tool_result("c1")' in marker.output
     assert "9,000" in marker.output
@@ -158,17 +155,6 @@ def test_tail_ratio_shrinks_raw_budget():
 
 def test_tail_empty_body():
     assert protected_tail_start([], TokenCounter(), 1.0, tail_tokens=100) == 0
-
-
-def test_markers_without_recall_hint():
-    from lovia.context.render import clear_marker, offload_marker
-
-    assert "recall_tool_result" not in clear_marker("c1", recall=False)
-    assert "cleared to save context" in clear_marker("c1", recall=False)
-    record = OffloadRecord(path=".context/tool-c1.txt", preview="p", chars=10)
-    text = offload_marker(record, "c1", recall=False)
-    assert "recall_tool_result" not in text
-    assert ".context/tool-c1.txt" in text
 
 
 def test_render_duplicate_call_ids_clears_every_result():

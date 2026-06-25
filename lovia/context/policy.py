@@ -13,14 +13,11 @@ The default implementation is :class:`~lovia.context.Compaction`; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from ..types import JsonObject
 from ..providers.base import Provider
 from ..transcript import TranscriptEntry
-
-if TYPE_CHECKING:
-    from ..workspace.protocol import WorkspaceSession
 
 
 @dataclass
@@ -35,8 +32,6 @@ class CompactionRequest:
         last_input_tokens: Last observed provider input-token count. Lags the
             current transcript by one call; the default pipeline uses it to
             *calibrate* its estimates rather than trusting it directly.
-        session_id: Session being compacted (informational).
-        run_id: Run being compacted (informational).
         overflow: ``True`` when the provider already raised
             :class:`~lovia.ContextOverflowError`; the policy should compact
             more aggressively.
@@ -44,24 +39,14 @@ class CompactionRequest:
             derived state here (the default pipeline stores its sticky
             decisions) without leaking it across runs — the runner creates a
             fresh dict for each run and round-trips it through checkpoints.
-        workspace: The active agent's workspace session, when one is open.
-            Lets policies archive large tool results to files.
-        tool_names: Names of the tools available to the active agent, when
-            known. Lets policies tailor markers (e.g. only mention
-            ``recall_tool_result`` when the agent actually has it).
-            ``None`` means "unknown".
     """
 
     entries: list[TranscriptEntry]
     provider: Provider | None = None
     model: str | None = None
     last_input_tokens: int | None = None
-    session_id: str | None = None
-    run_id: str | None = None
     overflow: bool = False
     scratch: dict[str, Any] = field(default_factory=dict)
-    workspace: "WorkspaceSession | None" = None
-    tool_names: frozenset[str] | None = None
 
 
 @dataclass
@@ -96,7 +81,21 @@ class ContextResult:
 
 
 class ContextPolicy(Protocol):
-    """Strategy that produces the per-call view of the transcript."""
+    """Strategy that produces the per-call view of the transcript.
+
+    The only required method is :meth:`compact`. A policy may also define two
+    **optional hooks** the runner invokes when present (kept off the protocol
+    so a minimal policy needs nothing but ``compact``):
+
+    * ``tools(self) -> list[Tool]`` — extra tools the runner injects whenever
+      this policy is active (e.g. the default :class:`Compaction` provides a
+      ``recall_tool_result`` bound to its store). A user tool of the same name
+      wins; the policy tool is skipped.
+    * ``carryover(self, scratch) -> JsonObject | None`` — the cross-run subset
+      of ``scratch`` to persist in the finished run's session-segment ``meta``,
+      so a follow-up run on the same session resumes the policy's decisions
+      without re-deriving them. Return ``None`` for nothing to carry.
+    """
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Return the view to send to the provider for the next model call.

@@ -14,8 +14,9 @@ This example shows the default ``Compaction`` doing its job:
    modified — the full history remains the source of truth.
 4. A hook listens for ``ContextCompacted`` and feeds the summary into a
    long-term ``Memory`` — the layers stay nicely orthogonal.
-5. ``recall_tool_result`` lets the agent pull back a tool output that
-   compaction dropped from the view, without re-running the tool.
+5. The compacting policy automatically provides ``recall_tool_result`` so the
+   agent can pull back a tool output that compaction dropped from the view,
+   without re-running the tool — no manual tool wiring needed.
 
 Run::
 
@@ -39,7 +40,6 @@ from lovia import (
 )
 from lovia.transcript import AssistantTextEntry, InputEntry
 from lovia.stores import InMemorySession
-from lovia.tools import recall_tool_result
 
 load_dotenv()
 
@@ -75,8 +75,7 @@ async def main() -> None:
         name="companion",
         instructions="You are a helpful, concise companion.",
         model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-        # Opt in to recall so the agent can retrieve compacted tool outputs.
-        tools=[recall_tool_result],
+        # recall_tool_result is provided automatically by the Compaction policy.
         hooks=hooks,
     )
 

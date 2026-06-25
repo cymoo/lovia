@@ -41,25 +41,21 @@ def split_system(
 def render_view(
     entries: list[TranscriptEntry],
     state: CompactionState,
-    *,
-    recall: bool = True,
 ) -> list[TranscriptEntry]:
     """Render the per-call view of ``entries`` under ``state``.
 
     Never mutates ``entries``. With an empty state this returns the same
-    entry objects in a new list. ``recall=False`` renders markers without
-    the ``recall_tool_result`` hint — used when the agent doesn't have that
-    tool, so the model isn't tempted to call something that doesn't exist.
+    entry objects in a new list.
     """
     system, body = split_system(entries)
     summary = state.summary
     if summary is not None and 0 < summary.covered <= len(body):
         rendered = [
             summary_entry(summary.text),
-            *render_entries(body[summary.covered :], state, recall=recall),
+            *render_entries(body[summary.covered :], state),
         ]
     else:
-        rendered = render_entries(body, state, recall=recall)
+        rendered = render_entries(body, state)
     if system is not None:
         return [system, *rendered]
     return rendered
@@ -68,8 +64,6 @@ def render_view(
 def render_entries(
     entries: list[TranscriptEntry],
     state: CompactionState,
-    *,
-    recall: bool = True,
 ) -> list[TranscriptEntry]:
     """Apply clear/offload markers to ``entries``; pass the rest by reference."""
     out: list[TranscriptEntry] = []
@@ -80,7 +74,7 @@ def render_entries(
                 out.append(
                     ToolResultEntry(
                         call_id=entry.call_id,
-                        output=offload_marker(record, entry.call_id, recall=recall),
+                        output=offload_marker(record, entry.call_id),
                         raw=None,
                         is_error=entry.is_error,
                     )
@@ -90,7 +84,7 @@ def render_entries(
                 out.append(
                     ToolResultEntry(
                         call_id=entry.call_id,
-                        output=clear_marker(entry.call_id, recall=recall),
+                        output=clear_marker(entry.call_id),
                         raw=None,
                         is_error=entry.is_error,
                     )
@@ -105,28 +99,20 @@ def summary_entry(text: str) -> InputEntry:
     return InputEntry(role="user", content=SUMMARY_WRAPPER.format(summary=text))
 
 
-def clear_marker(call_id: str, *, recall: bool = True) -> str:
+def clear_marker(call_id: str) -> str:
     """Inline placeholder for a cleared tool result."""
-    if not recall:
-        return "[Earlier tool result cleared to save context.]"
     return (
         "[Earlier tool result cleared to save context. "
         f'Call recall_tool_result("{call_id}") to retrieve the full output.]'
     )
 
 
-def offload_marker(record: OffloadRecord, call_id: str, *, recall: bool = True) -> str:
-    """Inline placeholder for a tool result archived to a workspace file."""
-    tail = (
-        "Read that file with your file tools, or call "
-        f'recall_tool_result("{call_id}") for the full output.]'
-        if recall
-        else "Read that file with your file tools to retrieve the full output.]"
-    )
+def offload_marker(record: OffloadRecord, call_id: str) -> str:
+    """Inline placeholder for a tool result archived to the result store."""
     return (
-        f"[Tool result ({record.chars:,} chars) archived to workspace file: "
-        f"{record.path}\n"
-        f"Preview:\n{record.preview}\n" + tail
+        f"[Tool result ({record.chars:,} chars) archived to save context.\n"
+        f"Preview:\n{record.preview}\n"
+        f'Call recall_tool_result("{call_id}") for the full output.]'
     )
 
 

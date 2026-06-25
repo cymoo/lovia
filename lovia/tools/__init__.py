@@ -24,7 +24,7 @@ from .base import (
 )
 from .http import http_fetch
 from .human import HumanChannel, HumanQuestion, ask_human
-from .recall import recall_tool_result
+from .recall import make_recall_tool
 from .search import (
     DuckDuckGoSearch,
     SearchResult,
@@ -50,8 +50,8 @@ __all__ = [
     "default_result_renderer",
     "duckduckgo_search",
     "http_fetch",
+    "make_recall_tool",
     "now",
-    "recall_tool_result",
     "render_tool_result",
     "truncate_tool_output",
     "run_tool",

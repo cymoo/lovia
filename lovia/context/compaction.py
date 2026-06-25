@@ -11,19 +11,23 @@ How a call flows:
    view is under the *compact_to* watermark. The gap between the two is
    hysteresis: compaction happens in rare bursts, not every turn.
 3. Token thresholds use cheap per-entry estimates *calibrated* against the
-   provider's real input-token counts from previous calls, so systematic
-   estimator error (and untracked overhead like tool schemas) is absorbed
-   automatically.
+   provider's real input-token counts from previous calls (a clamped EMA
+   *multiplier*). This absorbs systematic estimator error well once the
+   transcript is large relative to fixed per-call overhead (tool schemas,
+   system framing). On a *small* transcript with *large* tool schemas the
+   multiplicative model under-counts that fixed overhead, so the proactive
+   threshold can fire late — leave headroom via ``compact_at`` /
+   ``reserve_output_tokens``; the reactive overflow path is the backstop.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from .policy import CompactionRequest, ContextResult
 from .render import protected_tail_start, render_view, split_system
-from .state import SCRATCH_KEY, CompactionState, fingerprint
+from .state import CompactionState, fingerprint
 from .stages import (
     ClearToolResults,
     OffloadToolResults,
@@ -36,6 +40,10 @@ from .tokens import TokenBudget, TokenCounter, _validate_watermark
 from ..types import JsonObject
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry
+
+if TYPE_CHECKING:
+    from ..tools import Tool
+    from .store import ResultStore
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +84,7 @@ class Compaction:
         stages: Sequence[Stage] | None = None,
         summarizer: Summarizer | None = None,
         image_tokens: int = 1_600,
-        session_state_cache: int = 256,
+        store: "ResultStore | None" = None,
     ) -> None:
         """Configure automatic compaction.
 
@@ -100,13 +108,11 @@ class Compaction:
             summarizer: Summary backend for the default summarize stage.
                 Ignored when ``stages`` is given explicitly.
             image_tokens: Flat token cost per image for the estimator.
-            session_state_cache: How many sessions' sticky state to remember
-                in-process. The runner's scratch is per-run, so without this
-                cache every new run on a long session would re-summarize the
-                whole prefix from scratch; with it, a follow-up run picks up
-                the prior decisions (validated against the transcript
-                fingerprint, so stale state degrades safely to a reset).
-                ``0`` disables the cache.
+            store: Where :class:`OffloadToolResults` archives large results,
+                and where the provided ``recall_tool_result`` reads them back.
+                ``None`` (default) makes offload inert — the policy still
+                clears/summarizes, and recall falls back to the transcript.
+                Use :class:`~lovia.context.FileResultStore` for durability.
         """
         if context_window is not None and context_window < 1:
             raise ValueError("context_window must be >= 1")
@@ -118,8 +124,6 @@ class Compaction:
             raise ValueError("compact_to must be below compact_at")
         if keep_recent_tokens is not None and keep_recent_tokens < 1:
             raise ValueError("keep_recent_tokens must be >= 1")
-        if session_state_cache < 0:
-            raise ValueError("session_state_cache must be >= 0")
 
         self.context_window = context_window
         self.reserve_output_tokens = reserve_output_tokens
@@ -136,26 +140,17 @@ class Compaction:
                 SummarizeHistory(summarizer=summarizer),
             ]
         )
-        self._counter: tuple[int, TokenCounter] | None = None
-        self._session_cache_size = session_state_cache
-        # session_id → last saved scratch payload. Derived cache only:
-        # losing an entry is safe (fingerprint-validated on reuse).
-        self._session_states: dict[str, JsonObject] = {}
+        self.store = store
+        # Cache the most-recent provider's counter, keyed by provider *identity*
+        # via a strong ref — NOT id(): a cached provider can't then be GC'd and
+        # have its id() reused by a different provider (which would hand back the
+        # wrong tokenizer). At most one provider is pinned at a time.
+        self._counter: tuple[object | None, TokenCounter] | None = None
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
         state = CompactionState.load(req.scratch)
-        if req.session_id and state == CompactionState():
-            # Fresh run on a known session: pick up where the previous run's
-            # decisions left off instead of re-deriving them from scratch.
-            cached = self._session_states.get(req.session_id)
-            if cached is not None:
-                state = CompactionState.load({SCRATCH_KEY: cached})
-                # The circuit breaker is per-run: a transient summarizer
-                # failure in one run must not poison the next.
-                state.summary_failures = 0
         system, body = split_system(req.entries)
-        recall = req.tool_names is None or "recall_tool_result" in req.tool_names
 
         # A handoff or input_filter may have rewritten history out from under
         # the summary; detect it and drop the summary (clear/offload records
@@ -184,7 +179,7 @@ class Compaction:
             )
 
         counter = self._counter_for(req.provider)
-        view = render_view(req.entries, state, recall=recall)
+        view = render_view(req.entries, state)
         raw = counter.count(view)
         tokens = int(raw * state.ratio)
         tokens_before = int(counter.count(req.entries) * state.ratio)
@@ -244,10 +239,11 @@ class Compaction:
                     current_tokens=tokens,
                     protected_from=protected_from,
                     aggressive=aggressive,
+                    store=self.store,
                 )
                 if await stage.plan(body, ctx):
                     reasons.append(stage.name)
-                    view = render_view(req.entries, state, recall=recall)
+                    view = render_view(req.entries, state)
                     raw = counter.count(view)
                     tokens = int(raw * state.ratio)
                 if tokens <= budget.target_tokens:
@@ -270,6 +266,37 @@ class Compaction:
         return self._result(
             req, state, view, raw, tokens, tokens_before, reasons, budget
         )
+
+    def tools(self) -> list["Tool"]:
+        """Provide ``recall_tool_result``, bound to this policy's store.
+
+        The runner injects it whenever this policy is active, so the markers
+        this policy renders always have a tool to back them.
+        """
+        from ..tools.recall import make_recall_tool
+
+        return [make_recall_tool(self.store)]
+
+    def carryover(self, scratch: JsonObject) -> JsonObject | None:
+        """Cross-run subset of ``scratch`` to persist in the segment ``meta``.
+
+        Only the *decisions* (cleared, offloaded, summary) carry across runs:
+        they keep a follow-up run's view byte-stable without re-deriving them.
+        The calibration ratio, last-view estimate, and summarizer circuit
+        breaker reset to defaults — self-healing per-run runtime state, not
+        decisions, so stale values must not bleed into the next run.
+        """
+        state = CompactionState.load(scratch)
+        decisions = CompactionState(
+            cleared=state.cleared,
+            offloaded=state.offloaded,
+            summary=state.summary,
+        )
+        if decisions == CompactionState():
+            return None
+        out: dict[str, Any] = {}
+        decisions.save(out)
+        return out
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -321,30 +348,15 @@ class Compaction:
         )
 
     def _save(self, req: CompactionRequest, state: CompactionState) -> None:
-        """Persist ``state`` into the run scratch and the session cache.
-
-        ``state.save`` writes a fresh payload dict each call, so the cache can
-        hold the reference without aliasing later mutations; reuse goes
-        through ``CompactionState.load``, which copies into new objects.
-        """
+        """Persist ``state`` into the per-run scratch."""
         state.save(req.scratch)
-        if not req.session_id or self._session_cache_size <= 0:
-            return
-        payload = req.scratch.get(SCRATCH_KEY)
-        if not isinstance(payload, dict):  # pragma: no cover - defensive
-            return
-        self._session_states.pop(req.session_id, None)
-        while len(self._session_states) >= self._session_cache_size:
-            self._session_states.pop(next(iter(self._session_states)))
-        self._session_states[req.session_id] = payload
 
     def _counter_for(self, provider: object | None) -> TokenCounter:
-        key = id(provider) if provider is not None else 0
         cached = self._counter
-        if cached is not None and cached[0] == key:
+        if cached is not None and cached[0] is provider:
             return cached[1]
         counter = TokenCounter(provider, image_tokens=self.image_tokens)
-        self._counter = (key, counter)
+        self._counter = (provider, counter)
         return counter
 
 

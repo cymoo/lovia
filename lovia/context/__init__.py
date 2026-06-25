@@ -45,6 +45,7 @@ from .stages import (
     StageContext,
     SummarizeHistory,
 )
+from .store import FileResultStore, InMemoryResultStore, ResultStore
 from .summarizer import LLMSummarizer, Summarizer, transcript_to_text
 from .tokens import TokenBudget, TokenCounter
 
@@ -55,11 +56,14 @@ __all__ = [
     "Compaction",
     "ContextPolicy",
     "ContextResult",
+    "FileResultStore",
+    "InMemoryResultStore",
     "LLMSummarizer",
     "NoopContextPolicy",
     "OffloadRecord",
     "OffloadToolResults",
     "REQUIRED_SECTIONS",
+    "ResultStore",
     "SUMMARY_SYSTEM_PROMPT",
     "SUMMARY_WRAPPER",
     "Stage",

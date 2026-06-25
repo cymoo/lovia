@@ -106,7 +106,7 @@ only when the product asks for them.
 | Multi-agent routing or delegation | `handoffs=[...]` or `agent.as_tool()` |
 | Human approval | `@tool(needs_approval=True)` |
 | Files and shell commands | `Workspace.local(...)` |
-| Long context survival | `Compaction` plus optional `recall_tool_result` |
+| Long context survival | `Compaction` (auto-provides `recall_tool_result`) |
 | Custom context behavior | implement your own `ContextPolicy` |
 | Reusable capabilities | `PluginInstance`, `Skills`, `Todo`, or `MCP` |
 
@@ -445,13 +445,16 @@ policy = Compaction(
 result = await Runner.run(agent, "Continue.", context_policy=policy)
 ```
 
-Add `recall_tool_result` when you want the model to recover a compacted tool
-result without re-running the tool:
+`Compaction` automatically provides a `recall_tool_result` tool so the model
+can recover a compacted tool result by `call_id` without re-running it — no
+manual wiring. To archive large tool outputs to a store (recall reads them
+back, and an ephemeral store falls back to the transcript), give the policy a
+result store:
 
 ```python
-from lovia.tools import recall_tool_result
+from lovia.context import Compaction, FileResultStore
 
-agent = agent.clone(tools=[*agent.tools, recall_tool_result])
+policy = Compaction(context_window=200_000, store=FileResultStore(".cache/results"))
 ```
 
 Disable automatic compaction with `from lovia.context import NoopContextPolicy`

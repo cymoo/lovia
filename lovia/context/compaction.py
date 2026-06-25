@@ -108,11 +108,14 @@ class Compaction:
             summarizer: Summary backend for the default summarize stage.
                 Ignored when ``stages`` is given explicitly.
             image_tokens: Flat token cost per image for the estimator.
-            store: Where :class:`OffloadToolResults` archives large results,
-                and where the provided ``recall_tool_result`` reads them back.
-                ``None`` (default) makes offload inert — the policy still
-                clears/summarizes, and recall falls back to the transcript.
-                Use :class:`~lovia.context.FileResultStore` for durability.
+            store: Optional durable sink where :class:`OffloadToolResults`
+                archives large results, and where the provided
+                ``recall_tool_result`` reads them back. ``None`` (default)
+                keeps offload active — it still emits preview markers and recall
+                falls back to the transcript. Pass
+                :class:`~lovia.context.FileResultStore` when that fallback isn't
+                enough: the transcript holds every output today, but a clearing
+                policy (or a restart) can drop it, and the store survives that.
         """
         if context_window is not None and context_window < 1:
             raise ValueError("context_window must be >= 1")

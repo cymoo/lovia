@@ -1,18 +1,22 @@
 """Pluggable storage for offloaded tool results.
 
-When a context policy offloads a large tool result it writes the full output
-to a :class:`ResultStore` and keeps only a short marker in the per-call view;
-the policy's recall tool reads it back by ``call_id``. The store is owned by
-the *policy*, not the runner, so the context layer never depends on the
-workspace (or any runner-provided capability) just to archive a result.
+When a context policy offloads a large tool result it keeps only a short marker
+in the per-call view and, when a store is configured, writes the full output to
+a :class:`ResultStore` that the policy's recall tool reads back by ``call_id``.
+The store is owned by the *policy*, not the runner, so the context layer never
+depends on the workspace (or any runner-provided capability) just to archive a
+result.
 
-The full output also stays in the transcript, so the store is a **cache**: a
-dropped entry — or an ephemeral :class:`InMemoryResultStore` lost on restart —
-degrades to the transcript, which the recall tool falls back to. There is
-deliberately **no** ``delete``/eviction on the protocol: nothing relies on it
-for correctness, and a backend that wants a bound can enforce one internally
-(see :class:`InMemoryResultStore`). Selective/partial reads are likewise left
-out until a concrete need lands — both are non-breaking to add later.
+Today the full output also stays in the transcript, so recall can fall back to
+it: a store miss — or an ephemeral :class:`InMemoryResultStore` lost on restart
+— degrades gracefully rather than erroring. That fallback is not a guarantee,
+though: a clearing policy may later evict outputs from the transcript, and a
+durable store is what keeps them recoverable. So the store is a cache *while*
+the transcript retains everything and a durability backstop *once it does not*.
+There is deliberately **no** ``delete``/eviction on the protocol — a backend
+that wants a bound enforces one internally (see :class:`InMemoryResultStore`) —
+and selective/partial reads are likewise left out until a concrete need lands;
+both are non-breaking to add later.
 """
 
 from __future__ import annotations
@@ -40,14 +44,16 @@ class ResultStore(Protocol):
 class InMemoryResultStore:
     """A :class:`ResultStore` backed by an in-process dict, LRU-bounded.
 
-    Ephemeral: contents vanish when the process exits, which is safe because
-    the full output also lives in the transcript (recall falls back to it).
-    **Bounded by default** (``max_entries``): once full, the least-recently-used
-    key is evicted — also safe, since eviction just sends recall back to the
-    transcript. A policy (and therefore its store) is typically constructed once
-    and shared across sessions, so the bound is what stops a long-lived server
-    from accumulating every session's offloaded outputs forever. Pass
-    ``max_entries=None`` to opt into unbounded retention.
+    Ephemeral: contents vanish when the process exits. Recall falls back to the
+    transcript, which holds every output today — so that loss is safe for now;
+    reach for :class:`FileResultStore` when an output must outlive the process
+    or a future clearing policy. **Bounded by default** (``max_entries``): once
+    full, the least-recently-used key is evicted — also safe, since eviction
+    just sends recall back to the transcript. A policy (and therefore its
+    store) is typically constructed once and shared across sessions, so the
+    bound is what stops a long-lived server from accumulating every session's
+    offloaded outputs forever. Pass ``max_entries=None`` to opt into unbounded
+    retention.
     """
 
     def __init__(self, *, max_entries: int | None = 1024) -> None:

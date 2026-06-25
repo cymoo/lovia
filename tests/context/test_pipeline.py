@@ -644,7 +644,10 @@ async def test_reactive_recovers_when_latest_tool_result_is_the_problem():
         for e in res.entries
         if isinstance(e, ToolResultEntry) and e.call_id == "giant"
     )
-    assert "cleared to save context" in marker.output
+    # Offload now runs without a store, so it claims the oversized latest result
+    # first — a preview marker rather than clear's bare one; the retry fits either
+    # way.
+    assert "trimmed to a preview to save context" in marker.output
     assert res.tokens_after < res.tokens_before
 
 

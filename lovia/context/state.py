@@ -37,7 +37,8 @@ _VERSION = 2
 
 @dataclass
 class OffloadRecord:
-    """A tool result archived to the policy's result store, keyed by call_id."""
+    """A large tool result replaced by a preview marker in the view, keyed by
+    call_id (archived to the result store too, when one is configured)."""
 
     preview: str
     """The first characters of the output, kept inline as a teaser."""
@@ -68,8 +69,8 @@ class CompactionState:
     Attributes:
         cleared: ``call_id``\\ s whose tool results render as a tiny recall
             marker.
-        offloaded: ``call_id`` → :class:`OffloadRecord` for results archived
-            to the policy's result store.
+        offloaded: ``call_id`` → :class:`OffloadRecord` for results replaced by
+            a preview marker (and archived to the store, when one is configured).
         summary: The running summary, or ``None`` before the first one.
         ratio: Calibration multiplier mapping heuristic token estimates to
             the provider's real input-token counts (EMA, clamped).

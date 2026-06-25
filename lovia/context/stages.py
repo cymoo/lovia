@@ -8,8 +8,9 @@ pipeline re-renders and re-counts after every stage that decided something.
 The default order is cheap-first, mirroring Claude Code's /compact layering
 and Anthropic's context-editing primitives:
 
-1. :class:`OffloadToolResults` — archive huge results to the policy's result
-   store (I/O only; inert without a store).
+1. :class:`OffloadToolResults` — replace huge results with a preview marker;
+   when a store is configured, also archive the full output for durable recall
+   (best-effort I/O).
 2. :class:`ClearToolResults` — replace older tool results with tiny recall
    markers (free).
 3. :class:`SummarizeHistory` — fold the older prefix into a running LLM
@@ -49,8 +50,10 @@ class StageContext:
         protected_from: Body index of the first protected entry. Entries at
             or after it must stay verbatim for every stage.
         aggressive: ``True`` on the reactive overflow path — compact harder.
-        store: The policy's result store for offloading large results, when
-            configured. ``None`` makes :class:`OffloadToolResults` inert.
+        store: Optional durable sink for offloaded result bodies. ``None`` does
+            not disable :class:`OffloadToolResults` — it still emits preview
+            markers and recall falls back to the transcript; a store keeps the
+            output recoverable once the transcript no longer retains it.
     """
 
     request: CompactionRequest
@@ -107,12 +110,15 @@ def _oversized(entry: ToolResultEntry, ctx: StageContext) -> bool:
 
 
 class OffloadToolResults:
-    """Archive large tool results to the policy's result store, oldest first.
+    """Replace large tool results with a short preview marker, oldest first.
 
-    The view keeps a marker with a short preview; the agent recovers the full
-    content with ``recall_tool_result``, which reads it back from the store.
-    The full output also stays in the transcript (so an ephemeral store is
-    safe — recall falls back to it). Inert when the policy has no store.
+    The view keeps a marker with a preview; the agent recovers the full content
+    with ``recall_tool_result``, which reads the store first and falls back to
+    the transcript. So this runs with or without a store — today the transcript
+    still holds every output. A store earns its keep because that fallback is
+    not guaranteed: a clearing policy may evict outputs from the transcript, and
+    the store is the durable copy that outlives it. Archiving is best-effort —
+    a failing store never blocks the marker.
     """
 
     name = "offload"
@@ -128,10 +134,10 @@ class OffloadToolResults:
         """Configure offloading.
 
         Args:
-            min_chars: Only results at least this long are archived.
-            keep_last: The N most recent tool results are never archived.
+            min_chars: Only results at least this long are offloaded.
+            keep_last: The N most recent tool results are never offloaded.
             preview_chars: Length of the inline preview kept in the marker.
-            exclude_tools: Tool names whose results are never archived.
+            exclude_tools: Tool names whose results are never offloaded.
         """
         if min_chars < 1:
             raise ValueError("min_chars must be >= 1")
@@ -146,8 +152,6 @@ class OffloadToolResults:
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
         store = ctx.store
-        if store is None:
-            return False
         names = _tool_names(body)
         result_idxs = _result_indices(body)
         keep_from = len(result_idxs) - self.keep_last
@@ -167,16 +171,23 @@ class OffloadToolResults:
                 or names.get(entry.call_id) in self.exclude_tools
             ):
                 continue
-            try:
-                await store.put(entry.call_id, entry.output)
-            except Exception as exc:
-                logger.warning(
-                    "context.offload: store put for %s failed (%s: %s); skipping",
-                    entry.call_id,
-                    type(exc).__name__,
-                    exc,
-                )
-                continue
+            # Archiving is a best-effort side effect, decoupled from the
+            # decision: recall falls back to the transcript, so a missing or
+            # failing store never blocks the marker. The store still earns its
+            # keep — the transcript holds every output today but isn't required
+            # to forever (a clearing policy may evict them), and a durable store
+            # is what survives that — so a failed put() is logged, not silent.
+            if store is not None:
+                try:
+                    await store.put(entry.call_id, entry.output)
+                except Exception as exc:
+                    logger.warning(
+                        "context.offload: store put for %s failed (%s: %s); "
+                        "keeping marker, recall falls back to the transcript",
+                        entry.call_id,
+                        type(exc).__name__,
+                        exc,
+                    )
             record = OffloadRecord(
                 preview=entry.output[: self.preview_chars],
                 chars=len(entry.output),

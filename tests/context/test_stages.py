@@ -155,10 +155,54 @@ async def test_offload_writes_store_and_records_marker_data():
     assert "c1" not in ctx.state.offloaded  # keep_last=1
 
 
-async def test_offload_inert_without_store():
+async def test_offload_runs_without_store():
+    # No store: offload is NOT inert — it still records decisions and emits
+    # preview markers; the transcript backs recall. (This was the bug.)
     body = _pairs(3, chars=5_000)
+    budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
+    ctx = make_ctx(body, store=None, budget=budget)
+    assert (
+        await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx) is True
+    )
+    assert set(ctx.state.offloaded) == {"c0", "c1", "c2"}
+    record = ctx.state.offloaded["c0"]
+    assert record.preview == "r" * 400
+    assert record.chars == 5_000
+
+
+async def test_offload_without_store_skips_small_results():
+    # The min_chars gate is store-independent: nothing qualifies, nothing is
+    # decided (so the pipeline won't needlessly re-render).
+    body = _pairs(3, chars=100)
     ctx = make_ctx(body, store=None)
-    assert await OffloadToolResults(keep_last=0).plan(body, ctx) is False
+    assert (
+        await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx) is False
+    )
+    assert ctx.state.offloaded == {}
+
+
+async def test_offload_without_store_stops_once_under_target():
+    body = _pairs(10, chars=5_000)
+    budget = TokenBudget(window=12_000, reserve_output=0, trigger=0.9, target=0.8)
+    ctx = make_ctx(body, store=None, budget=budget)  # target 9600
+    await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx)
+    # Offloads oldest-first only until the view drops under target.
+    assert 0 < len(ctx.state.offloaded) < 10
+
+
+async def test_offload_without_store_is_sticky_and_does_not_redecide():
+    body = _pairs(2, chars=5_000)
+    budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
+    state = CompactionState()
+    ctx = make_ctx(body, store=None, state=state, budget=budget)
+    await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx)
+    before = dict(state.offloaded)
+    assert before  # something was offloaded on the first pass
+    ctx2 = make_ctx(body, store=None, state=state, budget=budget)
+    assert (
+        await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx2) is False
+    )
+    assert state.offloaded == before
 
 
 async def test_offload_skips_small_results():
@@ -171,12 +215,16 @@ async def test_offload_skips_small_results():
     assert store.data == {}
 
 
-async def test_offload_store_failure_skips_entry_without_raising():
+async def test_offload_store_failure_still_records():
+    # A failing store is best-effort: offload logs the failure but still keeps
+    # the marker (the transcript backs recall) instead of dropping the entry.
     body = _pairs(2, chars=5_000)
     budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
     ctx = make_ctx(body, store=FailingResultStore(), budget=budget)
-    assert await OffloadToolResults(keep_last=0).plan(body, ctx) is False
-    assert ctx.state.offloaded == {}
+    assert (
+        await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx) is True
+    )
+    assert set(ctx.state.offloaded) == {"c0", "c1"}
 
 
 async def test_offload_keys_store_by_raw_call_id():

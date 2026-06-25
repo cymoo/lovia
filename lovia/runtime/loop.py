@@ -45,7 +45,6 @@ from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import CheckpointOptions
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
-from ..context.render import split_system
 from ..exceptions import (
     ContextOverflowError,
     MaxTurnsExceeded,
@@ -65,6 +64,7 @@ from ..transcript import (
     TranscriptEntry,
     entries_to_messages,
     messages_to_entries,
+    split_system,
 )
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import (

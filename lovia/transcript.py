@@ -506,6 +506,29 @@ def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
 # ---------------------------------------------------------------------------
 
 
+def split_system(
+    entries: list[TranscriptEntry],
+) -> tuple[list[TranscriptEntry], list[TranscriptEntry]]:
+    """Split off the leading *run* of system messages; the rest is the *body*.
+
+    Returns every consecutive leading ``system`` entry, not just the first. A
+    caller may pass a ``system()`` input under a systemless agent, so after a
+    handoff the transcript can briefly lead with two systems (the new agent's
+    head + the caller's). Collapsing the whole leading run keeps the body — and
+    thus the body-relative summary coverage — invariant when a handoff changes
+    *how many* leading system entries there are, so the running summary survives
+    instead of being reset. (Provider adapters merge all system messages into
+    one ``system`` param regardless of count.)
+    """
+    n = 0
+    for entry in entries:
+        if isinstance(entry, InputEntry) and entry.role == "system":
+            n += 1
+        else:
+            break
+    return list(entries[:n]), list(entries[n:])
+
+
 def safe_window(
     entries: list[TranscriptEntry],
     *,
@@ -648,4 +671,5 @@ __all__ = [
     "entry_to_dict",
     "input_to_entries",
     "safe_window",
+    "split_system",
 ]

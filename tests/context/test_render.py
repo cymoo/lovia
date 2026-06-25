@@ -9,13 +9,14 @@ from lovia.context import (
     TokenCounter,
     render_view,
 )
-from lovia.context.render import protected_tail_start, split_system
+from lovia.context.render import protected_tail_start
 from lovia.context.state import fingerprint
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
     ToolResultEntry,
     entry_to_dict,
+    split_system,
 )
 
 from .helpers import call, out, system, user

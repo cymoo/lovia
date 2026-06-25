@@ -26,7 +26,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
 from .policy import CompactionRequest, ContextResult
-from .render import protected_tail_start, render_view, split_system
+from .render import protected_tail_start, render_view
 from .state import CompactionState, fingerprint
 from .stages import (
     ClearToolResults,
@@ -39,7 +39,7 @@ from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
 from ..types import JsonObject
 from ..providers.base import context_window as _provider_context_window
-from ..transcript import TranscriptEntry
+from ..transcript import TranscriptEntry, split_system
 
 if TYPE_CHECKING:
     from ..tools import Tool

@@ -137,6 +137,8 @@ class OffloadToolResults:
             raise ValueError("min_chars must be >= 1")
         if keep_last < 0:
             raise ValueError("keep_last must be >= 0")
+        if preview_chars < 0:
+            raise ValueError("preview_chars must be >= 0")
         self.min_chars = min_chars
         self.keep_last = keep_last
         self.preview_chars = preview_chars
@@ -287,6 +289,7 @@ class SummarizeHistory:
         summarizer: Summarizer | None = None,
         min_savings_ratio: float = 0.10,
         max_failures: int = 3,
+        max_summary_chars: int | None = 100_000,
     ) -> None:
         """Configure summarization.
 
@@ -298,14 +301,21 @@ class SummarizeHistory:
                 anti-thrash. Ignored on the aggressive path.
             max_failures: Consecutive summarizer failures (per run) before
                 the circuit breaker stops trying.
+            max_summary_chars: Reject a summary longer than this (treated as a
+                failure). The summary is replayed verbatim into every view, so
+                this is a safety valve against a misbehaving summarizer growing
+                it without bound. ``None`` disables the cap.
         """
         if not 0 <= min_savings_ratio < 1:
             raise ValueError("min_savings_ratio must be in [0, 1)")
         if max_failures < 1:
             raise ValueError("max_failures must be >= 1")
+        if max_summary_chars is not None and max_summary_chars < 1:
+            raise ValueError("max_summary_chars must be >= 1")
         self.summarizer: Summarizer = summarizer or LLMSummarizer()
         self.min_savings_ratio = min_savings_ratio
         self.max_failures = max_failures
+        self.max_summary_chars = max_summary_chars
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
         state = ctx.state
@@ -352,6 +362,24 @@ class SummarizeHistory:
             )
             if ctx.aggressive:
                 raise
+            return False
+
+        # Guard against a misbehaving (usually custom) summarizer: an empty
+        # summary would silently blank the covered prefix, and an over-long one
+        # would bloat every future view (it's replayed verbatim). Reject either
+        # like a failure — don't extend coverage; the circuit breaker stops
+        # retries, and the prefix stays for clear/offload or a surfaced overflow.
+        if not text.strip() or (
+            self.max_summary_chars is not None and len(text) > self.max_summary_chars
+        ):
+            state.summary_failures += 1
+            logger.warning(
+                "context.summary: rejected summary (chars=%d, empty=%s); failure %d/%d",
+                len(text),
+                not text.strip(),
+                state.summary_failures,
+                self.max_failures,
+            )
             return False
 
         state.summary_failures = 0

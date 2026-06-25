@@ -44,6 +44,11 @@ def test_in_memory_rejects_bad_max_entries():
         InMemoryResultStore(max_entries=0)
 
 
+def test_in_memory_is_bounded_by_default():
+    # The default must be bounded so a long-lived shared store can't leak.
+    assert InMemoryResultStore()._max is not None
+
+
 # --------------------------------------------------------- FileResultStore ---
 
 
@@ -66,3 +71,16 @@ async def test_file_store_keys_are_injective(tmp_path):
     # Two distinct keys -> two distinct files, all under the store directory.
     files = [p.name for p in tmp_path.iterdir()]
     assert len(files) == 2
+
+
+async def test_file_store_edge_keys_round_trip_without_oserror(tmp_path):
+    store = FileResultStore(tmp_path)
+    # Long, multibyte, empty, and "_" must all round-trip (no ENAMETOOLONG, no
+    # collision between "" and "_") and never raise on get.
+    cases = {"x" * 1000: "long", "中" * 200: "cjk", "": "empty", "_": "underscore"}
+    for k, v in cases.items():
+        await store.put(k, v)
+    for k, v in cases.items():
+        assert await store.get(k) == v
+    # Every distinct key got its own file (injective).
+    assert len(list(tmp_path.iterdir())) == len(cases)

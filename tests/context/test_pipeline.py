@@ -71,6 +71,18 @@ async def test_noop_policy_returns_same_list_object():
     assert res.changed is False and res.compacted is False
 
 
+def test_counter_cache_keyed_by_provider_identity():
+    # Guards the id()-reuse hazard: the counter cache must key on the provider
+    # object (strong ref), not id(), so a collected provider's id can't be
+    # reused by a different provider and hand back the wrong tokenizer.
+    pipeline = Compaction(context_window=1_000)
+    p1, p2 = FakeProviderWithWindow(), FakeProviderWithWindow()
+    c1 = pipeline._counter_for(p1)
+    assert pipeline._counter[0] is p1  # cached by identity, not id()
+    assert pipeline._counter_for(p1) is c1  # same object -> reuse
+    assert pipeline._counter_for(p2) is not c1  # distinct object -> rebuild
+
+
 async def test_under_trigger_no_compaction_and_no_quality_loss():
     """Below the trigger nothing is touched — even old tool results."""
     summarizer = FakeSummarizer()

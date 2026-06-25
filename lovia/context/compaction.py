@@ -11,9 +11,13 @@ How a call flows:
    view is under the *compact_to* watermark. The gap between the two is
    hysteresis: compaction happens in rare bursts, not every turn.
 3. Token thresholds use cheap per-entry estimates *calibrated* against the
-   provider's real input-token counts from previous calls, so systematic
-   estimator error (and untracked overhead like tool schemas) is absorbed
-   automatically.
+   provider's real input-token counts from previous calls (a clamped EMA
+   *multiplier*). This absorbs systematic estimator error well once the
+   transcript is large relative to fixed per-call overhead (tool schemas,
+   system framing). On a *small* transcript with *large* tool schemas the
+   multiplicative model under-counts that fixed overhead, so the proactive
+   threshold can fire late — leave headroom via ``compact_at`` /
+   ``reserve_output_tokens``; the reactive overflow path is the backstop.
 """
 
 from __future__ import annotations
@@ -137,7 +141,11 @@ class Compaction:
             ]
         )
         self.store = store
-        self._counter: tuple[int, TokenCounter] | None = None
+        # Cache the most-recent provider's counter, keyed by provider *identity*
+        # via a strong ref — NOT id(): a cached provider can't then be GC'd and
+        # have its id() reused by a different provider (which would hand back the
+        # wrong tokenizer). At most one provider is pinned at a time.
+        self._counter: tuple[object | None, TokenCounter] | None = None
 
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
@@ -344,12 +352,11 @@ class Compaction:
         state.save(req.scratch)
 
     def _counter_for(self, provider: object | None) -> TokenCounter:
-        key = id(provider) if provider is not None else 0
         cached = self._counter
-        if cached is not None and cached[0] == key:
+        if cached is not None and cached[0] is provider:
             return cached[1]
         counter = TokenCounter(provider, image_tokens=self.image_tokens)
-        self._counter = (key, counter)
+        self._counter = (provider, counter)
         return counter
 
 

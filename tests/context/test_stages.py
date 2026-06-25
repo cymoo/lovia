@@ -258,6 +258,25 @@ async def test_summarize_aggressive_bypasses_anti_thrash():
     assert len(summarizer.calls) == 1
 
 
+async def test_summarize_rejects_empty_summary():
+    # A custom summarizer returning "" must NOT silently blank the prefix.
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    assert await SummarizeHistory(summarizer=FakeSummarizer("")).plan(body, ctx) is False
+    assert ctx.state.summary is None
+    assert ctx.state.summary_failures == 1
+
+
+async def test_summarize_rejects_oversized_summary():
+    # A summary over the cap is rejected (it's replayed into every view).
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    stage = SummarizeHistory(summarizer=FakeSummarizer("S" * 50), max_summary_chars=10)
+    assert await stage.plan(body, ctx) is False
+    assert ctx.state.summary is None
+    assert ctx.state.summary_failures == 1
+
+
 async def test_summarize_passes_rendered_span_with_markers():
     summarizer = FakeSummarizer()
     body = [call("c1"), out("c1", "x" * 2_000), *_texts(4)]

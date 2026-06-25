@@ -18,6 +18,7 @@ out until a concrete need lands — both are non-breaking to add later.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections import OrderedDict
 from pathlib import Path
 from typing import Protocol
@@ -37,15 +38,19 @@ class ResultStore(Protocol):
 
 
 class InMemoryResultStore:
-    """A :class:`ResultStore` backed by an in-process dict.
+    """A :class:`ResultStore` backed by an in-process dict, LRU-bounded.
 
     Ephemeral: contents vanish when the process exits, which is safe because
-    the full output also lives in the transcript (the recall tool falls back
-    to it). Optionally bounded — when ``max_entries`` is set the least-recently
-    used key is evicted on overflow.
+    the full output also lives in the transcript (recall falls back to it).
+    **Bounded by default** (``max_entries``): once full, the least-recently-used
+    key is evicted — also safe, since eviction just sends recall back to the
+    transcript. A policy (and therefore its store) is typically constructed once
+    and shared across sessions, so the bound is what stops a long-lived server
+    from accumulating every session's offloaded outputs forever. Pass
+    ``max_entries=None`` to opt into unbounded retention.
     """
 
-    def __init__(self, *, max_entries: int | None = None) -> None:
+    def __init__(self, *, max_entries: int | None = 1024) -> None:
         if max_entries is not None and max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         self._max = max_entries
@@ -68,9 +73,11 @@ class InMemoryResultStore:
 class FileResultStore:
     """A :class:`ResultStore` that writes each value to a file under ``dir``.
 
-    Durable across restarts (unlike :class:`InMemoryResultStore`), so it is the
-    recommended backend in production. Keys are sanitized into safe file names;
-    file I/O runs on a thread so it never blocks the event loop.
+    Durable across restarts (unlike :class:`InMemoryResultStore`). It does
+    **not** evict — recall falls back to the transcript if a file is gone, but
+    operators should apply their own retention/cleanup to ``dir`` since it grows
+    with every offloaded result. Keys are mapped to injective, length-bounded
+    file names; file I/O runs on a thread so it never blocks the event loop.
     """
 
     def __init__(self, dir: str | Path) -> None:
@@ -90,18 +97,22 @@ class FileResultStore:
         def _read() -> str | None:
             try:
                 return self._path(key).read_text(encoding="utf-8")
-            except FileNotFoundError:
+            except OSError:
+                # Missing/unreadable file is a cache miss — recall then falls
+                # back to the transcript rather than erroring.
                 return None
 
         return await asyncio.to_thread(_read)
 
 
 def _safe_key(key: str) -> str:
-    # Percent-encode into an *injective*, filesystem-safe name: distinct keys
-    # must never map to the same file. A lossy sanitizer (e.g. regex-replacing
-    # to "_") could collide "a/b" and "a:b", and since recall prefers the store
-    # over the transcript a collision would return the *wrong* tool output.
-    return quote(key, safe="") or "_"
+    # Injective, filesystem-safe, and length-bounded. A lossy or unbounded
+    # sanitizer could (a) collide distinct keys onto one file — and since recall
+    # prefers the store, return the *wrong* output — or (b) overflow the ~255-char
+    # filename limit on long/multibyte ids. The sha1 suffix guarantees a unique,
+    # non-empty name; the readable prefix is just for debugging.
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    return f"{quote(key, safe='')[:80]}-{digest}"
 
 
 __all__ = ["FileResultStore", "InMemoryResultStore", "ResultStore"]

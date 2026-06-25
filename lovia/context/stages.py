@@ -134,10 +134,10 @@ class OffloadToolResults:
         """Configure offloading.
 
         Args:
-            min_chars: Only results at least this long are archived.
-            keep_last: The N most recent tool results are never archived.
+            min_chars: Only results at least this long are offloaded.
+            keep_last: The N most recent tool results are never offloaded.
             preview_chars: Length of the inline preview kept in the marker.
-            exclude_tools: Tool names whose results are never archived.
+            exclude_tools: Tool names whose results are never offloaded.
         """
         if min_chars < 1:
             raise ValueError("min_chars must be >= 1")

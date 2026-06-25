@@ -1,10 +1,11 @@
 """Pluggable storage for offloaded tool results.
 
-When a context policy offloads a large tool result it writes the full output
-to a :class:`ResultStore` and keeps only a short marker in the per-call view;
-the policy's recall tool reads it back by ``call_id``. The store is owned by
-the *policy*, not the runner, so the context layer never depends on the
-workspace (or any runner-provided capability) just to archive a result.
+When a context policy offloads a large tool result it keeps only a short marker
+in the per-call view and, when a store is configured, writes the full output to
+a :class:`ResultStore` that the policy's recall tool reads back by ``call_id``.
+The store is owned by the *policy*, not the runner, so the context layer never
+depends on the workspace (or any runner-provided capability) just to archive a
+result.
 
 Today the full output also stays in the transcript, so recall can fall back to
 it: a store miss — or an ephemeral :class:`InMemoryResultStore` lost on restart

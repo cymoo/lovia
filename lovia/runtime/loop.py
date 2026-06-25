@@ -63,8 +63,8 @@ from ..transcript import (
     ToolResultEntry,
     TranscriptEntry,
     entries_to_messages,
+    leading_system_count,
     messages_to_entries,
-    split_system,
 )
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import (
@@ -1145,7 +1145,7 @@ class RunLoop:
         if not result.changed:
             return state.transcript
         view = result.entries
-        if split_system(view)[0]:
+        if view and isinstance(view[0], InputEntry) and view[0].role == "system":
             return view
         # The compacted view dropped the leading system run. Re-prepend the
         # *existing* one(s) from the transcript rather than re-rendering: a fresh
@@ -1154,15 +1154,16 @@ class RunLoop:
         # ``RunContext.system_prompt`` reports — this keeps the view's system
         # text identical to what every other turn (and the property) sees.
         #
-        # Uses the ``split_system`` leading-run convention (every model call and
-        # the provider adapters use it), NOT the runner-head count
+        # Restores the whole leading ``system`` run (the convention every model
+        # call and the provider adapters use), NOT the runner-head count
         # (``system_head_len``) that handoff uses. The two answer different
         # questions: a handoff must NOT strip a caller-supplied leading
         # ``system`` input (it is run content), whereas here those same entries
-        # ARE the system the model normally sees and must be restored.
-        systems, _ = split_system(state.transcript)
-        if systems:
-            return [*systems, *view]
+        # ARE the system the model normally sees and must be restored. Slice
+        # only the small head — never copy the (potentially large) body.
+        n = leading_system_count(state.transcript)
+        if n:
+            return [*state.transcript[:n], *view]
         return view
 
     def _compacted_event(

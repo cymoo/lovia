@@ -16,6 +16,7 @@ from lovia.transcript import (
     InputEntry,
     ToolResultEntry,
     entry_to_dict,
+    leading_system_count,
     split_system,
 )
 
@@ -44,6 +45,15 @@ def test_split_system():
     a, b = system("a"), system("b")
     systems3, body3 = split_system([a, b, user0])
     assert systems3 == [a, b] and body3 == [user0]
+
+
+def test_leading_system_count():
+    u = user("hi")
+    assert leading_system_count([]) == 0
+    assert leading_system_count([u]) == 0
+    assert leading_system_count([system("a"), system("b"), u]) == 2
+    # Stops at the first non-system; a later system does not count.
+    assert leading_system_count([system("a"), u, system("b")]) == 1
 
 
 def test_render_with_empty_state_passes_entries_through_by_reference():

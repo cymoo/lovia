@@ -506,6 +506,17 @@ def entries_to_messages(entries: list[TranscriptEntry]) -> list[Message]:
 # ---------------------------------------------------------------------------
 
 
+def leading_system_count(entries: list[TranscriptEntry]) -> int:
+    """Count the consecutive ``system`` entries at the head of ``entries`` (>= 0)."""
+    n = 0
+    for entry in entries:
+        if isinstance(entry, InputEntry) and entry.role == "system":
+            n += 1
+        else:
+            break
+    return n
+
+
 def split_system(
     entries: list[TranscriptEntry],
 ) -> tuple[list[TranscriptEntry], list[TranscriptEntry]]:
@@ -518,15 +529,11 @@ def split_system(
     thus the body-relative summary coverage — invariant when a handoff changes
     *how many* leading system entries there are, so the running summary survives
     instead of being reset. (Provider adapters merge all system messages into
-    one ``system`` param regardless of count.)
+    one ``system`` param regardless of count.) Both halves are fresh slices, so
+    callers never alias ``entries``.
     """
-    n = 0
-    for entry in entries:
-        if isinstance(entry, InputEntry) and entry.role == "system":
-            n += 1
-        else:
-            break
-    return list(entries[:n]), list(entries[n:])
+    n = leading_system_count(entries)
+    return entries[:n], entries[n:]
 
 
 def safe_window(
@@ -670,6 +677,7 @@ __all__ = [
     "entry_from_dict",
     "entry_to_dict",
     "input_to_entries",
+    "leading_system_count",
     "safe_window",
     "split_system",
 ]

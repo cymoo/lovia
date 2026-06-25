@@ -8,8 +8,8 @@ pipeline re-renders and re-counts after every stage that decided something.
 The default order is cheap-first, mirroring Claude Code's /compact layering
 and Anthropic's context-editing primitives:
 
-1. :class:`OffloadToolResults` — archive huge results to workspace files
-   (I/O only; inert without a workspace).
+1. :class:`OffloadToolResults` — archive huge results to the policy's result
+   store (I/O only; inert without a store).
 2. :class:`ClearToolResults` — replace older tool results with tiny recall
    markers (free).
 3. :class:`SummarizeHistory` — fold the older prefix into a running LLM
@@ -19,9 +19,8 @@ and Anthropic's context-editing primitives:
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 from .policy import CompactionRequest
 from .render import clear_marker, offload_marker, render_entries
@@ -29,6 +28,9 @@ from .state import CompactionState, OffloadRecord, SummaryState, fingerprint
 from .summarizer import LLMSummarizer, Summarizer
 from .tokens import TokenBudget, TokenCounter
 from ..transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
+
+if TYPE_CHECKING:
+    from .store import ResultStore
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,8 @@ class StageContext:
         protected_from: Body index of the first protected entry. Entries at
             or after it must stay verbatim for every stage.
         aggressive: ``True`` on the reactive overflow path — compact harder.
+        store: The policy's result store for offloading large results, when
+            configured. ``None`` makes :class:`OffloadToolResults` inert.
     """
 
     request: CompactionRequest
@@ -56,6 +60,7 @@ class StageContext:
     current_tokens: int
     protected_from: int
     aggressive: bool
+    store: "ResultStore | None" = None
 
     def calibrated(self, raw_tokens: int) -> int:
         """Apply the learned estimate→actual ratio to ``raw_tokens``."""
@@ -95,19 +100,19 @@ def _oversized(entry: ToolResultEntry, ctx: StageContext) -> bool:
 
     On the aggressive (post-overflow) path such a result loses its
     keep-last/protected-tail immunity: keeping it verbatim guarantees the
-    retry fails again, while a marker (with recall/file fallback) lets the
+    retry fails again, while a marker (with recall fallback) lets the
     run make progress.
     """
     return ctx.calibrated(ctx.counter.count_entry(entry)) > ctx.budget.target_tokens
 
 
 class OffloadToolResults:
-    """Archive large tool results to workspace files, oldest first.
+    """Archive large tool results to the policy's result store, oldest first.
 
-    The view keeps a marker with the file path and a short preview; the agent
-    recovers the content with its workspace file tools (or the opt-in
-    ``recall_tool_result`` tool, since the full output stays in the
-    transcript). Inert when the run has no workspace.
+    The view keeps a marker with a short preview; the agent recovers the full
+    content with ``recall_tool_result``, which reads it back from the store.
+    The full output also stays in the transcript (so an ephemeral store is
+    safe — recall falls back to it). Inert when the policy has no store.
     """
 
     name = "offload"
@@ -118,7 +123,6 @@ class OffloadToolResults:
         min_chars: int = 4_000,
         keep_last: int = 2,
         preview_chars: int = 400,
-        dir: str = ".context",
         exclude_tools: Sequence[str] = (),
     ) -> None:
         """Configure offloading.
@@ -127,7 +131,6 @@ class OffloadToolResults:
             min_chars: Only results at least this long are archived.
             keep_last: The N most recent tool results are never archived.
             preview_chars: Length of the inline preview kept in the marker.
-            dir: Workspace-relative directory for archive files.
             exclude_tools: Tool names whose results are never archived.
         """
         if min_chars < 1:
@@ -137,16 +140,12 @@ class OffloadToolResults:
         self.min_chars = min_chars
         self.keep_last = keep_last
         self.preview_chars = preview_chars
-        self.dir = dir.rstrip("/")
         self.exclude_tools = frozenset(exclude_tools)
 
     async def plan(self, body: list[TranscriptEntry], ctx: StageContext) -> bool:
-        workspace = ctx.request.workspace
-        if workspace is None:
+        store = ctx.store
+        if store is None:
             return False
-        policy = getattr(workspace, "policy", None)
-        if policy is not None and getattr(policy, "allow_write", True) is False:
-            return False  # read-only workspace: don't retry doomed writes
         names = _tool_names(body)
         result_idxs = _result_indices(body)
         keep_from = len(result_idxs) - self.keep_last
@@ -166,19 +165,17 @@ class OffloadToolResults:
                 or names.get(entry.call_id) in self.exclude_tools
             ):
                 continue
-            path = f"{self.dir}/tool-{_safe_name(entry.call_id)}.txt"
             try:
-                await workspace.write_text(path, entry.output)
+                await store.put(entry.call_id, entry.output)
             except Exception as exc:
                 logger.warning(
-                    "context.offload: write %s failed (%s: %s); skipping",
-                    path,
+                    "context.offload: store put for %s failed (%s: %s); skipping",
+                    entry.call_id,
                     type(exc).__name__,
                     exc,
                 )
                 continue
             record = OffloadRecord(
-                path=path,
                 preview=entry.output[: self.preview_chars],
                 chars=len(entry.output),
             )
@@ -364,10 +361,6 @@ class SummarizeHistory:
             fingerprint=fingerprint(body[:new_covered]),
         )
         return True
-
-
-def _safe_name(call_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", call_id) or "unknown"
 
 
 __all__ = [

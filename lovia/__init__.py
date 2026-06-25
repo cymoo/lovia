@@ -53,6 +53,9 @@ from .exceptions import (
 from .context import (
     Compaction,
     ContextPolicy,
+    FileResultStore,
+    InMemoryResultStore,
+    ResultStore,
 )
 from .handoff import Handoff
 from .hooks import AgentHooks
@@ -73,7 +76,7 @@ from .reliability import CancelToken, RetryPolicy, RunBudget
 from .run_context import RunContext
 from .runtime.result import RunHandle, RunResult
 from .runner import Runner
-from .session import Session
+from .session import Segment, Session
 from .transcript import TranscriptEntry
 from .plugins import (
     Memory,
@@ -97,6 +100,9 @@ __all__ = [
     "ContextOverflowError",
     "Compaction",
     "ContextPolicy",
+    "FileResultStore",
+    "InMemoryResultStore",
+    "ResultStore",
     "GuardrailTripped",
     "Handoff",
     "ImagePart",
@@ -124,6 +130,7 @@ __all__ = [
     "Runner",
     "SQLiteCheckpointer",
     "SQLiteSession",
+    "Segment",
     "Session",
     "Skills",
     "SkillsError",

@@ -12,9 +12,7 @@ from .helpers import call, out, user
 def _full_state() -> CompactionState:
     return CompactionState(
         cleared={"c1", "c2"},
-        offloaded={
-            "c3": OffloadRecord(path=".context/tool-c3.txt", preview="pre", chars=9000)
-        },
+        offloaded={"c3": OffloadRecord(preview="pre", chars=9000)},
         summary=SummaryState(text="S", covered=4, fingerprint="ab" * 8),
         ratio=1.5,
         last_view_estimate=1234,
@@ -42,20 +40,20 @@ def test_load_tolerates_missing_and_garbage():
     assert CompactionState.load({}) == CompactionState()
     assert CompactionState.load({"context": "garbage"}) == CompactionState()
     assert CompactionState.load({"context": {"version": 99}}) == CompactionState()
-    partial = {"context": {"version": 1, "cleared": ["a", 7], "ratio": "NaN"}}
+    partial = {"context": {"version": 2, "cleared": ["a", 7], "ratio": "NaN"}}
     state = CompactionState.load(partial)
     assert state.cleared == {"a"}
     assert state.ratio == 1.0
 
 
 def test_load_clamps_ratio():
-    state = CompactionState.load({"context": {"version": 1, "ratio": 100.0}})
+    state = CompactionState.load({"context": {"version": 2, "ratio": 100.0}})
     assert state.ratio == 4.0
 
 
 def test_decided_covers_both_kinds():
     state = CompactionState(
-        cleared={"a"}, offloaded={"b": OffloadRecord(path="p", preview="", chars=1)}
+        cleared={"a"}, offloaded={"b": OffloadRecord(preview="", chars=1)}
     )
     assert state.decided("a") and state.decided("b") and not state.decided("c")
 

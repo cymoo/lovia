@@ -4,6 +4,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from lovia.transcript import InputEntry, AssistantTextEntry
 from lovia.stores import InMemorySession, SQLiteSession
 
@@ -153,3 +155,32 @@ async def test_sqlite_memory_path_shares_one_connection() -> None:
     await s.append("u1", [InputEntry(role="user", content="persisted")])
     entries = await s.load("u1")
     assert [e.content for e in entries] == ["persisted"]  # type: ignore[union-attr]
+
+
+# ----------------------------------------------------- segments() primitive ---
+
+
+@pytest.mark.parametrize("make", [lambda: InMemorySession(), lambda: SQLiteSession(":memory:")])
+async def test_segments_round_trip_run_id_and_meta(make) -> None:
+    s = make()
+    await s.append(
+        "u1", [InputEntry(role="user", content="one")], run_id="r1", meta={"m": 1}
+    )
+    await s.append("u1", [InputEntry(role="user", content="two")], run_id="r2")
+
+    segs = await s.segments("u1")
+    assert [seg.run_id for seg in segs] == ["r1", "r2"]
+    assert [seg.meta for seg in segs] == [{"m": 1}, None]
+    assert [e.content for seg in segs for e in seg.entries] == ["one", "two"]  # type: ignore[union-attr]
+
+    # load() (inherited default) flattens segments identically.
+    assert [e.content for e in await s.load("u1")] == ["one", "two"]  # type: ignore[union-attr]
+
+
+async def test_in_memory_segments_returns_a_copy() -> None:
+    s = InMemorySession()
+    await s.append("u1", [InputEntry(role="user", content="x")])
+    segs = await s.segments("u1")
+    segs[0].entries.append(InputEntry(role="user", content="leak"))
+    # Mutating the returned segment must not corrupt stored state.
+    assert len(await s.load("u1")) == 1

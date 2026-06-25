@@ -1,38 +1,32 @@
-"""End-to-end offload: runner + real LocalWorkspace + pipeline."""
+"""End-to-end offload: runner + policy-owned result store + pipeline."""
 
 from __future__ import annotations
 
-from lovia import Agent, Runner
-from lovia.context import Compaction, OffloadToolResults
+from lovia import Agent, InMemorySession, Runner
+from lovia.context import Compaction, InMemoryResultStore, OffloadToolResults
 from lovia.events import ContextCompacted
 from lovia.run_context import RunContext
-from lovia.tools import recall_tool_result, run_tool
+from lovia.tools import make_recall_tool, run_tool
 from lovia.transcript import ToolResultEntry
-from lovia.workspace import Workspace
 
-from ..scripted_provider import ScriptedProvider, text
+from ..scripted_provider import ScriptedProvider, call as scripted_call, text
 from .helpers import call, out
 
 BIG = "alpha beta " * 800  # ~8.8K chars ≈ 2.2K estimated tokens
 
 
-async def test_offload_archives_old_result_and_view_carries_marker(tmp_path):
+async def test_offload_archives_old_result_and_view_carries_marker():
     provider = ScriptedProvider([text("done")])
-    agent = Agent(
-        name="t",
-        instructions="x",
-        model=provider,
-        workspace=Workspace.local(str(tmp_path)),
-    )
+    agent = Agent(name="t", instructions="x", model=provider)
     # Two earlier big tool results in the session history; the older one
     # should be archived, the newer one kept verbatim (keep_last=1).
-    from lovia import InMemorySession
-
     sess = InMemorySession()
     await sess.append("s1", [call("c1"), out("c1", BIG), call("c2"), out("c2", BIG)])
+    store = InMemoryResultStore()
     pipeline = Compaction(
         context_window=2_500,
         reserve_output_tokens=0,
+        store=store,
         stages=[OffloadToolResults(min_chars=1_000, keep_last=1)],
     )
 
@@ -46,29 +40,66 @@ async def test_offload_archives_old_result_and_view_carries_marker(tmp_path):
     ):
         events_seen.append(ev)
 
-    # The full output landed in a workspace file.
-    archived = tmp_path / ".context" / "tool-c1.txt"
-    assert archived.read_text() == BIG
+    # The full output landed in the result store.
+    assert await store.get("c1") == BIG
 
-    # The provider saw the marker for c1 and the full output for c2.
+    # The provider saw the marker for c1 (preview, no file path) and the full
+    # output for c2.
     tool_messages = {
         m.tool_call_id: m.content for m in provider.calls[0] if m.role == "tool"
     }
-    assert "archived to workspace file: .context/tool-c1.txt" in tool_messages["c1"]
+    assert "archived to save context" in tool_messages["c1"]
     assert "alpha beta" in tool_messages["c1"]  # preview included
+    assert 'recall_tool_result("c1")' in tool_messages["c1"]
     assert tool_messages["c2"] == BIG
 
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1
     assert compacted[0].reason == "offload"
 
-    # The session still holds the untouched output.
+    # The session still holds the untouched output (transcript is the source
+    # of truth; the store is a cache on top of it).
     persisted = await sess.load("s1")
     full = [
         e for e in persisted if isinstance(e, ToolResultEntry) and e.call_id == "c1"
     ]
     assert full and full[0].output == BIG
 
-    # And recall_tool_result can still fetch it from the transcript.
+    # recall fetches from the store first...
     ctx = RunContext(context=None, entries=persisted, agent=agent)
-    assert await run_tool(recall_tool_result, {"call_id": "c1"}, ctx) == BIG
+    assert await run_tool(make_recall_tool(store), {"call_id": "c1"}, ctx) == BIG
+    # ...and falls back to the transcript when the store has nothing.
+    assert await run_tool(make_recall_tool(None), {"call_id": "c1"}, ctx) == BIG
+
+
+async def test_runner_dispatches_policy_provided_recall_tool():
+    """The compacting policy injects recall_tool_result with no manual wiring;
+    the model can call it and the runner actually dispatches it end-to-end."""
+    sess = InMemorySession()
+    await sess.append("s1", [call("c1"), out("c1", BIG)])
+    store = InMemoryResultStore()
+    policy = Compaction(
+        context_window=2_500,
+        reserve_output_tokens=0,
+        store=store,
+        stages=[OffloadToolResults(min_chars=1_000, keep_last=0)],
+    )
+    # Turn 1: the model calls recall for the dropped result; turn 2: it answers.
+    provider = ScriptedProvider(
+        [scripted_call("recall_tool_result", {"call_id": "c1"}), text("done")]
+    )
+    agent = Agent(name="t", instructions="x", model=provider)  # no tools added
+
+    result = await Runner.run(
+        agent, "what was c1?", context_policy=policy, session=sess, session_id="s1"
+    )
+    assert result.output == "done"
+    # The recall tool was registered (by the policy) and dispatched: its result
+    # is the full output, not a "tool not found" error.
+    persisted = await sess.load("s1")
+    recalled = [
+        e
+        for e in persisted
+        if isinstance(e, ToolResultEntry) and e.call_id == "call_recall_tool_result"
+    ]
+    assert recalled and recalled[0].output == BIG

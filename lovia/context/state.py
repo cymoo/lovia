@@ -32,15 +32,13 @@ from ..transcript import (
 
 SCRATCH_KEY = "context"
 """Key under which compaction state lives inside the per-run scratch dict."""
-_VERSION = 1
+_VERSION = 2
 
 
 @dataclass
 class OffloadRecord:
-    """A tool result archived to a workspace file."""
+    """A tool result archived to the policy's result store, keyed by call_id."""
 
-    path: str
-    """Workspace-relative path of the archived output."""
     preview: str
     """The first characters of the output, kept inline as a teaser."""
     chars: int
@@ -70,7 +68,7 @@ class CompactionState:
         cleared: ``call_id``\\ s whose tool results render as a tiny recall
             marker.
         offloaded: ``call_id`` → :class:`OffloadRecord` for results archived
-            to workspace files.
+            to the policy's result store.
         summary: The running summary, or ``None`` before the first one.
         ratio: Calibration multiplier mapping heuristic token estimates to
             the provider's real input-token counts (EMA, clamped).
@@ -110,12 +108,11 @@ class CompactionState:
                 if (
                     isinstance(call_id, str)
                     and isinstance(rec, dict)
-                    and isinstance(rec.get("path"), str)
                     and isinstance(rec.get("preview"), str)
                     and isinstance(rec.get("chars"), int)
                 ):
                     state.offloaded[call_id] = OffloadRecord(
-                        path=rec["path"], preview=rec["preview"], chars=rec["chars"]
+                        preview=rec["preview"], chars=rec["chars"]
                     )
 
         summary = raw.get("summary")
@@ -152,7 +149,7 @@ class CompactionState:
             "version": _VERSION,
             "cleared": sorted(self.cleared),
             "offloaded": {
-                call_id: {"path": r.path, "preview": r.preview, "chars": r.chars}
+                call_id: {"preview": r.preview, "chars": r.chars}
                 for call_id, r in self.offloaded.items()
             },
             "summary": (

@@ -19,10 +19,10 @@ from lovia.context.state import fingerprint
 from lovia.transcript import ToolCallEntry
 
 from .helpers import (
+    FailingResultStore,
     FailingSummarizer,
+    FakeResultStore,
     FakeSummarizer,
-    FailingWorkspace,
-    FakeWorkspace,
     call,
     out,
     user,
@@ -33,7 +33,7 @@ def make_ctx(
     body,
     *,
     state: CompactionState | None = None,
-    workspace=None,
+    store=None,
     aggressive: bool = False,
     budget: TokenBudget | None = None,
     protected_from: int | None = None,
@@ -41,7 +41,7 @@ def make_ctx(
     state = state if state is not None else CompactionState()
     counter = TokenCounter()
     return StageContext(
-        request=CompactionRequest(entries=list(body), workspace=workspace),
+        request=CompactionRequest(entries=list(body)),
         state=state,
         counter=counter,
         budget=budget
@@ -49,6 +49,7 @@ def make_ctx(
         current_tokens=counter.count(body),
         protected_from=len(body) if protected_from is None else protected_from,
         aggressive=aggressive,
+        store=store,
     )
 
 
@@ -140,47 +141,46 @@ async def test_clear_at_least_frees_tokens_even_under_target():
 # ---------------------------------------------------------------------------
 
 
-async def test_offload_writes_file_and_records_marker_data():
-    workspace = FakeWorkspace()
+async def test_offload_writes_store_and_records_marker_data():
+    store = FakeResultStore()
     body = _pairs(2, chars=5_000)
     budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
-    ctx = make_ctx(body, workspace=workspace, budget=budget)
+    ctx = make_ctx(body, store=store, budget=budget)
     stage = OffloadToolResults(min_chars=4_000, keep_last=1)
     assert await stage.plan(body, ctx) is True
-    assert workspace.files[".context/tool-c0.txt"] == "r" * 5_000
+    assert store.data["c0"] == "r" * 5_000
     record = ctx.state.offloaded["c0"]
-    assert record.path == ".context/tool-c0.txt"
     assert record.preview == "r" * 400
     assert record.chars == 5_000
     assert "c1" not in ctx.state.offloaded  # keep_last=1
 
 
-async def test_offload_inert_without_workspace():
+async def test_offload_inert_without_store():
     body = _pairs(3, chars=5_000)
-    ctx = make_ctx(body, workspace=None)
+    ctx = make_ctx(body, store=None)
     assert await OffloadToolResults(keep_last=0).plan(body, ctx) is False
 
 
 async def test_offload_skips_small_results():
-    workspace = FakeWorkspace()
+    store = FakeResultStore()
     body = _pairs(3, chars=100)
-    ctx = make_ctx(body, workspace=workspace)
+    ctx = make_ctx(body, store=store)
     assert (
         await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx) is False
     )
-    assert workspace.files == {}
+    assert store.data == {}
 
 
-async def test_offload_write_failure_skips_entry_without_raising():
+async def test_offload_store_failure_skips_entry_without_raising():
     body = _pairs(2, chars=5_000)
     budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
-    ctx = make_ctx(body, workspace=FailingWorkspace(), budget=budget)
+    ctx = make_ctx(body, store=FailingResultStore(), budget=budget)
     assert await OffloadToolResults(keep_last=0).plan(body, ctx) is False
     assert ctx.state.offloaded == {}
 
 
-async def test_offload_sanitizes_call_id_in_path():
-    workspace = FakeWorkspace()
+async def test_offload_keys_store_by_raw_call_id():
+    store = FakeResultStore()
     body = [
         ToolCallEntry(call_id="a/b:c", name="f", arguments="{}"),
         out("a/b:c", "r" * 5_000),
@@ -188,9 +188,10 @@ async def test_offload_sanitizes_call_id_in_path():
         out("recent", "r" * 5_000),
     ]
     budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
-    ctx = make_ctx(body, workspace=workspace, budget=budget)
+    ctx = make_ctx(body, store=store, budget=budget)
     await OffloadToolResults(keep_last=1).plan(body, ctx)
-    assert ctx.state.offloaded["a/b:c"].path == ".context/tool-a_b_c.txt"
+    assert "a/b:c" in ctx.state.offloaded
+    assert store.data["a/b:c"] == "r" * 5_000
 
 
 # ---------------------------------------------------------------------------
@@ -333,26 +334,11 @@ async def test_clear_proactive_never_touches_protected_results():
 
 
 async def test_offload_aggressive_archives_oversized_protected_result():
-    workspace = FakeWorkspace()
+    store = FakeResultStore()
     body = [call("giant"), out("giant", "g" * 40_000)]
     budget = TokenBudget(window=4_000, reserve_output=0, trigger=0.75, target=0.5)
     ctx = make_ctx(
-        body, workspace=workspace, aggressive=True, budget=budget, protected_from=0
+        body, store=store, aggressive=True, budget=budget, protected_from=0
     )
     assert await OffloadToolResults(keep_last=2).plan(body, ctx) is True
-    assert workspace.files[".context/tool-giant.txt"] == "g" * 40_000
-
-
-async def test_offload_inert_on_readonly_workspace():
-    class _ReadonlyPolicy:
-        allow_write = False
-
-    class _ReadonlyWorkspace(FakeWorkspace):
-        policy = _ReadonlyPolicy()
-
-    workspace = _ReadonlyWorkspace()
-    body = _pairs(3, chars=5_000)
-    budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
-    ctx = make_ctx(body, workspace=workspace, budget=budget)
-    assert await OffloadToolResults(keep_last=0).plan(body, ctx) is False
-    assert workspace.files == {}
+    assert store.data["giant"] == "g" * 40_000

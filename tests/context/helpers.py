@@ -62,21 +62,24 @@ class FakeProviderWithWindow:
         return self._window
 
 
-class FakeWorkspace:
-    """In-memory WorkspaceSession stub: write_text/read_text only."""
+class FakeResultStore:
+    """In-memory ResultStore stub: put/get."""
 
     def __init__(self) -> None:
-        self.files: dict[str, str] = {}
+        self.data: dict[str, str] = {}
 
-    async def write_text(self, path: str, content: str, *, create_only: bool = False):
-        self.files[path] = content
+    async def put(self, key: str, content: str) -> None:
+        self.data[key] = content
 
-    async def read_text(self, path: str, *, start=None, end=None):
-        return self.files[path]
+    async def get(self, key: str) -> str | None:
+        return self.data.get(key)
 
 
-class FailingWorkspace:
-    """A workspace whose writes always fail."""
+class FailingResultStore:
+    """A result store whose puts always fail."""
 
-    async def write_text(self, path: str, content: str, *, create_only: bool = False):
+    async def put(self, key: str, content: str) -> None:
         raise OSError("disk full")
+
+    async def get(self, key: str) -> str | None:
+        return None

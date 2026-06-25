@@ -38,9 +38,10 @@ Facts established, conclusions reached, and approaches ruled out (with brief \
 justification).
 
 ## Artifacts
-Files and paths created, modified, or archived — including any tool outputs \
-that were archived to workspace files (record the file path, not the \
-content) — plus exact identifiers, names, and IDs that later turns may need.
+Files and paths created, modified, or archived — plus exact identifiers, \
+names, and IDs that later turns may need. For tool outputs dropped from the \
+view, record the ``recall_tool_result`` call_id (not the content) so it can \
+be retrieved.
 
 ## Constraints & preferences
 Explicit rules the user gave: tone, style, must/must-not-do, deadlines, \

@@ -78,7 +78,7 @@ from ..providers.base import Provider
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
-from ..session import Session
+from ..session import Segment, Session
 from ..tools import Tool
 from ..tracing import NoopTracer, Span, Tracer, handoff_span, record_run_end, run_span
 
@@ -87,6 +87,12 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
+
+# Reserved key under which a context policy's cross-run carryover rides in a
+# finished run's session-segment ``meta``. Namespaced so ``meta`` can host
+# other co-tenants; the value is opaque to the loop (it just round-trips it
+# into the next run's ``context_policy_state``).
+CARRYOVER_META_KEY = "context_carryover"
 
 
 class RunLoop:
@@ -443,6 +449,14 @@ class RunLoop:
             workspace=active.workspace,
             cancel_token=self.cancel_token,
         )
+        # Read prior session history once, as segments: the flattened entries
+        # become the prefix, and the latest segment's ``meta`` seeds a fresh
+        # run's context-policy carryover (below).
+        segments: list[Segment] = []
+        if self.session is not None:
+            assert self.session_id is not None  # validated in __init__
+            segments = await self.session.segments(self.session_id)
+        history = [entry for seg in segments for entry in seg.entries]
         # The transcript is [system] + prior session history + this run's own
         # entries. ``run_start`` marks the boundary; on resume the run's own
         # entries come from the snapshot (the checkpoint stores only those), so
@@ -453,6 +467,7 @@ class RunLoop:
             extra_instructions,
             active.plugins.instructions,
             run_ctx,
+            history,
         )
         run_start = len(prefix)
         run_ctx.entries.extend(prefix)
@@ -464,6 +479,17 @@ class RunLoop:
         else:
             run_ctx.entries.extend(self._user_input_entries())
 
+        # Seed the context policy's per-run scratch: the resuming run's own
+        # checkpoint wins; otherwise a fresh run inherits the previous run's
+        # carryover from the latest session segment's meta; else empty.
+        if snapshot is not None:
+            context_state = dict(snapshot.context_policy_state)
+        elif segments:
+            carryover = (segments[-1].meta or {}).get(CARRYOVER_META_KEY)
+            context_state = dict(carryover) if isinstance(carryover, dict) else {}
+        else:
+            context_state = {}
+
         return RunState(
             run_ctx=run_ctx,
             active=active,
@@ -473,9 +499,7 @@ class RunLoop:
             last_input_tokens=(
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
-            context_policy_state=(
-                dict(snapshot.context_policy_state) if snapshot is not None else {}
-            ),
+            context_policy_state=context_state,
         )
 
     async def _resolve_active(
@@ -597,12 +621,8 @@ class RunLoop:
             provider=primary,
             model=getattr(primary, "model", None),
             last_input_tokens=state.last_input_tokens,
-            session_id=self.session_id,
-            run_id=self.run_id,
             overflow=False,
             scratch=state.context_policy_state,
-            workspace=state.run_ctx.workspace,
-            tool_names=frozenset(state.active.tools_by_name),
         )
         ctx_result = await self.context_policy.compact(request)
         view = await self._build_view(state, ctx_result)
@@ -909,11 +929,15 @@ class RunLoop:
         system_extra: str | None,
         plugin_instructions: list[str] | None,
         run_ctx: "RunContext[Any]",
+        history: list[TranscriptEntry],
     ) -> list[TranscriptEntry]:
         """The run's non-run prefix: the system entry plus prior session history.
 
-        Everything appended after this prefix is the run's own contribution; its
-        length is the run's :attr:`RunState.run_start` boundary.
+        ``history`` is the flattened prior-session transcript, already fetched
+        in ``_bootstrap`` from ``session.segments`` (one read serves both the
+        prefix and the carryover meta). Everything appended after this prefix is
+        the run's own contribution; its length is the run's
+        :attr:`RunState.run_start` boundary.
         """
         entries: list[TranscriptEntry] = []
         system_text = await self._system_prompt(
@@ -924,10 +948,7 @@ class RunLoop:
             plugin_instructions=plugin_instructions,
         )
         entries.extend(self._system_entry(system_text))
-
-        if self.session is not None:
-            assert self.session_id is not None  # validated in __init__
-            entries.extend(await self.session.load(self.session_id))
+        entries.extend(history)
         return entries
 
     def _user_input_entries(self) -> list[TranscriptEntry]:
@@ -1025,6 +1046,18 @@ class RunLoop:
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             add_tool("handoff", build_handoff_tool(handoff_obj))
+        # Tools the context policy provides (e.g. recall_tool_result). Added
+        # last and skipped on conflict, so an explicit tool of the same name
+        # from any source above always wins.
+        policy_tools = getattr(self.context_policy, "tools", None)
+        for t in policy_tools() if callable(policy_tools) else []:
+            if t.name in tools:
+                logger.debug(
+                    "context-policy tool %r shadowed by an explicit tool; skipping",
+                    t.name,
+                )
+                continue
+            tools[t.name] = t
         return tools
 
     def _resolve_providers(
@@ -1076,12 +1109,22 @@ class RunLoop:
         assert self.session is not None and self.session_id is not None
         run_entries = state.run_entries
         if run_entries:
+            # Carry the policy's cross-run decisions in the segment ``meta`` so a
+            # follow-up run resumes them without re-deriving — durably, unlike
+            # the old in-process cache. The value is opaque to the loop.
+            carryover_fn = getattr(self.context_policy, "carryover", None)
+            carryover = (
+                carryover_fn(state.context_policy_state)
+                if callable(carryover_fn)
+                else None
+            )
+            meta = {CARRYOVER_META_KEY: carryover} if carryover is not None else None
             # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
             # argument; ``None`` when not checkpointing -> the store generates one).
             # Append is idempotent on it, so a resumed completion that the
             # crash-window left re-runnable can never double-write the run.
             await self.session.append(
-                self.session_id, run_entries, run_id=self.run_id
+                self.session_id, run_entries, run_id=self.run_id, meta=meta
             )
 
     async def _build_view(

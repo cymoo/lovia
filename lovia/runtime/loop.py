@@ -470,6 +470,11 @@ class RunLoop:
             history,
         )
         run_start = len(prefix)
+        # How many leading entries (0 or 1) the runner's own system prompt
+        # occupies. Tracked so a later handoff strips exactly the runner's head
+        # and never a user-supplied leading ``system`` input entry (which a
+        # systemless agent leaves at transcript[0]). ``prefix`` is head + history.
+        system_head_len = len(prefix) - len(history)
         run_ctx.entries.extend(prefix)
         if snapshot is not None:
             run_ctx.entries.extend(snapshot.entries)
@@ -494,6 +499,7 @@ class RunLoop:
             run_ctx=run_ctx,
             active=active,
             run_start=run_start,
+            system_head_len=system_head_len,
             turns=snapshot.turns if snapshot is not None else 0,
             extra_instructions=extra_instructions,
             last_input_tokens=(
@@ -1000,24 +1006,22 @@ class RunLoop:
             extra=state.extra_instructions,
             plugin_instructions=state.active.plugins.instructions,
         )
-        old_head_len = (
-            1
-            if state.transcript
-            and isinstance(state.transcript[0], InputEntry)
-            and state.transcript[0].role == "system"
-            else 0
-        )
+        old_head_len = state.system_head_len
         body: list[TranscriptEntry] = state.transcript[old_head_len:]
         head = self._system_entry(new_system)
         # In-place so RunContext.entries keeps observing the same list.
         state.transcript[:] = [*head, *body]
-        # ``run_start`` marks this run's first entry, just past the system entry
-        # + prior history. The body is untouched, so the boundary only moves when
-        # the leading system entry appears or disappears — i.e. when the two
+        # Strip exactly the runner's old head (``system_head_len`` — tracked, not
+        # inferred from transcript[0], which a systemless agent may leave at a
+        # user-supplied ``system`` input entry) and prepend the new agent's.
+        # ``run_start`` marks this run's first entry, just past the head + prior
+        # history; the body is otherwise untouched, so the boundary shifts only
+        # by the change in head length — usually 0, non-zero only when the two
         # agents differ in whether they render a system prompt (an agent with
         # empty ``instructions`` and no workspace/plugins/structured-output
-        # renders none). Usually both have one and this delta is 0.
+        # renders none).
         state.run_start += len(head) - old_head_len
+        state.system_head_len = len(head)
 
     def _collect_tools(
         self,

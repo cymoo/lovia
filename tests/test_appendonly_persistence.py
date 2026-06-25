@@ -25,7 +25,7 @@ from lovia import (
     Runner,
 )
 from lovia.checkpointer import RunHead
-from lovia.messages import Usage
+from lovia.messages import Usage, system, user
 from lovia.stores import SQLiteCheckpointer
 from lovia.transcript import AssistantTextEntry, InputEntry
 
@@ -297,3 +297,36 @@ async def test_handoff_from_systemless_agent_keeps_run_boundary() -> None:
         "second",
         "final",
     ]
+
+
+async def test_handoff_keeps_user_supplied_system_input_entry() -> None:
+    # A systemless agent leaves a user-supplied leading ``system`` input entry at
+    # transcript[0]. A handoff must NOT mistake it for the runner's own head:
+    # dropping it would lose run input and, with a systemless target, drive
+    # run_start negative — truncating the persisted segment.
+    session = InMemorySession()
+    specialist = Agent(name="specialist", model=ScriptedProvider([text("final")]))
+    triage = Agent(
+        name="triage",  # systemless: transcript[0] is the input system msg, not a head
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="c1")]
+        ),
+        handoffs=[Handoff(target=specialist)],
+    )
+    result = await Runner.run(
+        triage,
+        [system("SYS-INPUT"), user("hello")],
+        session=session,
+        session_id="u1",
+    )
+    assert result.output == "final"
+
+    # The single run-segment retains BOTH input entries (nothing dropped, no
+    # truncation from a negative run_start).
+    [seg] = await session.segments("u1")
+    contents = _contents(seg.entries)
+    assert "SYS-INPUT" in contents and "hello" in contents
+    # The loaded transcript still leads with the user-supplied system entry.
+    full = await session.load("u1")
+    assert isinstance(full[0], InputEntry) and full[0].role == "system"
+    assert full[0].content == "SYS-INPUT"

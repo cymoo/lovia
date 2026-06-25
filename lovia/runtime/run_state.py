@@ -124,6 +124,12 @@ class RunState:
     # persisted: on resume the checkpoint's entries ARE this run's entries, so
     # ``run_start`` is re-derived past the reloaded history.
     run_start: int = 0
+    # Leading entries (0 or 1) the runner's own system prompt occupies at the
+    # head of the transcript. Tracked explicitly — never inferred from
+    # ``transcript[0].role`` — so a handoff swaps exactly the runner's head and
+    # never mistakes a user-supplied leading ``system`` input entry (reachable
+    # under a systemless agent) for it. Re-derived at bootstrap; not persisted.
+    system_head_len: int = 0
 
     @property
     def agent(self) -> Agent[Any]:

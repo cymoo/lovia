@@ -294,7 +294,7 @@ the `lovia.providers` entry-point group.
 ### Handoff
 
 Handoff lets one agent transfer control to a specialist. The transcript follows
-the handoff, optionally filtered.
+the handoff, so the specialist continues with the full conversation.
 
 ```python
 from lovia import Agent, Handoff, Runner

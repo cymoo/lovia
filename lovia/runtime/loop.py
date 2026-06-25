@@ -1145,7 +1145,7 @@ class RunLoop:
         if not result.changed:
             return state.transcript
         view = result.entries
-        if view and isinstance(view[0], InputEntry) and view[0].role == "system":
+        if leading_system_count(view):
             return view
         # The compacted view dropped the leading system run. Re-prepend the
         # *existing* one(s) from the transcript rather than re-rendering: a fresh

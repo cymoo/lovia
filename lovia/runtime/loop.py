@@ -1152,6 +1152,13 @@ class RunLoop:
         # ``ctx.turn`` and could diverge from both the stored entry and what
         # ``RunContext.system_prompt`` reports — this keeps the view's system
         # text identical to what every other turn (and the property) sees.
+        #
+        # Keyed off the leading ``system``-role entry — the ``split_system``
+        # convention every model call and the provider adapters use — NOT the
+        # runner-head count (``system_head_len``) that handoff uses. The two
+        # answer different questions: a handoff must NOT strip a caller-supplied
+        # leading ``system`` input (it is run content), whereas here that same
+        # entry IS the system the model normally sees and must be restored.
         head = state.transcript[0] if state.transcript else None
         if isinstance(head, InputEntry) and head.role == "system":
             return [head, *view]

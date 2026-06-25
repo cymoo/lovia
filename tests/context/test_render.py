@@ -31,12 +31,18 @@ def _assistant(s: str) -> AssistantTextEntry:
 
 
 def test_split_system():
-    entries = [system("sys"), user("hi")]
-    head, body = split_system(entries)
-    assert head is entries[0]
-    assert body == [entries[1]]
-    head2, body2 = split_system([user("hi")])
-    assert head2 is None and len(body2) == 1
+    sys0, user0 = system("sys"), user("hi")
+    systems, body = split_system([sys0, user0])
+    assert systems == [sys0]
+    assert body == [user0]
+    # No leading system -> empty system run.
+    systems2, body2 = split_system([user0])
+    assert systems2 == [] and body2 == [user0]
+    # The whole leading run is collected, not just the first (e.g. a handoff that
+    # leaves the new agent's head in front of a caller-supplied system input).
+    a, b = system("a"), system("b")
+    systems3, body3 = split_system([a, b, user0])
+    assert systems3 == [a, b] and body3 == [user0]
 
 
 def test_render_with_empty_state_passes_entries_through_by_reference():

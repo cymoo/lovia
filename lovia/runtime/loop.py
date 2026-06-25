@@ -45,6 +45,7 @@ from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import CheckpointOptions
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
+from ..context.render import split_system
 from ..exceptions import (
     ContextOverflowError,
     MaxTurnsExceeded,
@@ -1136,32 +1137,32 @@ class RunLoop:
     ) -> list[TranscriptEntry]:
         """Return the per-call view to send to the provider.
 
-        Compaction is view-only: ``state.transcript`` is never mutated. When
-        the policy dropped the leading system message (e.g. it summarized the
-        head), re-prepend the system entry already stored at the head of the
-        transcript so provider adapters still see one.
+        Compaction is view-only: ``state.transcript`` is never mutated. When the
+        policy dropped the leading system message(s) (e.g. it summarized the
+        head), re-prepend the system entries already stored at the head of the
+        transcript so provider adapters still see them.
         """
         if not result.changed:
             return state.transcript
         view = result.entries
-        if view and isinstance(view[0], InputEntry) and view[0].role == "system":
+        if split_system(view)[0]:
             return view
-        # The compacted view dropped the leading system entry. Re-prepend the
-        # *existing* one from the transcript rather than re-rendering: a fresh
+        # The compacted view dropped the leading system run. Re-prepend the
+        # *existing* one(s) from the transcript rather than re-rendering: a fresh
         # render would re-run dynamic instruction fragments at a later
-        # ``ctx.turn`` and could diverge from both the stored entry and what
+        # ``ctx.turn`` and could diverge from both the stored entries and what
         # ``RunContext.system_prompt`` reports — this keeps the view's system
         # text identical to what every other turn (and the property) sees.
         #
-        # Keyed off the leading ``system``-role entry — the ``split_system``
-        # convention every model call and the provider adapters use — NOT the
-        # runner-head count (``system_head_len``) that handoff uses. The two
-        # answer different questions: a handoff must NOT strip a caller-supplied
-        # leading ``system`` input (it is run content), whereas here that same
-        # entry IS the system the model normally sees and must be restored.
-        head = state.transcript[0] if state.transcript else None
-        if isinstance(head, InputEntry) and head.role == "system":
-            return [head, *view]
+        # Uses the ``split_system`` leading-run convention (every model call and
+        # the provider adapters use it), NOT the runner-head count
+        # (``system_head_len``) that handoff uses. The two answer different
+        # questions: a handoff must NOT strip a caller-supplied leading
+        # ``system`` input (it is run content), whereas here those same entries
+        # ARE the system the model normally sees and must be restored.
+        systems, _ = split_system(state.transcript)
+        if systems:
+            return [*systems, *view]
         return view
 
     def _compacted_event(

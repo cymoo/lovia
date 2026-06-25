@@ -150,7 +150,7 @@ class Compaction:
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
         state = CompactionState.load(req.scratch)
-        system, body = split_system(req.entries)
+        _, body = split_system(req.entries)
 
         # The running summary is carried across runs (in the segment ``meta``),
         # so the body prefix it claims to cover can differ from the live one —

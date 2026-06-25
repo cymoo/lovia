@@ -26,16 +26,25 @@ from ..transcript import (
 
 def split_system(
     entries: list[TranscriptEntry],
-) -> tuple[InputEntry | None, list[TranscriptEntry]]:
-    """Split off the leading system message; everything else is the *body*.
+) -> tuple[list[TranscriptEntry], list[TranscriptEntry]]:
+    """Split off the leading *run* of system messages; the rest is the *body*.
 
-    Sticky state indexes (summary coverage) are body-relative so they stay
-    valid when the system prompt is re-rendered between turns or swapped on
-    handoff.
+    Returns every consecutive leading ``system`` entry, not just the first. A
+    caller may pass a ``system()`` input under a systemless agent, so after a
+    handoff the transcript can briefly lead with two systems (the new agent's
+    head + the caller's). Collapsing the whole leading run keeps the body — and
+    thus the body-relative summary coverage — invariant when a handoff changes
+    *how many* leading system entries there are, so the running summary survives
+    instead of being reset. (Provider adapters merge all system messages into
+    one ``system`` param regardless of count.)
     """
-    if entries and isinstance(entries[0], InputEntry) and entries[0].role == "system":
-        return entries[0], entries[1:]
-    return None, list(entries)
+    n = 0
+    for entry in entries:
+        if isinstance(entry, InputEntry) and entry.role == "system":
+            n += 1
+        else:
+            break
+    return list(entries[:n]), list(entries[n:])
 
 
 def render_view(
@@ -47,7 +56,7 @@ def render_view(
     Never mutates ``entries``. With an empty state this returns the same
     entry objects in a new list.
     """
-    system, body = split_system(entries)
+    systems, body = split_system(entries)
     summary = state.summary
     if summary is not None and 0 < summary.covered <= len(body):
         rendered = [
@@ -56,9 +65,7 @@ def render_view(
         ]
     else:
         rendered = render_entries(body, state)
-    if system is not None:
-        return [system, *rendered]
-    return rendered
+    return [*systems, *rendered]
 
 
 def render_entries(

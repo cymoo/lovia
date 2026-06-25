@@ -130,7 +130,7 @@ Handoffs use a **sentinel pattern** across three modules. When a handoff tool is
 2. `runtime/tool_calls.py:ToolCallProcessor.process()` — detects `_HandoffSignal` via `isinstance()`, sets `state.pending_handoff`, and writes a text result to the transcript.
 3. `runtime/loop.py:RunLoop._apply_handoff()` — after the tool calls are processed, the loop checks `state.pending_handoff`; if set, it resolves a fresh `ActiveAgent` for the target via `_resolve_active()` (its own providers, tools, structured output, workspace, and plugin contributions) and swaps it in atomically with `RunState.activate()`, then rewrites the leading system message via `_reset_transcript_for_handoff()`.
 
-This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type. The optional `Handoff.input_filter` rewrites the transcript body as `TranscriptEntry` objects (not flattened `Message`s), so reasoning, server-side tool calls, and provider metadata survive the rewrite. The run-level `extra_instructions` addendum is re-applied to every agent reached by a handoff.
+This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type. A handoff swaps only the leading system message for the target agent's and carries the conversation body across intact — the new agent sees the full prior context, tool calls included (providers replay calls for tools the new agent lacks fine, as long as each call keeps its paired result). The run-level `extra_instructions` addendum is re-applied to every agent reached by a handoff.
 
 ### Session vs Checkpointer
 
@@ -188,9 +188,9 @@ method handles both triggers:
   `ResumeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
   `Compaction` additionally keeps a bounded in-process cache keyed by
   `session_id` so a *new run* on the same session resumes prior decisions; a
-  structural `fingerprint` of the covered prefix detects rewritten history
-  (handoff `input_filter`) and resets the summary while keeping
-  call_id-keyed decisions.
+  structural `fingerprint` of the covered prefix detects a rewritten prefix
+  (e.g. history trimmed before a new run reuses a carried summary) and resets
+  the summary while keeping call_id-keyed decisions.
 - **Markers and recovery.** Cleared/offloaded results render as markers that
   preserve `call_id`/`is_error` (pair validity). Markers mention the opt-in
   `lovia.tools.recall_tool_result` tool only when the agent actually has it

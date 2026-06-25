@@ -291,7 +291,7 @@ async def test_ratio_calibrates_against_real_usage():
 
 
 # ---------------------------------------------------------------------------
-# Fingerprint reset (handoff / input_filter rewrote history)
+# Fingerprint reset (covered prefix rewritten out from under the summary)
 # ---------------------------------------------------------------------------
 
 

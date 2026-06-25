@@ -3,24 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, CheckpointOptions, Handoff, Runner, tool
-from lovia.handoff import drop_stale_tool_calls
+from lovia import Agent, CheckpointOptions, Runner, tool
 from lovia.exceptions import BudgetExceeded, ContextOverflowError, UserError
 from lovia.plugins.mcp import MCP
-from lovia.messages import AssistantTurn, Message, ToolCall, Usage
+from lovia.messages import AssistantTurn, ToolCall, Usage
 from lovia.reliability import RunBudget
 from lovia.stores import InMemoryCheckpointer, InMemorySession
 from lovia.context import CompactionRequest, ContextResult
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
-    ReasoningEntry,
     TextDelta,
     entries_to_messages,
 )
@@ -435,55 +432,6 @@ async def test_extra_instructions_persist_across_handoff() -> None:
     assert system_msg.role == "system"
     assert "SPECIALIST-BASE" in system_msg.content
     assert "RUN-ADDENDUM" in system_msg.content
-
-
-# ---------------------------------------------------------------------------
-# A handoff input_filter receives rich TranscriptEntry objects (no round-trip)
-# ---------------------------------------------------------------------------
-
-
-async def test_handoff_input_filter_receives_rich_entries() -> None:
-    captured: list[Any] = []
-
-    def recording_filter(entries: list[Any]) -> list[Any]:
-        captured.extend(entries)
-        return drop_stale_tool_calls(entries)
-
-    specialist = Agent(name="Specialist", model=ScriptedProvider([text("done")]))
-    # One assistant turn carrying reasoning + text + the transfer tool call, so
-    # the transcript body the filter sees has rich entries to preserve.
-    mixed = AssistantTurn(
-        content="let me hand this off",
-        tool_calls=[
-            ToolCall(
-                id="t1",
-                name="transfer_to_specialist",
-                arguments=json.dumps({"reason": "x"}),
-            )
-        ],
-        usage=Usage(input_tokens=1, output_tokens=1),
-    )
-    setattr(mixed, "_scripted_reasoning_content", "internal reasoning")
-    triage = Agent(
-        name="Triage",
-        model=ScriptedProvider([mixed]),
-        handoffs=[Handoff(target=specialist, input_filter=recording_filter)],
-    )
-
-    result = await Runner.run(triage, "go")
-    assert result.output == "done"
-
-    # A ReasoningEntry has no flat-Message representation, so its presence proves
-    # the filter received entries directly — the lossy round-trip is gone.
-    assert any(isinstance(e, ReasoningEntry) for e in captured)
-    assert any(isinstance(e, AssistantTextEntry) for e in captured)
-    assert not any(isinstance(e, Message) for e in captured)
-
-    # drop_stale_tool_calls dropped the tool-call/result entries; the specialist
-    # sees no tool messages and no dangling tool_calls, but kept the text.
-    specialist_inbox = specialist.model.calls[0]  # type: ignore[attr-defined]
-    assert all(m.role != "tool" for m in specialist_inbox)
-    assert all(not (m.role == "assistant" and m.tool_calls) for m in specialist_inbox)
 
 
 # ---------------------------------------------------------------------------

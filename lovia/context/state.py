@@ -55,9 +55,10 @@ class SummaryState:
     """Number of leading *body* entries (transcript minus the leading system
     message) the summary replaces."""
     fingerprint: str
-    """Digest of the covered prefix (:func:`fingerprint`). A mismatch means
-    the transcript was rewritten under us (handoff, input filter) and the
-    summary no longer describes what it claims to cover."""
+    """Digest of the covered prefix (:func:`fingerprint`). A mismatch means the
+    covered prefix changed under us — e.g. the summary was carried into a new
+    run whose session history was trimmed or rewritten — so it no longer
+    describes what it claims to cover."""
 
 
 @dataclass
@@ -171,8 +172,8 @@ def fingerprint(entries: Sequence[TranscriptEntry]) -> str:
     """Cheap structural digest of a transcript prefix.
 
     Captures entry kinds, call ids/roles, and content lengths — enough to
-    detect a handoff or ``input_filter`` rewriting history out from under a
-    summary, without hashing megabytes of content.
+    detect the covered prefix being rewritten out from under a summary (e.g.
+    across a cross-run carryover), without hashing megabytes of content.
     """
     h = hashlib.sha1()
     for entry in entries:

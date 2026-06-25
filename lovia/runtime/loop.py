@@ -764,7 +764,7 @@ class RunLoop:
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
         with handoff_span(tracer, from_agent=prev_agent.name, to_agent=target.name):
             state.activate(await self._resolve_active(target, resources))
-            await self._reset_transcript_for_handoff(state, signal.handoff)
+            await self._reset_transcript_for_handoff(state)
 
         ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=target)
         if prev_agent.hooks is not None and prev_agent.hooks is not target.hooks:
@@ -984,23 +984,15 @@ class RunLoop:
             parts.append(format_output_instructions(structured_output))
         return "\n\n".join(part for part in parts if part).strip()
 
-    async def _reset_transcript_for_handoff(
-        self, state: RunState, handoff: Handoff | None
-    ) -> None:
+    async def _reset_transcript_for_handoff(self, state: RunState) -> None:
         """Swap the leading system message for the new active agent.
 
-        Operates on entries directly so nothing is lost in translation: the
-        optional :class:`Handoff` ``input_filter`` receives and returns
-        :class:`TranscriptEntry` objects, so the rich transcript (reasoning,
-        server-side tool calls, provider metadata) survives the rewrite and the
-        Session/checkpoint keep full fidelity.
+        Only the system entry changes: the new agent re-renders its own system
+        prompt and the old one is dropped. The conversation body (prior history
+        + this run's entries) is left intact, so the run's contribution stays
+        contiguous at ``transcript[run_start:]`` and the Session/checkpoint keep
+        full fidelity.
         """
-        # Freeze this run's entries from the current segment BEFORE the rewrite:
-        # an input_filter may drop or transform body entries (including prior
-        # session history), so capture the run's true, unfiltered contribution
-        # now — that, not the filtered view, is what the Session/checkpoint store.
-        state.pre_handoff_entries.extend(state.transcript[state.run_start :])
-
         new_system = await self._system_prompt(
             state.agent,
             state.active.structured_output,
@@ -1008,16 +1000,24 @@ class RunLoop:
             extra=state.extra_instructions,
             plugin_instructions=state.active.plugins.instructions,
         )
-        body: list[TranscriptEntry] = list(state.transcript)
-        if body and isinstance(body[0], InputEntry) and body[0].role == "system":
-            body = body[1:]
-        if handoff is not None and handoff.input_filter is not None:
-            body = list(handoff.input_filter(body))
+        old_head_len = (
+            1
+            if state.transcript
+            and isinstance(state.transcript[0], InputEntry)
+            and state.transcript[0].role == "system"
+            else 0
+        )
+        body: list[TranscriptEntry] = state.transcript[old_head_len:]
         head = self._system_entry(new_system)
         # In-place so RunContext.entries keeps observing the same list.
         state.transcript[:] = [*head, *body]
-        # Everything appended from here is the next segment's run contribution.
-        state.run_start = len(state.transcript)
+        # ``run_start`` marks this run's first entry, just past the system entry
+        # + prior history. The body is untouched, so the boundary only moves when
+        # the leading system entry appears or disappears — i.e. when the two
+        # agents differ in whether they render a system prompt (an agent with
+        # empty ``instructions`` and no workspace/plugins/structured-output
+        # renders none). Usually both have one and this delta is 0.
+        state.run_start += len(head) - old_head_len
 
     def _collect_tools(
         self,

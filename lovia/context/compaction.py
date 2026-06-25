@@ -152,16 +152,18 @@ class Compaction:
         state = CompactionState.load(req.scratch)
         system, body = split_system(req.entries)
 
-        # A handoff or input_filter may have rewritten history out from under
-        # the summary; detect it and drop the summary (clear/offload records
-        # are keyed by call_id and survive rewrites).
+        # The running summary is carried across runs (in the segment ``meta``),
+        # so the body prefix it claims to cover can differ from the live one —
+        # e.g. a follow-up run whose session history was trimmed or rewritten.
+        # Detect that and drop the summary (clear/offload records are keyed by
+        # call_id and survive such rewrites).
         summary = state.summary
         if summary is not None and (
             not 0 < summary.covered <= len(body)
             or fingerprint(body[: summary.covered]) != summary.fingerprint
         ):
             logger.info(
-                "context: transcript prefix changed (handoff or filter); "
+                "context: covered transcript prefix changed; "
                 "resetting running summary"
             )
             state.summary = None

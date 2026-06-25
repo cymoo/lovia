@@ -48,7 +48,7 @@ async def test_offload_archives_old_result_and_view_carries_marker():
     tool_messages = {
         m.tool_call_id: m.content for m in provider.calls[0] if m.role == "tool"
     }
-    assert "archived to save context" in tool_messages["c1"]
+    assert "trimmed to a preview to save context" in tool_messages["c1"]
     assert "alpha beta" in tool_messages["c1"]  # preview included
     assert 'recall_tool_result("c1")' in tool_messages["c1"]
     assert tool_messages["c2"] == BIG
@@ -57,8 +57,8 @@ async def test_offload_archives_old_result_and_view_carries_marker():
     assert len(compacted) == 1
     assert compacted[0].reason == "offload"
 
-    # The session still holds the untouched output (transcript is the source
-    # of truth; the store is a cache on top of it).
+    # The session still holds the untouched output today; the store is the
+    # durable copy layered on top (for when the transcript no longer retains it).
     persisted = await sess.load("s1")
     full = [
         e for e in persisted if isinstance(e, ToolResultEntry) and e.call_id == "c1"
@@ -103,3 +103,49 @@ async def test_runner_dispatches_policy_provided_recall_tool():
         if isinstance(e, ToolResultEntry) and e.call_id == "call_recall_tool_result"
     ]
     assert recalled and recalled[0].output == BIG
+
+
+async def test_offload_without_store_markers_and_recall_falls_back():
+    """Storeless offload — the default ``Compaction(context_window=...)`` config
+    the runtime builds — still replaces big results with a preview marker, and
+    recall recovers the full output from the transcript (no store needed)."""
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="t", instructions="x", model=provider)
+    sess = InMemorySession()
+    await sess.append("s1", [call("c1"), out("c1", BIG), call("c2"), out("c2", BIG)])
+    # No store passed — exactly what loop.py / web/app.py construct by default.
+    pipeline = Compaction(
+        context_window=2_500,
+        reserve_output_tokens=0,
+        stages=[OffloadToolResults(min_chars=1_000, keep_last=1)],
+    )
+
+    events_seen: list = []
+    async for ev in Runner.stream(
+        agent,
+        "summarize the data",
+        context_policy=pipeline,
+        session=sess,
+        session_id="s1",
+    ):
+        events_seen.append(ev)
+
+    # Offload ran without a store: the older big result became a preview marker;
+    # the newest stayed verbatim (keep_last=1).
+    tool_messages = {
+        m.tool_call_id: m.content for m in provider.calls[0] if m.role == "tool"
+    }
+    assert "trimmed to a preview to save context" in tool_messages["c1"]
+    assert "alpha beta" in tool_messages["c1"]  # preview kept inline
+    assert 'recall_tool_result("c1")' in tool_messages["c1"]
+    assert tool_messages["c2"] == BIG
+
+    # The stage still fired (the pipeline reports it)...
+    compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
+    assert len(compacted) == 1 and compacted[0].reason == "offload"
+
+    # ...and although nothing was archived, recall recovers c1 from the
+    # transcript via the entries-only fallback (store=None).
+    persisted = await sess.load("s1")
+    ctx = RunContext(context=None, entries=persisted, agent=agent)
+    assert await run_tool(make_recall_tool(None), {"call_id": "c1"}, ctx) == BIG

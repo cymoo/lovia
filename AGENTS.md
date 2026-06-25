@@ -158,7 +158,7 @@ method handles both triggers:
 
 - **Plan/render split.** Stages never transform views. They record *sticky
   decisions* into `CompactionState` (cleared call_ids, offloaded
-  call_id→file-path records, running-summary text + coverage), and the pure
+  call_id→preview records, running-summary text + coverage), and the pure
   function `render_view(transcript, state)` rebuilds the per-call view.
   Decisions are monotonic, so the rendered prompt prefix is byte-stable
   across turns — that is what keeps provider prompt caches warm. Never make a
@@ -167,8 +167,9 @@ method handles both triggers:
   of the usable window); a burst then shrinks the view to `compact_to`
   (default 0.50). Both accept a fraction (float) or absolute tokens (int).
   `TokenBudget` owns the math; `reserve_output_tokens` is subtracted first.
-- **Cheap-first stages**: `OffloadToolResults` (archive huge results to
-  workspace files; inert without a writable workspace) → `ClearToolResults`
+- **Cheap-first stages**: `OffloadToolResults` (replace huge results with a
+  preview marker; archive the full output to the result store when one is set,
+  else recall falls back to the transcript) → `ClearToolResults`
   (replace older results with recall markers; Anthropic `clear_tool_uses`
   semantics) → `SummarizeHistory` (incremental LLM summary of the older
   prefix; anti-thrash skip below 10% projected savings; per-run circuit

@@ -93,9 +93,9 @@ def clear_marker(call_id: str) -> str:
 
 
 def offload_marker(record: OffloadRecord, call_id: str) -> str:
-    """Inline placeholder for a tool result archived to the result store."""
+    """Inline placeholder for a large tool result trimmed to a preview."""
     return (
-        f"[Tool result ({record.chars:,} chars) archived to save context.\n"
+        f"[Tool result ({record.chars:,} chars) trimmed to a preview to save context.\n"
         f"Preview:\n{record.preview}\n"
         f'Call recall_tool_result("{call_id}") for the full output.]'
     )

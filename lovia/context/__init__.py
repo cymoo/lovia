@@ -3,7 +3,7 @@
 Compaction is a per-call view transform: a :class:`ContextPolicy` shapes only
 what is sent to the provider for one model call and never mutates the
 transcript or the Session. The default :class:`Compaction` is *sticky*:
-its decisions (cleared tool results, archived files, the running summary)
+its decisions (cleared and offloaded tool results, the running summary)
 are recorded in per-run scratch state and replayed verbatim on later calls,
 so the rendered prompt prefix stays byte-stable across turns — prompt-cache
 friendly — while the stored history remains the untouched source of truth.

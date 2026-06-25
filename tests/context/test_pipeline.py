@@ -33,6 +33,7 @@ from .helpers import (
     call,
     out,
     req,
+    system,
     user,
 )
 
@@ -310,6 +311,37 @@ async def test_rewritten_prefix_resets_summary_but_keeps_clear_decisions():
     # The stale summary was dropped and rebuilt from scratch (prior=None).
     assert summarizer.priors == [None, None]
     assert res.compacted is True
+
+
+async def test_leading_system_run_swap_keeps_summary():
+    # A handoff swaps/adds a leading system entry but leaves the body intact.
+    # split_system collapses the whole leading system *run*, so the body — and
+    # the body-relative summary coverage — stays invariant; the running summary
+    # survives (re-used as the prior) instead of being reset like a real prefix
+    # rewrite (contrast the test above).
+    summarizer = FakeSummarizer()
+    pipeline = _pipeline(
+        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
+    )
+    scratch: dict = {}
+    body = [user("x" * 100) for _ in range(30)]
+    # Systemless agent carrying a caller-supplied leading system() input.
+    await pipeline.compact(req([system("CALLER"), *body], scratch=scratch))
+    before = CompactionState.load(scratch).summary
+    assert before is not None
+
+    # Handoff to a systemful agent: a SECOND leading system appears, body intact.
+    await pipeline.compact(
+        req([system("AGENT"), system("CALLER"), *body], scratch=scratch)
+    )
+    after = CompactionState.load(scratch).summary
+
+    # Summary survived byte-for-byte (NOT reset): same coverage, fingerprint, and
+    # text — so the swap was a no-op for compaction. And no summarization
+    # restarted from scratch after the handoff (contrast the reset test's
+    # priors == [None, None]).
+    assert after == before
+    assert None not in summarizer.priors[1:]
 
 
 # ---------------------------------------------------------------------------

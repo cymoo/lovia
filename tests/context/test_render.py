@@ -9,13 +9,15 @@ from lovia.context import (
     TokenCounter,
     render_view,
 )
-from lovia.context.render import protected_tail_start, split_system
+from lovia.context.render import protected_tail_start
 from lovia.context.state import fingerprint
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
     ToolResultEntry,
     entry_to_dict,
+    leading_system_count,
+    split_system,
 )
 
 from .helpers import call, out, system, user
@@ -31,12 +33,27 @@ def _assistant(s: str) -> AssistantTextEntry:
 
 
 def test_split_system():
-    entries = [system("sys"), user("hi")]
-    head, body = split_system(entries)
-    assert head is entries[0]
-    assert body == [entries[1]]
-    head2, body2 = split_system([user("hi")])
-    assert head2 is None and len(body2) == 1
+    sys0, user0 = system("sys"), user("hi")
+    systems, body = split_system([sys0, user0])
+    assert systems == [sys0]
+    assert body == [user0]
+    # No leading system -> empty system run.
+    systems2, body2 = split_system([user0])
+    assert systems2 == [] and body2 == [user0]
+    # The whole leading run is collected, not just the first (e.g. a handoff that
+    # leaves the new agent's head in front of a caller-supplied system input).
+    a, b = system("a"), system("b")
+    systems3, body3 = split_system([a, b, user0])
+    assert systems3 == [a, b] and body3 == [user0]
+
+
+def test_leading_system_count():
+    u = user("hi")
+    assert leading_system_count([]) == 0
+    assert leading_system_count([u]) == 0
+    assert leading_system_count([system("a"), system("b"), u]) == 2
+    # Stops at the first non-system; a later system does not count.
+    assert leading_system_count([system("a"), u, system("b")]) == 1
 
 
 def test_render_with_empty_state_passes_entries_through_by_reference():

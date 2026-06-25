@@ -26,7 +26,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Sequence
 
 from .policy import CompactionRequest, ContextResult
-from .render import protected_tail_start, render_view, split_system
+from .render import protected_tail_start, render_view
 from .state import CompactionState, fingerprint
 from .stages import (
     ClearToolResults,
@@ -39,7 +39,7 @@ from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
 from ..types import JsonObject
 from ..providers.base import context_window as _provider_context_window
-from ..transcript import TranscriptEntry
+from ..transcript import TranscriptEntry, split_system
 
 if TYPE_CHECKING:
     from ..tools import Tool
@@ -150,7 +150,7 @@ class Compaction:
     async def compact(self, req: CompactionRequest) -> ContextResult:
         """Replay sticky decisions; make new ones only under token pressure."""
         state = CompactionState.load(req.scratch)
-        system, body = split_system(req.entries)
+        _, body = split_system(req.entries)
 
         # The running summary is carried across runs (in the segment ``meta``),
         # so the body prefix it claims to cover can differ from the live one —

@@ -21,21 +21,8 @@ from ..transcript import (
     ToolCallEntry,
     ToolResultEntry,
     TranscriptEntry,
+    split_system,
 )
-
-
-def split_system(
-    entries: list[TranscriptEntry],
-) -> tuple[InputEntry | None, list[TranscriptEntry]]:
-    """Split off the leading system message; everything else is the *body*.
-
-    Sticky state indexes (summary coverage) are body-relative so they stay
-    valid when the system prompt is re-rendered between turns or swapped on
-    handoff.
-    """
-    if entries and isinstance(entries[0], InputEntry) and entries[0].role == "system":
-        return entries[0], entries[1:]
-    return None, list(entries)
 
 
 def render_view(
@@ -47,7 +34,7 @@ def render_view(
     Never mutates ``entries``. With an empty state this returns the same
     entry objects in a new list.
     """
-    system, body = split_system(entries)
+    systems, body = split_system(entries)
     summary = state.summary
     if summary is not None and 0 < summary.covered <= len(body):
         rendered = [
@@ -56,9 +43,7 @@ def render_view(
         ]
     else:
         rendered = render_entries(body, state)
-    if system is not None:
-        return [system, *rendered]
-    return rendered
+    return [*systems, *rendered]
 
 
 def render_entries(
@@ -196,6 +181,5 @@ __all__ = [
     "protected_tail_start",
     "render_entries",
     "render_view",
-    "split_system",
     "summary_entry",
 ]

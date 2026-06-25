@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from .types import JsonObject
 from .tools import Tool
 from .reliability import RetryPolicy
-from .transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -43,15 +42,6 @@ class _HandoffSignal:
     reason: str | None = None
 
 
-# A function that rewrites the conversation transcript when control is
-# transferred. Receives the body of the transcript as rich
-# :class:`~lovia.transcript.TranscriptEntry` objects (everything except the
-# leading system prompt, which is re-rendered by the new agent) and returns a
-# possibly-filtered version. Operating on entries keeps reasoning, server-side
-# tool calls, and provider metadata intact through the rewrite.
-HandoffInputFilter = Callable[[list[TranscriptEntry]], list[TranscriptEntry]]
-
-
 @dataclass
 class Handoff:
     """A handoff target with optional customisation.
@@ -66,9 +56,6 @@ class Handoff:
         on_handoff: Optional callback invoked when the handoff fires; receives
             the parsed arguments (a single ``reason`` string by default) and
             the run context.
-        input_filter: Optional function that rewrites the transcript before
-            the new agent sees it. Use :func:`drop_stale_tool_calls` to strip
-            references to tools the new agent doesn't have.
     """
 
     target: "Agent[Any]"
@@ -77,17 +64,6 @@ class Handoff:
     on_handoff: (
         Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[None] | None] | None
     ) = None
-    input_filter: HandoffInputFilter | None = None
-
-
-def drop_stale_tool_calls(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
-    """Strip tool calls and tool results from a transcript.
-
-    A safe default ``input_filter`` for handoffs: keeps user input, assistant
-    text, reasoning, and system entries, but drops the tool-call and tool-result
-    entries that reference tools the new agent may not have registered.
-    """
-    return [e for e in entries if not isinstance(e, (ToolCallEntry, ToolResultEntry))]
 
 
 def build_handoff_tool(handoff: Handoff) -> Tool:

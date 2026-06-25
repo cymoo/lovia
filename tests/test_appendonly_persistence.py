@@ -23,11 +23,9 @@ from lovia import (
     InMemoryCheckpointer,
     InMemorySession,
     Runner,
-    tool,
 )
 from lovia.checkpointer import RunHead
-from lovia.handoff import drop_stale_tool_calls
-from lovia.messages import Usage
+from lovia.messages import Usage, system, user
 from lovia.stores import SQLiteCheckpointer
 from lovia.transcript import AssistantTextEntry, InputEntry
 
@@ -224,28 +222,111 @@ async def test_restart_checkpoint_keeps_only_the_new_runs_entries() -> None:
     assert _contents(snap.entries) == ["two", "second"]
 
 
-async def test_handoff_input_filter_persists_unfiltered_entries_to_session() -> None:
-    @tool
-    def add(a: int, b: int) -> int:
-        return a + b
+async def test_handoff_to_systemless_agent_keeps_run_boundary() -> None:
+    # The receiving agent has empty ``instructions`` (and no workspace/plugins/
+    # structured-output), so it renders NO system entry. The handoff drops the
+    # leading system entry and shifts every body entry left by one; ``run_start``
+    # must follow (delta -1) or this run's segment loses its opening input. This
+    # is one of the only paths that drives the ``run_start`` handoff delta
+    # non-zero, so it guards the otherwise-untested edge.
+    session = InMemorySession()
+    # Seed prior history so run_start > 1 and any drift is observable.
+    seed = Agent(name="seed", instructions="SEED", model=ScriptedProvider([text("r1")]))
+    await Runner.run(seed, "first", session=session, session_id="u1")
 
     specialist = Agent(name="specialist", model=ScriptedProvider([text("final")]))
+    assert specialist.instructions == ""  # => renders no system entry
     triage = Agent(
         name="triage",
+        instructions="TRIAGE",  # => has a system entry
         model=ScriptedProvider(
-            [
-                call("add", {"a": 1, "b": 2}, call_id="c1"),
-                call("transfer_to_specialist", {"reason": "x"}, call_id="c2"),
-            ]
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="c1")]
         ),
-        tools=[add],
-        handoffs=[Handoff(target=specialist, input_filter=drop_stale_tool_calls)],
+        handoffs=[Handoff(target=specialist)],
     )
-    session = InMemorySession()
-    await Runner.run(triage, "go", session=session, session_id="u1")
+    result = await Runner.run(triage, "second", session=session, session_id="u1")
+    assert result.output == "final"
 
-    kinds = [type(e).__name__ for e in await session.load("u1")]
-    # The specialist's per-call VIEW had the tool call/result filtered out, but
-    # the Session records the run's TRUE, unfiltered contribution as one segment.
-    assert "ToolCallEntry" in kinds and "ToolResultEntry" in kinds
-    assert len(session._segments["u1"]) == 1
+    segs = await session.segments("u1")
+    assert len(segs) == 2
+    # This run's input lands in its OWN segment exactly once; prior history is
+    # not absorbed into it.
+    seg2 = _contents(segs[1].entries)
+    assert "second" in seg2
+    assert "first" not in seg2 and "r1" not in seg2
+    full = _contents(await session.load("u1"))
+    assert [c for c in full if c in {"first", "r1", "second", "final"}] == [
+        "first",
+        "r1",
+        "second",
+        "final",
+    ]
+
+
+async def test_handoff_from_systemless_agent_keeps_run_boundary() -> None:
+    # Reverse: the FIRST agent has empty ``instructions`` (no system entry) and
+    # hands off to one WITH instructions, so a system entry *appears* mid-run.
+    # ``run_start`` must shift the other way (delta +1) or the run's segment
+    # absorbs the last history entry.
+    session = InMemorySession()
+    seed = Agent(name="seed", model=ScriptedProvider([text("r1")]))  # empty system
+    await Runner.run(seed, "first", session=session, session_id="u1")
+
+    specialist = Agent(
+        name="specialist", instructions="SPEC", model=ScriptedProvider([text("final")])
+    )
+    triage = Agent(
+        name="triage",  # empty instructions => no system entry
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="c1")]
+        ),
+        handoffs=[Handoff(target=specialist)],
+    )
+    result = await Runner.run(triage, "second", session=session, session_id="u1")
+    assert result.output == "final"
+
+    segs = await session.segments("u1")
+    assert len(segs) == 2
+    seg2 = _contents(segs[1].entries)
+    assert "second" in seg2
+    assert "r1" not in seg2  # history not duplicated into this run's segment
+    full = _contents(await session.load("u1"))
+    assert [c for c in full if c in {"first", "r1", "second", "final"}] == [
+        "first",
+        "r1",
+        "second",
+        "final",
+    ]
+
+
+async def test_handoff_keeps_user_supplied_system_input_entry() -> None:
+    # A systemless agent leaves a user-supplied leading ``system`` input entry at
+    # transcript[0]. A handoff must NOT mistake it for the runner's own head:
+    # dropping it would lose run input and, with a systemless target, drive
+    # run_start negative — truncating the persisted segment.
+    session = InMemorySession()
+    specialist = Agent(name="specialist", model=ScriptedProvider([text("final")]))
+    triage = Agent(
+        name="triage",  # systemless: transcript[0] is the input system msg, not a head
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="c1")]
+        ),
+        handoffs=[Handoff(target=specialist)],
+    )
+    result = await Runner.run(
+        triage,
+        [system("SYS-INPUT"), user("hello")],
+        session=session,
+        session_id="u1",
+    )
+    assert result.output == "final"
+
+    # The single run-segment retains BOTH input entries (nothing dropped, no
+    # truncation from a negative run_start).
+    [seg] = await session.segments("u1")
+    contents = _contents(seg.entries)
+    assert "SYS-INPUT" in contents and "hello" in contents
+    # The loaded transcript still leads with the user-supplied system entry.
+    full = await session.load("u1")
+    assert isinstance(full[0], InputEntry) and full[0].role == "system"
+    assert full[0].content == "SYS-INPUT"

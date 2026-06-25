@@ -195,39 +195,6 @@ async def test_stream_handle_double_iteration_raises() -> None:
             pass
 
 
-# --------------------------------------------------------------------- B3 ----
-
-
-async def test_handoff_input_filter_drops_stale_tool_calls() -> None:
-    from lovia import Handoff
-    from lovia.handoff import drop_stale_tool_calls
-
-    specialist = Agent(name="specialist", model=ScriptedProvider([text("final")]))
-    triage_provider = ScriptedProvider(
-        [
-            # Original agent first calls a tool, then hands off.
-            call("add", {"a": 1, "b": 2}, call_id="c1"),
-            call("transfer_to_specialist", {"reason": "spec"}, call_id="c2"),
-        ]
-    )
-    triage = Agent(
-        name="triage",
-        model=triage_provider,
-        tools=[add],
-        handoffs=[Handoff(target=specialist, input_filter=drop_stale_tool_calls)],
-    )
-    # The specialist provider is shared via its agent.
-    specialist.model = ScriptedProvider([text("final")])
-
-    result = await Runner.run(triage, "go")
-    assert result.output == "final"
-    # The transcript the specialist saw must contain no tool messages.
-    specialist_inbox = specialist.model.calls[0]  # type: ignore[attr-defined]
-    assert all(m.role != "tool" for m in specialist_inbox)
-    # And no assistant messages with dangling tool_calls.
-    assert all(not (m.role == "assistant" and m.tool_calls) for m in specialist_inbox)
-
-
 # --------------------------------------------------------------------- B4 ----
 
 

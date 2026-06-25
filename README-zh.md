@@ -272,7 +272,7 @@ agent = Agent(
 
 ### Handoff
 
-handoff 让一个 agent 把控制权交给专家 agent。transcript 会跟随移交，也可以通过 filter 清理。
+handoff 让一个 agent 把控制权交给专家 agent。transcript 会跟随移交，专家 agent 带着完整上下文继续。
 
 ```python
 from lovia import Agent, Handoff, Runner

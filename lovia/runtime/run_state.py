@@ -115,16 +115,21 @@ class RunState:
     # Set by the tool phase when a handoff tool fired; consumed by the loop.
     pending_handoff: "_HandoffSignal | None" = None
     # Boundary between prior session history and THIS run's own entries in the
-    # live transcript. ``run_start`` indexes where the current handoff segment's
-    # run entries begin; ``pre_handoff_entries`` holds this run's entries from
-    # earlier segments, captured just before each handoff rewrote the view (an
-    # ``input_filter`` may drop history, so we save the run's true contribution
-    # first). Together — see ``run_entries`` — they are what the Session and
-    # checkpoint persist. Neither is itself persisted: on resume the checkpoint's
-    # entries are this run's entries, so ``run_start`` is just re-derived past the
-    # reloaded history.
+    # live transcript: ``run_start`` is the index where this run's first entry
+    # (its opening input) begins — just past ``[system] + prior history``. The
+    # transcript only ever grows by appends, and a handoff merely swaps the
+    # leading system entry (see ``_reset_transcript_for_handoff``), so the run's
+    # contribution stays contiguous at ``transcript[run_start:]`` for the whole
+    # run — that slice is what the Session and checkpoint persist. Not itself
+    # persisted: on resume the checkpoint's entries ARE this run's entries, so
+    # ``run_start`` is re-derived past the reloaded history.
     run_start: int = 0
-    pre_handoff_entries: list[TranscriptEntry] = field(default_factory=list)
+    # Leading entries (0 or 1) the runner's own system prompt occupies at the
+    # head of the transcript. Tracked explicitly — never inferred from
+    # ``transcript[0].role`` — so a handoff swaps exactly the runner's head and
+    # never mistakes a user-supplied leading ``system`` input entry (reachable
+    # under a systemless agent) for it. Re-derived at bootstrap; not persisted.
+    system_head_len: int = 0
 
     @property
     def agent(self) -> Agent[Any]:
@@ -145,12 +150,12 @@ class RunState:
     def run_entries(self) -> list[TranscriptEntry]:
         """This run's own entries (input + everything it produced), across handoffs.
 
-        Excludes the prior session history (that lives in the Session). Built
-        from the entries captured before each handoff (``pre_handoff_entries``)
-        plus the live tail since the last handoff (or bootstrap). This is exactly
-        what the Session appends and the checkpoint stores.
+        Excludes the prior session history (that lives in the Session). It is the
+        live tail ``transcript[run_start:]``: handoffs only swap the leading
+        system entry, so the run's contribution stays contiguous here. This is
+        exactly what the Session appends and the checkpoint stores.
         """
-        return [*self.pre_handoff_entries, *self.transcript[self.run_start :]]
+        return self.transcript[self.run_start :]
 
     def activate(self, active: ActiveAgent) -> None:
         """Swap the active agent and mirror its public surface onto ``run_ctx``.

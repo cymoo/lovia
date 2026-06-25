@@ -8,10 +8,10 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from lovia import Agent, CheckpointOptions, Runner, tool
+from lovia import Agent, CheckpointOptions, Handoff, Runner, tool
 from lovia.exceptions import BudgetExceeded, ContextOverflowError, UserError
 from lovia.plugins.mcp import MCP
-from lovia.messages import AssistantTurn, ToolCall, Usage
+from lovia.messages import AssistantTurn, ToolCall, Usage, system, user
 from lovia.reliability import RunBudget
 from lovia.stores import InMemoryCheckpointer, InMemorySession
 from lovia.context import CompactionRequest, ContextResult
@@ -86,6 +86,44 @@ async def test_handoff_connects_target_agent_mcp_tools() -> None:
     assert "pong" in tool_outputs
     # Run-scoped connections are closed when the run ends.
     assert server.closed == 1
+
+
+# ---------------------------------------------------------------------------
+# Handoff + caller-supplied system input: both systems reach the new agent
+# (the adapter merges them into one ``system`` param — no provider rejection)
+# ---------------------------------------------------------------------------
+
+
+async def test_handoff_surfaces_both_caller_and_target_system_to_model() -> None:
+    # A systemless agent carrying a caller-supplied leading system() input hands
+    # off to an agent that DOES render a system prompt. The handoff preserves the
+    # caller's system (it is run content, not the runner's head), so the new
+    # agent's view leads with TWO system entries: the target's head, then the
+    # caller's. That is exactly the shape ``_to_anthropic_messages`` collapses
+    # into a single ``system`` param (see
+    # tests/providers/test_anthropic.py::test_message_translation_extracts_system_and_tool_blocks),
+    # and OpenAI merges adjacent same-role messages — so no provider rejects it.
+    specialist = Agent(
+        name="specialist",
+        instructions="B-SYS",
+        model=ScriptedProvider([text("final")]),
+    )
+    triage = Agent(
+        name="triage",  # systemless: no runner head of its own
+        model=ScriptedProvider(
+            [call("transfer_to_specialist", {"reason": "x"}, call_id="c1")]
+        ),
+        handoffs=[Handoff(target=specialist)],
+    )
+
+    result = await Runner.run(triage, [system("USER-SYS"), user("hi")])
+    assert result.output == "final"
+
+    # The specialist's first model call sees both systems — target head first,
+    # the caller's preserved next — then the user turn.
+    inbox = specialist.model.calls[0]  # type: ignore[attr-defined]
+    assert [m.content for m in inbox if m.role == "system"] == ["B-SYS", "USER-SYS"]
+    assert [m.role for m in inbox[:3]] == ["system", "system", "user"]
 
 
 # ---------------------------------------------------------------------------

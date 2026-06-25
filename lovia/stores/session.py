@@ -12,6 +12,7 @@ dependencies — SQLite goes through the stdlib :mod:`sqlite3` driver and
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -32,8 +33,11 @@ class InMemorySession(Session):
 
     async def segments(self, session_id: str) -> list[Segment]:
         async with self._lock:
+            # Copy entries (list) and meta (deep) so a caller mutating the
+            # returned segments can't corrupt stored state through the read API
+            # — matching the snapshot semantics SQLiteSession gets via JSON.
             return [
-                Segment(seg.run_id, list(seg.entries), seg.meta)
+                Segment(seg.run_id, list(seg.entries), copy.deepcopy(seg.meta))
                 for seg in self._segments.get(session_id, [])
             ]
 
@@ -50,7 +54,11 @@ class InMemorySession(Session):
             rid = run_id if run_id is not None else uuid4().hex
             if any(seg.run_id == rid for seg in segs):
                 return rid  # idempotent: this run is already stored
-            segs.append(Segment(run_id=rid, entries=list(entries), meta=meta))
+            # Snapshot meta on write so a caller mutating/reusing the dict after
+            # append can't retroactively change stored state (append-only).
+            segs.append(
+                Segment(run_id=rid, entries=list(entries), meta=copy.deepcopy(meta))
+            )
             return rid
 
     async def clear(self, session_id: str) -> None:

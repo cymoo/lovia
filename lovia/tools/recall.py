@@ -19,6 +19,7 @@ injects it. :func:`make_recall_tool` is the factory the policy calls.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Annotated, Any
 
 from ..run_context import RunContext
@@ -27,6 +28,8 @@ from .base import Tool, tool
 
 if TYPE_CHECKING:
     from ..context.store import ResultStore
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["make_recall_tool"]
 
@@ -49,7 +52,18 @@ def make_recall_tool(store: "ResultStore | None") -> Tool:
     ) -> str:
         """Return the full output of an earlier tool call by its ``call_id``."""
         if store is not None:
-            hit = await store.get(call_id)
+            # The store is a cache; the transcript is the source of truth. A
+            # store read failure must degrade to the transcript scan, not error.
+            try:
+                hit = await store.get(call_id)
+            except Exception as exc:
+                logger.warning(
+                    "recall: store.get(%s) failed (%s: %s); using transcript",
+                    call_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                hit = None
             if hit is not None:
                 return hit
         for entry in reversed(ctx.entries):

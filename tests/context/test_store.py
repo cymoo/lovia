@@ -54,11 +54,15 @@ async def test_file_store_round_trip(tmp_path):
     assert await store.get("k") == "hello\nworld"
 
 
-async def test_file_store_sanitizes_keys(tmp_path):
+async def test_file_store_keys_are_injective(tmp_path):
     store = FileResultStore(tmp_path)
-    # call_ids can contain path-unsafe characters; they must still round-trip.
-    await store.put("a/b:c", "payload")
-    assert await store.get("a/b:c") == "payload"
-    # Nothing escaped the store directory.
+    # call_ids with path-unsafe chars must round-trip AND never collide: a lossy
+    # sanitizer would map "a/b" and "a:b" to the same file, making recall return
+    # the wrong output (recall prefers the store over the transcript).
+    await store.put("a/b", "slash")
+    await store.put("a:b", "colon")
+    assert await store.get("a/b") == "slash"
+    assert await store.get("a:b") == "colon"
+    # Two distinct keys -> two distinct files, all under the store directory.
     files = [p.name for p in tmp_path.iterdir()]
-    assert files == ["a_b_c.txt"]
+    assert len(files) == 2

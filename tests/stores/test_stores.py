@@ -184,3 +184,16 @@ async def test_in_memory_segments_returns_a_copy() -> None:
     segs[0].entries.append(InputEntry(role="user", content="leak"))
     # Mutating the returned segment must not corrupt stored state.
     assert len(await s.load("u1")) == 1
+
+
+async def test_in_memory_meta_isolated_on_write_and_read() -> None:
+    s = InMemorySession()
+    meta = {"carry": {"cleared": ["a"]}}
+    await s.append("u1", [InputEntry(role="user", content="x")], run_id="r1", meta=meta)
+    # (1) Mutating the caller's dict after append must not change stored state.
+    meta["carry"]["cleared"].append("LEAK")
+    assert (await s.segments("u1"))[0].meta == {"carry": {"cleared": ["a"]}}
+    # (2) Mutating the meta returned by segments() must not corrupt the store.
+    segs = await s.segments("u1")
+    segs[0].meta["carry"]["cleared"].append("LEAK2")
+    assert (await s.segments("u1"))[0].meta == {"carry": {"cleared": ["a"]}}

@@ -18,10 +18,10 @@ out until a concrete need lands — both are non-breaking to add later.
 from __future__ import annotations
 
 import asyncio
-import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote
 
 
 class ResultStore(Protocol):
@@ -97,7 +97,11 @@ class FileResultStore:
 
 
 def _safe_key(key: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", key) or "unknown"
+    # Percent-encode into an *injective*, filesystem-safe name: distinct keys
+    # must never map to the same file. A lossy sanitizer (e.g. regex-replacing
+    # to "_") could collide "a/b" and "a:b", and since recall prefers the store
+    # over the transcript a collision would return the *wrong* tool output.
+    return quote(key, safe="") or "_"
 
 
 __all__ = ["FileResultStore", "InMemoryResultStore", "ResultStore"]

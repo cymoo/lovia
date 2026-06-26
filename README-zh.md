@@ -755,6 +755,34 @@ from lovia.web import serve
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
+### 命令行启动
+
+无需写代码：`python -m lovia.web` 会构建一个默认 agent——模型取自环境变量、技能取自
+`./skills`、并在当前目录开启一个 trusted workspace——然后启动聊天 UI。
+
+```bash
+python -m lovia.web                                    # 零配置
+python -m lovia.web --port 9000 --model openai:gpt-5.4
+python -m lovia.web --skills-dir ./skills --workspace-mode readonly
+python -m lovia.web --app myagents:assistant           # 启动你自己的 Agent
+```
+
+常用选项也可以用 `LOVIA_*` 环境变量指定（优先级：**命令行 > 环境变量 > 默认值**）；
+若装有 `python-dotenv`，会自动加载当前目录下的 `.env`（也可用 `--env-file` 指定）。
+模型凭证沿用各 provider 自己的 `OPENAI_API_KEY` / `OPENAI_BASE_URL`（Anthropic 用 `ANTHROPIC_*`）。
+
+| 选项 | 环境变量 | 默认值 |
+| --- | --- | --- |
+| `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--db` | `LOVIA_DB` | cwd 下的 `<agent>.db` |
+| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | 必填 |
+| `--skills-dir`（可重复） | `LOVIA_SKILLS_DIR` | 存在则用 `./skills` |
+| `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
+| `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`，否则用通用提示 |
+| `--app MODULE:ATTR` | `LOVIA_APP` | 构建默认 agent |
+
+`--version` 打印版本号；完整选项见 `python -m lovia.web --help`。
+
 ### 用 API 自建 UI
 
 HTTP API 与内置聊天页面是解耦的，你可以保留 JSON + SSE 接口、换上自己的前端。

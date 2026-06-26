@@ -832,6 +832,36 @@ from lovia.web import serve
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
+### Command line
+
+No code required: `python -m lovia.web` builds a default agent — model from env,
+skills from `./skills`, a trusted workspace on the current directory — and serves
+the chat UI.
+
+```bash
+python -m lovia.web                                    # zero-config
+python -m lovia.web --port 9000 --model openai:gpt-5.4
+python -m lovia.web --skills-dir ./skills --workspace-mode readonly
+python -m lovia.web --app myagents:assistant           # serve your own Agent
+```
+
+Common options also read `LOVIA_*` env vars (precedence: **flag > env > default**),
+and a `.env` in the current directory loads automatically when `python-dotenv` is
+installed (or pass `--env-file`). Model credentials use the provider's own
+`OPENAI_API_KEY` / `OPENAI_BASE_URL` (Anthropic: `ANTHROPIC_*`).
+
+| Option | Env var | Default |
+| --- | --- | --- |
+| `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--db` | `LOVIA_DB` | `<agent>.db` in cwd |
+| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | required |
+| `--skills-dir` (repeatable) | `LOVIA_SKILLS_DIR` | `./skills` if present |
+| `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
+| `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
+| `--app MODULE:ATTR` | `LOVIA_APP` | build default agent |
+
+`--version` prints the version; `python -m lovia.web --help` lists every flag.
+
 ### Build your own UI
 
 The HTTP API is decoupled from the bundled chat page, so you can keep the JSON +

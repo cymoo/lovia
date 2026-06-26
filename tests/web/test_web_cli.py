@@ -1,0 +1,419 @@
+"""Tests for the ``python -m lovia.web`` command-line launcher."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("fastapi")
+
+from lovia import Agent  # noqa: E402
+from lovia.exceptions import UserError  # noqa: E402
+from lovia.web import __main__ as cli  # noqa: E402
+
+
+# ----------------------------------------------------------------- model -
+
+
+def test_resolve_model_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_MODEL", "env-model")
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "openai-model")
+    # CLI flag wins over everything.
+    assert cli.resolve_model("cli-model") == "cli-model"
+    # Then LOVIA_MODEL.
+    assert cli.resolve_model(None) == "env-model"
+    monkeypatch.delenv("LOVIA_MODEL")
+    # Then OPENAI_DEFAULT_MODEL.
+    assert cli.resolve_model(None) == "openai-model"
+
+
+def test_resolve_model_falls_back_to_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOVIA_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_DEFAULT_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-x")
+    assert cli.resolve_model(None) == "claude-x"
+
+
+def test_resolve_model_errors_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("LOVIA_MODEL", "OPENAI_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(UserError, match="no model configured"):
+        cli.resolve_model(None)
+
+
+# ---------------------------------------------------------------- skills -
+
+
+def test_resolve_skills_explicit_dirs(tmp_path: Path) -> None:
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert cli.resolve_skills_dirs([str(a), str(b)]) == [a, b]
+
+
+def test_resolve_skills_explicit_missing_errors(tmp_path: Path) -> None:
+    with pytest.raises(UserError, match="skills directory not found"):
+        cli.resolve_skills_dirs([str(tmp_path / "nope")])
+
+
+def test_resolve_skills_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    d = tmp_path / "team"
+    d.mkdir()
+    monkeypatch.setenv("LOVIA_SKILLS_DIR", str(d))
+    assert cli.resolve_skills_dirs(None) == [d]
+
+
+def test_resolve_skills_default_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "skills").mkdir()
+    assert cli.resolve_skills_dirs(None) == [Path("skills")]
+
+
+def test_resolve_skills_default_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.resolve_skills_dirs(None) == []
+
+
+# ---------------------------------------------------------- instructions -
+
+
+def test_resolve_instructions_inline() -> None:
+    assert cli.resolve_instructions("be terse", None) == "be terse"
+
+
+def test_resolve_instructions_file(tmp_path: Path) -> None:
+    f = tmp_path / "prompt.md"
+    f.write_text("from file", encoding="utf-8")
+    assert cli.resolve_instructions(None, str(f)) == "from file"
+
+
+def test_resolve_instructions_file_missing(tmp_path: Path) -> None:
+    with pytest.raises(UserError, match="instructions file not found"):
+        cli.resolve_instructions(None, str(tmp_path / "nope.md"))
+
+
+def test_resolve_instructions_convention_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "AGENTS.md").write_text("conventional prompt", encoding="utf-8")
+    assert cli.resolve_instructions(None, None) == "conventional prompt"
+
+
+def test_resolve_instructions_generic_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.resolve_instructions(None, None) == cli.GENERIC_INSTRUCTIONS
+
+
+# ------------------------------------------------------------- workspace -
+
+
+def test_resolve_workspace_disabled() -> None:
+    assert cli.resolve_workspace(".", "trusted", no_workspace=True) is None
+
+
+def test_resolve_workspace_default_mode_is_trusted(tmp_path: Path) -> None:
+    ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    assert ws is not None
+    # 'trusted' is the only mode whose shell defaults to allow.
+    assert ws.policy.shell_default == "allow"
+
+
+def test_resolve_workspace_mode_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "readonly")
+    ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    assert ws is not None
+    assert ws.policy.allow_write is False
+    assert ws.policy.allow_shell is False
+
+
+def test_resolve_workspace_invalid_mode(tmp_path: Path) -> None:
+    with pytest.raises(UserError, match="invalid workspace mode"):
+        cli.resolve_workspace(str(tmp_path), "bogus", no_workspace=False)
+
+
+def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
+    with pytest.raises(UserError, match="workspace directory not found"):
+        cli.resolve_workspace(str(tmp_path / "nope"), "trusted", no_workspace=False)
+
+
+# -------------------------------------------------------------- --app -
+
+
+def _write_module(tmp_path: Path, name: str, body: str) -> None:
+    (tmp_path / f"{name}.py").write_text(body, encoding="utf-8")
+
+
+def test_load_app_requires_colon() -> None:
+    with pytest.raises(UserError, match="MODULE:ATTRIBUTE"):
+        cli.load_app_target("noColonHere")
+
+
+def test_load_app_returns_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_a",
+        "from lovia import Agent\nagent = Agent(name='custom', model='m')\n",
+    )
+    obj = cli.load_app_target("agentmod_a:agent")
+    assert isinstance(obj, Agent)
+    assert obj.name == "custom"
+
+
+def test_load_app_calls_factory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_b",
+        "from lovia import Agent\n"
+        "def make():\n    return Agent(name='made', model='m')\n",
+    )
+    obj = cli.load_app_target("agentmod_b:make")
+    assert isinstance(obj, Agent)
+    assert obj.name == "made"
+
+
+def test_load_app_bad_module() -> None:
+    with pytest.raises(UserError, match="could not import module"):
+        cli.load_app_target("definitely_not_a_module_xyz:agent")
+
+
+def test_load_app_bad_attr(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "agentmod_c", "x = 1\n")
+    with pytest.raises(UserError, match="has no attribute"):
+        cli.load_app_target("agentmod_c:agent")
+
+
+def test_load_app_wrong_type(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "agentmod_d", "agent = 123\n")
+    with pytest.raises(UserError, match="not an Agent"):
+        cli.load_app_target("agentmod_d:agent")
+
+
+# ------------------------------------------------------------- env files -
+
+
+def test_load_env_file_sets_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pytest.importorskip("dotenv")
+    env = tmp_path / "custom.env"
+    env.write_text("LOVIA_TEST_VAR=hello\n", encoding="utf-8")
+    monkeypatch.delenv("LOVIA_TEST_VAR", raising=False)
+    cli.load_env_files([str(env)])
+    assert os.getenv("LOVIA_TEST_VAR") == "hello"
+
+
+def test_load_env_file_existing_env_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pytest.importorskip("dotenv")
+    env = tmp_path / ".env"
+    env.write_text("LOVIA_TEST_VAR2=fromfile\n", encoding="utf-8")
+    monkeypatch.setenv("LOVIA_TEST_VAR2", "fromenv")
+    monkeypatch.chdir(tmp_path)
+    cli.load_env_files(None)
+    assert os.getenv("LOVIA_TEST_VAR2") == "fromenv"
+
+
+def test_load_env_file_missing_errors() -> None:
+    pytest.importorskip("dotenv")
+    with pytest.raises(UserError, match="env file not found"):
+        cli.load_env_files(["/no/such/file.env"])
+
+
+# --------------------------------------------------------------- parser -
+
+
+def test_parser_repeatable_skills_dir() -> None:
+    args = cli.build_parser().parse_args(["--skills-dir", "a", "--skills-dir", "b"])
+    assert args.skills_dir == ["a", "b"]
+
+
+def test_parser_rejects_bad_workspace_mode() -> None:
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--workspace-mode", "bogus"])
+
+
+def test_parser_defaults_are_none() -> None:
+    args = cli.build_parser().parse_args([])
+    assert args.host is None and args.port is None and args.model is None
+    assert args.no_workspace is False
+
+
+# --------------------------------------------------- build_default_agent -
+
+
+def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "test-model")
+    (tmp_path / "skills").mkdir()
+    args = cli.build_parser().parse_args([])
+    agent = cli.build_default_agent(args)
+    assert agent.name == "lovia"
+    assert agent.model == "test-model"
+    assert agent.instructions == cli.GENERIC_INSTRUCTIONS
+    assert len(agent.plugins) == 1  # Skills plugin from ./skills
+    assert agent.workspace is not None
+
+
+# ----------------------------------------------------------------- main -
+
+
+def test_main_serves_custom_app(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_main",
+        "from lovia import Agent\nagent = Agent(name='served', model='m')\n",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_serve(agent_or_agents: object, **kwargs: object) -> None:
+        captured["agent"] = agent_or_agents
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "serve", fake_serve)
+    rc = cli.main(
+        ["--app", "agentmod_main:agent", "--host", "0.0.0.0", "--port", "9123"]
+    )
+    assert rc == 0
+    assert isinstance(captured["agent"], Agent)
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 9123
+
+
+def test_main_reports_missing_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    for var in ("LOVIA_MODEL", "OPENAI_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main([])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "error:" in err and "no model configured" in err
+
+
+def test_main_port_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_port",
+        "from lovia import Agent\nagent = Agent(name='p', model='m')\n",
+    )
+    monkeypatch.setenv("LOVIA_PORT", "7777")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    rc = cli.main(["--app", "agentmod_port:agent"])
+    assert rc == 0
+    assert captured["port"] == 7777
+
+
+def test_main_help_exits_zero() -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+    assert exc.value.code == 0
+
+
+def test_main_version(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert "lovia" in capsys.readouterr().out
+
+
+def test_main_invalid_log_level(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    # The level is validated before anything else, so no model/app is needed.
+    rc = cli.main(["--log-level", "bogus"])
+    assert rc == 2
+    assert "invalid log level" in capsys.readouterr().err
+
+
+def test_main_passes_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_db",
+        "from lovia import Agent\nagent = Agent(name='d', model='m')\n",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    rc = cli.main(["--app", "agentmod_db:agent", "--db", "chats.sqlite"])
+    assert rc == 0
+    assert captured["db_path"] == "chats.sqlite"
+
+
+# ----------------------------------------------------- exposure warning -
+
+
+def test_is_loopback() -> None:
+    assert cli._is_loopback("127.0.0.1")
+    assert cli._is_loopback("localhost")
+    assert cli._is_loopback("::1")
+    assert not cli._is_loopback("0.0.0.0")
+    assert not cli._is_loopback("::")
+    assert not cli._is_loopback("192.168.1.5")
+
+
+def test_warn_when_trusted_workspace_exposed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ws = cli.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
+    cli._warn_if_exposed("0.0.0.0", ws)
+    assert calls  # warned
+
+
+def test_no_warn_on_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ws = cli.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
+    cli._warn_if_exposed("127.0.0.1", ws)
+    assert not calls
+
+
+def test_no_warn_on_readonly_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ws = cli.resolve_workspace(str(tmp_path), "readonly", no_workspace=False)
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
+    cli._warn_if_exposed("0.0.0.0", ws)
+    assert not calls
+
+
+def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
+    cli._warn_if_exposed("0.0.0.0", None)
+    assert not calls

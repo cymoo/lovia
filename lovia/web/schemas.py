@@ -92,6 +92,16 @@ class ChatSessionInfo(BaseModel):
     updated_at: float
 
 
+class RunInfo(BaseModel):
+    """A live supervised (background) run, for ``GET /api/runs``."""
+
+    session_id: str
+    run_id: str | None = None
+    agent: str
+    status: str
+    turns: int
+
+
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 try:
     from fastapi import FastAPI
@@ -60,6 +60,8 @@ def create_app(
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
+    max_background_runs: int = 8,
+    default_budget_factory: Callable[[], RunBudget] | None = None,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
@@ -120,6 +122,8 @@ def create_app(
         budget=budget,
         retry=retry,
         tracer=tracer,
+        max_background_runs=max_background_runs,
+        default_budget_factory=default_budget_factory,
     )
 
     @asynccontextmanager

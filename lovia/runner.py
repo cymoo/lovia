@@ -19,6 +19,7 @@ from .exceptions import UserError
 from .messages import Message, Usage
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .runtime.loop import RunLoop
+from .steering import Mailbox
 from .runtime.result import RunHandle, RunResult
 from .session import Session
 from .tracing import Tracer
@@ -40,6 +41,7 @@ class Runner:
         max_turns: int = 50,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
+        mailbox: Mailbox | None = None,
         retry: RetryPolicy | None = RetryPolicy(),
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
@@ -91,6 +93,7 @@ class Runner:
             max_turns=max_turns,
             budget=budget,
             cancel_token=cancel_token,
+            mailbox=mailbox,
             retry=retry,
             context_policy=context_policy,
             session=session,
@@ -112,6 +115,7 @@ class Runner:
         max_turns: int = 50,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
+        mailbox: Mailbox | None = None,
         retry: RetryPolicy | None = RetryPolicy(),
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
@@ -133,6 +137,7 @@ class Runner:
             output_type=output_type,
             extra_instructions=extra_instructions,
             cancel_token=cancel_token,
+            mailbox=mailbox,
             budget=budget,
             retry=retry,
             context_policy=context_policy,

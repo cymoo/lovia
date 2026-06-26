@@ -170,19 +170,25 @@ function appendBubbleContent(bubble, node) {
 }
 
 // ---- Render helpers ----------------------------------------------------
-export function appendUserTurn(text) {
+export function appendUserTurn(text, { queued = false, before = null } = {}) {
   const transcriptEl = document.getElementById('transcript');
-  if (!transcriptEl) return;
+  if (!transcriptEl) return null;
   const node = makeTurn('user');
+  if (queued) node.classList.add('queued');
   const body = document.createElement('div');
   body.className = 'body';
   body.textContent = text;
   const bubble = node.querySelector('.bubble');
   appendBubbleContent(bubble, body);
   ensureFooter(bubble);
-  addCopyButton(bubble);
-  transcriptEl.appendChild(node);
+  if (!queued) addCopyButton(bubble); // queued bubbles get their copy button on confirm
+  if (before && before.parentNode === transcriptEl) {
+    transcriptEl.insertBefore(node, before);
+  } else {
+    transcriptEl.appendChild(node);
+  }
   scrollDown();
+  return node;
 }
 
 function startAssistantTurn(ts) {
@@ -191,6 +197,7 @@ function startAssistantTurn(ts) {
   const node = makeTurn('assistant', ts);
   node.classList.add('streaming');
   transcriptEl.appendChild(node);
+  store.turnNode = node;
   store.bubble = node.querySelector('.bubble');
   store.body = null;
   store.rawText = '';
@@ -373,6 +380,7 @@ function resetChatView({ cancel = false } = {}) {
   if (cancel && store.streaming) store.emit('cancel');
   if (cancel) store.chatEpoch += 1;
   store.bubble = null;
+  store.turnNode = null;
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
@@ -380,6 +388,8 @@ function resetChatView({ cancel = false } = {}) {
   store.reasoningNode = null;
   store.reasoningStart = 0;
   store.reasoningEnd = 0;
+  _queuedTurns = [];
+  _pendingResend = [];
   clearTodoPanel();
 }
 
@@ -536,6 +546,93 @@ function addCopyButton(bubble) {
     }
   });
   footer?.appendChild(btn);
+}
+
+// ---- Mid-run injection: queued user turns awaiting confirmation ----------
+let _queuedTurns = [];   // FIFO of muted user-turn nodes (one per pending inject)
+let _pendingResend = []; // messages that raced a run's end; resent next (see runStream)
+
+// True when an assistant turn carries no rendered content yet (just opened, or
+// only an empty footer). Avoids stranding an empty bubble between two messages
+// injected at the same turn boundary.
+function assistantTurnIsEmpty(node) {
+  const bubble = node?.querySelector('.bubble');
+  if (!bubble) return true;
+  for (const child of bubble.children) {
+    if (!child.classList.contains('turn-footer')) return false;
+  }
+  return true;
+}
+
+// Finalize the current (streaming) assistant turn: stop its spinner, stamp it,
+// add a copy button, and reset the live-render pointers so the next turn opens
+// clean. Shared by the run-end paths and the injection bubble rotation.
+function finalizeCurrentAssistantTurn() {
+  finalizeReasoning();
+  const node = store.turnNode;
+  if (node) {
+    node.classList.remove('streaming');
+    setTurnTimestamp(node);
+    addCopyButton(store.bubble);
+  }
+  store.turnNode = null;
+  store.bubble = null;
+  store.body = null;
+  store.rawText = '';
+  store.toolNodes.clear();
+  store.reasoningNode = null;
+  store.reasoningText = '';
+  store.reasoningStart = 0;
+  store.reasoningEnd = 0;
+}
+
+// Promote a muted "queued" user bubble to a normal one once the run consumes it.
+function confirmQueuedTurn(node) {
+  if (!node) return;
+  node.classList.remove('queued');
+  node.querySelector('.withdraw-btn')?.remove();
+  delete node.dataset.injectId;
+  addCopyButton(node.querySelector('.bubble'));
+}
+
+// Add a cancel affordance to a queued bubble once its server token is known, so
+// the user can withdraw the message before the run drains it.
+function addWithdrawButton(node, injectId) {
+  const bubble = node?.querySelector('.bubble');
+  if (!bubble) return;
+  node.dataset.injectId = String(injectId);
+  if (bubble.querySelector('.withdraw-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'withdraw-btn';
+  btn.type = 'button';
+  btn.title = 'Cancel this queued message';
+  btn.setAttribute('aria-label', 'Cancel queued message');
+  btn.textContent = '×';
+  btn.addEventListener('click', () => withdrawQueued(node));
+  bubble.appendChild(btn);
+}
+
+// Withdraw a queued message: drop its bubble and ask the server to remove it
+// from the run's mailbox (best-effort — it may already have been consumed).
+async function withdrawQueued(node) {
+  const i = _queuedTurns.indexOf(node);
+  if (i >= 0) _queuedTurns.splice(i, 1);
+  const id = node.dataset.injectId;
+  node.remove();
+  if (id) {
+    try {
+      await api.uninject({ session_id: store.sessionId, id: Number(id) });
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+// Un-mute every still-queued bubble (e.g. an errored run dropped them) so they
+// read as sent rather than stuck pending.
+function flushQueuedTurns() {
+  for (const node of _queuedTurns) confirmQueuedTurn(node);
+  _queuedTurns = [];
 }
 
 // ---- History rendering --------------------------------------------------
@@ -805,6 +902,26 @@ async function handleEvent({ event, data }) {
       store.reasoningEnd = 0;
       break;
 
+    case 'user_injected': {
+      // A queued message was consumed at this turn's start. Close out the
+      // assistant work that preceded it (once per batch — only when the current
+      // bubble has content) so the response opens a fresh bubble below the
+      // injected user turn(s).
+      if (store.turnNode && !assistantTurnIsEmpty(store.turnNode)) {
+        finalizeCurrentAssistantTurn();
+        startAssistantTurn();
+      }
+      const queued = _queuedTurns.shift();
+      if (queued) {
+        confirmQueuedTurn(queued);
+      } else {
+        // Injected elsewhere (e.g. another tab): render above the fresh bubble.
+        appendUserTurn(data.content, { before: store.turnNode });
+      }
+      scrollDown();
+      break;
+    }
+
     case 'tool_call':
       {
         const todos = parseTodos(data.arguments);
@@ -907,14 +1024,38 @@ const composer = document.getElementById('composer');
 const promptEl = document.getElementById('prompt');
 let _streamAbortController = null;
 
-export async function runStream(message) {
+// While a run streams, the composer stays usable: Send becomes "Queue" (next
+// turn / next run) and Stop appears beside it. Keeping Send visible is what
+// makes queuing discoverable.
+function enterStreamingUI() {
   store.streaming = true;
+  if (stopBtn) stopBtn.style.display = '';
+  if (sendBtn) {
+    sendBtn.textContent = 'Queue';
+    sendBtn.setAttribute('aria-label', 'Queue message');
+  }
+  if (promptEl) promptEl.placeholder = 'Queue a follow-up…';
+}
+
+function exitStreamingUI() {
+  store.streaming = false;
+  if (stopBtn) stopBtn.style.display = 'none';
+  if (sendBtn) {
+    sendBtn.textContent = 'Send';
+    sendBtn.setAttribute('aria-label', 'Send');
+  }
+  if (promptEl) {
+    promptEl.placeholder = 'Send a message…';
+    promptEl.focus();
+  }
+}
+
+export async function runStream(message) {
   store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
-  sendBtn.style.display = 'none';
-  if (stopBtn) stopBtn.style.display = '';
-  const { node: turn, bubble } = startAssistantTurn();
+  enterStreamingUI();
+  startAssistantTurn();
   const streamEpoch = store.chatEpoch;
 
   _resumeAutoScroll();
@@ -956,17 +1097,12 @@ export async function runStream(message) {
       store.body.dataset.raw = store.rawText; // store raw markdown for copy
       flushRender();
     }
-    if (turn) {
-      turn.classList.remove('streaming');
-      setTurnTimestamp(turn);
-      // Add copy button to final bubble
-      addCopyButton(bubble);
-    }
-    store.streaming = false;
+    finalizeCurrentAssistantTurn();
+    // Un-mute any queued bubbles the server dropped (an errored/cancelled run
+    // doesn't auto-chain) so they read as sent — the user can resend.
+    flushQueuedTurns();
+    exitStreamingUI();
     _streamAbortController = null;
-    sendBtn.style.display = '';
-    if (stopBtn) stopBtn.style.display = 'none';
-    if (promptEl) promptEl.focus();
     if (turnProgressEl) turnProgressEl.classList.add('hidden');
     // A new chat's title is generated server-side just after the first turn —
     // poll for it (bounded). Other turns only need one refresh so the session
@@ -976,14 +1112,17 @@ export async function runStream(message) {
     } else {
       loadSessions();
     }
+    // A message that raced this run's end (inject → accepted:false) starts a
+    // fresh run now that the stream has fully settled.
+    if (store.chatEpoch === streamEpoch && _pendingResend.length) {
+      runStream(_pendingResend.splice(0).join('\n\n'));
+    }
   }
 }
 
 export async function runReconnect(sessionId) {
-  store.streaming = true;
-  sendBtn.style.display = 'none';
-  if (stopBtn) stopBtn.style.display = '';
-  const { node: turn, bubble } = startAssistantTurn();
+  enterStreamingUI();
+  startAssistantTurn();
   const streamEpoch = store.chatEpoch;
 
   _resumeAutoScroll();
@@ -1021,18 +1160,15 @@ export async function runReconnect(sessionId) {
       store.body.dataset.raw = store.rawText;
       flushRender();
     }
-    if (turn) {
-      turn.classList.remove('streaming');
-      setTurnTimestamp(turn);
-      addCopyButton(bubble);
-    }
-    store.streaming = false;
+    finalizeCurrentAssistantTurn();
+    flushQueuedTurns();
+    exitStreamingUI();
     _streamAbortController = null;
-    sendBtn.style.display = '';
-    if (stopBtn) stopBtn.style.display = 'none';
-    if (promptEl) promptEl.focus();
     if (turnProgressEl) turnProgressEl.classList.add('hidden');
     loadSessions();
+    if (store.chatEpoch === streamEpoch && _pendingResend.length) {
+      runStream(_pendingResend.splice(0).join('\n\n'));
+    }
   }
 }
 
@@ -1069,12 +1205,35 @@ export function initComposer() {
 
   composer?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (store.streaming) return;
     const message = promptEl.value.trim();
     if (!message) return;
     promptEl.value = '';
     autoresize();
     _resumeAutoScroll();
+
+    if (store.streaming) {
+      // Queue it: the server drains it at the next turn start, or seeds the
+      // next run if this one ends first. Show a muted bubble (with a cancel
+      // affordance) until the run confirms it or the user withdraws it.
+      const node = appendUserTurn(message, { queued: true });
+      if (node) _queuedTurns.push(node);
+      let res = null;
+      try {
+        res = await api.inject({ session_id: store.sessionId, message });
+      } catch { /* network error → treat as no active run */ }
+      if (res?.accepted) {
+        if (node) addWithdrawButton(node, res.id);
+      } else {
+        // Raced the run's end: confirm the bubble and deliver it as a fresh run
+        // once the current stream settles (see runStream's finally).
+        const i = _queuedTurns.indexOf(node);
+        if (i >= 0) _queuedTurns.splice(i, 1);
+        confirmQueuedTurn(node);
+        _pendingResend.push(message);
+      }
+      return;
+    }
+
     document.getElementById('empty-state')?.remove();
     appendUserTurn(message);
     await runStream(message);

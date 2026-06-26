@@ -18,6 +18,7 @@ from .messages import ToolCall
 if TYPE_CHECKING:
     from .agent import Agent
     from .approvals import ApprovalChannel
+    from .parts import ContentPart
     from .runtime.result import RunResult
 
 
@@ -127,6 +128,20 @@ class MessageCompleted(MessageEvent):
     """
 
     entries: list[TranscriptEntry]
+
+
+@dataclass
+class UserMessageInjected(MessageEvent):
+    """A mid-run injected message, consumed at the start of a turn.
+
+    Emitted when the runner drains a :class:`~lovia.steering.Mailbox` entry and
+    appends it to the transcript as a ``user`` message, so a live consumer can
+    render the injected turn at the right point in the stream. ``turn`` is the
+    turn number at whose start the message was consumed.
+    """
+
+    content: "str | list[ContentPart]"
+    turn: int
 
 
 @dataclass

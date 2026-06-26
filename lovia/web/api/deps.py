@@ -27,6 +27,7 @@ from ...context import ContextPolicy
 from ...providers import Provider
 from ...reliability import CancelToken, RetryPolicy, RunBudget
 from ...session import Session
+from ...steering import Mailbox
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
 from ..store import ChatStore
@@ -58,6 +59,8 @@ class RouterDeps:
     tracer: Tracer | None = None
     # Per-session cooperative-cancellation tokens (stop button / new stream).
     cancel_tokens: dict[str, CancelToken] = field(default_factory=dict)
+    # Per-session inbound mailboxes for mid-run message injection (/chat/inject).
+    mailboxes: dict[str, Mailbox] = field(default_factory=dict)
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)

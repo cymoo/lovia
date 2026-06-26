@@ -600,3 +600,237 @@ def test_build_api_router_is_embeddable() -> None:
     assert c.get("/api/agents").json() == [
         {"name": "bot", "instructions": "", "tools": []}
     ]
+
+
+# --------------------------------------------------- mid-run injection ----
+
+
+def test_inject_no_active_run_is_not_accepted() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))
+    r = c.post("/api/chat/inject", json={"session_id": "nope", "message": "x"})
+    assert r.status_code == 200
+    assert r.json() == {"accepted": False}
+
+
+def test_inject_rejects_empty_message() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))
+    r = c.post("/api/chat/inject", json={"session_id": "s", "message": "   "})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_inject_mid_run_emits_user_injected_event() -> None:
+    import asyncio
+
+    import httpx
+
+    release = asyncio.Event()
+
+    @tool
+    async def block() -> str:
+        """Block until the test releases the run."""
+        await release.wait()
+        return "unblocked"
+
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("after")])
+    agent = Agent(name="bot", model=provider, tools=[block])
+    app = _app(agent)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        collected: list[str] = []
+
+        async def consume() -> None:
+            async with ac.stream(
+                "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+            ) as res:
+                async for line in res.aiter_lines():
+                    collected.append(line)
+
+        consumer = asyncio.create_task(consume())
+
+        # Wait until the run is live (mailbox registered), then inject.
+        for _ in range(100):
+            r = await ac.post(
+                "/api/chat/inject", json={"session_id": "s1", "message": "meanwhile"}
+            )
+            if r.json().get("accepted"):
+                break
+            await asyncio.sleep(0.02)
+        else:
+            consumer.cancel()
+            raise AssertionError("inject was never accepted")
+
+        release.set()  # let the tool finish → turn 2 drains the injected message
+        await asyncio.wait_for(consumer, timeout=5)
+
+    evs = _parse_sse("\n".join(collected))
+    kinds = [e[0] for e in evs]
+    assert "user_injected" in kinds
+    payload = next(d for (e, d) in evs if e == "user_injected")
+    assert payload["content"] == "meanwhile"
+    # It lands between the first turn's tool call and the run's end.
+    assert kinds.index("tool_call") < kinds.index("user_injected") < kinds.index("done")
+
+
+@pytest.mark.asyncio
+async def test_leftover_message_auto_chains_into_next_run() -> None:
+    import httpx
+
+    from lovia.messages import Usage
+    from lovia.transcript import FinishDelta, TextDelta, UsageDelta
+
+    class ChainProvider:
+        name = "chain"
+        supports_json_schema = False
+
+        def __init__(self) -> None:
+            self.deps = None
+            self.sid = "s1"
+            self.n = 0
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            self.n += 1
+            if self.n == 1:
+                # Pushed after this run's turn-start drain → a leftover that
+                # seeds the next run over the same connection.
+                self.deps.mailboxes[self.sid].push("again")
+                yield TextDelta(text="first")
+            else:
+                yield TextDelta(text="second")
+            yield UsageDelta(usage=Usage(input_tokens=1, output_tokens=1))
+            yield FinishDelta(reason="stop")
+
+    provider = ChainProvider()
+    app = _app(Agent(name="bot", model=provider))
+    provider.deps = app.state.deps
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        collected: list[str] = []
+        async with ac.stream(
+            "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        ) as res:
+            async for line in res.aiter_lines():
+                collected.append(line)
+
+    evs = _parse_sse("\n".join(collected))
+    kinds = [e[0] for e in evs]
+    # Two runs over one connection: two `done`, a single `session` envelope.
+    assert kinds.count("done") == 2
+    assert kinds.count("session") == 1
+    deltas = "".join(d["delta"] for (e, d) in evs if e == "text_delta")
+    assert deltas == "firstsecond"
+    # The leftover reaches the next run as a rendered user turn (not silent input).
+    injected = [d["content"] for (e, d) in evs if e == "user_injected"]
+    assert injected == ["again"]
+    # The mailbox was torn down once the chain finished.
+    assert "s1" not in app.state.deps.mailboxes
+
+
+@pytest.mark.asyncio
+async def test_inject_then_cancel_does_not_chain() -> None:
+    import asyncio
+
+    import httpx
+
+    release = asyncio.Event()
+
+    @tool
+    async def block() -> str:
+        """Block until released."""
+        await release.wait()
+        return "ok"
+
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("after")])
+    agent = Agent(name="bot", model=provider, tools=[block])
+    app = _app(agent)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        collected: list[str] = []
+
+        async def consume() -> None:
+            async with ac.stream(
+                "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+            ) as res:
+                async for line in res.aiter_lines():
+                    collected.append(line)
+
+        consumer = asyncio.create_task(consume())
+        for _ in range(100):
+            r = await ac.post(
+                "/api/chat/inject", json={"session_id": "s1", "message": "queued"}
+            )
+            if r.json().get("accepted"):
+                break
+            await asyncio.sleep(0.02)
+        else:
+            consumer.cancel()
+            raise AssertionError("inject was never accepted")
+
+        # Cancel instead of releasing the tool: the run stops, no next run.
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()
+        await asyncio.wait_for(consumer, timeout=5)
+
+    # Only the first turn ran; the mailbox was cleaned up; no second run.
+    assert len(provider.calls) == 1
+    assert "s1" not in app.state.deps.mailboxes
+
+
+@pytest.mark.asyncio
+async def test_uninject_withdraws_a_queued_message() -> None:
+    import asyncio
+
+    import httpx
+
+    release = asyncio.Event()
+
+    @tool
+    async def block() -> str:
+        """Block until released."""
+        await release.wait()
+        return "ok"
+
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("after")])
+    agent = Agent(name="bot", model=provider, tools=[block])
+    app = _app(agent)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        collected: list[str] = []
+
+        async def consume() -> None:
+            async with ac.stream(
+                "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+            ) as res:
+                async for line in res.aiter_lines():
+                    collected.append(line)
+
+        consumer = asyncio.create_task(consume())
+        inj_id = None
+        for _ in range(100):
+            d = (
+                await ac.post(
+                    "/api/chat/inject", json={"session_id": "s1", "message": "oops"}
+                )
+            ).json()
+            if d.get("accepted"):
+                inj_id = d["id"]
+                break
+            await asyncio.sleep(0.02)
+        else:
+            consumer.cancel()
+            raise AssertionError("inject was never accepted")
+
+        # Withdraw it before the run drains it.
+        r = await ac.post("/api/chat/uninject", json={"session_id": "s1", "id": inj_id})
+        assert r.json() == {"removed": True}
+
+        release.set()  # turn 2 runs with nothing queued
+        await asyncio.wait_for(consumer, timeout=5)
+
+    evs = _parse_sse("\n".join(collected))
+    assert "user_injected" not in [e[0] for e in evs]
+    # The model never saw the withdrawn message.
+    assert all("oops" not in str(m.content) for msgs in provider.calls for m in msgs)

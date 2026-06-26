@@ -568,6 +568,41 @@ body.sidebar-collapsed .sidebar-expand-btn {
   border-color: var(--user-border);
   box-shadow: var(--user-shadow);
 }
+/* A message queued mid-run, not yet consumed by the agent. */
+.turn.user.queued .bubble {
+  position: relative;
+  border-style: dashed;
+  box-shadow: none;
+}
+.turn.user.queued .body {
+  color: var(--muted-2);
+}
+.withdraw-btn {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted-2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.withdraw-btn:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
 .turn .bubble:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-sm);

@@ -270,6 +270,27 @@ body.sidebar-collapsed .sidebar {
   color: var(--accent-text);
   font-weight: 600;
 }
+/* A live background run for this session (detach/reconnect). */
+.session-item.running .session-title::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  vertical-align: middle;
+  animation: run-pulse 1.4s ease-in-out infinite;
+}
+@keyframes run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 .session-meta {
   font-size: 11px;
   color: var(--muted-2);

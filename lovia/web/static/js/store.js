@@ -6,6 +6,7 @@ export const store = {
   agent: null,
   agents: [],
   sessions: [],
+  activeRuns: new Set(), // session ids with a live background run (sidebar dot)
   chatEpoch: 0,
   emptyTitle: "Wake up, Neo.",
   emptyDescription: "The Matrix has you.",

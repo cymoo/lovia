@@ -850,6 +850,13 @@ async function handleEvent({ event, data }) {
       break;
     }
 
+    case 'snapshot':
+      // Authoritative re-attach snapshot: replace the transcript with the run's
+      // history-so-far, then open a bubble for the live tail that follows.
+      renderHistory(data.entries || []);
+      startAssistantTurn();
+      break;
+
     case 'text_delta':
       finalizeReasoning();
       ensureBody();

@@ -1,0 +1,580 @@
+"""Server-owned run supervision: runs that outlive the HTTP connection.
+
+A streaming agent run becomes a long-lived ``asyncio.Task`` owned by the
+process, not the request. SSE endpoints subscribe to the run's :class:`EventHub`
+and may **detach** (disconnect) and **re-attach** without affecting the run.
+There is at most one run per session; the supervisor consolidates the
+per-session cancel token + mailbox that the request handler used to own.
+
+Single-worker by design (like the rest of the web layer's per-process state):
+the hub + task live in one process. The hub is intentionally a small, swappable
+class — a Redis-backed implementation could replace it without touching the
+loop or the endpoints.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
+
+try:
+    from fastapi import HTTPException
+except ImportError as exc:  # pragma: no cover - depends on optional env
+    from ._deps import raise_missing_web_extra
+
+    raise_missing_web_extra(exc)
+
+from .. import events
+from ..checkpointer import CheckpointOptions
+from ..messages import Message
+from ..reliability import CancelToken
+from ..runner import Runner
+from ..steering import Mailbox
+from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
+from .api.serialization import view_messages
+from .schemas import MessageOut
+from .sse import _format_result, event_to_sse
+
+if TYPE_CHECKING:
+    from ..agent import Agent
+    from ..checkpointer import RunSnapshot
+    from .api.deps import RouterDeps
+
+log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# EventHub — synchronous fan-out + monotonic seq
+# --------------------------------------------------------------------------- #
+
+
+class _Overflow(Exception):
+    """A subscriber fell too far behind and was dropped; it must re-attach."""
+
+
+_CLOSED = object()  # run terminal → close the SSE normally
+_DROPPED = object()  # subscriber overflowed → close the SSE so the client re-attaches
+
+
+class _Subscription:
+    __slots__ = ("_hub", "_q")
+
+    def __init__(self, hub: EventHub, maxsize: int) -> None:
+        self._hub = hub
+        self._q: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+
+    def __aiter__(self) -> _Subscription:
+        return self
+
+    async def __anext__(self) -> tuple[int, events.Event]:
+        item = await self._q.get()
+        if item is _CLOSED:
+            raise StopAsyncIteration
+        if item is _DROPPED:
+            raise _Overflow()
+        return cast("tuple[int, events.Event]", item)
+
+    def close(self) -> None:
+        self._hub._unsubscribe(self)
+
+
+class EventHub:
+    """Fan-out of run events to per-subscriber queues, with a monotonic ``seq``.
+
+    ``publish`` is synchronous (no ``await``), so it cannot interleave with a
+    snapshot capture — the basis of the attach no-gap/no-overlap guarantee.
+    """
+
+    def __init__(self, *, queue_maxsize: int = 512) -> None:
+        self._subs: set[_Subscription] = set()
+        self._seq = 0
+        self._maxsize = queue_maxsize
+        self._closed = False
+
+    @property
+    def seq(self) -> int:
+        return self._seq
+
+    def publish(self, ev: events.Event) -> int:
+        self._seq += 1
+        for sub in list(self._subs):
+            try:
+                sub._q.put_nowait((self._seq, ev))
+            except asyncio.QueueFull:
+                self._drop(sub)
+        return self._seq
+
+    def subscribe(self) -> _Subscription:
+        sub = _Subscription(self, self._maxsize)
+        if self._closed:
+            sub._q.put_nowait(_CLOSED)
+        else:
+            self._subs.add(sub)
+        return sub
+
+    def close(self) -> None:
+        self._closed = True
+        for sub in list(self._subs):
+            # Deliver any still-queued events, then the close sentinel — do NOT
+            # drain, or a fast terminal publish + close loses the tail (e.g. the
+            # final `done`/`error`). Only a full queue (overflow) is drained.
+            try:
+                sub._q.put_nowait(_CLOSED)
+            except asyncio.QueueFull:
+                self._drain(sub)
+                sub._q.put_nowait(_CLOSED)
+        self._subs.clear()
+
+    def _drop(self, sub: _Subscription) -> None:
+        self._subs.discard(sub)
+        self._drain(sub)
+        sub._q.put_nowait(_DROPPED)
+
+    def _unsubscribe(self, sub: _Subscription) -> None:
+        self._subs.discard(sub)
+
+    @staticmethod
+    def _drain(sub: _Subscription) -> None:
+        while True:
+            try:
+                sub._q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+
+# --------------------------------------------------------------------------- #
+# RunController — one supervised run per session
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _Attachment:
+    """What a re-attaching subscriber receives: an authoritative snapshot of the
+    completed turns, the current turn's events to replay, and the live tail."""
+
+    snapshot: list[MessageOut]
+    buffered: list[events.Event]
+    subscription: _Subscription
+    status: str
+
+
+class RunController:
+    """Owns a run's supervised task, cancel token, mailbox, event hub, and the
+    snapshot mirror used to serve late subscribers.
+
+    The snapshot state (``history_baseline``/``completed_mirror``/
+    ``in_flight_buffer``/``pending_approval``) is mutated **only** inside the
+    task, synchronously, immediately before each ``hub.publish`` — so
+    :meth:`attach` can read a consistent snapshot against the hub's ``seq``.
+    """
+
+    def __init__(
+        self,
+        *,
+        deps: RouterDeps,
+        supervisor: RunSupervisor,
+        session_id: str,
+        agent: Agent[Any],
+        first_input: str | list[Message],
+        first_checkpoint: CheckpointOptions | None,
+        seed_entries: list[TranscriptEntry],
+        is_new: bool,
+        title_message: str | None,
+    ) -> None:
+        self.deps = deps
+        self.supervisor = supervisor
+        self.session_id = session_id
+        self.agent = agent
+        self.cancel = CancelToken()
+        self.mailbox = Mailbox()
+        self.hub = EventHub()
+        self.run_id = (
+            first_checkpoint.resolved_run_id if first_checkpoint is not None else None
+        )
+        self.status = "running"
+        self.turns = 0
+        self.succeeded = False
+        self.final_output: Any = None
+        # snapshot mirror (task-private until read synchronously by attach)
+        self.history_baseline: list[TranscriptEntry] = []
+        self.completed_mirror: list[TranscriptEntry] = []
+        self.current_turn_entries: list[TranscriptEntry] = []
+        self.in_flight_buffer: list[events.Event] = []
+        self.pending_approval: events.ApprovalRequired | None = None
+        # first-run spec
+        self._first_input = first_input
+        self._first_ckpt = first_checkpoint
+        self._seed_entries = seed_entries
+        self._is_new = is_new
+        self._title_message = title_message
+        self._user_cancelled = False
+        self.task: asyncio.Task[None] | None = None
+
+    # -- lifecycle ------------------------------------------------------- #
+
+    def _ensure_begun(self) -> None:
+        """Create the supervised task on the first subscribe, so the very first
+        events (RunStarted/early deltas) can never be published before a
+        subscriber exists."""
+        if self.task is None:
+            self.task = asyncio.create_task(self._run())
+
+    def subscribe_live(self) -> _Subscription:
+        """Subscribe to a fresh run (START/resume) and begin it. No snapshot."""
+        sub = self.hub.subscribe()
+        self._ensure_begun()
+        return sub
+
+    def attach(self, *, with_snapshot: bool) -> _Attachment:
+        """Re-attach to a live run: authoritative snapshot + current-turn replay
+        + live tail, captured atomically against the hub seq."""
+        sub = self.hub.subscribe()
+        buffered = list(self.in_flight_buffer)
+        if with_snapshot:
+            entries = [*self.history_baseline, *self.completed_mirror]
+            now = time.time()
+            snapshot = view_messages(entries, created_at=now, updated_at=now)
+        else:
+            snapshot = []
+        # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
+        # if it somehow isn't, so a late client can always decide.
+        if self.pending_approval is not None and self.pending_approval not in buffered:
+            buffered = [*buffered, self.pending_approval]
+        return _Attachment(
+            snapshot=snapshot, buffered=buffered, subscription=sub, status=self.status
+        )
+
+    def inject(self, message: str) -> int:
+        return self.mailbox.push(message)
+
+    def uninject(self, token: int) -> bool:
+        return self.mailbox.remove(token)
+
+    def cancel_run(self, *, user: bool) -> None:
+        self._user_cancelled = self._user_cancelled or user
+        self.cancel.cancel("user requested stop" if user else "server shutdown")
+        # Unblock a run parked on a pending approval (deny) so it can wind down.
+        self.deps.approvals.deny_pending(self.session_id)
+
+    # -- snapshot mirror ------------------------------------------------- #
+
+    def _ingest(self, ev: events.Event) -> None:
+        if isinstance(ev, events.TurnStarted):
+            self.turns = ev.turn
+            self.in_flight_buffer = []
+            self.current_turn_entries = []
+        if isinstance(
+            ev,
+            (
+                events.TurnStarted,
+                events.TextDelta,
+                events.ReasoningDelta,
+                events.OutputDiscarded,
+                events.MessageCompleted,
+                events.ToolCallStarted,
+                events.ToolCallCompleted,
+                events.ApprovalRequired,
+                events.UserMessageInjected,
+                events.HandoffOccurred,
+                events.ContextCompacted,
+                events.ErrorOccurred,
+            ),
+        ):
+            self.in_flight_buffer.append(ev)
+        if isinstance(ev, events.UserMessageInjected):
+            self.current_turn_entries.append(
+                InputEntry(role="user", content=ev.content)
+            )
+        elif isinstance(ev, events.MessageCompleted):
+            self.current_turn_entries.extend(ev.entries)
+        elif isinstance(ev, events.ToolCallCompleted):
+            self.current_turn_entries.append(
+                ToolResultEntry(
+                    call_id=ev.call.id,
+                    output=_format_result(ev.result),
+                    is_error=ev.is_error,
+                )
+            )
+        elif isinstance(ev, events.TurnEnded):
+            self.completed_mirror.extend(self.current_turn_entries)
+            self.current_turn_entries = []
+            self.in_flight_buffer = []
+        if isinstance(ev, events.OutputDiscarded):
+            # A retry wiped this turn's partial output — drop the buffered deltas.
+            self.in_flight_buffer = [
+                e
+                for e in self.in_flight_buffer
+                if not isinstance(e, (events.TextDelta, events.ReasoningDelta))
+            ]
+
+    def _publish(self, ev: events.Event) -> None:
+        self._ingest(ev)
+        self.hub.publish(ev)
+
+    # -- the supervised task --------------------------------------------- #
+
+    async def _run(self) -> None:
+        deps, sid = self.deps, self.session_id
+        session, store = deps.session, deps.store
+        next_input: str | list[Message] = self._first_input
+        ckpt = self._first_ckpt
+        seed = self._seed_entries
+        title_args: tuple[str, str, Any, str] | None = None
+        succeeded = False
+        error_seen = False
+        try:
+            while True:
+                self.run_id = ckpt.resolved_run_id if ckpt is not None else None
+                self.history_baseline = (
+                    await session.load(sid) if session is not None else []
+                )
+                self.completed_mirror = list(seed)
+                self.current_turn_entries = []
+                self.in_flight_buffer = []
+                budget = deps.budget or deps.default_supervised_budget()
+                handle = Runner.stream(
+                    self.agent,
+                    next_input,
+                    session=session,
+                    session_id=sid,
+                    context_policy=deps.context_policy,
+                    cancel_token=self.cancel,
+                    mailbox=self.mailbox,
+                    max_turns=deps.max_turns,
+                    budget=budget,
+                    retry=deps.retry,
+                    tracer=deps.tracer,
+                    checkpoint=ckpt,
+                )
+                succeeded = False
+                error_seen = False
+                async for ev in handle:
+                    if isinstance(ev, events.ErrorOccurred):
+                        error_seen = True
+                    self._publish(ev)
+                    if isinstance(ev, events.RunCompleted):
+                        succeeded = True
+                        self.succeeded = True
+                        self.final_output = ev.result.output
+                    if isinstance(ev, events.ApprovalRequired):
+                        # The loop gates on the consumer: do not advance the
+                        # iterator until the decision lands (mirrors the old
+                        # drive_stream). The awaiter is THIS task, not the HTTP
+                        # request, so a detach can't release it.
+                        deps.approvals.register(sid, ev)
+                        self.pending_approval = ev
+                        self.status = "blocked_on_approval"
+                        try:
+                            await deps.approvals.await_decision(sid, ev)
+                        finally:
+                            self.pending_approval = None
+                            self.status = "running"
+                if (
+                    self._is_new
+                    and succeeded
+                    and title_args is None
+                    and self._title_message is not None
+                ):
+                    title_args = (
+                        sid,
+                        self._title_message,
+                        self.final_output,
+                        self.agent.name,
+                    )
+                # Auto-chain: leftovers re-queued, next run starts with empty
+                # input so the loop drains+emits them as user turns (Phase 1).
+                leftover = self.mailbox.drain()
+                if not leftover or self.cancel.is_cancelled or not succeeded:
+                    break
+                for content in leftover:
+                    self.mailbox.push(content)
+                next_input = []
+                seed = []
+                ckpt = await self.supervisor._checkpoint_for(sid, uuid.uuid4().hex)
+            if succeeded and store.checkpointer is not None:
+                await store.clear_active_run_id(sid, expected=self.run_id)
+        except Exception as exc:
+            # A terminal failure (MaxTurnsExceeded, provider error, …) that the
+            # loop didn't already surface as an `error` event: synthesize one so
+            # subscribers see a clear notice, mirroring the old drive_stream.
+            log.warning("supervised run %s ended: %s", sid, exc)
+            if not error_seen:
+                self.hub.publish(events.ErrorOccurred(error=exc))
+        finally:
+            if self._user_cancelled and store.checkpointer is not None:
+                rid = await store.get_active_run_id(sid)
+                if rid:
+                    await store.checkpointer.delete(rid)
+                await store.clear_active_run_id(sid, expected=rid)
+            await deps.approvals.release(sid)
+            self.hub.close()
+            self.supervisor._evict(sid, self)
+            if title_args is not None:
+                deps.schedule_title(*title_args)
+
+
+# --------------------------------------------------------------------------- #
+# RunSupervisor — process-wide registry (one controller per session)
+# --------------------------------------------------------------------------- #
+
+
+class RunSupervisor:
+    def __init__(self, deps: RouterDeps) -> None:
+        self.deps = deps
+        self._controllers: dict[str, RunController] = {}
+
+    @property
+    def max_background_runs(self) -> int:
+        return self.deps.max_background_runs
+
+    def get(self, session_id: str) -> RunController | None:
+        return self._controllers.get(session_id)
+
+    def __iter__(self) -> Any:
+        return iter(list(self._controllers.items()))
+
+    async def _checkpoint_for(self, sid: str, run_id: str) -> CheckpointOptions | None:
+        store = self.deps.store
+        if store.checkpointer is None:
+            return None
+        await store.set_active_run_id(sid, run_id)
+        return CheckpointOptions(
+            checkpointer=store.checkpointer,
+            run_id=run_id,
+            delete_on_success=True,
+        )
+
+    async def start(
+        self,
+        *,
+        session_id: str,
+        agent: Agent[Any],
+        input: str,
+        is_new: bool,
+        title_message: str | None,
+    ) -> RunController:
+        if len(self._controllers) >= self.max_background_runs:
+            raise HTTPException(status_code=429, detail="too many concurrent runs")
+        ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex)
+        seed: list[TranscriptEntry] = (
+            [InputEntry(role="user", content=input)] if input else []
+        )
+        ctrl = RunController(
+            deps=self.deps,
+            supervisor=self,
+            session_id=session_id,
+            agent=agent,
+            first_input=input,
+            first_checkpoint=ckpt,
+            seed_entries=seed,
+            is_new=is_new,
+            title_message=title_message,
+        )
+        self._controllers[session_id] = ctrl
+        return ctrl
+
+    async def start_resume(
+        self, *, session_id: str, agent: Agent[Any], snapshot: RunSnapshot
+    ) -> RunController:
+        ckpt = CheckpointOptions(
+            checkpointer=self.deps.store.checkpointer,
+            resume_from=snapshot,
+            delete_on_success=True,
+        )
+        seed = [
+            e
+            for e in snapshot.entries
+            if not (isinstance(e, InputEntry) and e.role == "system")
+        ]
+        ctrl = RunController(
+            deps=self.deps,
+            supervisor=self,
+            session_id=session_id,
+            agent=agent,
+            first_input=[],
+            first_checkpoint=ckpt,
+            seed_entries=seed,
+            is_new=False,
+            title_message=None,
+        )
+        self._controllers[session_id] = ctrl
+        return ctrl
+
+    def cancel(self, session_id: str) -> bool:
+        ctrl = self._controllers.get(session_id)
+        if ctrl is None:
+            return False
+        # Evict synchronously so an immediate follow-up /stream starts fresh;
+        # the task winds down + deletes its checkpoint in the background.
+        self._controllers.pop(session_id, None)
+        ctrl.cancel_run(user=True)
+        return True
+
+    def _evict(self, session_id: str, ctrl: RunController) -> None:
+        if self._controllers.get(session_id) is ctrl:
+            self._controllers.pop(session_id, None)
+
+    async def shutdown(self, *, grace: float = 10.0) -> None:
+        ctrls = list(self._controllers.values())
+        for c in ctrls:
+            c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint
+        tasks = [c.task for c in ctrls if c.task is not None]
+        if tasks:
+            _done, pending = await asyncio.wait(tasks, timeout=grace)
+            for t in pending:
+                t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+
+# --------------------------------------------------------------------------- #
+# SSE bridge
+# --------------------------------------------------------------------------- #
+
+
+async def forward(
+    source: _Attachment | _Subscription,
+    *,
+    sid: str,
+    emit_session: bool,
+) -> AsyncIterator[dict[str, str]]:
+    """Stream a subscription (START/resume) or a re-attach to SSE payloads.
+
+    On client disconnect, sse-starlette cancels this generator → the ``finally``
+    unsubscribes (the entire **detach** mechanism); the run is never touched.
+    """
+    if emit_session:
+        yield {"event": "session", "data": json.dumps({"session_id": sid})}
+    if isinstance(source, _Attachment):
+        sub = source.subscription
+        yield {
+            "event": "snapshot",
+            "data": json.dumps(
+                {
+                    "session_id": sid,
+                    "status": source.status,
+                    "entries": [m.model_dump() for m in source.snapshot],
+                }
+            ),
+        }
+        for ev in source.buffered:
+            payload = event_to_sse(ev)
+            if payload is not None:
+                yield payload
+    else:
+        sub = source
+    try:
+        async for _seq, ev in sub:
+            payload = event_to_sse(ev)
+            if payload is not None:
+                yield payload
+    except _Overflow:
+        return  # subscriber fell behind → close the SSE so the client re-attaches
+    finally:
+        sub.close()

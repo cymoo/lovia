@@ -22,7 +22,12 @@ from typing import Any, TypeVar
 from ..checkpointer import Checkpointer
 from ..types import JsonObject
 from ..session import Session
-from ..stores import InMemoryCheckpointer, InMemorySession, SQLiteCheckpointer, SQLiteSession
+from ..stores import (
+    InMemoryCheckpointer,
+    InMemorySession,
+    SQLiteCheckpointer,
+    SQLiteSession,
+)
 from ..stores._sqlite import SQLiteStore
 
 __all__ = ["ChatMeta", "ChatStore"]
@@ -212,8 +217,7 @@ class ChatStore:
 
     async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
         return await self._read_all(
-            f"SELECT {_META_COLS} FROM chat_sessions "
-            "ORDER BY updated_at DESC LIMIT ?",
+            f"SELECT {_META_COLS} FROM chat_sessions ORDER BY updated_at DESC LIMIT ?",
             (limit,),
             ChatMeta.from_row,
         )
@@ -263,8 +267,22 @@ class ChatStore:
             (run_id, session_id),
         )
 
-    async def clear_active_run_id(self, session_id: str) -> None:
-        """Clear the active run pointer (run completed or was abandoned)."""
-        await self._write(
-            "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?", (session_id,)
-        )
+    async def clear_active_run_id(
+        self, session_id: str, *, expected: str | None = None
+    ) -> None:
+        """Clear the active run pointer (run completed or was abandoned).
+
+        With ``expected`` set, only clears when the stored pointer still names
+        that run — so a finished run doesn't wipe a pointer a newer run claimed.
+        """
+        if expected is None:
+            await self._write(
+                "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?",
+                (session_id,),
+            )
+        else:
+            await self._write(
+                "UPDATE chat_sessions SET active_run_id = NULL "
+                "WHERE id = ? AND active_run_id = ?",
+                (session_id, expected),
+            )

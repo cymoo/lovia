@@ -12,7 +12,12 @@ const exportBtn = document.getElementById('export-btn');
 // ---- Load ----------------------------------------------------------------
 export async function loadSessions(query = '') {
   try {
-    store.sessions = await api.listSessions({ q: query });
+    const [sessions, runs] = await Promise.all([
+      api.listSessions({ q: query }),
+      api.listRuns().catch(() => []),
+    ]);
+    store.sessions = sessions;
+    store.activeRuns = new Set(runs.map((r) => r.session_id));
     renderSessions();
   } catch (err) {
     console.error('loadSessions:', err);
@@ -26,6 +31,7 @@ let _lastRenderSig = null;
 function sessionsSignature() {
   return JSON.stringify([
     store.sessionId,
+    [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at]),
   ]);
 }
@@ -49,6 +55,7 @@ function renderSessions() {
     const item = document.createElement('div');
     item.className = 'session-item';
     if (s.id === store.sessionId) item.classList.add('active');
+    if (store.activeRuns?.has(s.id)) item.classList.add('running');
     item.dataset.id = s.id;
 
     const main = document.createElement('button');

@@ -68,3 +68,8 @@ class ApprovalRegistry:
         doesn't leave the runner blocked.
         """
         self._channel.release(scope=session_id, decision=False)
+
+    def deny_pending(self, session_id: str) -> None:
+        """Synchronous default-deny of pending approvals, for non-async callers
+        (e.g. a cancel signal). Same effect as :meth:`release`, no await."""
+        self._channel.release(scope=session_id, decision=False)

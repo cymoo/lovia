@@ -18,6 +18,7 @@ from ...transcript import InputEntry, entries_to_messages
 from ..schemas import (
     ChatSessionInfo,
     RenameRequest,
+    RunInfo,
     SessionDetail,
     TodoItemOut,
     TodosResponse,
@@ -49,6 +50,22 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         )
         return [session_info(m) for m in metas]
 
+    @router.get("/api/runs", response_model=list[RunInfo])
+    async def list_runs(
+        status: str = Query("active", pattern="^active$"),
+    ) -> list[RunInfo]:
+        """Currently-live supervised runs (in-memory; authoritative for active)."""
+        return [
+            RunInfo(
+                session_id=sid,
+                run_id=c.run_id,
+                agent=c.agent.name,
+                status=c.status,
+                turns=c.turns,
+            )
+            for sid, c in deps.supervisor
+        ]
+
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:
         """Delete every session's transcript and metadata."""
@@ -58,11 +75,28 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
     async def get_session(session_id: str) -> SessionDetail:
         meta = await store.get(session_id)
-        active_run_id: str | None = None
+        # A live supervised run owns the session: report its run_id (even before
+        # the first checkpoint) and don't treat the pointer as stale. The client
+        # reconnects → attach delivers the authoritative snapshot anyway.
+        live = deps.supervisor.get(session_id)
+        active_run_id: str | None = live.run_id if live is not None else None
 
-        # Prefer an interrupted run's checkpoint entries when they're more
-        # up-to-date than the session store (only persisted on success).
-        if store.checkpointer is not None:
+        if live is not None:
+            entries = await session.load(session_id)
+            if store.checkpointer is not None and live.run_id is not None:
+                snapshot = await store.checkpointer.load(live.run_id)
+                if snapshot is not None and snapshot.status in (
+                    "interrupted",
+                    "running",
+                ):
+                    entries = entries + [
+                        e
+                        for e in snapshot.entries
+                        if not (isinstance(e, InputEntry) and e.role == "system")
+                    ]
+        elif store.checkpointer is not None:
+            # No live run, but a checkpoint may hold an interrupted run to resume
+            # (restart recovery). Prefer its entries; clean up a stale pointer.
             candidate = await store.get_active_run_id(session_id)
             if candidate:
                 snapshot = await store.checkpointer.load(candidate)
@@ -70,9 +104,6 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     "interrupted",
                     "running",
                 ):
-                    # The checkpoint holds only the in-flight run's own entries;
-                    # prepend the persisted history for the full conversation.
-                    # (Strip any system entry defensively — it's re-generated.)
                     history = await session.load(session_id)
                     run_entries = [
                         e
@@ -82,7 +113,6 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     entries = history + run_entries
                     active_run_id = candidate
                 else:
-                    # Stale pointer (failed, completed, or deleted): clean up.
                     await store.clear_active_run_id(session_id)
                     if snapshot is not None:
                         await store.checkpointer.delete(candidate)
@@ -128,7 +158,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         todos = todos_from_entries(entries)
         return TodosResponse(
             todos=[
-                TodoItemOut(content=t.content, status=t.status, active_form=t.active_form)
+                TodoItemOut(
+                    content=t.content, status=t.status, active_form=t.active_form
+                )
                 for t in todos
             ]
         )

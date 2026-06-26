@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...messages import Message
+from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
 from ..schemas import ChatSessionInfo, MessageOut
 from ..store import ChatMeta
 
@@ -31,7 +32,9 @@ def session_info(meta: ChatMeta) -> ChatSessionInfo:
 
 
 def _tool_calls(m: Message) -> list[dict[str, Any]]:
-    return [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in m.tool_calls]
+    return [
+        {"id": c.id, "name": c.name, "arguments": c.arguments} for c in m.tool_calls
+    ]
 
 
 def _content(m: Message) -> Any:
@@ -70,8 +73,24 @@ def messages_to_out(
     n = len(msgs)
     spacing = 0.0 if n <= 1 else max(0.0, updated_at - created_at) / (n - 1)
     return [
-        message_to_out(m, timestamp=created_at + i * spacing) for i, m in enumerate(msgs)
+        message_to_out(m, timestamp=created_at + i * spacing)
+        for i, m in enumerate(msgs)
     ]
+
+
+def view_messages(
+    entries: list[TranscriptEntry], *, created_at: float, updated_at: float
+) -> list[MessageOut]:
+    """Project a transcript (session history + a run's own entries) to the
+    session-detail message shape, dropping any ``system`` entry (it's
+    re-generated per run). Shared by ``GET /api/sessions/{id}`` and the live
+    re-attach snapshot so both render byte-identically."""
+    cleaned = [
+        e for e in entries if not (isinstance(e, InputEntry) and e.role == "system")
+    ]
+    return messages_to_out(
+        entries_to_messages(cleaned), created_at=created_at, updated_at=updated_at
+    )
 
 
 def message_to_json_dict(m: Message) -> dict[str, Any]:

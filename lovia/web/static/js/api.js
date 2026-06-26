@@ -85,6 +85,8 @@ export const api = {
   // ---- sessions ----
   listSessions: ({ q = '', limit } = {}) =>
     fetch(`/api/sessions${qs({ q, limit })}`).then(_json),
+  // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
+  listRuns: () => fetch('/api/runs').then(_json),
   getSession: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
   renameSession: (id, title) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}`, {

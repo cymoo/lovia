@@ -250,3 +250,27 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     assert (
         "".join(d["delta"] for (e, d) in evs if e == "text_delta") == "resumed-answer"
     )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_leaves_a_resumable_checkpoint() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")
+        # Graceful shutdown (deploy/restart): cooperative stop, short grace.
+        await app.state.deps.supervisor.shutdown(grace=0.2)
+        await _kill(task)
+        # Drained from the supervisor, but left resumable (pointer + a
+        # running/interrupted checkpoint — only a user cancel deletes it).
+        assert app.state.deps.supervisor.get("s1") is None
+    rid = await store.get_active_run_id("s1")
+    assert rid is not None
+    snap = await store.checkpointer.load(rid)
+    assert snap is not None and snap.status in ("interrupted", "running")

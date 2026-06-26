@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -121,7 +122,19 @@ def create_app(
         tracer=tracer,
     )
 
-    app = FastAPI(title=title, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # The supervisor is lazy (nothing to start); on shutdown, wind down any
+        # live background runs cooperatively (leaving resumable checkpoints).
+        yield
+        await deps.supervisor.shutdown()
+
+    app = FastAPI(
+        title=title,
+        lifespan=_lifespan,
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+    )
     app.include_router(build_api_router(deps))
     if ui:
         app.include_router(

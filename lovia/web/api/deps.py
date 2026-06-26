@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 try:
     from fastapi import HTTPException
@@ -32,6 +32,9 @@ from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
+
+if TYPE_CHECKING:
+    from ..supervisor import RunSupervisor
 
 log = logging.getLogger(__name__)
 
@@ -57,17 +60,48 @@ class RouterDeps:
     budget: RunBudget | None = None
     retry: RetryPolicy | None = None
     tracer: Tracer | None = None
-    # Per-session cooperative-cancellation tokens (stop button / new stream).
-    cancel_tokens: dict[str, CancelToken] = field(default_factory=dict)
-    # Per-session inbound mailboxes for mid-run message injection (/chat/inject).
-    mailboxes: dict[str, Mailbox] = field(default_factory=dict)
+    # Cap on concurrent supervised (background) runs; over-cap interactive
+    # starts are rejected (the scheduler, later, will defer).
+    max_background_runs: int = 8
+    # Factory for the default budget given to a supervised run when no explicit
+    # ``budget`` is set — bounds an abandoned, clientless run.
+    default_budget_factory: Callable[[], RunBudget] | None = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    # Lazily-built process-wide run supervisor (owns live runs' tasks + hubs +
+    # per-session cancel token + mailbox); exposed via the ``supervisor`` prop.
+    _supervisor: RunSupervisor | None = field(default=None, init=False, repr=False)
 
     @property
     def session(self) -> Session:
         return self.store.session
+
+    @property
+    def supervisor(self) -> RunSupervisor:
+        """The process-wide run supervisor (lazily constructed)."""
+        if self._supervisor is None:
+            from ..supervisor import RunSupervisor
+
+            self._supervisor = RunSupervisor(self)
+        return self._supervisor
+
+    @property
+    def cancel_tokens(self) -> dict[str, CancelToken]:
+        """Read-through view of live runs' cancel tokens (back-compat shim)."""
+        return {sid: c.cancel for sid, c in self.supervisor}
+
+    @property
+    def mailboxes(self) -> dict[str, Mailbox]:
+        """Read-through view of live runs' mailboxes (back-compat shim)."""
+        return {sid: c.mailbox for sid, c in self.supervisor}
+
+    def default_supervised_budget(self) -> RunBudget:
+        """A fresh budget for a supervised run (``RunBudget`` is mutable, so call
+        this per run). Bounds an abandoned, clientless run."""
+        if self.default_budget_factory is not None:
+            return self.default_budget_factory()
+        return RunBudget(max_total_tokens=1_000_000, max_seconds=1800.0)
 
     @property
     def default_agent(self) -> str | None:

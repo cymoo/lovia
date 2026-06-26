@@ -73,6 +73,7 @@ from .providers import (
     Provider,
 )
 from .reliability import CancelToken, RetryPolicy, RunBudget
+from .steering import Mailbox
 from .run_context import RunContext
 from .runtime.result import RunHandle, RunResult
 from .runner import Runner
@@ -110,6 +111,7 @@ __all__ = [
     "InMemorySession",
     "TranscriptEntry",
     "LoviaError",
+    "Mailbox",
     "MaxTurnsExceeded",
     "MCPError",
     "Memory",

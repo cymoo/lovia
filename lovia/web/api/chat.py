@@ -19,10 +19,18 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ... import events
 from ...checkpointer import CheckpointOptions
+from ...messages import Message
 from ...reliability import CancelToken
 from ...runner import Runner
 from ...runtime.result import RunHandle
-from ..schemas import ApprovalRequest, ChatRequest, ChatResponse
+from ...steering import Mailbox
+from ..schemas import (
+    ApprovalRequest,
+    ChatRequest,
+    ChatResponse,
+    InjectCancelRequest,
+    InjectRequest,
+)
 from ..sse import _coerce, event_to_sse, usage_dict
 from ..titles import provisional_title
 from .deps import RouterDeps
@@ -46,15 +54,18 @@ async def drive_stream(
     cancel: CancelToken,
     deps: RouterDeps,
     out: _DriveResult,
+    emit_session: bool = True,
 ) -> AsyncIterator[dict[str, str]]:
     """Drive a Runner stream to SSE payloads, recording the result in ``out``.
 
-    Shared by ``/chat/stream`` and ``/chat/reconnect``; the only behavioural
-    difference between them — scheduling a title for brand-new sessions — is left
-    to the caller, which runs it after this generator is exhausted.
+    Lifecycle-free: the caller owns the per-session cancel token, mailbox, and
+    checkpoint pointer and tears them down once the whole (possibly
+    auto-chained) connection is finished. ``emit_session`` is False for chained
+    runs so the ``session`` envelope is sent only once per connection.
     """
-    # Tell the client its session id up front so reconnects work.
-    yield {"event": "session", "data": json.dumps({"session_id": sid})}
+    if emit_session:
+        # Tell the client its session id up front so reconnects work.
+        yield {"event": "session", "data": json.dumps({"session_id": sid})}
     error_seen = False
     try:
         async for ev in handle:
@@ -90,17 +101,24 @@ async def drive_stream(
             }
     finally:
         await deps.approvals.release(sid)
-        deps.cancel_tokens.pop(sid, None)
-        # On success the checkpoint was already deleted (delete_on_success).
-        # Clear the DB pointer so the reconnect endpoint finds nothing.
-        if out.succeeded and deps.store.checkpointer is not None:
-            await deps.store.clear_active_run_id(sid)
 
 
 def build_chat_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
     store = deps.store
     session = deps.session
+
+    async def _checkpoint_for(sid: str, run_id: str) -> CheckpointOptions | None:
+        """Register ``run_id`` as the session's active run and build its
+        checkpoint options; ``None`` when no checkpointer is configured."""
+        if store.checkpointer is None:
+            return None
+        await store.set_active_run_id(sid, run_id)
+        return CheckpointOptions(
+            checkpointer=store.checkpointer,
+            run_id=run_id,
+            delete_on_success=True,
+        )
 
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
@@ -154,42 +172,101 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if sid in deps.cancel_tokens:
             deps.cancel_tokens[sid].cancel("new stream started")
 
-        run_id = uuid.uuid4().hex
         cancel = CancelToken()
         deps.cancel_tokens[sid] = cancel
+        mailbox = Mailbox()
+        deps.mailboxes[sid] = mailbox
 
-        checkpoint_opts: CheckpointOptions | None = None
-        if store.checkpointer is not None:
-            await store.set_active_run_id(sid, run_id)
-            checkpoint_opts = CheckpointOptions(
-                checkpointer=store.checkpointer,
-                run_id=run_id,
-                delete_on_success=True,
-            )
+        checkpoint_opts = await _checkpoint_for(sid, uuid.uuid4().hex)
 
         async def gen() -> AsyncIterator[dict[str, str]]:
-            handle = Runner.stream(
-                agent,
-                req.message,
-                session=session,
-                session_id=sid,
-                context_policy=deps.context_policy,
-                cancel_token=cancel,
-                max_turns=deps.max_turns,
-                budget=deps.budget,
-                retry=deps.retry,
-                tracer=deps.tracer,
-                checkpoint=checkpoint_opts,
-            )
+            first = True
+            title_args: tuple[str, str, Any, str] | None = None
+            next_input: str | list[Message] = req.message
+            cur_ckpt = checkpoint_opts
             out = _DriveResult()
-            async for payload in drive_stream(
-                handle, sid=sid, request=request, cancel=cancel, deps=deps, out=out
-            ):
-                yield payload
-            if is_new and out.succeeded:
-                deps.schedule_title(sid, req.message, out.final_output, agent.name)
+            try:
+                while True:
+                    handle = Runner.stream(
+                        agent,
+                        next_input,
+                        session=session,
+                        session_id=sid,
+                        context_policy=deps.context_policy,
+                        cancel_token=cancel,
+                        mailbox=mailbox,
+                        max_turns=deps.max_turns,
+                        budget=deps.budget,
+                        retry=deps.retry,
+                        tracer=deps.tracer,
+                        checkpoint=cur_ckpt,
+                    )
+                    out = _DriveResult()
+                    async for payload in drive_stream(
+                        handle,
+                        sid=sid,
+                        request=request,
+                        cancel=cancel,
+                        deps=deps,
+                        out=out,
+                        emit_session=first,
+                    ):
+                        yield payload
+                    if first and is_new and out.succeeded:
+                        title_args = (sid, req.message, out.final_output, agent.name)
+                    first = False
+
+                    # Anything still queued arrived too late to be drained at a
+                    # turn start. Re-queue it and start the next run with empty
+                    # input over this same stream: the next run drains it at its
+                    # first turn, so it emits `user_injected` (rendered as a user
+                    # turn) instead of silently folding into the run input.
+                    leftover = mailbox.drain()
+                    if not leftover or cancel.is_cancelled or not out.succeeded:
+                        break
+                    for content in leftover:
+                        mailbox.push(content)
+                    next_input = []
+                    cur_ckpt = await _checkpoint_for(sid, uuid.uuid4().hex)
+            finally:
+                deps.cancel_tokens.pop(sid, None)
+                deps.mailboxes.pop(sid, None)
+                # On success the checkpoint was already deleted
+                # (delete_on_success); clear the DB pointer so reconnect finds
+                # nothing.
+                if out.succeeded and store.checkpointer is not None:
+                    await store.clear_active_run_id(sid)
+            if title_args is not None:
+                deps.schedule_title(*title_args)
 
         return EventSourceResponse(gen())
+
+    @router.post("/api/chat/inject")
+    async def chat_inject(req: InjectRequest) -> dict[str, Any]:
+        """Queue a message into the active run for ``session_id``.
+
+        ``{"accepted": true, "id": <token>}`` when a run is live (drained at the
+        next turn start; the token withdraws it via ``/uninject``).
+        ``{"accepted": false}`` when no run is active — the "run just ended" race —
+        so the client can fall back to a normal stream without losing the message.
+        """
+        message = req.message.strip()
+        if not message:
+            raise HTTPException(status_code=422, detail="empty message")
+        mailbox = deps.mailboxes.get(req.session_id)
+        if mailbox is None:
+            return {"accepted": False}
+        return {"accepted": True, "id": mailbox.push(message)}
+
+    @router.post("/api/chat/uninject")
+    async def chat_uninject(req: InjectCancelRequest) -> dict[str, bool]:
+        """Withdraw a still-queued message before the run drains it.
+
+        ``{"removed": false}`` if it was already consumed or no run is active.
+        """
+        mailbox = deps.mailboxes.get(req.session_id)
+        removed = mailbox.remove(req.id) if mailbox is not None else False
+        return {"removed": removed}
 
     @router.post("/api/chat/approve")
     async def approve(req: ApprovalRequest) -> dict[str, bool]:
@@ -256,6 +333,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
         cancel = CancelToken()
         deps.cancel_tokens[session_id] = cancel
+        mailbox = Mailbox()
+        deps.mailboxes[session_id] = mailbox
 
         # Pass the pre-loaded snapshot directly to avoid a race between our check
         # above and the Runner's own checkpointer lookup.
@@ -266,29 +345,36 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
 
         async def gen() -> AsyncIterator[dict[str, str]]:
-            handle = Runner.stream(
-                agent,
-                [],  # input is ignored on resume; transcript already has it
-                session=session,
-                session_id=session_id,
-                context_policy=deps.context_policy,
-                cancel_token=cancel,
-                max_turns=deps.max_turns,
-                budget=deps.budget,
-                retry=deps.retry,
-                tracer=deps.tracer,
-                checkpoint=checkpoint_opts,
-            )
             out = _DriveResult()
-            async for payload in drive_stream(
-                handle,
-                sid=session_id,
-                request=request,
-                cancel=cancel,
-                deps=deps,
-                out=out,
-            ):
-                yield payload
+            try:
+                handle = Runner.stream(
+                    agent,
+                    [],  # input is ignored on resume; transcript already has it
+                    session=session,
+                    session_id=session_id,
+                    context_policy=deps.context_policy,
+                    cancel_token=cancel,
+                    mailbox=mailbox,
+                    max_turns=deps.max_turns,
+                    budget=deps.budget,
+                    retry=deps.retry,
+                    tracer=deps.tracer,
+                    checkpoint=checkpoint_opts,
+                )
+                async for payload in drive_stream(
+                    handle,
+                    sid=session_id,
+                    request=request,
+                    cancel=cancel,
+                    deps=deps,
+                    out=out,
+                ):
+                    yield payload
+            finally:
+                deps.cancel_tokens.pop(session_id, None)
+                deps.mailboxes.pop(session_id, None)
+                if out.succeeded and store.checkpointer is not None:
+                    await store.clear_active_run_id(session_id)
 
         return EventSourceResponse(gen())
 

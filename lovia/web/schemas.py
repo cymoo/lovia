@@ -34,6 +34,16 @@ class ChatRequest(BaseModel):
     agent: str | None = None
 
 
+class InjectRequest(BaseModel):
+    session_id: str
+    message: str = Field(max_length=10_000_000)
+
+
+class InjectCancelRequest(BaseModel):
+    session_id: str
+    id: int
+
+
 class ChatResponse(BaseModel):
     output: Any
     session_id: str | None

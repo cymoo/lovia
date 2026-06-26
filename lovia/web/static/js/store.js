@@ -11,6 +11,7 @@ export const store = {
   emptyDescription: "The Matrix has you.",
   sidebarCollapsed: localStorage.getItem("lovia-sidebar-collapsed") === "1",
   streaming: false,
+  turnNode: null,
   bubble: null,
   body: null,
   rawText: "",

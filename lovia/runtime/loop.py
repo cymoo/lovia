@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
     from ..messages import Message
+    from ..steering import Mailbox
     from ..workspace.protocol import WorkspaceSession
 
 from .. import events
@@ -115,6 +116,7 @@ class RunLoop:
         max_turns: int,
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
+        mailbox: Mailbox | None = None,
         retry: RetryPolicy | None = None,
         context_policy: ContextPolicy | None = None,
         session: Session | None,
@@ -139,6 +141,9 @@ class RunLoop:
         # is behaviourally identical to the old None for callers who don't reach
         # for it.
         self.cancel_token = cancel_token or CancelToken()
+        # Inbound steering channel (the dual of cancel_token): messages to
+        # inject as ``user`` turns at turn boundaries. ``None`` ⇒ feature inert.
+        self.mailbox = mailbox
         # Run-scoped observability. ``None`` → NoopTracer at stream() time, so
         # instrumentation stays free. A run-level knob (like budget/cancel_token),
         # not a per-agent one: it applies across handoffs to whatever agent is
@@ -184,6 +189,23 @@ class RunLoop:
         with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
             async for ev in self._stream_inner(tracer, span):
                 yield ev
+
+    async def _drain_mailbox(self, state: RunState) -> AsyncIterator[events.Event]:
+        """Append any mailbox-injected messages as ``user`` turns.
+
+        Called at the start of each turn (a safe point): each queued item
+        becomes an ``InputEntry`` the model sees on its next call, and a
+        :class:`events.UserMessageInjected` lets a live consumer render it.
+        Whatever is pushed after the last turn-start drain stays queued and is
+        fed into the next run by the caller.
+        """
+        if self.mailbox is None:
+            return
+        for content in self.mailbox.drain():
+            state.transcript.append(InputEntry(role="user", content=content))
+            yield await self._emit(
+                state, events.UserMessageInjected(content=content, turn=state.turns)
+            )
 
     async def _stream_inner(
         self, tracer: Tracer, span: Span
@@ -254,6 +276,10 @@ class RunLoop:
                     yield await self._emit(
                         state, events.TurnStarted(agent=state.agent, turn=state.turns)
                     )
+                    # Fold in any messages injected since this turn's predecessor
+                    # began, as ``user`` entries the model sees on this call.
+                    async for ev in self._drain_mailbox(state):
+                        yield ev
                     logger.debug(
                         "run.turn.start: agent=%r turn=%d",
                         state.agent.name,

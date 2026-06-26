@@ -67,6 +67,20 @@ export const api = {
     }),
   cancel: (sessionId) =>
     fetch(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }),
+  // Queue a message into the active run. `body`: { session_id, message }.
+  inject: (body) =>
+    fetch('/api/chat/inject', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
+  // Withdraw a still-queued message. `body`: { session_id, id }.
+  uninject: (body) =>
+    fetch('/api/chat/uninject', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_json),
 
   // ---- sessions ----
   listSessions: ({ q = '', limit } = {}) =>

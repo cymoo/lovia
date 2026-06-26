@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from ..types import JsonObject, JsonValue
 from .. import events
 from ..messages import Usage
+from ..parts import text_of
 from ..plugins import TodoItem
 from ..transcript import (
     AssistantTextEntry,
@@ -124,6 +125,11 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         return {
             "event": "message_completed",
             "data": json.dumps({"message": _entries_to_dict(ev.entries)}),
+        }
+    if isinstance(ev, events.UserMessageInjected):
+        return {
+            "event": "user_injected",
+            "data": json.dumps({"content": text_of(ev.content), "turn": ev.turn}),
         }
     if isinstance(ev, events.ToolCallStarted):
         return {

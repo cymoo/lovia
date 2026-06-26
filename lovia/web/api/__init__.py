@@ -32,6 +32,7 @@ from ..schemas import ServerInfo
 from .agents import build_agents_router
 from .chat import build_chat_router
 from .deps import RouterDeps
+from .schedules import build_schedules_router
 from .sessions import build_sessions_router
 
 __all__ = ["RouterDeps", "build_api_router"]
@@ -62,10 +63,12 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
             features={
                 "checkpointing": deps.store.checkpointer is not None,
                 "titles": deps.generate_titles,
+                "scheduling": True,
             },
         )
 
     router.include_router(build_agents_router(deps))
     router.include_router(build_chat_router(deps))
     router.include_router(build_sessions_router(deps))
+    router.include_router(build_schedules_router(deps))
     return router

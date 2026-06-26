@@ -1463,6 +1463,119 @@ dialog.custom-dialog::backdrop {
   margin-top: 22px;
 }
 
+/* ---- Schedules -------------------------------------------------------- */
+.custom-dialog.dialog-wide {
+  max-width: 560px;
+}
+.schedules-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.schedules-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.schedules-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sched-form .dialog-input {
+  margin-top: 0;
+}
+.sched-input {
+  resize: vertical;
+  min-height: 42px;
+  font-family: var(--sans);
+}
+.sched-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.sched-row .sched-kind,
+.sched-row .sched-agent {
+  flex: 0 0 auto;
+  width: auto;
+}
+.sched-expr-wrap {
+  flex: 1 1 140px;
+  display: flex;
+}
+.sched-expr-wrap > * {
+  width: 100%;
+}
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.sched-empty {
+  color: var(--muted);
+  font-size: 13.5px;
+  text-align: center;
+  padding: 14px 0;
+}
+.sched-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.sched-item.paused {
+  opacity: 0.6;
+}
+.sched-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.sched-item-prompt {
+  font-size: 13.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sched-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-family: var(--mono);
+}
+.sched-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sched-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  font-size: 13px;
+  transition: all 0.12s;
+}
+.sched-item-actions button:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
 /* ---- Scrollbar -------------------------------------------------------- */
 html {
   scrollbar-width: thin; /* Firefox parity with the webkit thumb below */

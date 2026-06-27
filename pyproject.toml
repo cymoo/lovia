@@ -32,6 +32,7 @@ dependencies = [
 mcp = ["mcp>=1.0"]
 ddg = ["ddgs>=7.0"]
 web = [
+    "croniter>=2.0",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "markdown-it-py>=3.0",
@@ -46,6 +47,7 @@ examples = [
 ]
 dev = [
     "build>=1.2",
+    "croniter>=2.0",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "markdown-it-py>=3.0",
@@ -71,5 +73,5 @@ files = ["lovia"]
 # warn_unused_ignores, so prefer module-level suppression here over inline
 # ``# type: ignore`` comments that go stale when the dep is installed.
 [[tool.mypy.overrides]]
-module = ["ddgs.*"]
+module = ["ddgs.*", "croniter.*"]
 ignore_missing_imports = true

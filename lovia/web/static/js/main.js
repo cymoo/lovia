@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { initTheme, initSidebarToggle } from './ui.js';
 import { initComposer, cancelStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
+import { initSchedules } from './schedules.js';
 import { toast } from './toast.js';
 
 // ---- Page config --------------------------------------------------------
@@ -95,9 +96,19 @@ function initKeyboardShortcuts() {
   initSidebarToggle();
   initComposer();
   initSessions();
+  initSchedules();
   initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();
+
+  // Reveal the schedules button only when the server advertises the feature.
+  api.info()
+    .then((info) => {
+      if (info?.features?.scheduling) {
+        document.getElementById('schedules-btn')?.classList.remove('hidden');
+      }
+    })
+    .catch(() => {});
 
   store.on('cancel', cancelStream);
 

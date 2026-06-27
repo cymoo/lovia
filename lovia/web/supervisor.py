@@ -458,6 +458,7 @@ class RunSupervisor:
         input: str,
         is_new: bool,
         title_message: str | None,
+        autostart: bool = False,
     ) -> RunController:
         if len(self._controllers) >= self.max_background_runs:
             raise HTTPException(status_code=429, detail="too many concurrent runs")
@@ -477,6 +478,9 @@ class RunSupervisor:
             title_message=title_message,
         )
         self._controllers[session_id] = ctrl
+        if autostart:
+            # Clientless (scheduled) run: begin the task now, with no subscriber.
+            ctrl._ensure_begun()
         return ctrl
 
     async def start_resume(

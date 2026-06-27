@@ -23,6 +23,7 @@ from ..session import Session
 from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
 from .approvals import ApprovalRegistry
+from .scheduler import Scheduler
 from .store import ChatStore
 from .ui import build_ui_router
 
@@ -62,6 +63,7 @@ def create_app(
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     default_budget_factory: Callable[[], RunBudget] | None = None,
+    scheduler_poll: float = 1.0,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
@@ -128,10 +130,16 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        # The supervisor is lazy (nothing to start); on shutdown, wind down any
-        # live background runs cooperatively (leaving resumable checkpoints).
-        yield
-        await deps.supervisor.shutdown()
+        # Start the scheduler loop; on shutdown stop it, then wind down any live
+        # background runs cooperatively (leaving resumable checkpoints).
+        scheduler = Scheduler(deps, poll_interval=scheduler_poll)
+        _app.state.scheduler = scheduler
+        scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
+            await deps.supervisor.shutdown()
 
     app = FastAPI(
         title=title,

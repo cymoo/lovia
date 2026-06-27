@@ -14,7 +14,7 @@ metadata table is owned by this module.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -30,12 +30,18 @@ from ..stores import (
 )
 from ..stores._sqlite import SQLiteStore
 
-__all__ = ["ChatMeta", "ChatStore"]
+__all__ = ["ChatMeta", "ChatStore", "ScheduleRow"]
 
 _T = TypeVar("_T")
 
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
 _META_COLS = "id, title, agent, created_at, updated_at"
+
+# Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
+_SCHED_COLS = (
+    "id, agent, input, session_id, trigger_kind, trigger_expr, "
+    "next_fire, active, last_session_id, created_at, updated_at"
+)
 
 
 _META_SCHEMA = """
@@ -49,6 +55,20 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
+CREATE TABLE IF NOT EXISTS schedules (
+    id TEXT PRIMARY KEY,
+    agent TEXT,
+    input TEXT NOT NULL,
+    session_id TEXT,
+    trigger_kind TEXT NOT NULL,
+    trigger_expr TEXT NOT NULL,
+    next_fire REAL NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    last_session_id TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(active, next_fire);
 """
 
 
@@ -72,6 +92,54 @@ class ChatMeta:
             "id": self.id,
             "title": self.title,
             "agent": self.agent,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class ScheduleRow:
+    """One row of the ``schedules`` table (a scheduled background run)."""
+
+    id: str
+    agent: str | None
+    input: str
+    session_id: str | None  # NULL → a fresh session per fire
+    trigger_kind: str  # "cron" | "every" | "at"
+    trigger_expr: str  # cron string | interval seconds | epoch timestamp
+    next_fire: float
+    active: bool
+    last_session_id: str | None  # session of the last fire (overlap check)
+    created_at: float
+    updated_at: float
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ScheduleRow":
+        return cls(
+            id=row[0],
+            agent=row[1],
+            input=row[2],
+            session_id=row[3],
+            trigger_kind=row[4],
+            trigger_expr=row[5],
+            next_fire=row[6],
+            active=bool(row[7]),
+            last_session_id=row[8],
+            created_at=row[9],
+            updated_at=row[10],
+        )
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "id": self.id,
+            "agent": self.agent,
+            "input": self.input,
+            "session_id": self.session_id,
+            "trigger_kind": self.trigger_kind,
+            "trigger_expr": self.trigger_expr,
+            "next_fire": self.next_fire,
+            "active": self.active,
+            "last_session_id": self.last_session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -285,4 +353,85 @@ class ChatStore:
                 "UPDATE chat_sessions SET active_run_id = NULL "
                 "WHERE id = ? AND active_run_id = ?",
                 (session_id, expected),
+            )
+
+    # ---- schedules ------------------------------------------------------
+
+    async def add_schedule(self, row: ScheduleRow) -> None:
+        await self._write(
+            f"INSERT INTO schedules ({_SCHED_COLS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row.id,
+                row.agent,
+                row.input,
+                row.session_id,
+                row.trigger_kind,
+                row.trigger_expr,
+                row.next_fire,
+                int(row.active),
+                row.last_session_id,
+                row.created_at,
+                row.updated_at,
+            ),
+        )
+
+    async def list_schedules(self) -> Sequence[ScheduleRow]:
+        return await self._read_all(
+            f"SELECT {_SCHED_COLS} FROM schedules ORDER BY created_at DESC",
+            (),
+            ScheduleRow.from_row,
+        )
+
+    async def get_schedule(self, schedule_id: str) -> ScheduleRow | None:
+        return await self._read_one(
+            f"SELECT {_SCHED_COLS} FROM schedules WHERE id = ?",
+            (schedule_id,),
+            ScheduleRow.from_row,
+        )
+
+    async def delete_schedule(self, schedule_id: str) -> bool:
+        """Delete a schedule; returns whether it existed."""
+        existed = (await self.get_schedule(schedule_id)) is not None
+        await self._write("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        return existed
+
+    async def due_schedules(self, now: float) -> Sequence[ScheduleRow]:
+        """Active schedules whose ``next_fire`` is at or before ``now``."""
+        return await self._read_all(
+            f"SELECT {_SCHED_COLS} FROM schedules "
+            "WHERE active = 1 AND next_fire <= ? ORDER BY next_fire",
+            (now,),
+            ScheduleRow.from_row,
+        )
+
+    async def mark_fired(
+        self,
+        schedule_id: str,
+        *,
+        next_fire: float,
+        active: bool,
+        last_session_id: str | None,
+    ) -> None:
+        """Advance a schedule after a fire (or deactivate a one-shot)."""
+        await self._write(
+            "UPDATE schedules SET next_fire = ?, active = ?, "
+            "last_session_id = ?, updated_at = ? WHERE id = ?",
+            (next_fire, int(active), last_session_id, time.time(), schedule_id),
+        )
+
+    async def set_schedule_active(
+        self, schedule_id: str, *, active: bool, next_fire: float | None = None
+    ) -> None:
+        """Pause/resume a schedule (resume passes a freshly-computed next_fire)."""
+        if next_fire is None:
+            await self._write(
+                "UPDATE schedules SET active = ?, updated_at = ? WHERE id = ?",
+                (int(active), time.time(), schedule_id),
+            )
+        else:
+            await self._write(
+                "UPDATE schedules SET active = ?, next_fire = ?, updated_at = ? "
+                "WHERE id = ?",
+                (int(active), next_fire, time.time(), schedule_id),
             )

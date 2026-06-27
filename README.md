@@ -901,6 +901,7 @@ Key endpoints (browse the full schema at `/api/docs`):
 | `GET /api/sessions` | list chats (`?q=` search, `?limit=`); `DELETE` clears all |
 | `GET`/`PATCH`/`DELETE /api/sessions/{id}` | transcript / rename / delete |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
+| `GET`/`POST /api/schedules`, `DELETE`/`PATCH /api/schedules/{id}` | list / create / delete / pause scheduled runs (cron · interval · at) |
 
 `lovia/web/static/js/api.js` is a ready-made browser client (including an SSE
 reader) — import it, or read it as a reference for any language.

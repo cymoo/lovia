@@ -102,6 +102,38 @@ class RunInfo(BaseModel):
     turns: int
 
 
+class ScheduleSpec(BaseModel):
+    """Create a scheduled background run.
+
+    ``trigger_expr`` is the cron string (``cron``), interval seconds (``every``),
+    or epoch timestamp (``at``). With ``session_id`` the fire continues that
+    conversation; without it, a fresh session is created per fire.
+    """
+
+    input: str = Field(max_length=10_000_000)
+    agent: str | None = None
+    session_id: str | None = None
+    trigger_kind: Literal["cron", "every", "at"]
+    trigger_expr: str = Field(max_length=200)
+
+
+class SchedulePatch(BaseModel):
+    active: bool
+
+
+class ScheduleInfo(BaseModel):
+    id: str
+    agent: str | None = None
+    input: str
+    session_id: str | None = None
+    trigger_kind: str
+    trigger_expr: str
+    next_fire: float
+    active: bool
+    created_at: float
+    updated_at: float
+
+
 class RenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 

@@ -822,6 +822,7 @@ app.include_router(build_api_router(deps))
 | `GET /api/sessions` | 会话列表（`?q=` 搜索、`?limit=`）；`DELETE` 清空全部       |
 | `GET`/`PATCH`/`DELETE /api/sessions/{id}` | 查看 / 重命名 / 删除                                |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出会话                                         |
+| `GET`/`POST /api/schedules`、`DELETE`/`PATCH /api/schedules/{id}` | 定时任务列表 / 创建 / 删除 / 暂停（cron · 间隔 · 定时） |
 
 `lovia/web/static/js/api.js` 是一个开箱即用的浏览器客户端（含 SSE 读取器）——
 直接 import，或作为任意语言的参考实现。

@@ -101,7 +101,36 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(id)}/todos`).then(_json),
   exportUrl: (id, format = 'md') =>
     `/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`,
+
+  // ---- schedules ----
+  listSchedules: () => fetch('/api/schedules').then(_json),
+  // Create a scheduled run. `body`: { input, agent?, session_id?, trigger_kind,
+  // trigger_expr }. Surfaces the server's validation `detail` on 4xx.
+  createSchedule: (body) =>
+    fetch('/api/schedules', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  deleteSchedule: (id) =>
+    fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  setScheduleActive: (id, active) =>
+    fetch(`/api/schedules/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ active }),
+    }).then(_json),
 };
+
+// Like `_json`, but raises the server's `{detail}` message (422/404) so the
+// schedule form can show *why* a trigger was rejected.
+async function _jsonOrDetail(res) {
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
 
 // Parse one SSE chunk ("event: x\ndata: y") into { event, data }, or null.
 function parseSSE(chunk) {

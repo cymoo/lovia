@@ -836,8 +836,9 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 No code required: `python -m lovia.web` builds a default agent — model from env,
 skills from `./skills`, long-term memory under `./.lovia/memory`, a todo
-checklist, built-in tools (time, HTTP fetch, web search), and a trusted
-workspace on the current directory — and serves the chat UI.
+checklist, model-driven scheduled runs (the agent can schedule its own
+follow-ups, with your approval), built-in tools (time, HTTP fetch, web search),
+and a trusted workspace on the current directory — and serves the chat UI.
 
 ```bash
 python -m lovia.web                                    # zero-config

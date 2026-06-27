@@ -34,6 +34,7 @@ from __future__ import annotations
 try:
     from .api import RouterDeps, build_api_router
     from .app import create_app, serve
+    from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -44,6 +45,7 @@ __all__ = [
     "ChatMeta",
     "ChatStore",
     "RouterDeps",
+    "Scheduling",
     "build_api_router",
     "create_app",
     "serve",

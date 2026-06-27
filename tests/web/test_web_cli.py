@@ -11,6 +11,7 @@ pytest.importorskip("fastapi")
 
 from lovia import Agent, Memory  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
+from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
 
 
@@ -358,12 +359,17 @@ def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     (tmp_path / "skills").mkdir()
     args = cli.build_parser().parse_args([])
-    agent = cli.build_default_agent(args)
+    agent = cli.build_default_agent(args, ChatStore.in_memory())
     assert agent.name == "lovia"
     assert agent.model == "test-model"
     assert agent.instructions == cli.GENERIC_INSTRUCTIONS
-    # ./skills -> Skills, plus the on-by-default Todo + Memory plugins.
-    assert {type(p).__name__ for p in agent.plugins} == {"Skills", "Todo", "Memory"}
+    # ./skills -> Skills, plus the on-by-default Todo + Scheduling + Memory plugins.
+    assert {type(p).__name__ for p in agent.plugins} == {
+        "Skills",
+        "Todo",
+        "Scheduling",
+        "Memory",
+    }
     # Always-on built-in tools (web_search only when its backend is installed).
     assert {"now", "http_fetch"} <= {t.name for t in agent.tools}
     assert agent.workspace is not None
@@ -375,7 +381,7 @@ def test_build_default_agent_no_memory(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LOVIA_MODEL", "test-model")
     args = cli.build_parser().parse_args(["--no-memory"])
-    agent = cli.build_default_agent(args)
+    agent = cli.build_default_agent(args, ChatStore.in_memory())
     assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 

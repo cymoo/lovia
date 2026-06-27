@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent  # noqa: E402
+from lovia import Agent, Memory  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
 
@@ -81,6 +81,85 @@ def test_resolve_skills_default_absent(
     monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     assert cli.resolve_skills_dirs(None) == []
+
+
+# ----------------------------------------------------------------- memory -
+
+
+def test_resolve_memory_disabled() -> None:
+    assert cli.resolve_memory("./anywhere", no_memory=True) is None
+
+
+def test_resolve_memory_default_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    mem = cli.resolve_memory(None, no_memory=False)
+    assert isinstance(mem, Memory)
+    assert mem.has_archive  # default builds both the notes and archive tiers
+    # The default root is created eagerly under cwd.
+    assert (tmp_path / ".lovia" / "memory").is_dir()
+
+
+def test_resolve_memory_explicit_dir(tmp_path: Path) -> None:
+    target = tmp_path / "mem"
+    mem = cli.resolve_memory(str(target), no_memory=False)
+    assert isinstance(mem, Memory)
+    assert target.is_dir()
+
+
+def test_resolve_memory_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    envmem = tmp_path / "envmem"
+    monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
+    mem = cli.resolve_memory(None, no_memory=False)
+    assert isinstance(mem, Memory)
+    assert envmem.is_dir()
+
+
+def test_resolve_memory_flag_beats_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    envmem = tmp_path / "envmem"
+    flagmem = tmp_path / "flagmem"
+    monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
+    mem = cli.resolve_memory(str(flagmem), no_memory=False)
+    assert isinstance(mem, Memory)
+    # The flag root is used; the env root is left untouched.
+    assert flagmem.is_dir()
+    assert not envmem.exists()
+
+
+def test_resolve_memory_path_is_file(tmp_path: Path) -> None:
+    f = tmp_path / "notadir"
+    f.write_text("x", encoding="utf-8")
+    with pytest.raises(UserError, match="not a directory"):
+        cli.resolve_memory(str(f), no_memory=False)
+
+
+# ------------------------------------------------------------ built-in tools -
+
+
+def test_resolve_tools_includes_builtins() -> None:
+    names = {t.name for t in cli.resolve_tools()}
+    assert {"now", "http_fetch"} <= names
+
+
+def test_resolve_tools_includes_search_when_available() -> None:
+    pytest.importorskip("ddgs")
+    assert "web_search" in {t.name for t in cli.resolve_tools()}
+
+
+def test_resolve_tools_skips_search_when_backend_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _missing() -> object:
+        raise UserError("ddgs not installed")
+
+    monkeypatch.setattr(cli, "duckduckgo_search", _missing)
+    # The missing optional backend must degrade gracefully, not crash.
+    names = {t.name for t in cli.resolve_tools()}
+    assert names == {"now", "http_fetch"}
 
 
 # ---------------------------------------------------------- instructions -
@@ -261,6 +340,13 @@ def test_parser_defaults_are_none() -> None:
     args = cli.build_parser().parse_args([])
     assert args.host is None and args.port is None and args.model is None
     assert args.no_workspace is False
+    assert args.memory_dir is None and args.no_memory is False
+
+
+def test_parser_memory_flags() -> None:
+    args = cli.build_parser().parse_args(["--memory-dir", "mem", "--no-memory"])
+    assert args.memory_dir == "mem"
+    assert args.no_memory is True
 
 
 # --------------------------------------------------- build_default_agent -
@@ -269,14 +355,28 @@ def test_parser_defaults_are_none() -> None:
 def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LOVIA_MODEL", "test-model")
+    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     (tmp_path / "skills").mkdir()
     args = cli.build_parser().parse_args([])
     agent = cli.build_default_agent(args)
     assert agent.name == "lovia"
     assert agent.model == "test-model"
     assert agent.instructions == cli.GENERIC_INSTRUCTIONS
-    assert len(agent.plugins) == 1  # Skills plugin from ./skills
+    # ./skills -> Skills, plus the on-by-default Todo + Memory plugins.
+    assert {type(p).__name__ for p in agent.plugins} == {"Skills", "Todo", "Memory"}
+    # Always-on built-in tools (web_search only when its backend is installed).
+    assert {"now", "http_fetch"} <= {t.name for t in agent.tools}
     assert agent.workspace is not None
+
+
+def test_build_default_agent_no_memory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "test-model")
+    args = cli.build_parser().parse_args(["--no-memory"])
+    agent = cli.build_default_agent(args)
+    assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 
 # ----------------------------------------------------------------- main -

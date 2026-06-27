@@ -758,12 +758,14 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ### 命令行启动
 
 无需写代码：`python -m lovia.web` 会构建一个默认 agent——模型取自环境变量、技能取自
-`./skills`、并在当前目录开启一个 trusted workspace——然后启动聊天 UI。
+`./skills`、长期记忆存于 `./.lovia/memory`、一个 todo 清单、内置工具（时间、HTTP
+抓取、网页搜索）、并在当前目录开启一个 trusted workspace——然后启动聊天 UI。
 
 ```bash
 python -m lovia.web                                    # 零配置
 python -m lovia.web --port 9000 --model openai:gpt-5.4
 python -m lovia.web --skills-dir ./skills --workspace-mode readonly
+python -m lovia.web --memory-dir ./mem                 # 记忆存到 ./mem
 python -m lovia.web --app myagents:assistant           # 启动你自己的 Agent
 ```
 
@@ -777,9 +779,14 @@ python -m lovia.web --app myagents:assistant           # 启动你自己的 Agen
 | `--db` | `LOVIA_DB` | cwd 下的 `<agent>.db` |
 | `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | 必填 |
 | `--skills-dir`（可重复） | `LOVIA_SKILLS_DIR` | 存在则用 `./skills` |
+| `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory`（默认开启） |
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`，否则用通用提示 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 构建默认 agent |
+
+默认 agent 还会内置一组常用能力：`todo_write` 清单，以及 `now`（时间）、`http_fetch`、
+`web_search` 工具。网页搜索需要 `ddg` extra（已包含在 `lovia[web]` 中）；若未安装则
+仅跳过该工具。
 
 `--version` 打印版本号；完整选项见 `python -m lovia.web --help`。
 

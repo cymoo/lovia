@@ -1,15 +1,18 @@
 """``python -m lovia.web`` — launch the lovia chat UI from the command line.
 
-Builds a sensible default agent (model + skills + workspace, all configurable
-via flags or ``LOVIA_*`` environment variables) and serves it with the bundled
-web UI. Point ``--app module:attribute`` at your own ``Agent`` to serve that
-instead.
+Builds a sensible default agent (a model, skills, long-term memory, a todo
+checklist, built-in tools — time, HTTP fetch, web search — and a workspace, all
+configurable via flags or ``LOVIA_*`` environment variables) and serves it with
+the bundled web UI. Point ``--app module:attribute`` at your own ``Agent`` to
+serve that instead.
 
 Examples::
 
     python -m lovia.web                           # default agent, ./skills, cwd workspace
     python -m lovia.web --port 9000 --model openai:gpt-5.4
     python -m lovia.web --skills-dir ./skills --skills-dir ./team-skills
+    python -m lovia.web --memory-dir ./mem        # persist memory under ./mem
+    python -m lovia.web --no-memory               # disable long-term memory
     python -m lovia.web --app myagents:assistant  # serve your own agent
 
 Common options also read ``LOVIA_*`` env vars. If ``python-dotenv`` is
@@ -33,7 +36,8 @@ from .. import __version__
 from ..agent import Agent
 from ..exceptions import UserError
 from ..log_config import enable_logging
-from ..plugins import Plugin, Skills
+from ..plugins import Memory, Plugin, Skills, Todo
+from ..tools import Tool, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from .app import serve
 
@@ -43,6 +47,7 @@ WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_SKILLS_DIR = "skills"
+DEFAULT_MEMORY_DIR = "./.lovia/memory"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
@@ -99,6 +104,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="skill directory; repeatable (env LOVIA_SKILLS_DIR; "
         f"default ./{DEFAULT_SKILLS_DIR} if present)",
+    )
+    p.add_argument(
+        "--memory-dir",
+        metavar="DIR",
+        help="directory for long-term memory (notes + searchable archive), "
+        f"created if missing (env LOVIA_MEMORY_DIR, default {DEFAULT_MEMORY_DIR})",
+    )
+    p.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="disable the long-term memory plugin (on by default)",
     )
     p.add_argument(
         "--workspace",
@@ -216,6 +232,42 @@ def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
     return [default] if default.is_dir() else []
 
 
+def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
+    """Build the default :class:`Memory` plugin unless ``--no-memory`` is set.
+
+    Storage-root precedence: ``--memory-dir`` > ``LOVIA_MEMORY_DIR`` >
+    ``./.lovia/memory``. The directory need not exist yet — the notes file and
+    archive db are created under it on first write.
+    """
+    if no_memory:
+        return None
+    root = _first(cli_dir, os.getenv("LOVIA_MEMORY_DIR")) or DEFAULT_MEMORY_DIR
+    path = Path(root)
+    if path.exists() and not path.is_dir():
+        raise CliError(f"memory path is not a directory: {path}")
+    log.info("memory enabled at %s", path)
+    return Memory(root)
+
+
+def resolve_tools() -> list[Tool]:
+    """The always-on built-in tools for the default agent.
+
+    ``now`` (current time) and ``http_fetch`` have no extra dependencies. Web
+    search needs the optional ``ddgs`` backend (bundled with the ``web``/``ddg``
+    extras); when it is missing we load the rest and log how to enable it rather
+    than failing.
+    """
+    tools: list[Tool] = [now, http_fetch]
+    try:
+        tools.append(duckduckgo_search())
+    except UserError:
+        log.info(
+            "web_search disabled: the 'ddgs' backend is not installed "
+            "(pip install 'lovia[ddg]')."
+        )
+    return tools
+
+
 def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
     if cli_text is not None:
         return cli_text
@@ -292,6 +344,10 @@ def build_default_agent(args: argparse.Namespace) -> Agent[Any]:
     if skills_dirs:
         plugins.append(Skills(*skills_dirs))
         log.info("loaded skills from %s", ", ".join(str(d) for d in skills_dirs))
+    plugins.append(Todo())
+    memory = resolve_memory(args.memory_dir, args.no_memory)
+    if memory is not None:
+        plugins.append(memory)
     workspace = resolve_workspace(
         args.workspace, args.workspace_mode, args.no_workspace
     )
@@ -300,6 +356,7 @@ def build_default_agent(args: argparse.Namespace) -> Agent[Any]:
         instructions=instructions,
         model=model,
         plugins=plugins,
+        tools=resolve_tools(),
         workspace=workspace,
     )
 
@@ -308,6 +365,8 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     flags = [
         ("--model", args.model is not None),
         ("--skills-dir", bool(args.skills_dir)),
+        ("--memory-dir", args.memory_dir is not None),
+        ("--no-memory", args.no_memory),
         ("--workspace", args.workspace is not None),
         ("--workspace-mode", args.workspace_mode is not None),
         ("--no-workspace", args.no_workspace),

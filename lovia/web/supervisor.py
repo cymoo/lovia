@@ -332,6 +332,17 @@ class RunController:
         try:
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None
+                # Bail before starting a leg that was cancelled mid-setup. On an
+                # auto-chain hop the cancel endpoint can capture the prior leg's
+                # run_id (this leg's pointer advanced a step earlier in
+                # _checkpoint_for), so its eager active_run_id clear no-ops.
+                # Starting this leg would then persist an ``interrupted``
+                # checkpoint the stale clear left reachable, and a reconnect could
+                # revive the stopped run; not starting it lets the finally clear
+                # the pointer cleanly. self.run_id is set above, so cleanup targets
+                # this leg.
+                if self.cancel.is_cancelled:
+                    break
                 self.history_baseline = (
                     await session.load(sid) if session is not None else []
                 )

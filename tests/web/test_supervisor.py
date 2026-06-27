@@ -16,7 +16,7 @@ pytest.importorskip("fastapi")
 
 import httpx  # noqa: E402
 
-from lovia import Agent, tool  # noqa: E402
+from lovia import Agent, Mailbox, Runner, tool  # noqa: E402
 from lovia.reliability import RunBudget  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -276,3 +276,88 @@ async def test_shutdown_leaves_a_resumable_checkpoint() -> None:
     assert rid is not None
     snap = await store.checkpointer.load(rid)
     assert snap is not None and snap.status in ("interrupted", "running")
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_auto_chain_hop_does_not_revive(monkeypatch) -> None:
+    """A user cancel landing in the auto-chain transition must not revive.
+
+    On an auto-chain hop the next leg's checkpoint pointer is advanced
+    (set_active_run_id) one step before ``self.run_id`` catches up, so the cancel
+    endpoint's eager clear reads a stale ``ctrl.run_id`` and its guarded clear
+    no-ops against the already-advanced pointer. The supervised loop must then
+    bail at the top of the next leg, so that leg never starts and never persists
+    an ``interrupted`` checkpoint a reconnect could revive. We pin the fix by
+    asserting the chained leg never runs (``Runner.stream`` is called once) and
+    that nothing is left to reconnect to.
+    """
+    from lovia.messages import Usage
+    from lovia.transcript import FinishDelta, TextDelta, UsageDelta
+    from lovia.web import supervisor as sup_mod
+
+    # One mailbox for the controller so the provider can leave an auto-chain
+    # leftover: a push *during* the model call lands after the turn-start drain,
+    # so it stays queued for the next leg (same shape as test_steering's late
+    # push). That queued message is what makes leg 1 auto-chain to leg 2.
+    mailbox = Mailbox()
+    monkeypatch.setattr(sup_mod, "Mailbox", lambda: mailbox)
+
+    class LatePushProvider:
+        name = "bot"
+        supports_json_schema = False
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            mailbox.push("q2")  # after the turn-start drain → queued as leftover
+            yield TextDelta(text="done")
+            yield UsageDelta(usage=Usage(input_tokens=1, output_tokens=1))
+            yield FinishDelta(reason="stop")
+
+    # Park the task at the auto-chain pointer advance (the 2nd set_active_run_id,
+    # i.e. the leg 1 → leg 2 hop) with the DB pointer already moved, so a cancel
+    # fired now sees the stale-ctrl.run_id / advanced-pointer window.
+    store = ChatStore.in_memory()
+    parked = asyncio.Event()
+    release_hop = asyncio.Event()
+    orig_set = store.set_active_run_id
+    sets = 0
+
+    async def gated_set(sid, run_id):
+        nonlocal sets
+        await orig_set(sid, run_id)  # advance the DB pointer first (DB = leg 2)
+        sets += 1
+        if sets == 2:
+            parked.set()
+            await release_hop.wait()
+
+    monkeypatch.setattr(store, "set_active_run_id", gated_set)
+
+    # Count legs that actually start. The runner checks cancel at the top of the
+    # turn *before* the model call, so the provider isn't a reliable leg counter;
+    # Runner.stream (one call per leg) is.
+    streams = 0
+    orig_stream = Runner.stream
+
+    def counting_stream(*a, **k):
+        nonlocal streams
+        streams += 1
+        return orig_stream(*a, **k)
+
+    monkeypatch.setattr(Runner, "stream", counting_stream)
+
+    agent = Agent(name="bot", model=LatePushProvider())
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await asyncio.wait_for(parked.wait(), timeout=5)  # leg 1 done, at the hop
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release_hop.set()
+        await asyncio.wait_for(task, timeout=5)  # winds down, hub closes the SSE
+
+        assert streams == 1  # the chained leg never started
+        assert await store.get_active_run_id("s1") is None  # pointer cleared
+        r = await ac.post("/api/chat/reconnect", params={"session_id": "s1"})
+        assert r.status_code == 404  # nothing to revive

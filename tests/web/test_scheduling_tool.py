@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +55,12 @@ def test_to_epoch_passes_through_epoch() -> None:
 def test_to_epoch_converts_iso() -> None:
     # A naive ISO datetime is interpreted in local time → a positive epoch.
     assert float(_to_epoch("2033-05-18T03:33")) > 1_900_000_000
+
+
+def test_to_epoch_handles_z_suffix() -> None:
+    # Models often emit `Z` for UTC; datetime.fromisoformat rejects it on <3.11.
+    expected = datetime(2026, 6, 29, 9, 0, tzinfo=timezone.utc).timestamp()
+    assert float(_to_epoch("2026-06-29T09:00Z")) == expected
 
 
 def test_to_epoch_rejects_garbage() -> None:

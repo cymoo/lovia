@@ -72,6 +72,10 @@ def _to_epoch(expr: str) -> str:
         return expr  # already epoch seconds
     except ValueError:
         pass
+    # Models often emit a trailing 'Z' for UTC, which datetime.fromisoformat only
+    # accepts on Python 3.11+ — normalize it so our 3.10 floor parses it too.
+    if expr[-1:] in ("Z", "z"):
+        expr = expr[:-1] + "+00:00"
     dt = datetime.fromisoformat(expr)  # raises ValueError on anything unparseable
     if dt.tzinfo is None:
         dt = dt.astimezone()  # interpret a naive datetime as local time
@@ -141,8 +145,8 @@ def _make_tool(store: ChatStore) -> Tool:
         now = time.time()
         row = ScheduleRow(
             id=uuid.uuid4().hex,
-            # Pin to the running agent (always a concrete, registered name) so
-            # the scheduler never has to fall back to an ambiguous default.
+            # The active agent's name — concrete and registered in a real run; if
+            # somehow absent, the scheduler resolves its default at fire time.
             agent=ctx.agent.name if ctx.agent is not None else None,
             input=text,
             session_id=session_id,

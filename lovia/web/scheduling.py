@@ -49,7 +49,10 @@ _INSTRUCTIONS = (
     'at 9 check…". Choose the trigger: `at` for a one-time moment, `every` for '
     "a fixed interval in seconds, `cron` for a calendar schedule. For relative "
     'or natural-language times ("in 10 minutes", "tomorrow at 9"), call the '
-    "`now` tool first to anchor them, then pass an ISO-8601 datetime. Write "
+    '`now` tool first — with the user\'s timezone, e.g. now(tz="Asia/Shanghai") '
+    "— to anchor them, then pass an ISO-8601 datetime that keeps that local UTC "
+    "offset. A bare datetime with no offset is read in the server's own "
+    "timezone. Write "
     "`instruction` as a complete, standalone prompt: the scheduled run starts "
     "fresh with no memory of this chat unless you set `continue_session=true`. "
     "Don't schedule something you could just do now — and note that creating a "
@@ -101,9 +104,10 @@ def _make_tool(store: ChatStore) -> Tool:
         ],
         trigger_expr: Annotated[
             str,
-            "For 'at': an ISO-8601 datetime like 2026-06-29T09:00 (or epoch "
-            "seconds). For 'every': the interval in seconds. For 'cron': a "
-            "5-field cron expression like '0 9 * * *'.",
+            "For 'at': an ISO-8601 datetime, ideally with the local UTC offset "
+            "(e.g. 2026-06-29T09:00+08:00) — a bare time is read in the server's "
+            "timezone; epoch seconds also work. For 'every': the interval in "
+            "seconds. For 'cron': a 5-field cron expression like '0 9 * * *'.",
         ],
         continue_session: Annotated[
             bool,
@@ -153,7 +157,11 @@ def _make_tool(store: ChatStore) -> Tool:
         )
         await store.add_schedule(row)
 
-        when = datetime.fromtimestamp(next_fire).isoformat(timespec="minutes")
+        # astimezone() stamps the server's offset so the resolved absolute time
+        # is explicit (helps catch a timezone the model got wrong).
+        when = (
+            datetime.fromtimestamp(next_fire).astimezone().isoformat(timespec="minutes")
+        )
         scope = "continuing this conversation" if session_id else "as a new chat"
         return (
             f"Scheduled — first run at {when} ({_describe(trigger_kind, expr)}), "

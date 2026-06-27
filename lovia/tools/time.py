@@ -9,7 +9,7 @@ Both are stateless module-level :class:`Tool` instances::
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
@@ -21,12 +21,18 @@ __all__ = ["now", "sleep"]
 @tool
 def now(
     tz: Annotated[
-        str | None, "IANA timezone name, e.g. 'UTC' or 'Asia/Shanghai'."
+        str | None,
+        "IANA timezone name, e.g. 'UTC' or 'Asia/Shanghai'. Defaults to the "
+        "server's local timezone.",
     ] = None,
 ) -> str:
-    """Return the current wall-clock time as an ISO-8601 string."""
+    """Return the current wall-clock time as an ISO-8601 string.
+
+    Defaults to the server's local timezone (the string carries its UTC
+    offset); pass ``tz`` for a specific zone.
+    """
     if tz is None:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now().astimezone().isoformat()
     return datetime.now(ZoneInfo(tz)).isoformat()
 
 

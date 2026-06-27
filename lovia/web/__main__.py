@@ -1,10 +1,10 @@
 """``python -m lovia.web`` — launch the lovia chat UI from the command line.
 
 Builds a sensible default agent (a model, skills, long-term memory, a todo
-checklist, built-in tools — time, HTTP fetch, web search — and a workspace, all
-configurable via flags or ``LOVIA_*`` environment variables) and serves it with
-the bundled web UI. Point ``--app module:attribute`` at your own ``Agent`` to
-serve that instead.
+checklist, model-driven scheduled runs, built-in tools — time, HTTP fetch, web
+search — and a workspace, all configurable via flags or ``LOVIA_*`` environment
+variables) and serves it with the bundled web UI. Point ``--app
+module:attribute`` at your own ``Agent`` to serve that instead.
 
 Examples::
 
@@ -40,6 +40,8 @@ from ..plugins import Memory, Plugin, Skills, Todo
 from ..tools import Tool, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from .app import serve
+from .scheduling import Scheduling
+from .store import ChatStore
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -48,6 +50,7 @@ LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_SKILLS_DIR = "skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
+DEFAULT_AGENT_NAME = "lovia"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
@@ -336,7 +339,7 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
     return cast("Agent[Any] | Mapping[str, Agent[Any]]", obj)
 
 
-def build_default_agent(args: argparse.Namespace) -> Agent[Any]:
+def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any]:
     model = resolve_model(args.model)
     instructions = resolve_instructions(args.instructions, args.instructions_file)
     skills_dirs = resolve_skills_dirs(args.skills_dir)
@@ -345,6 +348,9 @@ def build_default_agent(args: argparse.Namespace) -> Agent[Any]:
         plugins.append(Skills(*skills_dirs))
         log.info("loaded skills from %s", ", ".join(str(d) for d in skills_dirs))
     plugins.append(Todo())
+    # Let the model create Scheduled runs from chat (gated by approval). Closes
+    # over the app's store so it writes the rows the scheduler polls.
+    plugins.append(Scheduling(store))
     memory = resolve_memory(args.memory_dir, args.no_memory)
     if memory is not None:
         plugins.append(memory)
@@ -352,7 +358,7 @@ def build_default_agent(args: argparse.Namespace) -> Agent[Any]:
         args.workspace, args.workspace_mode, args.no_workspace
     )
     return Agent(
-        name="lovia",
+        name=DEFAULT_AGENT_NAME,
         instructions=instructions,
         model=model,
         plugins=plugins,
@@ -420,12 +426,17 @@ def main(argv: list[str] | None = None) -> int:
         db_path = _first(args.db, os.getenv("LOVIA_DB"))
 
         agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]]
+        # For the default agent we build the store up front (rather than letting
+        # create_app build it) so the schedule_run tool can close over the same
+        # ChatStore the scheduler polls. Custom --app agents keep using db_path.
+        store: ChatStore | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             _warn_ignored_agent_flags(args)
             agent_or_agents = load_app_target(app_target)
         else:
-            agent = build_default_agent(args)
+            store = ChatStore.sqlite(db_path or f"{DEFAULT_AGENT_NAME}.db")
+            agent = build_default_agent(args, store)
             _warn_if_exposed(host, agent.workspace)
             agent_or_agents = agent
 
@@ -435,6 +446,9 @@ def main(argv: list[str] | None = None) -> int:
             host=host,
             port=port,
             title=title,
+            # `store` wins when set (default agent); otherwise create_app builds
+            # one from db_path (the custom --app path).
+            store=store,
             db_path=db_path,
             log_level=level.lower(),
         )

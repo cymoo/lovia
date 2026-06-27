@@ -67,7 +67,19 @@ function exprValue(kind, input) {
 }
 
 // ---- the dialog ----------------------------------------------------------
+// A one-shot `at` that's no longer active and whose time has passed has already
+// fired (or was missed): it's done, not paused. Resuming it would only re-run a
+// moment in the past, so we label it "done" and drop the Resume control.
+function isDone(s) {
+  return (
+    !s.active &&
+    s.trigger_kind === 'at' &&
+    Number(s.trigger_expr) * 1000 <= Date.now()
+  );
+}
+
 function rowEl(s, onChange) {
+  const done = isDone(s);
   const item = document.createElement('div');
   item.className = 'sched-item' + (s.active ? '' : ' paused');
 
@@ -81,24 +93,28 @@ function rowEl(s, onChange) {
   meta.className = 'sched-item-meta';
   meta.textContent = s.active
     ? `${describeTrigger(s)} · next ${fmtTime(s.next_fire)}`
-    : `${describeTrigger(s)} · paused`;
+    : `${describeTrigger(s)} · ${done ? 'done' : 'paused'}`;
   main.append(prompt, meta);
 
   const actions = document.createElement('div');
   actions.className = 'sched-item-actions';
 
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.title = s.active ? 'Pause' : 'Resume';
-  toggle.textContent = s.active ? '⏸' : '▶';
-  toggle.addEventListener('click', async () => {
-    try {
-      await api.setScheduleActive(s.id, !s.active);
-      onChange();
-    } catch (err) {
-      toast(err.message || 'Couldn’t update schedule', { type: 'error' });
-    }
-  });
+  // A finished one-shot can't meaningfully resume — only offer Delete.
+  if (!done) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.title = s.active ? 'Pause' : 'Resume';
+    toggle.textContent = s.active ? '⏸' : '▶';
+    toggle.addEventListener('click', async () => {
+      try {
+        await api.setScheduleActive(s.id, !s.active);
+        onChange();
+      } catch (err) {
+        toast(err.message || 'Couldn’t update schedule', { type: 'error' });
+      }
+    });
+    actions.append(toggle);
+  }
 
   const del = document.createElement('button');
   del.type = 'button';
@@ -115,7 +131,7 @@ function rowEl(s, onChange) {
     }
   });
 
-  actions.append(toggle, del);
+  actions.append(del);
   item.append(main, actions);
   return item;
 }

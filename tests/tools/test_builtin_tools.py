@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime
 from typing import Any, Callable
 
 import httpx
@@ -115,11 +116,17 @@ def test_html_to_text_handles_malformed_markup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_now_returns_iso() -> None:
+async def test_now_defaults_to_local_iso() -> None:
     result = await now.invoke({}, _ctx())
-    assert "T" in result and (
-        result.endswith("+00:00") or "+" in result or "-" in result[10:]
-    )
+    parsed = datetime.fromisoformat(result)  # valid ISO-8601...
+    assert parsed.tzinfo is not None  # ...carrying an explicit UTC offset
+    # Default is the server's local zone, not UTC.
+    assert parsed.utcoffset() == datetime.now().astimezone().utcoffset()
+
+
+@pytest.mark.asyncio
+async def test_now_accepts_explicit_tz() -> None:
+    assert (await now.invoke({"tz": "UTC"}, _ctx())).endswith("+00:00")
 
 
 @pytest.mark.asyncio

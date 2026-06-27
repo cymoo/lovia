@@ -55,9 +55,11 @@ class Mailbox:
 
     def drain(self) -> list[InjectedContent]:
         """Return everything queued so far and clear the mailbox (FIFO)."""
-        items = [content for _, content in self._items]
-        self._items = []
-        return items
+        # Rebind-swap *first* so a concurrent push lands in the fresh list rather
+        # than the one we're about to return — never silently dropped (matches
+        # the module docstring's lost-append guarantee).
+        items, self._items = self._items, []
+        return [content for _, content in items]
 
     def __bool__(self) -> bool:
         """True while messages are still waiting to be drained."""

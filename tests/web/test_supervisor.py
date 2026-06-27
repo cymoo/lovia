@@ -72,8 +72,10 @@ async def _wait_run(ac, sid, *, status=None, gone=False):
 
 async def _kill(task) -> None:
     task.cancel()
-    with contextlib.suppress(Exception):
-        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    # Only swallow the expected cancellation — a timeout (hung task) or an
+    # unexpected error should surface and fail the test, not be hidden.
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=3)
 
 
 @pytest.mark.asyncio

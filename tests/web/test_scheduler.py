@@ -469,3 +469,52 @@ def test_api_create_rejects_bad_input() -> None:
         ).status_code
         == 422
     )
+
+
+def test_api_create_requires_agent_when_ambiguous() -> None:
+    agents = {
+        "alpha": _agent([text("a")], name="alpha"),
+        "beta": _agent([text("b")], name="beta"),
+    }
+    app = create_app(agents, store=ChatStore.in_memory(), generate_titles=False)
+    # Omitting `agent` with >1 agent (no default) → 404 with a clear message,
+    # not a confusing "unknown agent None".
+    r = TestClient(app).post(
+        "/api/schedules",
+        json={"input": "x", "trigger_kind": "every", "trigger_expr": "60"},
+    )
+    assert r.status_code == 404
+    assert "no agent specified" in r.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# concurrency cap
+# --------------------------------------------------------------------------- #
+
+
+async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
+    """A fire that hits the concurrency cap (429) must not leave an orphan chat."""
+    release = asyncio.Event()
+    block = _blocking_tool(release)
+    store = ChatStore.in_memory()
+    agent = _agent([call("block", {}, call_id="c1"), text("done")], tools=[block])
+    app = create_app(agent, store=store, generate_titles=False, max_background_runs=1)
+    deps = app.state.deps
+    sched = Scheduler(deps)
+    now = time.time()
+    # 'a' sorts first (earlier next_fire) and grabs the only slot; 'b' hits the cap.
+    await store.add_schedule(_row(id="a", next_fire=now - 2, now=now))
+    await store.add_schedule(_row(id="b", input="second", next_fire=now - 1, now=now))
+
+    try:
+        await sched.run_due()  # a fires (blocks); b hits 429 and defers
+
+        assert len(deps.supervisor._controllers) == 1  # only 'a' is live
+        assert len(await store.list_all()) == 1  # 'b' left no orphan session row
+        a = await store.get_schedule("a")
+        b = await store.get_schedule("b")
+        assert a is not None and a.next_fire > now  # advanced
+        assert b is not None and b.next_fire == now - 1  # untouched → will retry
+    finally:
+        release.set()
+        await _drain_runs(deps)

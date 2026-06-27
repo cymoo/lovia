@@ -188,7 +188,13 @@ class Scheduler:
         except HTTPException as exc:
             if exc.status_code == 429:
                 # At the concurrency cap: defer (leave next_fire due → retried).
+                # Drop the freshly-created session row so repeated 429s on a
+                # fresh-session schedule don't leak empty chats (each retry mints
+                # a new UUID). start() raises 429 before any state change, so the
+                # only side effect to undo is our own upsert above.
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
+                if is_new:
+                    await self.store.delete(target)
                 return
             raise
         await self._advance(sched, now, last_session_id=target)

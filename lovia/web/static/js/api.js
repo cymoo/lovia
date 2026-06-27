@@ -113,7 +113,9 @@ export const api = {
       body: JSON.stringify(body),
     }).then(_jsonOrDetail),
   deleteSchedule: (id) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
+      _jsonOrDetail,
+    ),
   setScheduleActive: (id, active) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',

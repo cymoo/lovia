@@ -108,9 +108,10 @@ function rowEl(s, onChange) {
     if (!(await confirmDialog('Delete this schedule?'))) return;
     try {
       await api.deleteSchedule(s.id);
-      onChange();
     } catch (err) {
-      toast('Couldn’t delete schedule', { type: 'error' });
+      toast(err.message || 'Couldn’t delete schedule', { type: 'error' });
+    } finally {
+      onChange(); // refresh either way — a 404 just means it's already gone
     }
   });
 

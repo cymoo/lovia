@@ -49,10 +49,9 @@ _INSTRUCTIONS = (
     'at 9 check…". Choose the trigger: `at` for a one-time moment, `every` for '
     "a fixed interval in seconds, `cron` for a calendar schedule. For relative "
     'or natural-language times ("in 10 minutes", "tomorrow at 9"), call the '
-    '`now` tool first — with the user\'s timezone, e.g. now(tz="Asia/Shanghai") '
-    "— to anchor them, then pass an ISO-8601 datetime that keeps that local UTC "
-    "offset. A bare datetime with no offset is read in the server's own "
-    "timezone. Write "
+    "`now` tool first to anchor them (it returns local time with its UTC "
+    "offset), then pass an ISO-8601 datetime that keeps that offset. A bare "
+    "datetime with no offset is read in the server's own timezone. Write "
     "`instruction` as a complete, standalone prompt: the scheduled run starts "
     "fresh with no memory of this chat unless you set `continue_session=true`. "
     "Don't schedule something you could just do now — and note that creating a "

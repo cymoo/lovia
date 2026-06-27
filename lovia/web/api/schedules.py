@@ -53,7 +53,14 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             raise HTTPException(status_code=422, detail="empty input")
         agent_name = spec.agent or deps.default_agent
         if agent_name is None or agent_name not in deps.agents:
-            raise HTTPException(status_code=404, detail=f"unknown agent {spec.agent!r}")
+            # Distinguish "named an unknown agent" from "named none and there's no
+            # default" (multi-agent server) — the latter reported a useless `None`.
+            detail = (
+                f"unknown agent {agent_name!r}"
+                if agent_name is not None
+                else "no agent specified and no default is available"
+            )
+            raise HTTPException(status_code=404, detail=detail)
         try:
             validate_trigger(spec.trigger_kind, spec.trigger_expr)
             next_fire = initial_next_fire(

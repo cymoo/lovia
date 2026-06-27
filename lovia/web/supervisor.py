@@ -284,6 +284,7 @@ class RunController:
                 events.HandoffOccurred,
                 events.ContextCompacted,
                 events.ErrorOccurred,
+                events.RunCompleted,
             ),
         ):
             self.in_flight_buffer.append(ev)
@@ -405,13 +406,19 @@ class RunController:
             # subscribers see a clear notice, mirroring the old drive_stream.
             log.warning("supervised run %s ended: %s", sid, exc)
             if not error_seen:
-                self.hub.publish(events.ErrorOccurred(error=exc))
+                # Publish via _publish so the synthesized error also lands in the
+                # snapshot mirror / in-flight buffer — a dropped client that
+                # re-attaches then still replays the terminal error.
+                self._publish(events.ErrorOccurred(error=exc))
         finally:
             if self._user_cancelled and store.checkpointer is not None:
-                rid = await store.get_active_run_id(sid)
+                # Delete THIS run's checkpoint by our own run_id — re-reading the
+                # pointer could name a newer run that started after cancel evicted
+                # us; the expected= guard likewise won't clobber that newer run.
+                rid = self.run_id
                 if rid:
                     await store.checkpointer.delete(rid)
-                await store.clear_active_run_id(sid, expected=rid)
+                    await store.clear_active_run_id(sid, expected=rid)
             await deps.approvals.release(sid)
             self.hub.close()
             self.supervisor._evict(sid, self)

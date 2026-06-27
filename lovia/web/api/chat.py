@@ -145,7 +145,16 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     @router.post("/api/chat/cancel")
     async def cancel_stream(session_id: str = Query(...)) -> dict[str, bool]:
         """Cancel the live run for ``session_id`` (or clear a stranded checkpoint)."""
-        if deps.supervisor.cancel(session_id):
+        ctrl = deps.supervisor.get(session_id)
+        if ctrl is not None:
+            run_id = ctrl.run_id
+            deps.supervisor.cancel(session_id)
+            # cancel() evicts the controller synchronously, so until its task's
+            # finally runs the active_run_id pointer still names this run. Clear
+            # it eagerly (guarded so we can't clobber a newer run) — otherwise a
+            # refresh in that window would reconnect and revive the stopped run.
+            if store.checkpointer is not None and run_id:
+                await store.clear_active_run_id(session_id, expected=run_id)
             return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.

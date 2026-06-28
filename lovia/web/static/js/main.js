@@ -2,7 +2,7 @@
 import { store } from './store.js';
 import { api } from './api.js';
 import { initTheme, initSidebarToggle } from './ui.js';
-import { initComposer, cancelStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
+import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 import { initSchedules } from './schedules.js';
 import { toast } from './toast.js';
@@ -71,6 +71,10 @@ store.on('reconnect', (sessionId) => {
   if (!store.streaming) runReconnect(sessionId);
 });
 
+// Switching sessions / starting a new chat detaches the live stream without
+// cancelling it (the run keeps going server-side and can be reconnected).
+store.on('detach-stream', detachStream);
+
 // ---- Keyboard shortcuts -------------------------------------------------
 function initKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
@@ -109,8 +113,6 @@ function initKeyboardShortcuts() {
       }
     })
     .catch(() => {});
-
-  store.on('cancel', cancelStream);
 
   // Restore session from URL query string (?session=xxx).
   // Wait for the initial session list to land so the sidebar

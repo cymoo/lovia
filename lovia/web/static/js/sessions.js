@@ -155,7 +155,12 @@ export async function deleteSession(id) {
 }
 
 export async function switchSession(id) {
-  if (store.streaming || store.sessionId === id) return;
+  if (store.sessionId === id) return;
+  // Detach from any in-flight stream first — WITHOUT cancelling it. The run
+  // keeps going server-side; if the session we're entering has its own live run
+  // we reconnect to it below, and the one we're leaving stays reachable (its
+  // sidebar dot persists) so clicking back resumes it.
+  store.emit('detach-stream');
   store.sessionId = id;
   store.syncURL(id);
   store.emit('session-switched', id);
@@ -171,15 +176,18 @@ export async function switchSession(id) {
 
   try {
     const data = await api.getSession(id);
+    if (store.sessionId !== id) return; // a newer switch superseded this one
     if (chatTitleEl) chatTitleEl.textContent = data.title || 'New chat';
     store.emit('render-history', data.entries || []);
-    // Auto-reconnect when the session has an unfinished run (e.g. page refresh
-    // mid-stream). The SSE continuation streams into a new assistant bubble
-    // appended after the already-rendered checkpoint history.
+    // Auto-reconnect when the session has an unfinished run — a page refresh
+    // mid-stream, or a run left streaming when we switched away. The SSE
+    // continuation streams into a new assistant bubble appended after the
+    // already-rendered checkpoint history.
     if (data.active_run_id && !store.streaming) {
       store.emit('reconnect', id);
     }
   } catch (err) {
+    if (store.sessionId !== id) return; // superseded; don't clobber the new view
     const errState = document.createElement('div');
     errState.className = 'empty-state';
     const h2 = document.createElement('h2');

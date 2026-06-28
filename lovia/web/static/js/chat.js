@@ -376,9 +376,7 @@ function clearTodoPanel() {
   store.todos = [];
 }
 
-function resetChatView({ cancel = false } = {}) {
-  if (cancel && store.streaming) store.emit('cancel');
-  if (cancel) store.chatEpoch += 1;
+function resetChatView() {
   store.bubble = null;
   store.turnNode = null;
   store.body = null;
@@ -639,6 +637,14 @@ function flushQueuedTurns() {
 export function renderHistory(entries) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
+  // Swapping the transcript collapses scrollHeight and snaps scrollTop to 0,
+  // firing a 'scroll' event the handler would misread as the user scrolling up
+  // — which disables sticky-bottom. Guard the swap exactly like scrollDown()
+  // does: the reset's (coalesced) scroll event fires before the rAF below
+  // releases the flag, so it's ignored. Without this, switching back to a
+  // still-streaming chat rendered its snapshot and then never re-pinned to the
+  // live tail.
+  _programmaticScroll = true;
   transcriptEl.innerHTML = '';
   _resumeAutoScroll();
   resetChatView();
@@ -721,7 +727,12 @@ export function renderHistory(entries) {
   store.bubble = null;
   store.body = null;
   store.rawText = '';
-  scrollDown();
+  // Land at the bottom now (content is static at this point) and record it as
+  // _lastScrollTop so the swap's async scroll event reads as "no movement";
+  // then release the guard next frame. Live deltas re-pin via scrollDown().
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  _lastScrollTop = transcriptEl.scrollTop;
+  requestAnimationFrame(() => { _programmaticScroll = false; });
 }
 
 // ---- Scroll ------------------------------------------------------------
@@ -1088,6 +1099,9 @@ export async function runStream(message) {
       await handleEvent(ev);
     }
   } catch (err) {
+    // A session switch / new chat detaches by bumping the epoch and aborting
+    // the fetch — not an error, and the view we left is gone. Leave it alone.
+    if (store.chatEpoch !== streamEpoch) return;
     if (err.name === 'AbortError') {
       ensureBody();
       if (!store.rawText) store.rawText = '_Cancelled._';
@@ -1100,29 +1114,33 @@ export async function runStream(message) {
     }
   } finally {
     clearTimeout(_renderTimer);
-    if (store.body && store.rawText) {
-      store.body.dataset.raw = store.rawText; // store raw markdown for copy
-      flushRender();
-    }
-    finalizeCurrentAssistantTurn();
-    // Un-mute any queued bubbles the server dropped (an errored/cancelled run
-    // doesn't auto-chain) so they read as sent — the user can resend.
-    flushQueuedTurns();
-    exitStreamingUI();
-    _streamAbortController = null;
-    if (turnProgressEl) turnProgressEl.classList.add('hidden');
-    // A new chat's title is generated server-side just after the first turn —
-    // poll for it (bounded). Other turns only need one refresh so the session
-    // jumps to the top of the list.
-    if (store.titlePending) {
-      pollForTitle(store.sessionId);
-    } else {
-      loadSessions();
-    }
-    // A message that raced this run's end (inject → accepted:false) starts a
-    // fresh run now that the stream has fully settled.
-    if (store.chatEpoch === streamEpoch && _pendingResend.length) {
-      runStream(_pendingResend.splice(0).join('\n\n'));
+    // If a switch superseded this stream, its DOM/UI now belong to another view;
+    // do only the connection-local cleanup above and skip the rest.
+    if (store.chatEpoch === streamEpoch) {
+      if (store.body && store.rawText) {
+        store.body.dataset.raw = store.rawText; // store raw markdown for copy
+        flushRender();
+      }
+      finalizeCurrentAssistantTurn();
+      // Un-mute any queued bubbles the server dropped (an errored/cancelled run
+      // doesn't auto-chain) so they read as sent — the user can resend.
+      flushQueuedTurns();
+      exitStreamingUI();
+      _streamAbortController = null;
+      if (turnProgressEl) turnProgressEl.classList.add('hidden');
+      // A new chat's title is generated server-side just after the first turn —
+      // poll for it (bounded). Other turns only need one refresh so the session
+      // jumps to the top of the list.
+      if (store.titlePending) {
+        pollForTitle(store.sessionId);
+      } else {
+        loadSessions();
+      }
+      // A message that raced this run's end (inject → accepted:false) starts a
+      // fresh run now that the stream has fully settled.
+      if (_pendingResend.length) {
+        runStream(_pendingResend.splice(0).join('\n\n'));
+      }
     }
   }
 }
@@ -1139,12 +1157,14 @@ export async function runReconnect(sessionId) {
     const res = await api.reconnect(sessionId, {
       signal: _streamAbortController.signal,
     });
+    if (store.chatEpoch !== streamEpoch) return; // switched away mid-request
 
     if (!res.ok || !res.body) {
       // 404 = nothing to reconnect, 409 = already running or agent gone.
       // Either way: silently remove the empty placeholder and let the user
       // see the already-rendered history without an error message.
-      if (turn) turn.remove();
+      store.turnNode?.remove();
+      store.turnNode = null;
       return;
     }
 
@@ -1156,6 +1176,7 @@ export async function runReconnect(sessionId) {
       await handleEvent(ev);
     }
   } catch (err) {
+    if (store.chatEpoch !== streamEpoch) return; // detached by a switch — not an error
     if (err.name !== 'AbortError') {
       ensureBody();
       store.rawText += `\n\n> ⚠️ **Error:** ${err.message ?? err}`;
@@ -1163,26 +1184,47 @@ export async function runReconnect(sessionId) {
     }
   } finally {
     clearTimeout(_renderTimer);
-    if (store.body && store.rawText) {
-      store.body.dataset.raw = store.rawText;
-      flushRender();
-    }
-    finalizeCurrentAssistantTurn();
-    flushQueuedTurns();
-    exitStreamingUI();
-    _streamAbortController = null;
-    if (turnProgressEl) turnProgressEl.classList.add('hidden');
-    loadSessions();
-    if (store.chatEpoch === streamEpoch && _pendingResend.length) {
-      runStream(_pendingResend.splice(0).join('\n\n'));
+    // A switch superseded this reconnect: its DOM/UI belong to another view now.
+    if (store.chatEpoch === streamEpoch) {
+      if (store.body && store.rawText) {
+        store.body.dataset.raw = store.rawText;
+        flushRender();
+      }
+      finalizeCurrentAssistantTurn();
+      flushQueuedTurns();
+      exitStreamingUI();
+      _streamAbortController = null;
+      if (turnProgressEl) turnProgressEl.classList.add('hidden');
+      loadSessions();
+      if (_pendingResend.length) {
+        runStream(_pendingResend.splice(0).join('\n\n'));
+      }
     }
   }
 }
 
 export function resetChatForNewSession() {
-  resetChatView({ cancel: true });
-  _resumeAutoScroll();
+  detachStream(); // keep any live run going server-side; just disconnect from it
+  resetChatView();
   renderEmptyState();
+  _resumeAutoScroll(); // after the swap, so the reset's scroll event is a no-op
+}
+
+// Detach the client from the in-flight run WITHOUT cancelling it server-side.
+// The supervised run keeps streaming and stays reachable (its sidebar dot
+// persists), so clicking back into the session reconnects to it. Bumps the
+// epoch so the live runStream/runReconnect loop bails and its catch/finally
+// no-op — the view we're moving to now owns the DOM — aborts the SSE fetch (the
+// server treats the dropped connection as a detach), and returns the composer
+// to its idle state. Contrast cancelStream(), which tells the server to stop.
+export function detachStream() {
+  store.chatEpoch += 1;
+  if (_streamAbortController) {
+    _streamAbortController.abort();
+    _streamAbortController = null;
+  }
+  clearTimeout(_renderTimer);
+  if (store.streaming) exitStreamingUI();
 }
 
 export async function cancelStream() {

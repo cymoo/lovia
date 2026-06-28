@@ -69,6 +69,37 @@ function renderMessage(m) {
   return out.join('');
 }
 
+// Build a complete, self-contained HTML document from an export envelope
+// (`{ title, messages }`). `theme` is baked into the root so the file keeps the
+// look the user exported from.
+export function buildExportDoc(data, theme = 'light') {
+  const heading = data.title || 'Chat';
+  const body = (data.messages || []).map(renderMessage).join('\n');
+
+  // Highlight code in a detached node, exactly like the live view (skip mermaid
+  // blocks — the export has no mermaid runtime, so they stay as plain code).
+  const frag = document.createElement('div');
+  frag.innerHTML = body;
+  if (typeof hljs !== 'undefined') {
+    frag.querySelectorAll('pre code').forEach((el) => {
+      if (el.classList.contains('language-mermaid')) return;
+      try {
+        hljs.highlightElement(el);
+      } catch {
+        /* unknown language — leave as plain text */
+      }
+    });
+  }
+
+  return (
+    `<!doctype html>\n<html lang="en" data-theme="${theme}">\n<head>\n` +
+    `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
+    `<title>${escapeHtml(heading)}</title>\n<style>${EXPORT_CSS}</style>\n</head>\n` +
+    `<body>\n<main class="export">\n<h1 class="export-title">${escapeHtml(heading)}</h1>\n` +
+    `${frag.innerHTML}\n</main>\n</body>\n</html>`
+  );
+}
+
 export async function exportSessionHtml(sessionId, title) {
   if (!sessionId) return;
   try {
@@ -77,30 +108,8 @@ export async function exportSessionHtml(sessionId, title) {
       return r.json();
     });
     const heading = data.title || title || 'Chat';
-    const body = (data.messages || []).map(renderMessage).join('\n');
-
-    // Highlight code in a detached node, exactly like the live view (skip mermaid
-    // blocks — the export has no mermaid runtime, so they stay as plain code).
-    const frag = document.createElement('div');
-    frag.innerHTML = body;
-    if (typeof hljs !== 'undefined') {
-      frag.querySelectorAll('pre code').forEach((el) => {
-        if (el.classList.contains('language-mermaid')) return;
-        try {
-          hljs.highlightElement(el);
-        } catch {
-          /* unknown language — leave as plain text */
-        }
-      });
-    }
-
     const theme = document.documentElement.getAttribute('data-theme') || 'light';
-    const doc =
-      `<!doctype html>\n<html lang="en" data-theme="${theme}">\n<head>\n` +
-      `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
-      `<title>${escapeHtml(heading)}</title>\n<style>${EXPORT_CSS}</style>\n</head>\n` +
-      `<body>\n<main class="export">\n<h1 class="export-title">${escapeHtml(heading)}</h1>\n` +
-      `${frag.innerHTML}\n</main>\n</body>\n</html>`;
+    const doc = buildExportDoc({ ...data, title: heading }, theme);
 
     const blob = new Blob([doc], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);

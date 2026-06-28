@@ -3,15 +3,15 @@ import { store } from './store.js';
 import { api } from './api.js';
 import { promptDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
+import { icon } from './icons.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = document.getElementById('session-search');
 const exportBtn = document.getElementById('export-btn');
 
-// lucide `pin` — used for the at-rest marker and the pin/unpin menu button.
-const PIN_SVG =
-  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+// lucide `pin` — the at-rest marker and the pin/unpin menu button.
+const PIN_SVG = icon('pin', { size: 14 });
 
 // ---- Load ----------------------------------------------------------------
 export async function loadSessions(query = '') {
@@ -98,7 +98,7 @@ function renderSessions() {
     const renameBtn = document.createElement('button');
     renameBtn.type = 'button';
     renameBtn.title = 'Rename';
-    renameBtn.innerHTML = '✎';
+    renameBtn.innerHTML = icon('pencil', { size: 14 });
     renameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       renameSession(s);
@@ -107,7 +107,7 @@ function renderSessions() {
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.title = 'Delete';
-    delBtn.innerHTML = '✕';
+    delBtn.innerHTML = icon('trash-2', { size: 14 });
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       deleteSession(s.id);

@@ -1,5 +1,6 @@
 // UI utilities: theme, sidebar toggle, dialogs.
 import { store } from './store.js';
+import { icon } from './icons.js';
 
 const darkToggle = document.getElementById('dark-toggle');
 const themeIcon = darkToggle?.querySelector('.theme-icon');
@@ -9,7 +10,8 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   store.theme = theme;
   localStorage.setItem('lovia-theme', theme);
-  if (themeIcon) themeIcon.textContent = theme === 'dark' ? '◑' : '◐';
+  // Show the destination: a sun in dark mode (click → light), a moon in light.
+  if (themeIcon) themeIcon.innerHTML = icon(theme === 'dark' ? 'sun' : 'moon', { size: 17 });
 }
 
 export function initTheme() {

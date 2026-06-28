@@ -1385,6 +1385,19 @@ body.sidebar-collapsed .sidebar-expand-btn {
   color: var(--ink);
 }
 
+/* Inline lucide icons sit in flex-centered buttons — render them block-level so
+   there's no baseline descender gap throwing off vertical centering. */
+.btn-icon svg,
+.btn svg,
+.session-menu button svg,
+.session-pin svg,
+.sched-item-actions button svg,
+.mermaid-lightbox-btn svg,
+.theme-icon svg,
+.todo-mark svg {
+  display: block;
+}
+
 /* theme toggle */
 #dark-toggle .theme-icon {
   font-size: 15px;

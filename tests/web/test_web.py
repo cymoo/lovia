@@ -480,6 +480,24 @@ def test_export_attributes_tool_result_to_its_tool() -> None:
     assert result_msg["tool_call_id"] == "c1"
 
 
+def test_export_md_does_not_misattribute_tool_result_with_empty_id() -> None:
+    """Empty tool-call ids must not collide and mislabel an unrelated result."""
+    from lovia.messages import Message, ToolCall
+    from lovia.web.api.serialization import export_md
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[ToolCall(id="", name="foo", arguments="{}")],
+        ),
+        Message(role="tool", content="some result", tool_call_id=""),
+    ]
+    md = export_md(msgs, title="t", session_id="s")
+    assert "Tool result: `foo`" not in md  # no real correlation via an empty id
+    assert "Tool result" in md  # falls back to the generic label
+
+
 # ------------------------------------------------------------- pin / patch -
 
 

@@ -132,14 +132,16 @@ def export_md(msgs: list[Message], *, title: str, session_id: str) -> str:
     """
     lines: list[str] = [f"# {title}\n", f"*Session: `{session_id}`*\n"]
     # A tool *result* message has no name of its own; map call id → name so it
-    # can be labelled with the tool it came from.
-    tool_names = {tc.id: tc.name for m in msgs for tc in m.tool_calls}
+    # can be labelled with the tool it came from. Skip empty ids: some providers
+    # default a missing tool-call id to "", which would collide and mislabel
+    # results that also have no id.
+    tool_names = {tc.id: tc.name for m in msgs for tc in m.tool_calls if tc.id}
     for m in msgs:
         text = display_text(m)
         if m.role == "tool":
             if not text.strip():
                 continue
-            name = tool_names.get(m.tool_call_id or "") or m.name
+            name = (tool_names.get(m.tool_call_id) if m.tool_call_id else None) or m.name
             label = f"Tool result: `{name}`" if name else "Tool result"
             lines.append(f"**{label}**\n\n```\n{text}\n```\n")
             continue

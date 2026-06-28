@@ -1431,7 +1431,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .sched-item-actions button svg,
 .mermaid-lightbox-btn svg,
 .theme-icon svg,
-.todo-mark svg {
+.todo-mark svg,
+.withdraw-btn svg {
   display: block;
 }
 

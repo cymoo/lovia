@@ -611,7 +611,7 @@ function addWithdrawButton(node, injectId) {
   btn.type = 'button';
   btn.title = 'Cancel this queued message';
   btn.setAttribute('aria-label', 'Cancel queued message');
-  btn.textContent = '×';
+  btn.innerHTML = icon('x', { size: 13 });
   btn.addEventListener('click', () => withdrawQueued(node));
   bubble.appendChild(btn);
 }

@@ -13,6 +13,7 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ __all__ = ["ChatMeta", "ChatStore", "ScheduleRow"]
 _T = TypeVar("_T")
 
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
-_META_COLS = "id, title, agent, created_at, updated_at"
+_META_COLS = "id, title, agent, created_at, updated_at, pinned"
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     agent TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
-    active_run_id TEXT
+    active_run_id TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
@@ -81,11 +83,12 @@ class ChatMeta:
     agent: str | None
     created_at: float
     updated_at: float
+    pinned: bool = False
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
         """Build from a ``_META_COLS`` row."""
-        return cls(row[0], row[1], row[2], row[3], row[4])
+        return cls(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
 
     def to_dict(self) -> JsonObject:
         return {
@@ -94,6 +97,7 @@ class ChatMeta:
             "agent": self.agent,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "pinned": self.pinned,
         }
 
 
@@ -167,6 +171,39 @@ class ChatStore:
         self.session = session
         self._meta = SQLiteStore(str(meta_path), _META_SCHEMA)
         self.checkpointer: Checkpointer | None = checkpointer
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply schema additions made after the initial release (idempotent).
+
+        ``SQLiteStore`` re-runs ``CREATE TABLE IF NOT EXISTS`` on every connect,
+        which never adds a column to a table that already exists — so a column
+        added later needs a guarded ``ALTER TABLE`` for pre-existing databases.
+        The ``pinned`` index lives here (not in ``_META_SCHEMA``) because that
+        script also runs against legacy DBs before this migration adds the column.
+        """
+        conn = self._meta._connect()
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+            if "pinned" not in cols:
+                try:
+                    conn.execute(
+                        "ALTER TABLE chat_sessions "
+                        "ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError as exc:
+                    # Another worker added the column between our PRAGMA check and
+                    # this ALTER (concurrent multi-worker startup). Tolerate that
+                    # one case; re-raise anything else.
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
+                "ON chat_sessions(pinned DESC, updated_at DESC)"
+            )
+            conn.commit()
+        finally:
+            self._meta._release(conn)
 
     # ---- low-level helpers ----------------------------------------------
     # One connect/commit/release dance, shared by every metadata method.
@@ -261,6 +298,13 @@ class ChatStore:
             "UPDATE chat_sessions SET title = ? WHERE id = ?", (title, session_id)
         )
 
+    async def set_pinned(self, session_id: str, pinned: bool) -> None:
+        """Pin or unpin a session (pinned sessions sort to the top)."""
+        await self._write(
+            "UPDATE chat_sessions SET pinned = ? WHERE id = ?",
+            (1 if pinned else 0, session_id),
+        )
+
     async def set_title_if_unchanged(
         self, session_id: str, title: str, *, expected: str | None
     ) -> None:
@@ -285,7 +329,8 @@ class ChatStore:
 
     async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
         return await self._read_all(
-            f"SELECT {_META_COLS} FROM chat_sessions ORDER BY updated_at DESC LIMIT ?",
+            f"SELECT {_META_COLS} FROM chat_sessions "
+            "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
             (limit,),
             ChatMeta.from_row,
         )
@@ -306,7 +351,8 @@ class ChatStore:
         pattern = f"%{query}%"
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
-            "WHERE title LIKE ? OR id LIKE ? ORDER BY updated_at DESC LIMIT ?",
+            "WHERE title LIKE ? OR id LIKE ? "
+            "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
             (pattern, pattern, limit),
             ChatMeta.from_row,
         )

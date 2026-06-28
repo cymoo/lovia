@@ -3,11 +3,17 @@ import { store } from './store.js';
 import { api } from './api.js';
 import { promptDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
+import { icon } from './icons.js';
+import { exportSessionHtml, exportFilename } from './export.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = document.getElementById('session-search');
 const exportBtn = document.getElementById('export-btn');
+const exportWrap = document.getElementById('export-wrap');
+
+// lucide `pin` — the at-rest marker and the pin/unpin menu button.
+const PIN_SVG = icon('pin', { size: 14 });
 
 // ---- Load ----------------------------------------------------------------
 export async function loadSessions(query = '') {
@@ -32,7 +38,7 @@ function sessionsSignature() {
   return JSON.stringify([
     store.sessionId,
     [...(store.activeRuns || [])].sort(),
-    store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at]),
+    store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0]),
   ]);
 }
 
@@ -51,11 +57,16 @@ function renderSessions() {
     return;
   }
 
+  let prevPinned = false;
   for (const s of store.sessions) {
     const item = document.createElement('div');
     item.className = 'session-item';
     if (s.id === store.sessionId) item.classList.add('active');
     if (store.activeRuns?.has(s.id)) item.classList.add('running');
+    if (s.pinned) item.classList.add('pinned');
+    // Visually separate the pinned group from the rest.
+    if (!s.pinned && prevPinned) item.classList.add('pin-divider');
+    prevPinned = !!s.pinned;
     item.dataset.id = s.id;
 
     const main = document.createElement('button');
@@ -67,13 +78,29 @@ function renderSessions() {
     main.querySelector('.session-meta').textContent = formatTime(s.updated_at);
     main.addEventListener('click', () => switchSession(s.id));
 
+    // At-rest pin marker (hidden on hover, where the menu takes its place).
+    const pinMark = document.createElement('span');
+    pinMark.className = 'session-pin';
+    pinMark.setAttribute('aria-hidden', 'true');
+    pinMark.innerHTML = PIN_SVG;
+
     const menu = document.createElement('div');
     menu.className = 'session-menu';
+
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.title = s.pinned ? 'Unpin' : 'Pin';
+    pinBtn.innerHTML = PIN_SVG;
+    if (s.pinned) pinBtn.classList.add('active');
+    pinBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePin(s);
+    });
 
     const renameBtn = document.createElement('button');
     renameBtn.type = 'button';
     renameBtn.title = 'Rename';
-    renameBtn.innerHTML = '✎';
+    renameBtn.innerHTML = icon('pencil', { size: 14 });
     renameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       renameSession(s);
@@ -82,14 +109,14 @@ function renderSessions() {
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.title = 'Delete';
-    delBtn.innerHTML = '✕';
+    delBtn.innerHTML = icon('trash-2', { size: 14 });
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       deleteSession(s.id);
     });
 
-    menu.append(renameBtn, delBtn);
-    item.append(main, menu);
+    menu.append(pinBtn, renameBtn, delBtn);
+    item.append(main, pinMark, menu);
     sessionsList.appendChild(item);
   }
 
@@ -99,9 +126,9 @@ function renderSessions() {
     if (active?.title) {
       if (chatTitleEl) chatTitleEl.textContent = active.title;
     }
-    if (exportBtn) exportBtn.style.display = '';
+    if (exportWrap) exportWrap.style.display = '';
   } else {
-    if (exportBtn) exportBtn.style.display = 'none';
+    if (exportWrap) exportWrap.style.display = 'none';
   }
 }
 
@@ -135,6 +162,26 @@ async function renameSession(s) {
     console.error(err);
     toast('Couldn’t rename chat', { type: 'error' });
   }
+}
+
+async function togglePin(s) {
+  const next = !s.pinned;
+  try {
+    await api.setPinned(s.id, next);
+  } catch (err) {
+    console.error(err);
+    toast('Couldn’t update pin', { type: 'error' });
+    return;
+  }
+  // Update locally and re-sort to match the server's "pinned first, then most
+  // recent" order — cheaper than a reload, and it keeps the active search filter.
+  const target = store.sessions.find((x) => x.id === s.id);
+  if (target) target.pinned = next;
+  store.sessions.sort(
+    (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at - a.updated_at,
+  );
+  _lastRenderSig = null; // order changed — force a redraw
+  renderSessions();
 }
 
 export async function deleteSession(id) {
@@ -204,7 +251,7 @@ export function clearChat() {
   store.syncURL(null);
   store.lastMessage = null;
   if (chatTitleEl) chatTitleEl.textContent = 'New chat';
-  if (exportBtn) exportBtn.style.display = 'none';
+  if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
 }
@@ -212,6 +259,8 @@ export function clearChat() {
 // ---- Export --------------------------------------------------------------
 export async function exportSession(format = 'md') {
   if (!store.sessionId) return;
+  const title = store.sessions.find((s) => s.id === store.sessionId)?.title || '';
+  if (format === 'html') return exportSessionHtml(store.sessionId, title);
   try {
     const res = await fetch(api.exportUrl(store.sessionId, format));
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -219,7 +268,7 @@ export async function exportSession(format = 'md') {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lovia-chat.${format}`;
+    a.download = exportFilename(title, format);
     a.click();
     URL.revokeObjectURL(url);
     toast('Chat exported');
@@ -227,6 +276,37 @@ export async function exportSession(format = 'md') {
     console.error('export:', err);
     toast('Export failed', { type: 'error' });
   }
+}
+
+// Dropdown letting the Export button pick a format (Markdown / HTML).
+function initExportMenu() {
+  const wrap = document.getElementById('export-wrap');
+  const menu = document.getElementById('export-menu');
+  if (!exportBtn || !menu || !wrap) return;
+  const close = () => {
+    menu.hidden = true;
+    exportBtn.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    exportBtn.setAttribute('aria-expanded', 'true');
+  };
+  exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden ? open() : close();
+  });
+  menu.querySelectorAll('.export-menu-item').forEach((it) => {
+    it.addEventListener('click', () => {
+      close();
+      exportSession(it.dataset.format);
+    });
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.hidden && !wrap.contains(e.target)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menu.hidden) close();
+  });
 }
 
 // ---- Search --------------------------------------------------------------
@@ -261,6 +341,6 @@ export function initSessions() {
     document.getElementById('prompt')?.focus();
   });
 
-  exportBtn?.addEventListener('click', () => exportSession('md'));
+  initExportMenu();
   store.on('clear-chat', clearChat);
 }

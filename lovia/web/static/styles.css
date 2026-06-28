@@ -321,6 +321,35 @@ body.sidebar-collapsed .sidebar {
   background: var(--surface-3);
   color: var(--ink);
 }
+.session-menu button.active {
+  color: var(--accent);
+}
+/* At-rest pin marker: visible only while pinned and not hovering (the hover
+   menu reuses the same slot). */
+.session-pin {
+  display: none;
+  align-items: center;
+  padding-right: 10px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.session-pin svg {
+  width: 13px;
+  height: 13px;
+}
+.session-item.pinned .session-pin {
+  display: flex;
+}
+.session-item:hover .session-pin,
+.session-item:focus-within .session-pin {
+  display: none;
+}
+/* Separator below the pinned group. */
+.session-item.pin-divider {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
 
 .agent-select {
   width: 100%;
@@ -393,6 +422,43 @@ body.sidebar-collapsed .sidebar-expand-btn {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* Export format dropdown (Markdown / HTML). */
+.export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 148px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.export-menu[hidden] {
+  display: none;
+}
+.export-menu-item {
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  transition: background 0.12s;
+}
+.export-menu-item:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
 
 .turn-progress {
@@ -1354,6 +1420,20 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .btn-icon:hover {
   background: var(--surface-3);
   color: var(--ink);
+}
+
+/* Inline lucide icons sit in flex-centered buttons — render them block-level so
+   there's no baseline descender gap throwing off vertical centering. */
+.btn-icon svg,
+.btn svg,
+.session-menu button svg,
+.session-pin svg,
+.sched-item-actions button svg,
+.mermaid-lightbox-btn svg,
+.theme-icon svg,
+.todo-mark svg,
+.withdraw-btn svg {
+  display: block;
 }
 
 /* theme toggle */

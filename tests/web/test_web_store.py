@@ -111,3 +111,95 @@ async def test_upsert_with_optional_agent(agent: str | None) -> None:
     meta = await store.get("s1")
     assert meta is not None
     assert meta.agent == agent
+
+
+# ---- pinning -------------------------------------------------------------
+
+
+async def test_pinned_defaults_to_false() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("s1")
+    meta = await store.get("s1")
+    assert meta is not None
+    assert meta.pinned is False
+
+
+async def test_set_pinned_roundtrip() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("s1")
+    await store.set_pinned("s1", True)
+    meta = await store.get("s1")
+    assert meta is not None and meta.pinned is True
+    await store.set_pinned("s1", False)
+    meta = await store.get("s1")
+    assert meta is not None and meta.pinned is False
+
+
+async def test_list_orders_pinned_first() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("old")
+    await store.upsert("mid")
+    await store.upsert("new")  # newest by updated_at
+    # Pin the oldest — it must jump to the top despite being least recent.
+    await store.set_pinned("old", True)
+    ids = [m.id for m in await store.list()]
+    assert ids == ["old", "new", "mid"]
+
+
+async def test_search_orders_pinned_first() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("a", title="alpha one")
+    await store.upsert("b", title="alpha two")  # more recent
+    await store.set_pinned("a", True)
+    ids = [m.id for m in await store.search("alpha")]
+    assert ids == ["a", "b"]
+
+
+async def test_pinned_persists_across_instances(tmp_path: Path) -> None:
+    path = tmp_path / "pin.db"
+    s1 = ChatStore.sqlite(path)
+    await s1.upsert("s1")
+    await s1.set_pinned("s1", True)
+
+    s2 = ChatStore.sqlite(path)
+    meta = await s2.get("s1")
+    assert meta is not None and meta.pinned is True
+
+
+async def test_migration_backfills_pinned_on_legacy_db(tmp_path: Path) -> None:
+    """A DB created before ``pinned`` existed must gain the column on open."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE chat_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            agent TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            active_run_id TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO chat_sessions (id, title, agent, created_at, updated_at) "
+        "VALUES ('legacy', 'Old chat', 'bot', 1.0, 2.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    # Opening the store runs the idempotent migration (ALTER + index).
+    store = ChatStore.sqlite(path)
+    meta = await store.get("legacy")
+    assert meta is not None
+    assert meta.pinned is False  # back-filled default
+    assert meta.title == "Old chat"  # existing data intact
+
+    # The new column is writable, and a second open is a no-op (no error).
+    await store.set_pinned("legacy", True)
+    again = ChatStore.sqlite(path)
+    meta = await again.get("legacy")
+    assert meta is not None and meta.pinned is True

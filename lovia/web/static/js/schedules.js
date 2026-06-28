@@ -6,6 +6,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { showDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
+import { icon } from './icons.js';
 
 // ---- formatting ----------------------------------------------------------
 function fmtTime(ts) {
@@ -104,7 +105,7 @@ function rowEl(s, onChange) {
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.title = s.active ? 'Pause' : 'Resume';
-    toggle.textContent = s.active ? '⏸' : '▶';
+    toggle.innerHTML = icon(s.active ? 'pause' : 'play', { size: 14 });
     toggle.addEventListener('click', async () => {
       try {
         await api.setScheduleActive(s.id, !s.active);
@@ -119,7 +120,7 @@ function rowEl(s, onChange) {
   const del = document.createElement('button');
   del.type = 'button';
   del.title = 'Delete';
-  del.textContent = '✕';
+  del.innerHTML = icon('x', { size: 14 });
   del.addEventListener('click', async () => {
     if (!(await confirmDialog('Delete this schedule?'))) return;
     try {
@@ -142,7 +143,7 @@ export async function openSchedulesDialog() {
   panel.innerHTML = `
     <div class="schedules-head">
       <h3>Scheduled runs</h3>
-      <button type="button" class="btn-icon sched-close" aria-label="Close">✕</button>
+      <button type="button" class="btn-icon sched-close" aria-label="Close">${icon('x', { size: 16 })}</button>
     </div>
     <form class="sched-form">
       <textarea class="dialog-input sched-input" rows="2" placeholder="Prompt to run on schedule…" required></textarea>

@@ -7,12 +7,12 @@
 // and reads like an embedded figure. `mermaid` is a global from the CDN
 // <script> in index.html (like marked / hljs / DOMPurify).
 
+import { icon } from './icons.js';
+
 const FONT =
   '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
-const EXPAND_ICON =
-  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
-const CLOSE_ICON =
-  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+const EXPAND_ICON = icon('maximize-2', { size: 14 });
+const CLOSE_ICON = icon('x', { size: 16 });
 
 const _cache = new Map(); // diagram source -> rendered SVG
 const _inflight = new Set(); // sources currently being rendered
@@ -173,9 +173,9 @@ function openLightbox(fig) {
     b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
     return b;
   };
-  bar.appendChild(mk('&minus;', 'Zoom out', () => { const [x, y] = center(); zoomAt(1 / 1.25, x, y); }));
+  bar.appendChild(mk(icon('minus', { size: 16 }), 'Zoom out', () => { const [x, y] = center(); zoomAt(1 / 1.25, x, y); }));
   bar.appendChild(mk('Fit', 'Reset / fit', fit));
-  bar.appendChild(mk('&plus;', 'Zoom in', () => { const [x, y] = center(); zoomAt(1.25, x, y); }));
+  bar.appendChild(mk(icon('plus', { size: 16 }), 'Zoom in', () => { const [x, y] = center(); zoomAt(1.25, x, y); }));
   bar.appendChild(mk(CLOSE_ICON, 'Close', close));
   overlay.appendChild(bar);
 

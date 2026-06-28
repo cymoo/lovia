@@ -17,9 +17,9 @@ from ...plugins import todos_from_entries
 from ...transcript import InputEntry, entries_to_messages
 from ..schemas import (
     ChatSessionInfo,
-    RenameRequest,
     RunInfo,
     SessionDetail,
+    SessionPatch,
     TodoItemOut,
     TodosResponse,
 )
@@ -137,13 +137,18 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         )
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)
-    async def rename_session(session_id: str, req: RenameRequest) -> ChatSessionInfo:
+    async def update_session(session_id: str, req: SessionPatch) -> ChatSessionInfo:
+        """Rename and/or (un)pin a session — applies whichever fields are set."""
         meta = await store.get(session_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="session not found")
-        await store.set_title(session_id, req.title)
+        if req.title is not None:
+            await store.set_title(session_id, req.title)
+        if req.pinned is not None:
+            await store.set_pinned(session_id, req.pinned)
         meta = await store.get(session_id)
-        assert meta is not None  # just updated
+        if meta is None:  # deleted concurrently between the update and re-read
+            raise HTTPException(status_code=404, detail="session not found")
         return session_info(meta)
 
     @router.delete("/api/sessions/{session_id}")

@@ -90,6 +90,7 @@ class ChatSessionInfo(BaseModel):
     agent: str | None = None
     created_at: float
     updated_at: float
+    pinned: bool = False
 
 
 class RunInfo(BaseModel):
@@ -134,8 +135,11 @@ class ScheduleInfo(BaseModel):
     updated_at: float
 
 
-class RenameRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=120)
+class SessionPatch(BaseModel):
+    """Partial update for a session — rename, (un)pin, or both."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    pinned: bool | None = None
 
 
 class TodoItemOut(BaseModel):

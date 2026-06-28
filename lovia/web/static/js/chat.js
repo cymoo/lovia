@@ -4,6 +4,7 @@ import { api, readSSE } from './api.js';
 import { copyToClipboard } from './ui.js';
 import { loadSessions } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
+import { icon } from './icons.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
 marked.setOptions({ gfm: true, breaks: false });
@@ -58,16 +59,16 @@ function addCodeBlockControls(container) {
     btn.className = 'btn-copy-code';
     btn.type = 'button';
     btn.title = 'Copy code';
-    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
+    btn.innerHTML = `${icon('copy', { size: 12 })} Copy`;
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const codeText = code?.textContent || pre.textContent?.replace(/Copy$/, '') || '';
       const ok = await copyToClipboard(codeText.trimEnd());
       if (ok) {
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+        btn.innerHTML = `${icon('check', { size: 12 })} Copied!`;
         btn.classList.add('copied');
         setTimeout(() => {
-          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy';
+          btn.innerHTML = `${icon('copy', { size: 12 })} Copy`;
           btn.classList.remove('copied');
         }, 2000);
       }
@@ -292,7 +293,12 @@ function removeToolNode(id) {
 // Tool names whose calls render as a todo card instead of a tool bubble.
 // Seeded with the default; renamed tools are learned from `todo` events.
 const todoNames = new Set(['todo_write']);
-const TODO_MARK = { completed: '✓', in_progress: '◐', pending: '' };
+// pending stays empty — its ring is drawn by `.todo-mark::before` in CSS.
+const TODO_MARK = {
+  completed: icon('check', { size: 13 }),
+  in_progress: icon('loader-circle', { size: 13 }),
+  pending: '',
+};
 const STICKY_SCROLL_PX = 160;
 const USER_SCROLL_PAUSE_MS = 900;
 
@@ -337,7 +343,7 @@ function fillTodoCard(card, todos) {
     const label = status === 'in_progress' && t.active_form ? t.active_form : t.content;
     const mark = document.createElement('span');
     mark.className = 'todo-mark';
-    mark.textContent = TODO_MARK[status];
+    mark.innerHTML = TODO_MARK[status];
     const text = document.createElement('span');
     text.className = 'todo-text';
     text.textContent = label;
@@ -605,7 +611,7 @@ function addWithdrawButton(node, injectId) {
   btn.type = 'button';
   btn.title = 'Cancel this queued message';
   btn.setAttribute('aria-label', 'Cancel queued message');
-  btn.textContent = '×';
+  btn.innerHTML = icon('x', { size: 13 });
   btn.addEventListener('click', () => withdrawQueued(node));
   bubble.appendChild(btn);
 }

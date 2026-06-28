@@ -94,6 +94,12 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ title }),
     }).then(_json),
+  setPinned: (id, pinned) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ pinned }),
+    }).then(_json),
   deleteSession: (id) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   deleteAllSessions: () => fetch('/api/sessions', { method: 'DELETE' }),

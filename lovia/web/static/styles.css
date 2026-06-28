@@ -321,6 +321,35 @@ body.sidebar-collapsed .sidebar {
   background: var(--surface-3);
   color: var(--ink);
 }
+.session-menu button.active {
+  color: var(--accent);
+}
+/* At-rest pin marker: visible only while pinned and not hovering (the hover
+   menu reuses the same slot). */
+.session-pin {
+  display: none;
+  align-items: center;
+  padding-right: 10px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.session-pin svg {
+  width: 13px;
+  height: 13px;
+}
+.session-item.pinned .session-pin {
+  display: flex;
+}
+.session-item:hover .session-pin,
+.session-item:focus-within .session-pin {
+  display: none;
+}
+/* Separator below the pinned group. */
+.session-item.pin-divider {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
 
 .agent-select {
   width: 100%;

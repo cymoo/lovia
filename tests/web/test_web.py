@@ -441,6 +441,44 @@ def test_export_md_omits_thinking_block_when_no_reasoning() -> None:
     assert "just an answer" in body
 
 
+# ------------------------------------------------------------- pin / patch -
+
+
+def test_patch_session_pins_and_reorders_list() -> None:
+    c = TestClient(_app(_make_agent([text("a"), text("b")])))
+    c.post("/api/chat", json={"message": "first", "session_id": "old"})
+    c.post("/api/chat", json={"message": "second", "session_id": "new"})  # most recent
+
+    # Unpinned: most recent first.
+    ids = [s["id"] for s in c.get("/api/sessions").json()]
+    assert ids == ["new", "old"]
+    assert all(s["pinned"] is False for s in c.get("/api/sessions").json())
+
+    # Pin the older one → it jumps to the top and reports pinned.
+    res = c.patch("/api/sessions/old", json={"pinned": True}).json()
+    assert res["pinned"] is True
+    ids = [s["id"] for s in c.get("/api/sessions").json()]
+    assert ids == ["old", "new"]
+
+    # Unpin → back to recency order.
+    c.patch("/api/sessions/old", json={"pinned": False})
+    ids = [s["id"] for s in c.get("/api/sessions").json()]
+    assert ids == ["new", "old"]
+
+
+def test_patch_session_rename_still_works() -> None:
+    c = TestClient(_app(_make_agent([text("a")])))
+    c.post("/api/chat", json={"message": "hi", "session_id": "s1"})
+    res = c.patch("/api/sessions/s1", json={"title": "Renamed"}).json()
+    assert res["title"] == "Renamed"
+    assert res["pinned"] is False
+
+
+def test_patch_unknown_session_returns_404() -> None:
+    c = TestClient(_app(_make_agent([text("a")])))
+    assert c.patch("/api/sessions/nope", json={"pinned": True}).status_code == 404
+
+
 # ----------------------------------------------------------- server info -
 
 

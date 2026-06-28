@@ -32,9 +32,13 @@ function escapeHtml(s) {
 
 function mdToHtml(text) {
   if (!text || !text.trim()) return '';
-  if (typeof marked === 'undefined') return `<p>${escapeHtml(text)}</p>`;
-  const raw = marked.parse(text);
-  return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
+  // The export is a standalone file that may be opened anywhere, so never emit
+  // unsanitized HTML built from (possibly untrusted) chat content: without
+  // DOMPurify, fall back to escaped plain text.
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return `<p>${escapeHtml(text)}</p>`;
+  }
+  return DOMPurify.sanitize(marked.parse(text));
 }
 
 // Content may be a plain string or (multimodal) a part list — mirror the

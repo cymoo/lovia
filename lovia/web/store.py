@@ -13,6 +13,7 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -185,10 +186,17 @@ class ChatStore:
         try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
             if "pinned" not in cols:
-                conn.execute(
-                    "ALTER TABLE chat_sessions "
-                    "ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-                )
+                try:
+                    conn.execute(
+                        "ALTER TABLE chat_sessions "
+                        "ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError as exc:
+                    # Another worker added the column between our PRAGMA check and
+                    # this ALTER (concurrent multi-worker startup). Tolerate that
+                    # one case; re-raise anything else.
+                    if "duplicate column" not in str(exc).lower():
+                        raise
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"

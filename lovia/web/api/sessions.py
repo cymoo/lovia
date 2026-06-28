@@ -147,7 +147,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         if req.pinned is not None:
             await store.set_pinned(session_id, req.pinned)
         meta = await store.get(session_id)
-        assert meta is not None  # just updated
+        if meta is None:  # deleted concurrently between the update and re-read
+            raise HTTPException(status_code=404, detail="session not found")
         return session_info(meta)
 
     @router.delete("/api/sessions/{session_id}")

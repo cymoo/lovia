@@ -95,12 +95,19 @@ def view_messages(
 
 
 def message_to_json_dict(m: Message) -> dict[str, Any]:
-    """One message in the JSON-export envelope."""
+    """One message in the JSON-export envelope.
+
+    ``tool_call_id``/``name`` are included so a consumer can attribute a tool
+    *result* message back to the call it answers (results don't carry the tool
+    name themselves).
+    """
     return {
         "role": m.role,
         "content": _content(m),
         "reasoning": m.reasoning,
         "tool_calls": _tool_calls(m),
+        "tool_call_id": m.tool_call_id,
+        "name": m.name,
     }
 
 
@@ -124,8 +131,18 @@ def export_md(msgs: list[Message], *, title: str, session_id: str) -> str:
     heading — the model reasons first, so the export mirrors that order.
     """
     lines: list[str] = [f"# {title}\n", f"*Session: `{session_id}`*\n"]
+    # A tool *result* message has no name of its own; map call id → name so it
+    # can be labelled with the tool it came from.
+    tool_names = {tc.id: tc.name for m in msgs for tc in m.tool_calls}
     for m in msgs:
         text = display_text(m)
+        if m.role == "tool":
+            if not text.strip():
+                continue
+            name = tool_names.get(m.tool_call_id or "") or m.name
+            label = f"Tool result: `{name}`" if name else "Tool result"
+            lines.append(f"**{label}**\n\n```\n{text}\n```\n")
+            continue
         if text or m.reasoning or m.tool_calls:
             lines.append(f"### {m.role.capitalize()}\n")
         if m.reasoning:

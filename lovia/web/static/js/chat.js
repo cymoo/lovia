@@ -1224,6 +1224,17 @@ export function detachStream() {
     _streamAbortController = null;
   }
   clearTimeout(_renderTimer);
+  // The superseded run's finally is now epoch-guarded off, so any *global* state
+  // it would have reset has to be reset here or it leaks into the next view:
+  //  - queued/pending buffers, else a later run's finally flushes stale bubbles
+  //    or resends a raced message into the wrong chat (accepted injects still
+  //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
+  //  - the turn-progress pill (un-hidden by turn_started);
+  //  - the todo panel (only renderHistory rebuilds it — a failed switch won't).
+  _queuedTurns = [];
+  _pendingResend = [];
+  if (turnProgressEl) turnProgressEl.classList.add('hidden');
+  clearTodoPanel();
   if (store.streaming) exitStreamingUI();
 }
 

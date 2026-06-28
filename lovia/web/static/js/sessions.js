@@ -4,11 +4,13 @@ import { api } from './api.js';
 import { promptDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
+import { exportSessionHtml, exportFilename } from './export.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = document.getElementById('session-search');
 const exportBtn = document.getElementById('export-btn');
+const exportWrap = document.getElementById('export-wrap');
 
 // lucide `pin` — the at-rest marker and the pin/unpin menu button.
 const PIN_SVG = icon('pin', { size: 14 });
@@ -124,9 +126,9 @@ function renderSessions() {
     if (active?.title) {
       if (chatTitleEl) chatTitleEl.textContent = active.title;
     }
-    if (exportBtn) exportBtn.style.display = '';
+    if (exportWrap) exportWrap.style.display = '';
   } else {
-    if (exportBtn) exportBtn.style.display = 'none';
+    if (exportWrap) exportWrap.style.display = 'none';
   }
 }
 
@@ -249,7 +251,7 @@ export function clearChat() {
   store.syncURL(null);
   store.lastMessage = null;
   if (chatTitleEl) chatTitleEl.textContent = 'New chat';
-  if (exportBtn) exportBtn.style.display = 'none';
+  if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
 }
@@ -257,6 +259,8 @@ export function clearChat() {
 // ---- Export --------------------------------------------------------------
 export async function exportSession(format = 'md') {
   if (!store.sessionId) return;
+  const title = store.sessions.find((s) => s.id === store.sessionId)?.title || '';
+  if (format === 'html') return exportSessionHtml(store.sessionId, title);
   try {
     const res = await fetch(api.exportUrl(store.sessionId, format));
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -264,7 +268,7 @@ export async function exportSession(format = 'md') {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lovia-chat.${format}`;
+    a.download = exportFilename(title, format);
     a.click();
     URL.revokeObjectURL(url);
     toast('Chat exported');
@@ -272,6 +276,37 @@ export async function exportSession(format = 'md') {
     console.error('export:', err);
     toast('Export failed', { type: 'error' });
   }
+}
+
+// Dropdown letting the Export button pick a format (Markdown / HTML).
+function initExportMenu() {
+  const wrap = document.getElementById('export-wrap');
+  const menu = document.getElementById('export-menu');
+  if (!exportBtn || !menu || !wrap) return;
+  const close = () => {
+    menu.hidden = true;
+    exportBtn.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    exportBtn.setAttribute('aria-expanded', 'true');
+  };
+  exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.hidden ? open() : close();
+  });
+  menu.querySelectorAll('.export-menu-item').forEach((it) => {
+    it.addEventListener('click', () => {
+      close();
+      exportSession(it.dataset.format);
+    });
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.hidden && !wrap.contains(e.target)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menu.hidden) close();
+  });
 }
 
 // ---- Search --------------------------------------------------------------
@@ -306,6 +341,6 @@ export function initSessions() {
     document.getElementById('prompt')?.focus();
   });
 
-  exportBtn?.addEventListener('click', () => exportSession('md'));
+  initExportMenu();
   store.on('clear-chat', clearChat);
 }

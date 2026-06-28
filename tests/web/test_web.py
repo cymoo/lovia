@@ -441,6 +441,19 @@ def test_export_md_omits_thinking_block_when_no_reasoning() -> None:
     assert "just an answer" in body
 
 
+def test_export_json_envelope_shape() -> None:
+    """The shape the client-side HTML export consumes (export.js)."""
+    c = TestClient(_app(_make_agent([text("the answer", reasoning="because")])))
+    c.post("/api/chat", json={"message": "go", "session_id": "s1"})
+    data = c.get("/api/sessions/s1/export?format=json").json()
+    assert set(data) >= {"session_id", "title", "agent", "messages"}
+    assert data["session_id"] == "s1"
+    msg = data["messages"][-1]  # the assistant turn
+    assert set(msg) >= {"role", "content", "reasoning", "tool_calls"}
+    assert msg["reasoning"] == "because"
+    assert isinstance(msg["tool_calls"], list)
+
+
 # ------------------------------------------------------------- pin / patch -
 
 

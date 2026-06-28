@@ -49,7 +49,20 @@ function contentText(content) {
   return JSON.stringify(content, null, 2);
 }
 
-function renderMessage(m) {
+function renderMessage(m, toolNames = {}) {
+  // A tool *result* message: attribute it to its call's name (results carry no
+  // name of their own) and show the raw output in a <pre>, not as markdown.
+  if (m.role === 'tool') {
+    const result = contentText(m.content);
+    if (!result.trim()) return '';
+    const name = (m.tool_call_id && toolNames[m.tool_call_id]) || m.name || '';
+    const label = name ? `Tool result: ${escapeHtml(name)}` : 'Tool result';
+    return (
+      `<section class="msg msg-tool"><div class="tool-label">${label}</div>` +
+      `<pre class="tool-output">${escapeHtml(result)}</pre></section>`
+    );
+  }
+
   const text = contentText(m.content);
   const tools = m.tool_calls || [];
   if (!text.trim() && !m.reasoning && !tools.length) return '';
@@ -64,9 +77,11 @@ function renderMessage(m) {
   }
   if (text.trim()) out.push(`<div class="msg-body">${mdToHtml(text)}</div>`);
   for (const tc of tools) {
-    const fence = '```json\n' + (tc.arguments || '') + '\n```';
+    // Build the <pre><code> directly (escaped) rather than a ```json fence: it's
+    // robust to backticks in the arguments and still highlighted by the pass below.
     out.push(
-      `<div class="msg-tool"><div class="tool-label">Tool: ${escapeHtml(tc.name || '')}</div>${mdToHtml(fence)}</div>`,
+      `<div class="msg-tool"><div class="tool-label">Tool: ${escapeHtml(tc.name || '')}</div>` +
+        `<pre><code class="language-json">${escapeHtml(tc.arguments || '')}</code></pre></div>`,
     );
   }
   out.push('</section>');
@@ -78,7 +93,15 @@ function renderMessage(m) {
 // look the user exported from.
 export function buildExportDoc(data, theme = 'light') {
   const heading = data.title || 'Chat';
-  const body = (data.messages || []).map(renderMessage).join('\n');
+  const messages = data.messages || [];
+  // call id → tool name, so a tool result message can be labelled with its tool.
+  const toolNames = {};
+  for (const m of messages) {
+    for (const tc of m.tool_calls || []) {
+      if (tc.id) toolNames[tc.id] = tc.name;
+    }
+  }
+  const body = messages.map((m) => renderMessage(m, toolNames)).join('\n');
 
   // Highlight code in a detached node, exactly like the live view (skip mermaid
   // blocks — the export has no mermaid runtime, so they stay as plain code).

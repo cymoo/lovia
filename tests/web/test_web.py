@@ -454,6 +454,50 @@ def test_export_json_envelope_shape() -> None:
     assert isinstance(msg["tool_calls"], list)
 
 
+def test_export_attributes_tool_result_to_its_tool() -> None:
+    """MD export labels a tool result with its tool's name; JSON carries the link."""
+
+    @tool
+    async def weather(city: str) -> str:
+        """Stub tool."""
+        return f"{city}:sunny"
+
+    provider = ScriptedProvider(
+        [call("weather", {"city": "paris"}, call_id="c1"), text("done")]
+    )
+    c = TestClient(_app(Agent(name="bot", model=provider, tools=[weather])))
+    c.post("/api/chat", json={"message": "go", "session_id": "s1"})
+
+    md = c.get("/api/sessions/s1/export?format=md").text
+    assert "**Tool: `weather`**" in md  # the call
+    assert "Tool result: `weather`" in md  # the result, attributed to its tool
+    assert "paris:sunny" in md
+
+    data = c.get("/api/sessions/s1/export?format=json").json()
+    # A tool-result message carries tool_call_id linking it back to the call so a
+    # consumer (export.js) can label it.
+    result_msg = next(m for m in data["messages"] if m["role"] == "tool")
+    assert result_msg["tool_call_id"] == "c1"
+
+
+def test_export_md_does_not_misattribute_tool_result_with_empty_id() -> None:
+    """Empty tool-call ids must not collide and mislabel an unrelated result."""
+    from lovia.messages import Message, ToolCall
+    from lovia.web.api.serialization import export_md
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[ToolCall(id="", name="foo", arguments="{}")],
+        ),
+        Message(role="tool", content="some result", tool_call_id=""),
+    ]
+    md = export_md(msgs, title="t", session_id="s")
+    assert "Tool result: `foo`" not in md  # no real correlation via an empty id
+    assert "Tool result" in md  # falls back to the generic label
+
+
 # ------------------------------------------------------------- pin / patch -
 
 

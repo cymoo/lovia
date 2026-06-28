@@ -661,7 +661,9 @@ export function renderHistory(entries) {
 
   const pendingResults = new Map();
   for (const it of entries) {
-    if (it.type === 'tool' && it.role === 'tool' && it.tool_call_id)
+    // History entries are MessageOut (role + tool_call_id), with no `type`
+    // field — gating on `it.type` here left every result unmatched and hidden.
+    if (it.role === 'tool' && it.tool_call_id)
       pendingResults.set(it.tool_call_id, contentText(it.content));
   }
 

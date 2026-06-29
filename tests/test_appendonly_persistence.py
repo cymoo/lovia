@@ -25,7 +25,10 @@ from lovia import (
     Runner,
 )
 from lovia.checkpointer import RunHead
+from lovia.events import RunCompleted
+from lovia.hooks import AgentHooks
 from lovia.messages import Usage, system, user
+from lovia.plugins import PluginInstance
 from lovia.stores import SQLiteCheckpointer
 from lovia.transcript import AssistantTextEntry, InputEntry
 
@@ -107,9 +110,10 @@ async def test_resume_reloads_history_and_appends_run_delta_once() -> None:
     )
 
     assert result.output == "recovered"
-    # The resumed run saw the prior history reloaded from the Session...
-    assert _contents(result.entries) == ["hi", "hello", "again", "recovered"]
-    # ...and appended exactly its own entries as one new segment; the existing
+    # result.entries is this run's own delta — the resumed snapshot entry plus
+    # what this run produced; prior history stays in the Session (asserted below).
+    assert _contents(result.entries) == ["again", "recovered"]
+    # The run appended exactly its own entries as one new segment; the existing
     # history segment is untouched (immutable, appended once).
     assert len(session._segments["u1"]) == 2
     assert _contents(await session.load("u1")) == [
@@ -330,3 +334,73 @@ async def test_handoff_keeps_user_supplied_system_input_entry() -> None:
     full = await session.load("u1")
     assert isinstance(full[0], InputEntry) and full[0].role == "system"
     assert full[0].content == "SYS-INPUT"
+
+
+# --------------------------------------------------------------------------- #
+# RunResult.entries is this run's OWN delta (not the full transcript), so it is
+# consistent with the resume path and lets hooks archive per run. The full
+# transcript stays on the Session (and on the live RunContext inside a hook).
+# --------------------------------------------------------------------------- #
+
+
+async def test_result_entries_are_this_runs_own_not_full_transcript() -> None:
+    """``RunResult.entries`` excludes the system prompt and prior session
+    history — it is just what this run took in and produced. The whole
+    conversation lives on the Session."""
+    session = InMemorySession()
+    agent = Agent(
+        name="a",
+        instructions="be brief",  # a system entry exists, but is excluded
+        model=ScriptedProvider([text("one"), text("two")]),
+    )
+    r1 = await Runner.run(agent, "first", session=session, session_id="s")
+    assert _contents(r1.entries) == ["first", "one"]  # no leading system entry
+    assert [m.role for m in r1.messages] == ["user", "assistant"]
+
+    r2 = await Runner.run(agent, "second", session=session, session_id="s")
+    # Run 2's result holds ONLY run 2's messages, not run 1's history.
+    assert _contents(r2.entries) == ["second", "two"]
+    # ...while the Session accumulated the whole conversation.
+    assert _contents(await session.load("s")) == ["first", "one", "second", "two"]
+
+
+class _CaptureOnCompleted:
+    """Minimal plugin: in the RunCompleted hook, record what the result carries
+    vs. what the live RunContext carries."""
+
+    name = "capture"
+
+    def __init__(self) -> None:
+        self.result_contents: list[Any] = []
+        self.ctx_roles: list[str] = []
+
+    async def setup(self) -> PluginInstance:
+        hooks = AgentHooks()
+
+        @hooks.on(RunCompleted)
+        async def _on(ev: RunCompleted, ctx: Any) -> None:
+            self.result_contents = _contents(ev.result.entries)
+            self.ctx_roles = [m.role for m in ctx.messages]
+
+        return PluginInstance(hooks=hooks)
+
+
+async def test_run_completed_hook_sees_run_delta_in_result_and_full_in_ctx() -> None:
+    """A hook's ``ev.result.entries`` is this run's own delta; the full
+    transcript (system + prior history + this run) is on ``ctx``."""
+    session = InMemorySession()
+    cap = _CaptureOnCompleted()
+    agent = Agent(
+        name="a",
+        instructions="be brief",
+        model=ScriptedProvider([text("one"), text("two")]),
+        plugins=[cap],
+    )
+    await Runner.run(agent, "first", session=session, session_id="s")
+    await Runner.run(agent, "second", session=session, session_id="s")
+
+    # In run 2's hook: the result is just run 2's own messages...
+    assert cap.result_contents == ["second", "two"]
+    # ...but ctx is the full transcript — leads with the system prompt and
+    # includes run 1's history.
+    assert cap.ctx_roles == ["system", "user", "assistant", "user", "assistant"]

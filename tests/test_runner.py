@@ -28,8 +28,8 @@ async def test_plain_text_run() -> None:
     result = await Runner.run(agent, "hi")
     assert result.output == "Hello!"
     assert result.turns == 1
-    # Initial messages: system + user; assistant reply is appended.
-    assert [m.role for m in result.messages] == ["system", "user", "assistant"]
+    # result.entries is this run's own — user input + assistant reply, no system.
+    assert [m.role for m in result.messages] == ["user", "assistant"]
 
 
 async def test_tool_call_round_trip() -> None:
@@ -43,10 +43,11 @@ async def test_tool_call_round_trip() -> None:
     result = await Runner.run(agent, "what is 2+3?")
     assert result.output == "The answer is 5."
     roles = [m.role for m in result.messages]
-    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    # This run's own entries — no leading system message.
+    assert roles == ["user", "assistant", "tool", "assistant"]
     # Tool result message carries the call id.
-    assert result.messages[3].tool_call_id == "c1"
-    assert result.messages[3].content == "5"
+    assert result.messages[2].tool_call_id == "c1"
+    assert result.messages[2].content == "5"
 
 
 async def test_unknown_tool_does_not_crash_run() -> None:

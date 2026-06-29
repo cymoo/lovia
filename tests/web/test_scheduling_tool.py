@@ -96,7 +96,7 @@ async def test_creates_one_schedule_row() -> None:
     assert row.trigger_kind == "every"
     assert row.trigger_expr == "300"
     assert row.active is True
-    assert row.session_id is None  # fresh session per fire by default
+    assert row.session_id == "s1"  # continues THIS conversation by default
     assert row.last_session_id is None
     assert row.next_fire == pytest.approx(row.created_at + 300, abs=2.0)
     assert "Scheduled" in out
@@ -117,6 +117,25 @@ async def test_continue_session_pins_current_session() -> None:
     )
     (row,) = await store.list_schedules()
     assert row.session_id == "sess-42"
+
+
+@pytest.mark.asyncio
+async def test_continue_session_false_starts_fresh() -> None:
+    # The opt-out: continue_session=False forces a fresh session per fire even
+    # when this run has a session.
+    store = ChatStore.in_memory()
+    await _invoke(
+        store,
+        {
+            "instruction": "digest",
+            "trigger_kind": "every",
+            "trigger_expr": "300",
+            "continue_session": False,
+        },
+        ctx=_ctx(session_id="sess-42"),
+    )
+    (row,) = await store.list_schedules()
+    assert row.session_id is None
 
 
 @pytest.mark.asyncio

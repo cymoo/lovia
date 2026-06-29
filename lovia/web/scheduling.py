@@ -52,8 +52,10 @@ _INSTRUCTIONS = (
     "`now` tool first to anchor them (it returns local time with its UTC "
     "offset), then pass an ISO-8601 datetime that keeps that offset. A bare "
     "datetime with no offset is read in the server's own timezone. Write "
-    "`instruction` as a complete, standalone prompt: the scheduled run starts "
-    "fresh with no memory of this chat unless you set `continue_session=true`. "
+    "`instruction` as a complete, standalone prompt (a fire may happen long "
+    "after this chat). By default the scheduled run continues THIS conversation "
+    "so the user sees results inline; set `continue_session=false` only if the "
+    "user asks for it to run in a separate chat. "
     "Don't schedule something you could just do now — and note that creating a "
     "schedule asks the user to approve it first."
 )
@@ -97,8 +99,9 @@ def _make_tool(store: ChatStore) -> Tool:
         ctx: RunContext[Any],
         instruction: Annotated[
             str,
-            "The full, self-contained prompt the scheduled run will execute. It "
-            "runs with no prior chat context unless you continue this session.",
+            "The full, self-contained prompt the scheduled run will execute. "
+            "Write it standalone even though it continues this conversation by "
+            "default — a fire may happen long after the current context.",
         ],
         trigger_kind: Annotated[
             Literal["at", "every", "cron"],
@@ -114,9 +117,10 @@ def _make_tool(store: ChatStore) -> Tool:
         ],
         continue_session: Annotated[
             bool,
-            "If true, each fire continues THIS conversation; if false (the "
-            "default), each fire starts a fresh chat.",
-        ] = False,
+            "If true (the default), each fire continues THIS conversation so its "
+            "results land inline here. Set false ONLY when the user explicitly "
+            "asks for the scheduled task to run in a separate / new chat.",
+        ] = True,
     ) -> str:
         text = instruction.strip()
         if not text:
@@ -139,8 +143,9 @@ def _make_tool(store: ChatStore) -> Tool:
             # RuntimeError = croniter not installed (cron triggers are opt-in).
             return f"Couldn't schedule that: {exc}"
 
-        # A fresh session per fire unless the model asked to continue this chat
-        # (and this run actually has a session to continue).
+        # Continue this chat by default so the user sees results inline; the
+        # model only opts out (a fresh session per fire) when the user asks.
+        # Falls back to a fresh session if this run has no session to continue.
         session_id = ctx.session_id if (continue_session and ctx.session_id) else None
         now = time.time()
         row = ScheduleRow(

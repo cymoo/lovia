@@ -130,6 +130,14 @@ async def test_now_accepts_explicit_tz() -> None:
 
 
 @pytest.mark.asyncio
+async def test_now_unknown_timezone_raises_tool_error() -> None:
+    # A bad / unknown zone (incl. Windows-without-tzdata) gives a clear error,
+    # not a raw ZoneInfoNotFoundError traceback.
+    with pytest.raises(ToolError, match="Unknown timezone"):
+        await now.invoke({"tz": "Not/AZone"}, _ctx())
+
+
+@pytest.mark.asyncio
 async def test_sleep_is_capped() -> None:
     out = await sleep.invoke({"seconds": 0.01}, _ctx())
     assert "slept" in out

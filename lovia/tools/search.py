@@ -91,6 +91,28 @@ class DuckDuckGoSearch:
         ]
 
 
+def _render_search_results(result: Any, ctx: Any) -> str:
+    """The text both the model and the web UI see for a ``web_search`` result.
+
+    A readable block per hit (title / url / snippet) instead of raw JSON. The
+    bare URL on its own line is what the web UI turns into a clickable link.
+    """
+    if not isinstance(result, list) or not result:
+        return "No results."
+    blocks: list[str] = []
+    for i, row in enumerate(result, 1):
+        title = (row.get("title") or "").strip() or "(untitled)"
+        url = (row.get("url") or "").strip()
+        snippet = (row.get("snippet") or "").strip()
+        block = f"{i}. {title}"
+        if url:
+            block += f"\n{url}"
+        if snippet:
+            block += f"\n{snippet}"
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
 def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     """Build a ``web_search`` :class:`Tool` backed by ``impl``.
 
@@ -99,7 +121,7 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     :func:`duckduckgo_search` for the bundled DuckDuckGo backend.
     """
 
-    @tool(name=name)
+    @tool(name=name, result_renderer=_render_search_results)
     async def _search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Max results (1-20)."] = 5,

@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from typing import Annotated
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..exceptions import ToolError
 from .base import tool
 
 __all__ = ["now", "sleep"]
@@ -33,7 +34,20 @@ def now(
     """
     if tz is None:
         return datetime.now().astimezone().isoformat()
-    return datetime.now(ZoneInfo(tz)).isoformat()
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        # Surface a clear, model-readable error instead of a raw traceback.
+        # On Windows the IANA tz database isn't part of the OS, so even valid
+        # names like "Asia/Shanghai" fail until ``tzdata`` is installed.
+        raise ToolError(
+            f"Unknown timezone {tz!r}.",
+            hint=(
+                "Use an IANA name like 'Asia/Shanghai'. On Windows the IANA tz "
+                "database isn't bundled — `pip install tzdata` to enable it."
+            ),
+        ) from exc
+    return datetime.now(zone).isoformat()
 
 
 @tool

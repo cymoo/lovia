@@ -33,10 +33,12 @@ mcp = ["mcp>=1.0"]
 ddg = ["ddgs>=7.0"]
 web = [
     "croniter>=2.0",
+    "ddgs>=7.0",
     "fastapi>=0.110",
     "jinja2>=3.1",
     "markdown-it-py>=3.0",
     "sse-starlette>=2.1",
+    "tzdata; platform_system == 'Windows'",
     "uvicorn[standard]>=0.27",
 ]
 examples = [

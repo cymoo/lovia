@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Protocol
 
 from ..exceptions import UserError
-from .base import Tool, tool
+from .base import Tool, default_result_renderer, tool
 
 __all__ = [
     "DuckDuckGoSearch",
@@ -94,10 +94,15 @@ class DuckDuckGoSearch:
 def _render_search_results(result: Any, ctx: Any) -> str:
     """The text both the model and the web UI see for a ``web_search`` result.
 
-    A readable block per hit (title / url / snippet) instead of raw JSON. The
+    A readable block per hit (title / url / snippet) instead of raw JSON; the
     bare URL on its own line is what the web UI turns into a clickable link.
+    Only the success shape (a list of hits) is ours to format — anything else,
+    notably the runner's ``"Tool error: …"`` string from a raised exception,
+    passes through unchanged so real failures aren't swallowed as "No results.".
     """
-    if not isinstance(result, list) or not result:
+    if not isinstance(result, list):
+        return result if isinstance(result, str) else default_result_renderer(result)
+    if not result:
         return "No results."
     blocks: list[str] = []
     for i, row in enumerate(result, 1):

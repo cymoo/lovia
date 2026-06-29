@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -254,6 +255,27 @@ async def test_archive_runs_accumulate_across_session() -> None:
     await arc.ingest("s1", _msgs(("user", "bravo bravo"), ("assistant", "ok")), run_id="r2")
     assert await arc.search("alpha")  # earlier run is still archived
     assert await arc.search("bravo")
+
+
+@requires_fts
+async def test_archive_rebuilds_stale_schema(tmp_path) -> None:
+    # An on-disk archive.db from an older schema (no run_id column) must be
+    # rebuilt rather than left to crash ingest. Old rows are discarded — we do
+    # not migrate archived data across schema changes.
+    path = tmp_path / "archive.db"
+    con = sqlite3.connect(str(path))
+    con.executescript(
+        "CREATE VIRTUAL TABLE archive_fts USING fts5("
+        "session_id UNINDEXED, text, when_ts UNINDEXED);"
+    )
+    con.execute("INSERT INTO archive_fts VALUES ('old', 'stale relic', 0)")
+    con.commit()
+    con.close()
+
+    arc = SQLiteArchiveStore(str(path))  # detects the old schema -> recreates
+    await arc.ingest("s1", _msgs(("user", "fresh hiking trip"), ("assistant", "ok")))
+    assert await arc.search("hiking")  # new ingest + search work, no error
+    assert await arc.search("relic") == []  # old rows discarded, not migrated
 
 
 async def test_archive_oneshot_runs_all_retained() -> None:

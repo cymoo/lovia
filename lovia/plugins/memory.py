@@ -397,6 +397,28 @@ class SQLiteArchiveStore(SQLiteStore):
             Path(p).parent.mkdir(parents=True, exist_ok=True)
         super().__init__(p, schema)
         self._table = "archive_fts" if self._use_fts else "archive_docs"
+        self._reset_if_stale()
+
+    def _reset_if_stale(self) -> None:
+        """Rebuild a table left over from an older archive schema.
+
+        We don't migrate archived data across schema changes — the archive is a
+        recall cache, not a source of truth — but ``CREATE ... IF NOT EXISTS``
+        would leave an old table in place, and its missing columns make
+        ``ingest`` fail. Detect the mismatch by the ``run_id`` column and
+        recreate the table empty (discarding the old rows).
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = ?", (self._table,)
+            ).fetchone()
+            if row and "run_id" not in (row[0] or ""):
+                conn.executescript(f"DROP TABLE IF EXISTS {self._table};")
+                conn.executescript(self._schema)
+                conn.commit()
+        finally:
+            self._release(conn)
 
     async def ingest(
         self,

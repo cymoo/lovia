@@ -290,14 +290,17 @@ def _archive_docs(entries: list[TranscriptEntry]) -> list[str]:
 # CJK-aware term extraction. SQLite's default ``unicode61`` FTS tokenizer (and a
 # plain ``LIKE``) can't segment scripts written without spaces between words: a
 # whole CJK run becomes one token, so ``recall("北京")`` never matches "...北京...".
-# We split CJK runs into overlapping bigrams (keeping ASCII words whole) on both
+# We split CJK runs into overlapping bigrams (other scripts' words stay whole) on
 # the indexed text and the query, so the two sides line up, two-character words
 # match exactly, and bm25 still ranks. The same extractor drives the LIKE
 # fallback, so a natural-language CJK query matches by its bigrams there too.
 
 # CJK Unified Ideographs (+ Ext. A, Compatibility), kana, and Hangul.
 _CJK = "㐀-䶿一-鿿豈-﫿぀-ヿ가-힯"
-_PIECE_RE = re.compile(rf"[0-9a-z]+|[{_CJK}]+")
+_CJK_RE = re.compile(rf"[{_CJK}]")
+# A CJK run, or a run of word characters in any other script (ASCII, accented
+# Latin, Cyrillic, Greek, ...) — those use spaces, so they stay whole words.
+_PIECE_RE = re.compile(rf"[{_CJK}]+|[^\W{_CJK}]+")
 
 
 def _bigrams(run: str) -> list[str]:
@@ -308,13 +311,13 @@ def _bigrams(run: str) -> list[str]:
 
 
 def _terms(text: str) -> list[str]:
-    """Split text into search terms: ASCII words whole, CJK runs as bigrams."""
+    """Split text into search terms: word-runs whole, CJK runs as bigrams."""
     out: list[str] = []
     for piece in _PIECE_RE.findall(text.lower()):
-        if piece[0].isascii():
-            out.append(piece)
-        else:
+        if _CJK_RE.match(piece):
             out.extend(_bigrams(piece))
+        else:
+            out.append(piece)
     return out
 
 

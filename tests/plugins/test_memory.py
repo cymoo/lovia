@@ -222,6 +222,8 @@ def test_terms_segmentation() -> None:
     assert _terms("北京") == ["北京"]
     assert _terms("北京出差") == ["北京", "京出", "出差"]
     assert _terms("我爱python") == ["我爱", "python"]
+    assert _terms("café Müller") == ["café", "müller"]  # accented Latin: whole
+    assert _terms("Москва") == ["москва"]  # Cyrillic: whole, not bigrammed
     assert _terms("中") == ["中"]
     assert _terms("") == []
     assert _terms("!!! ???") == []

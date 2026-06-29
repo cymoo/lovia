@@ -20,12 +20,13 @@ from lovia.plugins import memory as memory_mod
 from lovia.plugins.memory import (
     FileNotesStore,
     Memory,
-    SQLiteMemoryArchive,
+    SQLiteArchiveStore,
     _drop_fact,
     _format_facts,
     _fts5_available,
     _meter,
     _parse_facts,
+    _terms,
 )
 from lovia.transcript import (
     AssistantTextEntry,
@@ -133,13 +134,13 @@ async def test_notes_concurrent_writes_are_serialized(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SQLiteMemoryArchive (cold tier)
+# SQLiteArchiveStore (cold tier)
 # ---------------------------------------------------------------------------
 
 
 @requires_fts
 async def test_archive_fts_ranking_and_filtering() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     assert arc._use_fts
     await arc.ingest(
         "s1",
@@ -162,13 +163,39 @@ async def test_archive_fts_ranking_and_filtering() -> None:
     assert all(
         "hik" in h.text.lower() or "mountain" in h.text.lower() for h in hits
     )
-    # We report -bm25, so higher score == better; results are best-first.
+    # bm25-ranked: we report -bm25, so higher score == better; results best-first.
     assert hits == sorted(hits, key=lambda h: h.score, reverse=True)
+
+
+@requires_fts
+async def test_archive_cjk_search() -> None:
+    arc = SQLiteArchiveStore(":memory:")
+    assert arc._use_fts
+    await arc.ingest(
+        "s1",
+        _msgs(
+            ("user", "我今天去了北京出差，顺便看了朋友"),
+            ("assistant", "北京很好玩，我爱 python"),
+        ),
+    )
+    # Two-char CJK words match: the default unicode61 tokenizer keeps a whole CJK
+    # run as one token and misses these; the bigram index segments them.
+    assert await arc.search("北京")
+    assert await arc.search("出差")
+    # A natural-language CJK query matches via its bigrams, not just exact words.
+    assert await arc.search("我想知道北京出差的情况")
+    # Mixed CJK + ASCII: the ASCII word is found too.
+    assert await arc.search("python")
+    # A word that never appears does not match.
+    assert await arc.search("广州") == []
+    # bm25 ranks the message with more matching bigrams first.
+    hits = await arc.search("北京出差")
+    assert hits[0].text == "我今天去了北京出差，顺便看了朋友"
 
 
 async def test_archive_like_fallback(monkeypatch) -> None:
     monkeypatch.setattr(memory_mod, "_fts5_available", lambda: False)
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     assert not arc._use_fts
     await arc.ingest(
         "s1",
@@ -179,15 +206,36 @@ async def test_archive_like_fallback(monkeypatch) -> None:
     assert await arc.search("   ") == []  # empty query → no hits, no error
 
 
+async def test_archive_cjk_like_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(memory_mod, "_fts5_available", lambda: False)
+    arc = SQLiteArchiveStore(":memory:")
+    assert not arc._use_fts
+    await arc.ingest("s1", _msgs(("user", "我今天去了北京出差"), ("assistant", "ok")))
+    # The LIKE fallback segments CJK queries into bigrams too.
+    assert await arc.search("北京")
+    assert await arc.search("我想知道北京出差的情况")
+    assert await arc.search("广州") == []
+
+
+def test_terms_segmentation() -> None:
+    assert _terms("hiking Mountains") == ["hiking", "mountains"]
+    assert _terms("北京") == ["北京"]
+    assert _terms("北京出差") == ["北京", "京出", "出差"]
+    assert _terms("我爱python") == ["我爱", "python"]
+    assert _terms("中") == ["中"]
+    assert _terms("") == []
+    assert _terms("!!! ???") == []
+
+
 async def test_archive_empty_query_returns_nothing() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     await arc.ingest("s1", _msgs(("user", "hello"), ("assistant", "hi")))
     assert await arc.search("") == []
     assert await arc.search("!!! ??? ...") == []
 
 
 async def test_archive_replace_on_session_is_idempotent() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     await arc.ingest("s1", _msgs(("user", "alpha alpha alpha"), ("assistant", "ok")))
     await arc.ingest("s1", _msgs(("user", "bravo bravo bravo"), ("assistant", "ok")))
     # The first version was replaced, not appended.
@@ -196,7 +244,7 @@ async def test_archive_replace_on_session_is_idempotent() -> None:
 
 
 async def test_archive_oneshot_runs_all_retained() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     await arc.ingest(None, _msgs(("user", "charlie charlie"), ("assistant", "ok")))
     await arc.ingest(None, _msgs(("user", "delta delta"), ("assistant", "ok")))
     # No session_id → unique key per run, so both are retained.
@@ -205,7 +253,7 @@ async def test_archive_oneshot_runs_all_retained() -> None:
 
 
 async def test_archive_skips_tool_and_system_entries() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     entries = [
         InputEntry(role="system", content="system prompt should not be archived"),
         InputEntry(role="user", content="user question echotoken"),
@@ -221,7 +269,7 @@ async def test_archive_skips_tool_and_system_entries() -> None:
 
 
 async def test_archive_ingest_empty_is_noop() -> None:
-    arc = SQLiteMemoryArchive(":memory:")
+    arc = SQLiteArchiveStore(":memory:")
     await arc.ingest("s1", [])  # nothing to store
     assert await arc.search("anything") == []
 
@@ -229,7 +277,7 @@ async def test_archive_ingest_empty_is_noop() -> None:
 async def test_archive_roundtrip_on_disk(tmp_path) -> None:
     # Constructing under a missing dir must not fail (parent is created).
     path = tmp_path / "nested" / "archive.db"
-    arc = SQLiteMemoryArchive(str(path))
+    arc = SQLiteArchiveStore(str(path))
     await arc.ingest("s1", _msgs(("user", "persistent zebra fact"), ("assistant", "ok")))
     assert path.exists()
     hits = await arc.search("zebra")
@@ -244,7 +292,7 @@ async def test_archive_roundtrip_on_disk(tmp_path) -> None:
 def test_memory_path_form_builds_default_stores(tmp_path) -> None:
     mem = Memory(str(tmp_path / "mem"))
     assert isinstance(mem.notes, FileNotesStore)
-    assert isinstance(mem.archive, SQLiteMemoryArchive)
+    assert isinstance(mem.archive, SQLiteArchiveStore)
 
 
 def test_memory_path_form_archive_none_disables_cold_tier(tmp_path) -> None:
@@ -265,7 +313,7 @@ def test_memory_custom_notes_no_archive(tmp_path) -> None:
 async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
     notes = FileNotesStore(tmp_path / "MEMORY.md")
     await notes.add("user prefers dark mode")
-    mem = Memory(notes=notes, archive=SQLiteMemoryArchive(":memory:"))
+    mem = Memory(notes=notes, archive=SQLiteArchiveStore(":memory:"))
     inst = await mem.setup()
     assert {t.name for t in inst.tools} == {"remember", "forget", "recall"}
     assert "NOTES" in inst.instructions
@@ -277,13 +325,13 @@ async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
     assert inst.hooks is not None
 
 
-async def test_setup_inject_false_and_no_archive(tmp_path) -> None:
+async def test_setup_no_archive(tmp_path) -> None:
     notes = FileNotesStore(tmp_path / "MEMORY.md")
-    await notes.add("secret note")
-    mem = Memory(notes=notes, archive=None, inject=False)
+    await notes.add("durable note")
+    mem = Memory(notes=notes, archive=None)
     inst = await mem.setup()
     assert {t.name for t in inst.tools} == {"remember", "forget"}  # no recall
-    assert "secret note" not in inst.instructions  # notes not injected
+    assert "durable note" in inst.instructions  # notes are always injected
     assert "remember" in inst.instructions  # usage guidance still present
     assert "recall" not in inst.instructions  # no archive guidance
 
@@ -333,7 +381,7 @@ async def test_forget_tool_via_run(tmp_path) -> None:
 
 
 async def test_recall_tool_returns_hits_without_summary(tmp_path) -> None:
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     await archive.ingest(
         "old",
         _msgs(("user", "my dog's name is Rex"), ("assistant", "Nice, Rex!")),
@@ -360,7 +408,7 @@ async def test_recall_tool_summarizes_when_enabled(tmp_path, monkeypatch) -> Non
         return "SUMMARY: your dog is Rex"
 
     monkeypatch.setattr(memory_mod, "_summarize", fake_summarize)
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     await archive.ingest("old", _msgs(("user", "my dog Rex"), ("assistant", "ok")))
     notes = FileNotesStore(tmp_path / "MEMORY.md")
     provider = ScriptedProvider(
@@ -378,7 +426,7 @@ async def test_recall_tool_summarizes_when_enabled(tmp_path, monkeypatch) -> Non
 
 
 async def test_recall_tool_handles_no_hits(tmp_path) -> None:
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     notes = FileNotesStore(tmp_path / "MEMORY.md")
     provider = ScriptedProvider(
         [call("recall", {"query": "nonexistent"}, call_id="c1"), text("nothing")]
@@ -408,7 +456,7 @@ async def test_run_completed_ingests_and_extracts(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(memory_mod, "_extract", fake_extract)
 
     notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     provider = ScriptedProvider([text("Arr, hello matey!")])
     mem = Memory(notes=notes, archive=archive, auto_extract=True)
     agent = Agent(name="a", model=provider, plugins=[mem])
@@ -434,7 +482,7 @@ async def test_auto_extract_false_skips_extraction(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(memory_mod, "_extract", fake_extract)
 
     notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     provider = ScriptedProvider([text("hi")])
     mem = Memory(notes=notes, archive=archive, auto_extract=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
@@ -472,7 +520,7 @@ async def test_extraction_failure_does_not_break_run(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr(memory_mod, "_extract", boom)
     notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteMemoryArchive(":memory:")
+    archive = SQLiteArchiveStore(":memory:")
     provider = ScriptedProvider([text("still fine")])
     mem = Memory(notes=notes, archive=archive, auto_extract=True)
     agent = Agent(name="a", model=provider, plugins=[mem])
@@ -536,7 +584,7 @@ async def test_live_notes_persist_across_sessions(tmp_path) -> None:
     def make_agent() -> Agent:
         mem = Memory(
             notes=FileNotesStore(notes_path),
-            archive=SQLiteMemoryArchive(str(archive_path)),
+            archive=SQLiteArchiveStore(str(archive_path)),
         )
         return Agent(
             name="assistant",
@@ -568,7 +616,7 @@ async def test_live_notes_persist_across_sessions(tmp_path) -> None:
 @pytest.mark.live_provider
 async def test_live_archive_recall(tmp_path) -> None:
     model = _live_model()
-    archive = SQLiteMemoryArchive(str(tmp_path / "archive.db"))
+    archive = SQLiteArchiveStore(str(tmp_path / "archive.db"))
     await archive.ingest(
         "old-trip",
         _msgs(

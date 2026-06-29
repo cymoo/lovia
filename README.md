@@ -686,7 +686,6 @@ Behavior is tuned with optional flags:
 
 | Field | Default | Effect |
 | --- | --- | --- |
-| `inject` | `True` | Inject the Notes block into the system prompt each run |
 | `auto_extract` | `True` | At run end, promote durable facts into Notes (one model call) and consolidate Notes over budget |
 | `summarize_recall` | `True` | `recall` returns a model-written summary of the hits, not raw excerpts |
 | `recall_k` | `5` | How many archive hits `recall` retrieves |
@@ -699,7 +698,7 @@ view-only, extraction runs once at run end over the complete transcript: it is
 curation (promoting the few durable facts into the small hot tier), not rescue.
 
 **Bring your own backend.** Each tier sits behind a small protocol
-(`NotesStore`, `MemoryArchive`), so you can swap either one — Redis, a vector
+(`NotesStore`, `ArchiveStore`), so you can swap either one — Redis, a vector
 DB, Postgres — while keeping the same tools and instructions:
 
 ```python

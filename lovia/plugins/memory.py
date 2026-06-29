@@ -33,7 +33,7 @@ small ``Protocol`` so the backends are swappable::
 
     agent: Agent[Any] = Agent(name="assistant", plugins=[Memory("./.lovia/memory")])
     # -> FileNotesStore("./.lovia/memory/MEMORY.md")
-    #  + SQLiteMemoryArchive("./.lovia/memory/archive.db")
+    #  + SQLiteArchiveStore("./.lovia/memory/archive.db")
 
 Backends are long-lived and shared by every run (held on the plugin, never
 rebuilt per run, never closed by the plugin); :meth:`Memory.setup` only
@@ -85,7 +85,7 @@ _DEFAULT_MAX_CHARS = 2000
 # (the field was left untouched) from an explicit ``archive=None`` ("no cold
 # tier"). Without it, ``None`` would be ambiguous and could not disable the
 # archive when ``notes`` is a path. Typed ``Any`` so the public field annotation
-# stays ``MemoryArchive | None``.
+# stays ``ArchiveStore | None``.
 _DEFAULT_ARCHIVE: Any = object()
 
 
@@ -252,7 +252,7 @@ class FileNotesStore:
 
 @dataclass
 class ArchiveHit:
-    """One search result from the cold :class:`MemoryArchive` tier."""
+    """One search result from the cold :class:`ArchiveStore` tier."""
 
     session_id: str
     when: float
@@ -261,7 +261,7 @@ class ArchiveHit:
 
 
 @runtime_checkable
-class MemoryArchive(Protocol):
+class ArchiveStore(Protocol):
     """The cold tier: a searchable archive of past sessions."""
 
     async def ingest(
@@ -287,6 +287,42 @@ def _archive_docs(entries: list[TranscriptEntry]) -> list[str]:
     return docs
 
 
+# CJK-aware term extraction. SQLite's default ``unicode61`` FTS tokenizer (and a
+# plain ``LIKE``) can't segment scripts written without spaces between words: a
+# whole CJK run becomes one token, so ``recall("北京")`` never matches "...北京...".
+# We split CJK runs into overlapping bigrams (keeping ASCII words whole) on both
+# the indexed text and the query, so the two sides line up, two-character words
+# match exactly, and bm25 still ranks. The same extractor drives the LIKE
+# fallback, so a natural-language CJK query matches by its bigrams there too.
+
+# CJK Unified Ideographs (+ Ext. A, Compatibility), kana, and Hangul.
+_CJK = "㐀-䶿一-鿿豈-﫿぀-ヿ가-힯"
+_PIECE_RE = re.compile(rf"[0-9a-z]+|[{_CJK}]+")
+
+
+def _bigrams(run: str) -> list[str]:
+    """Overlapping 2-grams of a CJK run (the run itself when 1–2 chars long)."""
+    if len(run) <= 2:
+        return [run]
+    return [run[i : i + 2] for i in range(len(run) - 1)]
+
+
+def _terms(text: str) -> list[str]:
+    """Split text into search terms: ASCII words whole, CJK runs as bigrams."""
+    out: list[str] = []
+    for piece in _PIECE_RE.findall(text.lower()):
+        if piece[0].isascii():
+            out.append(piece)
+        else:
+            out.extend(_bigrams(piece))
+    return out
+
+
+def _index_text(text: str) -> str:
+    """The bigram-segmented form stored in the FTS ``search`` column."""
+    return " ".join(_terms(text))
+
+
 def _fts5_available() -> bool:
     """Probe whether this SQLite build has the FTS5 extension."""
     try:
@@ -300,10 +336,13 @@ def _fts5_available() -> bool:
         return False
 
 
+# ``text`` is stored for display only (UNINDEXED); ``search`` holds the
+# bigram-segmented form that the default tokenizer actually indexes.
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     session_id UNINDEXED,
-    text,
+    text UNINDEXED,
+    search,
     when_ts UNINDEXED
 );
 """
@@ -319,14 +358,15 @@ CREATE INDEX IF NOT EXISTS idx_archive_docs_sid ON archive_docs(session_id);
 """
 
 
-class SQLiteMemoryArchive(SQLiteStore):
-    """Default :class:`MemoryArchive`: stdlib SQLite with FTS5 full-text search.
+class SQLiteArchiveStore(SQLiteStore):
+    """Default :class:`ArchiveStore`: stdlib SQLite with FTS5 full-text search.
 
     Each archived run becomes a set of per-message rows keyed by
     ``session_id``. Ingest is **replace-on-session** so re-archiving a growing
     session is idempotent; one-shot runs (no ``session_id``) get a unique key so
-    every run is still retained. Search ranks with bm25 when FTS5 is available
-    and falls back to a recency-ordered ``LIKE`` scan otherwise.
+    every run is still retained. Search ranks with bm25 over a CJK-aware bigram
+    index (so scripts without whitespace word boundaries match too) when FTS5 is
+    available, and falls back to a recency-ordered ``LIKE`` scan otherwise.
     """
 
     def __init__(
@@ -349,15 +389,21 @@ class SQLiteMemoryArchive(SQLiteStore):
         sid = session_id or f"run-{uuid.uuid4().hex}"
         now = time.time()
         table = self._table
+        if self._use_fts:
+            insert = (
+                f"INSERT INTO {table} (session_id, text, search, when_ts) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            rows = [(sid, d, _index_text(d), now) for d in docs]
+        else:
+            insert = f"INSERT INTO {table} (session_id, text, when_ts) VALUES (?, ?, ?)"
+            rows = [(sid, d, now) for d in docs]
 
         def _impl() -> None:
             conn = self._connect()
             try:
                 conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (sid,))
-                conn.executemany(
-                    f"INSERT INTO {table} (session_id, text, when_ts) VALUES (?, ?, ?)",
-                    [(sid, d, now) for d in docs],
-                )
+                conn.executemany(insert, rows)
                 conn.commit()
             finally:
                 self._release(conn)
@@ -365,12 +411,14 @@ class SQLiteMemoryArchive(SQLiteStore):
         await self._run(_impl)
 
     async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
-        tokens = re.findall(r"\w+", query.lower())
-        if not tokens:
+        terms = _terms(query)
+        if not terms:
             return []
 
         if self._use_fts:
-            match = " OR ".join(tokens)
+            # Quote each term so a CJK bigram or ASCII word is one FTS phrase;
+            # OR them and let bm25 rank by how many distinct terms each row hits.
+            match = " OR ".join(f'"{t}"' for t in terms)
 
             def _fts() -> list[ArchiveHit]:
                 conn = self._connect()
@@ -396,8 +444,8 @@ class SQLiteMemoryArchive(SQLiteStore):
 
             return await self._run(_fts)
 
-        clause = " OR ".join(["text LIKE ?"] * len(tokens))
-        params: list[Any] = [f"%{t}%" for t in tokens] + [k]
+        clause = " OR ".join(["text LIKE ?"] * len(terms))
+        params: list[Any] = [f"%{t}%" for t in terms] + [k]
 
         def _like() -> list[ArchiveHit]:
             conn = self._connect()
@@ -606,7 +654,7 @@ def _make_forget(notes: NotesStore) -> Tool:
     return forget
 
 
-def _make_recall(plugin: "Memory", archive: MemoryArchive) -> Tool:
+def _make_recall(plugin: "Memory", archive: ArchiveStore) -> Tool:
     @tool(name="recall", description=_RECALL_DESCRIPTION)
     async def recall(
         ctx: RunContext[Any],
@@ -662,13 +710,11 @@ class Memory:
 
     Fields:
         notes: A :class:`NotesStore`, or a root directory path under which the
-            default :class:`FileNotesStore` (+ :class:`SQLiteMemoryArchive`) are
+            default :class:`FileNotesStore` (+ :class:`SQLiteArchiveStore`) are
             created.
-        archive: A :class:`MemoryArchive`; ``None`` to disable the cold tier.
-            Left unset, the default :class:`SQLiteMemoryArchive` is built under
+        archive: A :class:`ArchiveStore`; ``None`` to disable the cold tier.
+            Left unset, the default :class:`SQLiteArchiveStore` is built under
             the notes root when ``notes`` is a path (and omitted otherwise).
-        inject: When ``True`` (default), the Notes block is injected into the
-            system prompt each run.
         auto_extract: When ``True`` (default), the plugin promotes durable facts
             from the conversation into Notes at the end of each run (and
             consolidates Notes that exceed the store's budget). This adds one
@@ -682,8 +728,7 @@ class Memory:
     """
 
     notes: "NotesStore | str | os.PathLike[str]" = _DEFAULT_ROOT
-    archive: "MemoryArchive | None" = _DEFAULT_ARCHIVE
-    inject: bool = True
+    archive: "ArchiveStore | None" = _DEFAULT_ARCHIVE
     auto_extract: bool = True
     summarize_recall: bool = True
     recall_k: int = 5
@@ -699,7 +744,7 @@ class Memory:
             root = Path(self.notes)
             self.notes = FileNotesStore(root / _NOTES_FILENAME)
             if archive_is_default:
-                self.archive = SQLiteMemoryArchive(root / _ARCHIVE_FILENAME)
+                self.archive = SQLiteArchiveStore(root / _ARCHIVE_FILENAME)
         if self.archive is _DEFAULT_ARCHIVE:
             # Custom notes store (no root to anchor a default archive) and no
             # explicit archive → notes-only, matching the old behavior.
@@ -731,9 +776,8 @@ class Memory:
         if archive is not None:
             tools.append(_make_recall(self, archive))
 
-        instructions = _build_instructions(archive is not None)
-        if self.inject:
-            instructions = f"{instructions}\n\n{await notes.render()}"
+        guidance = _build_instructions(archive is not None)
+        instructions = f"{guidance}\n\n{await notes.render()}"
 
         return PluginInstance(
             tools=tools,
@@ -742,7 +786,7 @@ class Memory:
         )
 
     def _make_hooks(
-        self, notes: NotesStore, archive: "MemoryArchive | None"
+        self, notes: NotesStore, archive: "ArchiveStore | None"
     ) -> AgentHooks:
         hooks = AgentHooks()
         finalized = False
@@ -802,9 +846,9 @@ class Memory:
 
 __all__ = [
     "ArchiveHit",
+    "ArchiveStore",
     "FileNotesStore",
     "Memory",
-    "MemoryArchive",
     "NotesStore",
-    "SQLiteMemoryArchive",
+    "SQLiteArchiveStore",
 ]

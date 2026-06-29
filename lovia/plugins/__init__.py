@@ -14,11 +14,11 @@ from __future__ import annotations
 from .base import Plugin, PluginInstance, ViewInjector
 from .memory import (
     ArchiveHit,
+    ArchiveStore,
     FileNotesStore,
     Memory,
-    MemoryArchive,
     NotesStore,
-    SQLiteMemoryArchive,
+    SQLiteArchiveStore,
 )
 from .skills import (
     LocalDirSkillSource,
@@ -44,11 +44,11 @@ __all__ = [
     "PluginInstance",
     "ViewInjector",
     "ArchiveHit",
+    "ArchiveStore",
     "FileNotesStore",
     "Memory",
-    "MemoryArchive",
     "NotesStore",
-    "SQLiteMemoryArchive",
+    "SQLiteArchiveStore",
     "LocalDirSkillSource",
     "Skill",
     "SkillCategory",

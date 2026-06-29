@@ -23,8 +23,10 @@ transcript and the ``Session`` persists it). So nothing is ever lost from the
 record, and the only end-of-run work is *curation*: ingesting the run into the
 archive and promoting durable facts into Notes. That is also why this plugin
 hooks only :class:`~lovia.events.RunCompleted` and not ``ContextCompacted`` — at
-run end ``result.entries`` is already the complete transcript, so a separate
-pre-compaction flush would just re-extract the same facts at extra cost.
+run end ``result.entries`` already holds this run's complete entries (compaction
+is view-only), so a separate pre-compaction flush would just re-extract the same
+facts at extra cost. (``result.entries`` is this run's own messages, not the
+whole session, so the archive appends per run rather than re-ingesting history.)
 
 Defaults are filesystem markdown (Notes) + SQLite FTS5 (Archive), each behind a
 small ``Protocol`` so the backends are swappable::
@@ -265,9 +267,19 @@ class ArchiveStore(Protocol):
     """The cold tier: a searchable archive of past sessions."""
 
     async def ingest(
-        self, session_id: str | None, entries: list[TranscriptEntry]
+        self,
+        session_id: str | None,
+        entries: list[TranscriptEntry],
+        *,
+        run_id: str | None = None,
     ) -> None:
-        """Store a run's transcript, keyed by ``session_id`` (replace-on-ingest)."""
+        """Append one run's own messages, replacing any prior copy of ``run_id``.
+
+        ``entries`` is the run's **own** transcript (not the whole session), so
+        each completed run adds only its new messages; re-ingesting the same
+        ``run_id`` replaces them (idempotent on a resumed completion). Mirrors
+        :meth:`~lovia.session.Session.append`.
+        """
         ...
 
     async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
@@ -344,6 +356,7 @@ def _fts5_available() -> bool:
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     session_id UNINDEXED,
+    run_id UNINDEXED,
     text UNINDEXED,
     search,
     when_ts UNINDEXED
@@ -354,6 +367,7 @@ _PLAIN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS archive_docs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
     text TEXT NOT NULL,
     when_ts REAL NOT NULL
 );
@@ -364,12 +378,13 @@ CREATE INDEX IF NOT EXISTS idx_archive_docs_sid ON archive_docs(session_id);
 class SQLiteArchiveStore(SQLiteStore):
     """Default :class:`ArchiveStore`: stdlib SQLite with FTS5 full-text search.
 
-    Each archived run becomes a set of per-message rows keyed by
-    ``session_id``. Ingest is **replace-on-session** so re-archiving a growing
-    session is idempotent; one-shot runs (no ``session_id``) get a unique key so
-    every run is still retained. Search ranks with bm25 over a CJK-aware bigram
-    index (so scripts without whitespace word boundaries match too) when FTS5 is
-    available, and falls back to a recency-ordered ``LIKE`` scan otherwise.
+    Each completed run appends its own messages as per-message rows keyed by
+    ``(session_id, run_id)``. Ingest is **replace-on-run** so a resumed
+    completion re-ingesting the same ``run_id`` is idempotent, while distinct
+    runs accumulate across a session; a run with no id gets a unique key so it is
+    still retained. Search ranks with bm25 over a CJK-aware bigram index (so
+    scripts without whitespace word boundaries match too) when FTS5 is available,
+    and falls back to a recency-ordered ``LIKE`` scan otherwise.
     """
 
     def __init__(
@@ -384,28 +399,42 @@ class SQLiteArchiveStore(SQLiteStore):
         self._table = "archive_fts" if self._use_fts else "archive_docs"
 
     async def ingest(
-        self, session_id: str | None, entries: list[TranscriptEntry]
+        self,
+        session_id: str | None,
+        entries: list[TranscriptEntry],
+        *,
+        run_id: str | None = None,
     ) -> None:
         docs = _archive_docs(entries)
         if not docs:
             return
         sid = session_id or f"run-{uuid.uuid4().hex}"
+        rid = run_id or uuid.uuid4().hex
         now = time.time()
         table = self._table
+        rows: list[tuple[Any, ...]]
         if self._use_fts:
             insert = (
-                f"INSERT INTO {table} (session_id, text, search, when_ts) "
+                f"INSERT INTO {table} (session_id, run_id, text, search, when_ts) "
+                "VALUES (?, ?, ?, ?, ?)"
+            )
+            rows = [(sid, rid, d, _index_text(d), now) for d in docs]
+        else:
+            insert = (
+                f"INSERT INTO {table} (session_id, run_id, text, when_ts) "
                 "VALUES (?, ?, ?, ?)"
             )
-            rows = [(sid, d, _index_text(d), now) for d in docs]
-        else:
-            insert = f"INSERT INTO {table} (session_id, text, when_ts) VALUES (?, ?, ?)"
-            rows = [(sid, d, now) for d in docs]
+            rows = [(sid, rid, d, now) for d in docs]
 
         def _impl() -> None:
             conn = self._connect()
             try:
-                conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (sid,))
+                # Replace-on-run: a re-ingested run_id supersedes its old rows,
+                # but distinct runs in a session accumulate.
+                conn.execute(
+                    f"DELETE FROM {table} WHERE session_id = ? AND run_id = ?",
+                    (sid, rid),
+                )
                 conn.executemany(insert, rows)
                 conn.commit()
             finally:
@@ -808,7 +837,7 @@ class Memory:
 
             if archive is not None:
                 try:
-                    await archive.ingest(ctx.session_id, entries)
+                    await archive.ingest(ctx.session_id, entries, run_id=ctx.run_id)
                 except Exception:
                     # Best-effort background curation: the run already
                     # completed, so a failure here is WARNING, not ERROR.

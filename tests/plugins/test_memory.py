@@ -236,12 +236,23 @@ async def test_archive_empty_query_returns_nothing() -> None:
     assert await arc.search("!!! ??? ...") == []
 
 
-async def test_archive_replace_on_session_is_idempotent() -> None:
+async def test_archive_replace_on_run_is_idempotent() -> None:
     arc = SQLiteArchiveStore(":memory:")
-    await arc.ingest("s1", _msgs(("user", "alpha alpha alpha"), ("assistant", "ok")))
-    await arc.ingest("s1", _msgs(("user", "bravo bravo bravo"), ("assistant", "ok")))
-    # The first version was replaced, not appended.
+    # Re-ingesting the SAME run_id replaces its rows (an idempotent resume),
+    # rather than appending a second copy.
+    await arc.ingest("s1", _msgs(("user", "alpha alpha"), ("assistant", "ok")), run_id="r1")
+    await arc.ingest("s1", _msgs(("user", "bravo bravo"), ("assistant", "ok")), run_id="r1")
     assert await arc.search("alpha") == []
+    assert await arc.search("bravo")
+
+
+async def test_archive_runs_accumulate_across_session() -> None:
+    arc = SQLiteArchiveStore(":memory:")
+    # Distinct runs in one session each append their own messages — the archive
+    # is the union across runs, not just the latest run.
+    await arc.ingest("s1", _msgs(("user", "alpha alpha"), ("assistant", "ok")), run_id="r1")
+    await arc.ingest("s1", _msgs(("user", "bravo bravo"), ("assistant", "ok")), run_id="r2")
+    assert await arc.search("alpha")  # earlier run is still archived
     assert await arc.search("bravo")
 
 

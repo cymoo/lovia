@@ -17,8 +17,15 @@ from ..transcript import TranscriptEntry, entries_to_messages
 class RunResult:
     """The terminal state of a completed run.
 
-    ``entries`` is the canonical transcript form. ``messages`` is a derived,
-    lossy chat-format view for clients and provider-shaped inspection.
+    ``entries`` is **this run's own** transcript: the run's input plus everything
+    it produced (assistant / reasoning / tool entries), across handoffs. It
+    deliberately excludes the system prompt and prior session history, so it is
+    the same whether the run finished fresh or was rebuilt from a checkpoint
+    snapshot. For the *full* transcript (system + prior history + this run), read
+    ``RunContext.entries`` inside a hook, or ``Session.load()`` after the run.
+
+    ``messages`` is a derived, lossy chat-format view of ``entries`` (so it,
+    too, is this-run-only and does not lead with the system message).
     """
 
     output: Any

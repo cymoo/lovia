@@ -84,9 +84,9 @@ async def test_entries_mirror_simple_text() -> None:
     assert _normalize(entries_to_messages(result.entries)) == _normalize(
         result.messages
     )
-    # And the structure is what we expect: system, user, assistant.
+    # And the structure is this run's own: user, assistant (no system entry).
     kinds = [type(i).__name__ for i in result.entries]
-    assert kinds == ["InputEntry", "InputEntry", "AssistantTextEntry"]
+    assert kinds == ["InputEntry", "AssistantTextEntry"]
 
 
 async def test_entries_mirror_tool_call_and_reply() -> None:
@@ -125,7 +125,6 @@ async def test_entries_mirror_reasoning() -> None:
     # Reasoning becomes its own TranscriptEntry, appearing before the message output.
     kinds = [type(i).__name__ for i in result.entries]
     assert kinds == [
-        "InputEntry",
         "InputEntry",
         "ReasoningEntry",
         "AssistantTextEntry",
@@ -216,8 +215,9 @@ async def test_entries_mirror_resume_from_snapshot() -> None:
     assert _normalize(entries_to_messages(result.entries)) == _normalize(
         result.messages
     )
-    # Rebuilt system prompt (1) + 3 snapshot entries + 1 assistant turn = 5.
-    assert len(result.entries) == 5
+    # result.entries is this run's own: 3 snapshot entries + 1 assistant turn = 4
+    # (the rebuilt system prompt lives before run_start and is excluded).
+    assert len(result.entries) == 4
 
 
 async def test_session_history_preserves_reasoning_entries_for_provider_replay() -> (

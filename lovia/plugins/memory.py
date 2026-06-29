@@ -23,8 +23,10 @@ transcript and the ``Session`` persists it). So nothing is ever lost from the
 record, and the only end-of-run work is *curation*: ingesting the run into the
 archive and promoting durable facts into Notes. That is also why this plugin
 hooks only :class:`~lovia.events.RunCompleted` and not ``ContextCompacted`` — at
-run end ``result.entries`` is already the complete transcript, so a separate
-pre-compaction flush would just re-extract the same facts at extra cost.
+run end ``result.entries`` already holds this run's complete entries (compaction
+is view-only), so a separate pre-compaction flush would just re-extract the same
+facts at extra cost. (``result.entries`` is this run's own messages, not the
+whole session, so the archive appends per run rather than re-ingesting history.)
 
 Defaults are filesystem markdown (Notes) + SQLite FTS5 (Archive), each behind a
 small ``Protocol`` so the backends are swappable::
@@ -33,7 +35,7 @@ small ``Protocol`` so the backends are swappable::
 
     agent: Agent[Any] = Agent(name="assistant", plugins=[Memory("./.lovia/memory")])
     # -> FileNotesStore("./.lovia/memory/MEMORY.md")
-    #  + SQLiteMemoryArchive("./.lovia/memory/archive.db")
+    #  + SQLiteArchiveStore("./.lovia/memory/archive.db")
 
 Backends are long-lived and shared by every run (held on the plugin, never
 rebuilt per run, never closed by the plugin); :meth:`Memory.setup` only
@@ -85,7 +87,7 @@ _DEFAULT_MAX_CHARS = 2000
 # (the field was left untouched) from an explicit ``archive=None`` ("no cold
 # tier"). Without it, ``None`` would be ambiguous and could not disable the
 # archive when ``notes`` is a path. Typed ``Any`` so the public field annotation
-# stays ``MemoryArchive | None``.
+# stays ``ArchiveStore | None``.
 _DEFAULT_ARCHIVE: Any = object()
 
 
@@ -252,7 +254,7 @@ class FileNotesStore:
 
 @dataclass
 class ArchiveHit:
-    """One search result from the cold :class:`MemoryArchive` tier."""
+    """One search result from the cold :class:`ArchiveStore` tier."""
 
     session_id: str
     when: float
@@ -261,13 +263,23 @@ class ArchiveHit:
 
 
 @runtime_checkable
-class MemoryArchive(Protocol):
+class ArchiveStore(Protocol):
     """The cold tier: a searchable archive of past sessions."""
 
     async def ingest(
-        self, session_id: str | None, entries: list[TranscriptEntry]
+        self,
+        session_id: str | None,
+        entries: list[TranscriptEntry],
+        *,
+        run_id: str | None = None,
     ) -> None:
-        """Store a run's transcript, keyed by ``session_id`` (replace-on-ingest)."""
+        """Append one run's own messages, replacing any prior copy of ``run_id``.
+
+        ``entries`` is the run's **own** transcript (not the whole session), so
+        each completed run adds only its new messages; re-ingesting the same
+        ``run_id`` replaces them (idempotent on a resumed completion). Mirrors
+        :meth:`~lovia.session.Session.append`.
+        """
         ...
 
     async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
@@ -287,6 +299,45 @@ def _archive_docs(entries: list[TranscriptEntry]) -> list[str]:
     return docs
 
 
+# CJK-aware term extraction. SQLite's default ``unicode61`` FTS tokenizer (and a
+# plain ``LIKE``) can't segment scripts written without spaces between words: a
+# whole CJK run becomes one token, so ``recall("北京")`` never matches "...北京...".
+# We split CJK runs into overlapping bigrams (other scripts' words stay whole) on
+# the indexed text and the query, so the two sides line up, two-character words
+# match exactly, and bm25 still ranks. The same extractor drives the LIKE
+# fallback, so a natural-language CJK query matches by its bigrams there too.
+
+# CJK Unified Ideographs (+ Ext. A, Compatibility), kana, and Hangul.
+_CJK = "㐀-䶿一-鿿豈-﫿぀-ヿ가-힯"
+_CJK_RE = re.compile(rf"[{_CJK}]")
+# A CJK run, or a run of word characters in any other script (ASCII, accented
+# Latin, Cyrillic, Greek, ...) — those use spaces, so they stay whole words.
+_PIECE_RE = re.compile(rf"[{_CJK}]+|[^\W{_CJK}]+")
+
+
+def _bigrams(run: str) -> list[str]:
+    """Overlapping 2-grams of a CJK run (the run itself when 1–2 chars long)."""
+    if len(run) <= 2:
+        return [run]
+    return [run[i : i + 2] for i in range(len(run) - 1)]
+
+
+def _terms(text: str) -> list[str]:
+    """Split text into search terms: word-runs whole, CJK runs as bigrams."""
+    out: list[str] = []
+    for piece in _PIECE_RE.findall(text.lower()):
+        if _CJK_RE.match(piece):
+            out.extend(_bigrams(piece))
+        else:
+            out.append(piece)
+    return out
+
+
+def _index_text(text: str) -> str:
+    """The bigram-segmented form stored in the FTS ``search`` column."""
+    return " ".join(_terms(text))
+
+
 def _fts5_available() -> bool:
     """Probe whether this SQLite build has the FTS5 extension."""
     try:
@@ -300,10 +351,14 @@ def _fts5_available() -> bool:
         return False
 
 
+# ``text`` is stored for display only (UNINDEXED); ``search`` holds the
+# bigram-segmented form that the default tokenizer actually indexes.
 _FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     session_id UNINDEXED,
-    text,
+    run_id UNINDEXED,
+    text UNINDEXED,
+    search,
     when_ts UNINDEXED
 );
 """
@@ -312,6 +367,7 @@ _PLAIN_SCHEMA = """
 CREATE TABLE IF NOT EXISTS archive_docs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
     text TEXT NOT NULL,
     when_ts REAL NOT NULL
 );
@@ -319,13 +375,15 @@ CREATE INDEX IF NOT EXISTS idx_archive_docs_sid ON archive_docs(session_id);
 """
 
 
-class SQLiteMemoryArchive(SQLiteStore):
-    """Default :class:`MemoryArchive`: stdlib SQLite with FTS5 full-text search.
+class SQLiteArchiveStore(SQLiteStore):
+    """Default :class:`ArchiveStore`: stdlib SQLite with FTS5 full-text search.
 
-    Each archived run becomes a set of per-message rows keyed by
-    ``session_id``. Ingest is **replace-on-session** so re-archiving a growing
-    session is idempotent; one-shot runs (no ``session_id``) get a unique key so
-    every run is still retained. Search ranks with bm25 when FTS5 is available
+    Each completed run appends its own messages as per-message rows keyed by
+    ``(session_id, run_id)``. Ingest is **replace-on-run** so a resumed
+    completion re-ingesting the same ``run_id`` is idempotent, while distinct
+    runs accumulate across a session; a run with no id gets a unique key so it is
+    still retained. Search ranks with bm25 over a CJK-aware bigram index (so
+    scripts without whitespace word boundaries match too) when FTS5 is available,
     and falls back to a recency-ordered ``LIKE`` scan otherwise.
     """
 
@@ -339,25 +397,67 @@ class SQLiteMemoryArchive(SQLiteStore):
             Path(p).parent.mkdir(parents=True, exist_ok=True)
         super().__init__(p, schema)
         self._table = "archive_fts" if self._use_fts else "archive_docs"
+        self._reset_if_stale()
+
+    def _reset_if_stale(self) -> None:
+        """Rebuild a table left over from an older archive schema.
+
+        We don't migrate archived data across schema changes — the archive is a
+        recall cache, not a source of truth — but ``CREATE ... IF NOT EXISTS``
+        would leave an old table in place, and its missing columns make
+        ``ingest`` fail. Detect the mismatch by the ``run_id`` column and
+        recreate the table empty (discarding the old rows).
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = ?", (self._table,)
+            ).fetchone()
+            if row and "run_id" not in (row[0] or ""):
+                conn.executescript(f"DROP TABLE IF EXISTS {self._table};")
+                conn.executescript(self._schema)
+                conn.commit()
+        finally:
+            self._release(conn)
 
     async def ingest(
-        self, session_id: str | None, entries: list[TranscriptEntry]
+        self,
+        session_id: str | None,
+        entries: list[TranscriptEntry],
+        *,
+        run_id: str | None = None,
     ) -> None:
         docs = _archive_docs(entries)
         if not docs:
             return
         sid = session_id or f"run-{uuid.uuid4().hex}"
+        rid = run_id or uuid.uuid4().hex
         now = time.time()
         table = self._table
+        rows: list[tuple[Any, ...]]
+        if self._use_fts:
+            insert = (
+                f"INSERT INTO {table} (session_id, run_id, text, search, when_ts) "
+                "VALUES (?, ?, ?, ?, ?)"
+            )
+            rows = [(sid, rid, d, _index_text(d), now) for d in docs]
+        else:
+            insert = (
+                f"INSERT INTO {table} (session_id, run_id, text, when_ts) "
+                "VALUES (?, ?, ?, ?)"
+            )
+            rows = [(sid, rid, d, now) for d in docs]
 
         def _impl() -> None:
             conn = self._connect()
             try:
-                conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (sid,))
-                conn.executemany(
-                    f"INSERT INTO {table} (session_id, text, when_ts) VALUES (?, ?, ?)",
-                    [(sid, d, now) for d in docs],
+                # Replace-on-run: a re-ingested run_id supersedes its old rows,
+                # but distinct runs in a session accumulate.
+                conn.execute(
+                    f"DELETE FROM {table} WHERE session_id = ? AND run_id = ?",
+                    (sid, rid),
                 )
+                conn.executemany(insert, rows)
                 conn.commit()
             finally:
                 self._release(conn)
@@ -365,12 +465,14 @@ class SQLiteMemoryArchive(SQLiteStore):
         await self._run(_impl)
 
     async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
-        tokens = re.findall(r"\w+", query.lower())
-        if not tokens:
+        terms = _terms(query)
+        if not terms:
             return []
 
         if self._use_fts:
-            match = " OR ".join(tokens)
+            # Quote each term so a CJK bigram or ASCII word is one FTS phrase;
+            # OR them and let bm25 rank by how many distinct terms each row hits.
+            match = " OR ".join(f'"{t}"' for t in terms)
 
             def _fts() -> list[ArchiveHit]:
                 conn = self._connect()
@@ -396,8 +498,8 @@ class SQLiteMemoryArchive(SQLiteStore):
 
             return await self._run(_fts)
 
-        clause = " OR ".join(["text LIKE ?"] * len(tokens))
-        params: list[Any] = [f"%{t}%" for t in tokens] + [k]
+        clause = " OR ".join(["text LIKE ?"] * len(terms))
+        params: list[Any] = [f"%{t}%" for t in terms] + [k]
 
         def _like() -> list[ArchiveHit]:
             conn = self._connect()
@@ -606,7 +708,7 @@ def _make_forget(notes: NotesStore) -> Tool:
     return forget
 
 
-def _make_recall(plugin: "Memory", archive: MemoryArchive) -> Tool:
+def _make_recall(plugin: "Memory", archive: ArchiveStore) -> Tool:
     @tool(name="recall", description=_RECALL_DESCRIPTION)
     async def recall(
         ctx: RunContext[Any],
@@ -662,13 +764,11 @@ class Memory:
 
     Fields:
         notes: A :class:`NotesStore`, or a root directory path under which the
-            default :class:`FileNotesStore` (+ :class:`SQLiteMemoryArchive`) are
+            default :class:`FileNotesStore` (+ :class:`SQLiteArchiveStore`) are
             created.
-        archive: A :class:`MemoryArchive`; ``None`` to disable the cold tier.
-            Left unset, the default :class:`SQLiteMemoryArchive` is built under
+        archive: A :class:`ArchiveStore`; ``None`` to disable the cold tier.
+            Left unset, the default :class:`SQLiteArchiveStore` is built under
             the notes root when ``notes`` is a path (and omitted otherwise).
-        inject: When ``True`` (default), the Notes block is injected into the
-            system prompt each run.
         auto_extract: When ``True`` (default), the plugin promotes durable facts
             from the conversation into Notes at the end of each run (and
             consolidates Notes that exceed the store's budget). This adds one
@@ -682,8 +782,7 @@ class Memory:
     """
 
     notes: "NotesStore | str | os.PathLike[str]" = _DEFAULT_ROOT
-    archive: "MemoryArchive | None" = _DEFAULT_ARCHIVE
-    inject: bool = True
+    archive: "ArchiveStore | None" = _DEFAULT_ARCHIVE
     auto_extract: bool = True
     summarize_recall: bool = True
     recall_k: int = 5
@@ -699,7 +798,7 @@ class Memory:
             root = Path(self.notes)
             self.notes = FileNotesStore(root / _NOTES_FILENAME)
             if archive_is_default:
-                self.archive = SQLiteMemoryArchive(root / _ARCHIVE_FILENAME)
+                self.archive = SQLiteArchiveStore(root / _ARCHIVE_FILENAME)
         if self.archive is _DEFAULT_ARCHIVE:
             # Custom notes store (no root to anchor a default archive) and no
             # explicit archive → notes-only, matching the old behavior.
@@ -731,9 +830,8 @@ class Memory:
         if archive is not None:
             tools.append(_make_recall(self, archive))
 
-        instructions = _build_instructions(archive is not None)
-        if self.inject:
-            instructions = f"{instructions}\n\n{await notes.render()}"
+        guidance = _build_instructions(archive is not None)
+        instructions = f"{guidance}\n\n{await notes.render()}"
 
         return PluginInstance(
             tools=tools,
@@ -742,7 +840,7 @@ class Memory:
         )
 
     def _make_hooks(
-        self, notes: NotesStore, archive: "MemoryArchive | None"
+        self, notes: NotesStore, archive: "ArchiveStore | None"
     ) -> AgentHooks:
         hooks = AgentHooks()
         finalized = False
@@ -761,7 +859,7 @@ class Memory:
 
             if archive is not None:
                 try:
-                    await archive.ingest(ctx.session_id, entries)
+                    await archive.ingest(ctx.session_id, entries, run_id=ctx.run_id)
                 except Exception:
                     # Best-effort background curation: the run already
                     # completed, so a failure here is WARNING, not ERROR.
@@ -802,9 +900,9 @@ class Memory:
 
 __all__ = [
     "ArchiveHit",
+    "ArchiveStore",
     "FileNotesStore",
     "Memory",
-    "MemoryArchive",
     "NotesStore",
-    "SQLiteMemoryArchive",
+    "SQLiteArchiveStore",
 ]

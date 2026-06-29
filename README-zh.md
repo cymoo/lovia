@@ -628,7 +628,6 @@ agent = Agent(
 
 | 字段 | 默认值 | 作用 |
 | --- | --- | --- |
-| `inject` | `True` | 每次 run 都把 Notes 注入系统提示 |
 | `auto_extract` | `True` | run 结束时用一次模型调用提取长期事实写入 Notes；超出预算时会合并整理 Notes |
 | `summarize_recall` | `True` | `recall` 返回由模型整理过的命中摘要，而不是原始片段 |
 | `recall_k` | `5` | `recall` 从 Archive 中取回的命中数量 |
@@ -636,7 +635,7 @@ agent = Agent(
 
 提取、整理和召回摘要这些内部请求，会通过一个没有工具、没有 plugin 的子 agent 调用 `Runner.run`，并使用结构化输出。因此它们能复用同一条 provider 链，又不会递归触发 `Memory` 自身。lovia 的 transcript 会完整保留，context compaction 只影响传给模型的视图，所以事实提取只需要在 run 结束时针对完整 transcript 跑一次：它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后补救。
 
-**自带后端。** 两个层级背后各有一个小协议（`NotesStore`、`MemoryArchive`），所以你可以把任意一层换成自己的实现，比如 Redis、向量库或 Postgres，同时保留同一套工具和 instructions：
+**自带后端。** 两个层级背后各有一个小协议（`NotesStore`、`ArchiveStore`），所以你可以把任意一层换成自己的实现，比如 Redis、向量库或 Postgres，同时保留同一套工具和 instructions：
 
 ```python
 from lovia import Agent, Memory

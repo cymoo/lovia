@@ -849,7 +849,11 @@ class RunLoop:
 
         result = RunResult(
             output=output,
-            entries=state.transcript,
+            # This run's own entries (its input + what it produced), NOT the full
+            # transcript — consistent with the resume-from-snapshot path, which
+            # rebuilds exactly these. The full transcript (system + prior history
+            # + this run) is ``RunContext.entries`` / ``Session.load()``.
+            entries=state.run_entries,
             final_agent=state.agent,
             usage=state.run_ctx.usage,
             turns=state.turns,

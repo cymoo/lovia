@@ -7,11 +7,8 @@ correct keep-alive and disconnect semantics.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from typing import AsyncIterator, cast
-
-from pydantic import BaseModel
 
 from ..types import JsonObject, JsonValue
 from .. import events
@@ -42,15 +39,6 @@ def _todo_payload(todos: list[TodoItem]) -> list[JsonObject]:
     ]
 
 
-class _ModelEncoder(json.JSONEncoder):
-    def default(self, obj: object) -> object:
-        if isinstance(obj, BaseModel):
-            return obj.model_dump()
-        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-            return dataclasses.asdict(obj)
-        return super().default(obj)
-
-
 def _entries_to_dict(entries: list[TranscriptEntry]) -> JsonObject:
     """Flatten the entries emitted in one assistant turn into a wire shape.
 
@@ -76,31 +64,6 @@ def _entries_to_dict(entries: list[TranscriptEntry]) -> JsonObject:
         "reasoning": "".join(reasoning_parts) or None,
         "tool_calls": tool_calls or None,
     }
-
-
-def _format_result(value: object) -> str:
-    """Format a tool result as a human-readable string for the web UI.
-
-    Pydantic models are rendered as ``key: value`` lines so that actual
-    newlines inside string fields (e.g. ``CommandResult.stdout``) survive
-    JSON round-tripping and display correctly in the browser's ``<pre>``.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        lines: list[str] = []
-        for k, v in dump().items():
-            if isinstance(v, str):
-                lines.append(f"{k}:\n{v.rstrip()}" if "\n" in v else f"{k}: {v}")
-            else:
-                lines.append(f"{k}: {v}")
-        return "\n".join(lines)
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, indent=2, ensure_ascii=False, cls=_ModelEncoder)
-    return str(value)
 
 
 def _coerce(value: object) -> JsonValue:
@@ -165,7 +128,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
                 {
                     "id": ev.call.id,
                     "name": ev.call.name,
-                    "result": _format_result(ev.result),
+                    "result": ev.output,
                     "is_error": ev.is_error,
                 }
             ),

@@ -157,6 +157,22 @@ async def test_web_search_with_custom_backend() -> None:
     assert out == [{"title": "t", "url": "https://x", "snippet": "s"}]
 
 
+def test_web_search_result_renderer() -> None:
+    # The renderer is what the model AND the web UI see — readable text with the
+    # url on its own line (which the UI linkifies), not raw JSON.
+    from lovia.tools.search import _render_search_results
+
+    hits = [
+        {"title": "First", "url": "https://a.example", "snippet": "alpha"},
+        {"title": "Second", "url": "https://b.example", "snippet": "beta"},
+    ]
+    out = _render_search_results(hits, None)
+    assert "First" in out and "https://a.example" in out and "alpha" in out
+    assert "Second" in out
+    assert "[{" not in out and '"title"' not in out  # not raw JSON
+    assert _render_search_results([], None) == "No results."
+
+
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     # Force both ddgs and duckduckgo_search imports to fail.
     for mod in ("ddgs", "duckduckgo_search"):

@@ -15,6 +15,32 @@ function renderMarkdown(text) {
   return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// Escape arbitrary text and turn bare http(s) URLs into clickable links. Used
+// for tool-result <pre> blocks so links work without markdown-rendering (which
+// would mangle code / shell output); every non-URL character is escaped.
+function linkifyText(text) {
+  const urlRe = /https?:\/\/[^\s<>"')\]]+/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = urlRe.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, m.index));
+    const url = m[0];
+    out += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+    last = m.index + url.length;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+}
+
 function highlightCode(container) {
   if (typeof hljs === 'undefined') return;
   container.querySelectorAll('pre code').forEach((el) => {
@@ -121,16 +147,37 @@ function formatTimestamp(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function formatArgs(args) {
-  if (!args) return '()';
-  try {
-    const obj = JSON.parse(args);
-    const entries = Object.entries(obj);
-    if (entries.length === 0) return '()';
-    return '(' + entries.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ') + ')';
-  } catch {
-    return `(${args})`;
+function argValue(v, compact) {
+  if (typeof v === 'string') {
+    if (!compact) return v; // block form: keep real newlines for the <pre>
+    const oneLine = v.replace(/\s+/g, ' ').trim();
+    return oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine;
   }
+  return JSON.stringify(v);
+}
+
+// compact: a one-line `(k: v, …)` preview for the tool bubble's summary.
+// block:   one `k: v` per line (string values keep real newlines) for the
+//          approval card's <pre>, so multi-line prompts read naturally.
+function formatArgs(args, { compact = true } = {}) {
+  if (!args) return compact ? '()' : '';
+  let obj;
+  try {
+    obj = JSON.parse(args);
+  } catch {
+    return compact ? `(${args})` : String(args);
+  }
+  const entries = Object.entries(obj);
+  if (entries.length === 0) return compact ? '()' : '';
+  if (compact) {
+    return `(${entries.map(([k, v]) => `${k}: ${argValue(v, true)}`).join(', ')})`;
+  }
+  return entries
+    .map(([k, v]) => {
+      const val = argValue(v, false);
+      return val.includes('\n') ? `${k}:\n${val}` : `${k}: ${val}`;
+    })
+    .join('\n');
 }
 
 function contentText(content) {
@@ -280,7 +327,7 @@ function updateToolResult(id, result, isError) {
     if (pre) pre.style.display = 'none';
     return;
   }
-  if (pre) pre.textContent = String(result);
+  if (pre) pre.innerHTML = linkifyText(String(result));
   if (isError) node.classList.add('error');
 }
 
@@ -423,7 +470,7 @@ function appendApproval(call) {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-approval');
   node.querySelector('.approval-name').textContent = call.name;
-  node.querySelector('.approval-args').textContent = formatArgs(call.arguments);
+  node.querySelector('.approval-args').textContent = formatArgs(call.arguments, { compact: false });
   const resolve = async (decision) => {
     node.classList.add('resolved');
     try {
@@ -717,7 +764,7 @@ export function renderHistory(entries) {
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
           if (result !== undefined && result !== '') {
-            node.querySelector('.tool-result').textContent = result;
+            node.querySelector('.tool-result').innerHTML = linkifyText(String(result));
           } else {
             // No result stored — hide the empty <pre>
             const pre = node.querySelector('.tool-result');

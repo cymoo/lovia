@@ -169,6 +169,10 @@ class ToolCallCompleted(ToolEvent):
     call: ToolCall
     result: Any
     is_error: bool = False
+    #: The rendered result string the model received — the live twin of
+    #: ``ToolResultEntry.output``. ``result`` stays the raw, un-rendered value
+    #: (for observability and type-aware consumers like the todo card).
+    output: str = ""
 
 
 @dataclass

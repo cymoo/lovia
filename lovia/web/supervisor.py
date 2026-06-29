@@ -39,7 +39,7 @@ from ..steering import Mailbox
 from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
 from .api.serialization import view_messages
 from .schemas import MessageOut
-from .sse import _format_result, event_to_sse
+from .sse import event_to_sse
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -298,7 +298,7 @@ class RunController:
             self.current_turn_entries.append(
                 ToolResultEntry(
                     call_id=ev.call.id,
-                    output=_format_result(ev.result),
+                    output=ev.output,
                     is_error=ev.is_error,
                 )
             )

@@ -67,7 +67,9 @@ class ToolCallProcessor:
             state.transcript.append(
                 ToolResultEntry(call_id=call.id, output=err, is_error=True)
             )
-            yield events.ToolCallCompleted(call=call, result=err, is_error=True)
+            yield events.ToolCallCompleted(
+                call=call, result=err, is_error=True, output=err
+            )
             return
 
         try:
@@ -85,7 +87,9 @@ class ToolCallProcessor:
             state.transcript.append(
                 ToolResultEntry(call_id=call.id, output=err, is_error=True)
             )
-            yield events.ToolCallCompleted(call=call, result=err, is_error=True)
+            yield events.ToolCallCompleted(
+                call=call, result=err, is_error=True, output=err
+            )
             return
 
         if tool.requires_approval(args, state.run_ctx):
@@ -123,7 +127,9 @@ class ToolCallProcessor:
                 state.transcript.append(
                     ToolResultEntry(call_id=call.id, output=denial, is_error=True)
                 )
-                yield events.ToolCallCompleted(call=call, result=denial, is_error=True)
+                yield events.ToolCallCompleted(
+                    call=call, result=denial, is_error=True, output=denial
+                )
                 return
 
         yield events.ToolCallStarted(call=call)
@@ -208,7 +214,9 @@ class ToolCallProcessor:
                 call.id,
                 truncate_repr(result_text),
             )
-        yield events.ToolCallCompleted(call=call, result=result, is_error=is_error)
+        yield events.ToolCallCompleted(
+            call=call, result=result, is_error=is_error, output=result_text
+        )
 
     def _apply_handler_decision(self, call_id: str, decision: object) -> None:
         # String decisions follow the declared ``ApprovalDecision`` contract

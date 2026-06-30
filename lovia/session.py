@@ -10,6 +10,15 @@ own new entries as one segment. The store is **append-only**: a completed run is
 never rewritten, so prior history is immutable. Application code controls the
 ``session_id`` so multi-user systems just key sessions by user / conversation id.
 
+What counts as *finished* is the caller's call. The runner auto-appends a
+segment only when a run **completes successfully**; an interrupted run is left in
+its checkpoint, not here. Recording an interrupted run instead — appending its
+partial transcript as a finished segment and dropping the checkpoint — is a
+deliberate **caller** decision, since only the caller knows whether the
+interruption will be resumed or abandoned (the bundled web UI does this when a
+user stops a run). A finalized partial must still be tool-consistent; see
+:func:`lovia.transcript.drop_dangling_tool_calls`.
+
 Why :class:`TranscriptEntry` and not :class:`Message`?
 The TranscriptEntry form is richer (it preserves reasoning, server-side tool
 calls, and provider-specific metadata). Chat-style adapters can still flatten

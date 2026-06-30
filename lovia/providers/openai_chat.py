@@ -169,7 +169,7 @@ class OpenAIChatProvider:
         client: Optional pre-built :class:`httpx.AsyncClient`. If omitted we
             create one per provider instance and reuse it.
         timeout: Request timeout in seconds. Defaults to the
-            ``LOVIA_REQUEST_TIMEOUT`` environment variable, else 60.
+            ``LOVIA_PROVIDER_TIMEOUT`` environment variable, else 60.
         default_headers: Extra headers merged into every request (useful for
             providers that require custom auth headers).
         trust_env: Whether the provider-created HTTP client should honor proxy

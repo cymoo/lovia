@@ -1,9 +1,12 @@
 """Environment-driven configuration for lovia's outbound ``httpx`` clients.
 
 The model providers and the ``http_fetch`` tool all make HTTPS requests through
-``httpx``. This module centralizes how their TLS trust, request timeout, and
-proxy behavior are resolved from the environment, so the same knobs apply
-everywhere (handy behind an intranet CA or proxy).
+``httpx``. This module centralizes how their outbound behavior is resolved from
+the environment (handy behind an intranet CA or proxy). TLS trust
+(:func:`resolve_verify`) is shared by the providers and ``http_fetch``; the
+request-timeout (:func:`resolve_timeout`) and proxy/``trust_env``
+(:func:`resolve_trust_env`) knobs are provider-scoped — ``http_fetch`` keeps its
+own per-call timeout and httpx's default proxy handling.
 """
 
 from __future__ import annotations

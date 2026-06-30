@@ -86,6 +86,49 @@ async def test_delete_removes_transcript_and_meta(tmp_path: Path) -> None:
     assert (await store.get("s1")) is None
 
 
+async def test_delete_drops_the_sessions_checkpoint(tmp_path: Path) -> None:
+    """Deleting a chat must not strand its interrupted run's snapshot: once the
+    metadata row is gone, ``active_run_id`` is unreadable and the checkpoint would
+    leak forever (unreachable, never resumable, never cleaned up)."""
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+
+    store = ChatStore.sqlite(tmp_path / "x.db")
+    assert store.checkpointer is not None
+    await store.upsert("s1")
+    await store.checkpointer.append(
+        "run-1",
+        [AssistantTextEntry(content="partial")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id("s1", "run-1")
+    assert (await store.checkpointer.load("run-1")) is not None
+
+    await store.delete("s1")
+    assert (await store.checkpointer.load("run-1")) is None  # no orphan left behind
+
+
+async def test_delete_all_drops_checkpoints(tmp_path: Path) -> None:
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+
+    store = ChatStore.sqlite(tmp_path / "x.db")
+    assert store.checkpointer is not None
+    for sid, rid in (("s1", "run-1"), ("s2", "run-2")):
+        await store.upsert(sid)
+        await store.checkpointer.append(
+            rid,
+            [AssistantTextEntry(content="partial")],
+            RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+        )
+        await store.set_active_run_id(sid, rid)
+
+    await store.delete_all()
+    assert (await store.checkpointer.load("run-1")) is None
+    assert (await store.checkpointer.load("run-2")) is None
+    assert (await store.list()) == []
+
+
 async def test_sqlite_persists_across_instances(tmp_path: Path) -> None:
     path = tmp_path / "persist.db"
     s1 = ChatStore.sqlite(path)

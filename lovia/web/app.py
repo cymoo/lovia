@@ -29,7 +29,7 @@ from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
-_DEFAULT_MAX_TOKENS = 65_536  # 64K
+DEFAULT_CONTEXT_WINDOW = 65_536  # 64K
 
 
 def _normalise(
@@ -107,7 +107,7 @@ def create_app(
         chat_store = ChatStore.sqlite(_default_db_path(agents))
 
     effective_policy: ContextPolicy = context_policy or Compaction(
-        context_window=_DEFAULT_MAX_TOKENS
+        context_window=DEFAULT_CONTEXT_WINDOW
     )
 
     approvals = ApprovalRegistry()

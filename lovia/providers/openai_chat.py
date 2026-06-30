@@ -32,6 +32,7 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Message, ToolCall, Usage
+from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
@@ -167,7 +168,8 @@ class OpenAIChatProvider:
         base_url: Override to target an OpenAI-compatible endpoint.
         client: Optional pre-built :class:`httpx.AsyncClient`. If omitted we
             create one per provider instance and reuse it.
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds. Defaults to the
+            ``LOVIA_REQUEST_TIMEOUT`` environment variable, else 60.
         default_headers: Extra headers merged into every request (useful for
             providers that require custom auth headers).
         trust_env: Whether the provider-created HTTP client should honor proxy
@@ -186,10 +188,10 @@ class OpenAIChatProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         default_headers: dict[str, str] | None = None,
         supports_json_schema: bool | None = None,
-        trust_env: bool = False,
+        trust_env: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -198,10 +200,10 @@ class OpenAIChatProvider:
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
         self._owns_client = client is None
-        self._timeout = timeout
+        self._timeout = resolve_timeout(timeout)
         self._extra_headers = dict(default_headers or {})
         self._supports_json_schema = supports_json_schema
-        self._trust_env = trust_env
+        self._trust_env = resolve_trust_env(trust_env)
 
     @property
     def supports_json_schema(self) -> bool:
@@ -234,6 +236,7 @@ class OpenAIChatProvider:
             self._client = httpx.AsyncClient(
                 timeout=self._timeout,
                 trust_env=self._trust_env,
+                verify=resolve_verify(),
             )
         return self._client
 

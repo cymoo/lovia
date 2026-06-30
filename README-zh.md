@@ -782,6 +782,21 @@ python -m lovia.web --app myagents:assistant           # 启动你自己的 Agen
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`，否则用通用提示 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 构建默认 agent |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | `2`（首次之后的重试次数；`0` 关闭） |
+| `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60` 秒 |
+| `--max-tokens` | `LOVIA_MAX_TOKENS` | provider 默认值 |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 64K |
+| `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
+| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭（开启后读取 `HTTP(S)_PROXY`） |
+
+`--provider-timeout` 和 `--trust-env` 由各 provider 直接读取，因此对 `--app` agent
+和库调用同样生效；`--max-retries` / `--max-turns` 作用于每一次服务运行，而
+`--max-tokens` / `--context-window` 仅配置默认 agent。
+
+内网自签名 CA 场景：`LOVIA_HTTP_CA_BUNDLE` 让所有出站 HTTPS（模型 provider 和
+`http_fetch` 工具）都使用指定的 PEM 证书包，`LOVIA_HTTP_INSECURE=1` 则关闭校验
+（仅限可信网络）。`web` extra 已内置 `truststore`，会自动信任操作系统证书库
+（与浏览器一致，无需任何配置）。
 
 默认 agent 还会内置一组常用能力：`todo_write` 清单，以及 `now`（时间）、`http_fetch`、
 `web_search` 工具。网页搜索需要 `ddg` extra（已包含在 `lovia[web]` 中）；若未安装则
@@ -874,7 +889,7 @@ app.include_router(build_api_router(deps))
 | 运行示例 | `pip install "lovia[examples,web]"` |
 | 开发、测试、发布 | `pip install -e ".[dev]"` |
 
-`examples` 是运行演示脚本所需的依赖，例如 `python-dotenv`、`rich`、`prefect` 和 `ddgs`。`dev` 是维护这个仓库所需的依赖，例如 `pytest`、`ruff`、`mypy`、`build`、`twine` 以及 Web 测试依赖。二者故意分开，避免普通开发安装演示专用依赖。
+`examples` 是运行演示脚本所需的依赖，例如 `python-dotenv`、`rich` 和 `ddgs`。`dev` 是维护这个仓库所需的依赖，例如 `pytest`、`ruff`、`mypy`、`build`、`twine` 以及 Web 测试依赖。二者故意分开，避免普通开发安装演示专用依赖。
 
 ## 开发
 

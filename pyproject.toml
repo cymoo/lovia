@@ -38,12 +38,12 @@ web = [
     "jinja2>=3.1",
     "markdown-it-py>=3.0",
     "sse-starlette>=2.1",
+    "truststore>=0.9",
     "tzdata; platform_system == 'Windows'",
     "uvicorn[standard]>=0.27",
 ]
 examples = [
     "ddgs>=7.0",
-    "prefect>=3.0",
     "python-dotenv>=1.0.0",
     "rich>=13.7",
 ]
@@ -75,5 +75,5 @@ files = ["lovia"]
 # warn_unused_ignores, so prefer module-level suppression here over inline
 # ``# type: ignore`` comments that go stale when the dep is installed.
 [[tool.mypy.overrides]]
-module = ["ddgs.*", "croniter.*"]
+module = ["ddgs.*", "croniter.*", "truststore.*"]
 ignore_missing_imports = true

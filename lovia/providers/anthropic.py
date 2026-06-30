@@ -43,6 +43,7 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Usage
+from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
     merge_anthropic_blocks as _merge_anthropic_blocks,
@@ -70,11 +71,11 @@ class AnthropicProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         client: httpx.AsyncClient | None = None,
-        timeout: float = 60.0,
+        timeout: float | None = None,
         anthropic_version: str = _DEFAULT_VERSION,
         default_max_tokens: int = 4096,
         default_headers: dict[str, str] | None = None,
-        trust_env: bool = False,
+        trust_env: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -83,11 +84,11 @@ class AnthropicProvider:
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._client = client
         self._owns_client = client is None
-        self._timeout = timeout
+        self._timeout = resolve_timeout(timeout)
         self._version = anthropic_version
         self._default_max_tokens = default_max_tokens
         self._extra_headers = dict(default_headers or {})
-        self._trust_env = trust_env
+        self._trust_env = resolve_trust_env(trust_env)
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -99,6 +100,7 @@ class AnthropicProvider:
             self._client = httpx.AsyncClient(
                 timeout=self._timeout,
                 trust_env=self._trust_env,
+                verify=resolve_verify(),
             )
         return self._client
 

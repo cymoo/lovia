@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import Field
 
+from ..http_config import resolve_verify
 from ..exceptions import ToolError
 from .base import clip_text, tool
 
@@ -164,7 +165,9 @@ async def http_fetch(
             hint="Only http:// and https:// URLs can be fetched.",
         )
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True, verify=resolve_verify()
+    ) as client:
         async with client.stream(
             method.upper(), url, headers=headers, json=body
         ) as resp:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import httpx
@@ -15,7 +15,7 @@ from lovia.run_context import RunContext
 from lovia.tools.http import html_to_text, http_fetch
 from lovia.tools.human import HumanChannel, ask_human
 from lovia.tools.search import SearchResult, duckduckgo_search, web_search
-from lovia.tools.time import now, sleep
+from lovia.tools.time import current_date, now, sleep
 
 
 def _ctx() -> RunContext:
@@ -143,18 +143,71 @@ async def test_sleep_is_capped() -> None:
     assert "slept" in out
 
 
+# ---------------------------------------------------------------- current_date
+
+
+def test_current_date_states_today_with_weekday() -> None:
+    # The fragment is what the model sees before it acts: today's ISO date + day.
+    today = datetime.now().astimezone()
+    text = current_date()(_ctx())
+    assert text.startswith("Today's date is ")
+    assert today.strftime("%Y-%m-%d") in text
+    assert today.strftime("%A") in text
+
+
+def test_current_date_honors_explicit_tz() -> None:
+    text = current_date(tz="UTC")(_ctx())
+    assert datetime.now(timezone.utc).strftime("%Y-%m-%d") in text
+
+
+def test_current_date_unknown_timezone_raises_at_construction() -> None:
+    # A bad zone fails when the fragment is built, not on every render.
+    with pytest.raises(UserError, match="Unknown timezone"):
+        current_date(tz="Not/AZone")
+
+
 # ---------------------------------------------------------------- search
 
 
 @pytest.mark.asyncio
 async def test_web_search_with_custom_backend() -> None:
     class Stub:
-        async def search(self, query: str, *, max_results: int = 5):  # type: ignore[no-untyped-def]
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
             return [SearchResult(title="t", url="https://x", snippet="s")]
 
     s = web_search(Stub())
     out = await s.invoke({"query": "x"}, _ctx())
     assert out == [{"title": "t", "url": "https://x", "snippet": "s"}]
+
+
+@pytest.mark.asyncio
+async def test_web_search_forwards_time_range() -> None:
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
+            seen["time_range"] = time_range
+            return [SearchResult(title="t", url="https://x", snippet="s")]
+
+    s = web_search(Recorder())
+    await s.invoke({"query": "x", "time_range": "m"}, _ctx())
+    assert seen["time_range"] == "m"
+    # Omitting it means no recency filter — the backend receives None.
+    await s.invoke({"query": "x"}, _ctx())
+    assert seen["time_range"] is None
+
+
+def test_web_search_time_range_is_an_enum_in_the_schema() -> None:
+    # The model sees an explicit d/w/m/y choice, so invalid values can't arrive.
+    class Stub:
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
+            return []
+
+    prop = web_search(Stub()).parameters["properties"]["time_range"]
+    enum = prop.get("enum") or next(
+        b["enum"] for b in prop.get("anyOf", []) if "enum" in b
+    )
+    assert enum == ["d", "w", "m", "y"]
 
 
 def test_web_search_result_renderer() -> None:

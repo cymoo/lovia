@@ -386,6 +386,26 @@ def test_build_default_agent_no_memory(
     assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 
+def test_build_default_agent_injects_current_date(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The default agent should know today's date — rendered into its system
+    # prompt — so it searches the current year without a `now` round-trip.
+    import asyncio
+    from datetime import datetime
+
+    from lovia.run_context import RunContext
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "test-model")
+    args = cli.build_parser().parse_args([])
+    agent = cli.build_default_agent(args, ChatStore.in_memory())
+
+    ctx = RunContext(context=None, entries=[], agent=agent)
+    system_prompt = asyncio.run(agent.render_system_prompt(ctx))
+    assert datetime.now().astimezone().strftime("%Y-%m-%d") in system_prompt
+
+
 # ----------------------------------------------------------------- main -
 
 

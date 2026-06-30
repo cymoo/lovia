@@ -12,14 +12,16 @@ implement it for whatever backend you like. A convenience
     agent = Agent(name="x", tools=[search])
 
 The factory ``web_search(impl)`` returns a single :class:`Tool` whose name
-defaults to ``web_search``.
+defaults to ``web_search``. The tool also exposes an optional ``time_range``
+recency filter (``'d'``/``'w'``/``'m'``/``'y'``) that backends receive as a
+keyword argument.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
 from ..exceptions import UserError
 from .base import Tool, default_result_renderer, tool
@@ -47,7 +49,7 @@ class WebSearch(Protocol):
     """
 
     async def search(
-        self, query: str, *, max_results: int = 5
+        self, query: str, *, max_results: int = 5, time_range: str | None = None
     ) -> list[SearchResult]: ...
 
 
@@ -74,11 +76,16 @@ class DuckDuckGoSearch:
             ) from exc
         self._ddgs_cls = ddgs_cls
 
-    async def search(self, query: str, *, max_results: int = 5) -> list[SearchResult]:
+    async def search(
+        self, query: str, *, max_results: int = 5, time_range: str | None = None
+    ) -> list[SearchResult]:
 
         def _go() -> list[dict[str, Any]]:
             with self._ddgs_cls() as ddgs:
-                return list(ddgs.text(query, max_results=max_results))
+                # ``timelimit`` is DDG's recency filter ('d'/'w'/'m'/'y'); None = no limit.
+                return list(
+                    ddgs.text(query, max_results=max_results, timelimit=time_range)
+                )
 
         rows = await asyncio.to_thread(_go)
         return [
@@ -130,10 +137,15 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     async def _search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Max results (1-20)."] = 5,
+        time_range: Annotated[
+            Literal["d", "w", "m", "y"] | None,
+            "Optional recency filter: 'd'=past day, 'w'=week, 'm'=month, 'y'=year. "
+            "Omit for no time limit.",
+        ] = None,
     ) -> list[dict[str, str]]:
         """Search the web and return a list of ``{title, url, snippet}``."""
         n = max(1, min(int(max_results), 20))
-        rows = await impl.search(query, max_results=n)
+        rows = await impl.search(query, max_results=n, time_range=time_range)
         return [{"title": r.title, "url": r.url, "snippet": r.snippet} for r in rows]
 
     return _search

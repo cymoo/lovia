@@ -865,7 +865,7 @@ installed (or pass `--env-file`). Model credentials use the provider's own
 | `--max-retries` | `LOVIA_MAX_RETRIES` | `2` (retries after the first; `0` disables) |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 64K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 200K |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
 

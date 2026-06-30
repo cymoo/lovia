@@ -785,7 +785,7 @@ python -m lovia.web --app myagents:assistant           # 启动你自己的 Agen
 | `--max-retries` | `LOVIA_MAX_RETRIES` | `2`（首次之后的重试次数；`0` 关闭） |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60` 秒 |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider 默认值 |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 64K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 200K |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭（开启后读取 `HTTP(S)_PROXY`） |
 

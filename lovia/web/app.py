@@ -29,7 +29,7 @@ from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
-DEFAULT_CONTEXT_WINDOW = 65_536  # 64K
+DEFAULT_CONTEXT_WINDOW = 200_000  # 200K
 
 
 def _normalise(
@@ -81,7 +81,7 @@ def create_app(
     to the first agent's own ``model``.
 
     ``context_policy`` defaults to :class:`Compaction` with a
-    64 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
+    200 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
 
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
     the agent loop per request, ``budget`` (a :class:`RunBudget`) bounds token

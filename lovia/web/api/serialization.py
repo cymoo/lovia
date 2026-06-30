@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...messages import Message
+from ...session import COMPACTED_META_KEY, Segment
 from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
 from ..schemas import ChatSessionInfo, MessageOut
 from ..store import ChatMeta
@@ -79,6 +80,46 @@ def messages_to_out(
     ]
 
 
+def segments_to_out(
+    segments: list[Segment], *, created_at: float, updated_at: float
+) -> list[MessageOut]:
+    """Project run ``segments`` to the session-detail message shape, splicing one
+    synthetic ``context_compacted`` entry after each run that recorded a
+    compaction notice in its ``meta``.
+
+    Real messages keep the same evenly-spread timestamps as the flat ``load``
+    path (run boundaries never merge — each run opens with a fresh user turn — so
+    per-segment grouping matches whole-transcript grouping). Notices are inserted
+    at run boundaries; each borrows the timestamp of the message it follows.
+    """
+    all_msgs: list[Message] = []
+    boundaries: list[tuple[int, dict[str, Any]]] = []  # (msg index, notice)
+    for seg in segments:
+        cleaned = [
+            e
+            for e in seg.entries
+            if not (isinstance(e, InputEntry) and e.role == "system")
+        ]
+        all_msgs.extend(entries_to_messages(cleaned))
+        notice = (seg.meta or {}).get(COMPACTED_META_KEY)
+        if isinstance(notice, dict):
+            boundaries.append((len(all_msgs), notice))
+    outs = messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at)
+    # Insert from last to first so earlier boundary indices stay valid.
+    for idx, notice in reversed(boundaries):
+        ts = outs[idx - 1].timestamp if idx > 0 else created_at
+        outs.insert(
+            idx,
+            MessageOut(
+                role="context_compacted",
+                content=None,
+                compaction=notice,
+                timestamp=ts,
+            ),
+        )
+    return outs
+
+
 def view_messages(
     entries: list[TranscriptEntry], *, created_at: float, updated_at: float
 ) -> list[MessageOut]:
@@ -141,7 +182,9 @@ def export_md(msgs: list[Message], *, title: str, session_id: str) -> str:
         if m.role == "tool":
             if not text.strip():
                 continue
-            name = (tool_names.get(m.tool_call_id) if m.tool_call_id else None) or m.name
+            name = (
+                tool_names.get(m.tool_call_id) if m.tool_call_id else None
+            ) or m.name
             label = f"Tool result: `{name}`" if name else "Tool result"
             lines.append(f"**{label}**\n\n```\n{text}\n```\n")
             continue

@@ -155,6 +155,10 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "data": json.dumps({"turn": ev.turn, "agent": ev.agent.name}),
         }
     if isinstance(ev, events.ContextCompacted):
+        # ``metadata`` is already JSON-safe (a JsonObject) and carries the
+        # interesting numbers — tokens_before/after, pressure, cleared/offloaded
+        # counts, summary_covered. Forward it whole so the UI can surface them
+        # without per-key plumbing here.
         return {
             "event": "context_compacted",
             "data": json.dumps(
@@ -163,6 +167,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
                     "reason": ev.reason,
                     "summary": ev.summary,
                     "reactive": ev.reactive,
+                    "metadata": ev.metadata,
                 }
             ),
         }

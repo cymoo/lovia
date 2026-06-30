@@ -505,6 +505,27 @@ async def test_runner_emits_context_compacted_event():
     assert isinstance(compacted[0].metadata.get("tokens_after"), int)
 
 
+async def test_runner_persists_compaction_notice_to_segment_meta():
+    """A run that compacts stows a JSON-safe notice in its finished segment's
+    meta, so the web UI can replay it when the session is reloaded."""
+    from lovia.session import COMPACTED_META_KEY
+
+    policy = Compaction(summarizer=FakeSummarizer("S."))
+    provider = _OverflowOnceProvider()
+    agent = Agent(name="t", instructions="x", model=provider)
+    sess = await _seeded_session()
+    async for _ in Runner.stream(
+        agent, "go", context_policy=policy, session=sess, session_id="s1"
+    ):
+        pass
+    notice = (await sess.segments("s1"))[-1].meta[COMPACTED_META_KEY]
+    assert notice["reason"] == "reactive_summary"
+    assert notice["reactive"] is True
+    assert notice["summary"] == "S."
+    # The token numbers ride along (the whole point of persisting, vs carryover).
+    assert notice["metadata"]["tokens_before"] >= notice["metadata"]["tokens_after"]
+
+
 async def test_runner_no_policy_keeps_existing_behavior():
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", instructions="x", model=provider)

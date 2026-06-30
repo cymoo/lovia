@@ -19,7 +19,11 @@ from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 _TODOS = {
     "todos": [
         {"content": "Design model", "status": "completed"},
-        {"content": "Write tests", "status": "in_progress", "active_form": "Writing tests"},
+        {
+            "content": "Write tests",
+            "status": "in_progress",
+            "active_form": "Writing tests",
+        },
         {"content": "Document", "status": "pending"},
     ]
 }
@@ -186,6 +190,82 @@ def test_stream_emits_tool_events() -> None:
     assert "tool_result" in kinds
 
 
+def test_context_compacted_sse_forwards_metadata() -> None:
+    """The compaction SSE payload carries the metadata the UI renders."""
+    from lovia import events
+    from lovia.web.sse import event_to_sse
+
+    ev = events.ContextCompacted(
+        session_id="s1",
+        entries_before=[],
+        entries_after=[],
+        reason="reactive_offload+clear",
+        summary="A running summary.",
+        reactive=True,
+        metadata={
+            "tokens_before": 18000,
+            "tokens_after": 9000,
+            "pressure": 0.82,
+            "cleared": 3,
+            "offloaded": 1,
+            "summary_covered": 8,
+            "ratio": 1.05,
+        },
+    )
+    payload = event_to_sse(ev)
+    assert payload is not None
+    assert payload["event"] == "context_compacted"
+    data = json.loads(payload["data"])
+    assert data["reactive"] is True
+    assert data["summary"] == "A running summary."
+    # The whole metadata dict rides along so the UI can show before/after,
+    # pressure, and the trim counts without extra plumbing.
+    assert data["metadata"]["tokens_before"] == 18000
+    assert data["metadata"]["tokens_after"] == 9000
+    assert data["metadata"]["pressure"] == 0.82
+    assert data["metadata"]["cleared"] == 3
+
+
+def test_session_detail_replays_persisted_compaction_notice() -> None:
+    """A finished session surfaces a per-run compaction notice (persisted in the
+    segment meta) as a synthetic ``context_compacted`` entry at the run boundary."""
+    import asyncio
+
+    from lovia.session import COMPACTED_META_KEY
+    from lovia.transcript import AssistantTextEntry, InputEntry
+
+    store = ChatStore.in_memory()
+    sid = "s-compact"
+    notice = {
+        "reason": "offload+clear",
+        "reactive": False,
+        "summary": None,
+        "metadata": {"tokens_before": 9000, "tokens_after": 5000, "cleared": 2},
+    }
+    asyncio.run(
+        store.session.append(
+            sid,
+            [
+                InputEntry(role="user", content="hi"),
+                AssistantTextEntry(content="hello"),
+            ],
+            run_id="r1",
+            meta={COMPACTED_META_KEY: notice},
+        )
+    )
+
+    c = TestClient(_app(_make_agent([text("x")]), store=store))
+    res = c.get(f"/api/sessions/{sid}").json()
+    assert [e["role"] for e in res["entries"]] == [
+        "user",
+        "assistant",
+        "context_compacted",
+    ]
+    out = res["entries"][-1]
+    assert out["compaction"]["reason"] == "offload+clear"
+    assert out["compaction"]["metadata"]["tokens_before"] == 9000
+
+
 # ---------------------------------------------------------- approval flow -
 
 
@@ -343,7 +423,9 @@ async def test_approval_registry_resolve_unknown() -> None:
 def _todo_agent() -> Agent:
     return Agent(
         name="bot",
-        model=ScriptedProvider([call("todo_write", _TODOS, call_id="c1"), text("done")]),
+        model=ScriptedProvider(
+            [call("todo_write", _TODOS, call_id="c1"), text("done")]
+        ),
         plugins=[Todo()],
     )
 
@@ -411,7 +493,9 @@ def test_max_turns_caps_the_agent_loop() -> None:
 
 
 def test_export_md_renders_reasoning_as_visible_blockquote() -> None:
-    c = TestClient(_app(_make_agent([text("the answer", reasoning="step one\nstep two")])))
+    c = TestClient(
+        _app(_make_agent([text("the answer", reasoning="step one\nstep two")]))
+    )
     c.post("/api/chat", json={"message": "go", "session_id": "s1"})
     body = c.get("/api/sessions/s1/export?format=md").text
     # No collapsed HTML disclosure widget (it would hide reasoning in PDF).
@@ -422,7 +506,11 @@ def test_export_md_renders_reasoning_as_visible_blockquote() -> None:
     assert "> step one" in body
     assert "> step two" in body
     # Thinking comes before the answer (the model reasons first), under one heading.
-    assert body.index("### Assistant") < body.index("💭 Thinking") < body.index("the answer")
+    assert (
+        body.index("### Assistant")
+        < body.index("💭 Thinking")
+        < body.index("the answer")
+    )
 
 
 def test_export_md_quotes_blank_lines_within_reasoning() -> None:

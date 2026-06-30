@@ -14,7 +14,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...plugins import todos_from_entries
-from ...transcript import InputEntry, entries_to_messages
+from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
 from ..schemas import (
     ChatSessionInfo,
     RunInfo,
@@ -29,6 +29,7 @@ from .serialization import (
     export_txt,
     message_to_json_dict,
     messages_to_out,
+    segments_to_out,
     session_info,
 )
 
@@ -81,6 +82,13 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         live = deps.supervisor.get(session_id)
         active_run_id: str | None = live.run_id if live is not None else None
 
+        # A finished session (no live run, no resumable checkpoint) is rebuilt
+        # from segments so persisted per-run compaction notices replay. A live or
+        # resuming run splices checkpoint entries on top of the flat transcript and
+        # surfaces compaction over the live SSE stream instead.
+        entries: list[TranscriptEntry] = []
+        finished = False
+
         if live is not None:
             entries = await session.load(session_id)
             if store.checkpointer is not None and live.run_id is not None:
@@ -98,41 +106,49 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             # No live run, but a checkpoint may hold an interrupted run to resume
             # (restart recovery). Prefer its entries; clean up a stale pointer.
             candidate = await store.get_active_run_id(session_id)
-            if candidate:
-                snapshot = await store.checkpointer.load(candidate)
-                if snapshot is not None and snapshot.status in (
-                    "interrupted",
-                    "running",
-                ):
-                    history = await session.load(session_id)
-                    run_entries = [
-                        e
-                        for e in snapshot.entries
-                        if not (isinstance(e, InputEntry) and e.role == "system")
-                    ]
-                    entries = history + run_entries
-                    active_run_id = candidate
-                else:
+            snapshot = await store.checkpointer.load(candidate) if candidate else None
+            if (
+                candidate
+                and snapshot is not None
+                and snapshot.status in ("interrupted", "running")
+            ):
+                history = await session.load(session_id)
+                run_entries = [
+                    e
+                    for e in snapshot.entries
+                    if not (isinstance(e, InputEntry) and e.role == "system")
+                ]
+                entries = history + run_entries
+                active_run_id = candidate
+            else:
+                if candidate:
                     await store.clear_active_run_id(session_id)
                     if snapshot is not None:
                         await store.checkpointer.delete(candidate)
-                    entries = await session.load(session_id)
-            else:
-                entries = await session.load(session_id)
+                finished = True
         else:
-            entries = await session.load(session_id)
+            finished = True
 
-        msgs = entries_to_messages(entries)
         now = time.time()
         created = meta.created_at if meta else now
         updated = meta.updated_at if meta else now
+        if finished:
+            out_entries = segments_to_out(
+                await session.segments(session_id),
+                created_at=created,
+                updated_at=updated,
+            )
+        else:
+            out_entries = messages_to_out(
+                entries_to_messages(entries), created_at=created, updated_at=updated
+            )
         return SessionDetail(
             id=meta.id if meta else session_id,
             title=meta.title if meta else None,
             agent=meta.agent if meta else None,
             created_at=created,
             updated_at=updated,
-            entries=messages_to_out(msgs, created_at=created, updated_at=updated),
+            entries=out_entries,
             active_run_id=active_run_id,
         )
 

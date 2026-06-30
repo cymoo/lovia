@@ -40,6 +40,13 @@ class Segment:
     meta: JsonObject | None = None
 
 
+# Reserved key under which the loop stows a JSON-safe snapshot of a run's last
+# context-compaction in its finished segment's ``meta`` (a co-tenant alongside
+# ``context_carryover``, defined in ``runtime.loop``). The web UI reads it to
+# replay the compaction notice when a finished session is reloaded.
+COMPACTED_META_KEY = "context_compacted"
+
+
 class Session(Protocol):
     """A conversation transcript store keyed by ``session_id``.
 

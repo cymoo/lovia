@@ -336,15 +336,30 @@ class ChatStore:
         )
 
     async def delete(self, session_id: str) -> None:
-        """Remove transcript AND metadata for ``session_id``."""
+        """Remove transcript, checkpoint, AND metadata for ``session_id``.
+
+        The checkpoint is dropped first: once the metadata row is gone its
+        ``active_run_id`` is unreadable, so an interrupted run's snapshot would
+        otherwise be stranded (unreachable, never resumable, never cleaned up).
+        """
+        await self._drop_checkpoint(session_id)
         await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
 
     async def delete_all(self) -> None:
-        """Remove ALL transcripts and metadata."""
+        """Remove ALL transcripts, checkpoints, and metadata."""
         for m in await self.list_all():
+            await self._drop_checkpoint(m.id)
             await self.session.clear(m.id)
         await self._write("DELETE FROM chat_sessions")
+
+    async def _drop_checkpoint(self, session_id: str) -> None:
+        """Delete the session's active-run snapshot, if any (best-effort)."""
+        if self.checkpointer is None:
+            return
+        run_id = await self.get_active_run_id(session_id)
+        if run_id:
+            await self.checkpointer.delete(run_id)
 
     async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
         """Search sessions whose title or id contains ``query``."""

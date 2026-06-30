@@ -209,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="model context window in tokens used for compaction "
-        "(env LOVIA_CONTEXT_WINDOW, default: auto-detect, else 64K)",
+        "(env LOVIA_CONTEXT_WINDOW, default: auto-detect, else 200K)",
     )
     p.add_argument(
         "--max-turns",
@@ -313,8 +313,8 @@ def resolve_context_window(cli: int | None, model: str) -> int:
     """Compaction context window in tokens.
 
     Precedence: ``--context-window`` flag, ``LOVIA_CONTEXT_WINDOW``, the model's
-    advertised window, then a conservative 64K fallback for OpenAI-compatible
-    endpoints not in the context-window table.
+    advertised window, then a 200K fallback for OpenAI-compatible endpoints not
+    in the context-window table.
     """
     value = cli if cli is not None else _env_int_optional("LOVIA_CONTEXT_WINDOW")
     if value is not None:

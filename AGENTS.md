@@ -47,8 +47,10 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
 - `Agent` is **immutable by convention** — use `clone(**overrides)`, never mutate in place.
 - A compaction stage must never mutate `state.transcript`/the `Session`, nor *undo* a sticky decision —
   monotonic decisions are what keep the prompt prefix byte-stable and provider caches warm.
-- `Session` is **append-only** and distinct from the checkpointer (session = completed runs;
-  checkpoint = the in-flight run). Don't add a `replace`.
+- `Session` is **append-only** and distinct from the checkpointer (session = *finished* runs — a
+  run that completed, or one the caller finalized, e.g. the web UI on stop; checkpoint = the run
+  that may still resume). The runner auto-appends only on success; finalizing an interrupted run
+  into the session is a caller decision. Don't add a `replace`.
 - Dropping middle transcript entries? Route through `safe_window()` (`transcript.py`) or you'll orphan
   tool-call/result pairs.
 - Public-behavior change → sync **both** READMEs (`README.md` + `README-zh.md`).

@@ -396,7 +396,7 @@ result = await Runner.run(
 )
 ```
 
-两个 store 都是 **append-only**：`Session` 累积已完成的 run（每个 run 一个 segment），checkpoint 保存进行中的那个 run，所以完整 transcript = `session.load()` 加上进行中的 snapshot。历史不可变 —— 每个 run 只追加自己的 entries，从不重写。请给每个 run 一个在单个 checkpointer 内唯一的 `run_id`（如 `uuid4().hex`）——它是 checkpoint 的唯一键，且不像 session 那样按 `session_id` 限定作用域。
+两个 store 都是 **append-only**：`Session` 累积已结束的 run（每个 run 一个 segment —— 成功完成的，或被调用方定稿的），checkpoint 保存仍可 resume 的那个 run，所以完整 transcript = `session.load()` 加上进行中的 snapshot。历史不可变 —— 每个 run 只追加自己的 entries，从不重写。请给每个 run 一个在单个 checkpointer 内唯一的 `run_id`（如 `uuid4().hex`）——它是 checkpoint 的唯一键，且不像 session 那样按 `session_id` 限定作用域。
 
 ## 上下文管理
 
@@ -785,7 +785,7 @@ python -m lovia.web --app myagents:assistant           # 启动你自己的 Agen
 | `--max-retries` | `LOVIA_MAX_RETRIES` | `2`（首次之后的重试次数；`0` 关闭） |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60` 秒 |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider 默认值 |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 64K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 200K |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭（开启后读取 `HTTP(S)_PROXY`） |
 

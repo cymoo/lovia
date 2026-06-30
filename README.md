@@ -419,9 +419,10 @@ result = await Runner.run(
 )
 ```
 
-Both stores are **append-only**: a `Session` accumulates completed runs (one
-segment each) while a checkpoint holds the in-flight run, so the full transcript
-is `session.load()` plus the in-flight snapshot. History is immutable — each run
+Both stores are **append-only**: a `Session` accumulates finished runs (one
+segment each — a run that completed, or one the caller finalized) while a
+checkpoint holds the run that may still resume, so the full transcript is
+`session.load()` plus the in-flight snapshot. History is immutable — each run
 appends its own entries; nothing is ever rewritten. Give each run a `run_id`
 that is unique per checkpointer (e.g. `uuid4().hex`) — it is the checkpoint's
 only key and, unlike a session, is not scoped by `session_id`.
@@ -865,7 +866,7 @@ installed (or pass `--env-file`). Model credentials use the provider's own
 | `--max-retries` | `LOVIA_MAX_RETRIES` | `2` (retries after the first; `0` disables) |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 64K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 200K |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
 

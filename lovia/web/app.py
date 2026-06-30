@@ -29,7 +29,7 @@ from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
-_DEFAULT_MAX_TOKENS = 65_536  # 64K
+DEFAULT_CONTEXT_WINDOW = 65_536  # 64K
 
 
 def _normalise(
@@ -59,7 +59,7 @@ def create_app(
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
-    retry: RetryPolicy | None = None,
+    retry: RetryPolicy | None = RetryPolicy(),
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     default_budget_factory: Callable[[], RunBudget] | None = None,
@@ -107,7 +107,7 @@ def create_app(
         chat_store = ChatStore.sqlite(_default_db_path(agents))
 
     effective_policy: ContextPolicy = context_policy or Compaction(
-        context_window=_DEFAULT_MAX_TOKENS
+        context_window=DEFAULT_CONTEXT_WINDOW
     )
 
     approvals = ApprovalRegistry()
@@ -187,7 +187,7 @@ def serve(
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
-    retry: RetryPolicy | None = None,
+    retry: RetryPolicy | None = RetryPolicy(),
     tracer: Tracer | None = None,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",

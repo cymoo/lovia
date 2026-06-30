@@ -9,7 +9,8 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from lovia import Agent, Memory  # noqa: E402
+from lovia import Agent, Memory, RetryPolicy  # noqa: E402
+from lovia.context import Compaction  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
@@ -523,3 +524,159 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("0.0.0.0", None)
     assert not calls
+
+
+# ------------------------------------------ reliability / model knobs -
+
+
+def test_resolve_max_retries_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOVIA_MAX_RETRIES", raising=False)
+    assert cli.resolve_max_retries(None) == 2  # default
+    monkeypatch.setenv("LOVIA_MAX_RETRIES", "5")
+    assert cli.resolve_max_retries(None) == 5  # env
+    assert cli.resolve_max_retries(0) == 0  # flag wins; 0 disables retries
+
+
+def test_resolve_max_retries_rejects_negative() -> None:
+    with pytest.raises(UserError, match="must be >= 0"):
+        cli.resolve_max_retries(-1)
+
+
+def test_resolve_max_turns_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOVIA_MAX_TURNS", raising=False)
+    assert cli.resolve_max_turns(None) == 50  # default
+    monkeypatch.setenv("LOVIA_MAX_TURNS", "10")
+    assert cli.resolve_max_turns(None) == 10  # env
+    assert cli.resolve_max_turns(5) == 5  # flag wins
+
+
+def test_resolve_max_turns_rejects_zero() -> None:
+    with pytest.raises(UserError, match="must be >= 1"):
+        cli.resolve_max_turns(0)
+
+
+def test_resolve_max_tokens_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOVIA_MAX_TOKENS", raising=False)
+    assert cli.resolve_max_tokens(None) is None  # provider default
+    monkeypatch.setenv("LOVIA_MAX_TOKENS", "1024")
+    assert cli.resolve_max_tokens(None) == 1024  # env
+    assert cli.resolve_max_tokens(4096) == 4096  # flag wins
+
+
+def test_resolve_max_tokens_rejects_non_positive() -> None:
+    with pytest.raises(UserError, match="must be > 0"):
+        cli.resolve_max_tokens(0)
+
+
+def test_resolve_context_window_explicit_wins() -> None:
+    assert cli.resolve_context_window(123_456, "anthropic:claude-opus-4-8") == 123_456
+
+
+def test_resolve_context_window_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_CONTEXT_WINDOW", "100000")
+    assert cli.resolve_context_window(None, "openai:gpt-x") == 100_000
+
+
+def test_resolve_context_window_autodetects_known_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOVIA_CONTEXT_WINDOW", raising=False)
+    # A known Anthropic alias resolves to its real window, not the 64K default.
+    assert cli.resolve_context_window(None, "anthropic:claude-opus-4-8") == 200_000
+
+
+def test_resolve_context_window_falls_back_for_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOVIA_CONTEXT_WINDOW", raising=False)
+    # An endpoint not in the context-window table uses the conservative default.
+    assert (
+        cli.resolve_context_window(None, "openai:mystery-model")
+        == cli.DEFAULT_CONTEXT_WINDOW
+    )
+
+
+def test_resolve_context_window_rejects_zero() -> None:
+    with pytest.raises(UserError, match="must be >= 1"):
+        cli.resolve_context_window(0, "m")
+
+
+def test_parser_reliability_flags() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "--max-retries",
+            "4",
+            "--provider-timeout",
+            "90",
+            "--max-tokens",
+            "2048",
+            "--context-window",
+            "128000",
+            "--max-turns",
+            "20",
+            "--trust-env",
+        ]
+    )
+    assert args.max_retries == 4
+    assert args.provider_timeout == 90.0
+    assert args.max_tokens == 2048
+    assert args.context_window == 128_000
+    assert args.max_turns == 20
+    assert args.trust_env is True
+
+
+def test_build_default_agent_max_tokens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "test-model")
+    args = cli.build_parser().parse_args(["--max-tokens", "1234"])
+    agent = cli.build_default_agent(args, ChatStore.in_memory())
+    assert agent.settings.max_tokens == 1234
+
+
+def test_main_passes_retry_and_context_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    rc = cli.main(
+        ["--max-retries", "1", "--context-window", "111111", "--max-turns", "7"]
+    )
+    assert rc == 0
+    retry = captured["retry"]
+    assert isinstance(retry, RetryPolicy)
+    assert retry.max_attempts == 2  # first attempt + 1 retry
+    policy = captured["context_policy"]
+    assert isinstance(policy, Compaction)
+    assert policy.context_window == 111_111
+    assert captured["max_turns"] == 7
+
+
+def test_main_provider_timeout_and_trust_env_set_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    # setenv (not delenv) so monkeypatch restores/removes them on teardown even
+    # though main() mutates os.environ directly.
+    monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
+    monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", "")
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main(["--provider-timeout", "150", "--trust-env"])
+    assert rc == 0
+    assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
+    assert os.environ["LOVIA_PROVIDER_TRUST_ENV"] == "1"
+
+
+def test_main_rejects_bad_provider_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main(["--provider-timeout", "0"])
+    assert rc == 2
+    assert "must be > 0" in capsys.readouterr().err

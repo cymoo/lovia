@@ -239,7 +239,7 @@ context-overflow probe additionally needs `LOVIA_LIVE_OVERFLOW_TESTS=1`).
 - **Pydantic v2** for data models. Prefer `model_fields`, `model_validate`, etc.
 - **Type annotations** on all public functions and classes.
 - **Errors carry `.hint`** — every `LoviaError` subclass accepts an optional `hint=` kwarg rendered in `str(exc)`. `OutputValidationError` also exposes the raw model text and target schema name. Bury no context.
-- Keep the core minimal — hard dependencies are `httpx` + `pydantic` only. Every other capability (MCP, web, search, Prefect) is an opt-in extra.
+- Keep the core minimal — hard dependencies are `httpx` + `pydantic` only. Every other capability (MCP, web, search) is an opt-in extra.
 - Provider adapters live under `lovia/providers/`; each adapter translates between the lovia transcript format and the vendor API.
 - Follow `ruff` rules for formatting and linting. Do not add `# noqa` suppressions without a comment explaining why.
 - **Backwards compatibility** — renames go through a deprecation shim for at least one minor release.
@@ -251,7 +251,7 @@ lovia is built around four words. When in doubt, optimise for the one earlier in
 1. **Concise (简洁).** Every piece should fit on one screen of mental model. The core (`agent.py`, `runner.py`, `tools/`, `output.py`, `schema.py`, `skills.py`, `exceptions.py`) stays small and obvious. New features must justify their line cost; cleverness that saves keystrokes but obscures behaviour is rejected.
 2. **Lightweight (轻量).** Core has exactly two hard dependencies: `httpx` and `pydantic`. Every other capability — MCP, web UI, DuckDuckGo, etc. — is an opt-in extra and only imported when the user asks for it. `import lovia` must stay cheap.
 3. **Extensible (易扩展).** Public surfaces are dataclasses, Protocols, and `@decorator` hooks — not subclasses you must inherit from. Providers, sessions, memory stores, web-search backends, and hooks are all Protocol-based; users plug in their own implementations without monkey-patching.
-4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, human-in-the-loop, time, filesystem, shell), `lovia.plugins.*` ships the built-in plugins (todos, skills, MCP), and `lovia.workspace.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web, Rich examples, and Prefect examples stay behind extras.
+4. **General-purpose (通用).** `lovia.tools.*` ships practical, framework-agnostic tools (http, search, human-in-the-loop, time, filesystem, shell), `lovia.plugins.*` ships the built-in plugins (todos, skills, MCP), and `lovia.workspace.*` ships the filesystem + process boundary so a real agent can be assembled in minutes. Optional integrations such as web and Rich examples stay behind extras.
 
 A few corollaries that follow from these:
 

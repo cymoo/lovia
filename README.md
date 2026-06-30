@@ -862,6 +862,23 @@ installed (or pass `--env-file`). Model credentials use the provider's own
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
 | `--app MODULE:ATTR` | `LOVIA_APP` | build default agent |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | `2` (retries after the first; `0` disables) |
+| `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
+| `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 64K |
+| `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
+| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
+
+`--provider-timeout` and `--trust-env` are honored directly by the providers, so
+they also apply to `--app` agents and library use; `--max-retries` / `--max-turns`
+apply to every served run, while `--max-tokens` / `--context-window` configure the
+default agent only.
+
+For TLS behind an intranet CA, `LOVIA_HTTP_CA_BUNDLE` points all outbound HTTPS
+(model providers and the `http_fetch` tool) at a custom PEM bundle, and
+`LOVIA_HTTP_INSECURE=1` disables verification (use only on trusted networks).
+The `web` extra bundles `truststore`, so the OS certificate store is trusted
+automatically — what the browser already trusts, no env needed.
 
 The default agent also gets always-on built-ins: a `todo_write` checklist plus
 `now` (time), `http_fetch`, and `web_search` tools. Web search needs the `ddg`
@@ -955,10 +972,10 @@ The `examples/` directory is a set of runnable scripts. A useful reading order:
 | Development | `pip install -e ".[dev]"` |
 
 `examples` contains dependencies used only by runnable demos, such as
-`python-dotenv`, `rich`, `prefect`, and `ddgs`. `dev` contains repository
-maintenance dependencies: `pytest`, `ruff`, `mypy`, `build`, `twine`, and the
-web test stack. They stay separate so normal development does not install
-demo-only packages like Prefect.
+`python-dotenv`, `rich`, and `ddgs`. `dev` contains repository maintenance
+dependencies: `pytest`, `ruff`, `mypy`, `build`, `twine`, and the web test
+stack. They stay separate so normal development does not install demo-only
+packages.
 
 ## Development
 

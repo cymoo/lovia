@@ -37,7 +37,12 @@ from ..reliability import CancelToken
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..steering import Mailbox
-from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
+from ..transcript import (
+    InputEntry,
+    ToolResultEntry,
+    TranscriptEntry,
+    drop_dangling_tool_calls,
+)
 from .api.serialization import view_messages
 from .schemas import MessageOut
 from .sse import event_to_sse
@@ -268,15 +273,19 @@ class RunController:
 
         Called when a run ends without success and its checkpoint is about to be
         dropped (user stop, or a non-resumable failure) so a reload shows what was
-        produced instead of an empty chat. ``completed_mirror`` only ever holds
-        whole turns (it grows on ``TurnEnded``), so the persisted transcript never
-        ends on a dangling tool call. Keyed by ``run_id`` -> idempotent; with the
-        checkpoint deleted next, the run lives in exactly one place (the resume
-        path concatenates session history + snapshot, so a run present in both
-        would double-count).
+        produced instead of an empty chat. ``completed_mirror`` grows only on
+        ``TurnEnded``, so a *fresh* run's mirror already ends on a whole turn — but
+        a *resumed* run seeds it with the checkpoint's entries, which can end on a
+        tool call the restored run had not yet executed. ``drop_dangling_tool_calls``
+        strips any such unmatched call so the stored transcript never ends on a
+        dangling ``tool_use`` (which a provider would reject on the next turn).
+
+        Keyed by ``run_id`` -> idempotent; with the checkpoint deleted next, the
+        run lives in exactly one place (the resume path concatenates session
+        history + snapshot, so a run present in both would double-count).
         """
         session = self.deps.session
-        entries = list(self.completed_mirror)
+        entries = drop_dangling_tool_calls(list(self.completed_mirror))
         if session is not None and entries:
             await session.append(self.session_id, entries, run_id=run_id)
 
@@ -347,7 +356,7 @@ class RunController:
         title_args: tuple[str, str, Any, str] | None = None
         succeeded = False
         error_seen = False
-        failed_terminally = False  # run ended non-resumably (drop its checkpoint)
+        failed_terminally = False  # ended in a non-resumable failure (drop checkpoint)
         try:
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None

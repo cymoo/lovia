@@ -21,8 +21,10 @@ from lovia.transcript import (
     ToolCallEntry,
     ToolResultEntry,
     UsageDelta,
+    entries_to_messages,
     entry_from_dict,
     entry_to_dict,
+    drop_dangling_tool_calls,
 )
 
 
@@ -117,3 +119,60 @@ def test_delta_types_construct() -> None:
     assert td.index == 0 and td.call_id == "c1" and td.name == "add"
     assert UsageDelta(usage=Usage(input_tokens=10)).usage.input_tokens == 10
     assert FinishDelta(reason="stop").reason == "stop"
+
+
+def _call_ids(entries) -> list[str]:
+    return [e.call_id for e in entries if isinstance(e, ToolCallEntry)]
+
+
+def test_drop_dangling_tool_calls_keeps_matched_pairs() -> None:
+    """A whole turn whose call has a result is returned untouched."""
+    entries = [
+        InputEntry(role="user", content="q"),
+        AssistantTextEntry(content="calling"),
+        ToolCallEntry(call_id="c1", name="t", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="ok"),
+    ]
+    assert drop_dangling_tool_calls(entries) == entries
+
+
+def test_drop_dangling_tool_calls_drops_trailing_unmatched_call() -> None:
+    """A tool call with no result (e.g. a resumed run stopped before draining it)
+    is removed; the surrounding entries — including the assistant's text — stay,
+    so the result renders no unmatched ``tool_use``."""
+    entries = [
+        InputEntry(role="user", content="q"),
+        AssistantTextEntry(content="working"),
+        ToolCallEntry(call_id="c1", name="t", arguments="{}"),
+    ]
+    assert drop_dangling_tool_calls(entries) == [
+        InputEntry(role="user", content="q"),
+        AssistantTextEntry(content="working"),
+    ]
+
+
+def test_drop_dangling_tool_calls_partial_turn_keeps_resolved_only() -> None:
+    """With one resolved and one pending call, only the pending one is dropped —
+    and the surviving result keeps its own call, so no orphan result is created."""
+    entries = [
+        InputEntry(role="user", content="q"),
+        ToolCallEntry(call_id="c1", name="t", arguments="{}"),
+        ToolCallEntry(call_id="c2", name="t", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="ok"),
+    ]
+    trimmed = drop_dangling_tool_calls(entries)
+    assert _call_ids(trimmed) == ["c1"]  # c2 (no result) dropped, c1 kept
+    assert ToolResultEntry(call_id="c1", output="ok") in trimmed
+    # Every call surviving into the rendered messages has a matching tool result.
+    msgs = entries_to_messages(trimmed)
+    call_ids = {tc.id for m in msgs for tc in m.tool_calls}
+    result_ids = {m.tool_call_id for m in msgs if m.role == "tool"}
+    assert call_ids <= result_ids
+
+
+def test_drop_dangling_tool_calls_noop_without_tool_entries() -> None:
+    entries = [
+        InputEntry(role="user", content="q"),
+        AssistantTextEntry(content="hi"),
+    ]
+    assert drop_dangling_tool_calls(entries) == entries

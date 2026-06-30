@@ -658,6 +658,29 @@ def safe_window(
     return head_entries + list(entries[cut:])
 
 
+def drop_dangling_tool_calls(
+    entries: list[TranscriptEntry],
+) -> list[TranscriptEntry]:
+    """Drop ``ToolCallEntry``\\ s that have no matching ``ToolResultEntry``.
+
+    A transcript captured mid-turn can end on a tool call whose result never
+    landed — e.g. a resumed run stopped while still draining the pending calls
+    its checkpoint restored (saved right after the model asked for them, before
+    they ran). Left in place, :func:`entries_to_messages` renders such a call as
+    an assistant ``tool_use`` with no following result, which providers reject on
+    the next turn (OpenAI: unknown ``tool_call_id``; Anthropic: ``tool_use``
+    without ``tool_result``). Removing the unmatched calls yields a transcript
+    safe to persist and replay; matched pairs and every other entry are kept, so
+    no orphan :class:`ToolResultEntry` is ever created.
+    """
+    resolved = {e.call_id for e in entries if isinstance(e, ToolResultEntry)}
+    return [
+        e
+        for e in entries
+        if not (isinstance(e, ToolCallEntry) and e.call_id not in resolved)
+    ]
+
+
 __all__ = [
     "AssistantTextEntry",
     "EntryCompletedDelta",
@@ -680,4 +703,5 @@ __all__ = [
     "leading_system_count",
     "safe_window",
     "split_system",
+    "drop_dangling_tool_calls",
 ]

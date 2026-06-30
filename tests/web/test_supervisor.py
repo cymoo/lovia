@@ -486,3 +486,46 @@ async def test_failed_run_persists_partial_transcript() -> None:
         detail = (await ac.get("/api/sessions/s1")).json()
     assert detail["active_run_id"] is None
     assert detail["entries"]
+
+
+@pytest.mark.asyncio
+async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
+    """A *resumed* run seeds its mirror with the checkpoint's entries, which can
+    end on a tool call the restored run had not yet executed. If it's stopped
+    before draining that call, the persisted transcript must not end on an
+    unmatched ``tool_use`` (a provider would reject it on the next turn)."""
+    from lovia.transcript import (
+        AssistantTextEntry,
+        ToolCallEntry,
+        entries_to_messages,
+    )
+    from lovia.web.supervisor import RunController
+
+    store = ChatStore.in_memory()
+    agent = Agent(name="bot", model=ScriptedProvider([]))
+    deps = _app(agent, store=store).state.deps
+    ctrl = RunController(
+        deps=deps,
+        supervisor=deps.supervisor,
+        session_id="s1",
+        agent=agent,
+        first_input="",
+        first_checkpoint=None,
+        seed_entries=[],
+        is_new=False,
+        title_message=None,
+    )
+    # The mirror a resumed-then-stopped run would carry: a pending, unexecuted call.
+    ctrl.completed_mirror = [
+        InputEntry(role="user", content="go"),
+        AssistantTextEntry(content="on it"),
+        ToolCallEntry(call_id="c1", name="block", arguments="{}"),
+    ]
+    await ctrl._persist_partial("run-x")
+
+    entries = await store.session.load("s1")
+    assert entries  # the partial chat survived the stop
+    msgs = entries_to_messages(entries)
+    assert not any(m.tool_calls for m in msgs)  # the dangling call was trimmed
+    assert any(m.role == "user" and m.content == "go" for m in msgs)
+    assert any(m.role == "assistant" and m.content == "on it" for m in msgs)

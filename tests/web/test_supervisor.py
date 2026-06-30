@@ -17,7 +17,9 @@ pytest.importorskip("fastapi")
 import httpx  # noqa: E402
 
 from lovia import Agent, Mailbox, Runner, tool  # noqa: E402
-from lovia.reliability import RunBudget  # noqa: E402
+from lovia.exceptions import ProviderError  # noqa: E402
+from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
+from lovia.transcript import InputEntry, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -76,6 +78,45 @@ async def _kill(task) -> None:
     # unexpected error should surface and fail the test, not be hidden.
     with contextlib.suppress(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=3)
+
+
+async def _wait_session_entries(store, sid, *, timeout=5.0):
+    """Poll until the session holds persisted entries.
+
+    The supervisor's terminal persist runs in the run task's ``finally`` — which
+    completes *after* the cancel endpoint returns and the controller is evicted —
+    so a test can't sync on ``_wait_run(gone=True)`` for it.
+    """
+    for _ in range(int(timeout / 0.02)):
+        entries = await store.session.load(sid)
+        if entries:
+            return entries
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"session {sid} never persisted any entries")
+
+
+async def _wait_calls(provider, n, *, timeout=5.0):
+    """Poll until the scripted provider has been called at least ``n`` times."""
+    for _ in range(int(timeout / 0.02)):
+        if len(provider.calls) >= n:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"provider reached {len(provider.calls)} calls, wanted {n}")
+
+
+class _ScriptThenFail(ScriptedProvider):
+    """Replay the script, then raise a non-retryable :class:`ProviderError` on the
+    next model call — a 'failed', non-resumable run end (not a clean cancel)."""
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        if not self._script:
+            err = ProviderError("scripted non-retryable failure")
+            err.retryable = False
+            raise err
+        async for delta in super().stream(
+            entries, tools=tools, response_format=response_format, settings=settings
+        ):
+            yield delta
 
 
 @pytest.mark.asyncio
@@ -276,6 +317,9 @@ async def test_shutdown_leaves_a_resumable_checkpoint() -> None:
     assert rid is not None
     snap = await store.checkpointer.load(rid)
     assert snap is not None and snap.status in ("interrupted", "running")
+    # A resumable interrupt stays ONLY in the checkpoint — never also written to
+    # the Session, or a resume (history + snapshot) would double-count the run.
+    assert await store.session.load("s1") == []
 
 
 @pytest.mark.asyncio
@@ -361,3 +405,84 @@ async def test_cancel_during_auto_chain_hop_does_not_revive(monkeypatch) -> None
         assert await store.get_active_run_id("s1") is None  # pointer cleared
         r = await ac.post("/api/chat/reconnect", params={"session_id": "s1"})
         assert r.status_code == 404  # nothing to revive
+
+
+@pytest.mark.asyncio
+async def test_cancel_persists_partial_transcript() -> None:
+    """A user stop folds the run's completed turns into the Session, so a page
+    reload shows the partial chat instead of just its title over an empty body.
+
+    The first turn (``ping``) completes before the second (``block``) parks the
+    run, so the mirror holds a whole, finished turn to persist.
+    """
+    release = asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    provider = ScriptedProvider(
+        [call("ping", {}, call_id="c1"), call("block", {}, call_id="c2"), text("end")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[ping, _blocking_tool(release)])
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 2)  # ping turn done; block turn now parked
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()  # let the parked tool unwind so the run task can finish
+        await _wait_run(ac, "s1", gone=True)
+        await _kill(task)
+        # The stopped run's completed turn survives in the durable Session...
+        entries = await _wait_session_entries(store, "s1")
+        assert any(isinstance(e, InputEntry) and e.content == "go" for e in entries)
+        assert any(
+            isinstance(e, ToolResultEntry) and e.output == "pong" for e in entries
+        )
+        # ...and nothing is left to reconnect to (one durable copy, no resume).
+        assert await store.get_active_run_id("s1") is None
+        detail = (await ac.get("/api/sessions/s1")).json()
+    assert detail["active_run_id"] is None
+    assert detail["entries"]  # the chat is no longer empty on reload
+
+
+@pytest.mark.asyncio
+async def test_failed_run_persists_partial_transcript() -> None:
+    """A non-resumable failure (non-retryable provider error) folds the run's
+    completed turns into the Session and leaves nothing to reconnect to — the
+    'failed' checkpoint would otherwise be silently dropped by the next GET."""
+
+    @tool
+    async def ping() -> str:
+        """Return immediately."""
+        return "pong"
+
+    # Turn 1 (ping) completes; the turn-2 model call raises a non-retryable error.
+    provider = _ScriptThenFail([call("ping", {}, call_id="c1")])
+    agent = Agent(name="bot", model=provider, tools=[ping])
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store, retry=RetryPolicy(max_attempts=1))
+    async with _client(app) as ac:
+        lines: list[str] = []
+        async with ac.stream(
+            "POST", "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        ) as res:
+            async for line in res.aiter_lines():
+                lines.append(line)
+        assert "error" in [e for e, _ in _parse_sse("\n".join(lines))]
+        entries = await _wait_session_entries(store, "s1")
+        assert any(
+            isinstance(e, ToolResultEntry) and e.output == "pong" for e in entries
+        )
+        # The non-resumable run is folded into the Session, not stranded in a
+        # checkpoint: no pointer, and reconnect finds nothing.
+        assert await store.get_active_run_id("s1") is None
+        r = await ac.post("/api/chat/reconnect", params={"session_id": "s1"})
+        assert r.status_code == 404
+        detail = (await ac.get("/api/sessions/s1")).json()
+    assert detail["active_run_id"] is None
+    assert detail["entries"]

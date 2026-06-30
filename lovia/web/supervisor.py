@@ -35,6 +35,7 @@ from ..checkpointer import CheckpointOptions
 from ..messages import Message
 from ..reliability import CancelToken
 from ..runner import Runner
+from ..runtime.checkpoint import CheckpointWriter
 from ..steering import Mailbox
 from ..transcript import InputEntry, ToolResultEntry, TranscriptEntry
 from .api.serialization import view_messages
@@ -262,6 +263,23 @@ class RunController:
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
 
+    async def _persist_partial(self, run_id: str) -> None:
+        """Fold this run's completed turns into the durable Session.
+
+        Called when a run ends without success and its checkpoint is about to be
+        dropped (user stop, or a non-resumable failure) so a reload shows what was
+        produced instead of an empty chat. ``completed_mirror`` only ever holds
+        whole turns (it grows on ``TurnEnded``), so the persisted transcript never
+        ends on a dangling tool call. Keyed by ``run_id`` -> idempotent; with the
+        checkpoint deleted next, the run lives in exactly one place (the resume
+        path concatenates session history + snapshot, so a run present in both
+        would double-count).
+        """
+        session = self.deps.session
+        entries = list(self.completed_mirror)
+        if session is not None and entries:
+            await session.append(self.session_id, entries, run_id=run_id)
+
     # -- snapshot mirror ------------------------------------------------- #
 
     def _ingest(self, ev: events.Event) -> None:
@@ -329,6 +347,7 @@ class RunController:
         title_args: tuple[str, str, Any, str] | None = None
         succeeded = False
         error_seen = False
+        failed_terminally = False  # run ended non-resumably (drop its checkpoint)
         try:
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None
@@ -421,15 +440,33 @@ class RunController:
                 # snapshot mirror / in-flight buffer — a dropped client that
                 # re-attaches then still replays the terminal error.
                 self._publish(events.ErrorOccurred(error=exc))
+            # A non-resumable ("failed") end is never offered for reconnect, so the
+            # next GET would silently drop its checkpoint and the partial work would
+            # vanish on reload. Flag it so the finally folds it into the Session.
+            failed_terminally = CheckpointWriter.classify(exc) == "failed"
         finally:
-            if self._user_cancelled and store.checkpointer is not None:
-                # Delete THIS run's checkpoint by our own run_id — re-reading the
-                # pointer could name a newer run that started after cancel evicted
-                # us; the expected= guard likewise won't clobber that newer run.
-                rid = self.run_id
-                if rid:
-                    await store.checkpointer.delete(rid)
-                    await store.clear_active_run_id(sid, expected=rid)
+            # Terminal disposition of THIS leg's run_id (target our own run_id, not
+            # a re-read pointer — a newer run may have claimed it; the expected=
+            # guards below likewise won't clobber that run):
+            #   * user stop, or a non-resumable failure -> persist the partial
+            #     transcript, then drop the checkpoint + pointer so exactly one
+            #     durable copy survives a reload (no resume, hence no double-count).
+            #   * transient interrupt / graceful shutdown -> keep the checkpoint so
+            #     a reconnect can resume it; the Session is left untouched.
+            #   * success -> the loop already persisted + cleared; nothing to do.
+            rid = self.run_id
+            if (
+                store.checkpointer is not None
+                and rid
+                and (self._user_cancelled or failed_terminally)
+            ):
+                # ``not succeeded`` skips a leg the loop already persisted (e.g. a
+                # cancel landing on an auto-chain hop, where this run_id names the
+                # not-yet-started next leg and the mirror is the prior, saved one).
+                if not succeeded:
+                    await self._persist_partial(rid)
+                await store.checkpointer.delete(rid)
+                await store.clear_active_run_id(sid, expected=rid)
             await deps.approvals.release(sid)
             self.hub.close()
             self.supervisor._evict(sid, self)

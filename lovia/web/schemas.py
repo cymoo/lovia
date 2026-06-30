@@ -72,6 +72,10 @@ class MessageOut(BaseModel):
     name: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     timestamp: float | None = None
+    # Populated only for a synthetic ``role="context_compacted"`` entry: the
+    # persisted compaction notice ({reason, reactive, summary, metadata}) that
+    # ``renderHistory`` replays. ``None`` for every real message.
+    compaction: dict[str, Any] | None = None
 
 
 class SessionDetail(BaseModel):

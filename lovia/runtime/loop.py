@@ -80,7 +80,7 @@ from ..providers.base import Provider
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
-from ..session import Segment, Session
+from ..session import COMPACTED_META_KEY, Segment, Session
 from ..tools import Tool
 from ..tracing import NoopTracer, Span, Tracer, handoff_span, record_run_end, run_span
 
@@ -250,8 +250,7 @@ class RunLoop:
                 # transcript. Skip on resume — they already ran on the
                 # original input.
                 input_guardrails = (
-                    state.agent.input_guardrails
-                    + state.active.plugins.input_guardrails
+                    state.agent.input_guardrails + state.active.plugins.input_guardrails
                 )
                 if input_guardrails and self.resume_from is None:
                     await check_input_guardrails(
@@ -581,8 +580,7 @@ class RunLoop:
         for plugin in agent.plugins:
             if plugin.name in seen:
                 raise UserError(
-                    f"Duplicate plugin name {plugin.name!r} on agent "
-                    f"{agent.name!r}.",
+                    f"Duplicate plugin name {plugin.name!r} on agent {agent.name!r}.",
                     hint="A plugin's name is its identity and must be unique "
                     "per agent; each is activated once per run. Remove the "
                     "duplicate or give one plugin a distinct name.",
@@ -862,7 +860,9 @@ class RunLoop:
         if self.parent_usage is not None:
             self.parent_usage.add(state.run_ctx.usage)
 
-        record_run_end(span, turns=state.turns, total_tokens=state.run_ctx.usage.total_tokens)
+        record_run_end(
+            span, turns=state.turns, total_tokens=state.run_ctx.usage.total_tokens
+        )
         return result
 
     # ------------------------------------------------------------------ #
@@ -1153,13 +1153,20 @@ class RunLoop:
                 if callable(carryover_fn)
                 else None
             )
-            meta = {CARRYOVER_META_KEY: carryover} if carryover is not None else None
+            # ``meta`` hosts co-tenant keys: the policy's cross-run carryover (for
+            # the next run) and the run's last compaction notice (for the web UI to
+            # replay on reload). Either may be absent; ``or None`` keeps it sparse.
+            meta: dict[str, Any] = {}
+            if carryover is not None:
+                meta[CARRYOVER_META_KEY] = carryover
+            if state.last_compaction is not None:
+                meta[COMPACTED_META_KEY] = state.last_compaction
             # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
             # argument; ``None`` when not checkpointing -> the store generates one).
             # Append is idempotent on it, so a resumed completion that the
             # crash-window left re-runnable can never double-write the run.
             await self.session.append(
-                self.session_id, run_entries, run_id=self.run_id, meta=meta
+                self.session_id, run_entries, run_id=self.run_id, meta=meta or None
             )
 
     async def _build_view(
@@ -1209,6 +1216,15 @@ class RunLoop:
             metadata["tokens_before"] = result.tokens_before
         if result.tokens_after is not None:
             metadata["tokens_after"] = result.tokens_after
+        # Remember this compaction so the finished segment can carry a notice the
+        # web UI replays on reload. Same shape the live SSE sends; the last
+        # compaction of the run wins (its cumulative counts are the most complete).
+        state.last_compaction = {
+            "reason": result.reason or "context_policy",
+            "reactive": reactive,
+            "summary": result.summary,
+            "metadata": metadata,
+        }
         return events.ContextCompacted(
             session_id=self.session_id,
             entries_before=list(state.transcript),

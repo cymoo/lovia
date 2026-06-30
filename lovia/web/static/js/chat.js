@@ -492,12 +492,96 @@ function appendHandoff(from, to) {
   appendBubbleContent(store.bubble, node);
 }
 
-function appendContextCompacted(data) {
-  if (!store.bubble) return;
+// Compact, human-readable token count: 950, 18.2k, 240k, 1.3M.
+function formatTokens(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return null;
+  if (n < 1000) return String(n);
+  if (n < 100000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1000000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1000000).toFixed(1)}M`;
+}
+
+function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+// Surface why compaction fired and how much it saved. The numbers all ride on
+// `data.metadata` (tokens_before/after, pressure, cleared/offloaded counts,
+// summary_covered); everything degrades gracefully if a field is absent. Shared
+// by the live SSE path (target = the active assistant bubble) and history replay
+// (target = the run's bubble, or the transcript for a boundary notice).
+function appendContextCompacted(target, data) {
+  if (!target || !data) return;
   const node = cloneTemplate('tmpl-context-compacted');
-  const msg = data.summary ? 'Context compacted with summary.' : 'Context compacted.';
-  node.querySelector('.context-text').textContent = msg;
-  appendBubbleContent(store.bubble, node);
+  const meta = data.metadata || {};
+  if (data.reason) node.title = `reason: ${data.reason}`;
+
+  // Trigger chip — reactive means we recovered from a provider context-overflow;
+  // otherwise compaction fired proactively at the high-water mark.
+  const trigger = node.querySelector('.context-trigger');
+  if (data.reactive) {
+    trigger.textContent = 'Overflow recovery';
+    trigger.classList.add('context-trigger--reactive');
+  } else {
+    trigger.textContent = 'Proactive';
+    trigger.classList.add('context-trigger--proactive');
+  }
+
+  // Primary stat — tokens before → after, with the reduction percentage.
+  const stats = node.querySelector('.context-stats');
+  const before = formatTokens(meta.tokens_before);
+  const after = formatTokens(meta.tokens_after);
+  if (before && after) {
+    const flow = document.createElement('span');
+    flow.className = 'context-flow';
+    flow.textContent = `${before} → ${after} tokens`;
+    stats.appendChild(flow);
+    const pct =
+      meta.tokens_before > 0
+        ? Math.round((1 - meta.tokens_after / meta.tokens_before) * 100)
+        : 0;
+    if (pct !== 0) {
+      const badge = document.createElement('span');
+      badge.className = `context-badge${pct < 0 ? ' context-badge--grow' : ''}`;
+      badge.textContent = pct < 0 ? `+${-pct}%` : `-${pct}%`;
+      stats.appendChild(badge);
+    }
+  } else {
+    stats.remove();
+  }
+
+  // Detail line — how full the window was and what is currently trimmed.
+  const detail = node.querySelector('.context-detail');
+  const bits = [];
+  if (typeof meta.pressure === 'number') {
+    bits.push(`context was ${Math.round(meta.pressure * 100)}% full`);
+  }
+  if (meta.offloaded) bits.push(`${plural(meta.offloaded, 'tool result')} offloaded`);
+  if (meta.cleared) bits.push(`${plural(meta.cleared, 'tool result')} cleared`);
+  if (meta.summary_covered) {
+    bits.push(`summary covers ${plural(meta.summary_covered, 'message')}`);
+  }
+  if (bits.length) {
+    detail.textContent = bits.join(' · ');
+  } else {
+    detail.remove();
+  }
+
+  // Full summary text, collapsed by default.
+  if (data.summary) {
+    const details = document.createElement('details');
+    details.className = 'context-summary';
+    const label = document.createElement('summary');
+    label.textContent = 'Summary';
+    details.appendChild(label);
+    const body = document.createElement('div');
+    body.className = 'context-summary-body';
+    body.textContent = data.summary;
+    details.appendChild(body);
+    node.appendChild(details);
+  }
+
+  appendBubbleContent(target, node);
 }
 
 function appendRetry() {
@@ -774,6 +858,10 @@ export function renderHistory(entries) {
         }
       }
       addCopyButton(currentBubble);
+    } else if (it.role === 'context_compacted') {
+      // Persisted run-boundary notice — render into the run's bubble (matching
+      // the live placement), or the transcript if the run had no assistant turn.
+      appendContextCompacted(currentBubble || transcriptEl, it.compaction);
     }
   }
 
@@ -1037,7 +1125,7 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'context_compacted':
-      appendContextCompacted(data);
+      appendContextCompacted(store.bubble, data);
       break;
 
     case 'error':

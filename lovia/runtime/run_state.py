@@ -105,6 +105,11 @@ class RunState:
     # Persisted to RunSnapshot and restored on resume.
     last_input_tokens: int | None = None
     context_policy_state: dict[str, Any] = field(default_factory=dict)
+    # The run's most recent context-compaction, as a JSON-safe notice
+    # ({reason, reactive, summary, metadata}). Stowed in the finished segment's
+    # ``meta`` by ``_persist_session`` so the web UI can replay it on reload.
+    # Not persisted across resume: a resumed run re-captures if it compacts again.
+    last_compaction: dict[str, Any] | None = None
     # Not persisted; resets on resume (bounded by max_turns).
     output_repair_attempts: int = 0
     turns: int = 0

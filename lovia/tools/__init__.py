@@ -32,7 +32,7 @@ from .search import (
     duckduckgo_search,
     web_search,
 )
-from .time import now, sleep
+from .time import current_date, now, sleep
 
 __all__ = [
     "ApprovalPredicate",
@@ -47,6 +47,7 @@ __all__ = [
     "WebSearch",
     "apply_tool_policies",
     "ask_human",
+    "current_date",
     "default_result_renderer",
     "duckduckgo_search",
     "http_fetch",

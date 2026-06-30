@@ -1,9 +1,9 @@
 """``python -m lovia.web`` — launch the lovia chat UI from the command line.
 
 Builds a sensible default agent (a model, skills, long-term memory, a todo
-checklist, model-driven scheduled runs, built-in tools — time, HTTP fetch, web
-search — and a workspace, all configurable via flags or ``LOVIA_*`` environment
-variables) and serves it with the bundled web UI. Point ``--app
+checklist, current-date awareness, model-driven scheduled runs, built-in tools
+— time, HTTP fetch, web search — and a workspace, all configurable via flags or
+``LOVIA_*`` environment variables) and serves it with the bundled web UI. Point ``--app
 module:attribute`` at your own ``Agent`` to serve that instead.
 
 Examples::
@@ -41,7 +41,7 @@ from ..plugins import Memory, Plugin, Skills, Todo
 from ..providers import ModelSettings, provider_from_string
 from ..providers.base import context_window as provider_context_window
 from ..reliability import RetryPolicy
-from ..tools import Tool, duckduckgo_search, http_fetch, now
+from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from .app import DEFAULT_CONTEXT_WINDOW, serve
 from .scheduling import Scheduling
@@ -469,7 +469,7 @@ def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any
     workspace = resolve_workspace(
         args.workspace, args.workspace_mode, args.no_workspace
     )
-    return Agent(
+    agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
         model=model,
@@ -478,6 +478,11 @@ def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any
         tools=resolve_tools(),
         workspace=workspace,
     )
+    # Tell the model today's date up front so it searches the current year and
+    # skips the now->web_search round-trip. Date only (server-local tz): stable
+    # within a prompt-cache window; precise time stays the `now` tool's job.
+    agent.instruction(current_date())
+    return agent
 
 
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:

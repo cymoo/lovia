@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..exceptions import ToolError
+from ..exceptions import ToolError, UserError
 from .base import tool
 
-__all__ = ["now", "sleep"]
+if TYPE_CHECKING:
+    from ..agent import InstructionsFn
+    from ..run_context import RunContext
+
+__all__ = ["current_date", "now", "sleep"]
 
 
 @tool
@@ -48,6 +52,42 @@ def now(
             ),
         ) from exc
     return datetime.now(zone).isoformat()
+
+
+def current_date(tz: str | None = None) -> "InstructionsFn":
+    """Build an ``@agent.instruction`` fragment that states today's date.
+
+    Register it so the model knows "today" *before* it acts — it then writes the
+    current year into web searches and no longer wastes a turn calling ``now``
+    first::
+
+        agent = Agent(name="researcher", tools=[duckduckgo_search()])
+        agent.instruction(current_date())            # server-local timezone
+        # or: agent.instruction(current_date(tz="Asia/Shanghai"))
+
+    Date only, by design: the date is constant within any prompt-cache window,
+    so it never meaningfully busts the cache; precise time, when needed, is the
+    :func:`now` tool's job. The fragment is re-rendered each run, so it stays
+    current across a long-lived session.
+    """
+    try:
+        zone = ZoneInfo(tz) if tz else None
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        # Fail at setup with a clear message rather than every render. On Windows
+        # the IANA tz database isn't bundled, so even valid names need ``tzdata``.
+        raise UserError(
+            f"Unknown timezone {tz!r}.",
+            hint=(
+                "Use an IANA name like 'Asia/Shanghai'. On Windows the IANA tz "
+                "database isn't bundled — `pip install tzdata` to enable it."
+            ),
+        ) from exc
+
+    def fragment(ctx: "RunContext[Any]") -> str:  # ctx required by InstructionsFn
+        dt = datetime.now(zone) if zone else datetime.now().astimezone()
+        return f"Today's date is {dt:%Y-%m-%d} ({dt:%A})."
+
+    return fragment
 
 
 @tool

@@ -1400,7 +1400,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   background: var(--bg);
   border: 2px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 8px 8px 8px 18px;
+  padding: 8px 18px;
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
@@ -1474,7 +1474,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   padding: 5px 14px;
   font-size: 12px;
 }
-#send,
 #stop {
   padding: 9px 20px;
   min-width: 64px;

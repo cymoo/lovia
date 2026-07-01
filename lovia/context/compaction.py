@@ -23,7 +23,7 @@ How a call flows:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from .policy import CompactionRequest, ContextResult
 from .render import protected_tail_start, render_view
@@ -37,7 +37,6 @@ from .stages import (
 )
 from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
-from ..types import JsonObject
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry, split_system
 
@@ -54,6 +53,11 @@ _RATIO_MIN, _RATIO_MAX = 0.5, 4.0
 
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
+
+
+def _plural(n: int, noun: str) -> str:
+    """``1 tool result`` / ``2 tool results`` — naive count + noun for notices."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 class Compaction:
@@ -282,27 +286,6 @@ class Compaction:
 
         return [make_recall_tool(self.store)]
 
-    def carryover(self, scratch: JsonObject) -> JsonObject | None:
-        """Cross-run subset of ``scratch`` to persist in the segment ``meta``.
-
-        Only the *decisions* (cleared, offloaded, summary) carry across runs:
-        they keep a follow-up run's view byte-stable without re-deriving them.
-        The calibration ratio, last-view estimate, and summarizer circuit
-        breaker reset to defaults — self-healing per-run runtime state, not
-        decisions, so stale values must not bleed into the next run.
-        """
-        state = CompactionState.load(scratch)
-        decisions = CompactionState(
-            cleared=state.cleared,
-            offloaded=state.offloaded,
-            summary=state.summary,
-        )
-        if decisions == CompactionState():
-            return None
-        out: dict[str, Any] = {}
-        decisions.save(out)
-        return out
-
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
@@ -329,14 +312,17 @@ class Compaction:
         else:
             reason = None
 
-        metadata: JsonObject = {
-            "ratio": round(state.ratio, 3),
-            "cleared": len(state.cleared),
-            "offloaded": len(state.offloaded),
-            "summary_covered": state.summary.covered if state.summary else 0,
-        }
+        # Policy-authored notice bullets, rendered verbatim by the UI. Only the
+        # decisions worth surfacing — the calibration ratio stays internal.
+        detail: list[str] = []
         if budget is not None:
-            metadata["pressure"] = round(budget.pressure(tokens), 3)
+            detail.append(f"context was {round(budget.pressure(tokens) * 100)}% full")
+        if state.offloaded:
+            detail.append(f"{_plural(len(state.offloaded), 'tool result')} offloaded")
+        if state.cleared:
+            detail.append(f"{_plural(len(state.cleared), 'tool result')} cleared")
+        if state.summary is not None:
+            detail.append(f"summary covers {_plural(state.summary.covered, 'message')}")
         return ContextResult(
             entries=view,
             changed=changed,
@@ -349,7 +335,7 @@ class Compaction:
             ),
             tokens_before=tokens_before,
             tokens_after=tokens,
-            metadata=metadata,
+            detail=detail,
         )
 
     def _save(self, req: CompactionRequest, state: CompactionState) -> None:

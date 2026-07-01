@@ -55,7 +55,7 @@ async def test_offload_archives_old_result_and_view_carries_marker():
 
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1
-    assert compacted[0].reason == "offload"
+    assert compacted[0].notice.reason == "offload"
 
     # The session still holds the untouched output today; the store is the
     # durable copy layered on top (for when the transcript no longer retains it).
@@ -142,7 +142,7 @@ async def test_offload_without_store_markers_and_recall_falls_back():
 
     # The stage still fired (the pipeline reports it)...
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
-    assert len(compacted) == 1 and compacted[0].reason == "offload"
+    assert len(compacted) == 1 and compacted[0].notice.reason == "offload"
 
     # ...and although nothing was archived, recall recovers c1 from the
     # transcript via the entries-only fallback (store=None).

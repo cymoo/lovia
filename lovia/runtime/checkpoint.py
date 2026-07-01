@@ -143,7 +143,7 @@ class CheckpointWriter:
             output=output,
             error=error,
             last_input_tokens=state.last_input_tokens,
-            context_policy_state=state.context_policy_state,
+            context_state=state.context_state,
         )
         await self.checkpointer.append(self.run_id, delta, head)
         self._persisted = len(run_entries)

@@ -63,7 +63,7 @@ class RunHead:
     # decisions, calibrated ratio, running summary, …). The runner never
     # inspects this — it round-trips it through checkpoints so the policy
     # can pick up where it left off after a resume.
-    context_policy_state: JsonObject = field(default_factory=dict)
+    context_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> JsonObject:
@@ -75,7 +75,7 @@ class RunHead:
             "output": to_json_safe(self.output),
             "error": to_json_safe(self.error),
             "last_input_tokens": self.last_input_tokens,
-            "context_policy_state": to_json_safe(self.context_policy_state) or {},
+            "context_state": to_json_safe(self.context_state) or {},
             "updated_at": self.updated_at,
         }
 
@@ -89,7 +89,7 @@ class RunHead:
             output=data.get("output"),
             error=data.get("error"),
             last_input_tokens=data.get("last_input_tokens"),
-            context_policy_state=data.get("context_policy_state", {}),
+            context_state=data.get("context_state", {}),
             updated_at=data.get("updated_at", time.time()),
         )
 
@@ -120,7 +120,7 @@ class RunSnapshot:
     output: Any | None = None
     error: JsonObject | None = None
     last_input_tokens: int | None = None
-    context_policy_state: JsonObject = field(default_factory=dict)
+    context_state: JsonObject = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
     # ----- head <-> snapshot, used by store implementations -----
@@ -136,7 +136,7 @@ class RunSnapshot:
             output=self.output,
             error=self.error,
             last_input_tokens=self.last_input_tokens,
-            context_policy_state=self.context_policy_state,
+            context_state=self.context_state,
             updated_at=self.updated_at,
         )
 
@@ -155,7 +155,7 @@ class RunSnapshot:
             output=head.output,
             error=head.error,
             last_input_tokens=head.last_input_tokens,
-            context_policy_state=head.context_policy_state,
+            context_state=head.context_state,
             updated_at=head.updated_at,
         )
 

@@ -8,6 +8,7 @@ correct keep-alive and disconnect semantics.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import AsyncIterator, cast
 
 from ..types import JsonObject, JsonValue
@@ -155,21 +156,13 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "data": json.dumps({"turn": ev.turn, "agent": ev.agent.name}),
         }
     if isinstance(ev, events.ContextCompacted):
-        # ``metadata`` is already JSON-safe (a JsonObject) and carries the
-        # interesting numbers — tokens_before/after, pressure, cleared/offloaded
-        # counts, summary_covered. Forward it whole so the UI can surface them
-        # without per-key plumbing here.
+        # The notice is already JSON-safe and self-contained (reason, token
+        # delta, policy-authored ``detail`` bullets, summary). Forward it whole so
+        # the UI renders any policy's compaction without per-key plumbing — the
+        # same shape the reload path reads back from the segment ``meta``.
         return {
             "event": "context_compacted",
-            "data": json.dumps(
-                {
-                    "session_id": ev.session_id,
-                    "reason": ev.reason,
-                    "summary": ev.summary,
-                    "reactive": ev.reactive,
-                    "metadata": ev.metadata,
-                }
-            ),
+            "data": json.dumps({"session_id": ev.session_id, **asdict(ev.notice)}),
         }
     if isinstance(ev, events.ErrorOccurred):
         return {

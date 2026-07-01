@@ -23,6 +23,7 @@ import logging
 import time
 from collections import Counter
 from contextlib import AsyncExitStack
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ from ..transcript import (
     entries_to_messages,
     leading_system_count,
     messages_to_entries,
+    to_json_safe,
 )
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import (
@@ -80,7 +82,7 @@ from ..providers.base import Provider
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
-from ..session import COMPACTED_META_KEY, Segment, Session
+from ..session import STATE_META_KEY, NOTICE_META_KEY, Segment, Session
 from ..tools import Tool
 from ..tracing import NoopTracer, Span, Tracer, handoff_span, record_run_end, run_span
 
@@ -89,12 +91,6 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
-
-# Reserved key under which a context policy's cross-run carryover rides in a
-# finished run's session-segment ``meta``. Namespaced so ``meta`` can host
-# other co-tenants; the value is opaque to the loop (it just round-trips it
-# into the next run's ``context_policy_state``).
-CARRYOVER_META_KEY = "context_carryover"
 
 
 class RunLoop:
@@ -477,7 +473,7 @@ class RunLoop:
         )
         # Read prior session history once, as segments: the flattened entries
         # become the prefix, and the latest segment's ``meta`` seeds a fresh
-        # run's context-policy carryover (below).
+        # run's context-policy state (below).
         segments: list[Segment] = []
         if self.session is not None:
             assert self.session_id is not None  # validated in __init__
@@ -512,12 +508,12 @@ class RunLoop:
 
         # Seed the context policy's per-run scratch: the resuming run's own
         # checkpoint wins; otherwise a fresh run inherits the previous run's
-        # carryover from the latest session segment's meta; else empty.
+        # carried decisions from the latest session segment's meta; else empty.
         if snapshot is not None:
-            context_state = dict(snapshot.context_policy_state)
+            context_state = dict(snapshot.context_state)
         elif segments:
-            carryover = (segments[-1].meta or {}).get(CARRYOVER_META_KEY)
-            context_state = dict(carryover) if isinstance(carryover, dict) else {}
+            prior = (segments[-1].meta or {}).get(STATE_META_KEY)
+            context_state = dict(prior) if isinstance(prior, dict) else {}
         else:
             context_state = {}
 
@@ -531,7 +527,7 @@ class RunLoop:
             last_input_tokens=(
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
-            context_policy_state=context_state,
+            context_state=context_state,
         )
 
     async def _resolve_active(
@@ -653,7 +649,7 @@ class RunLoop:
             model=getattr(primary, "model", None),
             last_input_tokens=state.last_input_tokens,
             overflow=False,
-            scratch=state.context_policy_state,
+            scratch=state.context_state,
         )
         ctx_result = await self.context_policy.compact(request)
         view = await self._build_view(state, ctx_result)
@@ -972,8 +968,8 @@ class RunLoop:
 
         ``history`` is the flattened prior-session transcript, already fetched
         in ``_bootstrap`` from ``session.segments`` (one read serves both the
-        prefix and the carryover meta). Everything appended after this prefix is
-        the run's own contribution; its length is the run's
+        prefix and the carried-state meta). Everything appended after this prefix
+        is the run's own contribution; its length is the run's
         :attr:`RunState.run_start` boundary.
         """
         entries: list[TranscriptEntry] = []
@@ -1144,23 +1140,21 @@ class RunLoop:
         assert self.session is not None and self.session_id is not None
         run_entries = state.run_entries
         if run_entries:
-            # Carry the policy's cross-run decisions in the segment ``meta`` so a
-            # follow-up run resumes them without re-deriving — durably, unlike
-            # the old in-process cache. The value is opaque to the loop.
-            carryover_fn = getattr(self.context_policy, "carryover", None)
-            carryover = (
-                carryover_fn(state.context_policy_state)
-                if callable(carryover_fn)
-                else None
-            )
-            # ``meta`` hosts co-tenant keys: the policy's cross-run carryover (for
-            # the next run) and the run's last compaction notice (for the web UI to
-            # replay on reload). Either may be absent; ``or None`` keeps it sparse.
+            # ``meta`` hosts two independent co-tenants (either may be absent):
+            #  * the policy's carried state — the same opaque scratch the
+            #    checkpoint stores — so the next run on this session resumes its
+            #    decisions without re-deriving them;
+            #  * the run's last compaction notice, for the web UI to replay on
+            #    reload.
             meta: dict[str, Any] = {}
-            if carryover is not None:
-                meta[CARRYOVER_META_KEY] = carryover
-            if state.last_compaction is not None:
-                meta[COMPACTED_META_KEY] = state.last_compaction
+            if state.context_state:
+                # Sanitize exactly as the checkpoint path does (which stores
+                # ``to_json_safe(context_state)``) — same blob, same
+                # treatment — so a custom policy's scratch can't round-trip
+                # through the checkpoint yet crash the session store here.
+                meta[STATE_META_KEY] = to_json_safe(state.context_state)
+            if state.context_notice is not None:
+                meta[NOTICE_META_KEY] = asdict(state.context_notice)
             # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
             # argument; ``None`` when not checkpointing -> the store generates one).
             # Append is idempotent on it, so a resumed completion that the
@@ -1211,28 +1205,24 @@ class RunLoop:
         *,
         reactive: bool,
     ) -> events.ContextCompacted:
-        metadata = dict(result.metadata)
-        if result.tokens_before is not None:
-            metadata["tokens_before"] = result.tokens_before
-        if result.tokens_after is not None:
-            metadata["tokens_after"] = result.tokens_after
-        # Remember this compaction so the finished segment can carry a notice the
-        # web UI replays on reload. Same shape the live SSE sends; the last
-        # compaction of the run wins (its cumulative counts are the most complete).
-        state.last_compaction = {
-            "reason": result.reason or "context_policy",
-            "reactive": reactive,
-            "summary": result.summary,
-            "metadata": metadata,
-        }
+        # Build the notice once and reuse it: the live event carries it, and it is
+        # remembered on ``state.context_notice`` so the finished segment can stow
+        # it for the web UI to replay on reload. The last compaction of the run
+        # wins (its cumulative counts are the most complete).
+        notice = events.CompactionNotice(
+            reason=result.reason or "context_policy",
+            reactive=reactive,
+            summary=result.summary,
+            tokens_before=result.tokens_before,
+            tokens_after=result.tokens_after,
+            detail=result.detail,
+        )
+        state.context_notice = notice
         return events.ContextCompacted(
             session_id=self.session_id,
             entries_before=list(state.transcript),
             entries_after=list(view),
-            summary=result.summary,
-            reactive=reactive,
-            reason=result.reason or "context_policy",
-            metadata=metadata,
+            notice=notice,
         )
 
 

@@ -8,10 +8,12 @@ reverts; summary coverage only grows), so the rendered prompt prefix is
 byte-stable across turns — which is exactly what provider prompt caches need.
 
 The state lives inside the runner-owned per-run ``scratch`` dict
-(:attr:`~lovia.checkpointer.RunSnapshot.context_policy_state`) as plain
-JSON types, so it survives checkpoint/resume for free and can never leak
-across runs. :meth:`CompactionState.load` is deliberately forgiving: garbage,
-missing keys, or a different schema version simply mean a fresh state.
+(:attr:`~lovia.checkpointer.RunSnapshot.context_state`) as plain
+JSON types, so it survives checkpoint/resume for free, and the runner carries
+it to the next run on the same session (via the segment ``meta``) so decisions
+persist without re-deriving. :meth:`CompactionState.load` is deliberately
+forgiving: garbage, missing keys, or a different schema version simply mean a
+fresh state.
 """
 
 from __future__ import annotations
@@ -174,7 +176,8 @@ def fingerprint(entries: Sequence[TranscriptEntry]) -> str:
 
     Captures entry kinds, call ids/roles, and content lengths — enough to
     detect the covered prefix being rewritten out from under a summary (e.g.
-    across a cross-run carryover), without hashing megabytes of content.
+    when a summary is carried into a new run), without hashing megabytes of
+    content.
     """
     h = hashlib.sha1()
     for entry in entries:

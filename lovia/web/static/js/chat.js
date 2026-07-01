@@ -501,19 +501,16 @@ function formatTokens(n) {
   return `${(n / 1000000).toFixed(1)}M`;
 }
 
-function plural(n, noun) {
-  return `${n} ${noun}${n === 1 ? '' : 's'}`;
-}
-
-// Surface why compaction fired and how much it saved. The numbers all ride on
-// `data.metadata` (tokens_before/after, pressure, cleared/offloaded counts,
-// summary_covered); everything degrades gracefully if a field is absent. Shared
-// by the live SSE path (target = the active assistant bubble) and history replay
-// (target = the run's bubble, or the transcript for a boundary notice).
+// Surface why compaction fired and how much it saved. Policy-agnostic: the
+// numeric fields (tokens_before/after) ride at the top level and the policy
+// authors its own `detail` bullets, so this renders any ContextPolicy's notice
+// without knowing its internals; everything degrades gracefully if a field is
+// absent. Shared by the live SSE path (target = the active assistant bubble) and
+// history replay (target = the run's bubble, or the transcript for a boundary
+// notice).
 function appendContextCompacted(target, data) {
   if (!target || !data) return;
   const node = cloneTemplate('tmpl-context-compacted');
-  const meta = data.metadata || {};
   if (data.reason) node.title = `reason: ${data.reason}`;
 
   // Trigger chip — reactive means we recovered from a provider context-overflow;
@@ -529,16 +526,16 @@ function appendContextCompacted(target, data) {
 
   // Primary stat — tokens before → after, with the reduction percentage.
   const stats = node.querySelector('.context-stats');
-  const before = formatTokens(meta.tokens_before);
-  const after = formatTokens(meta.tokens_after);
+  const before = formatTokens(data.tokens_before);
+  const after = formatTokens(data.tokens_after);
   if (before && after) {
     const flow = document.createElement('span');
     flow.className = 'context-flow';
     flow.textContent = `${before} → ${after} tokens`;
     stats.appendChild(flow);
     const pct =
-      meta.tokens_before > 0
-        ? Math.round((1 - meta.tokens_after / meta.tokens_before) * 100)
+      data.tokens_before > 0
+        ? Math.round((1 - data.tokens_after / data.tokens_before) * 100)
         : 0;
     if (pct !== 0) {
       const badge = document.createElement('span');
@@ -550,17 +547,9 @@ function appendContextCompacted(target, data) {
     stats.remove();
   }
 
-  // Detail line — how full the window was and what is currently trimmed.
+  // Detail line — bullets the policy authored, rendered verbatim.
   const detail = node.querySelector('.context-detail');
-  const bits = [];
-  if (typeof meta.pressure === 'number') {
-    bits.push(`context was ${Math.round(meta.pressure * 100)}% full`);
-  }
-  if (meta.offloaded) bits.push(`${plural(meta.offloaded, 'tool result')} offloaded`);
-  if (meta.cleared) bits.push(`${plural(meta.cleared, 'tool result')} cleared`);
-  if (meta.summary_covered) {
-    bits.push(`summary covers ${plural(meta.summary_covered, 'message')}`);
-  }
+  const bits = Array.isArray(data.detail) ? data.detail : [];
   if (bits.length) {
     detail.textContent = bits.join(' · ');
   } else {

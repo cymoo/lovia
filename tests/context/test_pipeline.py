@@ -17,6 +17,7 @@ from lovia import (
 from lovia.transcript import AssistantTextEntry, InputEntry
 from lovia.context import (
     CompactionState,
+    ContextResult,
     NoopContextPolicy,
     OffloadRecord,
     SummaryState,
@@ -499,16 +500,16 @@ async def test_runner_emits_context_compacted_event():
         events_seen.append(ev)
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1
-    assert compacted[0].reactive is True
-    assert compacted[0].reason == "reactive_summary"
-    assert compacted[0].summary == "S."
-    assert isinstance(compacted[0].metadata.get("tokens_after"), int)
+    assert compacted[0].notice.reactive is True
+    assert compacted[0].notice.reason == "reactive_summary"
+    assert compacted[0].notice.summary == "S."
+    assert isinstance(compacted[0].notice.tokens_after, int)
 
 
 async def test_runner_persists_compaction_notice_to_segment_meta():
     """A run that compacts stows a JSON-safe notice in its finished segment's
     meta, so the web UI can replay it when the session is reloaded."""
-    from lovia.session import COMPACTED_META_KEY
+    from lovia.session import NOTICE_META_KEY
 
     policy = Compaction(summarizer=FakeSummarizer("S."))
     provider = _OverflowOnceProvider()
@@ -518,12 +519,12 @@ async def test_runner_persists_compaction_notice_to_segment_meta():
         agent, "go", context_policy=policy, session=sess, session_id="s1"
     ):
         pass
-    notice = (await sess.segments("s1"))[-1].meta[COMPACTED_META_KEY]
+    notice = (await sess.segments("s1"))[-1].meta[NOTICE_META_KEY]
     assert notice["reason"] == "reactive_summary"
     assert notice["reactive"] is True
     assert notice["summary"] == "S."
-    # The token numbers ride along (the whole point of persisting, vs carryover).
-    assert notice["metadata"]["tokens_before"] >= notice["metadata"]["tokens_after"]
+    # The token numbers ride along at the top level now (no nested metadata).
+    assert notice["tokens_before"] >= notice["tokens_after"]
 
 
 async def test_runner_no_policy_keeps_existing_behavior():
@@ -542,7 +543,7 @@ async def test_runner_default_policy_recovers_from_overflow():
         events_seen.append(ev)
     compacted = [e for e in events_seen if isinstance(e, ContextCompacted)]
     assert len(compacted) == 1
-    assert compacted[0].reactive is True
+    assert compacted[0].notice.reactive is True
     assert "hello after compaction" in (events_seen[-1].result.output or "")
 
 
@@ -576,11 +577,14 @@ async def test_compaction_does_not_modify_session():
 
 
 # ---------------------------------------------------------------------------
-# Cross-run carryover (decisions persisted in the session segment meta)
+# Cross-run continuation (the full policy scratch persisted in the segment meta)
 # ---------------------------------------------------------------------------
 
 
-def test_carryover_keeps_decisions_drops_calibration():
+def test_state_round_trips_full_including_calibration():
+    """There is no carryover subset anymore: the policy carries its FULL scratch
+    across runs — decisions AND calibration — via the one ``save``/``load`` shape
+    the checkpoint and the session-meta both use."""
     state = CompactionState(
         cleared={"a", "b"},
         offloaded={"c": OffloadRecord(preview="p", chars=99)},
@@ -591,32 +595,16 @@ def test_carryover_keeps_decisions_drops_calibration():
     )
     scratch: dict = {}
     state.save(scratch)
-    cv = Compaction().carryover(scratch)
-    assert cv is not None
-    reloaded = CompactionState.load(cv)
-    # Decisions survive...
-    assert reloaded.cleared == {"a", "b"}
-    assert set(reloaded.offloaded) == {"c"}
-    assert reloaded.summary is not None and reloaded.summary.covered == 3
-    # ...per-run calibration and the circuit breaker reset to defaults.
-    assert reloaded.ratio == 1.0
-    assert reloaded.last_view_estimate is None
-    assert reloaded.summary_failures == 0
+    # Everything survives verbatim — including the carried ``ratio`` (better kept
+    # than re-learned) and the ``summary_failures`` breaker count.
+    assert CompactionState.load(scratch) == state
 
 
-def test_carryover_none_when_no_decisions():
-    assert Compaction().carryover({}) is None
-    # Calibration-only state (no decisions) carries nothing either.
-    scratch: dict = {}
-    CompactionState(ratio=3.0, last_view_estimate=42, summary_failures=1).save(scratch)
-    assert Compaction().carryover(scratch) is None
-
-
-async def test_carryover_resumes_summary_across_runs_durably():
+async def test_continuation_resumes_summary_across_runs_durably():
     """A *fresh* policy instance on the second run inherits the first run's
-    summary from the session segment meta — durable carryover, not an
+    summary from the session segment meta — durable continuation, not an
     in-process cache — so the long prefix is not re-summarized."""
-    from lovia.runtime.loop import CARRYOVER_META_KEY
+    from lovia.session import STATE_META_KEY
 
     sess = InMemorySession()
     await sess.append("s1", [user(f"m{i}" + "x" * 98) for i in range(30)])
@@ -639,14 +627,67 @@ async def test_carryover_resumes_summary_across_runs_durably():
     calls_after_first = len(summarizer.calls)
     assert calls_after_first >= 1  # run 1 summarized the long prefix
 
-    # The completed run wrote its carryover into the latest segment meta.
+    # The completed run wrote its full policy state into the latest segment meta.
     segs = await sess.segments("s1")
-    assert segs[-1].meta and CARRYOVER_META_KEY in segs[-1].meta
+    assert segs[-1].meta and STATE_META_KEY in segs[-1].meta
+    # The FULL scratch carries — not a decisions-only subset. Calibration and the
+    # summarizer breaker ride along too (the exact inverse of the old carryover,
+    # which dropped them).
+    carried = segs[-1].meta[STATE_META_KEY]["context"]
+    assert {"ratio", "last_view_estimate", "summary_failures"} <= carried.keys()
 
     await Runner.run(
         agent, "q2", context_policy=fresh_policy(), session=sess, session_id="s1"
     )
     assert len(summarizer.calls) == calls_after_first  # inherited; no re-summarize
+
+
+async def test_detail_bullets_describe_what_changed():
+    """The policy authors its own notice bullets from its state (the UI renders
+    them verbatim). Covers ``_plural`` both ways and the pressure line."""
+    pipeline = _pipeline(context_window=100_000)
+    scratch: dict = {}
+    CompactionState(
+        cleared={"a"},
+        offloaded={
+            "c": OffloadRecord(preview="p", chars=9),
+            "d": OffloadRecord(preview="q", chars=9),
+        },
+    ).save(scratch)
+    res = await pipeline.compact(req([user("hi")], scratch=scratch))
+    assert "2 tool results offloaded" in res.detail  # plural
+    assert "1 tool result cleared" in res.detail  # singular
+    assert any(b.endswith("% full") for b in res.detail)  # pressure line present
+
+
+async def test_custom_policy_detail_flows_to_the_notice():
+    """A non-Compaction policy authors its own notice bullets; the loop forwards
+    them verbatim into the event (hence into the UI and the segment meta). Proves
+    the notice is policy-agnostic — the UI never reaches into Compaction internals
+    — and doubles as a minimal-policy smoke test (only ``compact`` implemented)."""
+
+    class KeepTailPolicy:
+        async def compact(self, request):
+            return ContextResult(
+                entries=request.entries[-1:],
+                changed=True,
+                compacted=True,
+                reason="keep_tail",
+                tokens_before=100,
+                tokens_after=10,
+                detail=["dropped everything but the tail"],
+            )
+
+    provider = ScriptedProvider([text("ok")])
+    agent = Agent(name="t", instructions="x", model=provider)
+    seen: list = []
+    async for ev in Runner.stream(agent, "go", context_policy=KeepTailPolicy()):
+        seen.append(ev)
+    compacted = [e for e in seen if isinstance(e, ContextCompacted)]
+    assert len(compacted) == 1
+    assert compacted[0].notice.reason == "keep_tail"
+    assert compacted[0].notice.detail == ["dropped everything but the tail"]
+    assert compacted[0].notice.tokens_before == 100
 
 
 # ---------------------------------------------------------------------------

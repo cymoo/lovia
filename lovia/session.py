@@ -40,8 +40,9 @@ class Segment:
 
     A session is an append-only log of these: each finished run appends its own
     ``entries`` as one segment keyed by ``run_id``, with opaque per-run ``meta``
-    (e.g. a context policy's cross-run carryover, or a per-run summary). Stores
-    persist ``meta`` verbatim and never interpret it.
+    (e.g. the context policy's carried cross-run state, or a compaction notice —
+    see ``STATE_META_KEY`` / ``NOTICE_META_KEY``). Stores persist ``meta``
+    verbatim and never interpret it.
     """
 
     run_id: str
@@ -49,11 +50,19 @@ class Segment:
     meta: JsonObject | None = None
 
 
-# Reserved key under which the loop stows a JSON-safe snapshot of a run's last
-# context-compaction in its finished segment's ``meta`` (a co-tenant alongside
-# ``context_carryover``, defined in ``runtime.loop``). The web UI reads it to
-# replay the compaction notice when a finished session is reloaded.
-COMPACTED_META_KEY = "context_compacted"
+# Reserved keys the loop stows in a finished run's segment ``meta`` (stores
+# persist ``meta`` verbatim and never interpret it — see :class:`Segment`). Each
+# is stored under the same name the ``RunState`` field and the checkpoint use, so
+# the carried state has one name everywhere:
+#
+# * ``context_state`` — the context policy's carried state (its sticky decisions
+#   plus calibration), round-tripped into the next run's ``context_state`` so a
+#   follow-up run resumes without re-deriving. The same blob the checkpoint
+#   stores; opaque to the loop.
+# * ``context_notice`` — a JSON-safe snapshot of the run's last compaction that
+#   the web UI replays when a finished session is reloaded.
+STATE_META_KEY = "context_state"
+NOTICE_META_KEY = "context_notice"
 
 
 class Session(Protocol):

@@ -1168,32 +1168,23 @@ async function pollForTitle(sessionId) {
 }
 
 // ---- Streaming ---------------------------------------------------------
-const sendBtn = document.getElementById('send');
 const stopBtn = document.getElementById('stop');
 const composer = document.getElementById('composer');
 const promptEl = document.getElementById('prompt');
 let _streamAbortController = null;
 
-// While a run streams, the composer stays usable: Send becomes "Queue" (next
-// turn / next run) and Stop appears beside it. Keeping Send visible is what
-// makes queuing discoverable.
+// Messages are sent with Enter, so there's no send button. While a run streams,
+// the composer stays usable: Stop appears, and pressing Enter queues the text
+// for the next turn/run. The placeholder is what makes queuing discoverable.
 function enterStreamingUI() {
   store.streaming = true;
   if (stopBtn) stopBtn.style.display = '';
-  if (sendBtn) {
-    sendBtn.textContent = 'Queue';
-    sendBtn.setAttribute('aria-label', 'Queue message');
-  }
   if (promptEl) promptEl.placeholder = 'Queue a follow-up…';
 }
 
 function exitStreamingUI() {
   store.streaming = false;
   if (stopBtn) stopBtn.style.display = 'none';
-  if (sendBtn) {
-    sendBtn.textContent = 'Send';
-    sendBtn.setAttribute('aria-label', 'Send');
-  }
   if (promptEl) {
     promptEl.placeholder = 'Send a message…';
     promptEl.focus();

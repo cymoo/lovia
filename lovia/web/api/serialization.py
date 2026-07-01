@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...messages import Message
-from ...session import COMPACTED_META_KEY, Segment
+from ...session import NOTICE_META_KEY, Segment
 from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
 from ..schemas import ChatSessionInfo, MessageOut
 from ..store import ChatMeta
@@ -101,7 +101,7 @@ def segments_to_out(
             if not (isinstance(e, InputEntry) and e.role == "system")
         ]
         all_msgs.extend(entries_to_messages(cleaned))
-        notice = (seg.meta or {}).get(COMPACTED_META_KEY)
+        notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
             boundaries.append((len(all_msgs), notice))
     outs = messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at)

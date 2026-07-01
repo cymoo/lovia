@@ -28,7 +28,7 @@ def test_state_round_trips_through_scratch():
 
 
 def test_state_round_trips_through_checkpoint_json():
-    """Exact checkpoint path: context_policy_state serialized as JSON and back."""
+    """Exact checkpoint path: context_state serialized as JSON and back."""
     scratch: dict = {}
     _full_state().save(scratch)
     revived = json.loads(json.dumps(scratch))

@@ -190,8 +190,8 @@ def test_stream_emits_tool_events() -> None:
     assert "tool_result" in kinds
 
 
-def test_context_compacted_sse_forwards_metadata() -> None:
-    """The compaction SSE payload carries the metadata the UI renders."""
+def test_context_compacted_sse_forwards_notice() -> None:
+    """The compaction SSE payload carries the notice the UI renders."""
     from lovia import events
     from lovia.web.sse import event_to_sse
 
@@ -199,31 +199,27 @@ def test_context_compacted_sse_forwards_metadata() -> None:
         session_id="s1",
         entries_before=[],
         entries_after=[],
-        reason="reactive_offload+clear",
-        summary="A running summary.",
-        reactive=True,
-        metadata={
-            "tokens_before": 18000,
-            "tokens_after": 9000,
-            "pressure": 0.82,
-            "cleared": 3,
-            "offloaded": 1,
-            "summary_covered": 8,
-            "ratio": 1.05,
-        },
+        notice=events.CompactionNotice(
+            reason="reactive_offload+clear",
+            reactive=True,
+            summary="A running summary.",
+            tokens_before=18000,
+            tokens_after=9000,
+            detail=["context was 82% full", "3 tool results cleared"],
+        ),
     )
     payload = event_to_sse(ev)
     assert payload is not None
     assert payload["event"] == "context_compacted"
     data = json.loads(payload["data"])
+    assert data["session_id"] == "s1"
     assert data["reactive"] is True
     assert data["summary"] == "A running summary."
-    # The whole metadata dict rides along so the UI can show before/after,
-    # pressure, and the trim counts without extra plumbing.
-    assert data["metadata"]["tokens_before"] == 18000
-    assert data["metadata"]["tokens_after"] == 9000
-    assert data["metadata"]["pressure"] == 0.82
-    assert data["metadata"]["cleared"] == 3
+    # The notice rides along flat so the UI shows before/after and the
+    # policy-authored detail bullets without extra plumbing.
+    assert data["tokens_before"] == 18000
+    assert data["tokens_after"] == 9000
+    assert data["detail"] == ["context was 82% full", "3 tool results cleared"]
 
 
 def test_session_detail_replays_persisted_compaction_notice() -> None:
@@ -231,7 +227,7 @@ def test_session_detail_replays_persisted_compaction_notice() -> None:
     segment meta) as a synthetic ``context_compacted`` entry at the run boundary."""
     import asyncio
 
-    from lovia.session import COMPACTED_META_KEY
+    from lovia.session import NOTICE_META_KEY
     from lovia.transcript import AssistantTextEntry, InputEntry
 
     store = ChatStore.in_memory()
@@ -240,7 +236,9 @@ def test_session_detail_replays_persisted_compaction_notice() -> None:
         "reason": "offload+clear",
         "reactive": False,
         "summary": None,
-        "metadata": {"tokens_before": 9000, "tokens_after": 5000, "cleared": 2},
+        "tokens_before": 9000,
+        "tokens_after": 5000,
+        "detail": ["2 tool results cleared"],
     }
     asyncio.run(
         store.session.append(
@@ -250,7 +248,7 @@ def test_session_detail_replays_persisted_compaction_notice() -> None:
                 AssistantTextEntry(content="hello"),
             ],
             run_id="r1",
-            meta={COMPACTED_META_KEY: notice},
+            meta={NOTICE_META_KEY: notice},
         )
     )
 
@@ -263,7 +261,7 @@ def test_session_detail_replays_persisted_compaction_notice() -> None:
     ]
     out = res["entries"][-1]
     assert out["compaction"]["reason"] == "offload+clear"
-    assert out["compaction"]["metadata"]["tokens_before"] == 9000
+    assert out["compaction"]["tokens_before"] == 9000
 
 
 # ---------------------------------------------------------- approval flow -

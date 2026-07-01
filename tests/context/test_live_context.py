@@ -364,7 +364,7 @@ async def test_live_large_history_compacts_within_budget():
 
     compacted = _compactions(seen)
     assert compacted, "a history this large must trigger compaction"
-    tokens_after = compacted[-1].metadata.get("tokens_after")
+    tokens_after = compacted[-1].notice.tokens_after
     assert isinstance(tokens_after, int) and tokens_after < 14_000
     # The fact sat inside the protected tail — must survive verbatim.
     assert "7117" in (result.output or "")

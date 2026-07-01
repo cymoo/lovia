@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .types import JsonObject
 from .transcript import TranscriptEntry
 from .messages import ToolCall
 
@@ -232,28 +231,39 @@ class RunCompleted(RunEvent):
 
 
 @dataclass
+class CompactionNotice:
+    """A JSON-safe record of one context compaction — what it did, for display.
+
+    Built once by the loop from a :class:`~lovia.context.ContextResult` and the
+    reactive flag, then reused three ways: embedded in :class:`ContextCompacted`
+    for the live stream, stowed in the finished segment's ``meta`` for the web UI
+    to replay on reload, and held on ``RunState.context_notice``. The generic
+    fields are typed; ``detail`` is the policy-authored, human-readable tail
+    (e.g. ``["context was 85% full", "2 tool results offloaded"]``) that the UI
+    renders verbatim — a custom policy fills it however it likes.
+    """
+
+    reason: str
+    reactive: bool
+    summary: str | None = None
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+    detail: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ContextCompacted(ContextEvent):
     """Emitted when :class:`~lovia.ContextPolicy` produced a compacted view.
 
-    ``entries_before`` is the full transcript; ``entries_after`` is the view the
-    runner sent to the provider for this turn. ``summary`` is the model-produced
-    summary text when the policy used LLM summarization, or ``None`` for purely
-    structural compaction.
-
-    ``reason`` names the policy decision that caused the rewrite.
-    ``reactive`` is ``True`` when the compaction was triggered by a
-    :class:`~lovia.ContextOverflowError` from the provider rather than by
-    the proactive token threshold.
-
-    Compaction is view-only: ``entries_before`` is the full transcript and
-    remains the source of truth; ``entries_after`` is the transcript the
-    provider saw for this turn only — it is not written back to the Session.
+    ``entries_before`` is the full transcript and remains the source of truth;
+    ``entries_after`` is the view the runner sent to the provider for this turn
+    only — it is not written back to the Session. ``notice`` is the JSON-safe
+    :class:`CompactionNotice` describing what happened (reason, token delta,
+    policy-authored detail, and any summary text); the loop stows the same object
+    in the finished segment's ``meta`` so the web UI can replay it on reload.
     """
 
     session_id: str | None
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
-    reason: str
-    summary: str | None = None
-    reactive: bool = False
-    metadata: JsonObject = field(default_factory=dict)
+    notice: CompactionNotice

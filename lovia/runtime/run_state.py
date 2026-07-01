@@ -30,6 +30,7 @@ from ..tools import Tool
 from ..transcript import TranscriptEntry
 
 if TYPE_CHECKING:
+    from ..events import CompactionNotice
     from ..guardrails import GuardrailFn
     from ..handoff import _HandoffSignal
     from ..hooks import AgentHooks
@@ -104,12 +105,16 @@ class RunState:
     active: ActiveAgent
     # Persisted to RunSnapshot and restored on resume.
     last_input_tokens: int | None = None
-    context_policy_state: dict[str, Any] = field(default_factory=dict)
-    # The run's most recent context-compaction, as a JSON-safe notice
-    # ({reason, reactive, summary, metadata}). Stowed in the finished segment's
-    # ``meta`` by ``_persist_session`` so the web UI can replay it on reload.
-    # Not persisted across resume: a resumed run re-captures if it compacts again.
-    last_compaction: dict[str, Any] | None = None
+    # The context policy's carried state, opaque to the loop: sticky compaction
+    # decisions + calibration. Round-tripped through the checkpoint (resume) and
+    # the session-segment ``meta`` (next run) under the same name, ``context_state``.
+    context_state: dict[str, Any] = field(default_factory=dict)
+    # The run's most recent compaction, as a typed
+    # :class:`~lovia.events.CompactionNotice`. Stowed (as a dict) under
+    # ``context_notice`` in the finished segment's ``meta`` by ``_persist_session``
+    # so the web UI can replay it on reload. Not persisted across resume: a
+    # resumed run re-captures if it compacts again.
+    context_notice: "CompactionNotice | None" = None
     # Not persisted; resets on resume (bounded by max_turns).
     output_repair_attempts: int = 0
     turns: int = 0

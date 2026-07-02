@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lovia import Agent, Mailbox, Runner, events, tool
+from lovia import Agent, AgentHooks, Mailbox, RunContext, Runner, events, tool
 from lovia.messages import Usage
 from lovia.stores import InMemorySession
 from lovia.transcript import FinishDelta, TextDelta, UsageDelta
@@ -132,12 +132,170 @@ async def test_message_pushed_after_last_drain_stays_queued() -> None:
     assert mailbox.drain() == ["too late"]
 
 
-async def test_no_mailbox_is_inert() -> None:
+async def test_run_without_pushes_emits_no_injection_events() -> None:
+    # No mailbox= passed: the runner still creates one (exposed as
+    # ``ctx.mailbox``), but with nothing pushed the feature stays invisible.
     provider = ScriptedProvider([text("hi")])
     agent = Agent(name="t", model=provider)
     seen, result = await _collect(Runner.stream(agent, "go"))
     assert result.output == "hi"
     assert not any(isinstance(ev, events.UserMessageInjected) for ev in seen)
+
+
+# ------------------------------------------------ ctx.mailbox steering ----
+
+
+async def test_tool_steers_via_ctx_mailbox_without_caller_mailbox() -> None:
+    # No mailbox= passed: the tool reaches the runner-created default through
+    # its RunContext and the push is consumed at the next turn start.
+    @tool
+    async def trip(ctx: RunContext) -> str:
+        """Queue a follow-up via the run's own mailbox."""
+        ctx.mailbox.push("and another thing")
+        return "ok"
+
+    provider = ScriptedProvider([call("trip", {}, call_id="c1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[trip])
+
+    seen, result = await _collect(Runner.stream(agent, "go"))
+
+    assert result.output == "done"
+    injected = [ev for ev in seen if isinstance(ev, events.UserMessageInjected)]
+    assert len(injected) == 1
+    assert injected[0].turn == 2
+    # The model actually saw it on its turn-2 call.
+    turn2_users = [m.content for m in provider.calls[1] if m.role == "user"]
+    assert "and another thing" in turn2_users
+
+
+async def test_hook_steers_via_ctx_mailbox() -> None:
+    hooks = AgentHooks()
+
+    @hooks.on(events.ToolCallCompleted)
+    def nudge(ev: events.ToolCallCompleted, ctx: RunContext) -> None:
+        ctx.mailbox.push("also address the deadline")
+
+    @tool
+    async def work() -> str:
+        """Do the work."""
+        return "ok"
+
+    provider = ScriptedProvider([call("work", {}, call_id="c1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[work], hooks=hooks)
+
+    seen, result = await _collect(Runner.stream(agent, "go"))
+
+    injected = [ev for ev in seen if isinstance(ev, events.UserMessageInjected)]
+    assert [ev.content for ev in injected] == ["also address the deadline"]
+    turn2_users = [m.content for m in provider.calls[1] if m.role == "user"]
+    assert "also address the deadline" in turn2_users
+
+
+async def test_ctx_mailbox_is_the_caller_supplied_instance() -> None:
+    # An *empty* Mailbox is falsy (``__bool__``); the runner must still use it
+    # rather than swap in a default — pushes via ctx land in the caller's box.
+    mailbox = Mailbox()
+    seen_boxes: list[Mailbox] = []
+
+    @tool
+    async def grab(ctx: RunContext) -> str:
+        """Record the run's mailbox."""
+        seen_boxes.append(ctx.mailbox)
+        return "ok"
+
+    provider = ScriptedProvider([call("grab", {}, call_id="c1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[grab])
+    await Runner.run(agent, "go", mailbox=mailbox)
+
+    assert seen_boxes == [mailbox]
+    assert seen_boxes[0] is mailbox
+
+
+async def test_sub_run_does_not_inherit_parent_mailbox() -> None:
+    # Deliberate asymmetry with cancel_token (see agent_as_tool): drain() is
+    # destructive, so a shared mailbox would let the child's turn boundary
+    # steal messages addressed to the parent conversation.
+    parent_mailbox = Mailbox()
+    child_boxes: list[Mailbox] = []
+
+    @tool
+    async def probe(ctx: RunContext) -> str:
+        """Record the child run's mailbox; push a message for the parent."""
+        child_boxes.append(ctx.mailbox)
+        parent_mailbox.push("for the parent")
+        return "child tool done"
+
+    child = Agent(
+        name="child",
+        model=ScriptedProvider([call("probe", {}, call_id="k1"), text("child answer")]),
+        tools=[probe],
+    )
+    parent_provider = ScriptedProvider(
+        [call("ask_child", {"input": "go"}, call_id="c1"), text("parent done")]
+    )
+    parent = Agent(name="parent", model=parent_provider, tools=[child.as_tool()])
+
+    seen, result = await _collect(
+        Runner.stream(parent, "delegate", mailbox=parent_mailbox)
+    )
+
+    assert result.output == "parent done"
+    # The child ran on its own runner-created mailbox, not the parent's.
+    assert child_boxes and child_boxes[0] is not parent_mailbox
+    # The push was consumed by the *parent's* next turn...
+    injected = [ev for ev in seen if isinstance(ev, events.UserMessageInjected)]
+    assert [ev.content for ev in injected] == ["for the parent"]
+    parent_turn2_users = [
+        m.content for m in parent_provider.calls[1] if m.role == "user"
+    ]
+    assert "for the parent" in parent_turn2_users
+    # ...and never leaked into the child's turn-2 view.
+    child_provider = child.model
+    child_turn2_users = [m.content for m in child_provider.calls[1] if m.role == "user"]
+    assert "for the parent" not in child_turn2_users
+
+
+async def test_default_mailbox_push_on_final_turn_is_dropped() -> None:
+    # MessageCompleted on the only turn fires after the last drain; with a
+    # runner-created mailbox nobody outside can recover the push. The run must
+    # still complete cleanly — the message is simply never seen.
+    hooks = AgentHooks()
+
+    @hooks.on(events.MessageCompleted)
+    def too_late(ev: events.MessageCompleted, ctx: RunContext) -> None:
+        ctx.mailbox.push("nobody will read this")
+
+    provider = ScriptedProvider([text("final")])
+    agent = Agent(name="t", model=provider, hooks=hooks)
+
+    seen, result = await _collect(Runner.stream(agent, "go"))
+
+    assert result.output == "final"
+    assert result.turns == 1
+    assert not any(isinstance(ev, events.UserMessageInjected) for ev in seen)
+
+
+async def test_hook_push_can_be_withdrawn_before_drain() -> None:
+    hooks = AgentHooks()
+
+    @hooks.on(events.ToolCallCompleted)
+    def push_and_reconsider(ev: events.ToolCallCompleted, ctx: RunContext) -> None:
+        token = ctx.mailbox.push("draft")
+        ctx.mailbox.push("keep")
+        ctx.mailbox.remove(token)
+
+    @tool
+    async def work() -> str:
+        """Do the work."""
+        return "ok"
+
+    provider = ScriptedProvider([call("work", {}, call_id="c1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[work], hooks=hooks)
+
+    seen, _ = await _collect(Runner.stream(agent, "go"))
+
+    injected = [ev.content for ev in seen if isinstance(ev, events.UserMessageInjected)]
+    assert injected == ["keep"]
 
 
 async def test_injected_message_persists_to_session_once() -> None:

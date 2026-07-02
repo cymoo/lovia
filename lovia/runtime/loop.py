@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
     from ..messages import Message
-    from ..steering import Mailbox
     from ..workspace.protocol import WorkspaceSession
 
 from .. import events
@@ -59,6 +58,7 @@ from ..guardrails import (
 )
 from ..handoff import Handoff, build_handoff_tool
 from ..hooks import dispatch
+from ..steering import Mailbox
 from ..transcript import (
     InputEntry,
     ToolCallEntry,
@@ -143,9 +143,14 @@ class RunLoop:
         # is behaviourally identical to the old None for callers who don't reach
         # for it.
         self.cancel_token = cancel_token or CancelToken()
-        # Inbound steering channel (the dual of cancel_token): messages to
-        # inject as ``user`` turns at turn boundaries. ``None`` ⇒ feature inert.
-        self.mailbox = mailbox
+        # Inbound steering channel (the dual of cancel_token, given the same
+        # treatment): always hold one so it can be exposed on RunContext for
+        # tools and hooks to push into. A runner-created default has no outside
+        # reference — anything still queued when the run ends is unreachable —
+        # so the leftover hand-off to a next run only works for caller-supplied
+        # mailboxes. Not ``or``: an *empty* Mailbox is falsy (``__bool__``) and
+        # must not be swapped out for a fresh one.
+        self.mailbox = mailbox if mailbox is not None else Mailbox()
         # Run-scoped observability. ``None`` → NoopTracer at stream() time, so
         # instrumentation stays free. A run-level knob (like budget/cancel_token),
         # not a per-agent one: it applies across handoffs to whatever agent is
@@ -198,11 +203,9 @@ class RunLoop:
         Called at the start of each turn (a safe point): each queued item
         becomes an ``InputEntry`` the model sees on its next call, and a
         :class:`events.UserMessageInjected` lets a live consumer render it.
-        Whatever is pushed after the last turn-start drain stays queued and is
-        fed into the next run by the caller.
+        Whatever is pushed after the last turn-start drain stays queued; a
+        caller who supplied the mailbox can feed it into the next run.
         """
-        if self.mailbox is None:
-            return
         for content in self.mailbox.drain():
             state.transcript.append(InputEntry(role="user", content=content))
             yield await self._emit(
@@ -476,6 +479,7 @@ class RunLoop:
             budget=self.budget,
             workspace=active.workspace,
             cancel_token=self.cancel_token,
+            mailbox=self.mailbox,
         )
         # Read prior session history once, as segments: the flattened entries
         # become the prefix, and the latest segment's ``meta`` seeds a fresh

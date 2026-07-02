@@ -7,6 +7,15 @@ point) and appends each item as a normal ``user`` message, so the model sees it
 on its next call. Whatever is still queued when the run ends is left for the
 caller to feed into the next run.
 
+Like the cancel token, a mailbox is always present on a run: the runner exposes
+the caller-supplied instance — or a default it creates — as
+:attr:`RunContext.mailbox <lovia.run_context.RunContext.mailbox>`, so tools and
+hooks can steer the run they are part of (a deadline hook nudging "wrap up", a
+plugin feeding in fresh context). Two caveats follow from drain-at-turn-start:
+a push is seen on the *next* turn, never the current one; and a push during the
+final turn is consumed by nobody unless the caller holds the mailbox — a
+runner-created default is unreachable once the run ends.
+
 Like :class:`CancelToken`, this is intentionally lockless and tiny. ``push`` is
 a single ``list.append`` and ``drain``'s rebind-swap is atomic within one
 asyncio loop (no ``await`` between the read and the rebind); even under true

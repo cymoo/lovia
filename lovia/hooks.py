@@ -16,7 +16,8 @@ small:
 Every handler is called as ``handler(event, ctx)``: it receives the **event**
 and the run's live :class:`~lovia.run_context.RunContext` — the run's dynamic
 state (``session_id``, the active ``agent``, cumulative ``usage``, the live
-transcript, the ``cancel_token``). This mirrors guardrails and view-injectors,
+transcript, the ``cancel_token``, the ``mailbox`` for injecting a message into
+the next turn). This mirrors guardrails and view-injectors,
 which already always receive the context. A handler that only cares about the
 event simply ignores ``ctx``. Handlers may be sync or async; the dispatcher
 awaits whichever is returned. Multiple handlers per event type are supported and
@@ -89,9 +90,7 @@ class AgentHooks:
 
         return decorator
 
-    def on_any(
-        self, fn: "HookHandler[events.Event]"
-    ) -> "HookHandler[events.Event]":
+    def on_any(self, fn: "HookHandler[events.Event]") -> "HookHandler[events.Event]":
         """Register a catch-all handler, called as ``handler(event, ctx)`` for
         every event."""
         self._any.append(fn)

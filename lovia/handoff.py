@@ -136,6 +136,14 @@ def agent_as_tool(
     child is checking the token. Sharing the instance lets a ``cancel()`` trip
     the child at its next turn boundary; the resulting :class:`RunCancelled`
     propagates straight up through the tool call and terminates the parent run.
+
+    The parent's ``mailbox`` is deliberately *not* inherited — the asymmetry
+    with ``cancel_token`` is intentional. Cancellation is a broadcast, but an
+    injected message is addressed to one conversation, and ``drain()`` is
+    destructive: a shared instance would let whichever run reaches a turn
+    boundary first steal messages meant for the other. The sub-run gets its own
+    runner-created mailbox, reachable from its tools and hooks as
+    ``ctx.mailbox``.
     """
     tool_name = name or f"ask_{_slug(agent.name)}"
     tool_desc = (

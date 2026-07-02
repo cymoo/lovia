@@ -50,6 +50,7 @@ from .checks import (
     tool_not_called,
     weighted,
 )
+from .judge import Verdict, llm_judge
 from .report import CaseResult, Diff, Report, SampleResult
 from .runner import AgentSource, Case, evaluate
 
@@ -62,11 +63,13 @@ __all__ = [
     "Diff",
     "Report",
     "SampleResult",
+    "Verdict",
     "all_of",
     "any_of",
     "contains",
     "equals",
     "evaluate",
+    "llm_judge",
     "matches",
     "max_tokens",
     "max_turns",

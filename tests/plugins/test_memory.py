@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from lovia import Agent, ModelSettings, Runner
-from lovia.plugins import memory as memory_mod
-from lovia.plugins.memory import (
+from lovia.plugins.memory import plugin as memory_mod
+from lovia.plugins.memory.plugin import (
     FileNotesStore,
     Memory,
     SQLiteArchiveStore,

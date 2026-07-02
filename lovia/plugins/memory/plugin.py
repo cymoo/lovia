@@ -64,17 +64,17 @@ from typing import (
 
 from pydantic import BaseModel, Field
 
-from ..events import RunCompleted
-from ..hooks import AgentHooks
-from ..parts import text_of
-from ..run_context import RunContext
-from ..stores._sqlite import SQLiteStore
-from ..tools import Tool, tool
-from ..transcript import TranscriptEntry, entries_to_messages
-from .base import PluginInstance
+from ...events import RunCompleted
+from ...hooks import AgentHooks
+from ...parts import text_of
+from ...run_context import RunContext
+from ...stores._sqlite import SQLiteStore
+from ...tools import Tool, tool
+from ...transcript import TranscriptEntry, entries_to_messages
+from ..base import PluginInstance
 
 if TYPE_CHECKING:
-    from ..providers import Provider
+    from ...providers import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -590,9 +590,9 @@ async def _extract(
     current_notes: str,
     model: "str | Provider | list[str | Provider]",
 ) -> list[str]:
-    from ..agent import Agent
-    from ..providers import ModelSettings
-    from ..runner import Runner
+    from ...agent import Agent
+    from ...providers import ModelSettings
+    from ...runner import Runner
 
     convo = _render_transcript(entries)
     if not convo.strip():
@@ -619,9 +619,9 @@ async def _consolidate(
     max_chars: int,
     model: "str | Provider | list[str | Provider]",
 ) -> list[str]:
-    from ..agent import Agent
-    from ..providers import ModelSettings
-    from ..runner import Runner
+    from ...agent import Agent
+    from ...providers import ModelSettings
+    from ...runner import Runner
 
     agent: Agent[Any] = Agent(
         name="memory-consolidator",
@@ -644,9 +644,9 @@ async def _summarize(
     query: str,
     model: "str | Provider | list[str | Provider]",
 ) -> str:
-    from ..agent import Agent
-    from ..providers import ModelSettings
-    from ..runner import Runner
+    from ...agent import Agent
+    from ...providers import ModelSettings
+    from ...runner import Runner
 
     joined = "\n\n".join(f"(session {h.session_id})\n{h.text}" for h in hits)
     agent: Agent[Any] = Agent(

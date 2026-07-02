@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from lovia.context import CompactionState, OffloadRecord, SummaryState
-from lovia.context.state import fingerprint
+from lovia.context.state import fingerprint, unique_result_ids
 from .helpers import call, out, user
 
 
@@ -59,6 +59,36 @@ def test_decided_covers_both_kinds():
 
 
 # ---------------------------------------------------------------------------
+# unique_result_ids / prune
+# ---------------------------------------------------------------------------
+
+
+def test_unique_result_ids_excludes_reused_ids():
+    body = [
+        call("a"),
+        out("a", "x"),
+        call("call_0"),
+        out("call_0", "x"),
+        call("call_0"),
+        out("call_0", "y"),  # provider reused the id
+    ]
+    assert unique_result_ids(body) == {"a"}
+
+
+def test_prune_drops_absent_and_ambiguous_records():
+    state = CompactionState(
+        cleared={"gone", "dup", "live"},
+        offloaded={
+            "gone2": OffloadRecord(preview="p", chars=9),
+            "live2": OffloadRecord(preview="p", chars=9),
+        },
+    )
+    state.prune({"live", "live2"})
+    assert state.cleared == {"live"}
+    assert set(state.offloaded) == {"live2"}
+
+
+# ---------------------------------------------------------------------------
 # fingerprint
 # ---------------------------------------------------------------------------
 
@@ -75,3 +105,11 @@ def test_fingerprint_changes_when_prefix_changes():
     assert fingerprint(a) != fingerprint(b)
     assert fingerprint(a) != fingerprint(c)
     assert len(fingerprint(a)) == 16
+
+
+def test_fingerprint_ignores_tool_result_length():
+    # A stored tool output trimmed in place (session cleanup) must not read
+    # as a rewrite — the summary covers a marker, not the output itself.
+    a = [user("hi"), call("c1"), out("c1", "x" * 10_000)]
+    b = [user("hi"), call("c1"), out("c1", "x" * 10)]
+    assert fingerprint(a) == fingerprint(b)

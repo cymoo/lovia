@@ -37,6 +37,7 @@ def make_ctx(
     aggressive: bool = False,
     budget: TokenBudget | None = None,
     protected_from: int | None = None,
+    model_window: int | None = None,
 ):
     state = state if state is not None else CompactionState()
     counter = TokenCounter()
@@ -50,6 +51,7 @@ def make_ctx(
         protected_from=len(body) if protected_from is None else protected_from,
         aggressive=aggressive,
         store=store,
+        model_window=model_window,
     )
 
 
@@ -91,11 +93,32 @@ async def test_clear_skips_small_results():
     assert ctx.state.cleared == set()
 
 
-async def test_clear_respects_exclude_tools():
-    body = _pairs(5, name="memory")
+async def test_clear_never_decides_reused_call_ids():
+    # Decisions are keyed by call_id; with a provider that reuses ids a
+    # marker would replace every occurrence, including the newest result.
+    body = [
+        call("call_0"),
+        out("call_0", "r" * 1_000),
+        call("u"),
+        out("u", "r" * 1_000),
+        call("call_0"),
+        out("call_0", "r" * 1_000),
+    ]
     ctx = make_ctx(body)
-    stage = ClearToolResults(keep_last=0, exclude_tools=["memory"])
-    assert await stage.plan(body, ctx) is False
+    await ClearToolResults(keep_last=0).plan(body, ctx)
+    assert ctx.state.cleared == {"u"}
+
+
+async def test_clear_skips_summary_covered_results():
+    # Results the summary already replaced never render; deciding them would
+    # only bloat sticky state and count phantom savings.
+    body = _pairs(5)
+    state = CompactionState(
+        summary=SummaryState(text="S", covered=4, fingerprint=fingerprint(body[:4]))
+    )
+    ctx = make_ctx(body, state=state)
+    await ClearToolResults(keep_last=0).plan(body, ctx)
+    assert ctx.state.cleared == {"c2", "c3", "c4"}
 
 
 async def test_clear_respects_protected_tail():
@@ -227,6 +250,20 @@ async def test_offload_store_failure_still_records():
     assert set(ctx.state.offloaded) == {"c0", "c1"}
 
 
+async def test_offload_skips_summary_covered_results():
+    # No store I/O and no OffloadRecord for entries hidden by the summary.
+    store = FakeResultStore()
+    body = _pairs(4, chars=5_000)
+    state = CompactionState(
+        summary=SummaryState(text="S", covered=4, fingerprint=fingerprint(body[:4]))
+    )
+    budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
+    ctx = make_ctx(body, store=store, state=state, budget=budget)
+    await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx)
+    assert set(ctx.state.offloaded) == {"c2", "c3"}
+    assert set(store.data) == {"c2", "c3"}
+
+
 async def test_offload_keys_store_by_raw_call_id():
     store = FakeResultStore()
     body = [
@@ -252,18 +289,57 @@ def _texts(n: int, chars: int = 400):
 
 
 async def test_summarize_first_summary_covers_unprotected_prefix():
+    # The 8-entry span exceeds half the 1000-token window, so it folds in
+    # two capped chunks: the first from scratch, the second on top of it.
     summarizer = FakeSummarizer("S1")
     body = _texts(10)
     ctx = make_ctx(body, protected_from=8)
     stage = SummarizeHistory(summarizer=summarizer)
     assert await stage.plan(body, ctx) is True
-    assert summarizer.priors == [None]
-    assert summarizer.calls[0] == body[:8]
+    assert summarizer.priors == [None, "S1"]
+    assert summarizer.calls == [body[:4], body[4:8]]
     summary = ctx.state.summary
     assert summary is not None
     assert summary.text == "S1"
     assert summary.covered == 8
     assert summary.fingerprint == fingerprint(body[:8])
+
+
+async def test_summarize_chunks_bounded_by_model_window_on_aggressive():
+    # The aggressive budget is sized to the failed prompt, which can dwarf
+    # the real window; fold chunks must still fit the actual model.
+    summarizer = FakeSummarizer("S1")
+    body = _texts(10)
+    inflated = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(
+        body, protected_from=8, aggressive=True, budget=inflated, model_window=1_000
+    )
+    stage = SummarizeHistory(summarizer=summarizer)
+    assert await stage.plan(body, ctx) is True
+    # Capped at (1000 - 0) // 2, not 50_000: the span folds in two chunks.
+    assert summarizer.calls == [body[:4], body[4:8]]
+
+
+async def test_summarize_failure_mid_fold_keeps_partial_coverage():
+    # A failure on a later chunk keeps the coverage already committed, so
+    # the next burst resumes from the frontier instead of starting over.
+    class FailsOnSecondCall:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def summarize(self, entries, *, req, prior_summary=None):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("boom")
+            return "S1"
+
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    stage = SummarizeHistory(summarizer=FailsOnSecondCall())
+    assert await stage.plan(body, ctx) is True  # chunk 1 was folded
+    summary = ctx.state.summary
+    assert summary is not None and summary.covered == 4
+    assert ctx.state.summary_failures == 1
 
 
 async def test_summarize_folds_only_the_new_span():
@@ -345,6 +421,18 @@ async def test_summarize_circuit_breaker_blocks_after_failures():
     assert summarizer.calls == []
 
 
+async def test_summarize_circuit_breaker_half_opens_on_aggressive():
+    # The failure counter is carried across runs in the scratch; the overflow
+    # path must still probe or a burst of transient failures would disable
+    # summarization for the rest of the session.
+    summarizer = FakeSummarizer("S1")
+    body = _texts(10)
+    state = CompactionState(summary_failures=3)
+    ctx = make_ctx(body, state=state, protected_from=8, aggressive=True)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert state.summary_failures == 0  # success resets the breaker
+
+
 async def test_summarize_failure_increments_counter_then_success_resets():
     failing = FailingSummarizer()
     body = _texts(10)
@@ -358,12 +446,15 @@ async def test_summarize_failure_increments_counter_then_success_resets():
     assert state.summary_failures == 0
 
 
-async def test_summarize_reactive_failure_propagates():
+async def test_summarize_reactive_failure_returns_false():
+    # The summarizer's own error must not escape on the aggressive path —
+    # it would replace the original ContextOverflowError the runner is
+    # handling and misattribute the failure.
     body = _texts(10)
     state = CompactionState()
     ctx = make_ctx(body, state=state, protected_from=8, aggressive=True)
-    with pytest.raises(RuntimeError, match="boom"):
-        await SummarizeHistory(summarizer=FailingSummarizer()).plan(body, ctx)
+    stage = SummarizeHistory(summarizer=FailingSummarizer())
+    assert await stage.plan(body, ctx) is False
     assert state.summary_failures == 1
 
 

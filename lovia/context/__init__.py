@@ -15,7 +15,7 @@ Layers, bottom up:
 * :mod:`~lovia.context.render` — pure transcript+state → view rendering.
 * :mod:`~lovia.context.stages` — composable strategies (offload, clear,
   summarize) that record decisions cheap-first.
-* :mod:`~lovia.context.pipeline` — the default policy orchestrating stages
+* :mod:`~lovia.context.compaction` — the default policy orchestrating stages
   under trigger/target hysteresis.
 """
 

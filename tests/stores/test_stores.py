@@ -272,3 +272,29 @@ async def test_trim_validates_arguments(trim_session) -> None:
         await trim_session.trim_tool_results("u1", keep_chars=-1)
     with pytest.raises(ValueError, match="keep_runs"):
         await trim_session.trim_tool_results("u1", keep_runs=-1)
+
+
+async def test_sqlite_trim_rolls_back_partial_writes_on_error() -> None:
+    # The ":memory:" connection is shared and outlives the call: without a
+    # rollback, an update left uncommitted by a mid-trim failure would be
+    # silently committed by the NEXT operation's commit().
+    s = SQLiteSession(":memory:")
+    for i in range(3):
+        await s.append("u1", _run_with_result(i), run_id=f"r{i}")
+    conn = s._connect()
+    conn.execute(
+        "UPDATE session_runs SET entries_json = 'not json' WHERE run_id = 'r1'"
+    )
+    conn.commit()
+
+    # r0 is updated first, then r1's corrupt JSON raises mid-transaction.
+    with pytest.raises(ValueError):
+        await s.trim_tool_results("u1", keep_runs=0)
+
+    # A follow-up write commits on the shared connection; r0's trim must not
+    # ride along with it. (Read r0's row directly — r1 stays corrupt.)
+    await s.append("u1", [InputEntry(role="user", content="later")], run_id="r3")
+    row = conn.execute(
+        "SELECT entries_json FROM session_runs WHERE run_id = 'r0'"
+    ).fetchone()
+    assert "r" * 5_000 in row[0]

@@ -287,6 +287,13 @@ class SQLiteSession(SQLiteStore, Session):
                         total += trimmed
                 conn.commit()
                 return total
+            except BaseException:
+                # The ":memory:" handle is shared and outlives this call: a
+                # partial trim left uncommitted here would be silently
+                # committed by the next operation's commit(). (File-backed
+                # connections roll back on close, but be explicit for both.)
+                conn.rollback()
+                raise
             finally:
                 self._release(conn)
 

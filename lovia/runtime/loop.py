@@ -92,6 +92,12 @@ logger = logging.getLogger(__name__)
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
 
+# After a context overflow, retry the model call only if reactive compaction
+# shrank the estimated prompt below this fraction of the size that failed.
+# Deliberately permissive — it exists to skip near-no-op retries, not to
+# second-guess a real shrink.
+_RETRY_SHRINK_FACTOR = 0.95
+
 
 class RunLoop:
     """The event-producing async iterator behind :meth:`Runner.stream`.
@@ -680,12 +686,32 @@ class RunLoop:
                 "aggressive view (%s)",
                 overflow,
             )
+            # This turn's first compact() already calibrated against
+            # ``last_input_tokens``, and that count describes the *previous*
+            # turn's view — pairing it with the estimate of the larger view
+            # that just overflowed would drag the calibration ratio down
+            # exactly when the estimate must stay conservative.
+            failed_tokens = ctx_result.tokens_after
+            request.last_input_tokens = None
             request.overflow = True
             ctx_result = await self.context_policy.compact(request)
-            if not ctx_result.compacted:
+            # Retry only when the rebuilt view is meaningfully smaller than
+            # the one that just failed (both numbers come from the same
+            # estimator, so the comparison is scale-free). A near-identical
+            # prompt is doomed to the same 400 — surface the overflow instead
+            # of paying for it. Any real shrink still gets its one retry:
+            # vetoing it would turn a possible recovery into a certain death.
+            shrunk = (
+                ctx_result.tokens_after is None
+                or failed_tokens is None
+                or ctx_result.tokens_after < failed_tokens * _RETRY_SHRINK_FACTOR
+            )
+            if not ctx_result.compacted or not shrunk:
                 logger.error(
-                    "context.overflow: policy could not shrink transcript; "
-                    "surfacing ContextOverflowError"
+                    "context.overflow: policy could not shrink the prompt "
+                    "(est. %s -> %s tokens); surfacing ContextOverflowError",
+                    failed_tokens,
+                    ctx_result.tokens_after,
                 )
                 raise
             view = await self._build_view(state, ctx_result)

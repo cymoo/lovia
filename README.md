@@ -84,8 +84,8 @@ explicit composition.
   specialist agent; agent-as-tool delegates a bounded subtask. Both are
   primitives, not an orchestration DSL you have to adopt wholesale.
 - **It has production seams, not a production costume.** Approvals, budgets,
-  cancellation, retries, hooks, scoped workspace tools, and checkpoint/resume
-  are explicit knobs you can wire into your own app.
+  cancellation, mid-run steering, retries, hooks, scoped workspace tools, and
+  checkpoint/resume are explicit knobs you can wire into your own app.
 - **It has one extension axis.** Plugins bundle tools, prompt additions,
   per-turn view injectors, hooks, guardrails, and cleanup. Skills, MCP, todo
   lists, and long-term memory can use the same mechanism.
@@ -526,6 +526,28 @@ async def on_done(ev, ctx: RunContext):
 agent = agent.clone(hooks=hooks)
 ```
 
+Mid-run steering is the inbound dual of cancellation: push a message into a
+live run and the model sees it as a normal user turn at the next turn start (a
+`TurnStarted` hook fires just before its turn's drain, so its push lands on
+that very turn). Tools and hooks reach the same channel as `ctx.mailbox` — the
+runner creates a mailbox per run when you don't supply one — so a run can also
+steer itself, with no outside plumbing:
+
+```python
+from lovia import Mailbox
+
+# ``hooks`` and ``agent`` continue from the snippet above.
+@hooks.on(events.TurnStarted)
+def deadline(ev, ctx: RunContext):
+    if ev.turn == 9:
+        ctx.mailbox.push("Last turn: answer with what you have.")
+
+
+mailbox = Mailbox()
+handle = Runner.stream(agent, "Analyze these logs.", mailbox=mailbox)
+mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
+```
+
 ## Built-In Tools
 
 Nothing is imported into your agent automatically. Pick the tools you want.
@@ -956,6 +978,7 @@ The `examples/` directory is a set of runnable scripts. A useful reading order:
 | `examples/21_dx.py` | sync calls, per-call output types, and other DX shortcuts |
 | `examples/28_memory.py` | long-term memory across runs with the `Memory` plugin |
 | `examples/23_workspace_agent.py` | scoped coding workspace |
+| `examples/24_steering.py` | mid-run message injection (caller- and hook-side steering) |
 | `examples/25_data_analysis.py` | data analysis agent |
 | `examples/26_mcp.py` | MCP server tools |
 | `examples/27_todos.py` | todo plugin and per-turn reminders |

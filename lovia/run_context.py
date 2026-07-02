@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from .messages import Message, Usage
 from .reliability import CancelToken, RunBudget
+from .steering import Mailbox
 from .transcript import InputEntry, TranscriptEntry, entries_to_messages
 
 if TYPE_CHECKING:
@@ -72,6 +73,17 @@ class RunContext(Generic[TContext]):
             (the runner creates one when the caller didn't pass it), so a tool
             or hook can call ``cancel()`` to request the run terminate at the
             next safe point, and an agent-as-tool sub-run can inherit it.
+        mailbox: The run's inbound steering channel — the dual of
+            :attr:`cancel_token`, and like it always present (the runner
+            creates one when the caller didn't pass it). A tool or hook can
+            ``push()`` content to inject it as a ``user`` message at the next
+            mailbox drain — each turn start, right after that turn's
+            ``TurnStarted`` hooks fire, and never mid-turn. So a push during
+            the run's final turn is not seen by this run (and, for a
+            runner-created mailbox, by nobody — only a caller-supplied
+            instance can be drained after the run). Agent-as-tool sub-runs get
+            their own mailbox rather than inheriting this one; see
+            :func:`~lovia.handoff.agent_as_tool`.
     """
 
     context: TContext | None
@@ -84,6 +96,7 @@ class RunContext(Generic[TContext]):
     budget: RunBudget | None = None
     workspace: "WorkspaceSession | None" = None
     cancel_token: CancelToken = field(default_factory=CancelToken)
+    mailbox: Mailbox = field(default_factory=Mailbox)
 
     @property
     def deps(self) -> TContext | None:

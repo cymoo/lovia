@@ -73,9 +73,9 @@ Python 本来的样子：dataclass、Protocol、async function、显式组合。
 - **多 agent 组合很克制。** Handoff 适合把控制权交给另一个专家 agent；
   agent-as-tool 适合把某个 agent 当成可委派的子任务。两者都只是原子抽象，
   不要求你接受一整套编排 DSL。
-- **生产能力是明确的接口，不是姿态。** 审批、预算、取消、重试、hooks、
-  受权限约束的 workspace 工具、checkpoint/resume 都是你可以接进自己产品的
-  显式旋钮。
+- **生产能力是明确的接口，不是姿态。** 审批、预算、取消、运行中转向、重试、
+  hooks、受权限约束的 workspace 工具、checkpoint/resume 都是你可以接进自己
+  产品的显式旋钮。
 - **只有一条扩展轴。** Plugin 可以打包工具、系统提示、每轮 view injector、
   hooks、guardrails 和清理逻辑。Skills、MCP、todo list 和长期记忆都可以用
   同一套机制表达。
@@ -490,6 +490,27 @@ async def on_done(ev, ctx: RunContext):
 agent = agent.clone(hooks=hooks)
 ```
 
+运行中转向（steering）是取消的入向对偶：往一个正在运行的 run 里 push 一条
+消息，模型会在下一个 turn 开始时把它当作普通的 user 消息看到（`TurnStarted`
+hook 在本轮 drain 之前触发，所以它的 push 当轮即生效）。工具和 hooks
+通过 `ctx.mailbox` 拿到同一条通道——没传 `mailbox=` 时 runner 会为每个 run
+自动创建——所以 run 也可以在内部转向自己，不需要任何外部接线：
+
+```python
+from lovia import Mailbox
+
+# hooks 和 agent 沿用上一段代码。
+@hooks.on(events.TurnStarted)
+def deadline(ev, ctx: RunContext):
+    if ev.turn == 9:
+        ctx.mailbox.push("最后一轮：用现有信息直接作答。")
+
+
+mailbox = Mailbox()
+handle = Runner.stream(agent, "分析这些日志。", mailbox=mailbox)
+mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一个 turn 生效
+```
+
 ## 内置工具
 
 工具不会自动塞进 agent。你按需选择。
@@ -872,6 +893,7 @@ app.include_router(build_api_router(deps))
 | `examples/20_custom_provider.py` | 实现 `Provider` 协议（离线可跑） |
 | `examples/21_dx.py` | 同步调用、临时输出类型等 DX 快捷方式 |
 | `examples/23_workspace_agent.py` | 受权限约束的代码 workspace |
+| `examples/24_steering.py` | 运行中注入消息（调用方与 hook 双侧 steering） |
 | `examples/25_data_analysis.py` | 数据分析 agent |
 | `examples/26_mcp.py` | MCP server 工具 |
 | `examples/27_todos.py` | todo plugin 和每轮提醒 |

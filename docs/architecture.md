@@ -36,6 +36,8 @@ lovia/
   hooks.py          # AgentHooks subscriber (handlers called as handler(event, ctx))
   guardrails.py     # input/output guardrail protocol
   session.py        # Session protocol
+  steering.py       # Mailbox — mid-run user-message injection, drained at turn
+                    #   starts; always present on RunContext (ctx.mailbox)
   context/          # Context-window management (see "Context compaction" below)
     policy.py       #   ContextPolicy protocol, CompactionRequest/ContextResult, Noop
     compaction.py   #   Compaction — the default policy (sticky staged pipeline)

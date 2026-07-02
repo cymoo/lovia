@@ -11,24 +11,24 @@ final provider-native transcript entry when ids or metadata must be preserved.
 Providers MAY additionally implement two optional methods used by
 :class:`~lovia.ContextPolicy`:
 
-* ``estimate_tokens(entries) -> int`` — approximate prompt size; the framework
-  falls back to a chars/4 heuristic via :func:`estimate_tokens` below.
+* ``estimate_tokens(entries) -> int`` — approximate prompt size; without it
+  the context layer's :class:`~lovia.context.TokenCounter` falls back to its
+  chars/4 heuristic.
 * ``context_window(model) -> int | None`` — the maximum prompt+output tokens
   the named model accepts; ``None`` (or absent method) means "unknown".
 
 Neither method is required by the Protocol so existing adapters keep working;
-:func:`estimate_tokens` and :func:`context_window` below dispatch to the
-adapter when available and fall back otherwise.
+:func:`context_window` below dispatches to the adapter when available and
+falls back otherwise.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Protocol, runtime_checkable
 
 from ..types import JsonObject
-from ..transcript import TranscriptEntry, ModelDelta, entry_to_dict
+from ..transcript import TranscriptEntry, ModelDelta
 
 
 @dataclass
@@ -99,26 +99,6 @@ class TokenEstimator(Protocol):
 @runtime_checkable
 class ContextWindowProvider(Protocol):
     def context_window(self, model: str) -> int | None: ...
-
-
-def estimate_tokens(provider: object, entries: list[TranscriptEntry]) -> int:
-    """Approximate the prompt size of ``entries`` for ``provider``.
-
-    If the provider exposes an ``estimate_tokens(entries) -> int`` method we
-    defer to it (vendors who ship a tokenizer should override). Otherwise
-    we fall back to a deliberately rough chars / 4 heuristic on the JSON
-    serialization — enough to drive a "compact at 80% of the window"
-    policy without pulling in tiktoken as a hard dependency.
-    """
-    if isinstance(provider, TokenEstimator):
-        return int(provider.estimate_tokens(entries))
-    # ``entry_to_dict`` is cheap and already used by sessions; reusing it
-    # here keeps the estimate consistent with what gets persisted.
-    chars = sum(
-        len(json.dumps(entry_to_dict(it), ensure_ascii=False)) for it in entries
-    )
-    # //4 is the textbook GPT heuristic; close enough for thresholding.
-    return chars // 4
 
 
 def context_window(provider: object, model: str | None) -> int | None:

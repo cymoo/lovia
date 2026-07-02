@@ -501,7 +501,10 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
         delta.call_id == "c1" and delta.name == "lookup" for delta in tool_deltas
     )
     usage = next(_deltas(deltas, UsageDelta)).usage
-    assert usage.input_tokens == 10
+    # ``input_tokens`` is normalized to the full prompt: Anthropic's raw
+    # ``input_tokens`` (10, uncached slice only) plus the final cache
+    # write/read counts from message_delta (4 + 5).
+    assert usage.input_tokens == 19
     assert usage.output_tokens == 8
     assert usage.cache_write_tokens == 4
     assert usage.cache_read_tokens == 5

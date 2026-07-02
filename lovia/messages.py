@@ -55,7 +55,14 @@ class Message:
 
 @dataclass
 class Usage:
-    """Token usage for one or more model calls."""
+    """Token usage for one or more model calls.
+
+    ``input_tokens`` is the **full** prompt size, including tokens served from
+    or written to a provider prompt cache — adapters normalize to this
+    (OpenAI's ``prompt_tokens`` already includes cached tokens; the Anthropic
+    adapter adds its separately-reported cache counts back in). The cache
+    fields break that total down for cost accounting.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0

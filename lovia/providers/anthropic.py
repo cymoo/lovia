@@ -73,7 +73,12 @@ class AnthropicProvider:
         client: httpx.AsyncClient | None = None,
         timeout: float | None = None,
         anthropic_version: str = _DEFAULT_VERSION,
-        default_max_tokens: int = 4096,
+        # Applied when ModelSettings.max_tokens is unset (the API requires the
+        # field). 16_384 matches Compaction's default reserve_output_tokens, so
+        # the output headroom the context budget reserves is actually usable;
+        # every current Claude model allows >= 32k output tokens. For retired
+        # 3.x-era models with 4k/8k output caps, pass an explicit lower value.
+        default_max_tokens: int = 16_384,
         default_headers: dict[str, str] | None = None,
         trust_env: bool | None = None,
     ) -> None:
@@ -377,6 +382,13 @@ class AnthropicProvider:
                 label="Anthropic",
             )
 
+        # Anthropic's ``input_tokens`` counts only the uncached slice of the
+        # prompt; cache reads/writes are reported separately. Normalize to the
+        # framework convention (``Usage.input_tokens`` = the full prompt, as
+        # OpenAI's ``prompt_tokens`` already is) — otherwise every consumer of
+        # the raw number (budgets, the context policy's calibration) sees a
+        # prompt that shrinks to near-zero whenever the cache is warm.
+        usage.input_tokens += usage.cache_read_tokens + usage.cache_write_tokens
         yield UsageDelta(usage=usage)
         yield FinishDelta(reason=_normalize_stop_reason(stop_reason))
 
@@ -526,6 +538,10 @@ def _is_context_overflow(status: int, body: str) -> bool:
         "prompt is too long" in lowered
         or "input is too long" in lowered
         or "context window" in lowered
+        # "input length and `max_tokens` exceed context limit" (current API)
+        or "context limit" in lowered
+        # Bedrock-hosted Claude behind gateways
+        or "too many total text bytes" in lowered
         or "max_tokens_to_sample" in lowered
         and "exceeds" in lowered
     )

@@ -691,48 +691,80 @@ agent = Agent(
 )
 ```
 
-`Memory("./dir")` (or `Memory()`) builds the defaults under that root — a
-markdown notes file plus a SQLite FTS5 archive:
+Recall quality escalates one argument at a time:
+
+```python
+Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
+Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm → hybrid recall
+Memory("./memory", index=my_index)             # bring your own retrieval engine
+```
+
+- **Zero-config** is stdlib SQLite FTS5 (bm25 over a CJK-aware bigram index),
+  and the LLM — the one model an agent always has — covers the lexical gaps:
+  `recall` queries are expanded with synonyms and translations before searching
+  (`expand_query="auto"`), and at run end a single digest call both promotes
+  durable facts into Notes and writes a self-contained episode summary into the
+  Archive, where it searches far better than raw chat fragments.
+- **`embedder=`** upgrades the default index to a keyword|vector hybrid fused
+  by Reciprocal Rank Fusion — semantic and cross-lingual recall with zero new
+  dependencies. Vectors live in SQLite; `OpenAIEmbedder` speaks to any
+  OpenAI-compatible `/embeddings` endpoint (official API, BGE-M3 on
+  SiliconFlow, DashScope, a local server — `OPENAI_EMBEDDING_BASE_URL` /
+  `OPENAI_EMBEDDING_API_KEY` override the chat endpoint's env vars, since chat
+  and embeddings often live on different hosts). Query expansion turns itself
+  off — the semantic arm covers it.
+- **`index=`** replaces the retrieval engine outright. An `Index` is three
+  methods over plain docs (`add` / `remove` / `search`, upsert by `Doc.id`) —
+  implement it over Elasticsearch, a vector database, whatever — and compose
+  arms with `|`: `KeywordIndex(...) | VectorIndex(...) | my_arm` is one
+  RRF-fused hybrid. `index=None` disables the cold tier and the `recall` tool.
+
+The default stores live under the root you pass:
 
 ```
 .lovia/memory/
-├── MEMORY.md      # hot tier: one durable fact per line, always in context
-└── archive.db     # cold tier: searchable past conversations
+├── MEMORY.md      # hot tier: one fact per line, always in context, human-editable
+├── archive.db     # cold tier: keyword index of past conversations
+└── vectors.db     # cold tier: vector arm (only with embedder=)
 ```
 
 > **Privacy.** The Archive persists user and assistant message text to disk, so
 > it can retain sensitive content. Store the memory directory somewhere with
-> appropriate access control, and pass `archive=None` to keep no searchable
+> appropriate access control, and pass `index=None` to keep no searchable
 > record of past conversations.
 
 Behavior is tuned with optional flags:
 
 | Field | Default | Effect |
 | --- | --- | --- |
-| `auto_extract` | `True` | At run end, promote durable facts into Notes (one model call) and consolidate Notes over budget |
+| `auto_curate` | `True` | One digest call at run end: durable facts → Notes, episode summary → Archive; consolidates Notes over budget |
+| `expand_query` | `"auto"` | Expand `recall` queries with LLM synonyms/translations; `"auto"` = only for the lexical-only default index |
 | `summarize_recall` | `True` | `recall` returns a model-written summary of the hits, not raw excerpts |
-| `recall_k` | `5` | How many archive hits `recall` retrieves |
+| `recall_k` | `5` | How many hits `recall` retrieves |
+| `notes_budget` | `2000` | Char budget for Notes — the prompt meter and the consolidation trigger |
 | `model` | host model | Model used for the curation side-queries |
 
 The curation and recall side-queries dogfood `Runner.run` with a tool-less,
 plugin-less sub-agent and structured output — so they reuse your provider chain
 and can't recurse. Because lovia's transcript is durable and compaction is
-view-only, extraction runs once at run end over the complete transcript: it is
+view-only, the digest runs once at run end over the complete transcript: it is
 curation (promoting the few durable facts into the small hot tier), not rescue.
 
-**Bring your own backend.** Each tier sits behind a small protocol
-(`NotesStore`, `ArchiveStore`), so you can swap either one — Redis, a vector
-DB, Postgres — while keeping the same tools and instructions:
+**Bring your own backend.** Each tier sits behind a deliberately narrow
+protocol. `NotesStore` is two methods (`load`/`save` a fact list — all
+normalization, dedup, and budgeting policy stays in the plugin), and `Index` is
+the three-method retrieval seam above, with no lovia types beyond `Doc`/`Hit`.
+Doc ids are deterministic (`run_id:seq`), so a re-ingested run upserts instead
+of duplicating — a backend only needs honest upsert-by-id semantics:
 
 ```python
 from lovia import Agent, Memory
 
-agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, archive=my_archive)])
+agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, index=my_index)])
 ```
 
-Pass `archive=None` for a notes-only memory with no `recall` tool. Custom
-backends are long-lived and shared by every run, so they must be safe for
-concurrent use; the plugin never closes them.
+Custom backends are long-lived and shared by every run, so they must be safe
+for concurrent use; the plugin never closes them.
 
 ### Writing a plugin
 

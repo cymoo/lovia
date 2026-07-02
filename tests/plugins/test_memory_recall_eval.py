@@ -59,7 +59,10 @@ CORPUS = [
     ),
 ]
 
-# (query, expected doc id, category)
+# (query, expected doc id, category). The pet queries are deliberately
+# unreachable by keywords even after expansion — the doc says "golden
+# retriever named Rex", never "pet" or "dog" — marking the residual gap that
+# only the semantic arm closes.
 QUERIES = [
     ("ORD-88317", "order", "exact-id"),
     ("10.0.4.17", "server", "exact-id"),
@@ -77,8 +80,8 @@ CATEGORIES = ("exact-id", "keyword", "paraphrase", "cross-lingual")
 K = 3
 
 
-async def _score(index: Index, expander=None) -> dict[str, str]:
-    """hit@K per category, as ``hits/total`` strings plus an int total."""
+async def _score(index: Index, expander=None) -> tuple[dict[str, str], int]:
+    """Per-category hit@K as ``hits/total`` display strings, plus the raw total."""
     per_cat = {c: [0, 0] for c in CATEGORIES}
     total = 0
     for query, expected, category in QUERIES:
@@ -94,8 +97,7 @@ async def _score(index: Index, expander=None) -> dict[str, str]:
         total += hit
     row = {c: f"{h}/{n}" for c, (h, n) in per_cat.items()}
     row["TOTAL"] = f"{total}/{len(QUERIES)}"
-    row["_total"] = total  # type: ignore[assignment]
-    return row
+    return row, total
 
 
 def _print_table(rows: dict[str, dict[str, str]]) -> None:
@@ -124,26 +126,30 @@ async def test_recall_eval(tmp_path) -> None:
         return await _expand(query, chat_model)
 
     rows: dict[str, dict[str, str]] = {}
-    rows["keyword"] = await _score(keyword)
-    rows["keyword+expand"] = await _score(keyword, expander)
+    totals: dict[str, int] = {}
+    rows["keyword"], totals["keyword"] = await _score(keyword)
+    rows["keyword+expand"], totals["keyword+expand"] = await _score(keyword, expander)
 
     embedder = _embedder_from_env()
     if embedder is not None:
         vector = VectorIndex(tmp_path / "vec.db", embedder)
         await vector.add(CORPUS)
-        rows["vector"] = await _score(vector)
-        rows["hybrid"] = await _score(keyword | vector)
+        rows["vector"], totals["vector"] = await _score(vector)
+        rows["hybrid"], totals["hybrid"] = await _score(keyword | vector)
 
     _print_table(rows)
+
+    def hits(arm: str, category: str) -> int:
+        return int(rows[arm][category].split("/")[0])
 
     # Lexical search nails exact identifiers and literal keywords by design.
     assert rows["keyword"]["exact-id"] == "2/2"
     assert rows["keyword"]["keyword"] == "2/2"
     # Expansion rides along with the raw query, so it can only add recall on
     # this corpus — and it should recover cross-lingual misses.
-    assert rows["keyword+expand"]["_total"] >= rows["keyword"]["_total"]  # type: ignore[operator]
-    assert rows["keyword+expand"]["cross-lingual"] >= rows["keyword"]["cross-lingual"]
+    assert totals["keyword+expand"] >= totals["keyword"]
+    assert hits("keyword+expand", "cross-lingual") > hits("keyword", "cross-lingual")
     if embedder is not None:
         # The hybrid keeps keyword's exact-id strength while adding semantics.
         assert rows["hybrid"]["exact-id"] == "2/2"
-        assert rows["hybrid"]["_total"] >= rows["keyword"]["_total"]  # type: ignore[operator]
+        assert totals["hybrid"] >= totals["keyword"]

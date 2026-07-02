@@ -7,7 +7,6 @@ All network-free; KeywordIndex runs on in-memory SQLite.
 from __future__ import annotations
 
 import logging
-import sqlite3
 
 import pytest
 
@@ -170,54 +169,12 @@ async def test_keyword_on_disk_roundtrip(tmp_path) -> None:
 
 
 @requires_fts
-async def test_keyword_drops_legacy_archive_tables(tmp_path) -> None:
-    # A pre-0.8 archive.db holds archive_fts/archive_docs tables this module no
-    # longer reads; they are dropped at init so stale rows don't sit in the
-    # file forever. (The cold tier is a recall cache — no data migration.)
-    path = tmp_path / "archive.db"
-    con = sqlite3.connect(str(path))
-    con.executescript(
-        "CREATE VIRTUAL TABLE archive_fts USING fts5("
-        "session_id UNINDEXED, run_id UNINDEXED, text UNINDEXED, search, "
-        "when_ts UNINDEXED);"
-        "CREATE TABLE archive_docs (id INTEGER PRIMARY KEY, text TEXT);"
-    )
-    con.commit()
-    con.close()
-
-    idx = KeywordIndex(path)
-    await idx.add([Doc(id="a", text="fresh hiking trip")])
-    assert await idx.search("hiking")
-
-    con = sqlite3.connect(str(path))
-    names = {
-        n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    con.close()
-    assert "archive_fts" not in names
-    assert "archive_docs" not in names
-
-
-@requires_fts
-async def test_keyword_rebuilds_stale_schema(tmp_path) -> None:
-    # A memory_fts table from an older shape (no meta column) is rebuilt empty
-    # rather than left to crash add().
-    path = tmp_path / "index.db"
-    con = sqlite3.connect(str(path))
-    con.executescript(
-        "CREATE VIRTUAL TABLE memory_fts USING fts5("
-        "id UNINDEXED, text UNINDEXED, search, when_ts UNINDEXED);"
-    )
-    con.execute(
-        "INSERT INTO memory_fts VALUES ('old', 'stale relic', 'stale relic', 0)"
-    )
-    con.commit()
-    con.close()
-
-    idx = KeywordIndex(path)
-    await idx.add([Doc(id="a", text="fresh hiking trip")])
-    assert await idx.search("hiking")
-    assert await idx.search("relic") == []  # old rows discarded, not migrated
+async def test_keyword_respects_k() -> None:
+    idx = KeywordIndex(":memory:")
+    await idx.add([Doc(id=f"d{i}", text=f"zebra number {i}") for i in range(10)])
+    assert len(await idx.search("zebra", k=3)) == 3
+    assert await idx.search("zebra", k=0) == []
+    assert await idx.search("zebra", k=-1) == []
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +209,18 @@ async def test_keyword_like_fallback_cjk_and_upsert(monkeypatch) -> None:
     assert await idx.search("上海") == []
 
 
+async def test_keyword_like_fallback_escapes_underscore(monkeypatch) -> None:
+    # ``_`` is a word character, so it reaches LIKE — unescaped it would
+    # wildcard-match any single character.
+    monkeypatch.setattr(index_mod, "_fts5_available", lambda: False)
+    idx = KeywordIndex(":memory:")
+    await idx.add([Doc(id="a", text="the variable is named foo9bar")])
+    assert await idx.search("foo_bar") == []  # literal underscore: no match
+    await idx.add([Doc(id="b", text="the variable is named foo_bar")])
+    hits = await idx.search("foo_bar")
+    assert [h.doc.id for h in hits] == ["b"]
+
+
 # ---------------------------------------------------------------------------
 # ``|`` composition
 # ---------------------------------------------------------------------------
@@ -265,6 +234,13 @@ def test_or_composes_and_flattens() -> None:
     # Chains flatten instead of nesting, in both association orders.
     assert (ab | c).indexes == [a, b, c]
     assert (a | (b | c)).indexes == [a, b, c]
+
+
+def test_or_preserves_custom_rrf_k() -> None:
+    a, b, c = FakeIndex(), FakeIndex(), FakeIndex()
+    tuned = HybridIndex([a, b], rrf_k=10)
+    assert (tuned | c)._rrf_k == 10  # left operand's tuning survives chaining
+    assert (a | b)._rrf_k == 60
 
 
 def test_hybrid_requires_at_least_one_arm() -> None:
@@ -299,8 +275,10 @@ async def test_hybrid_dedups_by_id_keeping_first_arm_doc() -> None:
 
 async def test_hybrid_truncates_to_k() -> None:
     arm = FakeIndex([_hit(f"d{i}") for i in range(10)])
-    hits = await HybridIndex([arm]).search("q", k=3)
+    hybrid = HybridIndex([arm])
+    hits = await hybrid.search("q", k=3)
     assert len(hits) == 3
+    assert await hybrid.search("q", k=0) == []
 
 
 async def test_hybrid_search_fails_open_per_arm(caplog) -> None:

@@ -99,7 +99,9 @@ class Fusable:
                 arms.extend(side.indexes)
             else:
                 arms.append(side)
-        return HybridIndex(arms)
+        # A non-default rrf_k survives chaining (left operand wins).
+        rrf_k = self._rrf_k if isinstance(self, HybridIndex) else _DEFAULT_RRF_K
+        return HybridIndex(arms, rrf_k=rrf_k)
 
 
 # ---------------------------------------------------------------------------
@@ -182,16 +184,12 @@ CREATE TABLE IF NOT EXISTS memory_docs (
 );
 """
 
-# Tables from schema generations this module no longer reads. The cold tier is
-# a recall cache, not a source of truth, so old rows are dropped, not migrated.
-_LEGACY_TABLES = ("archive_fts", "archive_docs")
-
 
 def _dump_meta(meta: dict[str, str]) -> str:
     return json.dumps(meta, ensure_ascii=False)
 
 
-def _hit(row: sqlite3.Row, *, score: float) -> Hit:
+def _hit_from_row(row: sqlite3.Row, *, score: float) -> Hit:
     meta = cast(dict[str, str], json.loads(row["meta"])) if row["meta"] else {}
     return Hit(
         doc=Doc(id=row["id"], text=row["text"], when=row["when_ts"], meta=meta),
@@ -216,43 +214,6 @@ class KeywordIndex(Fusable, SQLiteStore):
             Path(p).parent.mkdir(parents=True, exist_ok=True)
         super().__init__(p, _FTS_SCHEMA if self._use_fts else _PLAIN_SCHEMA)
         self._table = "memory_fts" if self._use_fts else "memory_docs"
-        self._reset_stale_tables()
-
-    def _reset_stale_tables(self) -> None:
-        """Drop tables this schema generation no longer reads.
-
-        Covers pre-0.8 ``archive_*`` tables and any future ``memory_*`` shape
-        change (detected by a missing current column). No data is migrated —
-        the cold tier is a recall cache, and stale rows would otherwise sit in
-        the file forever (or, for a same-name shape change, break ``add``).
-        """
-        conn = self._connect()
-        try:
-            stale = [
-                name
-                for (name,) in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE name IN (?, ?)",
-                    _LEGACY_TABLES,
-                )
-            ]
-            row = conn.execute(
-                "SELECT sql FROM sqlite_master WHERE name = ?", (self._table,)
-            ).fetchone()
-            if row and "meta" not in (row[0] or ""):
-                stale.append(self._table)
-            if not stale:
-                return
-            for name in stale:
-                try:
-                    conn.executescript(f"DROP TABLE IF EXISTS {name};")
-                except sqlite3.OperationalError:
-                    # e.g. an FTS5 virtual table in a build without FTS5 —
-                    # unreadable either way; leave it inert.
-                    logger.warning("memory: could not drop stale table %r", name)
-            conn.executescript(self._schema)
-            conn.commit()
-        finally:
-            self._release(conn)
 
     async def add(self, docs: list[Doc]) -> None:
         if not docs:
@@ -317,7 +278,7 @@ class KeywordIndex(Fusable, SQLiteStore):
 
     async def search(self, query: str, k: int = 5) -> list[Hit]:
         terms = _terms(query)
-        if not terms:
+        if not terms or k <= 0:
             return []
 
         if self._use_fts:
@@ -337,12 +298,15 @@ class KeywordIndex(Fusable, SQLiteStore):
                 finally:
                     self._release(conn)
                 # bm25 returns lower = better; report -bm25 so higher = better.
-                return [_hit(r, score=-float(r["score"])) for r in rows]
+                return [_hit_from_row(r, score=-float(r["score"])) for r in rows]
 
             return await self._run(_fts)
 
-        clause = " OR ".join(["text LIKE ?"] * len(terms))
-        params: list[Any] = [f"%{t}%" for t in terms] + [k]
+        clause = " OR ".join([r"text LIKE ? ESCAPE '\'"] * len(terms))
+        # ``_`` is a word character, so it survives _terms — escape it (and the
+        # escape char itself) or it would wildcard-match any character.
+        escaped = [t.replace("\\", "\\\\").replace("_", r"\_") for t in terms]
+        params: list[Any] = [f"%{t}%" for t in escaped] + [k]
 
         def _like() -> list[Hit]:
             conn = self._connect()
@@ -354,7 +318,7 @@ class KeywordIndex(Fusable, SQLiteStore):
                 ).fetchall()
             finally:
                 self._release(conn)
-            return [_hit(r, score=0.0) for r in rows]
+            return [_hit_from_row(r, score=0.0) for r in rows]
 
         return await self._run(_like)
 
@@ -362,6 +326,9 @@ class KeywordIndex(Fusable, SQLiteStore):
 # ---------------------------------------------------------------------------
 # HybridIndex: Reciprocal Rank Fusion over any set of indexes
 # ---------------------------------------------------------------------------
+
+
+_DEFAULT_RRF_K = 60
 
 
 class HybridIndex(Fusable):
@@ -375,7 +342,9 @@ class HybridIndex(Fusable):
     degrades recall instead of disabling it; only every arm failing raises.
     """
 
-    def __init__(self, indexes: Sequence[Index], *, rrf_k: int = 60) -> None:
+    def __init__(
+        self, indexes: Sequence[Index], *, rrf_k: int = _DEFAULT_RRF_K
+    ) -> None:
         if not indexes:
             raise ValueError("HybridIndex needs at least one index")
         self.indexes: list[Index] = list(indexes)
@@ -397,6 +366,8 @@ class HybridIndex(Fusable):
                 raise r
 
     async def search(self, query: str, k: int = 5) -> list[Hit]:
+        if k <= 0:
+            return []
         # Over-fetch per arm: a doc ranked deep in one arm can still fuse into
         # the overall top-k.
         results = await asyncio.gather(

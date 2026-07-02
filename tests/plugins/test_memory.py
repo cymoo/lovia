@@ -163,6 +163,18 @@ async def test_concurrent_adds_are_serialized(tmp_path) -> None:
     assert set(facts) == {f"fact number {i}" for i in range(50)}
 
 
+async def test_public_remember_and_forget(tmp_path) -> None:
+    # remember/forget are public: code can seed and clean Notes without a
+    # model in the loop, with the same semantics as the tools.
+    mem = Memory(tmp_path / "mem", index=None)
+    assert await mem.remember("user speaks French") is True
+    assert await mem.remember("USER SPEAKS FRENCH") is False  # dup
+    assert await mem.forget("speaks french") is True  # substring match
+    assert await mem.forget("speaks french") is False  # already gone
+    assert await mem.forget("   ") is False  # blank → no-op
+    assert await mem._notes_store().load() == []
+
+
 # ---------------------------------------------------------------------------
 # Construction: the three-step ladder (default / embedder= / index=)
 # ---------------------------------------------------------------------------
@@ -175,7 +187,7 @@ def test_default_builds_notes_and_keyword_index(tmp_path) -> None:
     assert mem._should_expand()  # lexical-only default → expansion on
 
 
-def test_embedder_upgrades_default_to_hybrid(tmp_path) -> None:
+async def test_embedder_upgrades_default_to_hybrid(tmp_path) -> None:
     class Emb:
         id = "fake:v1"
 
@@ -187,6 +199,9 @@ def test_embedder_upgrades_default_to_hybrid(tmp_path) -> None:
     kinds = {type(arm) for arm in mem.index.indexes}
     assert kinds == {KeywordIndex, VectorIndex}
     assert not mem._should_expand()  # semantic arm present → auto-expansion off
+    # Both arms live under the root (db files themselves are created lazily).
+    assert (tmp_path / "mem").is_dir()
+    await mem.index.add([Doc(id="a", text="hello")])
     assert (tmp_path / "mem" / "archive.db").exists()
     assert (tmp_path / "mem" / "vectors.db").exists()
 

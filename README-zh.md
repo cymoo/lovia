@@ -671,6 +671,8 @@ Memory("./memory", index=my_index)             # 自带检索引擎
 
 消化、整理和召回摘要这些内部请求，会通过一个没有工具、没有 plugin 的子 agent 调用 `Runner.run`，并使用结构化输出。因此它们能复用同一条 provider 链，又不会递归触发 `Memory` 自身。lovia 的 transcript 会完整保留，context compaction 只影响传给模型的视图，所以消化只需要在 run 结束时针对完整 transcript 跑一次：它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后补救。
 
+`remember` / `forget` 同时也是公开方法（`await mem.remember("...")`），代码可以在没有模型参与的情况下播种或清理 Notes。
+
 **自带后端。** 两个层级背后各有一个刻意收窄的协议。`NotesStore` 只有两个方法（`load`/`save` 一组事实——归一化、去重、预算这些策略都留在 plugin 里）；`Index` 就是上面的三方法检索缝，除 `Doc`/`Hit` 外不涉及任何 lovia 类型。Doc id 是确定性的（`run_id:seq`），resume 的 run 重新写入时按 id upsert 而不会产生重复——后端只需老实实现按 id 覆盖：
 
 ```python

@@ -36,7 +36,7 @@ from ...exceptions import ProviderError, UserError
 from ...http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ...providers._http import is_retryable_status
 from ...stores._sqlite import SQLiteStore
-from .index import Doc, Fusable, Hit, _dump_meta, _hit
+from .index import Doc, Fusable, Hit, _dump_meta, _hit_from_row
 
 logger = logging.getLogger(__name__)
 
@@ -281,9 +281,9 @@ class VectorIndex(Fusable, SQLiteStore):
         if p != ":memory:":
             Path(p).parent.mkdir(parents=True, exist_ok=True)
         super().__init__(p, _VEC_SCHEMA)
-        self._reset_if_respaced()
+        self._reset_if_embedder_changed()
 
-    def _reset_if_respaced(self) -> None:
+    def _reset_if_embedder_changed(self) -> None:
         """Empty the index when the stored vector space no longer matches."""
         conn = self._connect()
         try:
@@ -367,8 +367,13 @@ class VectorIndex(Fusable, SQLiteStore):
         # Don't spend an embedding call on an empty index.
         if await self._run(self._is_empty):
             return []
-        (qvec,) = await self.embedder.embed([query])
-        q = _normalize(qvec)
+        vectors = await self.embedder.embed([query])
+        if len(vectors) != 1:
+            raise ProviderError(
+                f"embedder {self.embedder.id!r} returned {len(vectors)} vectors "
+                "for one query"
+            )
+        q = _normalize(vectors[0])
 
         def _scan() -> list[Hit]:
             conn = self._connect()
@@ -387,7 +392,7 @@ class VectorIndex(Fusable, SQLiteStore):
                     continue
                 scored.append((float(_dot(q, v)), r))
             top = nlargest(k, scored, key=operator.itemgetter(0))
-            return [_hit(r, score=s) for s, r in top]
+            return [_hit_from_row(r, score=s) for s, r in top]
 
         return await self._run(_scan)
 

@@ -200,27 +200,22 @@ class FileNotesStore:
 # ---------------------------------------------------------------------------
 
 
-def _archive_texts(entries: list[TranscriptEntry]) -> list[str]:
-    """Pull the user/assistant message texts worth archiving from a transcript."""
-    texts: list[str] = []
+def _message_texts(entries: list[TranscriptEntry]) -> list[tuple[str, str]]:
+    """The non-empty user/assistant ``(role, text)`` pairs of a transcript."""
+    pairs: list[tuple[str, str]] = []
     for m in entries_to_messages(entries):
         if m.role not in ("user", "assistant"):
             continue
         text = text_of(m.content).strip()
         if text:
-            texts.append(text)
-    return texts
+            pairs.append((m.role, text))
+    return pairs
 
 
 def _render_transcript(entries: list[TranscriptEntry]) -> str:
-    lines: list[str] = []
-    for m in entries_to_messages(entries):
-        if m.role not in ("user", "assistant"):
-            continue
-        text = text_of(m.content).strip()
-        if text:
-            lines.append(f"{m.role.upper()}: {text}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"{role.upper()}: {text}" for role, text in _message_texts(entries)
+    )
 
 
 def _hit_line(hit: Hit) -> str:
@@ -280,34 +275,41 @@ _DIGEST_INSTRUCTIONS = (
     "— the user's stable preferences, corrections they made, and durable facts "
     "about them or their project. Ignore transient task details, one-off "
     "requests, and anything already covered by the current notes. Each fact is "
-    "one short, self-contained line. If nothing qualifies, return an empty "
-    "list.\n"
+    "one short, self-contained line in the conversation's dominant language. "
+    "If nothing qualifies, return an empty list.\n"
     "2. summary: a few sentences capturing what the conversation was about — "
     "topics, decisions, and outcomes — written to be found and understood on "
-    "its own later, in the conversation's dominant language. Preserve names, "
-    "numbers, and identifiers verbatim. Empty if the conversation is trivial."
+    "its own later, in the conversation's dominant language. Quote names, "
+    "numbers, and identifiers exactly as they appeared. Empty if the "
+    "conversation is trivial (greetings, tests, nothing worth recalling)."
 )
 
 _CONSOLIDATE_INSTRUCTIONS = (
     "You compress an agent's long-term notes. Merge duplicates and near-"
     "duplicates, drop the least important entries, and keep durable preferences "
-    "and facts. Preserve meaning; be concise. Return the rewritten notes as a "
-    "list of short, self-contained lines that fit the requested budget."
+    "and facts. Preserve meaning and keep each note in its original language; "
+    "be concise. Return the rewritten notes as a list of short, self-contained "
+    "lines that fit the requested budget."
 )
 
 _EXPAND_INSTRUCTIONS = (
     "You expand search queries for a keyword search over past conversations. "
-    "Given a query, return up to 8 short terms that could appear verbatim in "
+    "Given a query, return up to 10 short terms that could appear verbatim in "
     "relevant text: synonyms, alternate phrasings, and translations into the "
     "other languages the user plausibly writes in (at minimum English and the "
-    "query's own language). Return only the terms."
+    "query's own language). For category words, also give a few common "
+    "concrete instances, since the text likely names the specific thing (pet "
+    "→ dog, cat; vehicle → car, bike). Prefer concrete content words; never "
+    "translate or alter codes, numbers, or identifiers; do not repeat words "
+    "already in the query. Return only the terms."
 )
 
 _SUMMARIZE_INSTRUCTIONS = (
     "You answer from an agent's memory archive. Given a question and some "
     "retrieved excerpts from past conversations, summarize only what is "
-    "relevant to the question, concisely. If nothing is relevant, say so "
-    "plainly."
+    "relevant to the question, concisely, in the question's language. The "
+    "excerpts are date-stamped — mention when something happened if it helps. "
+    "If nothing is relevant, say so plainly."
 )
 
 
@@ -468,6 +470,9 @@ class Memory:
       ``recall`` tool.
     * ``notes=`` — replace the hot-tier persistence (any :class:`NotesStore`).
 
+    :meth:`remember` and :meth:`forget` are also public methods, so code can
+    seed or clean Notes without a model in the loop.
+
     Fields:
         root: Directory for the default stores. Ignored for a tier whose store
             is passed explicitly.
@@ -575,6 +580,32 @@ class Memory:
                 await notes.save(facts)
         return added
 
+    async def remember(self, fact: str) -> bool:
+        """Add one durable fact to Notes; ``False`` if it was already there.
+
+        Backs the model's ``remember`` tool; call it directly to seed memories
+        programmatically (onboarding data, migrations, an admin UI).
+        """
+        return await self._add_facts([fact]) == 1
+
+    async def forget(self, fact: str) -> bool:
+        """Remove the best-matching note; ``False`` if nothing matched.
+
+        Matching is exact → case-insensitive → substring, same as the model's
+        ``forget`` tool, which this backs.
+        """
+        norm = _normalize_fact(fact)
+        if not norm:
+            return False
+        notes = self._notes_store()
+        async with self._notes_lock:
+            facts = await notes.load()
+            kept = _drop_fact(facts, norm)
+            if len(kept) == len(facts):
+                return False
+            await notes.save(kept)
+        return True
+
     # -- setup -----------------------------------------------------------------
 
     async def setup(self) -> PluginInstance:
@@ -602,10 +633,9 @@ class Memory:
         async def remember(
             fact: Annotated[str, "The durable fact to remember."],
         ) -> str:
-            added = await plugin._add_facts([fact])
-            if not added:
-                return "Already in your notes — nothing to add."
-            return "Remembered. It will be available in future sessions."
+            if await plugin.remember(fact):
+                return "Remembered. It will be available in future sessions."
+            return "Already in your notes — nothing to add."
 
         return remember
 
@@ -616,17 +646,9 @@ class Memory:
         async def forget(
             fact: Annotated[str, "Text matching the note to remove."],
         ) -> str:
-            norm = _normalize_fact(fact)
-            if not norm:
-                return "No matching note found to forget."
-            notes = plugin._notes_store()
-            async with plugin._notes_lock:
-                facts = await notes.load()
-                kept = _drop_fact(facts, norm)
-                if len(kept) == len(facts):
-                    return "No matching note found to forget."
-                await notes.save(kept)
-            return "Forgotten."
+            if await plugin.forget(fact):
+                return "Forgotten."
+            return "No matching note found to forget."
 
         return forget
 
@@ -741,7 +763,7 @@ class Memory:
                 when=now,
                 meta={**meta, "kind": "message"},
             )
-            for seq, text in enumerate(_archive_texts(entries))
+            for seq, (_, text) in enumerate(_message_texts(entries))
         ]
         if digest and digest.summary.strip():
             docs.append(

@@ -750,6 +750,9 @@ and can't recurse. Because lovia's transcript is durable and compaction is
 view-only, the digest runs once at run end over the complete transcript: it is
 curation (promoting the few durable facts into the small hot tier), not rescue.
 
+`remember` / `forget` are also public methods (`await mem.remember("...")`),
+so code can seed or clean Notes without a model in the loop.
+
 **Bring your own backend.** Each tier sits behind a deliberately narrow
 protocol. `NotesStore` is two methods (`load`/`save` a fact list — all
 normalization, dedup, and budgeting policy stays in the plugin), and `Index` is

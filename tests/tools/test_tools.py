@@ -325,6 +325,25 @@ async def test_no_cap_keeps_full_output_and_raw() -> None:
     assert entry.raw == {"data": "z" * 10_000}
 
 
+async def test_huge_output_drops_raw_even_without_cap() -> None:
+    # raw mirrors the output, so retaining it for a huge result doubles run
+    # memory and every checkpoint/session serialization; the output itself
+    # stays untouched (no cap configured).
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def big() -> dict:
+        """Return a huge structured payload."""
+        return {"data": "z" * 30_000}
+
+    provider = ScriptedProvider([call("big", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[big])
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert "z" * 30_000 in entry.output  # not truncated
+    assert entry.raw is None  # but the mirrored object tree is not retained
+
+
 async def test_small_output_not_touched_by_cap() -> None:
     from lovia.transcript import ToolResultEntry
 

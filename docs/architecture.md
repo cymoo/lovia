@@ -53,6 +53,13 @@ lovia/
     todo.py         #   Todo plugin: todo_write + per-turn reminder injector
     skills.py       #   Skills plugin + SkillCategory/SkillSource (SKILL.md disclosure)
     mcp.py          #   MCP plugin + MCP client (lazy; requires mcp package)
+  eval/             # Declarative evals: Case + checks → evaluate() → Report
+    checks.py       #   Check protocol (any (RunResult) -> CheckResult | bool)
+                    #   + deterministic matchers + all_of/any_of/weighted
+    judge.py        #   llm_judge — an Agent(output_type=Verdict) underneath
+    runner.py       #   Case + evaluate() (sampling, concurrency, fail_fast)
+    report.py       #   SampleResult/CaseResult/Report + baseline diff
+  testing.py        # ScriptedProvider + text()/call() — public deterministic fake
   schema.py         # JSON Schema generation from Python types
   exceptions.py     # Framework exceptions (carry an optional .hint)
   providers/        # LLM provider adapters (OpenAI, Anthropic, …)
@@ -187,10 +194,14 @@ method handles both triggers:
 
 ## Testing internals
 
-Tests use `ScriptedProvider` (in `tests/scripted_provider.py`) — a deterministic, in-memory provider that replays pre-canned `AssistantTurn` objects. No network calls. Build scripts with the `text()` and `call()` helpers:
+Tests use `ScriptedProvider` (public home: `lovia/testing.py`, so user eval
+suites can use it too; `tests/scripted_provider.py` remains as a re-export
+shim) — a deterministic, in-memory provider that replays pre-canned
+`AssistantTurn` objects. No network calls. Build scripts with the `text()` and
+`call()` helpers:
 
 ```python
-from .scripted_provider import ScriptedProvider, call, text
+from lovia.testing import ScriptedProvider, call, text
 
 provider = ScriptedProvider([
     call("add", {"a": 2, "b": 3}, call_id="c1"),
@@ -201,8 +212,10 @@ provider = ScriptedProvider([
 The provider records every prompt it receives in `provider.calls` (as `list[list[Message]]`), so tests can assert on what the agent actually sent.
 
 Context-system tests live under `tests/context/` (tokens, state, render,
-stages, pipeline, recall, offload integration). Live end-to-end tests against
-the real endpoint configured in `.env` are in
-`tests/context/test_live_context.py` and `tests/providers/test_live.py`; run
-them with `LOVIA_LIVE_TESTS=1 pytest -m live_provider` (the genuine
-context-overflow probe additionally needs `LOVIA_LIVE_OVERFLOW_TESTS=1`).
+stages, pipeline, recall, offload integration); eval-framework tests under
+`tests/eval/` (checks against hand-built `RunResult`s, the engine and judge
+against scripted agents). Live end-to-end tests against the real endpoint
+configured in `.env` are in `tests/context/test_live_context.py`,
+`tests/providers/test_live.py`, and `tests/eval/test_live.py`; run them with
+`LOVIA_LIVE_TESTS=1 pytest -m live_provider` (the genuine context-overflow
+probe additionally needs `LOVIA_LIVE_OVERFLOW_TESTS=1`).

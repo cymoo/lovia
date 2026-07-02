@@ -139,6 +139,22 @@ async def test_summarize_raises_on_empty_provider_output() -> None:
         await s.summarize([InputEntry(role="user", content="hi")], req=_req(provider))
 
 
+async def test_summarize_raises_on_truncated_output() -> None:
+    # finish_reason "length" means the tail sections were silently cut off;
+    # folding that forward would compound the loss, so it must fail loudly.
+    from lovia.messages import AssistantTurn, Usage
+
+    truncated = AssistantTurn(
+        content=_full_summary(),
+        usage=Usage(input_tokens=1, output_tokens=1),
+        finish_reason="length",
+    )
+    provider = ScriptedProvider([truncated])
+    s = LLMSummarizer(provider)
+    with pytest.raises(ValueError, match="truncated"):
+        await s.summarize([InputEntry(role="user", content="hi")], req=_req(provider))
+
+
 async def test_summarize_first_vs_fold_template() -> None:
     # First summary uses the <transcript> framing.
     p1 = ScriptedProvider([text(_full_summary())])

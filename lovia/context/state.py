@@ -19,6 +19,7 @@ fresh state.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -35,6 +36,11 @@ from ..transcript import (
 SCRATCH_KEY = "context"
 """Key under which compaction state lives inside the per-run scratch dict."""
 _VERSION = 2
+
+RATIO_MIN, RATIO_MAX = 0.5, 4.0
+"""Clamp bounds for the calibration ratio, applied both when updating the EMA
+and when loading persisted state — one weird usage report (or a corrupted
+scratch) must not poison the estimate scale."""
 
 
 @dataclass
@@ -79,8 +85,10 @@ class CompactionState:
         last_view_estimate: Raw (uncalibrated) estimate of the view returned
             by the previous ``compact()`` call; compared against the next
             real ``last_input_tokens`` to update :attr:`ratio`.
-        summary_failures: Consecutive summarizer failures this run; the
-            summarize stage stops trying after its limit (circuit breaker).
+        summary_failures: Consecutive summarizer failures, carried in the
+            scratch like every other decision. Past the summarize stage's
+            limit the proactive path stops trying (circuit breaker); the
+            aggressive path still probes, and a success resets the count.
     """
 
     cleared: set[str] = field(default_factory=set)
@@ -93,6 +101,26 @@ class CompactionState:
     def decided(self, call_id: str) -> bool:
         """Whether a sticky decision already exists for this tool result."""
         return call_id in self.cleared or call_id in self.offloaded
+
+    def prune(self, referable: set[str]) -> None:
+        """Drop clear/offload records whose id is not in ``referable``.
+
+        ``referable`` is :func:`unique_result_ids` of the current body: a
+        record whose id is absent points at a result the session history no
+        longer contains (trimmed or rewritten between runs), and one whose id
+        is now duplicated would render *every* matching result as a marker —
+        including a fresh one the decision was never about. Either way the
+        record is stale; dropping it merely returns those results to verbatim
+        rendering. Records for summary-covered entries survive (their ids are
+        still unique in the body), which matters because a summary reset must
+        find them intact.
+        """
+        self.cleared &= referable
+        self.offloaded = {
+            call_id: rec
+            for call_id, rec in self.offloaded.items()
+            if call_id in referable
+        }
 
     @classmethod
     def load(cls, scratch: dict[str, Any]) -> "CompactionState":
@@ -135,7 +163,7 @@ class CompactionState:
 
         ratio = raw.get("ratio")
         if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
-            state.ratio = min(4.0, max(0.5, float(ratio)))
+            state.ratio = min(RATIO_MAX, max(RATIO_MIN, float(ratio)))
 
         estimate = raw.get("last_view_estimate")
         if isinstance(estimate, int) and not isinstance(estimate, bool):
@@ -171,13 +199,28 @@ class CompactionState:
         }
 
 
+def unique_result_ids(entries: Sequence[TranscriptEntry]) -> set[str]:
+    """``call_id``\\ s carried by exactly one tool result in ``entries``.
+
+    These are the only ids a sticky decision (or a recall marker) can
+    reference unambiguously. Providers with globally unique ids put every
+    result here; providers that reuse ids per turn (``call_0``, ``call_1``)
+    make repeated ids ambiguous, and the pipeline neither decides about nor
+    replays decisions for those.
+    """
+    counts = Counter(e.call_id for e in entries if isinstance(e, ToolResultEntry))
+    return {call_id for call_id, n in counts.items() if n == 1}
+
+
 def fingerprint(entries: Sequence[TranscriptEntry]) -> str:
     """Cheap structural digest of a transcript prefix.
 
     Captures entry kinds, call ids/roles, and content lengths — enough to
     detect the covered prefix being rewritten out from under a summary (e.g.
     when a summary is carried into a new run), without hashing megabytes of
-    content.
+    content. Tool-result *lengths* are deliberately excluded: the summary
+    covers markers, not the outputs themselves, so trimming a stored output
+    in place (a session cleanup) must not read as a rewrite.
     """
     h = hashlib.sha1()
     for entry in entries:
@@ -202,8 +245,14 @@ def _signature(entry: TranscriptEntry) -> str:
     if isinstance(entry, ToolCallEntry):
         return f"call:{entry.call_id}:{len(entry.arguments)}"
     if isinstance(entry, ToolResultEntry):
-        return f"result:{entry.call_id}:{len(entry.output)}"
+        return f"result:{entry.call_id}"
     return f"unknown:{type(entry).__name__}"  # pragma: no cover - exhaustive
 
 
-__all__ = ["CompactionState", "OffloadRecord", "SummaryState", "fingerprint"]
+__all__ = [
+    "CompactionState",
+    "OffloadRecord",
+    "SummaryState",
+    "fingerprint",
+    "unique_result_ids",
+]

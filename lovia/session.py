@@ -76,6 +76,12 @@ class Session(Protocol):
     ``append``, and ``clear``. There is deliberately no ``replace`` — immutable
     history is what lets the runner persist only a run's delta and keeps
     cross-run state (run boundaries, per-run ``meta``) consistent.
+
+    The bundled stores additionally provide ``trim_tool_results(...)``, an
+    operator-invoked maintenance method deliberately kept **off** this protocol
+    (so custom stores need not implement it): it truncates old stored tool
+    outputs while preserving run and entry structure — the one sanctioned
+    exception to append-only. See :mod:`lovia.stores.session`.
     """
 
     async def segments(self, session_id: str) -> list[Segment]:

@@ -39,9 +39,10 @@ justification).
 
 ## Artifacts
 Files and paths created, modified, or archived — plus exact identifiers, \
-names, and IDs that later turns may need. For tool outputs dropped from the \
-view, record the ``recall_tool_result`` call_id (not the content) so it can \
-be retrieved.
+names, and IDs that later turns may need. When a dropped tool output is \
+likely to be needed again, note its ``recall_tool_result`` call_id with a \
+few words on what it holds (e.g. ``call_42: full test log``). List only \
+outputs worth recovering — do NOT enumerate every dropped result.
 
 ## Constraints & preferences
 Explicit rules the user gave: tone, style, must/must-not-do, deadlines, \
@@ -66,6 +67,9 @@ Rules:
 user wording verbatim.
 - Do NOT invent facts that are not in the transcript.
 - Do NOT include pleasantries or meta-commentary about the summarization.
+- Keep the whole summary compact — well under 2000 words. Prefer tight \
+wording over exhaustive detail; drop low-value narration before dropping \
+identifiers or decisions.
 - Respond with TEXT ONLY: plain markdown with the six headings above, no \
 code fences, no tool calls.
 """
@@ -91,11 +95,12 @@ Here is the running summary of the conversation so far:
 
 Update it so it also covers the newer events below. Requirements:
 - Keep all six sections.
-- Keep every still-relevant earlier fact; drop nothing that is not \
-superseded by the new events.
-- Integrate the new events fully: every new fact, identifier, code, file \
-path, and number that appears in <new_events> must appear in the updated \
-summary verbatim.
+- Keep every still-relevant earlier fact; drop what the new events \
+supersede, and prune entries that no longer matter (e.g. artifacts for \
+work that has since completed).
+- Integrate the new events: facts, decisions, and identifiers that later \
+turns will plausibly need must appear verbatim — but do not hoard; \
+transient details and dead ends can be compressed to a line or dropped.
 - Move items between sections when their status changed (e.g. from Next \
 steps to Current state).
 

@@ -207,12 +207,13 @@ async def test_sticky_replay_after_burst():
     entries = [user("x" * 100) for _ in range(30)]
     first = await pipeline.compact(req(entries, scratch=scratch))
     assert first.compacted is True
+    calls_after_burst = len(summarizer.calls)
 
     second = await pipeline.compact(req(entries, scratch=scratch))
     assert second.compacted is False
     assert second.changed is True
     assert second.reason == "sticky_replay"
-    assert len(summarizer.calls) == 1  # no new LLM work
+    assert len(summarizer.calls) == calls_after_burst  # no new LLM work
     assert [entry_to_dict(e) for e in second.entries] == [
         entry_to_dict(e) for e in first.entries
     ]
@@ -306,12 +307,79 @@ async def test_rewritten_prefix_resets_summary_but_keeps_clear_decisions():
     entries = [user("x" * 100) for _ in range(30)]
     await pipeline.compact(req(entries, scratch=scratch))
     assert CompactionState.load(scratch).summary is not None
+    calls_after_burst = len(summarizer.priors)
 
     rewritten = [user("REWRITTEN HISTORY " + "y" * 100), *entries[1:]]
     res = await pipeline.compact(req(rewritten, scratch=scratch))
-    # The stale summary was dropped and rebuilt from scratch (prior=None).
-    assert summarizer.priors == [None, None]
+    # The stale summary was dropped and rebuilt from scratch (prior=None on
+    # the rebuild's first fold, not the carried summary text).
+    assert summarizer.priors[0] is None
+    assert summarizer.priors[calls_after_burst] is None
     assert res.compacted is True
+
+
+async def test_protected_tail_measured_on_rendered_view():
+    """A cleared result near the tail costs marker-size in the actual prompt,
+    so it must not eat the tail budget at its raw size — that would leave the
+    model less verbatim recency than ``keep_recent_tokens`` promises."""
+    from lovia.context import SummarizeHistory
+
+    summarizer = FakeSummarizer()
+    pipeline = _pipeline(
+        context_window=1_000,
+        compact_at=0.9,
+        compact_to=0.5,
+        keep_recent_tokens=600,
+        stages=[SummarizeHistory(summarizer=summarizer)],
+    )
+    body = [
+        user("x" * 4_000),  # ~1000 tokens: exceeds the remaining tail budget
+        call("c0"),
+        out("c0", "r" * 8_000),  # cleared: renders as a ~35-token marker
+        user("tail question"),
+    ]
+    scratch: dict = {}
+    CompactionState(cleared={"c0"}).save(scratch)
+    await pipeline.compact(req(body, scratch=scratch))
+    covered = CompactionState.load(scratch).summary
+    # Counted raw, the cleared 2000-token result would blow the 600-token
+    # tail budget and the summary would cover the first three entries;
+    # counted as rendered, only the big leading user message is summarized.
+    assert covered is not None and covered.covered == 1
+
+
+async def test_summary_survives_stored_output_trim():
+    """An operator trimming stored tool outputs (``Session.trim_tool_results``)
+    keeps entry structure and call ids; the result-length-blind fingerprint
+    therefore matches and the carried summary is NOT reset."""
+    from lovia.context import SummarizeHistory
+
+    summarizer = FakeSummarizer()
+    pipeline = _pipeline(
+        context_window=1_000,
+        compact_at=0.5,
+        compact_to=0.3,
+        stages=[SummarizeHistory(summarizer=summarizer)],
+    )
+    scratch: dict = {}
+    entries: list = [user("go")]
+    for i in range(10):
+        entries += [call(f"c{i}"), out(f"c{i}", "r" * 500)]
+    await pipeline.compact(req(entries, scratch=scratch))
+    before = CompactionState.load(scratch).summary
+    assert before is not None
+    calls_after_burst = len(summarizer.calls)
+
+    trimmed = [
+        ToolResultEntry(call_id=e.call_id, output=e.output[:50] + "[trimmed]")
+        if isinstance(e, ToolResultEntry)
+        else e
+        for e in entries
+    ]
+    await pipeline.compact(req(trimmed, scratch=scratch))
+    after = CompactionState.load(scratch).summary
+    assert after is not None and after.covered == before.covered  # not reset
+    assert len(summarizer.calls) == calls_after_burst  # no re-summarize
 
 
 async def test_leading_system_run_swap_keeps_summary():
@@ -380,12 +448,15 @@ async def test_reactive_ignores_refuted_window_claim():
     assert len(res.entries) < len(entries)
 
 
-async def test_reactive_summarizer_failure_propagates_and_persists_counter():
+async def test_reactive_summarizer_failure_is_contained_and_persists_counter():
+    # The summarizer's own error stays inside the pipeline (the runner must
+    # get to surface the original ContextOverflowError); the failure counter
+    # is still recorded.
     pipeline = Compaction(summarizer=FailingSummarizer())
     scratch: dict = {}
     entries = [user("x" * 1_000) for _ in range(4)]
-    with pytest.raises(RuntimeError, match="boom"):
-        await pipeline.compact(req(entries, overflow=True, scratch=scratch))
+    res = await pipeline.compact(req(entries, overflow=True, scratch=scratch))
+    assert res.compacted is False
     assert CompactionState.load(scratch).summary_failures == 1
 
 
@@ -416,6 +487,7 @@ async def test_state_survives_checkpoint_round_trip():
     entries = [user("x" * 100) for _ in range(30)]
     first = await pipeline.compact(req(entries, scratch=scratch))
     assert first.compacted is True
+    calls_after_burst = len(summarizer.calls)
 
     revived_scratch = json.loads(json.dumps(scratch))
     res = await pipeline.compact(req(entries, scratch=revived_scratch))
@@ -423,7 +495,7 @@ async def test_state_survives_checkpoint_round_trip():
     assert [entry_to_dict(e) for e in res.entries] == [
         entry_to_dict(e) for e in first.entries
     ]
-    assert len(summarizer.calls) == 1
+    assert len(summarizer.calls) == calls_after_burst
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +553,7 @@ async def test_runner_reactive_compaction_recovers_from_overflow():
         agent, "hello there", context_policy=policy, session=sess, session_id="s1"
     )
     assert provider.stream_count == 2
-    assert len(summarizer.calls) == 1
+    assert summarizer.calls  # the reactive burst summarized (maybe chunked)
     assert "hello after compaction" in (result.output or "")
     # The retried prompt was actually smaller.
     assert provider.last_input_lengths[1] < provider.last_input_lengths[0]
@@ -553,6 +625,75 @@ async def test_runner_overflow_on_incompressible_prompt_propagates():
     agent = Agent(name="t", instructions="x", model=provider)
     with pytest.raises(ContextOverflowError):
         await Runner.run(agent, "hello")
+
+
+async def test_reactive_compact_gets_no_stale_calibration_sample():
+    """The retry compact() must not see ``last_input_tokens``: this turn's
+    first compact already consumed it, and it describes the previous turn's
+    view — pairing it with the just-overflowed (larger) view would drag the
+    calibration ratio down."""
+    from lovia import tool
+
+    from ..scripted_provider import call as provider_call
+
+    @tool
+    async def ping() -> str:
+        return "pong"
+
+    class OverflowOnSecondStream(ScriptedProvider):
+        def __init__(self, script) -> None:
+            super().__init__(script)
+            self.streams = 0
+
+        async def stream(self, entries, **kwargs):
+            self.streams += 1
+            if self.streams == 2:
+                raise ContextOverflowError("simulated overflow")
+            async for delta in super().stream(entries, **kwargs):
+                yield delta
+
+    seen: list[tuple[bool, int | None]] = []
+
+    class SpyPolicy:
+        async def compact(self, request):
+            seen.append((request.overflow, request.last_input_tokens))
+            return ContextResult(
+                entries=list(request.entries),
+                changed=request.overflow,
+                compacted=request.overflow,
+                tokens_after=10 if request.overflow else 1_000,
+            )
+
+    provider = OverflowOnSecondStream([provider_call("ping", {}), text("done")])
+    agent = Agent(name="t", instructions="x", model=provider, tools=[ping])
+    result = await Runner.run(agent, "go", context_policy=SpyPolicy())
+    assert result.output == "done"
+    assert seen[0] == (False, None)  # turn 1: nothing observed yet
+    assert seen[1][0] is False and seen[1][1] is not None  # turn 2: calibrates
+    assert seen[2] == (True, None)  # retry: stale sample withheld
+
+
+async def test_runner_skips_doomed_retry_when_view_barely_shrinks():
+    """A reactive view that is not meaningfully smaller than the one that
+    just failed would hit the same 400 — the runner surfaces the overflow
+    instead of paying for the retry."""
+
+    class BarelyShrinkingPolicy:
+        async def compact(self, request):
+            if not request.overflow:
+                return ContextResult(entries=list(request.entries), tokens_after=1_000)
+            return ContextResult(
+                entries=list(request.entries),
+                changed=True,
+                compacted=True,
+                tokens_after=990,  # under 5% smaller than the failed 1_000
+            )
+
+    provider = _OverflowOnceProvider()
+    agent = Agent(name="t", instructions="x", model=provider)
+    with pytest.raises(ContextOverflowError):
+        await Runner.run(agent, "hello", context_policy=BarelyShrinkingPolicy())
+    assert provider.stream_count == 1  # the doomed retry was never sent
 
 
 async def test_compaction_does_not_modify_session():
@@ -642,6 +783,29 @@ async def test_continuation_resumes_summary_across_runs_durably():
     assert len(summarizer.calls) == calls_after_first  # inherited; no re-summarize
 
 
+async def test_stale_and_ambiguous_records_are_pruned_from_scratch():
+    """Records for ids the body no longer holds (trimmed history) or holds
+    twice (a provider reusing call ids) are GC'd instead of replayed —
+    a reused id must not render the newest result as a marker."""
+    entries = [
+        user("go"),
+        call("call_0"),
+        out("call_0", "old " * 200),
+        call("call_0"),
+        out("call_0", "new " * 200),
+    ]
+    scratch: dict = {}
+    CompactionState(
+        cleared={"ghost", "call_0"},
+        offloaded={"ghost2": OffloadRecord(preview="p", chars=9)},
+    ).save(scratch)
+    pipeline = _pipeline(context_window=1_000_000)
+    res = await pipeline.compact(req(entries, scratch=scratch))
+    assert res.changed is False  # nothing rendered as a marker
+    pruned = CompactionState.load(scratch)
+    assert pruned.cleared == set() and pruned.offloaded == {}
+
+
 async def test_detail_bullets_describe_what_changed():
     """The policy authors its own notice bullets from its state (the UI renders
     them verbatim). Covers ``_plural`` both ways and the pressure line."""
@@ -654,9 +818,18 @@ async def test_detail_bullets_describe_what_changed():
             "d": OffloadRecord(preview="q", chars=9),
         },
     ).save(scratch)
-    res = await pipeline.compact(req([user("hi")], scratch=scratch))
-    assert "2 tool results offloaded" in res.detail  # plural
-    assert "1 tool result cleared" in res.detail  # singular
+    entries = [
+        user("hi"),
+        call("a"),
+        out("a", "x"),
+        call("c"),
+        out("c", "x"),
+        call("d"),
+        out("d", "x"),
+    ]
+    res = await pipeline.compact(req(entries, scratch=scratch))
+    assert "2 tool results offloaded in total" in res.detail  # plural
+    assert "1 tool result cleared in total" in res.detail  # singular
     assert any(b.endswith("% full") for b in res.detail)  # pressure line present
 
 

@@ -22,6 +22,15 @@ from ..transcript import ToolResultEntry
 
 logger = logging.getLogger(__name__)
 
+# Rendered-output size above which the tool's raw return value is not
+# retained on the transcript entry, even when nothing is truncated. ``raw``
+# mirrors the output (for a structured result it is the object tree behind
+# the JSON dump), so keeping it roughly doubles what run memory and every
+# checkpoint/session serialization pay for a huge entry — for a field whose
+# only job is post-hoc inspection. Hooks observe the original result on the
+# transient ``ToolCallCompleted`` event regardless.
+_KEEP_RAW_MAX_CHARS = 16_000
+
 
 @dataclass
 class ToolCallProcessor:
@@ -197,6 +206,8 @@ class ToolCallProcessor:
                 limit,
             )
             result_text = truncate_tool_output(result_text, limit)
+            raw_value = None
+        elif len(result_text) > _KEEP_RAW_MAX_CHARS:
             raw_value = None
 
         state.transcript.append(

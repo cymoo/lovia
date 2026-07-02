@@ -26,8 +26,14 @@ import logging
 from typing import TYPE_CHECKING, Sequence
 
 from .policy import CompactionRequest, ContextResult
-from .render import protected_tail_start, render_view
-from .state import CompactionState, fingerprint
+from .render import protected_tail_start, render_entries, render_view
+from .state import (
+    RATIO_MAX,
+    RATIO_MIN,
+    CompactionState,
+    fingerprint,
+    unique_result_ids,
+)
 from .stages import (
     ClearToolResults,
     OffloadToolResults,
@@ -46,10 +52,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Calibration EMA: weight of the newest observation, and clamp bounds that
-# keep one weird usage report from poisoning the ratio.
+# Calibration EMA: weight of the newest observation. Clamp bounds live next
+# to the state (:data:`~lovia.context.state.RATIO_MIN`/``RATIO_MAX``), which
+# applies them again when loading persisted scratch.
 _CALIBRATION_ALPHA = 0.2
-_RATIO_MIN, _RATIO_MAX = 0.5, 4.0
 
 # Aggressive (post-overflow) overrides.
 _REACTIVE_TARGET = 0.25
@@ -175,13 +181,20 @@ class Compaction:
             )
             state.summary = None
 
+        # GC clear/offload records that no longer point at exactly one live
+        # tool result — ids trimmed out of the session history, or ids a
+        # provider reused (which would make the marker replace the wrong,
+        # possibly newest, result). Keeps the persisted scratch from growing
+        # with records nothing can render.
+        state.prune(unique_result_ids(body))
+
         # Calibrate the estimator against the real usage of the previous call.
         if req.last_input_tokens and state.last_view_estimate:
             observed = req.last_input_tokens / max(1, state.last_view_estimate)
             state.ratio = min(
-                _RATIO_MAX,
+                RATIO_MAX,
                 max(
-                    _RATIO_MIN,
+                    RATIO_MIN,
                     (1 - _CALIBRATION_ALPHA) * state.ratio
                     + _CALIBRATION_ALPHA * observed,
                 ),
@@ -197,6 +210,9 @@ class Compaction:
         window = self.context_window
         if window is None:
             window = _provider_context_window(req.provider, req.model)
+        # The real window (when known) survives the aggressive override below:
+        # stages that make actual model calls (summarize) size against it.
+        model_window = window
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
@@ -235,7 +251,14 @@ class Compaction:
         tail_tokens = self.keep_recent_tokens or max(1, budget.usable // 5)
         if aggressive:
             tail_tokens = min(tail_tokens, max(1, budget.usable // 10))
-        protected_from = protected_tail_start(body, counter, state.ratio, tail_tokens)
+        # Measure the tail on *rendered* entries (1:1 index-aligned with the
+        # body): already-cleared/offloaded results cost marker-size in the
+        # actual prompt, so counting them raw would fill the tail budget with
+        # phantom tokens and leave the model less verbatim recency than
+        # ``keep_recent_tokens`` promises.
+        protected_from = protected_tail_start(
+            render_entries(body, state), counter, state.ratio, tail_tokens
+        )
 
         reasons: list[str] = []
         try:
@@ -249,6 +272,7 @@ class Compaction:
                     protected_from=protected_from,
                     aggressive=aggressive,
                     store=self.store,
+                    model_window=model_window,
                 )
                 if await stage.plan(body, ctx):
                     reasons.append(stage.name)
@@ -258,8 +282,9 @@ class Compaction:
                 if tokens <= budget.target_tokens:
                     break
         except BaseException:
-            # Keep what was decided (and failure counters) even when a stage
-            # raises on the aggressive path.
+            # Stages are expected to log-and-return-False on failure, but an
+            # unexpected raise must still keep what was already decided (and
+            # the failure counters).
             state.last_view_estimate = raw
             self._save(req, state)
             raise
@@ -314,13 +339,19 @@ class Compaction:
 
         # Policy-authored notice bullets, rendered verbatim by the UI. Only the
         # decisions worth surfacing — the calibration ratio stays internal.
+        # Counts are cumulative session state, and say so: a notice fires per
+        # burst, but its numbers describe everything decided up to now.
         detail: list[str] = []
         if budget is not None:
             detail.append(f"context was {round(budget.pressure(tokens) * 100)}% full")
         if state.offloaded:
-            detail.append(f"{_plural(len(state.offloaded), 'tool result')} offloaded")
+            detail.append(
+                f"{_plural(len(state.offloaded), 'tool result')} offloaded in total"
+            )
         if state.cleared:
-            detail.append(f"{_plural(len(state.cleared), 'tool result')} cleared")
+            detail.append(
+                f"{_plural(len(state.cleared), 'tool result')} cleared in total"
+            )
         if state.summary is not None:
             detail.append(f"summary covers {_plural(state.summary.covered, 'message')}")
         return ContextResult(

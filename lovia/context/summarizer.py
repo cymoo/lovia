@@ -131,10 +131,23 @@ class LLMSummarizer:
         self, provider: Provider, conversation: list[TranscriptEntry]
     ) -> str:
         chunks: list[str] = []
+        finish: str | None = None
         async for delta in provider.stream(conversation, settings=self.settings):
+            dtype = getattr(delta, "type", "")
             text = getattr(delta, "text", None)
-            if isinstance(text, str) and getattr(delta, "type", "") == "text_delta":
+            if isinstance(text, str) and dtype == "text_delta":
                 chunks.append(text)
+            elif dtype == "finish_delta":
+                finish = getattr(delta, "reason", None)
+        if finish == "length":
+            # A summary cut off by the output limit has silently lost its
+            # tail (typically the last sections) — folding it forward would
+            # compound the loss on every burst. Fail loudly instead: the
+            # stage counts it like any other summarizer failure.
+            raise ValueError(
+                "LLMSummarizer output truncated by the provider's max_tokens; "
+                "raise ModelSettings.max_tokens or shorten the summary prompt"
+            )
         summary = "".join(chunks).strip()
         if not summary:
             raise ValueError("LLMSummarizer returned empty text")

@@ -397,12 +397,16 @@ _OVERFLOW_NEEDLES = (
     "context_length_exceeded",
     "context length",  # "the model's context length is only N"
     "context window",  # some vendors
+    "context limit",  # "input length and max_tokens exceed context limit"
     "prompt is too long",
     "input is too long",
     "input length",  # "maximum input length of N"
     "reduce the length of the input",
     "reduce the length of the messages",
     "too many tokens",
+    "token count exceeds",  # Gemini-compatible gateways
+    "exceeds the maximum number of tokens",
+    "too many total text bytes",  # Bedrock-hosted models behind proxies
     "request too large",
 )
 

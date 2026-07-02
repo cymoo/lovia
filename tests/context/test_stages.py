@@ -386,7 +386,9 @@ async def test_summarize_rejects_empty_summary():
     # A custom summarizer returning "" must NOT silently blank the prefix.
     body = _texts(10)
     ctx = make_ctx(body, protected_from=8)
-    assert await SummarizeHistory(summarizer=FakeSummarizer("")).plan(body, ctx) is False
+    assert (
+        await SummarizeHistory(summarizer=FakeSummarizer("")).plan(body, ctx) is False
+    )
     assert ctx.state.summary is None
     assert ctx.state.summary_failures == 1
 
@@ -495,8 +497,6 @@ async def test_offload_aggressive_archives_oversized_protected_result():
     store = FakeResultStore()
     body = [call("giant"), out("giant", "g" * 40_000)]
     budget = TokenBudget(window=4_000, reserve_output=0, trigger=0.75, target=0.5)
-    ctx = make_ctx(
-        body, store=store, aggressive=True, budget=budget, protected_from=0
-    )
+    ctx = make_ctx(body, store=store, aggressive=True, budget=budget, protected_from=0)
     assert await OffloadToolResults(keep_last=2).plan(body, ctx) is True
     assert store.data["giant"] == "g" * 40_000

@@ -179,9 +179,7 @@ async def test_todos_carry_across_handoff() -> None:
 @pytest.mark.asyncio
 async def test_inject_false_omits_reminder() -> None:
     args = {"todos": [{"content": "x"}]}
-    provider = ScriptedProvider(
-        [call("todo_write", args, call_id="c1"), text("done")]
-    )
+    provider = ScriptedProvider([call("todo_write", args, call_id="c1"), text("done")])
     agent = Agent(name="t", model=provider, plugins=[Todo(inject=False)])
     await Runner.run(agent, "go")
     assert not any(

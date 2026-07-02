@@ -165,9 +165,7 @@ def test_command_decider_overrides_then_falls_through() -> None:
 
 def test_command_decider_invalid_return_falls_through() -> None:
     # A hook returning a non-Decision must not crash; it falls through.
-    policy = WorkspacePolicy(
-        shell_default="ask", command_decider=lambda seg: "maybe"
-    )
+    policy = WorkspacePolicy(shell_default="ask", command_decider=lambda seg: "maybe")
     assert policy.decide_command("anything") == "ask"
 
 

@@ -3,39 +3,40 @@
 ``Memory`` gives an agent a long-term memory that survives across runs and
 sessions, built from two tiers and three verbs the model already understands:
 
-* **Notes** (the *hot* tier) — a tiny, char-budgeted block that is **always
-  injected** into the system prompt. It holds the user's stable preferences,
-  durable facts, and important context. The model curates it with
-  ``remember(fact)`` / ``forget(fact)``, and (when ``auto_extract``) the plugin
+* **Notes** (the *hot* tier) — a tiny, char-budgeted list of facts that is
+  **always injected** into the system prompt: the user's stable preferences,
+  durable facts, important context. The model curates it with
+  ``remember(fact)`` / ``forget(fact)``, and (when ``auto_curate``) the plugin
   promotes durable facts into it automatically at the end of each run.
-* **Archive** (the *cold* tier) — a full-text-searchable store of past
-  conversations, pulled in only on demand via ``recall(query)``.
+* **Archive** (the *cold* tier) — a searchable index of past conversations,
+  pulled in on demand via ``recall(query)``.
 
-So the surface is intuitive: **Memory** + **remember / recall / forget**, over
-**Notes** (hot) and **Archive** (cold). This synthesizes Claude Code's
-multi-file memory and Hermes' tiered memory — the realization being that *the
-unit that matters is the tier, not the file*: keep the hot tier as one small
-always-present blob and put the cold tier in a real search index.
+The tiers sit behind two deliberately narrow seams. The hot tier is a
+:class:`NotesStore` (``load``/``save`` a fact list — all policy such as
+normalization, dedup, rendering, and budgeting lives here in the plugin, so a
+custom store is pure persistence). The cold tier is an
+:class:`~.index.Index` (``add``/``remove``/``search`` over plain
+:class:`~.index.Doc` — no transcript knowledge required). Escalate recall
+quality by saying one more fact per step::
 
-This fits lovia especially well because the transcript is durable and
-compaction is **view-only** (``ContextCompacted.entries_before`` is the full
-transcript and the ``Session`` persists it). So nothing is ever lost from the
-record, and the only end-of-run work is *curation*: ingesting the run into the
-archive and promoting durable facts into Notes. That is also why this plugin
-hooks only :class:`~lovia.events.RunCompleted` and not ``ContextCompacted`` — at
-run end ``result.entries`` already holds this run's complete entries (compaction
-is view-only), so a separate pre-compaction flush would just re-extract the same
-facts at extra cost. (``result.entries`` is this run's own messages, not the
-whole session, so the archive appends per run rather than re-ingesting history.)
+    Memory("./memory")                            # stdlib FTS + LLM query expansion
+    Memory("./memory", embedder=OpenAIEmbedder()) # auto-hybrid: keyword | vector, RRF
+    Memory("./memory", index=my_index)            # bring your own retrieval engine
 
-Defaults are filesystem markdown (Notes) + SQLite FTS5 (Archive), each behind a
-small ``Protocol`` so the backends are swappable::
+The zero-dependency default leans on the one model that is always present in
+an agent framework — the LLM itself: queries are expanded with synonyms and
+translations before hitting the lexical index (``expand_query="auto"`` turns
+this off when a semantic arm is configured), and at run end a single digest
+call both promotes durable facts into Notes and writes a self-contained
+episode summary into the archive, where it searches far better than raw chat
+fragments.
 
-    from lovia import Agent, Memory
-
-    agent: Agent[Any] = Agent(name="assistant", plugins=[Memory("./.lovia/memory")])
-    # -> FileNotesStore("./.lovia/memory/MEMORY.md")
-    #  + SQLiteArchiveStore("./.lovia/memory/archive.db")
+Idempotency is carried by the data: message docs get deterministic ids
+(``run_id:seq``), so a resumed run that re-ingests simply upserts. This fits
+lovia because the transcript is durable and compaction is view-only — nothing
+is ever lost from the record, so end-of-run work is pure curation, and the
+plugin hooks only :class:`~lovia.events.RunCompleted` (``result.entries`` is
+the run's own complete transcript).
 
 Backends are long-lived and shared by every run (held on the plugin, never
 rebuilt per run, never closed by the plugin); :meth:`Memory.setup` only
@@ -47,16 +48,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
-import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    Literal,
     Protocol,
     cast,
     runtime_checkable,
@@ -65,13 +66,15 @@ from typing import (
 from pydantic import BaseModel, Field
 
 from ...events import RunCompleted
+from ...exceptions import UserError
 from ...hooks import AgentHooks
 from ...parts import text_of
 from ...run_context import RunContext
-from ...stores._sqlite import SQLiteStore
 from ...tools import Tool, tool
 from ...transcript import TranscriptEntry, entries_to_messages
 from ..base import PluginInstance
+from .index import Doc, Hit, Index, KeywordIndex
+from .vector import Embedder, VectorIndex
 
 if TYPE_CHECKING:
     from ...providers import Provider
@@ -81,20 +84,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ROOT = "./.lovia/memory"
 _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
-_DEFAULT_MAX_CHARS = 2000
-
-# Sentinel for ``Memory.archive``: distinguishes "build the default archive"
-# (the field was left untouched) from an explicit ``archive=None`` ("no cold
-# tier"). Without it, ``None`` would be ambiguous and could not disable the
-# archive when ``notes`` is a path. Typed ``Any`` so the public field annotation
-# stays ``ArchiveStore | None``.
-_DEFAULT_ARCHIVE: Any = object()
+_VECTORS_FILENAME = "vectors.db"
+_DEFAULT_NOTES_BUDGET = 2000
 
 
 # ---------------------------------------------------------------------------
-# Notes body helpers — the canonical hot-tier format is one fact per line,
-# rendered as a ``- fact`` bullet list (markdown-native, model-friendly, and
-# trivial to add/remove/dedup).
+# Notes policy helpers — the canonical hot-tier form is a list of short facts,
+# persisted as a ``- fact`` bullet list (markdown-native, model-friendly, and
+# human-editable). All of this is plugin policy shared by every NotesStore.
 # ---------------------------------------------------------------------------
 
 
@@ -104,7 +101,7 @@ def _normalize_fact(fact: str) -> str:
 
 
 def _parse_facts(body: str) -> list[str]:
-    """Parse a stored notes body (``- fact`` per line) into its facts."""
+    """Parse a notes body (``- fact`` per line) into its facts."""
     facts: list[str] = []
     for line in body.splitlines():
         stripped = line.strip()
@@ -116,7 +113,7 @@ def _parse_facts(body: str) -> list[str]:
 
 
 def _format_facts(facts: list[str]) -> str:
-    """Render facts back to the canonical notes body."""
+    """Render facts to the canonical bullet-list body."""
     return "\n".join(f"- {f}" for f in facts)
 
 
@@ -143,56 +140,41 @@ def _meter(used: int, total: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Hot tier: Notes
+# Hot tier: NotesStore
 # ---------------------------------------------------------------------------
 
 
 @runtime_checkable
 class NotesStore(Protocol):
-    """The hot tier: a tiny, always-injected, self-curating note block.
+    """The hot-tier seam: pure persistence of a fact list.
 
-    The body convention is one fact per line (``raw`` returns it, ``replace``
-    sets it); :meth:`render` wraps it with a capacity meter for injection.
+    Two methods, no policy: normalization, dedup, fuzzy removal, budgeting,
+    and prompt rendering all live in the plugin, identically for every store.
+    Read-modify-write cycles are serialized by the plugin; a store only needs
+    each individual ``load``/``save`` to be safe.
     """
 
-    async def render(self) -> str:
-        """Return the block to inject into the system prompt (with a meter)."""
+    async def load(self) -> list[str]:
+        """Return the stored facts (empty when nothing is stored yet)."""
         ...
 
-    async def raw(self) -> str:
-        """Return the stored notes body."""
-        ...
-
-    async def add(self, fact: str) -> None:
-        """Add a fact (idempotent — duplicates are ignored)."""
-        ...
-
-    async def remove(self, fact: str) -> None:
-        """Remove a fact (best-effort match)."""
-        ...
-
-    async def replace(self, content: str) -> None:
-        """Replace the whole body (used by consolidation)."""
+    async def save(self, facts: list[str]) -> None:
+        """Persist ``facts``, replacing the previous list."""
         ...
 
 
 class FileNotesStore:
-    """Default :class:`NotesStore`: a single markdown file, one fact per line.
+    """Default :class:`NotesStore`: one markdown file, one ``- fact`` per line.
 
-    Facts are stored as a ``- fact`` bullet list and char-budgeted
-    (model-agnostic, Hermes-style). Writes are serialized with an
-    ``asyncio.Lock`` and made atomic via a temp-file rename, so concurrent runs
-    never corrupt the file and readers never see a half-written body.
+    The file is human-editable (non-bullet lines are ignored on load). Writes
+    are atomic via a temp-file rename, so readers never see a half-written
+    body even if the process dies mid-save.
     """
 
     def __init__(
-        self,
-        path: str | os.PathLike[str] = f"{_DEFAULT_ROOT}/{_NOTES_FILENAME}",
-        max_chars: int = _DEFAULT_MAX_CHARS,
+        self, path: str | os.PathLike[str] = f"{_DEFAULT_ROOT}/{_NOTES_FILENAME}"
     ) -> None:
         self._path = Path(path)
-        self.max_chars = max_chars
-        self._lock = asyncio.Lock()
 
     def _read(self) -> str:
         try:
@@ -206,372 +188,28 @@ class FileNotesStore:
         tmp.write_text(body, encoding="utf-8")
         os.replace(tmp, self._path)
 
-    async def raw(self) -> str:
-        return (await asyncio.to_thread(self._read)).strip()
+    async def load(self) -> list[str]:
+        return _parse_facts(await asyncio.to_thread(self._read))
 
-    async def render(self) -> str:
-        body = await self.raw()
-        meter = _meter(len(body), self.max_chars)
-        if not body:
-            return f"NOTES {meter}\n(empty — use `remember` to save durable facts)"
-        return f"NOTES {meter}\n{body}"
-
-    async def add(self, fact: str) -> None:
-        norm = _normalize_fact(fact)
-        if not norm:
-            return
-        async with self._lock:
-            facts = _parse_facts(await asyncio.to_thread(self._read))
-            if any(norm.lower() == f.lower() for f in facts):
-                return
-            facts.append(norm)
-            await asyncio.to_thread(self._write, _format_facts(facts))
-
-    async def remove(self, fact: str) -> None:
-        norm = _normalize_fact(fact)
-        if not norm:
-            return
-        async with self._lock:
-            facts = _parse_facts(await asyncio.to_thread(self._read))
-            kept = _drop_fact(facts, norm)
-            if len(kept) != len(facts):
-                await asyncio.to_thread(self._write, _format_facts(kept))
-
-    async def replace(self, content: str) -> None:
-        async with self._lock:
-            # Re-normalize through parse/format so a raw payload still lands as
-            # the canonical one-fact-per-line body; fall back to the trimmed
-            # text when it has no bullets.
-            facts = _parse_facts(content)
-            body = _format_facts(facts) if facts else content.strip()
-            await asyncio.to_thread(self._write, body)
+    async def save(self, facts: list[str]) -> None:
+        await asyncio.to_thread(self._write, _format_facts(facts))
 
 
 # ---------------------------------------------------------------------------
-# Cold tier: Archive
+# Transcript → docs (the only place the cold tier meets lovia's data model)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class ArchiveHit:
-    """One search result from the cold :class:`ArchiveStore` tier."""
-
-    session_id: str
-    when: float
-    text: str
-    score: float
-
-
-@runtime_checkable
-class ArchiveStore(Protocol):
-    """The cold tier: a searchable archive of past sessions."""
-
-    async def ingest(
-        self,
-        session_id: str | None,
-        entries: list[TranscriptEntry],
-        *,
-        run_id: str | None = None,
-    ) -> None:
-        """Append one run's own messages, replacing any prior copy of ``run_id``.
-
-        ``entries`` is the run's **own** transcript (not the whole session), so
-        each completed run adds only its new messages; re-ingesting the same
-        ``run_id`` replaces them (idempotent on a resumed completion). Mirrors
-        :meth:`~lovia.session.Session.append`.
-        """
-        ...
-
-    async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
-        """Return up to ``k`` archived messages relevant to ``query``."""
-        ...
-
-
-def _archive_docs(entries: list[TranscriptEntry]) -> list[str]:
+def _archive_texts(entries: list[TranscriptEntry]) -> list[str]:
     """Pull the user/assistant message texts worth archiving from a transcript."""
-    docs: list[str] = []
+    texts: list[str] = []
     for m in entries_to_messages(entries):
         if m.role not in ("user", "assistant"):
             continue
         text = text_of(m.content).strip()
         if text:
-            docs.append(text)
-    return docs
-
-
-# CJK-aware term extraction. SQLite's default ``unicode61`` FTS tokenizer (and a
-# plain ``LIKE``) can't segment scripts written without spaces between words: a
-# whole CJK run becomes one token, so ``recall("北京")`` never matches "...北京...".
-# We split CJK runs into overlapping bigrams (other scripts' words stay whole) on
-# the indexed text and the query, so the two sides line up, two-character words
-# match exactly, and bm25 still ranks. The same extractor drives the LIKE
-# fallback, so a natural-language CJK query matches by its bigrams there too.
-
-# CJK Unified Ideographs (+ Ext. A, Compatibility), kana, and Hangul.
-_CJK = "㐀-䶿一-鿿豈-﫿぀-ヿ가-힯"
-_CJK_RE = re.compile(rf"[{_CJK}]")
-# A CJK run, or a run of word characters in any other script (ASCII, accented
-# Latin, Cyrillic, Greek, ...) — those use spaces, so they stay whole words.
-_PIECE_RE = re.compile(rf"[{_CJK}]+|[^\W{_CJK}]+")
-
-
-def _bigrams(run: str) -> list[str]:
-    """Overlapping 2-grams of a CJK run (the run itself when 1–2 chars long)."""
-    if len(run) <= 2:
-        return [run]
-    return [run[i : i + 2] for i in range(len(run) - 1)]
-
-
-def _terms(text: str) -> list[str]:
-    """Split text into search terms: word-runs whole, CJK runs as bigrams."""
-    out: list[str] = []
-    for piece in _PIECE_RE.findall(text.lower()):
-        if _CJK_RE.match(piece):
-            out.extend(_bigrams(piece))
-        else:
-            out.append(piece)
-    return out
-
-
-def _index_text(text: str) -> str:
-    """The bigram-segmented form stored in the FTS ``search`` column."""
-    return " ".join(_terms(text))
-
-
-def _fts5_available() -> bool:
-    """Probe whether this SQLite build has the FTS5 extension."""
-    try:
-        con = sqlite3.connect(":memory:")
-        try:
-            con.execute("CREATE VIRTUAL TABLE _probe USING fts5(x)")
-        finally:
-            con.close()
-        return True
-    except sqlite3.OperationalError:
-        return False
-
-
-# ``text`` is stored for display only (UNINDEXED); ``search`` holds the
-# bigram-segmented form that the default tokenizer actually indexes.
-_FTS_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
-    session_id UNINDEXED,
-    run_id UNINDEXED,
-    text UNINDEXED,
-    search,
-    when_ts UNINDEXED
-);
-"""
-
-_PLAIN_SCHEMA = """
-CREATE TABLE IF NOT EXISTS archive_docs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    when_ts REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_archive_docs_sid ON archive_docs(session_id);
-"""
-
-
-class SQLiteArchiveStore(SQLiteStore):
-    """Default :class:`ArchiveStore`: stdlib SQLite with FTS5 full-text search.
-
-    Each completed run appends its own messages as per-message rows keyed by
-    ``(session_id, run_id)``. Ingest is **replace-on-run** so a resumed
-    completion re-ingesting the same ``run_id`` is idempotent, while distinct
-    runs accumulate across a session; a run with no id gets a unique key so it is
-    still retained. Search ranks with bm25 over a CJK-aware bigram index (so
-    scripts without whitespace word boundaries match too) when FTS5 is available,
-    and falls back to a recency-ordered ``LIKE`` scan otherwise.
-    """
-
-    def __init__(
-        self, path: str | os.PathLike[str] = f"{_DEFAULT_ROOT}/{_ARCHIVE_FILENAME}"
-    ) -> None:
-        self._use_fts = _fts5_available()
-        schema = _FTS_SCHEMA if self._use_fts else _PLAIN_SCHEMA
-        p = str(path)
-        if p != ":memory:":
-            Path(p).parent.mkdir(parents=True, exist_ok=True)
-        super().__init__(p, schema)
-        self._table = "archive_fts" if self._use_fts else "archive_docs"
-        self._reset_if_stale()
-
-    def _reset_if_stale(self) -> None:
-        """Rebuild a table left over from an older archive schema.
-
-        We don't migrate archived data across schema changes — the archive is a
-        recall cache, not a source of truth — but ``CREATE ... IF NOT EXISTS``
-        would leave an old table in place, and its missing columns make
-        ``ingest`` fail. Detect the mismatch by the ``run_id`` column and
-        recreate the table empty (discarding the old rows).
-        """
-        conn = self._connect()
-        try:
-            row = conn.execute(
-                "SELECT sql FROM sqlite_master WHERE name = ?", (self._table,)
-            ).fetchone()
-            if row and "run_id" not in (row[0] or ""):
-                conn.executescript(f"DROP TABLE IF EXISTS {self._table};")
-                conn.executescript(self._schema)
-                conn.commit()
-        finally:
-            self._release(conn)
-
-    async def ingest(
-        self,
-        session_id: str | None,
-        entries: list[TranscriptEntry],
-        *,
-        run_id: str | None = None,
-    ) -> None:
-        docs = _archive_docs(entries)
-        if not docs:
-            return
-        sid = session_id or f"run-{uuid.uuid4().hex}"
-        rid = run_id or uuid.uuid4().hex
-        now = time.time()
-        table = self._table
-        rows: list[tuple[Any, ...]]
-        if self._use_fts:
-            insert = (
-                f"INSERT INTO {table} (session_id, run_id, text, search, when_ts) "
-                "VALUES (?, ?, ?, ?, ?)"
-            )
-            rows = [(sid, rid, d, _index_text(d), now) for d in docs]
-        else:
-            insert = (
-                f"INSERT INTO {table} (session_id, run_id, text, when_ts) "
-                "VALUES (?, ?, ?, ?)"
-            )
-            rows = [(sid, rid, d, now) for d in docs]
-
-        def _impl() -> None:
-            conn = self._connect()
-            try:
-                # Replace-on-run: a re-ingested run_id supersedes its old rows,
-                # but distinct runs in a session accumulate.
-                conn.execute(
-                    f"DELETE FROM {table} WHERE session_id = ? AND run_id = ?",
-                    (sid, rid),
-                )
-                conn.executemany(insert, rows)
-                conn.commit()
-            finally:
-                self._release(conn)
-
-        await self._run(_impl)
-
-    async def search(self, query: str, k: int = 5) -> list[ArchiveHit]:
-        terms = _terms(query)
-        if not terms:
-            return []
-
-        if self._use_fts:
-            # Quote each term so a CJK bigram or ASCII word is one FTS phrase;
-            # OR them and let bm25 rank by how many distinct terms each row hits.
-            match = " OR ".join(f'"{t}"' for t in terms)
-
-            def _fts() -> list[ArchiveHit]:
-                conn = self._connect()
-                try:
-                    rows = conn.execute(
-                        "SELECT session_id, when_ts, text, bm25(archive_fts) AS score "
-                        "FROM archive_fts WHERE archive_fts MATCH ? "
-                        "ORDER BY score LIMIT ?",
-                        (match, k),
-                    ).fetchall()
-                finally:
-                    self._release(conn)
-                # bm25 returns lower = better; report -bm25 so higher = better.
-                return [
-                    ArchiveHit(
-                        session_id=r["session_id"],
-                        when=r["when_ts"],
-                        text=r["text"],
-                        score=-float(r["score"]),
-                    )
-                    for r in rows
-                ]
-
-            return await self._run(_fts)
-
-        clause = " OR ".join(["text LIKE ?"] * len(terms))
-        params: list[Any] = [f"%{t}%" for t in terms] + [k]
-
-        def _like() -> list[ArchiveHit]:
-            conn = self._connect()
-            try:
-                rows = conn.execute(
-                    "SELECT session_id, when_ts, text FROM archive_docs "
-                    f"WHERE {clause} ORDER BY when_ts DESC LIMIT ?",
-                    params,
-                ).fetchall()
-            finally:
-                self._release(conn)
-            return [
-                ArchiveHit(
-                    session_id=r["session_id"],
-                    when=r["when_ts"],
-                    text=r["text"],
-                    score=0.0,
-                )
-                for r in rows
-            ]
-
-        return await self._run(_like)
-
-
-# ---------------------------------------------------------------------------
-# Curation side-queries — a tool-less, plugin-less sub-agent run via
-# ``Runner.run``. It dogfoods structured output + the provider chain and cannot
-# recurse (the sub-agent has no Memory plugin). Runner/Agent are imported lazily
-# to avoid an import cycle (plugins -> runner -> loop -> plugins.base).
-# ---------------------------------------------------------------------------
-
-
-class _ExtractedFacts(BaseModel):
-    facts: list[str] = Field(
-        default_factory=list,
-        description=(
-            "New durable facts worth remembering long-term (stable preferences, "
-            "corrections, lasting details about the user or project). Empty if "
-            "there is nothing new worth keeping."
-        ),
-    )
-
-
-class _ConsolidatedNotes(BaseModel):
-    facts: list[str] = Field(
-        default_factory=list,
-        description="The rewritten, deduplicated, shorter set of notes.",
-    )
-
-
-_EXTRACT_INSTRUCTIONS = (
-    "You curate an agent's long-term memory. From a conversation, identify only "
-    "facts that will still matter in future, unrelated sessions: the user's "
-    "stable preferences, corrections they made, and durable facts about them or "
-    "their project. Ignore transient task details, one-off requests, and "
-    "anything already covered by the current notes. Return each kept fact as a "
-    "short, self-contained line. If nothing qualifies, return an empty list."
-)
-
-_CONSOLIDATE_INSTRUCTIONS = (
-    "You compress an agent's long-term notes. Merge duplicates and near-"
-    "duplicates, drop the least important entries, and keep durable preferences "
-    "and facts. Preserve meaning; be concise. Return the rewritten notes as a "
-    "list of short, self-contained lines that fit the requested budget."
-)
-
-_SUMMARIZE_INSTRUCTIONS = (
-    "You answer from an agent's memory archive. Given a question and some "
-    "retrieved excerpts from past conversations, summarize only what is "
-    "relevant to the question, concisely. If nothing is relevant, say so "
-    "plainly."
-)
+            texts.append(text)
+    return texts
 
 
 def _render_transcript(entries: list[TranscriptEntry]) -> str:
@@ -585,33 +223,122 @@ def _render_transcript(entries: list[TranscriptEntry]) -> str:
     return "\n".join(lines)
 
 
-async def _extract(
+def _hit_line(hit: Hit) -> str:
+    """Render a hit for the model: date-stamped so answers can be grounded in time."""
+    if hit.doc.when > 0:
+        day = time.strftime("%Y-%m-%d", time.localtime(hit.doc.when))
+        return f"[{day}] {hit.doc.text}"
+    return hit.doc.text
+
+
+# ---------------------------------------------------------------------------
+# Curation side-queries — tool-less, plugin-less sub-agent runs via
+# ``Runner.run``. They dogfood structured output + the provider chain and
+# cannot recurse (the sub-agent has no Memory plugin). Runner/Agent are
+# imported lazily to avoid an import cycle (plugins -> runner -> loop ->
+# plugins.base).
+# ---------------------------------------------------------------------------
+
+
+class _RunDigest(BaseModel):
+    facts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "New durable facts worth remembering long-term (stable preferences, "
+            "corrections, lasting details about the user or project). Empty if "
+            "there is nothing new worth keeping."
+        ),
+    )
+    summary: str = Field(
+        default="",
+        description=(
+            "A short, self-contained summary of the conversation for the "
+            "long-term archive. Empty if the conversation has no content worth "
+            "archiving."
+        ),
+    )
+
+
+class _ConsolidatedNotes(BaseModel):
+    facts: list[str] = Field(
+        default_factory=list,
+        description="The rewritten, deduplicated, shorter set of notes.",
+    )
+
+
+class _ExpandedQuery(BaseModel):
+    terms: list[str] = Field(
+        default_factory=list,
+        description="Short search terms: synonyms, rephrasings, translations.",
+    )
+
+
+_DIGEST_INSTRUCTIONS = (
+    "You curate an agent's long-term memory. From a conversation, produce two "
+    "things.\n"
+    "1. facts: only facts that will still matter in future, unrelated sessions "
+    "— the user's stable preferences, corrections they made, and durable facts "
+    "about them or their project. Ignore transient task details, one-off "
+    "requests, and anything already covered by the current notes. Each fact is "
+    "one short, self-contained line. If nothing qualifies, return an empty "
+    "list.\n"
+    "2. summary: a few sentences capturing what the conversation was about — "
+    "topics, decisions, and outcomes — written to be found and understood on "
+    "its own later, in the conversation's dominant language. Preserve names, "
+    "numbers, and identifiers verbatim. Empty if the conversation is trivial."
+)
+
+_CONSOLIDATE_INSTRUCTIONS = (
+    "You compress an agent's long-term notes. Merge duplicates and near-"
+    "duplicates, drop the least important entries, and keep durable preferences "
+    "and facts. Preserve meaning; be concise. Return the rewritten notes as a "
+    "list of short, self-contained lines that fit the requested budget."
+)
+
+_EXPAND_INSTRUCTIONS = (
+    "You expand search queries for a keyword search over past conversations. "
+    "Given a query, return up to 8 short terms that could appear verbatim in "
+    "relevant text: synonyms, alternate phrasings, and translations into the "
+    "other languages the user plausibly writes in (at minimum English and the "
+    "query's own language). Return only the terms."
+)
+
+_SUMMARIZE_INSTRUCTIONS = (
+    "You answer from an agent's memory archive. Given a question and some "
+    "retrieved excerpts from past conversations, summarize only what is "
+    "relevant to the question, concisely. If nothing is relevant, say so "
+    "plainly."
+)
+
+
+async def _digest(
     entries: list[TranscriptEntry],
     current_notes: str,
     model: "str | Provider | list[str | Provider]",
-) -> list[str]:
+) -> _RunDigest:
     from ...agent import Agent
     from ...providers import ModelSettings
     from ...runner import Runner
 
     convo = _render_transcript(entries)
     if not convo.strip():
-        return []
+        return _RunDigest()
     agent: Agent[Any] = Agent(
-        name="memory-extractor",
+        name="memory-digest",
         model=model,
-        instructions=_EXTRACT_INSTRUCTIONS,
-        output_type=_ExtractedFacts,
+        instructions=_DIGEST_INSTRUCTIONS,
+        output_type=_RunDigest,
         settings=ModelSettings(temperature=0),
     )
     prompt = (
-        f"## Current notes (do NOT repeat these)\n{current_notes or '(empty)'}\n\n"
-        f"## Conversation\n{convo}\n\n"
-        "Extract only NEW durable facts not already in the notes."
+        f"## Current notes (do NOT repeat these in facts)\n"
+        f"{current_notes or '(empty)'}\n\n"
+        f"## Conversation\n{convo}"
     )
     result = await Runner.run(agent, prompt)
-    facts = getattr(result.output, "facts", []) or []
-    return [n for f in facts if (n := _normalize_fact(f))]
+    digest = cast(_RunDigest, result.output)
+    digest.facts = [n for f in digest.facts if (n := _normalize_fact(f))]
+    return digest
 
 
 async def _consolidate(
@@ -639,8 +366,28 @@ async def _consolidate(
     return [n for f in facts if (n := _normalize_fact(f))]
 
 
+async def _expand(
+    query: str,
+    model: "str | Provider | list[str | Provider]",
+) -> list[str]:
+    from ...agent import Agent
+    from ...providers import ModelSettings
+    from ...runner import Runner
+
+    agent: Agent[Any] = Agent(
+        name="memory-query-expander",
+        model=model,
+        instructions=_EXPAND_INSTRUCTIONS,
+        output_type=_ExpandedQuery,
+        settings=ModelSettings(temperature=0),
+    )
+    result = await Runner.run(agent, f"Query: {query}")
+    terms = getattr(result.output, "terms", []) or []
+    return [n for t in terms if (n := _normalize_fact(t))]
+
+
 async def _summarize(
-    hits: list[ArchiveHit],
+    hits: list[Hit],
     query: str,
     model: "str | Provider | list[str | Provider]",
 ) -> str:
@@ -648,7 +395,7 @@ async def _summarize(
     from ...providers import ModelSettings
     from ...runner import Runner
 
-    joined = "\n\n".join(f"(session {h.session_id})\n{h.text}" for h in hits)
+    joined = "\n\n".join(_hit_line(h) for h in hits)
     agent: Agent[Any] = Agent(
         name="memory-recall",
         model=model,
@@ -684,55 +431,7 @@ _RECALL_DESCRIPTION = (
 )
 
 
-def _make_remember(notes: NotesStore) -> Tool:
-    @tool(name="remember", description=_REMEMBER_DESCRIPTION)
-    async def remember(fact: Annotated[str, "The durable fact to remember."]) -> str:
-        before = await notes.raw()
-        await notes.add(fact)
-        if await notes.raw() == before:
-            return "Already in your notes — nothing to add."
-        return "Remembered. It will be available in future sessions."
-
-    return remember
-
-
-def _make_forget(notes: NotesStore) -> Tool:
-    @tool(name="forget", description=_FORGET_DESCRIPTION)
-    async def forget(fact: Annotated[str, "Text matching the note to remove."]) -> str:
-        before = await notes.raw()
-        await notes.remove(fact)
-        if await notes.raw() == before:
-            return "No matching note found to forget."
-        return "Forgotten."
-
-    return forget
-
-
-def _make_recall(plugin: "Memory", archive: ArchiveStore) -> Tool:
-    @tool(name="recall", description=_RECALL_DESCRIPTION)
-    async def recall(
-        ctx: RunContext[Any],
-        query: Annotated[str, "What to look for in past conversations."],
-    ) -> str:
-        hits = await archive.search(query, plugin.recall_k)
-        if not hits:
-            return "(nothing relevant found in long-term memory)"
-        if plugin.summarize_recall:
-            try:
-                return await _summarize(hits, query, plugin._resolve_model(ctx))
-            except Exception:
-                # Fail-open: fall back to raw hits, so this degrades output but
-                # doesn't fail the tool — WARNING, not ERROR (keep traceback).
-                logger.warning(
-                    "memory: recall summary failed; returning raw hits",
-                    exc_info=True,
-                )
-        return "\n\n".join(f"- {h.text}" for h in hits)
-
-    return recall
-
-
-def _build_instructions(has_archive: bool) -> str:
+def _build_instructions(has_index: bool) -> str:
     parts = [
         "You have long-term memory that persists across sessions.",
         "- Your durable NOTES are shown below and are always in context — they "
@@ -742,7 +441,7 @@ def _build_instructions(has_archive: bool) -> str:
         "correction, a stable detail). Keep each fact short and self-contained.",
         "- Call `forget(fact)` to remove a note that is wrong or no longer true.",
     ]
-    if has_archive:
+    if has_index:
         parts.append(
             "- Call `recall(query)` to search past conversations when the user "
             "refers to something earlier or you need context not in your notes."
@@ -758,151 +457,316 @@ def _build_instructions(has_archive: bool) -> str:
 class Memory:
     """Tiered cross-session memory: hot **Notes** + cold **Archive**.
 
-    ``Memory("./dir")`` (or ``Memory()``) builds both default stores under that
-    root. Pass ``notes=`` / ``archive=`` to supply custom backends; set
-    ``archive=None`` for a notes-only memory with no ``recall`` tool.
+    ``Memory()`` / ``Memory("./dir")`` is fully zero-config: markdown Notes and
+    a stdlib keyword index under that root, with LLM query expansion covering
+    the lexical gaps. Each further capability is one more argument:
+
+    * ``embedder=`` — upgrade the default index to keyword|vector hybrid
+      (Reciprocal Rank Fusion); expansion turns off automatically.
+    * ``index=`` — replace the retrieval engine outright (any
+      :class:`~.index.Index`); ``index=None`` disables the cold tier and the
+      ``recall`` tool.
+    * ``notes=`` — replace the hot-tier persistence (any :class:`NotesStore`).
 
     Fields:
-        notes: A :class:`NotesStore`, or a root directory path under which the
-            default :class:`FileNotesStore` (+ :class:`SQLiteArchiveStore`) are
-            created.
-        archive: A :class:`ArchiveStore`; ``None`` to disable the cold tier.
-            Left unset, the default :class:`SQLiteArchiveStore` is built under
-            the notes root when ``notes`` is a path (and omitted otherwise).
-        auto_extract: When ``True`` (default), the plugin promotes durable facts
-            from the conversation into Notes at the end of each run (and
-            consolidates Notes that exceed the store's budget). This adds one
-            model call at run end; set ``False`` for purely manual notes.
-        summarize_recall: When ``True`` (default), ``recall`` returns a cheap
-            model-written summary of the hits rather than the raw excerpts.
-        recall_k: Number of archive hits ``recall`` retrieves.
+        root: Directory for the default stores. Ignored for a tier whose store
+            is passed explicitly.
+        notes: Custom hot-tier store; default builds ``MEMORY.md`` under root.
+        index: Custom cold-tier index. Leave unset for the default (keyword,
+            or hybrid when ``embedder`` is given); ``None`` disables recall.
+        embedder: Adds a semantic arm to the *default* index. Mutually
+            exclusive with ``index=`` — a custom index embeds however it wants.
+        auto_curate: When ``True`` (default), one model call at run end
+            promotes durable facts into Notes and writes an episode summary
+            into the archive (plus a consolidation call when Notes outgrow
+            their budget). Set ``False`` for purely manual memory.
+        expand_query: Expand recall queries with LLM-generated synonyms and
+            translations before searching. ``"auto"`` (default) enables this
+            only for the default keyword-only index — lexical search needs the
+            help; a semantic arm doesn't.
+        summarize_recall: When ``True`` (default), ``recall`` returns a model-
+            written summary of the hits rather than the raw excerpts.
+        recall_k: Number of hits ``recall`` retrieves.
+        notes_budget: Char budget for Notes; exceeding it triggers
+            consolidation and is what the meter in the prompt reports.
         model: Model for the curation side-queries. ``None`` (default) reuses
             the host agent's model.
         name: Plugin name.
     """
 
-    notes: "NotesStore | str | os.PathLike[str]" = _DEFAULT_ROOT
-    archive: "ArchiveStore | None" = _DEFAULT_ARCHIVE
-    auto_extract: bool = True
+    root: str | os.PathLike[str] = _DEFAULT_ROOT
+    notes: "NotesStore | None" = None
+    index: "Index | EllipsisType | None" = ...
+    embedder: "Embedder | None" = None
+    auto_curate: bool = True
+    expand_query: "bool | Literal['auto']" = "auto"
     summarize_recall: bool = True
     recall_k: int = 5
+    notes_budget: int = _DEFAULT_NOTES_BUDGET
     model: "str | Provider | list[str | Provider] | None" = None
     name: str = "memory"
 
     def __post_init__(self) -> None:
-        # ``archive`` left untouched → build the default archive under the notes
-        # root (when ``notes`` is a path); an explicit ``archive=None`` always
-        # disables the cold tier.
-        archive_is_default = self.archive is _DEFAULT_ARCHIVE
-        if isinstance(self.notes, (str, os.PathLike)):
-            root = Path(self.notes)
-            self.notes = FileNotesStore(root / _NOTES_FILENAME)
-            if archive_is_default:
-                self.archive = SQLiteArchiveStore(root / _ARCHIVE_FILENAME)
-        if self.archive is _DEFAULT_ARCHIVE:
-            # Custom notes store (no root to anchor a default archive) and no
-            # explicit archive → notes-only, matching the old behavior.
-            self.archive = None
-
-    @property
-    def has_archive(self) -> bool:
-        """Whether the cold-tier searchable archive (the ``recall`` tool) is on.
-
-        ``False`` when constructed with ``archive=None`` (notes-only). Lets
-        callers branch — e.g. a UI that only shows a "search history" affordance
-        when recall is available — without poking at the sentinel default.
-        """
-        return self.archive is not None
+        if self.notes is None:
+            self.notes = FileNotesStore(Path(self.root) / _NOTES_FILENAME)
+        if isinstance(self.index, EllipsisType):
+            keyword = KeywordIndex(Path(self.root) / _ARCHIVE_FILENAME)
+            if self.embedder is not None:
+                vector = VectorIndex(Path(self.root) / _VECTORS_FILENAME, self.embedder)
+                self.index = keyword | vector
+                self._lexical_only = False
+            else:
+                self.index = keyword
+                self._lexical_only = True
+        else:
+            if self.embedder is not None:
+                raise UserError(
+                    "Memory: pass either embedder= or index=, not both",
+                    hint=(
+                        "embedder= only upgrades the default index; a custom "
+                        "index handles its own embedding (compose one with "
+                        "KeywordIndex(...) | VectorIndex(..., embedder))."
+                    ),
+                )
+            # A custom engine's strength is unknown; assume it doesn't need
+            # lexical help unless the user forces expand_query=True.
+            self._lexical_only = False
+        # Serializes read-modify-write cycles on Notes (tools + curation).
+        self._notes_lock = asyncio.Lock()
 
     def _resolve_model(
         self, ctx: RunContext[Any]
     ) -> "str | Provider | list[str | Provider]":
-        # ``self.model`` overrides; otherwise reuse the host agent's model. Both
-        # callers (the recall tool and the RunCompleted hook) pass a live
-        # context, and ``RunContext.agent`` / ``Agent.model`` are always set.
+        # ``self.model`` overrides; otherwise reuse the host agent's model.
         return self.model if self.model is not None else ctx.agent.model
 
+    def _should_expand(self) -> bool:
+        if self.expand_query == "auto":
+            return self._lexical_only
+        return bool(self.expand_query)
+
+    # -- notes policy (shared by tools and curation) --------------------------
+
+    def _notes_store(self) -> NotesStore:
+        return cast(NotesStore, self.notes)
+
+    async def _render_notes(self) -> str:
+        body = _format_facts(await self._notes_store().load())
+        meter = _meter(len(body), self.notes_budget)
+        if not body:
+            return f"NOTES {meter}\n(empty — use `remember` to save durable facts)"
+        return f"NOTES {meter}\n{body}"
+
+    async def _add_facts(self, new: list[str]) -> int:
+        """Merge normalized facts into Notes (case-insensitive dedup)."""
+        notes = self._notes_store()
+        async with self._notes_lock:
+            facts = await notes.load()
+            seen = {f.lower() for f in facts}
+            added = 0
+            for fact in new:
+                norm = _normalize_fact(fact)
+                if not norm or norm.lower() in seen:
+                    continue
+                facts.append(norm)
+                seen.add(norm.lower())
+                added += 1
+            if added:
+                await notes.save(facts)
+        return added
+
+    # -- setup -----------------------------------------------------------------
+
     async def setup(self) -> PluginInstance:
-        notes = cast(NotesStore, self.notes)
-        archive = self.archive
+        index = cast("Index | None", self.index)
 
-        tools: list[Tool] = [_make_remember(notes), _make_forget(notes)]
-        if archive is not None:
-            tools.append(_make_recall(self, archive))
+        tools: list[Tool] = [self._make_remember(), self._make_forget()]
+        if index is not None:
+            tools.append(self._make_recall(index))
 
-        guidance = _build_instructions(archive is not None)
-        instructions = f"{guidance}\n\n{await notes.render()}"
+        guidance = _build_instructions(index is not None)
+        instructions = f"{guidance}\n\n{await self._render_notes()}"
 
         return PluginInstance(
             tools=tools,
             instructions=instructions,
-            hooks=self._make_hooks(notes, archive),
+            hooks=self._make_hooks(index),
         )
 
-    def _make_hooks(
-        self, notes: NotesStore, archive: "ArchiveStore | None"
-    ) -> AgentHooks:
+    # -- tools -------------------------------------------------------------------
+
+    def _make_remember(self) -> Tool:
+        plugin = self
+
+        @tool(name="remember", description=_REMEMBER_DESCRIPTION)
+        async def remember(
+            fact: Annotated[str, "The durable fact to remember."],
+        ) -> str:
+            added = await plugin._add_facts([fact])
+            if not added:
+                return "Already in your notes — nothing to add."
+            return "Remembered. It will be available in future sessions."
+
+        return remember
+
+    def _make_forget(self) -> Tool:
+        plugin = self
+
+        @tool(name="forget", description=_FORGET_DESCRIPTION)
+        async def forget(
+            fact: Annotated[str, "Text matching the note to remove."],
+        ) -> str:
+            norm = _normalize_fact(fact)
+            if not norm:
+                return "No matching note found to forget."
+            notes = plugin._notes_store()
+            async with plugin._notes_lock:
+                facts = await notes.load()
+                kept = _drop_fact(facts, norm)
+                if len(kept) == len(facts):
+                    return "No matching note found to forget."
+                await notes.save(kept)
+            return "Forgotten."
+
+        return forget
+
+    def _make_recall(self, index: Index) -> Tool:
+        plugin = self
+
+        @tool(name="recall", description=_RECALL_DESCRIPTION)
+        async def recall(
+            ctx: RunContext[Any],
+            query: Annotated[str, "What to look for in past conversations."],
+        ) -> str:
+            search_query = query
+            if plugin._should_expand():
+                try:
+                    terms = await _expand(query, plugin._resolve_model(ctx))
+                    if terms:
+                        # The expansion terms ride along with the original
+                        # query; any Index benefits without knowing about it.
+                        search_query = f"{query} {' '.join(terms)}"
+                except Exception:
+                    # Fail-open: the raw query still searches.
+                    logger.warning(
+                        "memory: query expansion failed; searching the raw query",
+                        exc_info=True,
+                    )
+            hits = await index.search(search_query, plugin.recall_k)
+            if not hits:
+                return "(nothing relevant found in long-term memory)"
+            if plugin.summarize_recall:
+                try:
+                    return await _summarize(hits, query, plugin._resolve_model(ctx))
+                except Exception:
+                    # Fail-open: fall back to raw hits — degraded output, not
+                    # a failed tool.
+                    logger.warning(
+                        "memory: recall summary failed; returning raw hits",
+                        exc_info=True,
+                    )
+            return "\n\n".join(f"- {_hit_line(h)}" for h in hits)
+
+        return recall
+
+    # -- end-of-run curation -------------------------------------------------
+
+    def _make_hooks(self, index: "Index | None") -> AgentHooks:
         hooks = AgentHooks()
         finalized = False
 
         @hooks.on(RunCompleted)
         async def _on_completed(ev: RunCompleted, ctx: RunContext[Any]) -> None:
-            # Every hook receives the run's live RunContext; it carries the
-            # ``session_id`` and active agent, neither of which is on the event
-            # or :class:`~lovia.RunResult`.
+            # The live RunContext carries session_id/run_id and the active
+            # agent, none of which are on the event or RunResult.
             nonlocal finalized
             # Guard against any double-dispatch; RunCompleted is once per run.
             if finalized:
                 return
             finalized = True
-            entries = ev.result.entries
-
-            if archive is not None:
-                try:
-                    await archive.ingest(ctx.session_id, entries, run_id=ctx.run_id)
-                except Exception:
-                    # Best-effort background curation: the run already
-                    # completed, so a failure here is WARNING, not ERROR.
-                    logger.warning("memory: archive ingest failed", exc_info=True)
-
-            if self.auto_extract:
-                await self._curate_notes(notes, entries, self._resolve_model(ctx))
+            await self._curate(index, ev.result.entries, ctx)
 
         return hooks
 
-    async def _curate_notes(
+    async def _curate(
         self,
-        notes: NotesStore,
+        index: "Index | None",
         entries: list[TranscriptEntry],
-        model: "str | Provider | list[str | Provider]",
+        ctx: RunContext[Any],
     ) -> None:
-        # 1) Promote new durable facts into Notes.
-        try:
-            current = await notes.raw()
-            for fact in await _extract(entries, current, model):
-                await notes.add(fact)
-        except Exception:
-            # Best-effort curation (run already completed) — WARNING, not ERROR.
-            logger.warning("memory: note extraction failed", exc_info=True)
+        """Post-run memory upkeep. Best-effort throughout: the run already
+        completed, so every failure here is a WARNING, never an error."""
+        digest: _RunDigest | None = None
+        if self.auto_curate:
+            try:
+                current = _format_facts(await self._notes_store().load())
+                digest = await _digest(entries, current, self._resolve_model(ctx))
+            except Exception:
+                logger.warning("memory: run digest failed", exc_info=True)
+
+        if index is not None:
+            try:
+                await index.add(self._run_docs(entries, ctx, digest))
+            except Exception:
+                logger.warning("memory: archive ingest failed", exc_info=True)
+
+        if digest and digest.facts:
+            try:
+                await self._add_facts(digest.facts)
+                await self._consolidate_if_over_budget(ctx)
+            except Exception:
+                logger.warning("memory: notes curation failed", exc_info=True)
+
+    def _run_docs(
+        self,
+        entries: list[TranscriptEntry],
+        ctx: RunContext[Any],
+        digest: "_RunDigest | None",
+    ) -> list[Doc]:
+        """This run's archive docs: its messages, plus the digest summary.
+
+        Ids are deterministic (``run_id:seq``): a resumed run re-ingesting the
+        same messages upserts them in place, and messages appended by the
+        resume get fresh sequence numbers. Mirrors ``Session.append``.
+        """
+        rid = ctx.run_id or uuid.uuid4().hex
+        now = time.time()
+        meta = {"run_id": rid}
+        if ctx.session_id:
+            meta["session_id"] = ctx.session_id
+        docs = [
+            Doc(
+                id=f"{rid}:{seq}",
+                text=text,
+                when=now,
+                meta={**meta, "kind": "message"},
+            )
+            for seq, text in enumerate(_archive_texts(entries))
+        ]
+        if digest and digest.summary.strip():
+            docs.append(
+                Doc(
+                    id=f"{rid}:summary",
+                    text=digest.summary.strip(),
+                    when=now,
+                    meta={**meta, "kind": "summary"},
+                )
+            )
+        return docs
+
+    async def _consolidate_if_over_budget(self, ctx: RunContext[Any]) -> None:
+        notes = self._notes_store()
+        body = _format_facts(await notes.load())
+        if len(body) <= self.notes_budget:
             return
-        # 2) Consolidate when Notes exceed the store's char budget.
-        try:
-            body = await notes.raw()
-            max_chars = getattr(notes, "max_chars", None)
-            if max_chars and len(body) > max_chars:
-                facts = await _consolidate(body, max_chars, model)
-                if facts:
-                    await notes.replace(_format_facts(facts))
-        except Exception:
-            # Best-effort curation (run already completed) — WARNING, not ERROR.
-            logger.warning("memory: note consolidation failed", exc_info=True)
+        facts = await _consolidate(body, self.notes_budget, self._resolve_model(ctx))
+        if facts:
+            async with self._notes_lock:
+                await notes.save(facts)
 
 
 __all__ = [
-    "ArchiveHit",
-    "ArchiveStore",
     "FileNotesStore",
     "Memory",
     "NotesStore",
-    "SQLiteArchiveStore",
 ]

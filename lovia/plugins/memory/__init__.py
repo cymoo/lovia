@@ -1,25 +1,18 @@
 """Memory plugin package: tiered, cross-session memory for an agent.
 
-Public surface: the :class:`Memory` plugin (hot Notes + cold searchable tier),
-the cold-tier retrieval seam (:class:`Doc` / :class:`Hit` / :class:`Index`)
-with its stdlib backends, and the hot-tier :class:`NotesStore` seam. See
-``plugin.py`` for the full design narrative.
+Public surface: the :class:`Memory` plugin (hot Notes + cold Archive), the
+hot-tier :class:`NotesStore` seam, the cold-tier retrieval seam
+(:class:`Doc` / :class:`Hit` / :class:`Index`) with its stdlib backends
+(:class:`KeywordIndex`, :class:`VectorIndex`, :class:`HybridIndex`), and the
+:class:`Embedder` seam with an OpenAI-compatible default. See ``plugin.py``
+for the design narrative.
 """
 
 from .index import Doc, Fusable, Hit, HybridIndex, Index, KeywordIndex
-from .plugin import (
-    ArchiveHit,
-    ArchiveStore,
-    FileNotesStore,
-    Memory,
-    NotesStore,
-    SQLiteArchiveStore,
-)
+from .plugin import FileNotesStore, Memory, NotesStore
 from .vector import Embedder, OpenAIEmbedder, VectorIndex
 
 __all__ = [
-    "ArchiveHit",
-    "ArchiveStore",
     "Doc",
     "Embedder",
     "FileNotesStore",
@@ -31,6 +24,5 @@ __all__ = [
     "Memory",
     "NotesStore",
     "OpenAIEmbedder",
-    "SQLiteArchiveStore",
     "VectorIndex",
 ]

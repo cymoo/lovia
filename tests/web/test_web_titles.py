@@ -133,9 +133,9 @@ def test_new_session_gets_provisional_title_immediately() -> None:
         generate_titles=False,
     )
     c = TestClient(app)
-    sid = c.post(
-        "/api/chat", json={"message": "How do I write a TCP server?"}
-    ).json()["session_id"]
+    sid = c.post("/api/chat", json={"message": "How do I write a TCP server?"}).json()[
+        "session_id"
+    ]
     metas = c.get("/api/sessions").json()
     titled = next(m for m in metas if m["id"] == sid)
     assert titled["title"] == "How do I write a TCP server?"

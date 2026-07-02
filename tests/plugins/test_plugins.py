@@ -112,7 +112,9 @@ async def test_async_injector_is_awaited() -> None:
     provider = ScriptedProvider([text("hi")])
 
     async def inject(ctx: RunContext):
-        return [InputEntry(role="user", content="<system-reminder>ASYNC</system-reminder>")]
+        return [
+            InputEntry(role="user", content="<system-reminder>ASYNC</system-reminder>")
+        ]
 
     agent = Agent(name="t", model=provider, plugins=[_plugin(injectors=[inject])])
     await Runner.run(agent, "go")
@@ -194,7 +196,5 @@ async def test_setup_called_per_run_gives_fresh_state() -> None:
         name="t", model=ScriptedProvider([text("a"), text("b")]), plugins=[plugin]
     )
     await Runner.run(agent, "one")
-    await Runner.run(
-        agent.clone(model=ScriptedProvider([text("b")])), "two"
-    )
+    await Runner.run(agent.clone(model=ScriptedProvider([text("b")])), "two")
     assert plugin.setups == 2

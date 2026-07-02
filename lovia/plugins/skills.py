@@ -412,6 +412,7 @@ Each skill listed above has a description — use it to decide which are relevan
 # Skills — capability container
 # ---------------------------------------------------------------------------
 
+
 class SkillFilter(Protocol):
     """Predicate scoping which skills a :class:`SkillCategory` exposes.
 
@@ -743,7 +744,9 @@ class Skills:
         filter: "SkillFilter | None" = None,
         name: str = "skills",
     ) -> None:
-        self.catalog = _resolve_catalog(*sources, usage_rules=usage_rules, filter=filter)
+        self.catalog = _resolve_catalog(
+            *sources, usage_rules=usage_rules, filter=filter
+        )
         # Identity within an agent (see lovia.plugins.Plugin). Defaults to the
         # type name; override to mount two Skills plugins on one agent.
         self.name = name

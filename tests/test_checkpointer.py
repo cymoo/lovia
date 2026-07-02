@@ -239,7 +239,7 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
                 "type": "OutputNotSerializable",
                 "message": "could not serialize",
             },
-        )
+        ),
     )
     agent = Agent(name="a", model=ScriptedProvider([]))
 
@@ -456,7 +456,7 @@ async def test_resume_continues_from_snapshot() -> None:
             entries=entries,
             usage=Usage(input_tokens=10, output_tokens=5),
             turns=1,
-        )
+        ),
     )
 
     @tool
@@ -490,7 +490,7 @@ async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
             entries=entries,
             usage=Usage(input_tokens=10, output_tokens=5),
             turns=1,
-        )
+        ),
     )
     calls = 0
 

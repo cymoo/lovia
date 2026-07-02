@@ -81,6 +81,7 @@ from .session import Segment, Session
 from .transcript import TranscriptEntry
 from .plugins import (
     Memory,
+    OpenAIEmbedder,
     Plugin,
     PluginInstance,
     Skills,
@@ -117,6 +118,7 @@ __all__ = [
     "Memory",
     "ModelSettings",
     "OpenAIChatProvider",
+    "OpenAIEmbedder",
     "FilePart",
     "OutputValidationError",
     "Plugin",

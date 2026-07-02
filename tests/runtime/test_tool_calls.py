@@ -25,7 +25,9 @@ async def sensitive() -> str:
 
 @pytest.mark.asyncio
 async def test_raising_handler_is_denied_and_surfaces_error_event() -> None:
-    provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("understood")])
+    provider = ScriptedProvider(
+        [call("sensitive", {}, call_id="c1"), text("understood")]
+    )
 
     def boom(_call, _ctx):  # type: ignore[no-untyped-def]
         raise RuntimeError("handler crashed")

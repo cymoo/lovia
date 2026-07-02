@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from lovia.transcript import InputEntry, AssistantTextEntry
+from lovia.transcript import (
+    AssistantTextEntry,
+    InputEntry,
+    ToolCallEntry,
+    ToolResultEntry,
+)
 from lovia.stores import InMemorySession, SQLiteSession
 
 
@@ -160,7 +165,9 @@ async def test_sqlite_memory_path_shares_one_connection() -> None:
 # ----------------------------------------------------- segments() primitive ---
 
 
-@pytest.mark.parametrize("make", [lambda: InMemorySession(), lambda: SQLiteSession(":memory:")])
+@pytest.mark.parametrize(
+    "make", [lambda: InMemorySession(), lambda: SQLiteSession(":memory:")]
+)
 async def test_segments_round_trip_run_id_and_meta(make) -> None:
     s = make()
     await s.append(
@@ -197,3 +204,71 @@ async def test_in_memory_meta_isolated_on_write_and_read() -> None:
     segs = await s.segments("u1")
     segs[0].meta["carry"]["cleared"].append("LEAK2")
     assert (await s.segments("u1"))[0].meta == {"carry": {"cleared": ["a"]}}
+
+
+# -------------------------------------------------------- trim_tool_results ---
+
+
+def _run_with_result(i: int, chars: int = 5_000) -> list:
+    return [
+        InputEntry(role="user", content=f"q{i}"),
+        ToolCallEntry(call_id=f"c{i}", name="f", arguments="{}"),
+        ToolResultEntry(call_id=f"c{i}", output="r" * chars, raw={"big": True}),
+        AssistantTextEntry(content=f"a{i}"),
+    ]
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def trim_session(request, tmp_path):
+    if request.param == "memory":
+        return InMemorySession()
+    return SQLiteSession(tmp_path / "trim.db")
+
+
+async def test_trim_truncates_old_runs_and_keeps_recent(trim_session) -> None:
+    s = trim_session
+    for i in range(3):
+        await s.append("u1", _run_with_result(i), run_id=f"r{i}")
+
+    trimmed = await s.trim_tool_results("u1", keep_chars=400, keep_runs=1)
+    assert trimmed == 2
+
+    segs = await s.segments("u1")
+    old_results = [segs[0].entries[2], segs[1].entries[2]]
+    for result in old_results:
+        assert result.output.startswith("r" * 400)
+        assert 'recall_tool_result("c' in result.output
+        assert result.raw is None
+    # Structure preserved: same entry count, order, and call ids.
+    assert all(len(seg.entries) == 4 for seg in segs)
+    # The most recent run stays verbatim.
+    assert segs[2].entries[2].output == "r" * 5_000
+
+
+async def test_trim_is_idempotent(trim_session) -> None:
+    s = trim_session
+    for i in range(2):
+        await s.append("u1", _run_with_result(i), run_id=f"r{i}")
+    assert await s.trim_tool_results("u1", keep_runs=0) == 2
+    after_first = [e.output for seg in await s.segments("u1") for e in seg.entries[2:3]]
+    assert await s.trim_tool_results("u1", keep_runs=0) == 0  # nothing left to trim
+    after_second = [
+        e.output for seg in await s.segments("u1") for e in seg.entries[2:3]
+    ]
+    assert after_first == after_second
+
+
+async def test_trim_skips_results_not_worth_trimming(trim_session) -> None:
+    s = trim_session
+    await s.append("u1", _run_with_result(0, chars=450), run_id="r0")
+    await s.append("u1", [InputEntry(role="user", content="next")], run_id="r1")
+    # 450 chars minus a ~140-char marker saves nothing; leave it verbatim.
+    assert await s.trim_tool_results("u1", keep_chars=400, keep_runs=1) == 0
+    assert (await s.segments("u1"))[0].entries[2].output == "r" * 450
+
+
+async def test_trim_validates_arguments(trim_session) -> None:
+    with pytest.raises(ValueError, match="keep_chars"):
+        await trim_session.trim_tool_results("u1", keep_chars=-1)
+    with pytest.raises(ValueError, match="keep_runs"):
+        await trim_session.trim_tool_results("u1", keep_runs=-1)

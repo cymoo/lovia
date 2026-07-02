@@ -7,6 +7,17 @@ duplicates it). :class:`SQLiteSession` stores one row per run (never rewriting a
 old row); :class:`InMemorySession` keeps the segments in a list. No extra
 dependencies — SQLite goes through the stdlib :mod:`sqlite3` driver and
 :func:`asyncio.to_thread`.
+
+Both also provide ``trim_tool_results`` — an explicit **maintenance** operation
+(not part of the :class:`~lovia.session.Session` protocol) that truncates old
+stored tool outputs in place. It is the one sanctioned carve-out from
+append-only: the runner never rewrites history, but an operator may reclaim
+space, and the operation preserves what everything else depends on — run
+boundaries, entry count and order, ``call_id`` pairing — so body indices,
+summary coverage, and the (result-length-blind) compaction fingerprint all
+survive. Configure a :class:`~lovia.context.FileResultStore` on the compaction
+policy *before* relying on trim: offloaded outputs archived there stay fully
+recoverable via ``recall_tool_result``; un-archived ones are truncated for good.
 """
 
 from __future__ import annotations
@@ -20,8 +31,68 @@ from uuid import uuid4
 
 from ..session import Segment, Session
 from ..types import JsonObject
-from ..transcript import TranscriptEntry, entry_from_dict, entry_to_dict
+from ..transcript import (
+    ToolResultEntry,
+    TranscriptEntry,
+    entry_from_dict,
+    entry_to_dict,
+)
 from ._sqlite import SQLiteStore
+
+
+def _trim_marker(call_id: str, dropped: int) -> str:
+    """Honest tail appended to a truncated stored tool output."""
+    return (
+        f"\n[... {dropped:,} chars trimmed from stored history; "
+        f'recall_tool_result("{call_id}") returns the full output '
+        "only if it was archived to a result store]"
+    )
+
+
+# Fixed tail of the marker, used to recognize already-trimmed outputs so a
+# periodic trim job is idempotent instead of shaving the marker itself.
+_TRIM_SENTINEL = "archived to a result store]"
+
+
+def _trim_entries(
+    entries: list[TranscriptEntry], keep_chars: int
+) -> tuple[list[TranscriptEntry], int]:
+    """Truncate oversized tool outputs; return (new entries, trimmed count).
+
+    Entries are replaced, never mutated — transcript entries are immutable by
+    convention (identity-keyed token memos rely on it). Structure is preserved
+    exactly: same entry count, order, ``call_id`` and ``is_error``; ``raw`` is
+    dropped alongside the output it mirrors. A trim that would not actually
+    shrink the output (the marker outweighs the saving) is skipped.
+    """
+    out: list[TranscriptEntry] = []
+    trimmed = 0
+    for entry in entries:
+        if isinstance(entry, ToolResultEntry) and not entry.output.endswith(
+            _TRIM_SENTINEL
+        ):
+            dropped = len(entry.output) - keep_chars
+            marker = _trim_marker(entry.call_id, dropped)
+            if dropped > len(marker):
+                out.append(
+                    ToolResultEntry(
+                        call_id=entry.call_id,
+                        output=entry.output[:keep_chars] + marker,
+                        raw=None,
+                        is_error=entry.is_error,
+                    )
+                )
+                trimmed += 1
+                continue
+        out.append(entry)
+    return out, trimmed
+
+
+def _validate_trim_args(keep_chars: int, keep_runs: int) -> None:
+    if keep_chars < 0:
+        raise ValueError("keep_chars must be >= 0")
+    if keep_runs < 0:
+        raise ValueError("keep_runs must be >= 0")
 
 
 class InMemorySession(Session):
@@ -64,6 +135,30 @@ class InMemorySession(Session):
     async def clear(self, session_id: str) -> None:
         async with self._lock:
             self._segments.pop(session_id, None)
+
+    async def trim_tool_results(
+        self, session_id: str, *, keep_chars: int = 400, keep_runs: int = 1
+    ) -> int:
+        """Truncate stored tool outputs older than the last ``keep_runs`` runs.
+
+        A maintenance operation for long-lived sessions (see the module
+        docstring for the contract): each qualifying
+        :class:`~lovia.transcript.ToolResultEntry` keeps its first
+        ``keep_chars`` characters plus an honest trim marker; entry structure
+        is preserved. The ``keep_runs`` most recent runs stay verbatim — they
+        are what the next run actually converses over. Idempotent. Returns
+        the number of results trimmed.
+        """
+        _validate_trim_args(keep_chars, keep_runs)
+        async with self._lock:
+            segs = self._segments.get(session_id, [])
+            total = 0
+            for seg in segs[: max(0, len(segs) - keep_runs)]:
+                entries, trimmed = _trim_entries(seg.entries, keep_chars)
+                if trimmed:
+                    seg.entries = entries
+                    total += trimmed
+            return total
 
 
 _SESSION_SCHEMA = """
@@ -158,3 +253,41 @@ class SQLiteSession(SQLiteStore, Session):
                 self._release(conn)
 
         await self._run(_impl)
+
+    async def trim_tool_results(
+        self, session_id: str, *, keep_chars: int = 400, keep_runs: int = 1
+    ) -> int:
+        """Truncate stored tool outputs older than the last ``keep_runs`` runs.
+
+        Same contract as :meth:`InMemorySession.trim_tool_results`; rewrites
+        only the rows whose entries actually changed, in one transaction.
+        """
+        _validate_trim_args(keep_chars, keep_runs)
+
+        def _impl() -> int:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT id, entries_json FROM session_runs "
+                    "WHERE session_id = ? ORDER BY id ASC",
+                    (session_id,),
+                ).fetchall()
+                total = 0
+                for row_id, entries_json in rows[: max(0, len(rows) - keep_runs)]:
+                    entries = [entry_from_dict(d) for d in json.loads(entries_json)]
+                    trimmed_entries, trimmed = _trim_entries(entries, keep_chars)
+                    if trimmed:
+                        conn.execute(
+                            "UPDATE session_runs SET entries_json = ? WHERE id = ?",
+                            (
+                                json.dumps([entry_to_dict(e) for e in trimmed_entries]),
+                                row_id,
+                            ),
+                        )
+                        total += trimmed
+                conn.commit()
+                return total
+            finally:
+                self._release(conn)
+
+        return await self._run(_impl)

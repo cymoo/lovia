@@ -778,12 +778,18 @@ class Memory:
 
     async def _consolidate_if_over_budget(self, ctx: RunContext[Any]) -> None:
         notes = self._notes_store()
-        body = _format_facts(await notes.load())
-        if len(body) <= self.notes_budget:
-            return
-        facts = await _consolidate(body, self.notes_budget, self._resolve_model(ctx))
-        if facts:
-            async with self._notes_lock:
+        # Hold the lock across the model call: consolidation rewrites the whole
+        # list, so a remember/forget landing between read and save would be
+        # silently overwritten. The contention is fine — consolidation is rare
+        # (budget breach at run end) and a blocked tool just waits it out.
+        async with self._notes_lock:
+            body = _format_facts(await notes.load())
+            if len(body) <= self.notes_budget:
+                return
+            facts = await _consolidate(
+                body, self.notes_budget, self._resolve_model(ctx)
+            )
+            if facts:
                 await notes.save(facts)
 
 

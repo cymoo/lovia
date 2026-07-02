@@ -582,6 +582,30 @@ async def test_consolidation_triggers_over_budget(tmp_path, monkeypatch) -> None
     assert await mem._notes_store().load() == ["compact fact"]
 
 
+async def test_remember_during_consolidation_is_not_lost(tmp_path, monkeypatch) -> None:
+    # Consolidation rewrites the whole fact list around a slow model call; a
+    # remember() landing mid-flight must block on the lock and survive, not be
+    # overwritten by the consolidated save.
+    started = asyncio.Event()
+
+    async def slow_consolidate(body, max_chars, model):
+        started.set()
+        await asyncio.sleep(0.05)
+        return ["compact fact"]
+
+    monkeypatch.setattr(plugin_mod, "_consolidate", slow_consolidate)
+    mem = Memory(tmp_path / "mem", index=None, notes_budget=10)
+    await mem._add_facts(["a very long fact exceeding the tiny budget"])
+
+    task = asyncio.create_task(mem._consolidate_if_over_budget(_ctx()))
+    await started.wait()
+    await mem.remember("landed mid-flight")
+    await task
+    facts = await mem._notes_store().load()
+    assert "compact fact" in facts
+    assert "landed mid-flight" in facts
+
+
 async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:
     seen = {}
 

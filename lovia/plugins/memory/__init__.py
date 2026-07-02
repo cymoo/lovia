@@ -15,11 +15,13 @@ from .plugin import (
     NotesStore,
     SQLiteArchiveStore,
 )
+from .vector import Embedder, OpenAIEmbedder, VectorIndex
 
 __all__ = [
     "ArchiveHit",
     "ArchiveStore",
     "Doc",
+    "Embedder",
     "FileNotesStore",
     "Fusable",
     "Hit",
@@ -28,5 +30,7 @@ __all__ = [
     "KeywordIndex",
     "Memory",
     "NotesStore",
+    "OpenAIEmbedder",
     "SQLiteArchiveStore",
+    "VectorIndex",
 ]

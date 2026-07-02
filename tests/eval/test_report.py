@@ -73,6 +73,7 @@ def test_round_trip(tmp_path: Path) -> None:
             CaseResult(
                 name="structured",
                 pass_threshold=0.5,
+                metadata={"suite": "smoke"},
                 samples=[
                     SampleResult(
                         checks=[CheckResult(name="c", passed=True, score=0.9)],
@@ -95,6 +96,7 @@ def test_round_trip(tmp_path: Path) -> None:
     lcase = loaded.cases[0]
     assert lcase.name == "structured"
     assert lcase.pass_threshold == 0.5
+    assert lcase.metadata == {"suite": "smoke"}
     assert lcase.pass_rate == report.cases[0].pass_rate
     ok, bad = lcase.samples
     assert ok.output == {"n": 7}  # models serialize to plain data
@@ -102,6 +104,13 @@ def test_round_trip(tmp_path: Path) -> None:
     assert ok.checks[0].score == 0.9
     assert bad.error == "ProviderError: 500"
     assert not bad.passed
+
+
+def test_from_dict_rejects_unknown_schema_version() -> None:
+    with pytest.raises(ValueError, match="schema_version"):
+        Report.from_dict({"schema_version": 99, "cases": []})
+    # A missing version is treated as current (hand-rolled dicts stay easy).
+    assert Report.from_dict({"cases": []}).cases == []
 
 
 def test_unserializable_output_falls_back_to_repr() -> None:
@@ -126,6 +135,15 @@ def test_compare() -> None:
     assert not diff.ok
     assert not diff  # __bool__ mirrors ok
     assert "regressed: a" in str(diff)
+
+
+def test_compare_rejects_duplicate_case_names() -> None:
+    dup = Report(cases=[case("a", True), case("a", False)])
+    clean = Report(cases=[case("a", True)])
+    with pytest.raises(ValueError, match="duplicate case names in current"):
+        dup.compare(clean)
+    with pytest.raises(ValueError, match="duplicate case names in baseline"):
+        clean.compare(dup)
 
 
 def test_compare_clean() -> None:

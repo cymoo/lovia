@@ -586,9 +586,9 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 The details that keep suites honest and cheap:
 
 - **Any function is a check.** `lambda r: r.turns <= 3` works. Built-ins:
-  `contains`, `regex`, `equals`, `matches` (subset-match structured output),
-  `tool_called` / `tool_not_called`, `max_turns`, `max_tokens`, `no_error`,
-  composable with `all_of` / `any_of` / `weighted`.
+  `contains` / `not_contains`, `regex`, `equals`, `matches` (subset-match
+  structured output), `tool_called` / `tool_not_called`, `max_turns`,
+  `max_tokens`, `no_error`, composable with `all_of` / `any_of` / `weighted`.
 - **`llm_judge(rubric)`** grades semantics with a model (defaults to
   `$LOVIA_EVAL_JUDGE_MODEL`) and is just another check — pass a
   `lovia.testing.ScriptedProvider` as its `model` and the whole suite runs

@@ -557,10 +557,10 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 
 让套件既诚实又省钱的细节：
 
-- **任何函数都是检查项。** `lambda r: r.turns <= 3` 就能用。内置：`contains`、
-  `regex`、`equals`、`matches`（结构化输出的子集匹配）、`tool_called` /
-  `tool_not_called`、`max_turns`、`max_tokens`、`no_error`，并可用 `all_of` /
-  `any_of` / `weighted` 组合。
+- **任何函数都是检查项。** `lambda r: r.turns <= 3` 就能用。内置：`contains` /
+  `not_contains`、`regex`、`equals`、`matches`（结构化输出的子集匹配）、
+  `tool_called` / `tool_not_called`、`max_turns`、`max_tokens`、`no_error`，
+  并可用 `all_of` / `any_of` / `weighted` 组合。
 - **`llm_judge(rubric)`** 用模型给语义打分（默认读
   `$LOVIA_EVAL_JUDGE_MODEL`），它也只是一个普通检查项——把
   `lovia.testing.ScriptedProvider` 作为它的 `model`，整个套件即可离线运行。

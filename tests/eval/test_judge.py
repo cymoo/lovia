@@ -58,6 +58,26 @@ async def test_judge_prompt_carries_rubric_input_and_output() -> None:
     assert "The Seine flows through Paris." in prompt
 
 
+async def test_judge_input_joins_all_user_messages() -> None:
+    provider = ScriptedProvider([text(verdict(1.0))])
+    judge = llm_judge("rubric", model=provider)
+    result = RunResult(
+        output="fine",
+        entries=[
+            InputEntry(role="system", content="be brief"),
+            InputEntry(role="user", content="first question"),
+            InputEntry(role="user", content="second question"),
+        ],
+        final_agent=Agent(name="t"),
+        usage=Usage(),
+        turns=1,
+    )
+    await run_check(judge, result)
+    prompt = provider.calls[0][-1].text
+    assert "first question" in prompt and "second question" in prompt
+    assert "be brief" not in prompt  # system prompt is not the user input
+
+
 async def test_judge_output_repair_kicks_in() -> None:
     # First judge reply is not valid JSON; the runtime repairs it for free.
     provider = ScriptedProvider([text("hmm, let me think"), text(verdict(0.8))])

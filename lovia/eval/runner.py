@@ -31,8 +31,10 @@ class Case:
 
     ``name`` defaults to a snippet of the input. ``samples`` reruns the case
     to measure non-deterministic behavior; the case passes when at least
-    ``pass_threshold`` of its samples pass. The remaining fields are forwarded
-    to :meth:`~lovia.Runner.run` per sample.
+    ``pass_threshold`` of its samples pass. ``context`` / ``output_type`` /
+    ``max_turns`` are forwarded to :meth:`~lovia.Runner.run` per sample;
+    ``timeout`` bounds each sample's wall-clock seconds; ``metadata`` is
+    carried through to the :class:`~lovia.eval.CaseResult` untouched.
     """
 
     input: str | list[Message]
@@ -51,6 +53,8 @@ class Case:
             raise ValueError("Case.samples must be >= 1")
         if not 0.0 <= self.pass_threshold <= 1.0:
             raise ValueError("Case.pass_threshold must be within 0..1")
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError("Case.timeout must be positive (or None)")
         if not self.name:
             self.name = _derive_name(self.input)
 
@@ -72,6 +76,8 @@ async def evaluate(
     case never aborts the suite. ``price`` maps a sample's :class:`Usage` to
     a cost figure, e.g. ``lambda u: u.input_tokens * 3e-6 + u.output_tokens * 15e-6``.
     """
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
     suite = [cases] if isinstance(cases, Case) else list(cases)
 
     if fail_fast:
@@ -83,7 +89,7 @@ async def evaluate(
                 break
         return Report(cases=results)
 
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    semaphore = asyncio.Semaphore(concurrency)
 
     async def bounded(case: Case) -> CaseResult:
         async with semaphore:
@@ -99,7 +105,10 @@ async def _run_case(
 ) -> CaseResult:
     samples = [await _run_sample(agent, case, price) for _ in range(case.samples)]
     return CaseResult(
-        name=case.name, samples=samples, pass_threshold=case.pass_threshold
+        name=case.name,
+        samples=samples,
+        pass_threshold=case.pass_threshold,
+        metadata=dict(case.metadata),
     )
 
 
@@ -119,7 +128,9 @@ async def _run_sample(
             output_type=case.output_type,
             max_turns=case.max_turns,
         )
-        result = await (asyncio.wait_for(coro, case.timeout) if case.timeout else coro)
+        result = await (
+            asyncio.wait_for(coro, case.timeout) if case.timeout is not None else coro
+        )
     except asyncio.TimeoutError:
         sample.error = f"timeout: sample exceeded {case.timeout}s"
     except Exception as exc:
@@ -128,7 +139,11 @@ async def _run_sample(
         sample.output = result.output
         sample.turns = result.turns
         sample.usage = result.usage
-        sample.checks = [await run_check(check, result) for check in case.checks]
+        # Checks are independent; run them concurrently (judges are model
+        # calls). run_check never raises, and gather preserves order.
+        sample.checks = list(
+            await asyncio.gather(*(run_check(c, result) for c in case.checks))
+        )
     finally:
         sample.latency = time.monotonic() - started
     if price is not None:

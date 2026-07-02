@@ -74,7 +74,8 @@ async def test_sampling_and_pass_threshold() -> None:
     # Scripted replies differ per sample: 2 of 3 contain "Paris".
     replies = iter(["Paris", "Paris", "Lyon"])
 
-    factory = lambda: echo_agent(next(replies))  # noqa: E731
+    def factory() -> Agent[None]:
+        return echo_agent(next(replies))
 
     passing = await evaluate(
         factory,
@@ -199,6 +200,31 @@ async def test_timeout_recorded_as_error() -> None:
 async def test_plain_agent_instance_accepted() -> None:
     report = await evaluate(echo_agent("hello"), Case("q", checks=[contains("hello")]))
     assert report.passed
+
+
+async def test_empty_suite_passes_vacuously() -> None:
+    report = await evaluate(echo_agent(), [])
+    assert report.passed and report.cases == [] and report.pass_rate == 1.0
+
+
+async def test_concurrency_validation() -> None:
+    with pytest.raises(ValueError):
+        await evaluate(echo_agent(), [], concurrency=0)
+
+
+def test_case_timeout_validation() -> None:
+    with pytest.raises(ValueError):
+        Case("x", timeout=0)
+    with pytest.raises(ValueError):
+        Case("x", timeout=-1.0)
+
+
+async def test_metadata_carried_to_case_result() -> None:
+    report = await evaluate(
+        lambda: echo_agent("hi"),
+        Case("q", checks=[contains("hi")], metadata={"suite": "smoke", "owner": "me"}),
+    )
+    assert report.cases[0].metadata == {"suite": "smoke", "owner": "me"}
 
 
 async def test_max_turns_forwarded() -> None:

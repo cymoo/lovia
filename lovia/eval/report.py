@@ -45,6 +45,7 @@ class CaseResult:
     name: str
     samples: list[SampleResult]
     pass_threshold: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def pass_rate(self) -> float:
@@ -114,6 +115,7 @@ class Report:
                     "passed": case.passed,
                     "pass_rate": case.pass_rate,
                     "pass_threshold": case.pass_threshold,
+                    "metadata": case.metadata,
                     "samples": [_sample_to_dict(s) for s in case.samples],
                 }
                 for case in self.cases
@@ -122,11 +124,18 @@ class Report:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Report":
+        version = data.get("schema_version", _SCHEMA_VERSION)
+        if version != _SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported report schema_version {version!r}; "
+                f"this lovia reads version {_SCHEMA_VERSION}"
+            )
         return cls(
             cases=[
                 CaseResult(
                     name=case["name"],
                     pass_threshold=case.get("pass_threshold", 1.0),
+                    metadata=case.get("metadata", {}),
                     samples=[_sample_from_dict(s) for s in case.get("samples", [])],
                 )
                 for case in data.get("cases", [])
@@ -135,18 +144,28 @@ class Report:
 
     def save(self, path: str | Path) -> None:
         """Write the report as JSON — e.g. a baseline checked into the repo."""
-        Path(path).write_text(json.dumps(self.to_dict(), indent=2) + "\n")
+        payload = json.dumps(self.to_dict(), indent=2) + "\n"
+        Path(path).write_text(payload, encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> "Report":
-        return cls.from_dict(json.loads(Path(path).read_text()))
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
     # ------------------------------------------------------------------ #
     # Baseline diff
     # ------------------------------------------------------------------ #
 
     def compare(self, baseline: "Report") -> "Diff":
-        """Diff this report against a ``baseline`` (by case name)."""
+        """Diff this report against a ``baseline`` (by case name).
+
+        Raises :class:`ValueError` when either report contains duplicate case
+        names — the diff would silently drop all but one of them.
+        """
+        for label, report in (("current", self), ("baseline", baseline)):
+            names = [case.name for case in report.cases]
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            if dupes:
+                raise ValueError(f"duplicate case names in {label} report: {dupes}")
         ours = {case.name: case for case in self.cases}
         theirs = {case.name: case for case in baseline.cases}
         return Diff(

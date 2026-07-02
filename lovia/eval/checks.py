@@ -90,6 +90,21 @@ def contains(value: str, *, ignore_case: bool = False) -> Check:
     return _named(f"contains({value!r})", check)
 
 
+def not_contains(value: str, *, ignore_case: bool = False) -> Check:
+    """Pass when ``str(output)`` does **not** contain ``value``."""
+
+    def check(result: RunResult) -> CheckResult:
+        text = str(result.output)
+        found = value.lower() in text.lower() if ignore_case else value in text
+        return CheckResult(
+            name=f"not_contains({value!r})",
+            passed=not found,
+            reason=f"found in output: {_snip(text)}" if found else "",
+        )
+
+    return _named(f"not_contains({value!r})", check)
+
+
 def regex(pattern: str, *, flags: int = 0) -> Check:
     """Pass when ``re.search(pattern, str(output))`` matches."""
     compiled = re.compile(pattern, flags)
@@ -294,13 +309,13 @@ def any_of(*checks: Check, name: str = "any_of") -> Check:
     async def check(result: RunResult) -> CheckResult:
         results = [await run_check(c, result) for c in checks]
         ok = any(r.passed for r in results)
-        return CheckResult(
-            name=name,
-            passed=ok,
-            reason=""
-            if ok
-            else "no alternative passed: " + "; ".join(r.name for r in results),
-        )
+        if ok:
+            reason = ""
+        elif results:
+            reason = "no alternative passed: " + "; ".join(r.name for r in results)
+        else:
+            reason = "no checks provided"
+        return CheckResult(name=name, passed=ok, reason=reason)
 
     return _named(name, check)
 
@@ -313,8 +328,12 @@ def weighted(
     Binary checks contribute 1.0/0.0; scored checks (judges) contribute their
     ``score``. Passes when the weighted average reaches ``threshold``.
     """
-    if not weights or sum(weights.values()) <= 0:
-        raise ValueError("weighted() needs at least one check with positive weight")
+    if not weights:
+        raise ValueError("weighted() needs at least one check")
+    if any(w <= 0 for w in weights.values()):
+        raise ValueError("weighted() weights must all be positive")
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("weighted() threshold must be within 0..1")
 
     async def check(result: RunResult) -> CheckResult:
         total = sum(weights.values())
@@ -347,6 +366,7 @@ __all__ = [
     "max_tokens",
     "max_turns",
     "no_error",
+    "not_contains",
     "regex",
     "run_check",
     "tool_called",

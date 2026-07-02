@@ -18,6 +18,7 @@ from lovia.eval import (
     max_tokens,
     max_turns,
     no_error,
+    not_contains,
     regex,
     run_check,
     tool_called,
@@ -61,6 +62,14 @@ async def test_contains_ignore_case() -> None:
 
 async def test_contains_stringifies_output() -> None:
     assert (await run_check(contains("42"), make_result(output=42))).passed
+
+
+async def test_not_contains() -> None:
+    assert (await run_check(not_contains("sorry"), make_result("Paris."))).passed
+    r = await run_check(not_contains("sorry"), make_result("I'm sorry."))
+    assert not r.passed and "found in output" in r.reason
+    check = not_contains("SORRY", ignore_case=True)
+    assert not (await run_check(check, make_result("i'm sorry"))).passed
 
 
 async def test_regex() -> None:
@@ -229,6 +238,11 @@ async def test_any_of() -> None:
     assert not r.passed and "no alternative passed" in r.reason
 
 
+async def test_any_of_empty_fails_with_clear_reason() -> None:
+    r = await run_check(any_of(), make_result())
+    assert not r.passed and r.reason == "no checks provided"
+
+
 async def test_weighted() -> None:
     def half(result: RunResult) -> CheckResult:
         return CheckResult(name="half", passed=True, score=0.5)
@@ -250,13 +264,18 @@ async def test_weighted_buggy_child_contributes_zero() -> None:
     assert r.score == 0.5 and r.passed
 
 
-def test_weighted_rejects_empty_or_zero_weights() -> None:
+def test_weighted_validation() -> None:
     import pytest
 
     with pytest.raises(ValueError):
         weighted({})
     with pytest.raises(ValueError):
         weighted({contains("x"): 0.0})
+    # A negative weight is rejected even when the total stays positive.
+    with pytest.raises(ValueError):
+        weighted({contains("x"): 2.0, contains("y"): -0.5})
+    with pytest.raises(ValueError):
+        weighted({contains("x"): 1.0}, threshold=1.5)
 
 
 async def test_composition_custom_name() -> None:

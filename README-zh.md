@@ -491,22 +491,24 @@ agent = agent.clone(hooks=hooks)
 ```
 
 运行中转向（steering）是取消的入向对偶：往一个正在运行的 run 里 push 一条
-消息，模型会在下一个 turn 开始时把它当作普通的 user 消息看到。工具和 hooks
+消息，模型会在下一个 turn 开始时把它当作普通的 user 消息看到（`TurnStarted`
+hook 在本轮 drain 之前触发，所以它的 push 当轮即生效）。工具和 hooks
 通过 `ctx.mailbox` 拿到同一条通道——没传 `mailbox=` 时 runner 会为每个 run
 自动创建——所以 run 也可以在内部转向自己，不需要任何外部接线：
 
 ```python
 from lovia import Mailbox
 
-mailbox = Mailbox()
-handle = Runner.stream(agent, "分析这些日志。", mailbox=mailbox)
-mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一个 turn 生效
-
-
+# hooks 和 agent 沿用上一段代码。
 @hooks.on(events.TurnStarted)
 def deadline(ev, ctx: RunContext):
     if ev.turn == 9:
         ctx.mailbox.push("最后一轮：用现有信息直接作答。")
+
+
+mailbox = Mailbox()
+handle = Runner.stream(agent, "分析这些日志。", mailbox=mailbox)
+mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一个 turn 生效
 ```
 
 ## 内置工具

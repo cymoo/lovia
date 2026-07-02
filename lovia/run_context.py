@@ -77,11 +77,13 @@ class RunContext(Generic[TContext]):
             :attr:`cancel_token`, and like it always present (the runner
             creates one when the caller didn't pass it). A tool or hook can
             ``push()`` content to inject it as a ``user`` message at the next
-            turn start — never mid-turn, so a push during the run's final turn
-            is not seen by this run (and, for a runner-created mailbox, by
-            nobody — only a caller-supplied instance can be drained after the
-            run). Agent-as-tool sub-runs get their own mailbox rather than
-            inheriting this one; see :func:`~lovia.handoff.agent_as_tool`.
+            mailbox drain — each turn start, right after that turn's
+            ``TurnStarted`` hooks fire, and never mid-turn. So a push during
+            the run's final turn is not seen by this run (and, for a
+            runner-created mailbox, by nobody — only a caller-supplied
+            instance can be drained after the run). Agent-as-tool sub-runs get
+            their own mailbox rather than inheriting this one; see
+            :func:`~lovia.handoff.agent_as_tool`.
     """
 
     context: TContext | None

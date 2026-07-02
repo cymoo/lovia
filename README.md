@@ -527,23 +527,25 @@ agent = agent.clone(hooks=hooks)
 ```
 
 Mid-run steering is the inbound dual of cancellation: push a message into a
-live run and the model sees it as a normal user turn at the next turn start.
-Tools and hooks reach the same channel as `ctx.mailbox` — the runner creates a
-mailbox per run when you don't supply one — so a run can also steer itself,
-with no outside plumbing:
+live run and the model sees it as a normal user turn at the next turn start (a
+`TurnStarted` hook fires just before its turn's drain, so its push lands on
+that very turn). Tools and hooks reach the same channel as `ctx.mailbox` — the
+runner creates a mailbox per run when you don't supply one — so a run can also
+steer itself, with no outside plumbing:
 
 ```python
 from lovia import Mailbox
 
-mailbox = Mailbox()
-handle = Runner.stream(agent, "Analyze these logs.", mailbox=mailbox)
-mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
-
-
+# ``hooks`` and ``agent`` continue from the snippet above.
 @hooks.on(events.TurnStarted)
 def deadline(ev, ctx: RunContext):
     if ev.turn == 9:
         ctx.mailbox.push("Last turn: answer with what you have.")
+
+
+mailbox = Mailbox()
+handle = Runner.stream(agent, "Analyze these logs.", mailbox=mailbox)
+mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 ```
 
 ## Built-In Tools

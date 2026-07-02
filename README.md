@@ -548,6 +548,58 @@ handle = Runner.stream(agent, "Analyze these logs.", mailbox=mailbox)
 mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 ```
 
+## Evaluation
+
+`lovia.eval` turns "does my agent behave?" into a declarative suite. Three
+ideas cover the whole API: a `Case` pairs an input with checks; a check is any
+callable `(RunResult) -> CheckResult | bool`, sync or async — built-in
+matchers, the LLM judge, and your own functions are all the same thing; and
+`evaluate()` returns a `Report` you can print, assert on, and diff against a
+baseline.
+
+```python
+from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
+
+cases = [
+    Case("What is the capital of France?", checks=[contains("Paris")]),
+    Case("What's 23.4 * 91?", checks=[tool_called("calculator")]),
+    Case(
+        "Write a haiku about spring",
+        checks=[llm_judge("A 5-7-5 haiku that evokes spring")],
+        samples=4,  # non-determinism is measured, not retried away:
+        pass_threshold=0.75,  # pass if at least 3 of 4 samples pass
+    ),
+]
+
+report = await evaluate(agent, cases)
+print(report)
+assert report.passed
+```
+
+```
+eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
+  ✓ What is the capital of France?  1/1
+  ✓ What's 23.4 * 91?               1/1
+  ✗ Write a haiku about spring      2/4  llm_judge (score 0.55) — third line has eight syllables
+```
+
+The details that keep suites honest and cheap:
+
+- **Any function is a check.** `lambda r: r.turns <= 3` works. Built-ins:
+  `contains` / `not_contains`, `regex`, `equals`, `matches` (subset-match
+  structured output), `tool_called` / `tool_not_called`, `max_turns`,
+  `max_tokens`, `no_error`, composable with `all_of` / `any_of` / `weighted`.
+- **`llm_judge(rubric)`** grades semantics with a model (defaults to
+  `$LOVIA_EVAL_JUDGE_MODEL`) and is just another check — pass a
+  `lovia.testing.ScriptedProvider` as its `model` and the whole suite runs
+  offline.
+- **Errors are data.** A sample that raises records its `error` and fails
+  alone; one broken case or check never aborts the suite.
+- **Baselines.** `report.save(path)`, `Report.load(path)`, and
+  `current.compare(baseline)` flag regressions / improvements in CI.
+
+See `examples/29_eval.py` for an offline, fully scripted suite.
+
 ## Built-In Tools
 
 Nothing is imported into your agent automatically. Pick the tools you want.
@@ -1017,6 +1069,7 @@ The `examples/` directory is a set of runnable scripts. A useful reading order:
 | `examples/25_data_analysis.py` | data analysis agent |
 | `examples/26_mcp.py` | MCP server tools |
 | `examples/27_todos.py` | todo plugin and per-turn reminders |
+| `examples/29_eval.py` | offline agent evals: checks, LLM judge, baseline diff |
 | `examples/workflows/` | prompt chaining, routing, parallelization, evaluator loops, autonomous agents |
 
 ## Install Extras

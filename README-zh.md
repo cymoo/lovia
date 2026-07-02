@@ -521,6 +521,56 @@ handle = Runner.stream(agent, "分析这些日志。", mailbox=mailbox)
 mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一个 turn 生效
 ```
 
+## 评测
+
+`lovia.eval` 把「agent 的行为对不对」变成一份声明式测试套件。三个概念覆盖全部
+API：`Case` 把输入和它必须满足的检查项配成一对；检查项（check）是任意
+`(RunResult) -> CheckResult | bool` 的可调用对象（同步异步皆可）——内置匹配器、
+LLM 评审和你自己的函数是同一种东西；`evaluate()` 返回 `Report`，可以直接打印、
+断言，或与基线做对比。
+
+```python
+from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
+
+cases = [
+    Case("法国的首都是哪里？", checks=[contains("巴黎")]),
+    Case("23.4 * 91 等于多少？", checks=[tool_called("calculator")]),
+    Case(
+        "写一首关于春天的俳句",
+        checks=[llm_judge("符合 5-7-5 音节、意象与春天相关的俳句")],
+        samples=4,  # 非确定性靠采样度量，而不是靠重试掩盖：
+        pass_threshold=0.75,  # 4 次采样至少 3 次通过才算通过
+    ),
+]
+
+report = await evaluate(agent, cases)
+print(report)
+assert report.passed
+```
+
+```
+eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
+  ✓ 法国的首都是哪里？        1/1
+  ✓ 23.4 * 91 等于多少？      1/1
+  ✗ 写一首关于春天的俳句      2/4  llm_judge (score 0.55) — 第三行有八个音节
+```
+
+让套件既诚实又省钱的细节：
+
+- **任何函数都是检查项。** `lambda r: r.turns <= 3` 就能用。内置：`contains` /
+  `not_contains`、`regex`、`equals`、`matches`（结构化输出的子集匹配）、
+  `tool_called` / `tool_not_called`、`max_turns`、`max_tokens`、`no_error`，
+  并可用 `all_of` / `any_of` / `weighted` 组合。
+- **`llm_judge(rubric)`** 用模型给语义打分（默认读
+  `$LOVIA_EVAL_JUDGE_MODEL`），它也只是一个普通检查项——把
+  `lovia.testing.ScriptedProvider` 作为它的 `model`，整个套件即可离线运行。
+- **错误也是数据。** 某次采样抛异常只记为该样本的 `error` 并单独判负；
+  一个坏 case 或坏检查项不会中断整个套件。
+- **基线对比。** `report.save(path)`、`Report.load(path)` 加上
+  `current.compare(baseline)`，在 CI 里直接标出回归与改进。
+
+完整的离线脚本化套件见 `examples/29_eval.py`。
+
 ## 内置工具
 
 lovia 不会自动往 agent 里塞工具；需要哪些工具，由你自己选择。
@@ -973,6 +1023,7 @@ app.include_router(build_api_router(deps))
 | `examples/26_mcp.py` | MCP server 工具 |
 | `examples/27_todos.py` | todo 插件和每轮提醒 |
 | `examples/28_memory.py` | 用 `Memory` 插件实现跨 run 长期记忆 |
+| `examples/29_eval.py` | 离线 agent 评测：检查项、LLM 评审、基线对比 |
 | `examples/workflows/` | prompt chaining、routing、parallelization、evaluator loop、自主 agent |
 
 ## 安装可选依赖

@@ -1,34 +1,37 @@
-"""Tests for the Memory plugin: Notes (hot) + Archive (cold), tools, hooks.
+"""Tests for the Memory plugin: Notes (hot) + Archive (cold), tools, curation.
 
 The unit tests are network-free: they drive the runner with the scripted
 provider and monkeypatch the LLM curation side-queries. The opt-in live e2e
 tests exercise the real provider configured in ``.env``::
 
-    LOVIA_LIVE_TESTS=1 uv run pytest tests/test_memory.py -k live
+    LOVIA_LIVE_TESTS=1 uv run pytest tests/plugins/test_memory.py -k live
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from lovia import Agent, ModelSettings, Runner
-from lovia.plugins import memory as memory_mod
-from lovia.plugins.memory import (
+from lovia.exceptions import UserError
+from lovia.plugins.memory import plugin as plugin_mod
+from lovia.plugins.memory.index import Doc, Hit, HybridIndex, KeywordIndex
+from lovia.plugins.memory.plugin import (
     FileNotesStore,
     Memory,
-    SQLiteArchiveStore,
     _drop_fact,
     _format_facts,
-    _fts5_available,
+    _hit_line,
     _meter,
+    _normalize_fact,
     _parse_facts,
-    _terms,
+    _RunDigest,
 )
+from lovia.plugins.memory.vector import VectorIndex
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
@@ -37,10 +40,6 @@ from lovia.transcript import (
 )
 
 from ..scripted_provider import ScriptedProvider, call, text
-
-requires_fts = pytest.mark.skipif(
-    not _fts5_available(), reason="SQLite built without FTS5"
-)
 
 
 def _msgs(*pairs: tuple[str, str]) -> list:
@@ -52,6 +51,33 @@ def _msgs(*pairs: tuple[str, str]) -> list:
         else:
             entries.append(AssistantTextEntry(content=content))
     return entries
+
+
+def _ctx(run_id: str = "r1", session_id: str | None = "s1") -> SimpleNamespace:
+    """The slice of RunContext the curation path reads."""
+    return SimpleNamespace(
+        run_id=run_id, session_id=session_id, agent=SimpleNamespace(model="test-model")
+    )
+
+
+class SpyIndex:
+    """Index that records calls and replays canned hits."""
+
+    def __init__(self, hits: list[Hit] | None = None) -> None:
+        self.hits = hits or []
+        self.added: list[Doc] = []
+        self.removed: list[str] = []
+        self.queries: list[str] = []
+
+    async def add(self, docs: list[Doc]) -> None:
+        self.added.extend(docs)
+
+    async def remove(self, ids: list[str]) -> None:
+        self.removed.extend(ids)
+
+    async def search(self, query: str, k: int = 5) -> list[Hit]:
+        self.queries.append(query)
+        return self.hits[:k]
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +98,11 @@ def test_parse_format_roundtrip() -> None:
     assert _format_facts([]) == ""
 
 
+def test_normalize_fact() -> None:
+    assert _normalize_fact("  hello   world \n again ") == "hello world again"
+    assert _normalize_fact("   ") == ""
+
+
 def test_drop_fact_strategies() -> None:
     assert _drop_fact(["a", "b"], "a") == ["b"]
     assert _drop_fact(["Apple"], "apple") == []  # case-insensitive
@@ -79,296 +110,162 @@ def test_drop_fact_strategies() -> None:
     assert _drop_fact(["x"], "nope") == ["x"]  # no match → unchanged
 
 
+def test_hit_line_renders_date() -> None:
+    hit = Hit(doc=Doc(id="a", text="saw Rex", when=86400.0 * 365 * 30), score=1.0)
+    line = _hit_line(hit)
+    assert line.startswith("[") and line.endswith("] saw Rex")
+    # No timestamp → bare text.
+    assert _hit_line(Hit(doc=Doc(id="a", text="bare"), score=0.0)) == "bare"
+
+
 # ---------------------------------------------------------------------------
-# FileNotesStore (hot tier)
+# FileNotesStore (hot tier persistence)
 # ---------------------------------------------------------------------------
 
 
-async def test_notes_add_dedup_and_normalize(tmp_path) -> None:
-    store = FileNotesStore(tmp_path / "MEMORY.md")
-    await store.add("I prefer tabs over spaces.")
-    await store.add("  I prefer   tabs over spaces.  ")  # whitespace-normalized dup
-    await store.add("I PREFER TABS OVER SPACES.")  # case-insensitive dup
-    await store.add("My name is\nAlice")  # multi-line → single line
-    await store.add("   ")  # blank → ignored
-    assert _parse_facts(await store.raw()) == [
-        "I prefer tabs over spaces.",
-        "My name is Alice",
-    ]
+async def test_notes_store_roundtrip(tmp_path) -> None:
+    store = FileNotesStore(tmp_path / "nested" / "MEMORY.md")
+    assert await store.load() == []  # missing file → empty
+    await store.save(["one", "two"])
+    assert await store.load() == ["one", "two"]
+    assert (tmp_path / "nested" / "MEMORY.md").read_text() == "- one\n- two"
+    await store.save([])
+    assert await store.load() == []
 
 
-async def test_notes_remove_fuzzy(tmp_path) -> None:
-    store = FileNotesStore(tmp_path / "MEMORY.md")
-    await store.add("I prefer tabs over spaces.")
-    await store.add("My name is Alice")
-    await store.remove("my name is alice")  # case-insensitive
-    assert _parse_facts(await store.raw()) == ["I prefer tabs over spaces."]
-    await store.remove("tabs")  # substring
-    assert await store.raw() == ""
-    await store.remove("nothing here")  # no-op, no raise
+async def test_notes_store_tolerates_hand_edits(tmp_path) -> None:
+    path = tmp_path / "MEMORY.md"
+    path.write_text("# My notes\n\n- keep me\nprose line\n  - indented too\n")
+    store = FileNotesStore(path)
+    assert await store.load() == ["keep me", "indented too"]
 
 
-async def test_notes_render_meter_and_empty(tmp_path) -> None:
-    store = FileNotesStore(tmp_path / "MEMORY.md", max_chars=100)
-    empty = await store.render()
-    assert "NOTES [0% — 0/100 chars]" in empty
-    assert "(empty" in empty
-    await store.add("hello world")  # body "- hello world" == 13 chars
-    rendered = await store.render()
-    assert "- hello world" in rendered
-    assert "13/100 chars]" in rendered
+# ---------------------------------------------------------------------------
+# Notes policy (plugin-side): dedup, normalization, locking
+# ---------------------------------------------------------------------------
 
 
-async def test_notes_replace_normalizes(tmp_path) -> None:
-    store = FileNotesStore(tmp_path / "MEMORY.md")
-    await store.add("old")
-    await store.replace("- new one\n- new two")
-    assert _parse_facts(await store.raw()) == ["new one", "new two"]
+async def test_add_facts_normalizes_and_dedups(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    assert await mem._add_facts(["I prefer tabs.  "]) == 1
+    assert await mem._add_facts(["  I prefer   tabs. "]) == 0  # whitespace dup
+    assert await mem._add_facts(["I PREFER TABS."]) == 0  # case-insensitive dup
+    assert await mem._add_facts(["My name is\nAlice"]) == 1  # multi-line → one line
+    assert await mem._add_facts(["   "]) == 0  # blank → ignored
+    assert await mem._notes_store().load() == ["I prefer tabs.", "My name is Alice"]
 
 
-async def test_notes_concurrent_writes_are_serialized(tmp_path) -> None:
-    store = FileNotesStore(tmp_path / "MEMORY.md")
-    await asyncio.gather(*(store.add(f"fact number {i}") for i in range(50)))
-    facts = _parse_facts(await store.raw())
+async def test_concurrent_adds_are_serialized(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    await asyncio.gather(*(mem._add_facts([f"fact number {i}"]) for i in range(50)))
+    facts = await mem._notes_store().load()
     assert len(facts) == 50
     assert set(facts) == {f"fact number {i}" for i in range(50)}
 
 
-# ---------------------------------------------------------------------------
-# SQLiteArchiveStore (cold tier)
-# ---------------------------------------------------------------------------
-
-
-@requires_fts
-async def test_archive_fts_ranking_and_filtering() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    assert arc._use_fts
-    await arc.ingest(
-        "s1",
-        _msgs(
-            ("user", "I love hiking in the mountains"),
-            ("assistant", "Mountains are wonderful for a hiking trip"),
-        ),
-    )
-    await arc.ingest(
-        "s2",
-        _msgs(
-            ("user", "best pasta recipe please"),
-            ("assistant", "carbonara with guanciale"),
-        ),
-    )
-    hits = await arc.search("hiking mountains", k=5)
-    assert hits
-    # Only the hiking session matches these tokens.
-    assert all(h.session_id == "s1" for h in hits)
-    assert all(
-        "hik" in h.text.lower() or "mountain" in h.text.lower() for h in hits
-    )
-    # bm25-ranked: we report -bm25, so higher score == better; results best-first.
-    assert hits == sorted(hits, key=lambda h: h.score, reverse=True)
-
-
-@requires_fts
-async def test_archive_cjk_search() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    assert arc._use_fts
-    await arc.ingest(
-        "s1",
-        _msgs(
-            ("user", "我今天去了北京出差，顺便看了朋友"),
-            ("assistant", "北京很好玩，我爱 python"),
-        ),
-    )
-    # Two-char CJK words match: the default unicode61 tokenizer keeps a whole CJK
-    # run as one token and misses these; the bigram index segments them.
-    assert await arc.search("北京")
-    assert await arc.search("出差")
-    # A natural-language CJK query matches via its bigrams, not just exact words.
-    assert await arc.search("我想知道北京出差的情况")
-    # Mixed CJK + ASCII: the ASCII word is found too.
-    assert await arc.search("python")
-    # A word that never appears does not match.
-    assert await arc.search("广州") == []
-    # bm25 ranks the message with more matching bigrams first.
-    hits = await arc.search("北京出差")
-    assert hits[0].text == "我今天去了北京出差，顺便看了朋友"
-
-
-async def test_archive_like_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(memory_mod, "_fts5_available", lambda: False)
-    arc = SQLiteArchiveStore(":memory:")
-    assert not arc._use_fts
-    await arc.ingest(
-        "s1",
-        _msgs(("user", "I love hiking in the mountains"), ("assistant", "great")),
-    )
-    hits = await arc.search("hiking", k=5)
-    assert hits and "hiking" in hits[0].text.lower()
-    assert await arc.search("   ") == []  # empty query → no hits, no error
-
-
-async def test_archive_cjk_like_fallback(monkeypatch) -> None:
-    monkeypatch.setattr(memory_mod, "_fts5_available", lambda: False)
-    arc = SQLiteArchiveStore(":memory:")
-    assert not arc._use_fts
-    await arc.ingest("s1", _msgs(("user", "我今天去了北京出差"), ("assistant", "ok")))
-    # The LIKE fallback segments CJK queries into bigrams too.
-    assert await arc.search("北京")
-    assert await arc.search("我想知道北京出差的情况")
-    assert await arc.search("广州") == []
-
-
-def test_terms_segmentation() -> None:
-    assert _terms("hiking Mountains") == ["hiking", "mountains"]
-    assert _terms("北京") == ["北京"]
-    assert _terms("北京出差") == ["北京", "京出", "出差"]
-    assert _terms("我爱python") == ["我爱", "python"]
-    assert _terms("café Müller") == ["café", "müller"]  # accented Latin: whole
-    assert _terms("Москва") == ["москва"]  # Cyrillic: whole, not bigrammed
-    assert _terms("中") == ["中"]
-    assert _terms("") == []
-    assert _terms("!!! ???") == []
-
-
-async def test_archive_empty_query_returns_nothing() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    await arc.ingest("s1", _msgs(("user", "hello"), ("assistant", "hi")))
-    assert await arc.search("") == []
-    assert await arc.search("!!! ??? ...") == []
-
-
-async def test_archive_replace_on_run_is_idempotent() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    # Re-ingesting the SAME run_id replaces its rows (an idempotent resume),
-    # rather than appending a second copy.
-    await arc.ingest("s1", _msgs(("user", "alpha alpha"), ("assistant", "ok")), run_id="r1")
-    await arc.ingest("s1", _msgs(("user", "bravo bravo"), ("assistant", "ok")), run_id="r1")
-    assert await arc.search("alpha") == []
-    assert await arc.search("bravo")
-
-
-async def test_archive_runs_accumulate_across_session() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    # Distinct runs in one session each append their own messages — the archive
-    # is the union across runs, not just the latest run.
-    await arc.ingest("s1", _msgs(("user", "alpha alpha"), ("assistant", "ok")), run_id="r1")
-    await arc.ingest("s1", _msgs(("user", "bravo bravo"), ("assistant", "ok")), run_id="r2")
-    assert await arc.search("alpha")  # earlier run is still archived
-    assert await arc.search("bravo")
-
-
-@requires_fts
-async def test_archive_rebuilds_stale_schema(tmp_path) -> None:
-    # An on-disk archive.db from an older schema (no run_id column) must be
-    # rebuilt rather than left to crash ingest. Old rows are discarded — we do
-    # not migrate archived data across schema changes.
-    path = tmp_path / "archive.db"
-    con = sqlite3.connect(str(path))
-    con.executescript(
-        "CREATE VIRTUAL TABLE archive_fts USING fts5("
-        "session_id UNINDEXED, text, when_ts UNINDEXED);"
-    )
-    con.execute("INSERT INTO archive_fts VALUES ('old', 'stale relic', 0)")
-    con.commit()
-    con.close()
-
-    arc = SQLiteArchiveStore(str(path))  # detects the old schema -> recreates
-    await arc.ingest("s1", _msgs(("user", "fresh hiking trip"), ("assistant", "ok")))
-    assert await arc.search("hiking")  # new ingest + search work, no error
-    assert await arc.search("relic") == []  # old rows discarded, not migrated
-
-
-async def test_archive_oneshot_runs_all_retained() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    await arc.ingest(None, _msgs(("user", "charlie charlie"), ("assistant", "ok")))
-    await arc.ingest(None, _msgs(("user", "delta delta"), ("assistant", "ok")))
-    # No session_id → unique key per run, so both are retained.
-    assert await arc.search("charlie")
-    assert await arc.search("delta")
-
-
-async def test_archive_skips_tool_and_system_entries() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    entries = [
-        InputEntry(role="system", content="system prompt should not be archived"),
-        InputEntry(role="user", content="user question echotoken"),
-        ToolCallEntry(call_id="c1", name="foo", arguments="{}"),
-        ToolResultEntry(call_id="c1", output="tool output should not be archived"),
-        AssistantTextEntry(content="assistant answer echotoken"),
-    ]
-    await arc.ingest("s1", entries)
-    assert await arc.search("system prompt") == []
-    assert await arc.search("tool output") == []
-    hits = await arc.search("echotoken")
-    assert len(hits) == 2  # only the user + assistant messages
-
-
-async def test_archive_ingest_empty_is_noop() -> None:
-    arc = SQLiteArchiveStore(":memory:")
-    await arc.ingest("s1", [])  # nothing to store
-    assert await arc.search("anything") == []
-
-
-async def test_archive_roundtrip_on_disk(tmp_path) -> None:
-    # Constructing under a missing dir must not fail (parent is created).
-    path = tmp_path / "nested" / "archive.db"
-    arc = SQLiteArchiveStore(str(path))
-    await arc.ingest("s1", _msgs(("user", "persistent zebra fact"), ("assistant", "ok")))
-    assert path.exists()
-    hits = await arc.search("zebra")
-    assert hits and hits[0].session_id == "s1"
+async def test_public_remember_and_forget(tmp_path) -> None:
+    # remember/forget are public: code can seed and clean Notes without a
+    # model in the loop, with the same semantics as the tools.
+    mem = Memory(tmp_path / "mem", index=None)
+    assert await mem.remember("user speaks French") is True
+    assert await mem.remember("USER SPEAKS FRENCH") is False  # dup
+    assert await mem.forget("speaks french") is True  # substring match
+    assert await mem.forget("speaks french") is False  # already gone
+    assert await mem.forget("   ") is False  # blank → no-op
+    assert await mem._notes_store().load() == []
 
 
 # ---------------------------------------------------------------------------
-# Plugin construction & setup() contributions
+# Construction: the three-step ladder (default / embedder= / index=)
 # ---------------------------------------------------------------------------
 
 
-def test_memory_path_form_builds_default_stores(tmp_path) -> None:
-    mem = Memory(str(tmp_path / "mem"))
+def test_default_builds_notes_and_keyword_index(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem")
     assert isinstance(mem.notes, FileNotesStore)
-    assert isinstance(mem.archive, SQLiteArchiveStore)
+    assert isinstance(mem.index, KeywordIndex)
+    assert mem._should_expand()  # lexical-only default → expansion on
 
 
-def test_memory_path_form_archive_none_disables_cold_tier(tmp_path) -> None:
-    # Explicit archive=None must disable the cold tier even with a path notes
-    # root (it would otherwise be overridden by the default archive).
-    mem = Memory(str(tmp_path / "mem"), archive=None)
-    assert isinstance(mem.notes, FileNotesStore)
-    assert mem.archive is None
+async def test_embedder_upgrades_default_to_hybrid(tmp_path) -> None:
+    class Emb:
+        id = "fake:v1"
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] for _ in texts]
+
+    mem = Memory(tmp_path / "mem", embedder=Emb())
+    assert isinstance(mem.index, HybridIndex)
+    kinds = {type(arm) for arm in mem.index.indexes}
+    assert kinds == {KeywordIndex, VectorIndex}
+    assert not mem._should_expand()  # semantic arm present → auto-expansion off
+    # Both arms live under the root (db files themselves are created lazily).
+    assert (tmp_path / "mem").is_dir()
+    await mem.index.add([Doc(id="a", text="hello")])
+    assert (tmp_path / "mem" / "archive.db").exists()
+    assert (tmp_path / "mem" / "vectors.db").exists()
 
 
-def test_memory_custom_notes_no_archive(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    mem = Memory(notes=notes, archive=None)
+def test_custom_index_used_verbatim(tmp_path) -> None:
+    spy = SpyIndex()
+    mem = Memory(tmp_path / "mem", index=spy)
+    assert mem.index is spy
+    assert not mem._should_expand()  # unknown engine → no auto-expansion
+    assert Memory(tmp_path / "m2", index=spy, expand_query=True)._should_expand()
+
+
+def test_index_none_disables_cold_tier(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    assert mem.index is None
+    assert not (tmp_path / "mem" / "archive.db").exists()
+
+
+def test_embedder_with_custom_index_is_an_error(tmp_path) -> None:
+    class Emb:
+        id = "fake:v1"
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] for _ in texts]
+
+    with pytest.raises(UserError, match="not both"):
+        Memory(tmp_path / "mem", index=SpyIndex(), embedder=Emb())
+
+
+def test_custom_notes_store_used_verbatim(tmp_path) -> None:
+    notes = FileNotesStore(tmp_path / "elsewhere.md")
+    mem = Memory(tmp_path / "mem", notes=notes, index=None)
     assert mem.notes is notes
-    assert mem.archive is None
+
+
+def test_expand_query_forced_on_and_off(tmp_path) -> None:
+    assert not Memory(tmp_path / "a", expand_query=False)._should_expand()
+    assert Memory(tmp_path / "b", expand_query=True)._should_expand()
+
+
+# ---------------------------------------------------------------------------
+# setup() contributions
+# ---------------------------------------------------------------------------
 
 
 async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    await notes.add("user prefers dark mode")
-    mem = Memory(notes=notes, archive=SQLiteArchiveStore(":memory:"))
+    mem = Memory(tmp_path / "mem", index=SpyIndex())
+    await mem._add_facts(["user prefers dark mode"])
     inst = await mem.setup()
     assert {t.name for t in inst.tools} == {"remember", "forget", "recall"}
     assert "NOTES" in inst.instructions
     assert "user prefers dark mode" in inst.instructions
     assert "recall" in inst.instructions
-    # The RunCompleted hook reads session_id straight off the injected
-    # RunContext, so no capture view-injector is needed anymore.
-    assert inst.view_injectors == []
     assert inst.hooks is not None
 
 
-async def test_setup_no_archive(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    await notes.add("durable note")
-    mem = Memory(notes=notes, archive=None)
+async def test_setup_without_index(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["durable note"])
     inst = await mem.setup()
     assert {t.name for t in inst.tools} == {"remember", "forget"}  # no recall
     assert "durable note" in inst.instructions  # notes are always injected
     assert "remember" in inst.instructions  # usage guidance still present
-    assert "recall" not in inst.instructions  # no archive guidance
+    assert "recall" not in inst.instructions  # no cold-tier guidance
 
 
 # ---------------------------------------------------------------------------
@@ -377,10 +274,9 @@ async def test_setup_no_archive(tmp_path) -> None:
 
 
 async def test_system_prompt_carries_notes(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    await notes.add("the sky is blue")
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem._add_facts(["the sky is blue"])
     provider = ScriptedProvider([text("hi")])
-    mem = Memory(notes=notes, archive=None, auto_extract=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "go")
     system = provider.calls[0][0]
@@ -390,43 +286,62 @@ async def test_system_prompt_carries_notes(tmp_path) -> None:
 
 
 async def test_remember_tool_persists_via_run(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
     provider = ScriptedProvider(
         [call("remember", {"fact": "user likes vim"}, call_id="c1"), text("Saved!")]
     )
-    mem = Memory(notes=notes, archive=None, auto_extract=False)
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "remember that I like vim")
-    assert "user likes vim" in await notes.raw()
-    # The tool reported success in the transcript.
+    assert "user likes vim" in await mem._notes_store().load()
     tool_results = [e for e in result.entries if e.type == "tool_result"]
     assert any("Remembered" in r.output for r in tool_results)
 
 
+async def test_remember_tool_reports_duplicates(tmp_path) -> None:
+    provider = ScriptedProvider(
+        [call("remember", {"fact": "user likes vim"}, call_id="c1"), text("ok")]
+    )
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem._add_facts(["user likes vim"])
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "again")
+    tool_results = [e for e in result.entries if e.type == "tool_result"]
+    assert any("Already in your notes" in r.output for r in tool_results)
+
+
 async def test_forget_tool_via_run(tmp_path) -> None:
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    await notes.add("user likes vim")
     provider = ScriptedProvider(
         [call("forget", {"fact": "user likes vim"}, call_id="c1"), text("Done")]
     )
-    mem = Memory(notes=notes, archive=None, auto_extract=False)
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem._add_facts(["user likes vim"])
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "forget that I like vim")
-    assert await notes.raw() == ""
+    assert await mem._notes_store().load() == []
 
 
-async def test_recall_tool_returns_hits_without_summary(tmp_path) -> None:
-    archive = SQLiteArchiveStore(":memory:")
-    await archive.ingest(
-        "old",
-        _msgs(("user", "my dog's name is Rex"), ("assistant", "Nice, Rex!")),
-    )
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
+async def test_forget_tool_reports_no_match(tmp_path) -> None:
     provider = ScriptedProvider(
-        [call("recall", {"query": "dog name Rex"}, call_id="c1"), text("Your dog is Rex.")]
+        [call("forget", {"fact": "nothing like this"}, call_id="c1"), text("ok")]
+    )
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "forget")
+    tool_results = [e for e in result.entries if e.type == "tool_result"]
+    assert any("No matching note" in r.output for r in tool_results)
+
+
+async def test_recall_tool_returns_raw_hits(tmp_path) -> None:
+    index = KeywordIndex(":memory:")
+    await index.add([Doc(id="d1", text="my dog's name is Rex")])
+    provider = ScriptedProvider(
+        [call("recall", {"query": "dog name"}, call_id="c1"), text("Rex.")]
     )
     mem = Memory(
-        notes=notes, archive=archive, auto_extract=False, summarize_recall=False
+        tmp_path / "mem",
+        index=index,
+        auto_curate=False,
+        summarize_recall=False,
     )
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "what's my dog's name?")
@@ -442,32 +357,46 @@ async def test_recall_tool_summarizes_when_enabled(tmp_path, monkeypatch) -> Non
         seen["n_hits"] = len(hits)
         return "SUMMARY: your dog is Rex"
 
-    monkeypatch.setattr(memory_mod, "_summarize", fake_summarize)
-    archive = SQLiteArchiveStore(":memory:")
-    await archive.ingest("old", _msgs(("user", "my dog Rex"), ("assistant", "ok")))
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
+    monkeypatch.setattr(plugin_mod, "_summarize", fake_summarize)
+    index = SpyIndex([Hit(doc=Doc(id="d1", text="my dog Rex"), score=1.0)])
     provider = ScriptedProvider(
         [call("recall", {"query": "dog"}, call_id="c1"), text("done")]
     )
-    mem = Memory(
-        notes=notes, archive=archive, auto_extract=False, summarize_recall=True
-    )
+    mem = Memory(tmp_path / "mem", index=index, auto_curate=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "dog?")
     tool_results = [e for e in result.entries if e.type == "tool_result"]
     assert any("SUMMARY: your dog is Rex" in r.output for r in tool_results)
-    assert seen["query"] == "dog"
-    assert seen["n_hits"] >= 1
+    assert seen == {"query": "dog", "n_hits": 1}
+
+
+async def test_recall_summary_failure_falls_back_to_raw_hits(
+    tmp_path, monkeypatch
+) -> None:
+    async def boom(*a, **k):
+        raise RuntimeError("summarizer exploded")
+
+    monkeypatch.setattr(plugin_mod, "_summarize", boom)
+    index = SpyIndex([Hit(doc=Doc(id="d1", text="my dog Rex"), score=1.0)])
+    provider = ScriptedProvider(
+        [call("recall", {"query": "dog"}, call_id="c1"), text("done")]
+    )
+    mem = Memory(tmp_path / "mem", index=index, auto_curate=False)
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "dog?")
+    tool_results = [e for e in result.entries if e.type == "tool_result"]
+    assert any("my dog Rex" in r.output for r in tool_results)
 
 
 async def test_recall_tool_handles_no_hits(tmp_path) -> None:
-    archive = SQLiteArchiveStore(":memory:")
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
     provider = ScriptedProvider(
         [call("recall", {"query": "nonexistent"}, call_id="c1"), text("nothing")]
     )
     mem = Memory(
-        notes=notes, archive=archive, auto_extract=False, summarize_recall=False
+        tmp_path / "mem",
+        index=SpyIndex(),
+        auto_curate=False,
+        summarize_recall=False,
     )
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "?")
@@ -475,113 +404,268 @@ async def test_recall_tool_handles_no_hits(tmp_path) -> None:
     assert any("nothing relevant" in r.output for r in tool_results)
 
 
+async def test_recall_expands_query_when_enabled(tmp_path, monkeypatch) -> None:
+    async def fake_expand(query, model):
+        assert query == "car"
+        return ["automobile", "汽车"]
+
+    monkeypatch.setattr(plugin_mod, "_expand", fake_expand)
+    index = SpyIndex([Hit(doc=Doc(id="d1", text="bought a car"), score=1.0)])
+    provider = ScriptedProvider(
+        [call("recall", {"query": "car"}, call_id="c1"), text("done")]
+    )
+    mem = Memory(
+        tmp_path / "mem",
+        index=index,
+        expand_query=True,
+        auto_curate=False,
+        summarize_recall=False,
+    )
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    await Runner.run(agent, "car?")
+    # The index saw the original query plus the expansion terms.
+    assert index.queries == ["car automobile 汽车"]
+
+
+async def test_recall_expansion_failure_searches_raw_query(
+    tmp_path, monkeypatch
+) -> None:
+    async def boom(query, model):
+        raise RuntimeError("expander exploded")
+
+    monkeypatch.setattr(plugin_mod, "_expand", boom)
+    index = SpyIndex([Hit(doc=Doc(id="d1", text="bought a car"), score=1.0)])
+    provider = ScriptedProvider(
+        [call("recall", {"query": "car"}, call_id="c1"), text("done")]
+    )
+    mem = Memory(
+        tmp_path / "mem",
+        index=index,
+        expand_query=True,
+        auto_curate=False,
+        summarize_recall=False,
+    )
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "car?")
+    assert index.queries == ["car"]
+    tool_results = [e for e in result.entries if e.type == "tool_result"]
+    assert any("bought a car" in r.output for r in tool_results)
+
+
+async def test_recall_default_does_not_expand_on_custom_index(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+
+    async def fake_expand(query, model):
+        calls["n"] += 1
+        return ["nope"]
+
+    monkeypatch.setattr(plugin_mod, "_expand", fake_expand)
+    index = SpyIndex([Hit(doc=Doc(id="d1", text="x"), score=1.0)])
+    provider = ScriptedProvider(
+        [call("recall", {"query": "q"}, call_id="c1"), text("done")]
+    )
+    mem = Memory(
+        tmp_path / "mem", index=index, auto_curate=False, summarize_recall=False
+    )
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    await Runner.run(agent, "?")
+    assert calls["n"] == 0
+    assert index.queries == ["q"]
+
+
 # ---------------------------------------------------------------------------
-# Hooks: archive ingest + Notes curation on RunCompleted
+# End-of-run curation: digest → notes + archive
 # ---------------------------------------------------------------------------
 
 
-async def test_run_completed_ingests_and_extracts(tmp_path, monkeypatch) -> None:
+async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     captured = {}
 
-    async def fake_extract(entries, current, model):
-        captured["called"] = True
+    async def fake_digest(entries, current, model):
         captured["current"] = current
-        return ["the user is a pirate"]
+        return _RunDigest(
+            facts=["the user is a pirate"],
+            summary="Talked like pirates about sailing.",
+        )
 
-    monkeypatch.setattr(memory_mod, "_extract", fake_extract)
-
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteArchiveStore(":memory:")
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    index = SpyIndex()
+    mem = Memory(tmp_path / "mem", index=index)
     provider = ScriptedProvider([text("Arr, hello matey!")])
-    mem = Memory(notes=notes, archive=archive, auto_extract=True)
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "ahoy there sailor", session_id="s1")
 
-    # Extraction promoted the fact into Notes (the empty current was passed in).
-    assert "the user is a pirate" in await notes.raw()
-    assert captured["called"] is True
+    # The digest fact was promoted into Notes (with the empty current passed).
+    assert "the user is a pirate" in await mem._notes_store().load()
     assert captured["current"] == ""
-    # The conversation was archived, keyed by session_id.
-    hits = await archive.search("ahoy sailor")
-    assert hits
-    assert hits[0].session_id == "s1"
+    # Both messages and the episode summary landed in the index.
+    kinds = [d.meta["kind"] for d in index.added]
+    assert kinds.count("message") == 2  # user + assistant
+    assert kinds.count("summary") == 1
+    summary_doc = next(d for d in index.added if d.meta["kind"] == "summary")
+    assert summary_doc.text == "Talked like pirates about sailing."
+    assert summary_doc.meta["session_id"] == "s1"
+    assert summary_doc.id.endswith(":summary")
+    assert all(d.when > 0 for d in index.added)
 
 
-async def test_auto_extract_false_skips_extraction(tmp_path, monkeypatch) -> None:
+async def test_auto_curate_false_ingests_messages_only(tmp_path, monkeypatch) -> None:
     calls = {"n": 0}
 
-    async def fake_extract(*a, **k):
+    async def fake_digest(*a, **k):
         calls["n"] += 1
-        return ["should not appear"]
+        return _RunDigest()
 
-    monkeypatch.setattr(memory_mod, "_extract", fake_extract)
-
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteArchiveStore(":memory:")
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    index = SpyIndex()
+    mem = Memory(tmp_path / "mem", index=index, auto_curate=False)
     provider = ScriptedProvider([text("hi")])
-    mem = Memory(notes=notes, archive=archive, auto_extract=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "hello world uniquexyz", session_id="s1")
 
     assert calls["n"] == 0
-    assert await notes.raw() == ""
-    # Archive ingest happens regardless of auto_extract.
-    assert await archive.search("uniquexyz")
+    assert await mem._notes_store().load() == []
+    # Archive ingest happens regardless of auto_curate — raw messages only.
+    assert [d.meta["kind"] for d in index.added] == ["message", "message"]
+
+
+async def test_digest_failure_still_ingests_messages(tmp_path, monkeypatch) -> None:
+    async def boom(*a, **k):
+        raise RuntimeError("digest exploded")
+
+    monkeypatch.setattr(plugin_mod, "_digest", boom)
+    index = SpyIndex()
+    mem = Memory(tmp_path / "mem", index=index)
+    provider = ScriptedProvider([text("still fine")])
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "hello", session_id="s1")
+    assert result.output == "still fine"
+    assert await mem._notes_store().load() == []
+    assert [d.meta["kind"] for d in index.added] == ["message", "message"]
+
+
+async def test_ingest_failure_still_curates_notes(tmp_path, monkeypatch) -> None:
+    async def fake_digest(entries, current, model):
+        return _RunDigest(facts=["a durable fact"], summary="s")
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+
+    class BrokenIndex(SpyIndex):
+        async def add(self, docs: list[Doc]) -> None:
+            raise RuntimeError("index exploded")
+
+    mem = Memory(tmp_path / "mem", index=BrokenIndex())
+    provider = ScriptedProvider([text("ok")])
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    result = await Runner.run(agent, "hello")
+    assert result.output == "ok"
+    assert "a durable fact" in await mem._notes_store().load()
 
 
 async def test_consolidation_triggers_over_budget(tmp_path, monkeypatch) -> None:
-    async def fake_extract(entries, current, model):
-        return ["a very long fact that blows the tiny budget wide open"]
+    async def fake_digest(entries, current, model):
+        return _RunDigest(facts=["a very long fact that blows the tiny budget open"])
 
     async def fake_consolidate(body, max_chars, model):
         assert len(body) > max_chars
         return ["compact fact"]
 
-    monkeypatch.setattr(memory_mod, "_extract", fake_extract)
-    monkeypatch.setattr(memory_mod, "_consolidate", fake_consolidate)
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    monkeypatch.setattr(plugin_mod, "_consolidate", fake_consolidate)
 
-    notes = FileNotesStore(tmp_path / "MEMORY.md", max_chars=20)
+    mem = Memory(tmp_path / "mem", index=None, notes_budget=20)
     provider = ScriptedProvider([text("ok")])
-    mem = Memory(notes=notes, archive=None, auto_extract=True)
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "go")
+    assert await mem._notes_store().load() == ["compact fact"]
 
-    assert _parse_facts(await notes.raw()) == ["compact fact"]
 
+async def test_remember_during_consolidation_is_not_lost(tmp_path, monkeypatch) -> None:
+    # Consolidation rewrites the whole fact list around a slow model call; a
+    # remember() landing mid-flight must block on the lock and survive, not be
+    # overwritten by the consolidated save.
+    started = asyncio.Event()
 
-async def test_extraction_failure_does_not_break_run(tmp_path, monkeypatch) -> None:
-    async def boom(*a, **k):
-        raise RuntimeError("extractor exploded")
+    async def slow_consolidate(body, max_chars, model):
+        started.set()
+        await asyncio.sleep(0.05)
+        return ["compact fact"]
 
-    monkeypatch.setattr(memory_mod, "_extract", boom)
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
-    archive = SQLiteArchiveStore(":memory:")
-    provider = ScriptedProvider([text("still fine")])
-    mem = Memory(notes=notes, archive=archive, auto_extract=True)
-    agent = Agent(name="a", model=provider, plugins=[mem])
-    # The hook swallows extractor errors; the run still completes.
-    result = await Runner.run(agent, "hello", session_id="s1")
-    assert result.output == "still fine"
-    assert await notes.raw() == ""
-    assert await archive.search("hello")  # ingest still happened
+    monkeypatch.setattr(plugin_mod, "_consolidate", slow_consolidate)
+    mem = Memory(tmp_path / "mem", index=None, notes_budget=10)
+    await mem._add_facts(["a very long fact exceeding the tiny budget"])
+
+    task = asyncio.create_task(mem._consolidate_if_over_budget(_ctx()))
+    await started.wait()
+    await mem.remember("landed mid-flight")
+    await task
+    facts = await mem._notes_store().load()
+    assert "compact fact" in facts
+    assert "landed mid-flight" in facts
 
 
 async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:
     seen = {}
 
-    async def fake_extract(entries, current, model):
+    async def fake_digest(entries, current, model):
         seen["model"] = model
-        return []
+        return _RunDigest()
 
-    monkeypatch.setattr(memory_mod, "_extract", fake_extract)
-    notes = FileNotesStore(tmp_path / "MEMORY.md")
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None, model="openai:some-cheap-model")
     provider = ScriptedProvider([text("hi")])
-    mem = Memory(
-        notes=notes, archive=None, auto_extract=True, model="openai:some-cheap-model"
-    )
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "go")
     assert seen["model"] == "openai:some-cheap-model"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic ids → idempotent re-ingest
+# ---------------------------------------------------------------------------
+
+
+def test_run_docs_ids_are_deterministic(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    entries = _msgs(("user", "hello"), ("assistant", "hi there"))
+    digest = _RunDigest(summary="a summary")
+    docs1 = mem._run_docs(entries, _ctx(run_id="r1"), digest)
+    docs2 = mem._run_docs(entries, _ctx(run_id="r1"), digest)
+    assert [d.id for d in docs1] == ["r1:0", "r1:1", "r1:summary"]
+    assert [d.id for d in docs1] == [d.id for d in docs2]
+    # A different run gets different ids; no session_id → no meta key.
+    docs3 = mem._run_docs(entries, _ctx(run_id="r2", session_id=None), None)
+    assert [d.id for d in docs3] == ["r2:0", "r2:1"]
+    assert all("session_id" not in d.meta for d in docs3)
+
+
+async def test_reingest_upserts_instead_of_duplicating(tmp_path) -> None:
+    # A resumed run re-runs _curate with the same run_id: deterministic ids
+    # make the second ingest an upsert, not a duplicate.
+    index = KeywordIndex(":memory:")
+    mem = Memory(tmp_path / "mem", index=index, auto_curate=False)
+    entries = _msgs(("user", "zebra fact one"), ("assistant", "noted zebra"))
+    await mem._curate(index, entries, _ctx(run_id="r1"))
+    await mem._curate(index, entries, _ctx(run_id="r1"))
+    hits = await index.search("zebra", k=10)
+    assert len(hits) == 2  # one per message, not four
+
+
+def test_run_docs_skips_tool_and_system_entries(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    entries = [
+        InputEntry(role="system", content="system prompt should not be archived"),
+        InputEntry(role="user", content="user question echotoken"),
+        ToolCallEntry(call_id="c1", name="foo", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="tool output should not be archived"),
+        AssistantTextEntry(content="assistant answer echotoken"),
+    ]
+    docs = mem._run_docs(entries, _ctx(), None)
+    assert [d.text for d in docs] == [
+        "user question echotoken",
+        "assistant answer echotoken",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -613,30 +697,24 @@ def _live_model() -> str:
 @pytest.mark.live_provider
 async def test_live_notes_persist_across_sessions(tmp_path) -> None:
     model = _live_model()
-    notes_path = tmp_path / "MEMORY.md"
-    archive_path = tmp_path / "archive.db"
 
     def make_agent() -> Agent:
-        mem = Memory(
-            notes=FileNotesStore(notes_path),
-            archive=SQLiteArchiveStore(str(archive_path)),
-        )
         return Agent(
             name="assistant",
             model=f"openai:{model}",
             instructions="You are concise and helpful.",
             settings=ModelSettings(temperature=0),
-            plugins=[mem],
+            plugins=[Memory(tmp_path / "mem")],
         )
 
-    # Run 1: state a durable preference (auto_extract should promote it).
+    # Run 1: state a durable preference (the digest should promote it).
     await Runner.run(
         make_agent(),
         "Please remember that I strongly prefer Python over JavaScript for all "
         "code examples you give me.",
         session_id="live-pref-1",
     )
-    body = notes_path.read_text().lower()
+    body = (tmp_path / "mem" / "MEMORY.md").read_text().lower()
     assert "python" in body, f"preference not promoted into Notes; got: {body!r}"
 
     # Run 2: a fresh agent over the same Notes file should already know it.
@@ -649,11 +727,17 @@ async def test_live_notes_persist_across_sessions(tmp_path) -> None:
 
 
 @pytest.mark.live_provider
-async def test_live_archive_recall(tmp_path) -> None:
+async def test_live_archive_recall_with_expansion(tmp_path) -> None:
     model = _live_model()
-    archive = SQLiteArchiveStore(str(tmp_path / "archive.db"))
-    await archive.ingest(
-        "old-trip",
+    index = KeywordIndex(tmp_path / "archive.db")
+    mem = Memory(
+        tmp_path / "mem",
+        index=index,
+        auto_curate=False,
+        expand_query=True,
+    )
+    await mem._curate(
+        index,
         _msgs(
             (
                 "user",
@@ -666,12 +750,7 @@ async def test_live_archive_recall(tmp_path) -> None:
                 "Tofuku-ji and Arashiyama are great spots.",
             ),
         ),
-    )
-    mem = Memory(
-        notes=FileNotesStore(tmp_path / "MEMORY.md"),
-        archive=archive,
-        auto_extract=False,
-        summarize_recall=True,
+        _ctx(run_id="old-trip", session_id="old-trip"),
     )
     agent = Agent(
         name="assistant",

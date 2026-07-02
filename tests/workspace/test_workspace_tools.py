@@ -112,11 +112,14 @@ async def test_write_and_edit_renderers_are_human_readable(session, tmp_path) ->
     ctx = _ctx(session)
     created = await write_file.invoke({"path": "new.txt", "content": "hi"}, ctx)
     assert (
-        await render_tool_result(write_file, created, ctx) == "created new.txt (2 bytes)"
+        await render_tool_result(write_file, created, ctx)
+        == "created new.txt (2 bytes)"
     )
 
     raw = await edit_file.invoke({"path": "a.txt", "old": "beta", "new": "BETA"}, ctx)
-    assert await render_tool_result(edit_file, raw, ctx) == "edited a.txt (1 replacement)"
+    assert (
+        await render_tool_result(edit_file, raw, ctx) == "edited a.txt (1 replacement)"
+    )
 
     nochange = await edit_file.invoke(
         {"path": "a.txt", "old": "BETA", "new": "BETA"}, ctx
@@ -141,7 +144,9 @@ async def test_list_and_grep_truncate_with_a_note(tmp_path) -> None:
 
     matches = await grep_files.invoke({"pattern": "hit", "max_matches": 4}, ctx)
     assert len(matches) == 4
-    assert "truncated at 4 matches" in await render_tool_result(grep_files, matches, ctx)
+    assert "truncated at 4 matches" in await render_tool_result(
+        grep_files, matches, ctx
+    )
 
 
 @pytest.mark.asyncio
@@ -246,7 +251,9 @@ def test_render_entries_empty_and_size_variants() -> None:
 
 def test_render_matches_passes_through_non_matches() -> None:
     assert _render_matches(42, _ctx(None)) == 42
-    assert _render_matches([GrepMatch(path="f", line=1, text="x")], _ctx(None)) == "f:1: x"
+    assert (
+        _render_matches([GrepMatch(path="f", line=1, text="x")], _ctx(None)) == "f:1: x"
+    )
 
 
 def test_render_file_change_guard_and_messages() -> None:
@@ -259,7 +266,11 @@ def test_render_file_change_guard_and_messages() -> None:
 
 
 def test_render_edit_result_guard() -> None:
-    assert _render_edit_result(["not", "an", "edit"], _ctx(None)) == ["not", "an", "edit"]
+    assert _render_edit_result(["not", "an", "edit"], _ctx(None)) == [
+        "not",
+        "an",
+        "edit",
+    ]
     failed = EditResult(ok=False, path="f", message="edit failed")
     assert _render_edit_result(failed, _ctx(None)) == "edit failed"
 

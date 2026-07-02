@@ -5,11 +5,20 @@
 * **Notes** (hot) — a small block always injected into the system prompt; the
   model writes to it with ``remember(fact)`` / ``forget(fact)`` and the plugin
   promotes durable facts there automatically at run end.
-* **Archive** (cold) — a full-text-searchable log of past conversations the
-  model pulls in on demand with ``recall(query)``.
+* **Archive** (cold) — a searchable index of past conversations the model
+  pulls in on demand with ``recall(query)``. At run end the plugin also files
+  a short episode summary, and ``recall`` queries are LLM-expanded with
+  synonyms and translations, so lexical search finds paraphrases too.
 
-Both live under the directory you pass, so a fact learned in one run is known
-in the next — even in a fresh process. Delete ``/tmp/lovia_memory`` to reset.
+Recall quality escalates one argument at a time::
+
+    Memory("./memory")                             # stdlib keyword search
+    Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm (hybrid, RRF)
+    Memory("./memory", index=my_index)             # bring your own engine
+
+Both tiers live under the directory you pass, so a fact learned in one run is
+known in the next — even in a fresh process. Delete ``/tmp/lovia_memory`` to
+reset.
 
 Run::
 
@@ -47,6 +56,12 @@ async def main() -> None:
     # because it was written to Notes, which is injected into every run's prompt.
     r2 = await Runner.run(agent, "Suggest a dinner. Keep my preferences in mind.")
     print("A:", r2.output)
+
+    # Third run — the whole first conversation (plus its digest summary) is in
+    # the Archive by now, so the model can `recall` details that never made it
+    # into Notes.
+    r3 = await Runner.run(agent, "What have we talked about before?")
+    print("A:", r3.output)
 
 
 if __name__ == "__main__":

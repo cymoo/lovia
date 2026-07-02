@@ -176,8 +176,7 @@ class Compaction:
             or fingerprint(body[: summary.covered]) != summary.fingerprint
         ):
             logger.info(
-                "context: covered transcript prefix changed; "
-                "resetting running summary"
+                "context: covered transcript prefix changed; resetting running summary"
             )
             state.summary = None
 

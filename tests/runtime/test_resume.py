@@ -78,14 +78,18 @@ def test_resolve_raises_when_active_agent_unreachable() -> None:
 
 def test_rebuild_str_output_passthrough() -> None:
     a = Agent(name="a")
-    res = result_from_completed_snapshot(a, _snapshot("a", output="hello"), output_type=str)
+    res = result_from_completed_snapshot(
+        a, _snapshot("a", output="hello"), output_type=str
+    )
     assert res.output == "hello"
     assert res.final_agent is a
 
 
 def test_rebuild_str_output_defaults_none_to_empty() -> None:
     a = Agent(name="a")
-    res = result_from_completed_snapshot(a, _snapshot("a", output=None), output_type=str)
+    res = result_from_completed_snapshot(
+        a, _snapshot("a", output=None), output_type=str
+    )
     assert res.output == ""
 
 

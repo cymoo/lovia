@@ -635,36 +635,53 @@ agent = Agent(
 )
 ```
 
-`Memory("./dir")`（或 `Memory()`）会在指定根目录下创建默认实现：一个 Markdown 笔记文件，以及一个 SQLite FTS5 归档库。
+召回质量可以逐级升级，每一级只需要多传一个参数：
+
+```python
+Memory("./memory")                             # 标准库关键词检索（FTS5 bm25）
+Memory("./memory", embedder=OpenAIEmbedder())  # + 语义臂 → 混合召回
+Memory("./memory", index=my_index)             # 自带检索引擎
+```
+
+- **零配置**默认是标准库 SQLite FTS5（bm25 + CJK 感知的 bigram 索引），词法检索的短板由 agent 框架里永远在场的 LLM 补齐：`recall` 查询在检索前会被扩展出同义词和跨语言翻译（`expand_query="auto"`）；run 结束时的单次消化调用会把长期事实写入 Notes，同时为 Archive 生成一段自包含的对话摘要——摘要的可检索性远好于零散的聊天片段。
+- **`embedder=`** 把默认索引升级为关键词|向量混合检索（Reciprocal Rank Fusion 融合），获得语义与跨语言召回，且零新增依赖：向量存在 SQLite 里；`OpenAIEmbedder` 兼容任何 OpenAI 风格的 `/embeddings` 端点（官方 API、SiliconFlow 上的 BGE-M3、DashScope、本地服务……`OPENAI_EMBEDDING_BASE_URL` / `OPENAI_EMBEDDING_API_KEY` 可独立于 chat 端点配置，因为二者常在不同服务商）。此时查询扩展自动关闭——语义臂已覆盖其收益。
+- **`index=`** 直接替换整个检索引擎。`Index` 只有三个方法（`add` / `remove` / `search`，按 `Doc.id` upsert），用 Elasticsearch、向量数据库等任何引擎都能实现；各臂可用 `|` 组合：`KeywordIndex(...) | VectorIndex(...) | my_arm` 就是一个 RRF 融合的混合索引。传 `index=None` 则关闭冷层和 `recall` 工具。
+
+默认实现的文件都在你传入的根目录下：
 
 ```
 .lovia/memory/
-├── MEMORY.md      # 热层：一行一条长期事实，始终放进上下文
-└── archive.db     # 冷层：可检索的历史对话归档
+├── MEMORY.md      # 热层：一行一条长期事实，始终放进上下文，可手工编辑
+├── archive.db     # 冷层：历史对话的关键词索引
+└── vectors.db     # 冷层：向量臂（仅在传入 embedder= 时创建）
 ```
 
-> **隐私。** Archive 会把用户和助手的消息文本持久化到磁盘，因此可能保存敏感内容。请把记忆目录放在访问控制合适的位置；如果不希望保留可检索的历史对话记录，请传入 `archive=None`。
+> **隐私。** Archive 会把用户和助手的消息文本持久化到磁盘，因此可能保存敏感内容。请把记忆目录放在访问控制合适的位置；如果不希望保留可检索的历史对话记录，请传入 `index=None`。
 
 可以用可选参数调整行为：
 
 | 字段 | 默认值 | 作用 |
 | --- | --- | --- |
-| `auto_extract` | `True` | run 结束时用一次模型调用提取长期事实写入 Notes；超出预算时会合并整理 Notes |
+| `auto_curate` | `True` | run 结束时的单次消化调用：长期事实 → Notes，对话摘要 → Archive；Notes 超预算时合并整理 |
+| `expand_query` | `"auto"` | 用 LLM 为 `recall` 查询扩展同义词/翻译；`"auto"` = 仅在默认纯词法索引下开启 |
 | `summarize_recall` | `True` | `recall` 返回由模型整理过的命中摘要，而不是原始片段 |
-| `recall_k` | `5` | `recall` 从 Archive 中取回的命中数量 |
-| `model` | host 模型 | 用于提取、整理和召回摘要的模型 |
+| `recall_k` | `5` | `recall` 取回的命中数量 |
+| `notes_budget` | `2000` | Notes 的字符预算——提示词里的容量表和整理触发线 |
+| `model` | host 模型 | 用于消化、整理、扩展和召回摘要的模型 |
 
-提取、整理和召回摘要这些内部请求，会通过一个没有工具、没有 plugin 的子 agent 调用 `Runner.run`，并使用结构化输出。因此它们能复用同一条 provider 链，又不会递归触发 `Memory` 自身。lovia 的 transcript 会完整保留，context compaction 只影响传给模型的视图，所以事实提取只需要在 run 结束时针对完整 transcript 跑一次：它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后补救。
+消化、整理和召回摘要这些内部请求，会通过一个没有工具、没有 plugin 的子 agent 调用 `Runner.run`，并使用结构化输出。因此它们能复用同一条 provider 链，又不会递归触发 `Memory` 自身。lovia 的 transcript 会完整保留，context compaction 只影响传给模型的视图，所以消化只需要在 run 结束时针对完整 transcript 跑一次：它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后补救。
 
-**自带后端。** 两个层级背后各有一个小协议（`NotesStore`、`ArchiveStore`），所以你可以把任意一层换成自己的实现，比如 Redis、向量库或 Postgres，同时保留同一套工具和 instructions：
+`remember` / `forget` 同时也是公开方法（`await mem.remember("...")`），代码可以在没有模型参与的情况下播种或清理 Notes。
+
+**自带后端。** 两个层级背后各有一个刻意收窄的协议。`NotesStore` 只有两个方法（`load`/`save` 一组事实——归一化、去重、预算这些策略都留在 plugin 里）；`Index` 就是上面的三方法检索缝，除 `Doc`/`Hit` 外不涉及任何 lovia 类型。Doc id 是确定性的（`run_id:seq`），resume 的 run 重新写入时按 id upsert 而不会产生重复——后端只需老实实现按 id 覆盖：
 
 ```python
 from lovia import Agent, Memory
 
-agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, archive=my_archive)])
+agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, index=my_index)])
 ```
 
-传入 `archive=None` 可以得到只有 Notes、没有 `recall` 工具的记忆。自定义后端是长生命周期对象，会被每次 run 共享，因此需要保证并发安全；plugin 不会替你关闭它们。
+自定义后端是长生命周期对象，会被每次 run 共享，因此需要保证并发安全；plugin 不会替你关闭它们。
 
 ### 编写 plugin
 

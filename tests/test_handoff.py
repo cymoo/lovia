@@ -56,9 +56,7 @@ async def test_agent_as_tool_forwards_max_turns() -> None:
     # and continues to its own next message.
     expert = Agent(
         name="Expert",
-        model=ScriptedProvider(
-            [call("noop", {}), call("noop", {}), text("done")]
-        ),
+        model=ScriptedProvider([call("noop", {}), call("noop", {}), text("done")]),
     )
     tool = expert.as_tool(max_turns=1)
     parent = Agent(

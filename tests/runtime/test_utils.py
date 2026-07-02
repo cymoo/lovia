@@ -61,7 +61,9 @@ def test_truncate_repr_clips_before_sanitizing() -> None:
 
 
 def test_agent_model_label_string_model() -> None:
-    assert agent_model_label(Agent(name="a", model="openai:gpt-5.4")) == "openai:gpt-5.4"
+    assert (
+        agent_model_label(Agent(name="a", model="openai:gpt-5.4")) == "openai:gpt-5.4"
+    )
 
 
 def test_agent_model_label_list_of_providers() -> None:

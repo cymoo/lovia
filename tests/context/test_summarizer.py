@@ -96,7 +96,9 @@ def _req(provider: ScriptedProvider) -> CompactionRequest:
 async def test_summarize_requires_a_provider() -> None:
     s = LLMSummarizer()
     with pytest.raises(ValueError, match="requires a provider"):
-        await s.summarize([InputEntry(role="user", content="x")], req=CompactionRequest(entries=[]))
+        await s.summarize(
+            [InputEntry(role="user", content="x")], req=CompactionRequest(entries=[])
+        )
 
 
 async def test_summarize_accepts_complete_summary_without_retry() -> None:

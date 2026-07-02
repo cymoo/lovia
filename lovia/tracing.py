@@ -210,9 +210,7 @@ def model_call_span(
     return tracer.span(SpanName.MODEL_CALL, model=model, turn=turn)
 
 
-def tool_call_span(
-    tracer: Tracer, *, name: str, call_id: str
-) -> ContextManager[Span]:
+def tool_call_span(tracer: Tracer, *, name: str, call_id: str) -> ContextManager[Span]:
     return tracer.span(SpanName.TOOL_CALL, name=name, call_id=call_id)
 
 

@@ -119,9 +119,7 @@ async def test_read_guards_against_oversized_files(tmp_path) -> None:
         "\n".join(f"line{i}" for i in range(1, 2001)), encoding="utf-8"
     )
     # A tiny byte cap forces the oversized path without a real huge file.
-    session = await _session(
-        tmp_path, limits=WorkspaceLimits(max_file_read_bytes=200)
-    )
+    session = await _session(tmp_path, limits=WorkspaceLimits(max_file_read_bytes=200))
     result = await session.read_text("huge.txt")
     assert result.truncated is True
     # Only a bounded prefix was read, so far fewer than the 2000 real lines.
@@ -377,7 +375,9 @@ async def test_grep_skips_denied_directories(tmp_path) -> None:
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "k.txt").write_text("needle\n", encoding="utf-8")
     (tmp_path / "ok.txt").write_text("needle\n", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secrets",)))
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy(denied_paths=("secrets",))
+    )
     assert [m.path for m in await session.grep("needle")] == ["ok.txt"]
 
 
@@ -481,7 +481,9 @@ async def test_run_output_clipped_head_and_tail(tmp_path) -> None:
     assert result.stdout.rstrip().endswith("2000")  # tail kept
 
 
-async def test_shell_env_excludes_host_secrets_by_default(tmp_path, monkeypatch) -> None:
+async def test_shell_env_excludes_host_secrets_by_default(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("SUPER_SECRET_TOKEN", "leaked-value-123")
     session = await _session(tmp_path)  # inherit_env defaults to False
     result = await session.run('echo "[$SUPER_SECRET_TOKEN]"')
@@ -622,7 +624,9 @@ async def test_glob_skips_hidden_unless_requested(tmp_path) -> None:
 async def test_glob_skips_denied_paths(tmp_path) -> None:
     (tmp_path / "secret.txt").write_text("x", encoding="utf-8")
     (tmp_path / "ok.txt").write_text("y", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",)))
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",))
+    )
     paths = {e.path for e in await session.list_files(".", pattern="*")}
     assert "ok.txt" in paths
     assert "secret.txt" not in paths
@@ -644,7 +648,9 @@ async def test_glob_excludes_symlinks_escaping_root(tmp_path) -> None:
 async def test_grep_skips_denied_files(tmp_path) -> None:
     (tmp_path / "secret.txt").write_text("needle\n", encoding="utf-8")
     (tmp_path / "ok.txt").write_text("needle\n", encoding="utf-8")
-    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",)))
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy(denied_paths=("secret.txt",))
+    )
     hits = await session.grep("needle")
     assert {m.path for m in hits} == {"ok.txt"}
 

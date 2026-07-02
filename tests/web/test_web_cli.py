@@ -99,7 +99,7 @@ def test_resolve_memory_default_root(
     monkeypatch.chdir(tmp_path)
     mem = cli.resolve_memory(None, no_memory=False)
     assert isinstance(mem, Memory)
-    assert mem.has_archive  # default builds both the notes and archive tiers
+    assert mem.index is not None  # default builds both the notes and archive tiers
     # The default root is created eagerly under cwd.
     assert (tmp_path / ".lovia" / "memory").is_dir()
 

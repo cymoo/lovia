@@ -537,11 +537,6 @@ class MCP:
     async def setup(self) -> PluginInstance:
         tools: list[Tool] = []
         closers: list[Callable[[], Awaitable[None]]] = []
-        for server in self.servers:
-            conn = await server.open()
-            if server.close_after_run:
-                closers.append(conn.close)
-            tools.extend(conn.tools())
 
         async def aclose() -> None:
             for close in reversed(closers):
@@ -550,6 +545,18 @@ class MCP:
                 except Exception:  # noqa: BLE001 - best-effort teardown
                     logger.debug("mcp.close failed during teardown", exc_info=True)
 
+        try:
+            for server in self.servers:
+                conn = await server.open()
+                if server.close_after_run:
+                    closers.append(conn.close)
+                tools.extend(conn.tools())
+        except BaseException:
+            # A later server failed to open: the runner never receives the
+            # instance, so close the connections opened so far here — otherwise
+            # their transports (stdio subprocesses) would leak.
+            await aclose()
+            raise
         return PluginInstance(tools=tools, aclose=aclose)
 
 

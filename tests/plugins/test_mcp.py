@@ -7,6 +7,7 @@ import pytest
 
 from lovia.exceptions import MCPError
 from lovia.plugins.mcp import (
+    MCP,
     MCPConnection,
     MCPServer,
     MCPToolResult,
@@ -296,6 +297,45 @@ async def test_config_open_is_owned_per_run(monkeypatch: pytest.MonkeyPatch) -> 
     # A live connection "opens" to itself (so it can be passed to MCP()).
     assert await conn.open() is conn
     await conn.close()
+
+
+async def test_setup_failure_closes_owned_connections_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Server 1 (config → owned) opens fine, the persistent connection is
+    # user-owned, server 3 fails: setup must close only the owned connection
+    # before re-raising, so nothing leaks and the caller keeps theirs.
+    async def fake_open(self: MCPConnection) -> None:
+        self._session = FakeSession(pages=[_page([_tool("echo")], None)])
+
+    monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
+
+    opened: list[MCPConnection] = []
+    orig_open = _FakeServer.open
+
+    async def tracking_open(self: _FakeServer) -> MCPConnection:
+        conn = await orig_open(self)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(_FakeServer, "open", tracking_open)
+
+    class _BoomServer(MCPServer):
+        def _make_transport(self):  # type: ignore[override]
+            return lambda: None
+
+        async def open(self) -> MCPConnection:
+            raise ConnectionError("boom")
+
+    persistent = await _loaded(FakeSession(pages=[_page([_tool("keep")], None)]))
+    plugin = MCP(_FakeServer(name="ok"), persistent, _BoomServer())
+
+    with pytest.raises(ConnectionError, match="boom"):
+        await plugin.setup()
+
+    assert len(opened) == 1
+    assert opened[0]._session is None  # owned connection closed, no leak
+    assert persistent._session is not None  # user-owned connection untouched
 
 
 async def test_persistent_session_not_owned(monkeypatch: pytest.MonkeyPatch) -> None:

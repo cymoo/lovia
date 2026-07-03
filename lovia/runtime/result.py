@@ -26,6 +26,12 @@ class RunResult:
 
     ``messages`` is a derived, lossy chat-format view of ``entries`` (so it,
     too, is this-run-only and does not lead with the system message).
+
+    ``finish_reason`` is the provider-reported finish reason of the run's
+    final model turn (``"stop"``, ``"length"``, ...) — check it to tell a
+    complete answer from a ``max_tokens``-truncated one. ``None`` when the
+    provider reported none or the result was replayed from a completed
+    checkpoint (it is not persisted in snapshots).
     """
 
     output: Any
@@ -33,6 +39,7 @@ class RunResult:
     final_agent: Agent[Any]
     usage: Usage
     turns: int
+    finish_reason: str | None = None
 
     @property
     def messages(self) -> list[Message]:

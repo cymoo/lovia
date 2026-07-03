@@ -427,6 +427,13 @@ appends its own entries; nothing is ever rewritten. Give each run a `run_id`
 that is unique per checkpointer (e.g. `uuid4().hex`) — it is the checkpoint's
 only key and, unlike a session, is not scoped by `session_id`.
 
+Re-issuing a completed `run_id` replays its result without calling the model,
+and re-applies session persistence idempotently (keyed by `run_id`) — a crash
+between checkpoint finalization and the session append heals on the next
+replay instead of losing the run from the conversation history. To tell a
+complete answer from a `max_tokens`-truncated one, check
+`result.finish_reason` (e.g. `"stop"` vs `"length"`).
+
 ## Context Management
 
 Long conversations use `Compaction` by default. It is view-only: the full

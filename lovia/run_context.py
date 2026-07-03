@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from .messages import Message, Usage
 from .reliability import CancelToken, RunBudget
 from .steering import Mailbox
+from .tracing import Tracer
 from .transcript import InputEntry, TranscriptEntry, entries_to_messages
 
 if TYPE_CHECKING:
@@ -97,6 +98,11 @@ class RunContext(Generic[TContext]):
     workspace: "WorkspaceSession | None" = None
     cancel_token: CancelToken = field(default_factory=CancelToken)
     mailbox: Mailbox = field(default_factory=Mailbox)
+    # The run's tracer (``None`` when untraced). Internal plumbing, not public
+    # API — the same convention as ``ApprovalRequired._channel``: it exists so
+    # agent-as-tool sub-runs inherit the parent's tracer and their spans join
+    # the same trace.
+    _tracer: Tracer | None = field(default=None, repr=False)
 
     @property
     def deps(self) -> TContext | None:

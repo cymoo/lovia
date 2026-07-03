@@ -63,7 +63,9 @@ def resolve_resume_agent(entry: Agent[Any], snapshot: RunSnapshot) -> Agent[Any]
     Raises :class:`UserError` when the snapshot's active agent is not reachable
     from ``entry`` (resuming with the wrong entry agent, or a handoff graph that
     changed since the snapshot was written). A ``completed`` snapshot resolves
-    here too; the caller short-circuits it separately. ``failed`` snapshots are
+    here too, but its caller downgrades this error to a warning and falls back
+    to the entry agent — replay only needs attribution, whereas continuing
+    *execution* as the wrong agent is dangerous. ``failed`` snapshots are
     allowed through — the underlying cause may have been fixed by the caller
     (e.g. a permission error corrected after the fact).
     """
@@ -93,6 +95,8 @@ def result_from_completed_snapshot(
     ``agent`` is the snapshot's *active* agent (resolved via
     :func:`resolve_resume_agent`), so ``final_agent`` and the output-type
     coercion reflect the agent that actually finished the run.
+    ``finish_reason`` is not persisted in snapshots, so a replayed result
+    reports ``None`` there.
     """
     target_output_type = output_type if output_type is not None else agent.output_type
     output = snapshot.output

@@ -31,6 +31,11 @@ class RunBudget:
 
     Any limit set to ``None`` is unconstrained. ``max_seconds`` measures wall
     clock from the first :meth:`check` call.
+
+    An instance carries single-run state (the wall-clock start, the tool-call
+    count): create a fresh budget per run rather than reusing one across runs,
+    or its clock and counters carry over. :func:`~lovia.handoff.agent_as_tool`
+    copies the budget it was given per invocation for exactly this reason.
     """
 
     max_input_tokens: int | None = None

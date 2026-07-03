@@ -169,6 +169,10 @@ class RunLoop:
         # handoff graph by ``_resolve_resume`` (the snapshot's agent may be a
         # handoff target, not the entry agent). ``None`` for a fresh run.
         self._resume_agent: Agent[Any] | None = None
+        # The context policy's carried state from a *completed* snapshot,
+        # stashed by ``_resolve_resume`` so the replay path can rebuild the
+        # session-segment ``meta`` when it heals a missed session append.
+        self._completed_context_state: dict[str, Any] | None = None
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
@@ -223,9 +227,23 @@ class RunLoop:
             if completed is not None:
                 # Already-completed run: replay terminal events only. No
                 # bootstrap, guardrails, or hooks — those ran on the original
-                # completion; replay just folds usage and clears the checkpoint.
+                # completion; replay folds usage, re-applies session
+                # persistence idempotently, and clears the checkpoint.
                 if self.parent_usage is not None:
                     self.parent_usage.add(completed.usage)
+                if self.session is not None:
+                    # Heal the crash window between checkpoint completion and
+                    # session append: ``Session.append`` is idempotent on
+                    # ``run_id``, so when the original completion already
+                    # persisted this is a no-op — and when it crashed first,
+                    # the session would otherwise be missing this run forever.
+                    # Before the checkpoint delete, mirroring the normal
+                    # completion order (checkpoint finalized, then session).
+                    await self._append_session_segment(
+                        completed.entries,
+                        context_state=self._completed_context_state or {},
+                        notice=None,  # not persisted in snapshots
+                    )
                 if self.checkpoints.delete_on_success:
                     await self.checkpoints.delete()
                 yield events.RunStarted(agent=self.initial_agent)
@@ -282,8 +300,16 @@ class RunLoop:
                     )
                     # Fold in any messages injected since this turn's predecessor
                     # began, as ``user`` entries the model sees on this call.
+                    drained_any = False
                     async for ev in self._drain_mailbox(state):
+                        drained_any = True
                         yield ev
+                    if drained_any:
+                        # Persist immediately: the messages are already consumed
+                        # from the mailbox, so until the post-model save they
+                        # would exist nowhere durable — a crash during the model
+                        # call would silently drop them.
+                        await self.checkpoints.save_running(state)
                     logger.debug(
                         "run.turn.start: agent=%r turn=%d",
                         state.agent.name,
@@ -311,6 +337,9 @@ class RunLoop:
                             "Provider stream ended without final message"
                         )
                     self._record_usage(state, assistant)
+                    # Remembered for RunResult.finish_reason: the last turn's
+                    # value is the run's final one.
+                    state.last_finish_reason = assistant.finish_reason
                     logger.info(
                         "model.done: turn=%d tokens=%d(in=%d out=%d) finish=%s "
                         "tool_calls=%d dur=%.2fs",
@@ -323,6 +352,12 @@ class RunLoop:
                         time.perf_counter() - model_started,
                     )
                     state.transcript.extend(turn.turn_entries)
+                    # The turn has contributed entries to the transcript: from
+                    # here on an abort must not roll back the turn counter —
+                    # ``save_terminal`` persists these entries under this turn
+                    # (so even a failing ``save_running`` below keeps the
+                    # snapshot's turn count aligned with its entries).
+                    turn_durable = True
                     yield await self._emit(
                         state, events.MessageCompleted(entries=turn.turn_entries)
                     )
@@ -330,7 +365,6 @@ class RunLoop:
                     # crash mid-execution can resume by draining the calls
                     # that have no matching result yet.
                     await self.checkpoints.save_running(state)
-                    turn_durable = True
 
                     if assistant.tool_calls:
                         async for ev in self._tool_phase(
@@ -357,6 +391,8 @@ class RunLoop:
                 # resume. Finalizing the checkpoint first keeps the run in
                 # exactly one place; ``run_completed`` is already set, so a
                 # failure here can't un-complete the checkpoint (no save_terminal).
+                # A crash (or store error) between the two is healed on replay:
+                # the completed-snapshot path above re-appends idempotently.
                 if self.session is not None:
                     await self._persist_session(state)
 
@@ -441,11 +477,30 @@ class RunLoop:
                 ),
             )
 
-        active_agent = resolve_resume_agent(self.initial_agent, snapshot)
         if snapshot.status == "completed":
+            # Replay needs the recorded agent only for result attribution and
+            # output-type coercion. If the handoff graph changed since the run
+            # completed (agent renamed or removed), degrade to the entry agent
+            # with a warning instead of failing a run whose work is done — a
+            # worker re-issuing idempotent run_ids across a deploy must not
+            # error on finished runs. Resumable snapshots below keep the hard
+            # error: continuing *execution* as the wrong agent is dangerous.
+            try:
+                active_agent = resolve_resume_agent(self.initial_agent, snapshot)
+            except UserError:
+                logger.warning(
+                    "run.replay: recorded agent %r is no longer reachable from "
+                    "entry agent %r; attributing the replayed result to the "
+                    "entry agent",
+                    snapshot.agent_name,
+                    self.initial_agent.name,
+                )
+                active_agent = self.initial_agent
+            self._completed_context_state = dict(snapshot.context_state)
             return result_from_completed_snapshot(
                 active_agent, snapshot, output_type=self.output_type_override
             )
+        active_agent = resolve_resume_agent(self.initial_agent, snapshot)
         self.resume_from = snapshot
         self._resume_agent = active_agent
         return None
@@ -480,6 +535,9 @@ class RunLoop:
             workspace=active.workspace,
             cancel_token=self.cancel_token,
             mailbox=self.mailbox,
+            # The caller's tracer verbatim (None when untraced), carried as
+            # internal plumbing so agent-as-tool sub-runs join this trace.
+            _tracer=self.tracer,
         )
         # Read prior session history once, as segments: the flattened entries
         # become the prefix, and the latest segment's ``meta`` seeds a fresh
@@ -627,6 +685,10 @@ class RunLoop:
             len(pending),
             state.turns,
         )
+        # Mirror the restored turn counter onto the public context, exactly as
+        # a normal turn start does — tools draining here must see the turn
+        # they belong to, not the RunContext default of 0.
+        state.run_ctx.turn = state.turns
         yield await self._emit(
             state, events.TurnStarted(agent=state.agent, turn=state.turns)
         )
@@ -654,7 +716,14 @@ class RunLoop:
         providers = state.active.providers
         primary = providers[0]
         request = CompactionRequest(
-            entries=state.transcript,
+            # A shallow snapshot, not the live list: the policy contract says
+            # read-only, but handing out the real transcript would let one
+            # misbehaving user policy corrupt run state that the Session and
+            # checkpoint then persist. The entry objects are still shared —
+            # only the list is defensive. The transcript cannot grow between
+            # here and the overflow re-compact below (both happen before this
+            # turn's entries are appended), so the snapshot stays current.
+            entries=list(state.transcript),
             provider=primary,
             model=getattr(primary, "model", None),
             last_input_tokens=state.last_input_tokens,
@@ -784,6 +853,7 @@ class RunLoop:
             turn=state.turns,
             result=turn,
             retry=self.retry,
+            cancel_token=self.cancel_token,
         ):
             yield await self._emit(state, ev)
 
@@ -836,6 +906,17 @@ class RunLoop:
         Returns the run output, or :data:`_UNSET` after appending a repair
         prompt so the loop rolls another turn.
         """
+        if not assistant.content and state.active.structured_output is None:
+            # No content and no tool calls still completes the run (the empty
+            # string is the output), but it is almost always a provider hiccup
+            # or a max_tokens truncation — leave a trace. The structured-output
+            # path needs no twin: an empty reply fails to parse there and goes
+            # through output repair instead.
+            logger.warning(
+                "run.empty_output: model returned no content and no tool calls "
+                "(finish=%s); run completes with empty output",
+                assistant.finish_reason,
+            )
         try:
             return self._parse_output(
                 state.active.structured_output, assistant.content or ""
@@ -881,6 +962,7 @@ class RunLoop:
             final_agent=state.agent,
             usage=state.run_ctx.usage,
             turns=state.turns,
+            finish_reason=state.last_finish_reason,
         )
 
         if self.parent_usage is not None:
@@ -1167,31 +1249,52 @@ class RunLoop:
         # Append this run's own entries as one segment. Prior history is already
         # in the Session and stays immutable; ``run_entries`` excludes the system
         # entry (it lives before ``run_start``).
+        await self._append_session_segment(
+            state.run_entries,
+            context_state=state.context_state,
+            notice=state.context_notice,
+        )
+
+    async def _append_session_segment(
+        self,
+        entries: list[TranscriptEntry],
+        *,
+        context_state: dict[str, Any],
+        notice: events.CompactionNotice | None,
+    ) -> None:
+        """Append one run's ``entries`` to the Session as a segment.
+
+        Shared by normal completion (:meth:`_persist_session`) and the
+        completed-snapshot replay path, which re-applies persistence to heal
+        the crash window between checkpoint finalization and session append.
+
+        ``meta`` hosts two independent co-tenants (either may be absent):
+
+        * the policy's carried state — the same opaque scratch the checkpoint
+          stores — so the next run on this session resumes its decisions
+          without re-deriving them;
+        * the run's last compaction notice, for the web UI to replay on
+          reload (the replay path passes ``None``: not persisted in snapshots).
+        """
         assert self.session is not None and self.session_id is not None
-        run_entries = state.run_entries
-        if run_entries:
-            # ``meta`` hosts two independent co-tenants (either may be absent):
-            #  * the policy's carried state — the same opaque scratch the
-            #    checkpoint stores — so the next run on this session resumes its
-            #    decisions without re-deriving them;
-            #  * the run's last compaction notice, for the web UI to replay on
-            #    reload.
-            meta: dict[str, Any] = {}
-            if state.context_state:
-                # Sanitize exactly as the checkpoint path does (which stores
-                # ``to_json_safe(context_state)``) — same blob, same
-                # treatment — so a custom policy's scratch can't round-trip
-                # through the checkpoint yet crash the session store here.
-                meta[STATE_META_KEY] = to_json_safe(state.context_state)
-            if state.context_notice is not None:
-                meta[NOTICE_META_KEY] = asdict(state.context_notice)
-            # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
-            # argument; ``None`` when not checkpointing -> the store generates one).
-            # Append is idempotent on it, so a resumed completion that the
-            # crash-window left re-runnable can never double-write the run.
-            await self.session.append(
-                self.session_id, run_entries, run_id=self.run_id, meta=meta or None
-            )
+        if not entries:
+            return
+        meta: dict[str, Any] = {}
+        if context_state:
+            # Sanitize exactly as the checkpoint path does (which stores
+            # ``to_json_safe(context_state)``) — same blob, same treatment —
+            # so a custom policy's scratch can't round-trip through the
+            # checkpoint yet crash the session store here.
+            meta[STATE_META_KEY] = to_json_safe(context_state)
+        if notice is not None:
+            meta[NOTICE_META_KEY] = asdict(notice)
+        # Key the segment by the run's ``run_id`` (passed as the ``run_id=``
+        # argument; ``None`` when not checkpointing -> the store generates
+        # one). Append is idempotent on it, so a completed run's entries land
+        # in the session exactly once no matter how often it is replayed.
+        await self.session.append(
+            self.session_id, entries, run_id=self.run_id, meta=meta or None
+        )
 
     async def _build_view(
         self, state: RunState, result: ContextResult

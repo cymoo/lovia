@@ -15,6 +15,7 @@ from lovia import (
     InMemoryCheckpointer,
     ProviderError,
     RetryPolicy,
+    RunContext,
     Runner,
     TextPart,
     events,
@@ -250,28 +251,91 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
 
 
 @pytest.mark.asyncio
-async def test_resume_completed_snapshot_does_not_write_session() -> None:
-    # A completed snapshot is replayed verbatim: its transcript was already
-    # persisted on the original completion, so resume does not write it back
-    # even when a session is supplied.
+async def test_resume_completed_snapshot_appends_session_idempotently() -> None:
+    # Replaying a completed snapshot re-applies session persistence keyed by
+    # run_id. When the original completion already appended, that's a no-op;
+    # replaying repeatedly never duplicates the segment.
     from lovia.stores import InMemorySession
 
     cp = InMemoryCheckpointer()
     provider = ScriptedProvider([text("done")])
     agent = Agent(name="a", model=provider)
-    await Runner.run(agent, "hi", checkpoint=ckpt(cp, "done-session"))
-
     session = InMemorySession()
-    result = await Runner.run(
+    await Runner.run(
         agent,
-        [],
-        checkpoint=ckpt(cp, "done-session", if_run_exists="resume_only"),
+        "hi",
+        checkpoint=ckpt(cp, "done-session"),
         session=session,
         session_id="s1",
     )
+    assert len(await session.segments("s1")) == 1
 
-    assert result.output == "done"
-    assert await session.load("s1") == []
+    for _ in range(2):  # replay twice; the segment must not duplicate
+        result = await Runner.run(
+            agent,
+            [],
+            checkpoint=ckpt(cp, "done-session", if_run_exists="resume_only"),
+            session=session,
+            session_id="s1",
+        )
+        assert result.output == "done"
+
+    segs = await session.segments("s1")
+    assert len(segs) == 1
+    assert segs[0].run_id == "done-session"
+    assert len(provider.calls) == 1  # the model was never re-invoked
+
+
+@pytest.mark.asyncio
+async def test_replay_heals_session_lost_in_the_crash_window() -> None:
+    # The loop finalizes the checkpoint BEFORE appending to the session. A
+    # crash (or store error) between the two used to lose the run's entries
+    # from the session forever — the checkpoint said "completed" so a re-issue
+    # only replayed the result. Replay now re-appends idempotently, healing
+    # the window.
+    from lovia.stores import InMemorySession
+
+    class FlakySession(InMemorySession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_append = True
+
+        async def append(self, session_id, entries, *, run_id=None, meta=None):  # type: ignore[override]
+            if self.fail_next_append:
+                self.fail_next_append = False
+                raise ConnectionError("session store down")
+            return await super().append(session_id, entries, run_id=run_id, meta=meta)
+
+    cp = InMemoryCheckpointer()
+    session = FlakySession()
+    agent = Agent(name="a", model=ScriptedProvider([text("answer")]))
+
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            agent,
+            "q",
+            checkpoint=ckpt(cp, "rA"),
+            session=session,
+            session_id="s1",
+        )
+    snap = await cp.load("rA")
+    assert snap is not None and snap.status == "completed"
+    assert await session.segments("s1") == []  # the crash window
+
+    # Idempotent re-issue of the same run: replays the result AND heals the
+    # session.
+    agent2 = Agent(name="a", model=ScriptedProvider([]))  # model must not run
+    result = await Runner.run(
+        agent2,
+        "q",
+        checkpoint=ckpt(cp, "rA"),
+        session=session,
+        session_id="s1",
+    )
+    assert result.output == "answer"
+    [seg] = await session.segments("s1")
+    assert seg.run_id == "rA"
+    assert seg.entries == snap.entries
 
 
 @pytest.mark.asyncio
@@ -513,6 +577,99 @@ async def test_resume_drains_pending_tool_calls_from_snapshot() -> None:
         isinstance(entry, ToolResultEntry) and entry.call_id == "c1"
         for entry in result.entries
     )
+
+
+@pytest.mark.asyncio
+async def test_drained_pending_calls_see_the_restored_turn() -> None:
+    # Tools executed while draining a resumed snapshot's pending calls must
+    # see the snapshot's turn on ctx.turn (the turn they belong to), not the
+    # RunContext default of 0.
+    cp = InMemoryCheckpointer()
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="turn-probe",
+            agent_name="a",
+            entries=[
+                InputEntry(role="user", content="go"),
+                ToolCallEntry(call_id="c1", name="probe", arguments="{}"),
+            ],
+            usage=Usage(input_tokens=10, output_tokens=5),
+            turns=3,
+        ),
+    )
+    seen: list[int] = []
+
+    @tool
+    async def probe(ctx: RunContext) -> str:
+        seen.append(ctx.turn)
+        return "ok"
+
+    agent = Agent(name="a", model=ScriptedProvider([text("done")]), tools=[probe])
+    result = await Runner.run(
+        agent, [], checkpoint=ckpt(cp, "turn-probe", if_run_exists="resume_only")
+    )
+
+    assert result.output == "done"
+    assert seen == [3]
+
+
+@pytest.mark.asyncio
+async def test_replay_completed_run_survives_a_changed_handoff_graph() -> None:
+    # Replay needs the recorded agent only for attribution. When the handoff
+    # graph changed since the run completed (agent renamed/removed), replay
+    # degrades to the entry agent with a warning — a worker re-issuing
+    # idempotent run_ids across a deploy must not error on finished runs.
+    cp = InMemoryCheckpointer()
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="legacy-done",
+            agent_name="renamed-away",
+            entries=[
+                InputEntry(role="user", content="hi"),
+                AssistantTextEntry(content="done"),
+            ],
+            usage=Usage(input_tokens=1, output_tokens=1),
+            turns=1,
+            status="completed",
+            output="done",
+        ),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([]))  # model must not run
+
+    result = await Runner.run(
+        agent, [], checkpoint=ckpt(cp, "legacy-done", if_run_exists="resume_only")
+    )
+
+    assert result.output == "done"
+    assert result.final_agent.name == "a"  # attributed to the entry agent
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_running_snapshot_still_requires_a_reachable_agent() -> None:
+    # The completed-replay fallback above must NOT extend to resumable
+    # snapshots: continuing *execution* as the wrong agent is dangerous.
+    cp = InMemoryCheckpointer()
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="legacy-running",
+            agent_name="renamed-away",
+            entries=[InputEntry(role="user", content="hi")],
+            usage=Usage(),
+            turns=1,
+            status="running",
+        ),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    with pytest.raises(Exception, match="not reachable"):
+        await Runner.run(
+            agent,
+            [],
+            checkpoint=ckpt(cp, "legacy-running", if_run_exists="resume_only"),
+        )
 
 
 @pytest.mark.asyncio

@@ -72,3 +72,58 @@ async def test_max_turns_is_logged_once_at_the_boundary(
     msgs = [r.message for r in caplog.records]
     assert not any(m.startswith("run.max_turns:") for m in msgs)
     assert sum(m.startswith("run.interrupted:") for m in msgs) == 1
+
+
+async def test_empty_final_message_completes_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # No content and no tool calls still completes the run (output "") — but
+    # that is almost always a provider hiccup or max_tokens truncation, so a
+    # run.empty_output warning must be left behind.
+    from lovia.messages import AssistantTurn, Usage
+
+    empty = AssistantTurn(content=None, usage=Usage(input_tokens=1, output_tokens=0))
+    agent = Agent(name="a", model=ScriptedProvider([empty]))
+    with caplog.at_level(logging.WARNING, logger="lovia.runtime.loop"):
+        result = await Runner.run(agent, "go")
+    assert result.output == ""
+    assert any(r.message.startswith("run.empty_output:") for r in caplog.records)
+
+
+async def test_finish_reason_surfaces_on_the_result() -> None:
+    from lovia.messages import AssistantTurn, Usage
+
+    turn = AssistantTurn(
+        content="cut off mid-",
+        usage=Usage(input_tokens=1, output_tokens=1),
+        finish_reason="length",
+    )
+    agent = Agent(name="a", model=ScriptedProvider([turn]))
+    result = await Runner.run(agent, "go")
+    assert result.output == "cut off mid-"
+    assert result.finish_reason == "length"
+
+
+async def test_policy_mutating_request_entries_cannot_corrupt_the_transcript() -> None:
+    # The context policy receives a defensive snapshot: a misbehaving policy
+    # that mutates req.entries in place must not damage the live transcript
+    # the Session and checkpoint persist.
+    from lovia.context.policy import CompactionRequest, ContextResult
+
+    class VandalPolicy:
+        async def compact(self, req: CompactionRequest) -> ContextResult:
+            req.entries.clear()  # contract violation, deliberately
+            return ContextResult(entries=req.entries, changed=False)
+
+    provider = ScriptedProvider([text("intact")])
+    agent = Agent(name="a", model=provider)
+    result = await Runner.run(agent, "hello", context_policy=VandalPolicy())
+
+    assert result.output == "intact"
+    # The model still saw the real transcript (changed=False -> live view)...
+    assert any(m.role == "user" and m.content == "hello" for m in provider.calls[0])
+    # ...and the run's own entries survived the vandalism.
+    assert [type(e).__name__ for e in result.entries] == [
+        "InputEntry",
+        "AssistantTextEntry",
+    ]

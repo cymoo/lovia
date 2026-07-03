@@ -62,3 +62,77 @@ async def test_ask_in_non_streaming_run_defaults_to_deny() -> None:
     result = await Runner.run(agent, "go")
     tool_msg = next(m for m in result.messages if m.role == "tool")
     assert "not approved" in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_raising_approval_predicate_denies_without_dangling_call() -> None:
+    # A needs_approval *predicate* that raises must fail closed (deny) and
+    # still append a ToolResultEntry — a crash here would leave a dangling
+    # tool call that a resume would then re-execute.
+    from lovia.transcript import ToolCallEntry, ToolResultEntry
+
+    executed: list[int] = []
+
+    def exploding_predicate(_args, _ctx):  # type: ignore[no-untyped-def]
+        raise ValueError("predicate exploded")
+
+    @tool(needs_approval=exploding_predicate)
+    async def guarded() -> str:
+        executed.append(1)
+        return "ran"
+
+    provider = ScriptedProvider([call("guarded", {}, call_id="g1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[guarded])
+
+    handle = Runner.stream(agent, "go")
+    errors: list[BaseException] = []
+    async for ev in handle:
+        if isinstance(ev, events.ErrorOccurred):
+            errors.append(ev.error)
+    result = await handle.result()
+
+    assert result.output == "done"  # the run survives
+    assert executed == []  # fail closed: the tool never ran
+    assert any(isinstance(e, ValueError) for e in errors)
+    calls = [e for e in result.entries if isinstance(e, ToolCallEntry)]
+    results = [e for e in result.entries if isinstance(e, ToolResultEntry)]
+    assert len(calls) == len(results) == 1  # no dangling call
+    assert results[0].is_error
+    assert "not approved" in results[0].output
+
+
+@pytest.mark.asyncio
+async def test_raising_result_renderer_becomes_error_result() -> None:
+    # The tool already ran when rendering fails; crashing the run would leave
+    # a dangling call and re-execute the (possibly non-idempotent) tool on
+    # resume. Instead the failure becomes an error tool-result.
+    from lovia.transcript import ToolCallEntry, ToolResultEntry
+
+    executions: list[int] = []
+
+    def exploding_renderer(_value, _ctx):  # type: ignore[no-untyped-def]
+        raise RuntimeError("renderer exploded")
+
+    @tool(result_renderer=exploding_renderer)
+    async def pay() -> str:
+        executions.append(1)
+        return "charged $100"
+
+    provider = ScriptedProvider([call("pay", {}, call_id="p1"), text("done")])
+    agent = Agent(name="t", model=provider, tools=[pay])
+
+    handle = Runner.stream(agent, "go")
+    errors: list[BaseException] = []
+    async for ev in handle:
+        if isinstance(ev, events.ErrorOccurred):
+            errors.append(ev.error)
+    result = await handle.result()
+
+    assert result.output == "done"
+    assert executions == [1]  # ran exactly once; the run was not re-driven
+    assert any(isinstance(e, RuntimeError) for e in errors)
+    calls = [e for e in result.entries if isinstance(e, ToolCallEntry)]
+    results = [e for e in result.entries if isinstance(e, ToolResultEntry)]
+    assert len(calls) == len(results) == 1  # no dangling call
+    assert results[0].is_error
+    assert "rendering failed" in results[0].output

@@ -298,3 +298,28 @@ async def test_sqlite_trim_rolls_back_partial_writes_on_error() -> None:
         "SELECT entries_json FROM session_runs WHERE run_id = 'r0'"
     ).fetchone()
     assert "r" * 5_000 in row[0]
+
+
+async def test_in_memory_checkpointer_freezes_head_state() -> None:
+    # The RunHead handed to append() aliases the run's *live* context_state
+    # dict. The store must freeze it at append time (as SQLite does by
+    # serializing immediately), and hand out copies on load so a caller
+    # mutating the snapshot cannot corrupt the store.
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+    from lovia.stores import InMemoryCheckpointer
+
+    cp = InMemoryCheckpointer()
+    live_state = {"summary": "v1"}
+    head = RunHead(agent_name="a", usage=Usage(), turns=1, context_state=live_state)
+    await cp.append("r1", [InputEntry(role="user", content="hi")], head)
+
+    live_state["summary"] = "v2"  # the run keeps mutating its scratch
+    snap = await cp.load("r1")
+    assert snap is not None
+    assert snap.context_state == {"summary": "v1"}  # frozen at append time
+
+    snap.context_state["summary"] = "vandalized"  # a careless reader
+    snap2 = await cp.load("r1")
+    assert snap2 is not None
+    assert snap2.context_state == {"summary": "v1"}  # the store is unharmed

@@ -77,6 +77,13 @@ def test_agent_model_label_list_of_providers() -> None:
     assert agent_model_label(agent) == "gpt-x,scripted"
 
 
+def test_agent_model_label_list_of_spec_strings_is_unquoted() -> None:
+    # String specs in a fallback list are labels already; they must not go
+    # through repr() and come out quoted ("'openai:gpt-5.4'").
+    agent = Agent(name="a", model=["openai:gpt-5.4", "anthropic:claude"])
+    assert agent_model_label(agent) == "openai:gpt-5.4,anthropic:claude"
+
+
 def test_agent_model_label_single_provider_prefers_model_then_name() -> None:
     class _WithModel:
         model = "claude"

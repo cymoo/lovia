@@ -122,3 +122,146 @@ async def test_cancel_inside_sub_run_terminates_parent() -> None:
     )
     with pytest.raises(RunCancelled):
         await Runner.run(parent, "delegate")
+
+
+async def test_second_handoff_in_same_turn_is_rejected_unrun() -> None:
+    # The first handoff of a turn wins. A second transfer requested in the
+    # same turn must be rejected *before* it runs: its on_handoff side effects
+    # never fire and its tool result says so instead of claiming a transfer.
+    import json as _json
+
+    from lovia.handoff import Handoff
+    from lovia.messages import AssistantTurn, ToolCall, Usage
+    from lovia.transcript import ToolResultEntry
+
+    fired: list[str] = []
+    alpha = Agent(name="alpha", model=ScriptedProvider([text("from alpha")]))
+    beta = Agent(name="beta", model=ScriptedProvider([text("from beta")]))
+
+    double_transfer = AssistantTurn(
+        content=None,
+        tool_calls=[
+            ToolCall(id="h1", name="transfer_to_alpha", arguments=_json.dumps({})),
+            ToolCall(id="h2", name="transfer_to_beta", arguments=_json.dumps({})),
+        ],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    triage = Agent(
+        name="triage",
+        model=ScriptedProvider([double_transfer]),
+        handoffs=[
+            Handoff(target=alpha, on_handoff=lambda a, c: fired.append("alpha")),
+            Handoff(target=beta, on_handoff=lambda a, c: fired.append("beta")),
+        ],
+    )
+
+    result = await Runner.run(triage, "route me")
+
+    assert result.final_agent.name == "alpha"
+    assert result.output == "from alpha"
+    assert fired == ["alpha"]  # beta's callback never ran
+    results = {e.call_id: e for e in result.entries if isinstance(e, ToolResultEntry)}
+    assert "Transferred to alpha" in results["h1"].output
+    assert results["h2"].is_error
+    assert "already transferred to 'alpha'" in results["h2"].output
+
+
+async def test_agent_as_tool_budget_is_per_invocation() -> None:
+    # RunBudget carries internal state (its clock start, the tool-call count),
+    # so the instance given to as_tool() must be copied per invocation: two
+    # sub-runs that each fit the budget individually must both succeed.
+    from lovia import RunBudget
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    async def ping() -> str:
+        return "pong"
+
+    def child_turns():
+        return [
+            call("ping", {}, call_id="p1"),
+            call("ping", {}, call_id="p2"),
+            text("child done"),
+        ]
+
+    child = Agent(
+        name="Child",
+        model=ScriptedProvider(child_turns() + child_turns()),
+        tools=[ping],
+    )
+    # One sub-run makes 2 tool calls; a shared budget would start the second
+    # sub-run with the counter already at 2 and trip at its second call.
+    budget = RunBudget(max_tool_calls=3)
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [
+                call("ask_child", {"input": "first"}, call_id="c1"),
+                call("ask_child", {"input": "second"}, call_id="c2"),
+                text("both fine"),
+            ]
+        ),
+        tools=[child.as_tool(budget=budget)],
+    )
+
+    result = await Runner.run(parent, "delegate twice")
+
+    assert result.output == "both fine"
+    child_results = [
+        e.output
+        for e in result.entries
+        if isinstance(e, ToolResultEntry) and e.call_id in ("c1", "c2")
+    ]
+    assert child_results == ["child done", "child done"]
+
+
+def test_slug_produces_provider_legal_ascii_tool_names() -> None:
+    from lovia.handoff import _slug, build_handoff_tool, Handoff
+
+    assert _slug("Route Finder") == "route_finder"
+    assert _slug("café") == "caf"  # non-ASCII dropped, not passed through
+    assert _slug("") == "agent"
+
+    # Fully non-ASCII names fall back to a stable digest: still ASCII, and
+    # distinct agents get distinct names.
+    cn_support, cn_sales = _slug("客服"), _slug("销售")
+    assert cn_support.isascii() and cn_support.startswith("agent_")
+    assert cn_support != cn_sales
+    assert _slug("客服") == cn_support  # stable across calls
+
+    tool_name = build_handoff_tool(
+        Handoff(target=Agent(name="客服", model=ScriptedProvider([])))
+    ).name
+    assert tool_name.isascii()
+    assert tool_name.startswith("transfer_to_agent_")
+
+
+async def test_agent_as_tool_inherits_tracer() -> None:
+    # The sub-run inherits the parent's tracer (internal RunContext plumbing)
+    # so its spans join the parent's trace instead of vanishing into a
+    # NoopTracer.
+    from lovia.tracing import NoopTracer
+
+    tracer = NoopTracer()
+    seen: list[object] = []
+
+    @tool
+    async def record_tracer(ctx: RunContext) -> str:
+        seen.append(ctx._tracer)
+        return "noted"
+
+    child = Agent(
+        name="Child",
+        model=ScriptedProvider([call("record_tracer", {}), text("child done")]),
+        tools=[record_tracer],
+    )
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [call("ask_child", {"input": "go"}, call_id="c1"), text("ok")]
+        ),
+        tools=[child.as_tool()],
+    )
+    result = await Runner.run(parent, "delegate", tracer=tracer)
+    assert result.output == "ok"
+    assert seen == [tracer]  # the child's tool saw the parent's exact tracer

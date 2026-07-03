@@ -15,7 +15,8 @@ exactly one execution path.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .types import JsonObject
@@ -104,6 +105,10 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
         description=description,
         parameters=parameters,
         invoke=invoke,
+        # Lets the runner reject a second handoff in the same turn *before*
+        # invoking it (and firing its on_handoff side effects) — the first
+        # handoff of a turn wins.
+        _handoff=True,
     )
 
 
@@ -130,12 +135,17 @@ def agent_as_tool(
     free-form ``input``. Bound ``max_turns`` especially: a delegated sub-agent
     loops on its own, and the run default is generous. The sub-run inherits the
     parent's ``context`` and accumulates into its :class:`Usage` automatically.
+    ``budget`` is copied per invocation, so its limits (``max_seconds``,
+    ``max_tool_calls``, ...) apply to each sub-run individually rather than
+    accumulating across every call of this tool.
 
     The sub-run also inherits the parent's ``cancel_token``: cancellation is
     cooperative, so while the parent is blocked awaiting this sub-run only the
     child is checking the token. Sharing the instance lets a ``cancel()`` trip
     the child at its next turn boundary; the resulting :class:`RunCancelled`
     propagates straight up through the tool call and terminates the parent run.
+    The parent's tracer is inherited the same way, so the sub-run's spans join
+    the parent's trace.
 
     The parent's ``mailbox`` is deliberately *not* inherited — the asymmetry
     with ``cancel_token`` is intentional. Cancellation is a broadcast, but an
@@ -160,10 +170,17 @@ def agent_as_tool(
             prompt,
             context=ctx.context,
             max_turns=max_turns,
-            budget=budget,
+            # A fresh copy per invocation: RunBudget carries internal state
+            # (its wall-clock start, the tool-call count) that must not leak
+            # from one sub-run into the next. ``replace`` re-inits, so the
+            # ``init=False`` counters reset while the configured limits copy.
+            budget=replace(budget) if budget is not None else None,
             cancel_token=ctx.cancel_token,
             retry=retry,
             context_policy=context_policy,
+            # Inherit the parent's tracer so the sub-run's spans join the
+            # same trace instead of vanishing into a NoopTracer.
+            tracer=ctx._tracer,
             _parent_usage=ctx.usage,
         )
         return result.output
@@ -189,11 +206,26 @@ def agent_as_tool(
 
 
 def _slug(s: str) -> str:
-    """Make a string safe to use as a tool name."""
+    """Make a string safe to use as a provider-legal tool name.
+
+    Tool-name grammars are ASCII-only at every major provider (OpenAI enforces
+    ``^[a-zA-Z0-9_-]{1,64}$``), so non-ASCII characters are dropped rather than
+    passed through — ``str.isalnum`` alone would keep e.g. CJK characters and
+    produce a name the provider rejects with a 400. A name with nothing to keep
+    falls back to a stable digest so distinct agents still get distinct tool
+    names; set ``Handoff.name`` / ``as_tool(name=...)`` for a readable override
+    (the tool description carries the original agent name either way).
+    """
     out = []
     for ch in s.lower():
-        if ch.isalnum() or ch == "_":
+        if ch.isascii() and (ch.isalnum() or ch == "_"):
             out.append(ch)
         elif ch in (" ", "-"):
             out.append("_")
-    return "".join(out) or "agent"
+    slug = "".join(out)
+    if slug:
+        return slug
+    if not s:
+        return "agent"
+    digest = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
+    return f"agent_{digest}"

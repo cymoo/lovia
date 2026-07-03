@@ -48,9 +48,10 @@ class ToolCallProcessor:
         """Execute one assistant-requested tool call.
 
         Appends a :class:`ToolResultEntry` to ``state.transcript`` in every
-        outcome (missing tool, malformed arguments, denial, error, success)
-        so the transcript never contains a dangling tool call. A handoff tool
-        records its signal in ``state.pending_handoff``.
+        outcome (missing tool, duplicate handoff, malformed arguments, denial,
+        error, success) so the transcript never contains a dangling tool call.
+        A handoff tool records its signal in ``state.pending_handoff``; the
+        first handoff of a turn wins and later ones are rejected unrun.
         """
 
         self.cancel_token.check()
@@ -73,12 +74,25 @@ class ToolCallProcessor:
         if tool is None:
             err = f"Tool {call.name!r} is not available."
             logger.warning("tool.unknown: %s call_id=%s", call.name, call.id)
-            state.transcript.append(
-                ToolResultEntry(call_id=call.id, output=err, is_error=True)
+            yield self._rejected(state, call, err)
+            return
+
+        if tool._handoff and state.pending_handoff is not None:
+            # First handoff of the turn wins. Rejecting *before* invoke means
+            # the loser's ``on_handoff`` side effects never fire and the
+            # transcript never claims a transfer that won't happen.
+            target = state.pending_handoff.handoff.target.name
+            err = (
+                f"Handoff not performed: this turn already transferred to "
+                f"{target!r}. Only the first handoff in a turn takes effect."
             )
-            yield events.ToolCallCompleted(
-                call=call, result=err, is_error=True, output=err
+            logger.warning(
+                "tool.handoff_ignored: %s call_id=%s (already pending -> %r)",
+                call.name,
+                call.id,
+                target,
             )
+            yield self._rejected(state, call, err)
             return
 
         try:
@@ -93,15 +107,28 @@ class ToolCallProcessor:
                 call.id,
                 truncate_repr(call.arguments),
             )
-            state.transcript.append(
-                ToolResultEntry(call_id=call.id, output=err, is_error=True)
-            )
-            yield events.ToolCallCompleted(
-                call=call, result=err, is_error=True, output=err
-            )
+            yield self._rejected(state, call, err)
             return
 
-        if tool.requires_approval(args, state.run_ctx):
+        try:
+            needs_approval = tool.requires_approval(args, state.run_ctx)
+        except Exception as exc:
+            # Fail closed, and — like every other outcome — leave a
+            # ToolResultEntry: a raising predicate must neither let the tool
+            # run unvetted nor crash the run with a dangling call that a
+            # resume would then re-execute.
+            logger.warning(
+                "tool.approval_predicate_error: %s call_id=%s (%s: %s)",
+                tool.name,
+                call.id,
+                type(exc).__name__,
+                exc,
+            )
+            yield events.ErrorOccurred(error=exc)
+            err = f"Tool {call.name} was not approved (approval check failed)."
+            yield self._rejected(state, call, err)
+            return
+        if needs_approval:
             # Fail-closed approval. Resolution order: the streaming consumer
             # (while suspended at the ApprovalRequired yield, or out-of-band
             # via the channel), then ``agent.approval_handler``, then deny.
@@ -133,12 +160,7 @@ class ToolCallProcessor:
             self.approvals.discard(call.id)
             if not approved:
                 denial = f"Tool {call.name} was not approved."
-                state.transcript.append(
-                    ToolResultEntry(call_id=call.id, output=denial, is_error=True)
-                )
-                yield events.ToolCallCompleted(
-                    call=call, result=denial, is_error=True, output=denial
-                )
+                yield self._rejected(state, call, denial)
                 return
 
         yield events.ToolCallStarted(call=call)
@@ -165,6 +187,15 @@ class ToolCallProcessor:
             # Consistent with the pre-tool ``cancel_token.check()`` above, and the
             # path an agent-as-tool sub-run takes when it inherits and trips the
             # parent's token.
+            #
+            # BudgetExceeded is deliberately NOT re-raised here: budgets are
+            # scoped, not run-global. One escaping a tool is a *sub-run's own*
+            # budget (agent-as-tool) — a recoverable delegation failure, fed
+            # back to the model exactly like the sub-run's MaxTurnsExceeded.
+            # This run's own budget needs no help from this path: the loop
+            # re-checks it before the next tool call (above) and at every turn
+            # boundary, so an actually-exhausted run still stops at the next
+            # safe point before any further model call or tool execution.
             raise
         except Exception as exc:
             result = f"Tool error: {exc}"
@@ -184,9 +215,34 @@ class ToolCallProcessor:
                 f" ({result.reason})" if result.reason else ""
             )
         else:
-            result_text = await render_tool_result(
-                tool, result, state.run_ctx, default=state.agent.tool_result_renderer
-            )
+            try:
+                result_text = await render_tool_result(
+                    tool,
+                    result,
+                    state.run_ctx,
+                    default=state.agent.tool_result_renderer,
+                )
+            except RunCancelled:
+                raise
+            except Exception as exc:
+                # The tool itself already ran; only rendering failed. Convert
+                # to an error result instead of crashing the run — a crash
+                # here would leave a dangling call, and a resume would then
+                # re-execute the (possibly non-idempotent) tool. BudgetExceeded
+                # included, as in the invoke path above: budgets are scoped,
+                # and this run's own budget is re-checked at the next safe
+                # point regardless.
+                logger.warning(
+                    "tool.render_error: %s call_id=%s (%s: %s)",
+                    tool.name,
+                    call.id,
+                    type(exc).__name__,
+                    exc,
+                )
+                yield events.ErrorOccurred(error=exc)
+                result = f"Tool error: result rendering failed: {exc}"
+                result_text = result
+                is_error = True
 
         # Cap what enters the transcript: everything downstream (run memory,
         # checkpoints, session storage) pays for the full string, so huge
@@ -227,6 +283,23 @@ class ToolCallProcessor:
             )
         yield events.ToolCallCompleted(
             call=call, result=result, is_error=is_error, output=result_text
+        )
+
+    def _rejected(
+        self, state: RunState, call: ToolCall, err: str
+    ) -> events.ToolCallCompleted:
+        """Record a pre-execution rejection and return the event to yield.
+
+        The one place every rejected call (unknown tool, duplicate handoff,
+        malformed arguments, failed approval check, denial) writes its error
+        :class:`ToolResultEntry` and builds the matching ``ToolCallCompleted``
+        — so the transcript and event shape can't drift between outcomes.
+        """
+        state.transcript.append(
+            ToolResultEntry(call_id=call.id, output=err, is_error=True)
+        )
+        return events.ToolCallCompleted(
+            call=call, result=err, is_error=True, output=err
         )
 
     def _apply_handler_decision(self, call_id: str, decision: object) -> None:

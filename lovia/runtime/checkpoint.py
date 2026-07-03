@@ -33,6 +33,15 @@ class CheckpointWriter:
 
     All methods are no-ops when ``checkpointer`` or ``run_id`` is ``None``,
     so the loop can call them unconditionally.
+
+    Failure semantics are deliberately asymmetric. :meth:`save_running` (and
+    :meth:`complete`) propagate store errors and thereby **abort the run**:
+    checkpointing is a durability guarantee, and silently continuing past a
+    failed write would leave a snapshot that lies about what already ran —
+    resuming it would re-execute tool calls whose results were lost. Only
+    :meth:`save_terminal` is best-effort (logged, never raised), because it
+    runs while the original failure is already propagating and must not mask
+    it.
     """
 
     checkpointer: Checkpointer | None

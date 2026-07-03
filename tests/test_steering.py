@@ -319,3 +319,49 @@ async def test_injected_message_persists_to_session_once() -> None:
     )
     loaded_users = [m.content for m in second.calls[0] if m.role == "user"]
     assert loaded_users.count("remember this") == 1
+
+
+async def test_injected_message_is_checkpointed_before_the_model_call() -> None:
+    # Draining the mailbox is destructive: until the injected entry reaches
+    # the checkpoint it exists nowhere durable. The loop must persist it
+    # BEFORE the model call, or a crash there silently drops the message.
+    from lovia.checkpointer import CheckpointOptions
+    from lovia.stores import InMemoryCheckpointer
+    from lovia.transcript import InputEntry
+
+    cp = InMemoryCheckpointer()
+
+    class ProbeProvider:
+        """Records whether the injected entry was persisted when called."""
+
+        name = "probe"
+        model = None
+        supports_json_schema = False
+
+        def __init__(self) -> None:
+            self.injected_was_durable: bool | None = None
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            snap = await cp.load("m1")
+            self.injected_was_durable = snap is not None and any(
+                isinstance(e, InputEntry) and e.content == "remember me"
+                for e in snap.entries
+            )
+            yield TextDelta(text="ok")
+            yield UsageDelta(usage=Usage(input_tokens=1, output_tokens=1))
+            yield FinishDelta(reason="stop")
+
+    mailbox = Mailbox()
+    mailbox.push("remember me")  # queued before the run starts
+    provider = ProbeProvider()
+    agent = Agent(name="t", model=provider)
+
+    await Runner.run(
+        agent,
+        "go",
+        mailbox=mailbox,
+        checkpoint=CheckpointOptions(checkpointer=cp, run_id="m1"),
+    )
+    assert provider.injected_was_durable is True

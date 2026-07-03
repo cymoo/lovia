@@ -404,6 +404,12 @@ result = await Runner.run(
 请为每次 run 提供一个在当前 checkpointer 内唯一的 `run_id`（如 `uuid4().hex`）。
 它是 checkpoint 的唯一键，不像 session 那样还受 `session_id` 约束。
 
+对已完成的 `run_id` 重复发起运行会直接重放结果（不再调用模型），并以
+`run_id` 为幂等键补写 session——即使先前恰好在 checkpoint 完成与 session
+追加之间崩溃，重放也会自动补全会话历史，而不是永久丢失该轮。想区分完整
+回答与被 `max_tokens` 截断的回答，可检查 `result.finish_reason`（如
+`"stop"` 与 `"length"`）。
+
 ## 上下文管理
 
 长对话默认使用 `Compaction`。它只改变“本次发给模型的视图”：完整 transcript

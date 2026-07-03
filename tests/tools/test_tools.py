@@ -88,6 +88,32 @@ async def test_retries_receive_fresh_top_level_args() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_tool_does_not_retry_run_control_signals() -> None:
+    # RunCancelled / BudgetExceeded are run-control signals: the condition
+    # won't clear on its own, so retrying only delays termination.
+    from lovia.exceptions import BudgetExceeded, RunCancelled
+
+    attempts = {"cancelled": 0, "budget": 0}
+
+    @tool(retries=2)
+    async def cancelled_tool() -> str:
+        attempts["cancelled"] += 1
+        raise RunCancelled("stop now")
+
+    @tool(retries=2)
+    async def over_budget_tool() -> str:
+        attempts["budget"] += 1
+        raise BudgetExceeded("out of tokens")
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    with pytest.raises(RunCancelled):
+        await run_tool(cancelled_tool, {}, ctx)
+    with pytest.raises(BudgetExceeded):
+        await run_tool(over_budget_tool, {}, ctx)
+    assert attempts == {"cancelled": 1, "budget": 1}  # single attempt each
+
+
+@pytest.mark.asyncio
 async def test_retries_exhausted_surfaces_as_tool_error() -> None:
     @tool(retries=1)
     async def always_fail() -> str:

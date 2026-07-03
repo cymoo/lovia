@@ -13,7 +13,7 @@ from ..exceptions import ContextOverflowError
 from ..messages import AssistantTurn, ToolCall, Usage
 from ..output import StructuredOutput, response_format_for
 from ..providers.base import ModelSettings, Provider
-from ..reliability import RetryPolicy
+from ..reliability import CancelToken, RetryPolicy
 from .run_state import ModelTurnResult
 from .utils import truncate_repr
 from ..tracing import Tracer, model_call_span
@@ -76,6 +76,7 @@ async def stream_model_turn(
     turn: int,
     result: ModelTurnResult,
     retry: RetryPolicy | None,
+    cancel_token: CancelToken | None = None,
 ) -> AsyncIterator[events.Event]:
     """Stream one model call, yielding delta events.
 
@@ -104,6 +105,7 @@ async def stream_model_turn(
             ),
             settings=agent.settings,
             retry=retry,
+            cancel_token=cancel_token,
         ):
             if isinstance(delta, _StreamReset):
                 # A failed attempt streamed partial output; discard everything
@@ -228,6 +230,7 @@ async def stream_with_fallback(
     response_format: JsonObject | None,
     settings: ModelSettings | None,
     retry: RetryPolicy | None,
+    cancel_token: CancelToken | None = None,
 ) -> AsyncIterator[ModelDelta | _StreamReset]:
     """Stream from the first provider that succeeds.
 
@@ -239,6 +242,10 @@ async def stream_with_fallback(
     re-streamed from scratch (replace semantics). With ``restart_on_partial``
     off, a mid-stream error propagates immediately, as before. Cancellation and
     :class:`ContextOverflowError` always propagate immediately.
+
+    ``cancel_token``, when supplied, is checked around each retry backoff so a
+    cooperatively cancelled run stops here instead of sleeping out the backoff
+    and paying for another attempt before the loop's next safe point.
     """
     last_exc: Exception | None = None
     max_attempts = retry.max_attempts if retry is not None else 1
@@ -298,7 +305,15 @@ async def stream_with_fallback(
                         type(exc).__name__,
                         truncate_repr(str(exc)),
                     )
+                    # Checked on both sides of the sleep: before, so an
+                    # already-cancelled run skips the backoff entirely; after,
+                    # so a cancel that lands mid-sleep stops the retry rather
+                    # than paying for one more full attempt.
+                    if cancel_token is not None:
+                        cancel_token.check()
                     await retry.sleep(delay)
+                    if cancel_token is not None:
+                        cancel_token.check()
                     continue
                 break
     if last_exc is not None:

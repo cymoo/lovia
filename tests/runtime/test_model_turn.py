@@ -180,3 +180,41 @@ async def test_fallback_with_no_providers_yields_nothing() -> None:
         )
     ]
     assert out == []
+
+
+async def test_cancel_token_stops_retry_backoff() -> None:
+    # A cooperative cancel that lands while the retry backoff sleeps must
+    # terminate the stream right there — not after sleeping out the backoff
+    # and paying for another provider attempt.
+    from lovia.exceptions import ProviderError, RunCancelled
+    from lovia.reliability import CancelToken, RetryPolicy
+
+    token = CancelToken()
+    attempts = {"n": 0}
+
+    class _Retryable:
+        name = "retryable"
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            attempts["n"] += 1
+            raise ProviderError("outage", retryable=True)
+            yield  # pragma: no cover - makes this an async generator
+
+    async def cancelling_sleep(_delay: float) -> None:
+        token.cancel("user hit stop")
+
+    retry = RetryPolicy(max_attempts=5, sleep=cancelling_sleep)
+    with pytest.raises(RunCancelled):
+        async for _ in stream_with_fallback(
+            [_Retryable()],
+            [],
+            tools=None,
+            response_format=None,
+            settings=None,
+            retry=retry,
+            cancel_token=token,
+        ):
+            pass
+    assert attempts["n"] == 1  # cancelled during the first backoff

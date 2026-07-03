@@ -80,9 +80,12 @@ class Runner:
                   ...
 
         Resuming a run that already ``completed`` replays it verbatim: the handle
-        re-emits the terminal events but does not re-run session persistence,
-        output guardrails, or hooks (those ran on the original completion).
-        ``session``/``session_id`` are therefore ignored for a completed run.
+        re-emits the terminal events but does not re-run output guardrails or
+        hooks (those ran on the original completion). Session persistence *is*
+        re-applied — idempotently, keyed by ``run_id`` — when ``session`` is
+        supplied, so a crash between checkpoint finalization and the original
+        session append heals on replay instead of losing the run's entries
+        from the conversation history.
         """
         loop = RunLoop(
             initial_agent=agent,

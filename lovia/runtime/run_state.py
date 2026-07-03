@@ -118,6 +118,11 @@ class RunState:
     # Not persisted; resets on resume (bounded by max_turns).
     output_repair_attempts: int = 0
     turns: int = 0
+    # The most recent model turn's provider-reported finish reason ("stop",
+    # "length", "tool_calls", ...). Surfaced on RunResult so callers can tell
+    # a complete answer from a max_tokens-truncated one. Not persisted: a
+    # result replayed from a completed checkpoint reports ``None``.
+    last_finish_reason: str | None = None
     # Per-run system-prompt addendum (``extra_instructions``). Run-scoped: it is
     # appended to every active agent's instructions, including agents reached
     # via handoff.

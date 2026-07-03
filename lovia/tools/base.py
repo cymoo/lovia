@@ -36,7 +36,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from ..types import JsonObject, JsonSchema
-from ..exceptions import UserError
+from ..exceptions import BudgetExceeded, RunCancelled, UserError
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
@@ -113,6 +113,10 @@ class Tool:
     # When True the runner passes the RunContext to invoke as the named kwarg.
     _wants_context: bool = field(default=False, repr=False)
     _context_param: str | None = field(default=None, repr=False)
+    # Set by build_handoff_tool: lets the runner recognise a handoff tool
+    # *before* invoking it, so a second handoff in the same turn is rejected
+    # without firing its on_handoff side effects.
+    _handoff: bool = field(default=False, repr=False)
 
     def requires_approval(self, args: dict[str, Any], ctx: "RunContext[Any]") -> bool:
         if callable(self.needs_approval):
@@ -267,6 +271,14 @@ async def run_tool(
                     one_attempt(attempt_args, ctx), timeout=timeout
                 )
             return await one_attempt(attempt_args, ctx)
+        except (RunCancelled, BudgetExceeded):
+            # Not retried: neither condition can clear on its own, so retrying
+            # only burns attempts and backoff sleeps. They part ways upstream —
+            # the runner re-raises RunCancelled (run-global signal) but turns
+            # BudgetExceeded into a tool-error result (budgets are scoped: a
+            # sub-run's exhausted budget is a recoverable delegation failure,
+            # and the run's own budget is re-checked at the next safe point).
+            raise
         except Exception as exc:  # noqa: BLE001 — we want to retry any tool error
             last_exc = exc
             if attempt >= attempts:

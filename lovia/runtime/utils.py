@@ -39,6 +39,11 @@ def agent_model_label(agent: Agent[Any]) -> str:
     if isinstance(model, list):
         labels: list[str] = []
         for model_ref in model:
+            if isinstance(model_ref, str):
+                # A spec string is already the label; the getattr chain below
+                # would fall through to repr() and quote it ("'openai:...'").
+                labels.append(model_ref)
+                continue
             labels.append(
                 str(
                     getattr(model_ref, "model", None)

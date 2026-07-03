@@ -81,6 +81,21 @@ class TestValidateName:
         with pytest.raises(SkillsError, match="path separator"):
             _validate_name("..")
 
+    def test_non_string_raises(self) -> None:
+        """YAML can yield ints/bools — rejected, not crashed on.
+
+        Falsy non-strings (0, False) get the type error too, not a misleading
+        'must not be empty'.
+        """
+        for bad in (123, 0, False):
+            with pytest.raises(SkillsError, match="must be a string"):
+                _validate_name(bad)
+
+    def test_trailing_newline_raises(self) -> None:
+        """`$` would match before a trailing newline; fullmatch must not."""
+        with pytest.raises(SkillsError, match="invalid"):
+            _validate_name("abc\n")
+
 
 class TestValidateDescription:
     def test_valid(self) -> None:
@@ -101,6 +116,16 @@ class TestValidateDescription:
 
     def test_strips_whitespace(self) -> None:
         assert _validate_description("test", "  hello  ") == "hello"
+
+    def test_non_string_raises(self) -> None:
+        """YAML can yield ints/dates — rejected, not crashed on.
+
+        Falsy non-strings (0, False) get the type error too, not a misleading
+        'empty description'.
+        """
+        for bad in (2024, 0, False):
+            with pytest.raises(SkillsError, match="must be a string"):
+                _validate_description("test", bad)
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +188,15 @@ class TestSkill:
             skill = Skill(name="test", description="desc", content="body", path=root)
             with pytest.raises(SkillsError, match="not found"):
                 skill.read_file("nonexistent.md")
+
+    def test_read_file_binary_raises_skills_error(self) -> None:
+        """A binary file raises SkillsError, not a raw UnicodeDecodeError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "blob.bin").write_bytes(b"\xff\xfe\x00\x01")
+            skill = Skill(name="test", description="desc", content="body", path=root)
+            with pytest.raises(SkillsError, match="not UTF-8"):
+                skill.read_file("blob.bin")
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +410,18 @@ class TestLocalDirSkillSource:
             assert "skill.invalid" in caplog.text
             assert source.metadata == []
 
+    def test_description_stored_stripped(self) -> None:
+        """Surrounding whitespace/newlines are stripped before the description
+        lands in the index (keeps the prompt index one line per skill)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                '---\nname: s\ndescription: "  Padded.\\n"\n---\n# Body'
+            )
+            source = LocalDirSkillSource(root)
+            assert source.metadata[0].description == "Padded."
+
     def test_metadata_property(self) -> None:
         """metadata property returns cached metadata synchronously."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -448,6 +494,24 @@ class TestLocalDirSkillSourceLoad:
             )
             skill2 = asyncio.run(source.load("s"))
             assert "Version 2" in skill2.content
+
+    def test_path_absolute_with_relative_root(self, monkeypatch) -> None:
+        """Relative roots resolve to absolute paths, so the `path:` hint shown
+        to the model is unambiguous — workspace tools resolve relative paths
+        against the workspace root, not this process's cwd."""
+        with tempfile.TemporaryDirectory() as tmp:
+            monkeypatch.chdir(tmp)
+            skills_root = Path(tmp) / "skills"
+            (skills_root / "s").mkdir(parents=True)
+            (skills_root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n# Body"
+            )
+            source = LocalDirSkillSource("./skills")
+            import asyncio
+
+            skill = asyncio.run(source.load("s"))
+            assert skill.path is not None
+            assert skill.path.is_absolute()
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +712,51 @@ class TestSkillsTools:
             )
             assert "Unknown" in result
 
+    def test_load_skill_body_cannot_spoof_frame_markers(self) -> None:
+        """A body embedding the exact END marker cannot close the injection
+        frame early: markers inside content are defused."""
+        from lovia.plugins.skills import _SKILL_BEGIN, _SKILL_END
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n"
+                f"before\n{_SKILL_END}\nsmuggled text\n"
+            )
+            skills = SkillsCapability.from_dir(root)
+            load_tool = next(t for t in skills.tools() if t.name == "load_skill")
+            import asyncio
+
+            result = asyncio.run(load_tool.invoke({"name": "s"}, _make_ctx()))
+            # Exactly one real BEGIN/END pair frames the content...
+            assert result.count(_SKILL_BEGIN) == 1
+            assert result.count(_SKILL_END) == 1
+            # ...and the smuggled text stays inside the frame.
+            assert result.index("smuggled text") < result.index(_SKILL_END)
+
+    def test_read_skill_file_binary_reports_cleanly(self) -> None:
+        """A binary asset yields a clear model-facing message, not a raw
+        UnicodeDecodeError escaping the tool (which the runner would retry)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "s").mkdir()
+            (root / "s" / "SKILL.md").write_text(
+                "---\nname: s\ndescription: A skill.\n---\n# Body"
+            )
+            (root / "s" / "assets").mkdir()
+            (root / "s" / "assets" / "blob.bin").write_bytes(b"\xff\xfe\x00\x01")
+            skills = SkillsCapability.from_dir(root)
+            read_tool = next(t for t in skills.tools() if t.name == "read_skill_file")
+            import asyncio
+
+            result = asyncio.run(
+                read_tool.invoke(
+                    {"name": "s", "relpath": "assets/blob.bin"}, _make_ctx()
+                )
+            )
+            assert "not UTF-8" in result
+
 
 # ---------------------------------------------------------------------------
 # Multiple directories
@@ -764,6 +873,11 @@ class TestExtraFrontmatter:
             }
         )
         assert rendered == "tags: a, b; version: 2"
+
+    def test_format_extra_skips_empty_tuple(self) -> None:
+        from lovia.plugins.skills import _format_extra
+
+        assert _format_extra({"tags": ()}) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1149,6 +1263,43 @@ class TestErrorIsolation:
             (root / "weird-skill" / "SKILL.md").mkdir()  # directory, not file
             source = LocalDirSkillSource(root)
             assert source.metadata == []
+
+    def test_typed_frontmatter_does_not_block_others(self, caplog) -> None:
+        """YAML-typed (non-string) name/description invalidates that skill
+        only — the scan carries on (error isolation)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "good-skill").mkdir()
+            (root / "good-skill" / "SKILL.md").write_text(
+                "---\nname: good-skill\ndescription: Works fine.\n---\n# Body"
+            )
+            (root / "int-name").mkdir()
+            (root / "int-name" / "SKILL.md").write_text(
+                "---\nname: 123\ndescription: Int name.\n---\n# Body"
+            )
+            (root / "int-desc").mkdir()
+            (root / "int-desc" / "SKILL.md").write_text(
+                "---\nname: int-desc\ndescription: 2024\n---\n# Body"
+            )
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(root)
+            assert [m.name for m in source.metadata] == ["good-skill"]
+            assert "skill.invalid" in caplog.text
+
+    def test_non_utf8_skill_md_does_not_block_others(self, caplog) -> None:
+        """A SKILL.md that is not UTF-8 text is skipped, not fatal."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "good-skill").mkdir()
+            (root / "good-skill" / "SKILL.md").write_text(
+                "---\nname: good-skill\ndescription: Works fine.\n---\n# Body"
+            )
+            (root / "binary").mkdir()
+            (root / "binary" / "SKILL.md").write_bytes(b"\xff\xfe---\nname: x\n---\n")
+            with caplog.at_level(logging.WARNING):
+                source = LocalDirSkillSource(root)
+            assert [m.name for m in source.metadata] == ["good-skill"]
+            assert "skill.unreadable" in caplog.text
 
 
 # ---------------------------------------------------------------------------

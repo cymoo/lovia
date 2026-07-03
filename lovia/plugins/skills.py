@@ -36,6 +36,14 @@ Three layers of progressive disclosure:
 
 Extension: implement the :class:`SkillSource` protocol to serve skills from
 databases, APIs, MCP servers, or any other backend.
+
+Workspace interplay: ``load_skill`` / ``read_skill_file`` do their own file IO
+— a workspace ACL does not gate them, so skills load even when their directory
+lies outside the workspace root (or matches ``denied_paths``). Treat a skill
+directory as trusted, fully exposed content. Only *executing* bundled scripts
+goes through the workspace shell and its policy: when skills bundle scripts,
+grant the skill directory via ``Workspace.local(readable=...)`` so running
+them doesn't trip outside-root approval.
 """
 
 from __future__ import annotations
@@ -52,7 +60,7 @@ import yaml  # type: ignore[import-untyped]
 
 from ..types import JsonValue
 from ..exceptions import UserError
-from ..tools import Tool
+from ..tools import Tool, tool
 from .base import PluginInstance
 
 logger = logging.getLogger(__name__)
@@ -94,19 +102,27 @@ class SkillsError(Exception):
 # Name / description validation
 # ---------------------------------------------------------------------------
 
-_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$")
+# Matched with fullmatch(): `$` would accept a trailing newline (YAML quoted
+# scalars can smuggle one in), fullmatch() does not.
+_NAME_PATTERN = re.compile(r"[a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+)*")
 _NAME_MAX_LENGTH = 64
 _DESCRIPTION_MAX_LENGTH = 1024
 _CLOSING_FM = re.compile(r"\n---[ \t\r]*(?:\n|$)")
 
 
-def _validate_name(name: str) -> str:
-    """Validate *name* (letters, digits, hyphens and underscores, ≤ 64 chars)."""
-    if not name:
+def _validate_name(name: object) -> str:
+    """Validate *name* (a string of letters, digits, hyphens and underscores, ≤ 64 chars)."""
+    if name is None or name == "":
         raise SkillsError(
             "Skill name must not be empty.",
-            skill_name=name,
             hint="Provide a non-empty name, e.g. 'refund-policy'.",
+        )
+    # YAML happily yields ints/bools/dates; reject them explicitly instead of
+    # crashing on len()/regex below.
+    if not isinstance(name, str):
+        raise SkillsError(
+            f"Skill name must be a string, got {type(name).__name__}: {name!r}.",
+            hint='Quote the frontmatter value, e.g. name: "2024".',
         )
     if len(name) > _NAME_MAX_LENGTH:
         raise SkillsError(
@@ -121,7 +137,7 @@ def _validate_name(name: str) -> str:
             skill_name=name,
             hint="Use a flat name without path characters.",
         )
-    if not _NAME_PATTERN.match(name):
+    if not _NAME_PATTERN.fullmatch(name):
         raise SkillsError(
             f"Skill name {name!r} is invalid: "
             f"only letters, digits, hyphens, and underscores; no consecutive or "
@@ -132,13 +148,22 @@ def _validate_name(name: str) -> str:
     return name
 
 
-def _validate_description(name: str, description: str) -> str:
-    """Validate *description* is non-empty and within length limits."""
-    if not description or not description.strip():
+def _validate_description(name: str, description: object) -> str:
+    """Validate *description* and return it stripped of surrounding whitespace."""
+    if description is None or (
+        isinstance(description, str) and not description.strip()
+    ):
         raise SkillsError(
             f"Skill {name!r} has an empty description.",
             skill_name=name,
             hint="Provide a description explaining what the skill does and when to use it.",
+        )
+    if not isinstance(description, str):
+        raise SkillsError(
+            f"Skill {name!r} description must be a string, "
+            f"got {type(description).__name__}.",
+            skill_name=name,
+            hint='Quote the frontmatter value, e.g. description: "...".',
         )
     if len(description) > _DESCRIPTION_MAX_LENGTH:
         raise SkillsError(
@@ -164,7 +189,7 @@ class SkillMetadata:
     """
 
     name: str
-    """Kebab-case identifier, max 64 characters."""
+    """Identifier: letters, digits, hyphens and underscores, max 64 characters."""
 
     description: str
     """What the skill does and when to use it, max 1024 characters."""
@@ -199,8 +224,9 @@ class Skill:
 
         Raises :class:`SkillsError` when *self.path* is unset (e.g. in-memory
         skills), *relpath* escapes the skill directory, or the target file does
-        not exist. The tool layer is responsible for turning this into a
-        model-facing message — the data model stays free of tool concerns.
+        not exist or cannot be read as UTF-8 text. The tool layer is responsible
+        for turning this into a model-facing message — the data model stays free
+        of tool concerns.
         """
         if self.path is None:
             raise SkillsError(
@@ -225,7 +251,22 @@ class Skill:
                 skill_name=self.name,
                 path=relpath,
             )
-        return target.read_text(encoding="utf-8")
+        try:
+            return target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise SkillsError(
+                f"Skill file {relpath!r} is not UTF-8 text (a binary asset?).",
+                skill_name=self.name,
+                path=relpath,
+                hint="Only text files can be read into context; reference "
+                "binary assets by path instead.",
+            ) from None
+        except OSError as exc:
+            raise SkillsError(
+                f"Failed to read skill file {relpath!r}: {exc}",
+                skill_name=self.name,
+                path=relpath,
+            ) from exc
 
     # -- derived ------------------------------------------------------------ #
 
@@ -286,46 +327,55 @@ class LocalDirSkillSource:
     """
 
     def __init__(self, *roots: str | Path) -> None:
-        self._roots = [Path(r) for r in roots]
-        self._metadata: dict[str, SkillMetadata] = {}
-        self._dirs: dict[str, Path] = {}  # name → skill directory
+        # Roots are ~-expanded and resolved to absolute paths so Skill.path
+        # (and the `path:` hint in load_skill output) stays unambiguous: the
+        # workspace tools resolve relative paths against the workspace root,
+        # not this process's cwd.
+        self._roots = [Path(r).expanduser().resolve() for r in roots]
+        # One dict so metadata and directory can never skew: a single .get()
+        # returns a consistent record.
+        self._skills: dict[str, tuple[SkillMetadata, Path]] = {}
         self._scan()
 
     # -- metadata ----------------------------------------------------------- #
 
     @property
     def metadata(self) -> list[SkillMetadata]:
-        return list(self._metadata.values())
+        return [meta for meta, _ in self._skills.values()]
 
     def rescan(self) -> None:
         """Re-scan the configured directories, picking up added/removed skills.
 
-        Cheap because only lightweight metadata is read (bodies are lazy). Pair
-        with :attr:`Skills.metadata` (which reads through to the source) to
-        reload a running agent's catalog without rebuilding it.
+        Cheap because only lightweight metadata is read (bodies are lazy).
+        Added skills become loadable immediately (``load_skill`` reads through
+        live); the system-prompt index refreshes when
+        :meth:`SkillCategory.instructions` is next rendered — through the
+        :class:`Skills` plugin that happens at run setup, i.e. on the next run.
         """
-        self._metadata.clear()
-        self._dirs.clear()
+        self._skills.clear()
         self._scan()
 
     # -- load --------------------------------------------------------------- #
 
     async def load(self, name: str) -> Skill:
-        meta = self._metadata.get(name)
-        if meta is None:
-            known = ", ".join(sorted(self._metadata)) or "(none)"
+        # Snapshot the record: a concurrent rescan() may drop the skill while
+        # the body read below is in flight on the worker thread.
+        record = self._skills.get(name)
+        if record is None:
+            known = ", ".join(sorted(self._skills)) or "(none)"
             raise SkillsError(
                 f"Unknown skill: {name!r}.",
                 skill_name=name,
                 hint=f"Available: {known}",
             )
+        meta, skill_dir = record
         # File IO runs on a worker thread so a slow disk never blocks the loop.
-        content = await asyncio.to_thread(self._read_body, name)
+        content = await asyncio.to_thread(self._read_body, name, skill_dir)
         return Skill(
             name=meta.name,
             description=meta.description,
             content=content,
-            path=self._dirs[name],
+            path=skill_dir,
             extra=meta.extra,
         )
 
@@ -347,46 +397,49 @@ class LocalDirSkillSource:
 
             for entry in entries:
                 try:
-                    if not entry.is_dir():
-                        continue
-                    manifest = entry / "SKILL.md"
-                    if not manifest.is_file():
-                        continue
-                    raw = manifest.read_text(encoding="utf-8")
-                    frontmatter, _ = _parse_frontmatter(raw)
-                    name = frontmatter.get("name", entry.name)
-                    description = frontmatter.get("description", "")
-                    _validate_name(name)
-                    _validate_description(name, description)
-                    if name in self._metadata:
-                        logger.warning(
-                            "skill.duplicate: %r in %s, skipped", name, entry
-                        )
-                        continue
-                    extra = {
-                        k: v
-                        for k, v in frontmatter.items()
-                        if k not in ("name", "description")
-                    }
-                    self._metadata[name] = SkillMetadata(
-                        name=name, description=description, extra=extra
-                    )
-                    self._dirs[name] = entry
-                except OSError as exc:
+                    self._scan_entry(entry)
+                except (OSError, UnicodeDecodeError) as exc:
                     logger.warning("skill.unreadable: %s (%s)", entry, exc)
                 except SkillsError as exc:
                     logger.warning("skill.invalid: %s (%s)", entry, exc)
 
-    def _read_body(self, name: str) -> str:
-        """Read and return the ``SKILL.md`` body for *name*, stripping frontmatter."""
-        manifest = self._dirs[name] / "SKILL.md"
+    def _scan_entry(self, entry: Path) -> None:
+        """Register *entry*'s metadata if it is a valid skill directory."""
+        if not entry.is_dir():
+            return
+        manifest = entry / "SKILL.md"
+        if not manifest.is_file():
+            return
+        raw = manifest.read_text(encoding="utf-8")
+        frontmatter, _ = _parse_frontmatter(raw)
+        name = _validate_name(frontmatter.get("name", entry.name))
+        description = _validate_description(name, frontmatter.get("description", ""))
+        if name in self._skills:
+            logger.warning("skill.duplicate: %r in %s, skipped", name, entry)
+            return
+        extra = {
+            k: v for k, v in frontmatter.items() if k not in ("name", "description")
+        }
+        meta = SkillMetadata(name=name, description=description, extra=extra)
+        self._skills[name] = (meta, entry)
+
+    def _read_body(self, name: str, skill_dir: Path) -> str:
+        """Read the ``SKILL.md`` body for *name* from *skill_dir*, stripping frontmatter."""
+        manifest = skill_dir / "SKILL.md"
         try:
             raw = manifest.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise SkillsError(
+                f"Skill {name!r} SKILL.md is not UTF-8 text.",
+                skill_name=name,
+                path=str(skill_dir),
+                hint="Re-save the file with UTF-8 encoding.",
+            ) from None
         except OSError as exc:
             raise SkillsError(
                 f"Failed to read skill {name!r}: {exc}",
                 skill_name=name,
-                path=str(self._dirs[name]),
+                path=str(skill_dir),
                 hint="Check file permissions.",
             ) from exc
         _, body = _parse_frontmatter(raw)
@@ -479,9 +532,12 @@ class SkillCategory:
 
         Reading through (rather than snapshotting at construction) means a
         source that changes over time — e.g. ``LocalDirSkillSource.rescan()``
-        or a custom dynamic backend — is reflected on the next turn without
-        rebuilding the capability. The optional ``filter`` predicate is applied
-        here, so it governs both the index and what can be loaded.
+        or a custom dynamic backend — is reflected on the next call without
+        rebuilding the capability. Through the :class:`Skills` plugin,
+        ``instructions()`` renders once per run at setup, so mid-run changes
+        reach ``load_skill`` immediately but appear in the prompt index only
+        on the next run. The optional ``filter`` predicate is applied here, so
+        it governs both the index and what can be loaded.
         """
         metadata = self._source.metadata
         if self._filter is not None:
@@ -539,37 +595,42 @@ class SkillCategory:
         reads a sub-file the body references. The metadata index already lives
         in the system prompt, so no separate listing tool is needed.
         """
-        from ..tools import tool as _tool
-
         load = self._load
 
-        @_tool
+        @tool
         async def load_skill(name: str) -> str:
             """Load the full SKILL.md content of a named skill.
 
             Args:
-                name: The skill name (kebab-case).
+                name: The skill name, exactly as listed in the skills index.
             """
             try:
                 skill = await load(name)
             except SkillsError as exc:
                 return str(exc)
-            # The on-disk path lets the model execute bundled scripts
-            # (e.g. via a workspace shell tool).
-            location = f"  path: {skill.path}" if skill.path is not None else ""
+            # The on-disk path lets the model execute bundled scripts (e.g. via
+            # a workspace shell tool). resolve() keeps the hint unambiguous even
+            # for custom sources that return relative paths.
+            location = (
+                f"  path: {skill.path.resolve()}" if skill.path is not None else ""
+            )
+            # Truncate first so the defuse passes scan at most the capped size.
             return (
                 f"[skill: {skill.name}{location}]\n"
                 f"{_SKILL_CONTENT_PREAMBLE}\n"
-                f"{_SKILL_BEGIN}\n{_truncate(skill.content)}\n{_SKILL_END}"
+                f"{_SKILL_BEGIN}\n"
+                f"{_defuse_markers(_truncate(skill.content))}\n"
+                f"{_SKILL_END}"
             )
 
-        @_tool
+        @tool
         async def read_skill_file(name: str, relpath: str) -> str:
             """Read a sub-file from a skill directory.
 
             Use for supplementary files the skill body references, e.g.
             ``references/foo.md`` or ``scripts/run.py``. Returns the file
-            verbatim so scripts and templates can be used as-is.
+            verbatim so scripts and templates can be used as-is; very large
+            files are truncated.
 
             Args:
                 name: The skill name.
@@ -613,6 +674,18 @@ _SKILL_CONTENT_PREAMBLE = (
 )
 
 
+def _defuse_markers(text: str) -> str:
+    """Neutralize frame markers appearing inside *text*.
+
+    A body containing the exact BEGIN/END marker could "close" the data frame
+    early and smuggle text outside it. Bending the dashes keeps the content
+    readable while no longer matching the frame.
+    """
+    for marker in (_SKILL_BEGIN, _SKILL_END):
+        text = text.replace(marker, marker.replace("---", "- -"))
+    return text
+
+
 def _format_extra(extra: Mapping[str, JsonValue]) -> str:
     """Render extra frontmatter keys as a compact ``key: value; …`` string.
 
@@ -621,12 +694,12 @@ def _format_extra(extra: Mapping[str, JsonValue]) -> str:
     """
     parts: list[str] = []
     for key, value in extra.items():
-        if value is None or value == "" or value == [] or value == {}:
+        if value is None or value == "" or isinstance(value, dict):
             continue
         if isinstance(value, (list, tuple)):
+            if not value:
+                continue
             rendered = ", ".join(str(v) for v in value)
-        elif isinstance(value, dict):
-            continue
         else:
             rendered = str(value)
         parts.append(f"{key}: {rendered}")

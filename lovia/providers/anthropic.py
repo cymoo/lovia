@@ -510,8 +510,8 @@ def _to_anthropic_messages(
 
     for entry in entries:
         if isinstance(entry, InputEntry) and entry.role == "system":
-            if entry.content:
-                system_parts.append(_text_only(entry.content))
+            if text := _text_only(entry.content):
+                system_parts.append(text)
             continue
 
         if isinstance(entry, ToolResultEntry):
@@ -562,8 +562,13 @@ def _to_anthropic_messages(
             continue
 
         if isinstance(entry, InputEntry):
+            blocks = _content_to_anthropic_blocks(entry.content)
+            if not blocks:
+                # Nothing survives conversion (empty input); skipping without
+                # flushing lets assistant blocks around it stay one message.
+                continue
             flush_assistant()
-            _append_user_message(out, _content_to_anthropic_blocks(entry.content))
+            _append_user_message(out, blocks)
 
     flush_assistant()
     system_blocks: list[JsonObject] | None

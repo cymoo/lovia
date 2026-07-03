@@ -84,12 +84,11 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
     assert assistant_blocks[1] == {"type": "text", "text": "working"}
     assert assistant_blocks[2]["type"] == "tool_use"
     assert assistant_blocks[2]["input"] == {"a": 1, "b": 2}
-    assert out[2]["content"][0] == {
-        "type": "tool_result",
-        "tool_use_id": "c1",
-        "content": "3",
-    }
-    assert out[2]["content"][1] == {"type": "text", "text": ""}
+    # The trailing empty user entry contributes nothing (the API rejects
+    # empty text blocks), leaving only the tool_result.
+    assert out[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "c1", "content": "3"}
+    ]
 
 
 def test_message_translation_forwards_tool_result_is_error() -> None:
@@ -106,6 +105,51 @@ def test_message_translation_forwards_tool_result_is_error() -> None:
         "content": "boom",
         "is_error": True,
     }
+
+
+def test_message_translation_skips_empty_content() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="system", content=[TextPart("")]),
+            InputEntry(role="user", content=""),
+            InputEntry(role="user", content=[TextPart(""), TextPart("hi")]),
+            AssistantTextEntry(content=""),
+            ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+        ]
+    )
+
+    system, _ = _to_anthropic_messages([InputEntry(role="system", content="")])
+    assert system is None
+    assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+    assert [block["type"] for block in out[1]["content"]] == ["tool_use"]
+
+
+def test_message_translation_empty_user_between_assistant_turns() -> None:
+    """An all-empty user entry must not split the surrounding assistant blocks."""
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="user", content="go"),
+            AssistantTextEntry(content="first"),
+            InputEntry(role="user", content=""),
+            AssistantTextEntry(content="second"),
+        ]
+    )
+
+    assert [msg["role"] for msg in out] == ["user", "assistant"]
+    assert [block["text"] for block in out[1]["content"]] == ["first", "second"]
+
+
+def test_message_translation_keeps_non_text_parts_of_empty_text_message() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(
+                role="user",
+                content=[TextPart(""), ImagePart(url="https://x/y.png")],
+            )
+        ]
+    )
+
+    assert [block["type"] for block in out[0]["content"]] == ["image"]
 
 
 def test_message_translation_wraps_invalid_tool_arguments() -> None:

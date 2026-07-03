@@ -168,6 +168,41 @@ async def test_retries_exhausted_surfaces_as_tool_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_policy_can_short_circuit_without_invoking() -> None:
+    calls = {"n": 0}
+
+    async def cache(invoke, args, ctx):
+        return "cached"  # never calls invoke
+
+    @tool(policies=[cache])
+    async def expensive() -> str:
+        calls["n"] += 1
+        return "fresh"
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    assert await run_tool(expensive, {}, ctx) == "cached"
+    assert calls["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_applies_per_attempt_with_retries() -> None:
+    # The timeout is per attempt, not for the whole retry loop: a first
+    # attempt that times out still leaves the retry a full budget.
+    attempts = {"n": 0}
+
+    @tool(timeout=0.05, retries=1)
+    async def slow_then_fast() -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            await asyncio.sleep(1.0)
+        return "ok"
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    assert await run_tool(slow_then_fast, {}, ctx) == "ok"
+    assert attempts["n"] == 2
+
+
+@pytest.mark.asyncio
 async def test_timeout_triggers_tool_error() -> None:
     @tool(timeout=0.05)
     async def slow() -> str:
@@ -303,6 +338,36 @@ def test_default_result_renderer_handles_common_python_values() -> None:
             "blob": "hello",
         }
     }
+
+
+def test_default_result_renderer_fallbacks() -> None:
+    # Sets become lists (element order not guaranteed).
+    assert sorted(json.loads(default_result_renderer({2, 1}))) == [1, 2]
+    # A leaf json.dumps can't handle falls back to str() of the converted tree
+    # rather than raising into the runner.
+    rendered = default_result_renderer({"obj": object()})
+    assert isinstance(rendered, str) and "object object" in rendered
+
+
+def test_clip_text_variants() -> None:
+    from lovia.tools.base import clip_text
+
+    text_in = "H" * 80 + "T" * 20
+    # Within the limit: untouched, not flagged.
+    assert clip_text(text_in, 100) == (text_in, False)
+    # Head-only mode keeps the first `limit` chars plus an explicit notice.
+    out, truncated = clip_text(text_in, 10)
+    assert truncated and out.startswith("H" * 10)
+    assert "showing 10 of 100 chars" in out
+    assert (
+        "try a smaller range" in clip_text(text_in, 10, hint="try a smaller range")[0]
+    )
+    # keep_tail mode preserves both ends around the notice.
+    out, truncated = clip_text(text_in, 10, keep_tail=True)
+    assert truncated and out.startswith("H" * 5) and out.endswith("T" * 5)
+    # Degenerate limit: only the notice survives.
+    out, truncated = clip_text(text_in, 0)
+    assert truncated and "showing 0 of 100 chars" in out
 
 
 # ---- RunContext annotation injection (carried over from Phase 1) ----

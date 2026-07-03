@@ -242,6 +242,11 @@ async def test_sleep_is_capped() -> None:
     assert "slept" in out
 
 
+@pytest.mark.asyncio
+async def test_sleep_clamps_negative_to_zero() -> None:
+    assert await sleep.invoke({"seconds": -5}, _ctx()) == "slept 0.0s"
+
+
 # ---------------------------------------------------------------- current_date
 
 
@@ -327,6 +332,47 @@ def test_web_search_result_renderer() -> None:
     # routes error strings through renderers); they fall back to the default
     # rendering rather than being swallowed as "No results.".
     assert _render_search_results("plain string", None) == "plain string"
+
+
+@pytest.mark.asyncio
+async def test_web_search_clamps_max_results() -> None:
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
+            seen["max_results"] = max_results
+            return []
+
+    s = web_search(Recorder())
+    await s.invoke({"query": "x", "max_results": 100}, _ctx())
+    assert seen["max_results"] == 20
+    await s.invoke({"query": "x", "max_results": 0}, _ctx())
+    assert seen["max_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_backend_maps_rows_and_forwards_args() -> None:
+    from lovia.tools.search import DuckDuckGoSearch
+
+    seen: dict[str, Any] = {}
+
+    class FakeDDGS:
+        def __enter__(self) -> "FakeDDGS":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
+            seen.update(query=query, max_results=max_results, timelimit=timelimit)
+            return [{"title": "T", "href": "https://x.example", "body": "B"}]
+
+    # Bypass __init__'s import dance — it is covered separately below.
+    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
+    backend._ddgs_cls = FakeDDGS
+    rows = await backend.search("q", max_results=7, time_range="w")
+    assert seen == {"query": "q", "max_results": 7, "timelimit": "w"}
+    assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
 
 
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:

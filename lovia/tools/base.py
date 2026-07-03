@@ -118,10 +118,7 @@ class Tool:
     # Optional custom renderer for the result string the model sees.
     result_renderer: ToolResultRenderer | None = None
     # Advanced per-attempt policy chain. Policies compose in list order.
-    policies: tuple[ToolPolicy, ...] = field(default_factory=tuple)
-    # When True the runner passes the RunContext to invoke as the named kwarg.
-    _wants_context: bool = field(default=False, repr=False)
-    _context_param: str | None = field(default=None, repr=False)
+    policies: tuple[ToolPolicy, ...] = ()
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected
     # without firing its on_handoff side effects.
@@ -475,8 +472,6 @@ def tool(
             max_output_chars=max_output_chars,
             result_renderer=result_renderer,
             policies=tuple(policies),
-            _wants_context=context_param is not None,
-            _context_param=context_param,
         )
 
     if fn is None:

@@ -323,12 +323,10 @@ def test_web_search_result_renderer() -> None:
     assert "Second" in out
     assert "[{" not in out and '"title"' not in out  # not raw JSON
     assert _render_search_results([], None) == "No results."
-    # A raised web_search exception reaches the renderer as the runner's error
-    # string; it must pass through, not be swallowed as "No results.".
-    assert (
-        _render_search_results("Tool error: network down", None)
-        == "Tool error: network down"
-    )
+    # Non-list shapes can only arrive from a direct caller (the runner never
+    # routes error strings through renderers); they fall back to the default
+    # rendering rather than being swallowed as "No results.".
+    assert _render_search_results("plain string", None) == "plain string"
 
 
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:

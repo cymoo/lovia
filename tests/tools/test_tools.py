@@ -154,6 +154,45 @@ async def test_result_renderer_controls_string_sent_to_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_error_bypasses_custom_renderer() -> None:
+    # Renderers format a tool's return value; a raised error must reach the
+    # model as the runner's "Tool error: ..." string. Before, the error string
+    # was routed through the renderer, so a success-shape renderer crashed and
+    # masked the real cause behind "result rendering failed".
+    @tool(result_renderer=lambda r, ctx: f"<{r['n']}>")
+    async def broken() -> dict[str, int]:
+        raise ValueError("db unreachable")
+
+    provider = ScriptedProvider([call("broken", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[broken])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "Tool error: db unreachable"
+
+
+@pytest.mark.asyncio
+async def test_tool_error_bypasses_agent_level_renderer() -> None:
+    seen: list[Any] = []
+
+    def agent_renderer(r: Any, ctx: Any) -> str:
+        seen.append(r)
+        return f"[{r}]"
+
+    @tool
+    async def broken() -> str:
+        raise ValueError("boom")
+
+    provider = ScriptedProvider([call("broken", {}), text("done")])
+    agent = Agent(
+        name="a", model=provider, tools=[broken], tool_result_renderer=agent_renderer
+    )
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "Tool error: boom"
+    assert seen == []  # the renderer never saw the error string
+
+
+@pytest.mark.asyncio
 async def test_result_renderer_non_string_result_uses_default_rendering() -> None:
     @tool(result_renderer=lambda r, ctx: {"wrapped": r})
     async def make_obj() -> dict[str, int]:

@@ -80,6 +80,9 @@ class ToolPolicy(Protocol):
 
 # Render the raw return value as the string the model receives. ``None`` uses
 # the default renderer (str for strings, json.dumps for everything else).
+# Renderers see *successful* results only: when a tool raises, the runner's
+# own "Tool error: ..." string is final and bypasses both the per-tool and
+# the agent-wide renderer.
 ToolResultRenderer = Callable[[Any, "RunContext[Any]"], "str | Awaitable[str]"]
 
 

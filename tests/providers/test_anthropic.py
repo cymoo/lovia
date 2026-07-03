@@ -530,6 +530,29 @@ def test_build_payload_gates_thinking_replay_by_endpoint_and_option() -> None:
     assert block_types(build(compatible, None)) == ["thinking", "tool_use"]
 
 
+def test_build_payload_none_valued_option_removes_adapter_default() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        entries=[InputEntry(role="user", content="hi")],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {"type": "object"}},
+            }
+        ],
+        response_format=None,
+        settings=ModelSettings(
+            parallel_tool_calls=False,
+            provider_options={"anthropic": {"tool_choice": None}},
+        ),
+        stream=True,
+    )
+
+    # parallel_tool_calls=False would set tool_choice; None strips it.
+    assert "tool_choice" not in payload
+
+
 def test_response_format_ignores_unsupported_openai_shapes() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
@@ -795,4 +818,6 @@ def test_context_window_includes_current_claude_aliases() -> None:
     assert provider.context_window("claude-opus-4-8") == 200_000
     assert provider.context_window("claude-sonnet-4-6") == 200_000
     assert provider.context_window("claude-haiku-4-5") == 200_000
-    assert provider.context_window("claude-sonnet-4-5-20250929") is None
+    # Date-pinned snapshots share the alias's window; retired aliases don't.
+    assert provider.context_window("claude-sonnet-4-5-20250929") == 200_000
+    assert provider.context_window("claude-3-5-sonnet-20241022") is None

@@ -541,6 +541,76 @@ async def test_chat_context_overflow_is_classified() -> None:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
+def test_build_payload_none_valued_option_removes_adapter_default() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://example.test/v1"
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            provider_options={"openai-chat": {"stream_options": None}}
+        ),
+        stream=True,
+    )
+
+    # Endpoints that reject stream_options need a way to strip the default.
+    assert "stream_options" not in payload
+
+
+def test_context_window_resolves_date_pinned_snapshots() -> None:
+    provider = OpenAIChatProvider(model="gpt-4.1", api_key="sk-test")
+
+    assert provider.context_window("gpt-4.1") == 1_047_576
+    assert provider.context_window("gpt-4.1-2025-04-14") == 1_047_576
+    assert provider.context_window("o3-2025-04-16") is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_handles_null_arguments_and_missing_index() -> None:
+    body = _sse(
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                # Gateway style: complete calls, no index, and
+                                # a null arguments field on one of them.
+                                {
+                                    "id": "c1",
+                                    "function": {"name": "one", "arguments": None},
+                                },
+                                {
+                                    "id": "c2",
+                                    "function": {
+                                        "name": "two",
+                                        "arguments": '{"b":2}',
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    tool_deltas = list(_deltas(deltas, ToolCallDelta))
+    assert [(d.index, d.call_id, d.name, d.arguments) for d in tool_deltas] == [
+        (0, "c1", "one", ""),
+        (1, "c2", "two", '{"b":2}'),
+    ]
+
+
 def test_supports_json_schema_defaults_to_official_openai_only() -> None:
     assert OpenAIChatProvider(
         model="gpt-5", base_url="https://api.openai.com/v1"

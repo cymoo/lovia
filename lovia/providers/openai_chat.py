@@ -9,6 +9,7 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 from __future__ import annotations
 
 import os
+import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
@@ -311,7 +312,9 @@ class OpenAIChatProvider:
         if stream:
             # Asking for usage in the stream requires opt-in.
             payload.setdefault("stream_options", {"include_usage": True})
-        return payload
+        # None marks explicit removal (see provider_options), giving users a
+        # way to strip adapter defaults for endpoints that reject them.
+        return {k: v for k, v in payload.items() if v is not None}
 
     async def stream(
         self,
@@ -370,8 +373,11 @@ class OpenAIChatProvider:
                         reasoning_parts.append(reasoning)
                         yield ReasoningDelta(text=reasoning)
 
-                    for tc in delta.get("tool_calls") or []:
-                        idx = tc.get("index", 0)
+                    for pos, tc in enumerate(delta.get("tool_calls") or []):
+                        # Gateways that omit ``index`` send complete calls, so
+                        # list position keeps parallel calls in one chunk from
+                        # collapsing into a single slot.
+                        idx = tc.get("index", pos)
                         if tc.get("id"):
                             tool_call_ids[idx] = tc["id"]
                         fn = tc.get("function") or {}
@@ -383,7 +389,7 @@ class OpenAIChatProvider:
                             index=idx,
                             call_id=tool_call_ids.get(idx, ""),
                             name=tool_call_names.get(idx, ""),
-                            arguments=fn.get("arguments", ""),
+                            arguments=fn.get("arguments") or "",
                         )
 
                     if choice.get("finish_reason"):
@@ -411,7 +417,14 @@ class OpenAIChatProvider:
     # ----- ContextPolicy hooks ------------------------------------------------
 
     def context_window(self, model: str) -> int | None:
-        return _OPENAI_CONTEXT_WINDOWS.get(model)
+        window = _OPENAI_CONTEXT_WINDOWS.get(model)
+        if window is None:
+            # Date-pinned snapshots ("gpt-4.1-2025-04-14") share their
+            # alias's window.
+            window = _OPENAI_CONTEXT_WINDOWS.get(
+                re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+            )
+        return window
 
 
 # Default for replaying ``reasoning_content`` on assistant input messages,
@@ -470,9 +483,10 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return False
 
 
-# Context-window table for recent, commonly used OpenAI GPT model aliases. Keep
-# this intentionally small: date-pinned snapshots, o-series, retired models, and
-# niche aliases can fall back to reactive overflow handling.
+# Context-window table for recent, commonly used OpenAI GPT model aliases
+# (their date-pinned snapshots resolve via suffix stripping). Keep this
+# intentionally small: o-series, retired models, and niche aliases can fall
+# back to reactive overflow handling.
 _OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4.1": 1_047_576,
     "gpt-5": 400_000,

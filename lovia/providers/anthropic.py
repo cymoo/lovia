@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
@@ -115,7 +116,12 @@ class AnthropicProvider:
         return self._client
 
     def context_window(self, model: str) -> int | None:
-        return _ANTHROPIC_CONTEXT_WINDOWS.get(model)
+        window = _ANTHROPIC_CONTEXT_WINDOWS.get(model)
+        if window is None:
+            # Date-pinned snapshots ("claude-sonnet-4-5-20250929") share
+            # their alias's window.
+            window = _ANTHROPIC_CONTEXT_WINDOWS.get(re.sub(r"-\d{8}$", "", model))
+        return window
 
     def _using_official_endpoint(self) -> bool:
         return urlparse(self.base_url).hostname == "api.anthropic.com"
@@ -220,7 +226,9 @@ class AnthropicProvider:
             # Provider-specific extras intentionally win over adapter defaults
             # such as output_config/tool_choice.
             payload.update(extra)
-        return payload
+        # None marks explicit removal (see provider_options), giving users a
+        # way to strip adapter defaults for endpoints that reject them.
+        return {k: v for k, v in payload.items() if v is not None}
 
     async def stream(
         self,
@@ -599,9 +607,9 @@ def _is_context_overflow(status: int, body: str) -> bool:
     )
 
 
-# Context-window table for recent, commonly used Anthropic aliases. Date-pinned
-# snapshots and retired Claude 3.x/older 4.x aliases fall back to reactive
-# overflow handling.
+# Context-window table for recent, commonly used Anthropic aliases (their
+# date-pinned snapshots resolve via suffix stripping). Retired Claude
+# 3.x/older 4.x aliases fall back to reactive overflow handling.
 #
 # Values are the *default* windows. The 1M-token variants are gated behind the
 # ``context-1m`` beta header, which this adapter does not send by default;

@@ -49,7 +49,13 @@ class ModelSettings:
 
 
 def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:
-    """Return a merged copy of provider-specific settings for ``keys``."""
+    """Return a merged copy of provider-specific settings for ``keys``.
+
+    Later keys override earlier ones, so adapters pass their canonical name
+    last. A ``None`` value is an explicit removal: adapters drop None-valued
+    fields from the final payload, letting users strip an adapter default
+    (e.g. ``{"stream_options": None}`` for endpoints that reject it).
+    """
 
     out: JsonObject = {}
     for key in keys:

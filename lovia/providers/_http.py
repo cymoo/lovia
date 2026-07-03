@@ -12,7 +12,7 @@ from ..exceptions import ContextOverflowError, ProviderError
 
 def is_retryable_status(status_code: int) -> bool:
     """Return whether an HTTP status is likely worth retrying."""
-    return status_code == 429 or 500 <= status_code < 600
+    return status_code in (408, 429) or 500 <= status_code < 600
 
 
 async def raise_for_provider_status(
@@ -51,7 +51,13 @@ def raise_for_transport_error(
     label: str,
 ) -> NoReturn:
     """Translate network-layer failures into structured provider errors."""
-    retryable = isinstance(exc, httpx.TimeoutException | httpx.NetworkError)
+    # RemoteProtocolError is how a mid-stream disconnect surfaces (gateway or
+    # LB dropping an SSE response); it is as transient as a network error.
+    # LocalProtocolError stays non-retryable: we built a bad request.
+    retryable = isinstance(
+        exc,
+        httpx.TimeoutException | httpx.NetworkError | httpx.RemoteProtocolError,
+    )
     raise ProviderError(
         f"{label} stream failed before the provider returned a complete response: {exc}",
         vendor=vendor,

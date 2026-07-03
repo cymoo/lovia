@@ -367,3 +367,65 @@ async def test_ask_human_resolves_via_channel() -> None:
     result = await tool_.invoke({"question": "what is the answer?"}, _ctx())
     await t
     assert result == "42"
+    # An answered question is fully forgotten.
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_cancel_raises_tool_error() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    task = asyncio.create_task(tool_.invoke({"question": "hi?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    channel.cancel(channel.pending[0].id, "operator went home")
+    with pytest.raises(ToolError, match="operator went home"):
+        await task
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_external_cancellation_cleans_up_channel() -> None:
+    # A tool timeout / run cancellation cancels the awaiting task from the
+    # outside; the channel must not keep a ghost question nobody can answer.
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    task = asyncio.create_task(tool_.invoke({"question": "hi?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    assert len(channel.pending) == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_close_cancels_all_pending() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    t1 = asyncio.create_task(tool_.invoke({"question": "one?"}, _ctx()))
+    t2 = asyncio.create_task(tool_.invoke({"question": "two?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    assert len(channel.pending) == 2
+    channel.close("shutting down")
+    for t in (t1, t2):
+        with pytest.raises(ToolError, match="shutting down"):
+            await t
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_concurrent_questions_resolve_independently() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    t1 = asyncio.create_task(tool_.invoke({"question": "first?"}, _ctx()))
+    t2 = asyncio.create_task(tool_.invoke({"question": "second?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    by_text = {q.question: q.id for q in channel.pending}
+    channel.answer(by_text["second?"], "B")  # out of order on purpose
+    channel.answer(by_text["first?"], "A")
+    assert await t1 == "A"
+    assert await t2 == "B"

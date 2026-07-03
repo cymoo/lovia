@@ -12,7 +12,7 @@ from lovia.exceptions import UserError
 from lovia.workspace import (
     CommandRule,
     LocalWorkspaceSession,
-    PathOutsideWorkspaceError,
+    PathRule,
     PermissionDeniedError,
     Workspace,
     WorkspaceClosedError,
@@ -27,27 +27,63 @@ async def _session(tmp_path, **kwargs) -> LocalWorkspaceSession:
 
 
 # ---------------------------------------------------------------------------
-# Path safety
+# Path ACL enforcement
 # ---------------------------------------------------------------------------
 
 
-async def test_rejects_absolute_and_escape_paths(tmp_path) -> None:
+async def test_outside_paths_denied_by_default_policy(tmp_path) -> None:
+    # The bare WorkspacePolicy() defaults are conservative: reads and writes
+    # outside the root are denied (coding softens reads to "ask").
     session = await _session(tmp_path)
-    with pytest.raises(PathOutsideWorkspaceError):
+    with pytest.raises(PermissionDeniedError, match="outside the workspace"):
         await session.read_text("/etc/passwd")
-    with pytest.raises(PathOutsideWorkspaceError):
+    with pytest.raises(PermissionDeniedError):
         await session.read_text("../outside.txt")
-    with pytest.raises(PathOutsideWorkspaceError):
+    with pytest.raises(PermissionDeniedError):
         await session.write_text("a/../../escape.txt", "x")
 
 
-async def test_rejects_symlink_escape(tmp_path) -> None:
+async def test_absolute_path_inside_root_is_accepted(tmp_path) -> None:
+    (tmp_path / "a.txt").write_text("hi", encoding="utf-8")
+    session = await _session(tmp_path)
+    result = await session.read_text(str(tmp_path / "a.txt"))
+    assert result.content == "hi"
+    assert result.path == "a.txt"  # reported workspace-relative
+
+
+async def test_symlink_is_judged_by_its_target(tmp_path) -> None:
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     (tmp_path / "link.txt").symlink_to(outside)
+
+    # Default policy: the target is outside -> denied.
     session = await _session(tmp_path)
-    with pytest.raises(PathOutsideWorkspaceError):
+    with pytest.raises(PermissionDeniedError):
         await session.read_text("link.txt")
+
+    # A policy that grants the target's location makes the same link readable.
+    granted = await _session(
+        tmp_path,
+        policy=WorkspacePolicy(
+            path_rules=(PathRule(outside.parent.as_posix(), "allow", ops=("read",)),)
+        ),
+    )
+    assert (await granted.read_text("link.txt")).content == "secret"
+
+    # trusted reads anywhere, so the link works there too.
+    trusted = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    assert (await trusted.read_text("link.txt")).content == "secret"
+
+
+async def test_session_decide_path_reports_ask_for_outside_reads(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert session.decide_path("/etc/hosts") == "ask"
+    assert session.decide_path("inside.txt") == "allow"
+    assert session.decide_path("/etc/hosts", write=True) == "deny"
+    # "ask" passes at the session level: approval is gated by the tool layer.
+    (tmp_path.parent / "shared.txt").write_text("ok", encoding="utf-8")
+    result = await session.read_text((tmp_path.parent / "shared.txt").as_posix())
+    assert result.content == "ok"
 
 
 async def test_closed_session_refuses_operations(tmp_path) -> None:
@@ -236,7 +272,7 @@ async def test_edit_refuses_non_utf8_and_leaves_bytes_intact(tmp_path) -> None:
 
 async def test_write_to_root_is_rejected(tmp_path) -> None:
     session = await _session(tmp_path)
-    with pytest.raises(PathOutsideWorkspaceError):
+    with pytest.raises(WorkspaceError, match="root as a file"):
         await session.write_text(".", "data")
 
 
@@ -512,7 +548,7 @@ async def test_shell_env_explicit_passthrough(tmp_path) -> None:
 
 async def test_workspace_local_mode_presets_and_overrides(tmp_path) -> None:
     ws = Workspace.local(str(tmp_path), mode="readonly")
-    assert not ws.policy.allow_write
+    assert ws.policy.write == "deny"
     tool_names = [t.name for t in ws.tools()]
     assert tool_names == ["read_file", "list_files", "grep_files"]
 
@@ -670,3 +706,276 @@ async def test_run_applies_env_override(tmp_path) -> None:
     session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
     result = await session.run('echo "$MYVAR"', env={"MYVAR": "from-test"})
     assert "from-test" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Line-ending fidelity
+# ---------------------------------------------------------------------------
+
+
+async def test_read_preserves_crlf(tmp_path) -> None:
+    (tmp_path / "f.txt").write_bytes(b"one\r\ntwo\r\n")
+    session = await _session(tmp_path)
+    result = await session.read_text("f.txt")
+    # No universal-newline translation: the model sees what is on disk.
+    assert result.content == "one\r\ntwo\r\n"
+    assert result.total_lines == 2  # splitlines still counts CRLF lines
+
+
+async def test_edit_preserves_crlf_line_endings(tmp_path) -> None:
+    p = tmp_path / "f.txt"
+    p.write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    session = await _session(tmp_path)
+    result = await session.edit_text("f.txt", "two", "2")
+    assert result.ok
+    # Only the edited span changed; the rest of the bytes are identical.
+    assert p.read_bytes() == b"one\r\n2\r\nthree\r\n"
+
+
+async def test_edit_upconverts_lf_span_for_crlf_file(tmp_path) -> None:
+    # Models typically quote spans with plain \n; a CRLF file must still be
+    # editable, and the replacement must stay CRLF so the file is consistent.
+    p = tmp_path / "f.txt"
+    p.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    session = await _session(tmp_path)
+    result = await session.edit_text("f.txt", "alpha\nbeta", "ALPHA\nBETA")
+    assert result.ok
+    assert p.read_bytes() == b"ALPHA\r\nBETA\r\ngamma\r\n"
+
+
+# ---------------------------------------------------------------------------
+# Write durability
+# ---------------------------------------------------------------------------
+
+
+async def test_write_preserves_file_mode(tmp_path) -> None:
+    p = tmp_path / "script.sh"
+    p.write_text("#!/bin/sh\n", encoding="utf-8")
+    p.chmod(0o755)
+    session = await _session(tmp_path)
+    await session.write_text("script.sh", "#!/bin/sh\necho hi\n")
+    assert (p.stat().st_mode & 0o777) == 0o755
+    await session.edit_text("script.sh", "echo hi", "echo bye")
+    assert (p.stat().st_mode & 0o777) == 0o755
+
+
+async def test_write_to_directory_path_raises(tmp_path) -> None:
+    (tmp_path / "d").mkdir()
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="directory"):
+        await session.write_text("d", "content")
+
+
+# ---------------------------------------------------------------------------
+# grep on a single file
+# ---------------------------------------------------------------------------
+
+
+async def test_grep_accepts_a_file_path(tmp_path) -> None:
+    (tmp_path / "app.py").write_text("needle = 1\nother\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("needle = 2\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    matches = await session.grep("needle", path="app.py")
+    assert [(m.path, m.line) for m in matches] == [("app.py", 1)]
+
+
+async def test_grep_missing_path_raises(tmp_path) -> None:
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Not a file or directory"):
+        await session.grep("x", path="ghost")
+
+
+# ---------------------------------------------------------------------------
+# Process lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_cancelled_run_kills_the_process(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    task = asyncio.create_task(session.run(f"sleep 1 && touch {marker}", timeout=30))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(1.2)
+    # The child was killed with its process group; no orphan ran to completion.
+    assert not marker.exists()
+
+
+async def test_close_kills_inflight_processes(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    task = asyncio.create_task(session.run(f"sleep 1 && touch {marker}", timeout=30))
+    await asyncio.sleep(0.3)
+    await session.close()
+    result = await task  # the killed command surfaces as a failed result
+    assert result.ok is False
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+
+
+async def test_exit_code_reports_signal_death(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    result = await session.run("kill -9 $$")
+    assert result.exit_code == -9
+    assert result.ok is False
+
+
+# ---------------------------------------------------------------------------
+# Shell path guard (decide_command at the session)
+# ---------------------------------------------------------------------------
+
+
+async def test_shell_cannot_read_denied_paths(tmp_path) -> None:
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy.trusted(denied_paths=(".env*",))
+    )
+    assert session.decide_command("cat .env") == "deny"
+    with pytest.raises(PermissionDeniedError):
+        await session.run("cat .env")
+    # Unrelated commands still run freely under trusted.
+    assert (await session.run("echo ok")).ok
+
+
+async def test_shell_redirect_to_outside_is_gated(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    # write_outside="deny" -> a redirect target outside the root is denied.
+    assert session.decide_command("echo x > ../evil.txt") == "deny"
+    with pytest.raises(PermissionDeniedError):
+        await session.run("echo x > ../evil.txt")
+    assert not (tmp_path.parent / "evil.txt").exists()
+
+
+async def test_shell_outside_read_claims_escalate_to_ask(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    # trusted reads anywhere -> stays allow.
+    assert session.decide_command("cat /etc/hosts") == "allow"
+    coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    # coding asks for outside reads; the shell tool routes this to approval.
+    assert coding.decide_command("cat /etc/hosts") == "ask"
+
+
+async def test_listing_hides_symlink_to_denied_path(tmp_path) -> None:
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    (tmp_path / "alias.txt").symlink_to(tmp_path / ".env")
+    session = await _session(tmp_path, policy=WorkspacePolicy(denied_paths=(".env*",)))
+    listed = await session.list_files(".", include_hidden=True)
+    assert "alias.txt" not in [e.path for e in listed]
+
+
+async def test_grep_single_file_through_approved_symlink(tmp_path) -> None:
+    # A single-file grep target was already gated as the operation's subject
+    # (ask resolved at the tool layer), so the mid-walk symlink re-check must
+    # not silently drop it.
+    outside = tmp_path.parent / "shared_notes.txt"
+    outside.write_text("needle here\n", encoding="utf-8")
+    (tmp_path / "notes.txt").symlink_to(outside)
+    session = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    matches = await session.grep("needle", path="notes.txt")
+    assert len(matches) == 1
+
+
+async def test_readonly_write_error_mentions_write_policy(tmp_path) -> None:
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    session = await _session(tmp_path, policy=WorkspacePolicy.readonly())
+    with pytest.raises(PermissionDeniedError, match="denies writing"):
+        await session.write_text("a.txt", "y")
+
+
+async def test_shell_cwd_is_part_of_the_decision(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    # cwd resolving outside the root counts as an outside read claim.
+    assert session.decide_command("ls", cwd="..") in ("allow", "ask")
+    coding = await _session(tmp_path, policy=WorkspacePolicy.coding())
+    assert coding.decide_command("ls", cwd="..") == "ask"
+
+
+async def test_dev_null_plumbing_never_escalates(tmp_path) -> None:
+    # `2>/dev/null` is ubiquitous; write_outside="deny" must not make an
+    # allowed command fail because of it.
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.coding(command_rules=(CommandRule("pytest", "allow"),)),
+    )
+    assert session.decide_command("pytest -q 2>/dev/null") == "allow"
+    assert session.decide_command("pytest -q > /dev/null 2>&1") == "allow"
+
+
+async def test_writable_grant_allows_outside_writes(tmp_path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    out_dir = tmp_path / "exports"
+    out_dir.mkdir()
+    session = LocalWorkspaceSession(
+        root=str(root),
+        policy=WorkspacePolicy(
+            path_rules=(PathRule(out_dir.as_posix(), "allow"),),
+        ),
+    )
+    result = await session.write_text(str(out_dir / "report.md"), "# out\n")
+    assert result.action == "created"
+    assert (out_dir / "report.md").read_text() == "# out\n"
+    # The granted scope is readable too; unrelated outside paths stay denied.
+    assert (await session.read_text(str(out_dir / "report.md"))).content == "# out\n"
+    with pytest.raises(PermissionDeniedError):
+        await session.write_text(str(tmp_path / "elsewhere.md"), "x")
+
+
+async def test_glob_inside_explicit_dotdir_lists_entries(tmp_path) -> None:
+    # Hidden filtering is relative to the listed directory: explicitly
+    # listing ".config" must show its (non-hidden) contents.
+    cfg = tmp_path / ".config"
+    cfg.mkdir()
+    (cfg / "settings.toml").write_text("x = 1\n", encoding="utf-8")
+    (cfg / ".hidden.toml").write_text("h = 1\n", encoding="utf-8")
+    session = await _session(tmp_path)
+    entries = await session.list_files(".config", pattern="*")
+    assert [e.path for e in entries] == [".config/settings.toml"]
+
+
+async def test_edit_accepts_crlf_span_verbatim(tmp_path) -> None:
+    # A model that echoes read_file content exactly supplies \r\n itself.
+    p = tmp_path / "f.txt"
+    p.write_bytes(b"a\r\nb\r\n")
+    session = await _session(tmp_path)
+    result = await session.edit_text("f.txt", "a\r\nb", "A\r\nB")
+    assert result.ok
+    assert p.read_bytes() == b"A\r\nB\r\n"
+
+
+class _UppercaseExecutor:
+    """Fake ShellExecutor: proves the seam is consulted and clipped."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def run(self, command, *, cwd, env, timeout, policy, root):
+        from lovia.workspace.types import CommandResult
+
+        self.calls.append(command)
+        return CommandResult(exit_code=0, stdout="X" * 100, stderr="")
+
+
+async def test_custom_executor_is_used_and_output_clipped(tmp_path) -> None:
+    executor = _UppercaseExecutor()
+    session = LocalWorkspaceSession(
+        root=str(tmp_path),
+        policy=WorkspacePolicy.trusted(),
+        executor=executor,
+        limits=WorkspaceLimits(max_shell_output_chars=40),
+    )
+    result = await session.run("echo hi")
+    assert executor.calls == ["echo hi"]
+    assert result.truncated is True
+    assert len(result.stdout) < 100 + 60  # clipped with a notice, not raw
+    # Policy still gates before the executor: a denied command never reaches it.
+    denied = LocalWorkspaceSession(
+        root=str(tmp_path),
+        policy=WorkspacePolicy.trusted(command_rules=(CommandRule("rm", "deny"),)),
+        executor=executor,
+    )
+    with pytest.raises(PermissionDeniedError):
+        await denied.run("rm -rf .")
+    assert executor.calls == ["echo hi"]

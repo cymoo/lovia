@@ -20,8 +20,6 @@ lovia/
     result.py       #   RunHandle (async iterator + awaitable) and RunResult
   tools/            # @tool decorator, Tool type, and opt-in tool factories
     base.py         #   core Tool/tool API
-    files.py        #   workspace-backed file tools
-    shell.py        #   workspace shell tool
     http.py         #   http_fetch
     search.py       #   duckduckgo_search_tool  (requires lovia[ddg])
     human.py        #   HumanChannel + ask_human
@@ -64,8 +62,19 @@ lovia/
   exceptions.py     # Framework exceptions (carry an optional .hint)
   providers/        # LLM provider adapters (OpenAI, Anthropic, …)
   stores/           # Session and memory store implementations
-  workspace/        # Filesystem + process workspace (Workspace.local,
-                    #   WorkspaceLike/WorkspaceSession protocols, policy gating)
+  workspace/        # Filesystem + process workspace
+    workspace.py    #   Workspace.local factory + LocalWorkspace config
+    policy.py       #   WorkspacePolicy — one allow/ask/deny ACL for paths
+                    #   (PathRule) and shell commands (CommandRule)
+    paths.py        #   resolve_path — resolves (symlinks followed) and
+                    #   classifies inside/outside the root; no path is
+                    #   rejected on syntax, the ACL judges the target
+    local.py        #   LocalWorkspaceSession — the single enforcement point
+                    #   (deny raises here; ask is gated at the tool layer)
+    command_guard.py#   lexical path-claim extraction from shell commands
+    tools.py        #   read_file/write_file/edit_file/list_files/grep_files/
+                    #   shell + needs_approval predicates (the ask side)
+    protocol.py     #   WorkspaceSession/WorkspaceLike/ShellExecutor protocols
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
 ```
@@ -97,6 +106,16 @@ Provider registration supports the `lovia.providers` entry-point group for third
 ## Tool merging
 
 Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins (which now include MCP, skills, and todos), `agent.workspace`, handoffs, and the synthetic `final_output` tool (when structured output falls back to tool mode).
+
+## Workspace permission model
+
+One three-valued ACL (`allow`/`ask`/`deny`) governs both files and shell. The split invariant:
+
+- **`deny` is enforced in the session** (`LocalWorkspaceSession`): every file op resolves its path (symlinks followed, absolute/`~`/relative all accepted) and asks `WorkspacePolicy.decide_path(rel, abs, op)`; `run()` asks `session.decide_command(command, cwd)` (static `command_rules` merged most-restrictive with path claims lexically extracted by `command_guard.py` — redirect targets are writes, path-looking args are reads). Custom tools calling the session directly get the same gate.
+- **`ask` is resolved at the tool layer**: the built-in tools carry `needs_approval` predicates that call `session.decide_path`/`decide_command` and route through the existing `ApprovalRequired` channel. By the time a call reaches the session, `ask` has been approved — the session lets it pass. Bulk operations (list/grep) never trigger approval mid-walk; anything short of `allow` for a symlinked file inside the walk is skipped, and only the operation's own target can ask.
+- Symlinks have no special case: a path is judged by where it resolves. Inside-root reads are always `allow`; `write`, `read_outside`, `write_outside` and `path_rules`/`denied_paths` cover the rest. Presets: `readonly`, `coding` (outside reads ask, outside writes deny), `trusted` (reads anywhere, outside writes ask).
+- The command guard is **advisory** (it cannot see `python -c` or `$(...)` payloads) but one-sided: a missed claim falls back to the static rules, and a false claim is almost always a relative token that resolves inside the root where reads are allowed — it can surface extra `ask`s, not loosen anything. Hard enforcement is the `ShellExecutor` seam (`protocol.py`): an executor derives OS sandbox scopes (Seatbelt/bubblewrap) from the policy and runs *after* the policy/approval gates.
+- `instructions()` is generated from the policy so the system prompt never promises more than the session enforces.
 
 ## Plugins and view injectors
 

@@ -1,22 +1,28 @@
 """Workspace permission policy.
 
-A :class:`WorkspacePolicy` decides what the built-in workspace tools may do:
+A :class:`WorkspacePolicy` decides what the built-in workspace tools may do.
+Both file paths and shell commands are judged with the same three-valued
+vocabulary — ``allow`` runs freely, ``ask`` routes through the human-approval
+channel, ``deny`` is rejected outright:
 
-* **Path rules** (``denied_paths``, ``allow_write``) are enforced inside the
-  session, so every file operation — including ones from custom tools that
-  use the session directly — is gated.
-* **Command rules** decide whether a shell command runs freely (``allow``),
-  goes through the human-approval channel (``ask``), or is rejected outright
-  (``deny``). The static rules are deliberately simple (word-boundary
-  prefixes); anything richer routes through the optional ``command_decider``
-  hook.
+* **Path decisions** (:meth:`WorkspacePolicy.decide_path`) are an ordered ACL:
+  ``denied_paths`` first, then ``path_rules`` (first match wins), then the
+  defaults — inside the workspace root reads are always allowed and writes
+  follow ``write``; outside the root ``read_outside`` / ``write_outside``
+  apply. Paths are judged *after* symlink resolution, so a symlink is exactly
+  as accessible as its target — there is no separate symlink special case.
+* **Command decisions** (:meth:`WorkspacePolicy.decide_command`) combine the
+  static word-boundary prefix ``command_rules`` with the optional
+  ``command_decider`` hook. The session additionally extracts path-looking
+  tokens from commands and judges them with the same path ACL (see
+  :mod:`lovia.workspace.command_guard`).
 
-Honesty note: command rules are a *policy gate*, not a security boundary.
-Segmentation is lexical, so command substitution, ``eval``, or an interpreter
-one-liner can still smuggle work past the rules; and on the local backend an
-allowed command runs as the host user and can do anything that user can. Hard
-isolation requires a sandboxed backend (e.g. a container); the session
-protocol is abstracted so one can be added without touching the tools.
+Honesty note: on the local backend these decisions are a *policy gate*, not a
+security boundary. Command analysis is lexical, so command substitution,
+``eval``, or an interpreter one-liner can still smuggle work past the rules;
+and an allowed command runs as the host user. Hard isolation requires a
+sandboxed executor or backend (e.g. a container); the protocols are
+abstracted so one can be added without touching the tools.
 """
 
 from __future__ import annotations
@@ -24,11 +30,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from pathlib import Path
 from typing import Callable, Literal
 
-from .errors import PermissionDeniedError
-
 Decision = Literal["allow", "ask", "deny"]
+FileOp = Literal["read", "write"]
 
 # A per-segment command decider: given one command segment it returns a
 # Decision to override the static rules, or None to fall through to them. A
@@ -44,9 +50,23 @@ _SEVERITY = {"allow": 0, "ask": 1, "deny": 2}
 # its own: `git status && rm -rf /` must not ride on a `git status` allow
 # rule. Newlines count as separators too (a shell runs each line), closing a
 # bypass where `allowed\nrm -rf /` would ride on the first line's rule.
+# A single `&` splits only as a backgrounding operator: `&` inside the
+# fd-duplication forms `2>&1` / `>&2` / `<&0` (preceded by `<`/`>`) or the
+# redirect shorthands `&>` / `&>>` (followed by `>`) is part of a redirection,
+# not a separator — without the lookarounds `git status 2>&1` would be split
+# into `git status 2>` + `1` and the stray `1` would drop to shell_default.
 # Quoting is intentionally ignored — a quoted separator may cause a harmless
 # extra split, which can only make the decision stricter, never looser.
-_COMMAND_SPLIT = re.compile(r"(?:\|\||&&|[;\n\r|&])")
+_COMMAND_SPLIT = re.compile(
+    r"""
+      \|\|            # logical or
+    | &&              # logical and
+    | [;\n\r]         # statement separators
+    | \|(?!\|)        # pipe
+    | (?<![<>])&(?![&>])  # background job, but not >& / <& / &> / &&
+    """,
+    re.VERBOSE,
+)
 
 
 def _path_matches(rel_path: str, pattern: str) -> bool:
@@ -66,6 +86,45 @@ def _path_matches(rel_path: str, pattern: str) -> bool:
     return any(fnmatch(segment, pat) for segment in rel_path.split("/"))
 
 
+def _abs_matches(abs_posix: str, pattern: str) -> bool:
+    """Match a resolved absolute POSIX path against a ``/``- or ``~``-pattern.
+
+    Like the relative match, a pattern also covers everything beneath it, so
+    ``"~/notes"`` grants/denies the whole subtree.
+    """
+    pat = pattern
+    if pat.startswith("~"):
+        try:
+            pat = Path(pat).expanduser().as_posix()
+        except RuntimeError:
+            # No resolvable home directory: the pattern cannot match any
+            # resolved absolute path, so treat it as a non-match rather than
+            # crash every decision.
+            return False
+    pat = pat.rstrip("/")
+    if not pat:
+        return False
+    return fnmatch(abs_posix, pat) or fnmatch(abs_posix, pat + "/*")
+
+
+def _pattern_matches(pattern: str, *, rel: str | None, abs_posix: str) -> bool:
+    """Dispatch one ACL pattern by its form.
+
+    ``/``- or ``~``-prefixed patterns match the resolved absolute path.
+    Patterns containing ``/`` are workspace-relative (they never match
+    outside the root). A *bare* pattern names a file or directory wherever
+    it appears — inside or outside the root — so ``denied_paths=(".env*",)``
+    still bites when ``read_outside`` is permissive.
+    """
+    if pattern.startswith(("/", "~")):
+        return _abs_matches(abs_posix, pattern)
+    if rel is not None:
+        return _path_matches(rel, pattern)
+    if "/" not in pattern.rstrip("/"):
+        return _path_matches(abs_posix.lstrip("/"), pattern)
+    return False
+
+
 @dataclass(frozen=True)
 class CommandRule:
     """One shell-command rule: a word-boundary prefix and a decision.
@@ -80,32 +139,63 @@ class CommandRule:
 
 
 @dataclass(frozen=True)
+class PathRule:
+    """One path-ACL rule: a pattern, a decision, and the ops it covers.
+
+    ``pattern`` starting with ``/`` or ``~`` is matched against the resolved
+    absolute path (and its subtree). A pattern containing ``/`` is
+    workspace-relative and never matches outside the root. A *bare* pattern
+    (``".env*"``, ``"secrets"``) names a file or directory anywhere — inside
+    or outside the root (see :func:`_pattern_matches`). ``ops`` restricts the
+    rule to reads and/or writes — accepts any iterable of ``"read"`` /
+    ``"write"``.
+    """
+
+    pattern: str
+    action: Decision
+    ops: frozenset[FileOp] = frozenset({"read", "write"})
+
+    def __post_init__(self) -> None:
+        # Accept any iterable for ergonomics (("read",), {"write"}, ...).
+        if not isinstance(self.ops, frozenset):
+            object.__setattr__(self, "ops", frozenset(self.ops))
+
+
+@dataclass(frozen=True)
 class WorkspacePolicy:
     """What the workspace tools are allowed to do.
 
     Attributes:
-        allow_write: When False every write/edit is rejected (read-only).
+        write: Decision for writes *inside* the workspace root. Reads inside
+            the root are always allowed — a workspace the agent cannot read
+            is pointless.
+        read_outside: Decision for reads outside the root (reached via an
+            absolute path, ``~``, ``..`` or a symlink target).
+        write_outside: Decision for writes outside the root.
+        path_rules: Ordered ACL consulted before the defaults above;
+            first match wins. See :class:`PathRule`.
+        denied_paths: Sugar for the common case — patterns that neither
+            reads nor writes may touch, checked before ``path_rules``.
+            Same pattern language as :class:`PathRule`.
         allow_shell: When False the shell tool is excluded and every command
             decision is ``deny``.
         shell_default: Decision for commands no rule matches.
         command_rules: Evaluated first-match-wins per command segment;
             compound commands (``;``, ``&&``, ``||``, ``|``, ``&``, newlines)
             take the most restrictive decision across their segments.
-        denied_paths: globs over workspace-relative paths that file tools may
-            neither read nor write. Matched gitignore-style: a bare glob
-            (e.g. ``".env*"``) matches that name at any depth and a directory
-            name denies everything beneath it; a glob with ``/``
-            (e.g. ``"secrets/**"``) is matched against the full path.
         command_decider: optional per-segment hook consulted *before* the
             static ``command_rules``; return a :data:`Decision` to override or
             ``None`` to fall through. See :data:`CommandDecider`.
     """
 
-    allow_write: bool = True
+    write: Decision = "allow"
+    read_outside: Decision = "deny"
+    write_outside: Decision = "deny"
+    path_rules: tuple[PathRule, ...] = ()
+    denied_paths: tuple[str, ...] = ()
     allow_shell: bool = True
     shell_default: Decision = "ask"
     command_rules: tuple[CommandRule, ...] = ()
-    denied_paths: tuple[str, ...] = ()
     command_decider: "CommandDecider | None" = None
 
     def __post_init__(self) -> None:
@@ -123,13 +213,21 @@ class WorkspacePolicy:
     # ------------------------------------------------------------------ #
 
     @classmethod
-    def readonly(cls, *, denied_paths: tuple[str, ...] = ()) -> "WorkspacePolicy":
-        """Read-only file access; no writes, no shell."""
+    def readonly(
+        cls,
+        *,
+        denied_paths: tuple[str, ...] = (),
+        path_rules: tuple[PathRule, ...] = (),
+    ) -> "WorkspacePolicy":
+        """Read the workspace only: no writes anywhere, no shell."""
         return cls(
-            allow_write=False,
+            write="deny",
+            read_outside="deny",
+            write_outside="deny",
+            path_rules=path_rules,
+            denied_paths=denied_paths,
             allow_shell=False,
             shell_default="deny",
-            denied_paths=denied_paths,
         )
 
     @classmethod
@@ -138,13 +236,23 @@ class WorkspacePolicy:
         *,
         command_rules: tuple[CommandRule, ...] = (),
         denied_paths: tuple[str, ...] = (),
+        path_rules: tuple[PathRule, ...] = (),
         command_decider: "CommandDecider | None" = None,
     ) -> "WorkspacePolicy":
-        """Full file access; shell commands require approval by default."""
+        """Full workspace access; anything outside asks for approval or is denied.
+
+        Reads outside the root require approval, writes outside are denied,
+        and shell commands ask by default — the Claude-Code-like posture:
+        free inside the project, human-in-the-loop beyond it.
+        """
         return cls(
+            write="allow",
+            read_outside="ask",
+            write_outside="deny",
+            path_rules=path_rules,
+            denied_paths=denied_paths,
             shell_default="ask",
             command_rules=command_rules,
-            denied_paths=denied_paths,
             command_decider=command_decider,
         )
 
@@ -154,13 +262,22 @@ class WorkspacePolicy:
         *,
         command_rules: tuple[CommandRule, ...] = (),
         denied_paths: tuple[str, ...] = (),
+        path_rules: tuple[PathRule, ...] = (),
         command_decider: "CommandDecider | None" = None,
     ) -> "WorkspacePolicy":
-        """Full file access; shell commands run without approval by default."""
+        """Read anywhere, write the workspace; shell runs without approval.
+
+        Writes outside the root still ask — a cheap safety valve, since the
+        approval channel exists anyway.
+        """
         return cls(
+            write="allow",
+            read_outside="allow",
+            write_outside="ask",
+            path_rules=path_rules,
+            denied_paths=denied_paths,
             shell_default="allow",
             command_rules=command_rules,
-            denied_paths=denied_paths,
             command_decider=command_decider,
         )
 
@@ -168,13 +285,37 @@ class WorkspacePolicy:
     # Decisions
     # ------------------------------------------------------------------ #
 
+    def decide_path(self, *, rel: str | None, abs_posix: str, op: FileOp) -> Decision:
+        """Return the ACL decision for one resolved path.
+
+        ``rel`` is the workspace-relative POSIX path when the resolved path
+        is inside the root, ``None`` when it is outside; ``abs_posix`` is the
+        resolved absolute POSIX path in either case. Evaluation order:
+        ``denied_paths`` → ``path_rules`` (first match wins) → defaults.
+        """
+        for pattern in self.denied_paths:
+            if _pattern_matches(pattern, rel=rel, abs_posix=abs_posix):
+                return "deny"
+        for rule in self.path_rules:
+            if op in rule.ops and _pattern_matches(
+                rule.pattern, rel=rel, abs_posix=abs_posix
+            ):
+                return rule.action
+        if rel is not None:
+            return "allow" if op == "read" else self.write
+        return self.read_outside if op == "read" else self.write_outside
+
     def decide_command(self, command: str) -> Decision:
-        """Return the policy decision for one shell command line.
+        """Return the static-rule decision for one shell command line.
 
         The command is split on shell control operators and each segment is
         judged independently; the most restrictive decision wins, so an
         ``allow`` rule can never whitelist a compound command that smuggles
         in something stricter.
+
+        This judges the *command words* only. Path-looking tokens inside the
+        command are additionally judged against the path ACL by the session
+        (``WorkspaceSession.decide_command``), which merges both verdicts.
 
         Best-effort by design: segmentation is lexical, so command
         substitution (``$(...)``, backticks), ``eval``, or an interpreter
@@ -210,25 +351,22 @@ class WorkspacePolicy:
                 return rule.action
         return self.shell_default
 
-    def check_path(self, rel_path: str, *, write: bool) -> None:
-        """Raise :class:`PermissionDeniedError` if ``rel_path`` is off-limits.
 
-        ``rel_path`` is a normalized workspace-relative POSIX path.
-        """
-        if write and not self.allow_write:
-            raise PermissionDeniedError(
-                "Workspace is read-only.",
-                hint="Use mode='coding' (or allow_write=True) to enable writes.",
-            )
-        for pattern in self.denied_paths:
-            if _path_matches(rel_path, pattern):
-                raise PermissionDeniedError(
-                    f"Path {rel_path!r} is denied by workspace policy ({pattern!r}).",
-                )
-
-    def path_is_denied(self, rel_path: str) -> bool:
-        """Non-raising variant of the denied-path check (used by listings)."""
-        return any(_path_matches(rel_path, pattern) for pattern in self.denied_paths)
+def merge_decisions(*decisions: Decision) -> Decision:
+    """Combine decisions, most restrictive wins."""
+    result: Decision = "allow"
+    for decision in decisions:
+        if _SEVERITY[decision] > _SEVERITY[result]:
+            result = decision
+    return result
 
 
-__all__ = ["CommandDecider", "CommandRule", "Decision", "WorkspacePolicy"]
+__all__ = [
+    "CommandDecider",
+    "CommandRule",
+    "Decision",
+    "FileOp",
+    "PathRule",
+    "WorkspacePolicy",
+    "merge_decisions",
+]

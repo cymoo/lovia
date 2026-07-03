@@ -219,7 +219,7 @@ def test_resolve_workspace_mode_from_env(
     monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "readonly")
     ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
     assert ws is not None
-    assert ws.policy.allow_write is False
+    assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
 
 

@@ -285,11 +285,91 @@ def test_render_command_result_timeout() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shell_needs_approval_fails_closed_without_workspace() -> None:
-    assert _shell_needs_approval({"command": "ls"}, _ctx(None)) is True
+def test_shell_needs_approval_lets_setup_error_surface_without_workspace() -> None:
+    # No workspace -> nothing can run; skipping the approval gate lets
+    # require_workspace raise its setup hint instead of "not approved".
+    assert _shell_needs_approval({"command": "ls"}, _ctx(None)) is False
 
 
 def test_shell_needs_approval_fails_closed_on_bad_args(session) -> None:
     # Missing / non-string command -> ask rather than run something unjudged.
     assert _shell_needs_approval({}, _ctx(session)) is True
     assert _shell_needs_approval({"command": 123}, _ctx(session)) is True
+
+
+def test_shell_needs_approval_consults_path_claims(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+
+    coding = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    # Outside read claim escalates to ask even without a command rule.
+    assert _shell_needs_approval({"command": "cat /etc/hosts"}, _ctx(coding)) is True
+    trusted = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy.trusted()
+    )
+    assert _shell_needs_approval({"command": "cat /etc/hosts"}, _ctx(trusted)) is False
+
+
+# ---------------------------------------------------------------------------
+# File-tool approval gate (the ask side of the path ACL)
+# ---------------------------------------------------------------------------
+
+
+def test_file_tools_ask_for_outside_paths_under_coding(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+
+    session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    ctx = _ctx(session)
+    assert read_file.requires_approval({"path": "/etc/hosts"}, ctx) is True
+    # Inside the root: no approval needed.
+    assert read_file.requires_approval({"path": "inside.txt"}, ctx) is False
+    # Outside writes are denied under coding -> no pointless approval prompt;
+    # the call fails at the session with a clear error instead.
+    assert (
+        write_file.requires_approval({"path": "/tmp/evil.txt", "content": "x"}, ctx)
+        is False
+    )
+
+
+def test_file_tools_skip_approval_without_workspace() -> None:
+    # Without a workspace the tool raises its setup hint on invoke; gating it
+    # behind approval would replace that hint with "not approved".
+    ctx = _ctx(None)
+    assert read_file.requires_approval({"path": "x"}, ctx) is False
+    assert (
+        edit_file.requires_approval({"path": "x", "old": "a", "new": "b"}, ctx) is False
+    )
+    # Malformed args with a live workspace still fail closed.
+
+
+def test_file_tools_fail_closed_on_bad_args(session) -> None:
+    ctx = _ctx(session)
+    assert read_file.requires_approval({"path": 123}, ctx) is True
+
+
+def test_inside_writes_ask_when_policy_says_ask(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy(write="ask")
+    )
+    ctx = _ctx(session)
+    assert write_file.requires_approval({"path": "a.txt", "content": "x"}, ctx) is True
+    assert read_file.requires_approval({"path": "a.txt"}, ctx) is False
+
+
+@pytest.mark.asyncio
+async def test_list_files_renders_symlink_target(tmp_path) -> None:
+    import os
+
+    outside = tmp_path.parent / "elsewhere.txt"
+    outside.write_text("x", encoding="utf-8")
+    (tmp_path / "inner.txt").write_text("y", encoding="utf-8")
+    os.symlink(outside, tmp_path / "lnk.txt")
+    from lovia.workspace import WorkspacePolicy
+
+    session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
+    ctx = _ctx(session)
+    raw = await list_files.invoke({}, ctx)
+    rendered = await render_tool_result(list_files, raw, ctx)
+    assert "lnk.txt" in rendered
+    assert "->" in rendered  # the model can see where the link leads

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from lovia.workspace import CommandRule, PermissionDeniedError, WorkspacePolicy
-from lovia.workspace.policy import _path_matches
+from lovia.workspace import CommandRule, PathRule, WorkspacePolicy
+from lovia.workspace.policy import _path_matches, merge_decisions
 
 
 # ---------------------------------------------------------------------------
@@ -79,39 +79,172 @@ def test_empty_command_uses_default() -> None:
     assert WorkspacePolicy(shell_default="ask").decide_command("   ") == "ask"
 
 
+def test_fd_redirections_do_not_split_segments() -> None:
+    # `2>&1` / `>&2` / `&>` belong to one segment: without the splitter's
+    # lookarounds the stray `1` would drop to shell_default and an allowed
+    # `git status 2>&1` would suddenly ask.
+    policy = WorkspacePolicy(
+        shell_default="ask", command_rules=(CommandRule("git", "allow"),)
+    )
+    assert policy.decide_command("git status 2>&1") == "allow"
+    assert policy.decide_command("git status >&2") == "allow"
+    assert policy.decide_command("git status &> out.log") == "allow"
+    # A real background `&` still separates segments.
+    assert policy.decide_command("git status & curl x") == "ask"
+
+
 # ---------------------------------------------------------------------------
-# Path decisions
+# Path decisions (the ACL)
 # ---------------------------------------------------------------------------
 
 
-def test_check_path_denies_writes_when_readonly() -> None:
-    policy = WorkspacePolicy.readonly()
-    policy.check_path("notes.txt", write=False)
-    with pytest.raises(PermissionDeniedError, match="read-only"):
-        policy.check_path("notes.txt", write=True)
+def test_inside_root_reads_always_allowed_writes_follow_write() -> None:
+    policy = WorkspacePolicy(write="deny")
+    assert (
+        policy.decide_path(rel="notes.txt", abs_posix="/ws/notes.txt", op="read")
+        == "allow"
+    )
+    assert (
+        policy.decide_path(rel="notes.txt", abs_posix="/ws/notes.txt", op="write")
+        == "deny"
+    )
 
 
-def test_denied_paths_block_reads_and_writes() -> None:
-    policy = WorkspacePolicy(denied_paths=(".env*", "secrets/**"))
-    policy.check_path("src/app.py", write=True)
-    with pytest.raises(PermissionDeniedError):
-        policy.check_path(".env", write=False)
-    with pytest.raises(PermissionDeniedError):
-        policy.check_path(".env.local", write=False)
-    with pytest.raises(PermissionDeniedError):
-        policy.check_path("secrets/prod/key.pem", write=False)
+def test_outside_root_follows_outside_defaults() -> None:
+    policy = WorkspacePolicy(read_outside="ask", write_outside="deny")
+    assert policy.decide_path(rel=None, abs_posix="/etc/hosts", op="read") == "ask"
+    assert policy.decide_path(rel=None, abs_posix="/etc/hosts", op="write") == "deny"
+
+
+def test_denied_paths_win_over_everything() -> None:
+    policy = WorkspacePolicy(
+        denied_paths=(".env*", "secrets/**"),
+        path_rules=(PathRule(".env", "allow"),),  # denied still wins
+    )
+    assert policy.decide_path(rel=".env", abs_posix="/ws/.env", op="read") == "deny"
+    assert (
+        policy.decide_path(rel=".env.local", abs_posix="/ws/.env.local", op="read")
+        == "deny"
+    )
+    assert (
+        policy.decide_path(
+            rel="secrets/prod/key.pem", abs_posix="/ws/secrets/prod/key.pem", op="write"
+        )
+        == "deny"
+    )
+    assert (
+        policy.decide_path(rel="src/app.py", abs_posix="/ws/src/app.py", op="write")
+        == "allow"
+    )
+
+
+def test_denied_paths_match_nested_files_and_directories() -> None:
+    policy = WorkspacePolicy(denied_paths=(".env*", "secrets"))
+    # A bare glob catches the dotfile at any depth, not just at the root.
+    assert (
+        policy.decide_path(
+            rel="config/.env.local", abs_posix="/ws/config/.env.local", op="read"
+        )
+        == "deny"
+    )
+    # A bare directory name denies the dir and everything beneath it, anywhere.
+    assert (
+        policy.decide_path(
+            rel="secrets/prod/key.pem", abs_posix="/ws/secrets/prod/key.pem", op="read"
+        )
+        == "deny"
+    )
+    assert (
+        policy.decide_path(
+            rel="vendor/secrets/key", abs_posix="/ws/vendor/secrets/key", op="read"
+        )
+        == "deny"
+    )
+    # Unrelated paths stay allowed.
+    assert (
+        policy.decide_path(rel="src/app.py", abs_posix="/ws/src/app.py", op="read")
+        == "allow"
+    )
+
+
+def test_path_rules_first_match_wins_and_respects_ops() -> None:
+    policy = WorkspacePolicy(
+        read_outside="deny",
+        path_rules=(
+            PathRule("/opt/data", "allow", ops=("read",)),
+            PathRule("/opt", "deny"),
+        ),
+    )
+    assert (
+        policy.decide_path(rel=None, abs_posix="/opt/data/f.csv", op="read") == "allow"
+    )
+    # The read-only rule does not cover writes; the broader deny does.
+    assert (
+        policy.decide_path(rel=None, abs_posix="/opt/data/f.csv", op="write") == "deny"
+    )
+    assert policy.decide_path(rel=None, abs_posix="/opt/other", op="read") == "deny"
+
+
+def test_absolute_pattern_covers_subtree() -> None:
+    policy = WorkspacePolicy(path_rules=(PathRule("/srv/share", "allow"),))
+    assert (
+        policy.decide_path(rel=None, abs_posix="/srv/share/a/b.txt", op="read")
+        == "allow"
+    )
+    assert policy.decide_path(rel=None, abs_posix="/srv/shared", op="read") == "deny"
+
+
+def test_denied_paths_accept_absolute_patterns() -> None:
+    policy = WorkspacePolicy(read_outside="allow", denied_paths=("/etc/ssl/**",))
+    assert (
+        policy.decide_path(rel=None, abs_posix="/etc/ssl/private/key", op="read")
+        == "deny"
+    )
+    assert policy.decide_path(rel=None, abs_posix="/etc/hosts", op="read") == "allow"
+
+
+def test_bare_denied_patterns_match_outside_the_root_too() -> None:
+    # With permissive outside reads (trusted), a bare pattern still names the
+    # file anywhere — otherwise denied_paths=(".env*",) would be a no-op for
+    # every path outside the workspace.
+    policy = WorkspacePolicy(read_outside="allow", denied_paths=(".env*", "id_rsa"))
+    assert (
+        policy.decide_path(rel=None, abs_posix="/home/u/proj/.env", op="read") == "deny"
+    )
+    assert (
+        policy.decide_path(rel=None, abs_posix="/home/u/.ssh/id_rsa", op="read")
+        == "deny"
+    )
+    assert (
+        policy.decide_path(rel=None, abs_posix="/home/u/notes.md", op="read") == "allow"
+    )
+    # Workspace-relative patterns (containing "/") stay inside-only.
+    scoped = WorkspacePolicy(read_outside="allow", denied_paths=("secrets/**",))
+    assert (
+        scoped.decide_path(rel=None, abs_posix="/srv/secrets/key", op="read") == "allow"
+    )
+    assert (
+        scoped.decide_path(rel="secrets/key", abs_posix="/ws/secrets/key", op="read")
+        == "deny"
+    )
 
 
 def test_presets() -> None:
     readonly = WorkspacePolicy.readonly()
-    assert not readonly.allow_write and not readonly.allow_shell
+    assert readonly.write == "deny" and not readonly.allow_shell
+    assert readonly.read_outside == "deny"
 
     coding = WorkspacePolicy.coding(denied_paths=(".git/**",))
-    assert coding.allow_write and coding.shell_default == "ask"
-    assert coding.path_is_denied(".git/config")
+    assert coding.write == "allow" and coding.shell_default == "ask"
+    assert coding.read_outside == "ask" and coding.write_outside == "deny"
+    assert (
+        coding.decide_path(rel=".git/config", abs_posix="/ws/.git/config", op="read")
+        == "deny"
+    )
 
     trusted = WorkspacePolicy.trusted(command_rules=(CommandRule("rm", "deny"),))
     assert trusted.shell_default == "allow"
+    assert trusted.read_outside == "allow" and trusted.write_outside == "ask"
     assert trusted.decide_command("rm -rf x") == "deny"
     assert trusted.decide_command("echo ok") == "allow"
 
@@ -129,20 +262,6 @@ def test_newline_is_a_command_separator() -> None:
         command_rules=(CommandRule("git", "allow"), CommandRule("rm -rf", "deny")),
     )
     assert policy.decide_command("git status\nrm -rf /") == "deny"
-
-
-def test_denied_paths_match_nested_files_and_directories() -> None:
-    policy = WorkspacePolicy(denied_paths=(".env*", "secrets"))
-    # A bare glob catches the dotfile at any depth, not just at the root.
-    assert policy.path_is_denied("config/.env.local")
-    with pytest.raises(PermissionDeniedError):
-        policy.check_path("a/b/.env", write=False)
-    # A bare directory name denies the dir and everything beneath it, anywhere.
-    assert policy.path_is_denied("secrets")
-    assert policy.path_is_denied("secrets/prod/key.pem")
-    assert policy.path_is_denied("vendor/secrets/key")
-    # Unrelated paths stay allowed.
-    assert not policy.path_is_denied("src/app.py")
 
 
 def test_command_decider_overrides_then_falls_through() -> None:
@@ -167,6 +286,17 @@ def test_command_decider_invalid_return_falls_through() -> None:
     # A hook returning a non-Decision must not crash; it falls through.
     policy = WorkspacePolicy(shell_default="ask", command_decider=lambda seg: "maybe")
     assert policy.decide_command("anything") == "ask"
+
+
+def test_merge_decisions_most_restrictive_wins() -> None:
+    assert merge_decisions() == "allow"
+    assert merge_decisions("allow", "ask") == "ask"
+    assert merge_decisions("ask", "deny", "allow") == "deny"
+
+
+def test_path_rule_ops_accepts_any_iterable() -> None:
+    rule = PathRule("~/x", "allow", ops=("read",))
+    assert rule.ops == frozenset({"read"})
 
 
 # ---------------------------------------------------------------------------

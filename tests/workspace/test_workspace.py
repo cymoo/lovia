@@ -39,3 +39,40 @@ def test_readonly_mode_rejects_command_rules(tmp_path) -> None:
 def test_unknown_mode_is_rejected(tmp_path) -> None:
     with pytest.raises(UserError, match="Unknown workspace mode"):
         Workspace.local(str(tmp_path), mode="bogus")  # type: ignore[arg-type]
+
+
+def test_readable_writable_shorthands_expand_to_rules(tmp_path) -> None:
+    ws = Workspace.local(str(tmp_path), readable=("~/docs",), writable=("/srv/out",))
+    rules = ws.policy.path_rules
+    # writable first (read+write), then readable (read-only).
+    assert rules[0].pattern == "/srv/out" and rules[0].ops == frozenset(
+        {"read", "write"}
+    )
+    assert rules[1].pattern == "~/docs" and rules[1].ops == frozenset({"read"})
+    assert (
+        ws.policy.decide_path(rel=None, abs_posix="/srv/out/f.txt", op="write")
+        == "allow"
+    )
+
+
+def test_shorthands_conflict_with_explicit_policy(tmp_path) -> None:
+    with pytest.raises(UserError, match="not both"):
+        Workspace.local(
+            str(tmp_path),
+            policy=WorkspacePolicy.coding(),
+            readable=("~/docs",),
+        )
+
+
+def test_readonly_mode_accepts_readable_grants(tmp_path) -> None:
+    ws = Workspace.local(str(tmp_path), mode="readonly", readable=("/srv/ref",))
+    assert ws.policy.write == "deny"
+    # The grant opens exactly its scope; everything else outside stays denied.
+    assert (
+        ws.policy.decide_path(rel=None, abs_posix="/srv/ref/doc.md", op="read")
+        == "allow"
+    )
+    assert (
+        ws.policy.decide_path(rel=None, abs_posix=tmp_path.parent.as_posix(), op="read")
+        == "deny"
+    )

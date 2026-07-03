@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Protocol
 
-from .policy import WorkspacePolicy
+from .policy import Decision, WorkspacePolicy
 from .types import (
     CommandResult,
     DirEntry,
@@ -17,19 +18,28 @@ from .types import (
 if TYPE_CHECKING:
     from ..tools import Tool
 
-__all__ = ["WorkspaceLike", "WorkspaceSession"]
+__all__ = ["ShellExecutor", "WorkspaceLike", "WorkspaceSession"]
 
 
 class WorkspaceSession(Protocol):
     """Filesystem + process execution surface rooted at a workspace.
 
-    All paths are workspace-relative POSIX paths. Implementations enforce
-    the session's :class:`WorkspacePolicy` path rules on every operation, so
-    custom tools that use the session directly are gated the same way the
-    built-in tools are.
+    Paths may be workspace-relative, absolute, or ``~``-prefixed; they are
+    resolved (symlinks followed) and judged against the session's
+    :class:`WorkspacePolicy` ACL on every operation, so custom tools that use
+    the session directly are gated the same way the built-in tools are —
+    ``deny`` raises, ``ask`` is the tool layer's job (``needs_approval``).
     """
 
     policy: WorkspacePolicy
+
+    def decide_path(self, path: str, *, write: bool = False) -> Decision:
+        """Policy decision for one path (for tool approval predicates)."""
+        ...
+
+    def decide_command(self, command: str, cwd: str = ".") -> Decision:
+        """Combined decision for a shell command: static rules ⊕ path guard."""
+        ...
 
     async def read_text(
         self, path: str, *, start: int | None = None, end: int | None = None
@@ -82,8 +92,9 @@ class WorkspaceSession(Protocol):
     ) -> list[GrepMatch]:
         """Search file contents under ``path`` with a regular expression.
 
-        ``max_matches`` defaults to the session's configured limit; matches
-        past the cap are dropped (not an error).
+        ``path`` may also be a single file. ``max_matches`` defaults to the
+        session's configured limit; matches past the cap are dropped (not an
+        error).
         """
         ...
 
@@ -99,7 +110,34 @@ class WorkspaceSession(Protocol):
         ...
 
     async def close(self) -> None:
-        """Release held resources. Idempotent."""
+        """Release held resources (including live subprocesses). Idempotent."""
+        ...
+
+
+class ShellExecutor(Protocol):
+    """Strategy for actually executing an approved shell command.
+
+    The extension seam for OS-level enforcement: by default the session
+    spawns commands as the host user; a sandboxing executor (macOS Seatbelt,
+    Linux bubblewrap/Landlock, ...) can derive mount/permission scopes from
+    the policy and make the path ACL *mandatory* for shell commands instead
+    of advisory. Executors run *after* the policy/approval gates — they
+    decide *how* a command runs, never *whether*. Output may be returned
+    unclipped; the session applies its limits afterwards. An executor owns
+    the processes it spawns, including killing them on cancellation.
+    """
+
+    async def run(
+        self,
+        command: str,
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float | None,
+        policy: WorkspacePolicy,
+        root: Path,
+    ) -> CommandResult:
+        """Execute ``command`` and return its captured result."""
         ...
 
 

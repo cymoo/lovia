@@ -31,8 +31,8 @@ from typing import TYPE_CHECKING, AsyncIterator, Mapping, NoReturn
 
 from ..exceptions import UserError
 from .local import LocalWorkspaceSession
-from .policy import CommandRule, WorkspacePolicy
-from .protocol import WorkspaceSession
+from .policy import CommandRule, Decision, PathRule, WorkspacePolicy
+from .protocol import ShellExecutor, WorkspaceSession
 from .types import WorkspaceLimits, WorkspaceMode
 
 if TYPE_CHECKING:
@@ -57,6 +57,7 @@ class LocalWorkspace:
     shell_timeout: float | None = 300.0
     limits: WorkspaceLimits = field(default_factory=WorkspaceLimits)
     inherit_env: bool = False
+    executor: ShellExecutor | None = None
     close_after_run: bool = True
 
     async def open(self) -> LocalWorkspaceSession:
@@ -68,6 +69,7 @@ class LocalWorkspace:
             shell_timeout=self.shell_timeout,
             limits=self.limits,
             inherit_env=self.inherit_env,
+            executor=self.executor,
         )
 
     @asynccontextmanager
@@ -95,51 +97,89 @@ class LocalWorkspace:
         )
 
         bundle: list["Tool"] = [read_file, list_files, grep_files]
-        if self.policy.allow_write:
+        if self.policy.write != "deny" or self.policy.write_outside != "deny":
             bundle += [write_file, edit_file]
         if self.policy.allow_shell:
             bundle.append(shell)
         return bundle
 
     def instructions(self) -> str:
-        """Render the workspace fragment appended to the system prompt."""
+        """Render the workspace fragment appended to the system prompt.
+
+        Derived from the policy so the prompt states what is actually
+        enforced — it must never promise more than the session delivers.
+        """
+        policy = self.policy
         root_name = Path(self.root).expanduser().resolve().name or str(self.root)
         lines = [
             "## Workspace",
-            f"You work in a workspace rooted at {root_name!r}. All file paths "
-            "and shell working directories are relative to this root; absolute "
-            "host paths and '..' escapes above the root are rejected.",
+            f"You work in a workspace rooted at {root_name!r}. File paths may "
+            "be workspace-relative (preferred) or absolute; symlinks resolve "
+            "to their targets and are judged by where they lead.",
             "Explore with list_files and grep_files; read a file before editing "
             "it; use edit_file for targeted changes and write_file for new files "
             "or full rewrites. Large reads and command output are truncated — "
             "page with start/end or narrow the command rather than dumping "
             "everything.",
         ]
-        if not self.policy.allow_write:
+        if policy.write == "deny":
             lines.append(
-                "This workspace is read-only: write_file and edit_file are "
-                "disabled and not offered."
+                "The workspace is read-only: write_file and edit_file are "
+                "disabled inside it."
             )
-        if self.policy.denied_paths:
-            denied = ", ".join(repr(p) for p in self.policy.denied_paths)
+        elif policy.write == "ask":
             lines.append(
-                f"Paths matching {denied} are off-limits to every tool "
-                "(including the shell); do not try to read or modify them."
+                "Writes inside the workspace require user approval; batch "
+                "related edits rather than asking one line at a time."
             )
-        if self.policy.allow_shell:
-            if self.policy.shell_default == "allow":
+        outside = _describe_outside_access(policy.read_outside, policy.write_outside)
+        if outside:
+            lines.append(outside)
+        if policy.denied_paths:
+            denied = ", ".join(repr(p) for p in policy.denied_paths)
+            lines.append(
+                f"Paths matching {denied} are off-limits: file tools refuse "
+                "them, and shell commands that name them are refused too."
+            )
+        if policy.allow_shell:
+            if policy.shell_default == "allow":
                 lines.append(
                     "A shell tool is available and generally runs without "
-                    "approval; it is not sandboxed and runs as the host user, "
-                    "so be deliberate with anything destructive or irreversible."
+                    "approval; it is not OS-sandboxed and runs as the host "
+                    "user, so be deliberate with anything destructive or "
+                    "irreversible."
                 )
             else:
                 lines.append(
                     "A shell tool is available but gated: some commands need "
-                    "user approval and others are denied by policy. It is not a "
-                    "way around the file rules above — denied paths stay denied."
+                    "user approval and others are denied by policy."
                 )
+            lines.append(
+                "Paths named in shell commands (arguments, redirect targets, "
+                "cwd) are checked against the same rules as the file tools, "
+                "so the shell is not a way around them; a command that needs "
+                "broader access will ask for approval instead."
+            )
         return "\n".join(lines)
+
+
+def _describe_outside_access(read: Decision, write: Decision) -> str:
+    """One honest sentence about access beyond the workspace root."""
+    if read == "deny" and write == "deny":
+        return (
+            "Access outside the workspace root is not permitted; work within "
+            "the workspace."
+        )
+    phrases = {
+        "allow": "is allowed",
+        "ask": "requires user approval",
+        "deny": "is not permitted",
+    }
+    return (
+        f"Outside the workspace root, reading {phrases[read]} and writing "
+        f"{phrases[write]}. When access is denied, ask the user to widen the "
+        "workspace configuration rather than working around it."
+    )
 
 
 class Workspace:
@@ -163,18 +203,30 @@ class Workspace:
         *,
         mode: WorkspaceMode = "coding",
         policy: WorkspacePolicy | None = None,
+        readable: tuple[str, ...] = (),
+        writable: tuple[str, ...] = (),
         denied_paths: tuple[str, ...] = (),
+        path_rules: tuple[PathRule, ...] = (),
         command_rules: tuple[CommandRule, ...] = (),
         env: Mapping[str, str] | None = None,
         shell_timeout: float | None = 300.0,
         inherit_env: bool = False,
         limits: WorkspaceLimits | None = None,
+        executor: ShellExecutor | None = None,
     ) -> LocalWorkspace:
         """Create a local-filesystem workspace rooted at ``root``.
 
-        ``mode`` selects a policy preset (optionally refined with
-        ``denied_paths`` / ``command_rules``); pass an explicit ``policy`` to
-        take full control instead of using a preset.
+        ``mode`` selects a policy preset, optionally refined with:
+
+        * ``readable=`` / ``writable=`` — grant access to paths *outside* the
+          root (absolute or ``~`` patterns; ``writable`` implies readable),
+          e.g. ``readable=("~/docs",)`` for a reference folder.
+        * ``denied_paths=`` — patterns no tool may touch (``".env*"``, ...).
+        * ``path_rules=`` — full ACL control when the shorthands don't fit.
+        * ``command_rules=`` — shell prefix rules (allow/ask/deny).
+
+        Pass an explicit ``policy`` to take full control instead of using a
+        preset (mutually exclusive with the rule shorthands above).
 
         ``inherit_env`` controls the shell environment. By default (``False``)
         only a minimal, non-secret allowlist is passed to commands so
@@ -190,13 +242,17 @@ class Workspace:
            command needs via ``env={...}``; reserve ``inherit_env=True`` for
            trusted code in a sandboxed/throwaway environment.
 
-        ``limits`` tunes the tool size/count caps (read pagination, shell
-        output, grep/listing); omit for sensible defaults.
+        ``executor`` plugs in an OS-sandboxing command runner (see
+        :class:`~lovia.workspace.protocol.ShellExecutor`); ``limits`` tunes
+        the tool size/count caps. Omit both for sensible defaults.
         """
+        rules = _combine_rules(path_rules, readable=readable, writable=writable)
         if policy is not None:
-            if denied_paths or command_rules:
+            if denied_paths or command_rules or rules:
                 raise UserError(
-                    "Pass either policy= or denied_paths/command_rules, not both.",
+                    "Pass either policy= or rule shorthands "
+                    "(readable/writable/denied_paths/path_rules/command_rules), "
+                    "not both.",
                     hint="Put the rules inside your WorkspacePolicy.",
                 )
         elif mode == "readonly":
@@ -204,14 +260,20 @@ class Workspace:
                 raise UserError(
                     "mode='readonly' has no shell; command_rules are unused."
                 )
-            policy = WorkspacePolicy.readonly(denied_paths=denied_paths)
+            policy = WorkspacePolicy.readonly(
+                denied_paths=denied_paths, path_rules=rules
+            )
         elif mode == "coding":
             policy = WorkspacePolicy.coding(
-                denied_paths=denied_paths, command_rules=command_rules
+                denied_paths=denied_paths,
+                path_rules=rules,
+                command_rules=command_rules,
             )
         elif mode == "trusted":
             policy = WorkspacePolicy.trusted(
-                denied_paths=denied_paths, command_rules=command_rules
+                denied_paths=denied_paths,
+                path_rules=rules,
+                command_rules=command_rules,
             )
         else:
             raise UserError(f"Unknown workspace mode: {mode!r}")
@@ -222,6 +284,7 @@ class Workspace:
             shell_timeout=shell_timeout,
             limits=limits if limits is not None else WorkspaceLimits(),
             inherit_env=inherit_env,
+            executor=executor,
         )
 
     @classmethod
@@ -239,6 +302,22 @@ class Workspace:
             "protocols (see lovia.workspace.protocol) is the path to real "
             "isolation."
         )
+
+
+def _combine_rules(
+    path_rules: tuple[PathRule, ...],
+    *,
+    readable: tuple[str, ...],
+    writable: tuple[str, ...],
+) -> tuple[PathRule, ...]:
+    """Expand the readable/writable shorthands into ACL rules.
+
+    Explicit ``path_rules`` come first so they can override the shorthands;
+    ``denied_paths`` always wins regardless (checked before any rule).
+    """
+    grants = [PathRule(pat, "allow") for pat in writable]
+    grants += [PathRule(pat, "allow", ops=frozenset({"read"})) for pat in readable]
+    return tuple(path_rules) + tuple(grants)
 
 
 @dataclass(frozen=True)

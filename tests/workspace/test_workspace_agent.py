@@ -187,6 +187,127 @@ async def test_workspace_tool_conflicts_raise(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_outside_read_asks_then_succeeds_when_approved(tmp_path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    shared = tmp_path / "shared.txt"
+    shared.write_text("outside data", encoding="utf-8")
+
+    provider = ScriptedProvider(
+        [call("read_file", {"path": str(shared)}, call_id="r"), text("done")]
+    )
+    agent = Agent(
+        name="coder",
+        model=provider,
+        workspace=Workspace.local(str(root), mode="coding"),
+    )
+
+    handle = Runner.stream(agent, "read the shared file")
+    saw_approval = False
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            saw_approval = True
+            assert ev.call.name == "read_file"
+            ev.approve()
+
+    result = await handle.result()
+    assert saw_approval is True
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "outside data" in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_outside_read_rejected_reports_denial(tmp_path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    shared = tmp_path / "shared.txt"
+    shared.write_text("outside data", encoding="utf-8")
+
+    provider = ScriptedProvider(
+        [call("read_file", {"path": str(shared)}, call_id="r"), text("ok")]
+    )
+    agent = Agent(
+        name="coder",
+        model=provider,
+        workspace=Workspace.local(str(root), mode="coding"),
+    )
+
+    handle = Runner.stream(agent, "read the shared file")
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            ev.reject()
+
+    result = await handle.result()
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "outside data" not in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_inside_reads_do_not_ask_under_coding(tmp_path) -> None:
+    (tmp_path / "in.txt").write_text("inside", encoding="utf-8")
+    provider = ScriptedProvider(
+        [call("read_file", {"path": "in.txt"}, call_id="r"), text("done")]
+    )
+    agent = Agent(
+        name="coder",
+        model=provider,
+        workspace=Workspace.local(str(tmp_path), mode="coding"),
+    )
+
+    handle = Runner.stream(agent, "read")
+    saw_approval = False
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            saw_approval = True
+            ev.approve()
+
+    result = await handle.result()
+    assert saw_approval is False
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "inside" in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_shell_touching_outside_path_asks_under_coding(tmp_path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    outside = tmp_path / "notes.txt"
+    outside.write_text("outside notes", encoding="utf-8")
+
+    provider = ScriptedProvider(
+        [
+            call(
+                "shell",
+                {"command": f"head -n1 {outside}"},
+                call_id="sh",
+            ),
+            text("done"),
+        ]
+    )
+    agent = Agent(
+        name="coder",
+        model=provider,
+        workspace=Workspace.local(
+            str(root),
+            mode="coding",
+            command_rules=(CommandRule("head", "allow"),),
+        ),
+    )
+
+    handle = Runner.stream(agent, "peek outside")
+    saw_approval = False
+    async for ev in handle:
+        if isinstance(ev, events.ApprovalRequired):
+            saw_approval = True  # the path claim escalated an allowed command
+            ev.approve()
+
+    result = await handle.result()
+    assert saw_approval is True
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "outside notes" in tool_msg.content
+
+
+@pytest.mark.asyncio
 async def test_user_owned_session_survives_runs(tmp_path) -> None:
     (tmp_path / "one.txt").write_text("one", encoding="utf-8")
 

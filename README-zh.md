@@ -864,6 +864,7 @@ agent = Agent(
     workspace=Workspace.local(
         ".",
         mode="coding",
+        readable=("~/reference-docs",),   # 根目录之外的额外可读范围
         denied_paths=(".env*",),
         command_rules=(
             CommandRule("pytest", "allow"),
@@ -873,16 +874,24 @@ agent = Agent(
 )
 ```
 
+文件与 shell 命令共享同一套 `allow` / `ask` / `deny` 策略。路径可以是相对
+workspace 的，也可以是绝对路径；符号链接按其解析目标判定 —— 指向系统解释器的
+`.venv/bin/python` 在策略允许时可以直接读取。`ask` 决策与 shell 命令走同一个
+审批通道。
+
 模式：
 
-| 模式 | 工具 |
-| --- | --- |
-| `readonly` | `read_file`、`list_files`、`grep_files` |
-| `coding` | 读取工具，加上 `write_file`、`edit_file`，以及默认需要审批的 `shell` |
-| `trusted` | coding 模式的工具，并默认允许 `shell` |
+| 模式 | 根目录内 | 根目录外 | shell 默认 |
+| --- | --- | --- | --- |
+| `readonly` | 只读 | 拒绝 | 无 shell |
+| `coding` | 读 + 写 | 读需审批，写拒绝 | 审批 |
+| `trusted` | 读 + 写 | 读允许，写需审批 | 允许 |
 
-Workspace 路径都相对于根目录；绝对路径、`..` 逃逸和符号链接逃逸都会被拒绝。
-本地 shell 仍以宿主机用户身份运行；如果需要强隔离，请使用容器化或远程 workspace 后端。
+用 `readable=` / `writable=`（或完整的 `path_rules=`）扩大范围；用
+`denied_paths` 封禁路径 —— 被封禁的路径不仅文件工具拒绝，点名它们的 shell
+命令（包括重定向目标）同样会被拒绝。命令级路径守卫是词法层面的建议性防护 ——
+本地 shell 仍以宿主机用户身份运行；如果需要强隔离，请使用 `ShellExecutor`
+接缝（OS 级沙箱）或未来的容器后端。
 
 ## Web UI
 

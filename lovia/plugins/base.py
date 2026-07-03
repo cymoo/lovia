@@ -74,12 +74,12 @@ class PluginInstance:
     coroutine to release resources opened during ``setup``.
     """
 
-    tools: "list[Tool]" = field(default_factory=list)
+    tools: list[Tool] = field(default_factory=list)
     view_injectors: list[ViewInjector] = field(default_factory=list)
     instructions: str | None = None
-    hooks: "AgentHooks | None" = None
-    input_guardrails: "list[GuardrailFn]" = field(default_factory=list)
-    output_guardrails: "list[GuardrailFn]" = field(default_factory=list)
+    hooks: AgentHooks | None = None
+    input_guardrails: list[GuardrailFn] = field(default_factory=list)
+    output_guardrails: list[GuardrailFn] = field(default_factory=list)
     aclose: Callable[[], Awaitable[None]] = _noop_aclose
 
 

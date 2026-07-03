@@ -7,7 +7,7 @@ import json
 import pytest
 
 from lovia import Agent, Runner, Todo
-from lovia.plugins.todo import TodoItem, TodoList, render_todos
+from lovia.plugins.todo import TodoItem, TodoList, render_todos, todos_from_entries
 from lovia.transcript import InputEntry, ToolCallEntry
 
 from ..scripted_provider import ScriptedProvider, call, text
@@ -23,6 +23,21 @@ def test_replace_is_full_overwrite() -> None:
     assert [t.content for t in store.items] == ["a", "b"]
     store.replace(_inputs({"content": "c"}))
     assert [t.content for t in store.items] == ["c"]
+
+
+def test_replace_copies_inputs_and_returns_detached_list() -> None:
+    mine = _inputs(
+        {"content": "a", "status": "in_progress"},
+        {"content": "b", "status": "in_progress"},
+    )
+    store = TodoList()
+    returned = store.replace(mine)
+    # Normalization demoted the store's copy, not the caller's objects.
+    assert [t.status for t in mine] == ["in_progress", "in_progress"]
+    assert [t.status for t in store.items] == ["in_progress", "pending"]
+    # Mutating the returned list must not corrupt the store.
+    returned.append(TodoItem(content="sneaky"))
+    assert [t.content for t in store.items] == ["a", "b"]
 
 
 def test_normalize_keeps_one_in_progress() -> None:
@@ -80,6 +95,27 @@ def test_rehydrate_tolerates_garbage() -> None:
     store = TodoList()
     store.rehydrate_from(transcript, tool_name="todo_write")  # no raise
     assert store.items == []
+
+
+def test_rehydrate_skips_malformed_latest_write() -> None:
+    # A malformed call never mutated the store, so the newest *valid* write is
+    # still the current state — the scan must not stop at the malformed one.
+    valid = {"todos": [{"content": "keep me"}]}
+    transcript = [
+        ToolCallEntry(call_id="c1", name="todo_write", arguments=json.dumps(valid)),
+        ToolCallEntry(call_id="c2", name="todo_write", arguments="not json"),
+        ToolCallEntry(
+            call_id="c3",
+            name="todo_write",
+            # JSON-valid but fails TodoItem validation.
+            arguments=json.dumps({"todos": [{"status": 123}]}),
+        ),
+    ]
+    store = TodoList()
+    store.rehydrate_from(transcript, tool_name="todo_write")
+    assert [t.content for t in store.items] == ["keep me"]
+    # The web-layer view agrees with the injector-side rehydration.
+    assert [t.content for t in todos_from_entries(transcript)] == ["keep me"]
 
 
 @pytest.mark.asyncio

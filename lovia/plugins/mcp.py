@@ -28,6 +28,20 @@ Supported transports:
 * :class:`MCPServerStdio` — launch a subprocess and speak MCP over stdio.
 * :class:`MCPServerStreamableHTTP` — connect to a streamable-HTTP MCP endpoint.
 
+Caveats:
+
+* Reconnect + retry is **at-least-once**: if the transport dies after the
+  server executed the call but before the response arrived, the retry runs the
+  side effect twice. Set ``auto_reconnect=False`` for non-idempotent tools.
+* A persistent connection may be reused across *sequential* runs; sharing one
+  across **concurrent** runs is unsupported — reconnection is not synchronized,
+  so overlapping reconnects can leak a transport and fail the other run's
+  in-flight calls.
+* On Python < 3.12, combining a per-tool ``timeout`` with ``auto_reconnect``
+  can leak the old transport on reconnect: ``asyncio.wait_for`` runs attempts
+  in a separate task there, and anyio transports must be closed from the task
+  that opened them. Python 3.12+ is unaffected.
+
 Deliberate non-goals (keep the surface small): MCP prompts, resource browsing,
 sampling, OAuth, heartbeats/subscriptions, and hosted MCP.
 """
@@ -215,6 +229,7 @@ class MCPConnection:
     needs_approval: bool | ApprovalPredicate = False
     retries: int | None = None
     timeout: float | None = None
+    max_output_chars: int | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = False
@@ -275,6 +290,9 @@ class MCPConnection:
         self._session = session
 
     async def _reconnect(self) -> None:
+        # Must run in the task that opened the session: anyio transports bind
+        # their cancel scopes to the entering task (see module Caveats for the
+        # Python < 3.12 wait_for interaction).
         old = self._exit_stack
         self._session = None
         self._exit_stack = None
@@ -332,6 +350,7 @@ class MCPConnection:
                     needs_approval=self.needs_approval,
                     retries=self.retries,
                     timeout=self.timeout,
+                    max_output_chars=self.max_output_chars,
                     result_renderer=renderer,
                 )
             )
@@ -361,12 +380,22 @@ class MCPConnection:
             raise
         except Exception as exc:  # noqa: BLE001 - normalised into MCPError below
             if self.auto_reconnect and _is_connection_error(exc):
-                await self._reconnect()
+                try:
+                    await self._reconnect()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as rexc:  # noqa: BLE001 - normalised below
+                    raise MCPError(
+                        f"MCP tool {tool_name!r} failed: {exc}; "
+                        f"reconnect also failed: {rexc}",
+                        hint="The MCP server connection could not be recovered.",
+                        tool_name=tool_name,
+                    ) from rexc
                 try:
                     return await self._invoke_once(tool_name, args)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc2:  # noqa: BLE001
+                except Exception as exc2:  # noqa: BLE001 - normalised below
                     raise MCPError(
                         f"MCP tool {tool_name!r} failed after reconnect: {exc2}",
                         hint="The MCP server connection could not be recovered.",
@@ -398,12 +427,15 @@ class MCPServerLike(Protocol):
     async def open(self) -> MCPConnection: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServer:
     """Base config for an MCP server. Use a concrete transport subclass.
 
     Immutable configuration only — opening it yields a separate
-    :class:`MCPConnection` that owns the live session.
+    :class:`MCPConnection` that owns the live session. Keyword-only on
+    purpose: the first positional slot would otherwise be ``name``, so
+    ``MCPServerStdio("npx")`` would silently configure a prefix instead of
+    a command.
     """
 
     name: str | None = None
@@ -412,6 +444,10 @@ class MCPServer:
     needs_approval: bool | ApprovalPredicate = False
     retries: int | None = None
     timeout: float | None = None
+    # Cap (in chars) on each tool's rendered output — MCP servers are the
+    # likeliest source of huge text payloads (inlined embedded resources).
+    # ``None`` defers to the agent's ``max_tool_output_chars``.
+    max_output_chars: int | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = True
@@ -441,6 +477,7 @@ class MCPServer:
             needs_approval=self.needs_approval,
             retries=self.retries,
             timeout=self.timeout,
+            max_output_chars=self.max_output_chars,
             result_renderer=self.result_renderer,
             auto_reconnect=self.auto_reconnect,
             close_after_run=close_after_run,
@@ -454,11 +491,11 @@ class MCPServer:
         return conn
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServerStdio(MCPServer):
     """Run a local MCP server as a subprocess and connect over stdio."""
 
-    command: str = ""
+    command: str
     args: list[str] | None = None
     env: dict[str, str] | None = None
 
@@ -477,11 +514,11 @@ class MCPServerStdio(MCPServer):
         return lambda: stdio_client(params)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServerStreamableHTTP(MCPServer):
     """Connect to a remote MCP server over streamable HTTP."""
 
-    url: str = ""
+    url: str
     headers: dict[str, str] | None = None
 
     def _make_transport(self) -> Callable[[], Any]:
@@ -528,7 +565,7 @@ class MCP:
         )
     """
 
-    name: str = "mcp"
+    name: str
 
     def __init__(self, *servers: MCPServerLike, name: str = "mcp") -> None:
         self.servers = tuple(servers)
@@ -537,11 +574,6 @@ class MCP:
     async def setup(self) -> PluginInstance:
         tools: list[Tool] = []
         closers: list[Callable[[], Awaitable[None]]] = []
-        for server in self.servers:
-            conn = await server.open()
-            if server.close_after_run:
-                closers.append(conn.close)
-            tools.extend(conn.tools())
 
         async def aclose() -> None:
             for close in reversed(closers):
@@ -550,6 +582,18 @@ class MCP:
                 except Exception:  # noqa: BLE001 - best-effort teardown
                     logger.debug("mcp.close failed during teardown", exc_info=True)
 
+        try:
+            for server in self.servers:
+                conn = await server.open()
+                if server.close_after_run:
+                    closers.append(conn.close)
+                tools.extend(conn.tools())
+        except BaseException:
+            # A later server failed to open: the runner never receives the
+            # instance, so close the connections opened so far here — otherwise
+            # their transports (stdio subprocesses) would leak.
+            await aclose()
+            raise
         return PluginInstance(tools=tools, aclose=aclose)
 
 

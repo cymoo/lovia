@@ -7,8 +7,11 @@ import pytest
 
 from lovia.exceptions import MCPError
 from lovia.plugins.mcp import (
+    MCP,
     MCPConnection,
     MCPServer,
+    MCPServerStdio,
+    MCPServerStreamableHTTP,
     MCPToolResult,
     normalize_schema,
     render_mcp_content,
@@ -221,6 +224,20 @@ async def test_reconnect_on_connection_error(monkeypatch: pytest.MonkeyPatch) ->
     assert healthy.calls == [("echo", {})]
 
 
+async def test_reconnect_failure_is_normalized_to_mcp_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_open(self: MCPConnection) -> None:
+        raise ConnectionRefusedError("server gone")
+
+    monkeypatch.setattr(MCPConnection, "_open_session", failing_open)
+    conn = MCPConnection(transport=lambda: None, auto_reconnect=True)
+    conn._session = FakeSession(error=ConnectionError("broken pipe"))
+
+    with pytest.raises(MCPError, match="reconnect also failed"):
+        await conn._call("echo", {})
+
+
 async def test_no_reconnect_on_application_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -275,6 +292,27 @@ async def test_refresh_tools_relists() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Config construction
+# --------------------------------------------------------------------------- #
+def test_server_configs_are_keyword_only() -> None:
+    # Positionally the first slot would be the parent's ``name`` field, so
+    # MCPServerStdio("npx") would silently set a prefix instead of a command.
+    with pytest.raises(TypeError):
+        MCPServerStdio("npx")  # type: ignore[misc, call-arg]
+    with pytest.raises(TypeError):
+        MCPServerStreamableHTTP("http://localhost:8000/mcp")  # type: ignore[misc, call-arg]
+
+
+def test_server_configs_require_transport_field() -> None:
+    with pytest.raises(TypeError):
+        MCPServerStdio()  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        MCPServerStreamableHTTP()  # type: ignore[call-arg]
+    assert MCPServerStdio(command="uvx").command == "uvx"
+    assert MCPServerStreamableHTTP(url="http://x/mcp").url == "http://x/mcp"
+
+
+# --------------------------------------------------------------------------- #
 # Lifecycle ownership (config vs persistent connection)
 # --------------------------------------------------------------------------- #
 class _FakeServer(MCPServer):
@@ -296,6 +334,64 @@ async def test_config_open_is_owned_per_run(monkeypatch: pytest.MonkeyPatch) -> 
     # A live connection "opens" to itself (so it can be passed to MCP()).
     assert await conn.open() is conn
     await conn.close()
+
+
+async def test_policy_fields_reach_built_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_open(self: MCPConnection) -> None:
+        self._session = FakeSession(pages=[_page([_tool("echo")], None)])
+
+    monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
+
+    server = _FakeServer(
+        needs_approval=True, retries=2, timeout=1.5, max_output_chars=4096
+    )
+    conn = await server.open()
+    (tool,) = conn.tools()
+    assert tool.needs_approval is True
+    assert tool.retries == 2
+    assert tool.timeout == 1.5
+    assert tool.max_output_chars == 4096
+
+
+async def test_setup_failure_closes_owned_connections_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Server 1 (config → owned) opens fine, the persistent connection is
+    # user-owned, server 3 fails: setup must close only the owned connection
+    # before re-raising, so nothing leaks and the caller keeps theirs.
+    async def fake_open(self: MCPConnection) -> None:
+        self._session = FakeSession(pages=[_page([_tool("echo")], None)])
+
+    monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
+
+    opened: list[MCPConnection] = []
+    orig_open = _FakeServer.open
+
+    async def tracking_open(self: _FakeServer) -> MCPConnection:
+        conn = await orig_open(self)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(_FakeServer, "open", tracking_open)
+
+    class _BoomServer(MCPServer):
+        def _make_transport(self):  # type: ignore[override]
+            return lambda: None
+
+        async def open(self) -> MCPConnection:
+            raise ConnectionError("boom")
+
+    persistent = await _loaded(FakeSession(pages=[_page([_tool("keep")], None)]))
+    plugin = MCP(_FakeServer(name="ok"), persistent, _BoomServer())
+
+    with pytest.raises(ConnectionError, match="boom"):
+        await plugin.setup()
+
+    assert len(opened) == 1
+    assert opened[0]._session is None  # owned connection closed, no leak
+    assert persistent._session is not None  # user-owned connection untouched
 
 
 async def test_persistent_session_not_owned(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -646,10 +646,11 @@ async def test_chat_stream_handles_null_arguments_and_missing_index() -> None:
                     {
                         "delta": {
                             "tool_calls": [
-                                # Gateway style: complete calls, no index, and
-                                # a null arguments field on one of them.
+                                # Gateway style: complete calls, a null index,
+                                # a missing index, and a null arguments field.
                                 {
                                     "id": "c1",
+                                    "index": None,
                                     "function": {"name": "one", "arguments": None},
                                 },
                                 {

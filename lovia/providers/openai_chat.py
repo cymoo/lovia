@@ -402,10 +402,12 @@ class OpenAIChatProvider:
                         yield ReasoningDelta(text=reasoning)
 
                     for pos, tc in enumerate(delta.get("tool_calls") or []):
-                        # Gateways that omit ``index`` send complete calls, so
-                        # list position keeps parallel calls in one chunk from
-                        # collapsing into a single slot.
-                        idx = tc.get("index", pos)
+                        # Gateways that omit ``index`` (or send it as null)
+                        # emit complete calls, so list position keeps parallel
+                        # calls in one chunk from collapsing into one slot.
+                        idx = tc.get("index")
+                        if not isinstance(idx, int):
+                            idx = pos
                         if tc.get("id"):
                             tool_call_ids[idx] = tc["id"]
                         fn = tc.get("function") or {}

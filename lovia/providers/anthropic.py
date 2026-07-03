@@ -149,7 +149,7 @@ class AnthropicProvider:
     def _check_ready(self) -> None:
         if self._on_official_host() and not self._api_key:
             raise UserError(
-                "Anthropic provider requires an API key for api.anthropic.com",
+                f"Anthropic provider requires an API key for {self._host}",
                 hint="Set ANTHROPIC_API_KEY or pass api_key=...; use base_url=... for compatible gateways that do not need one.",
             )
 

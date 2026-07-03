@@ -270,7 +270,7 @@ class OpenAIChatProvider:
     def _check_ready(self) -> None:
         if self._on_official_host() and not self._api_key:
             raise UserError(
-                "OpenAI Chat provider requires an API key for api.openai.com",
+                f"OpenAI Chat provider requires an API key for {self._host}",
                 hint="Set OPENAI_API_KEY or pass api_key=...; use base_url=... for OpenAI-compatible endpoints that do not need one.",
             )
 

@@ -310,16 +310,18 @@ async def test_in_memory_checkpointer_freezes_head_state() -> None:
     from lovia.stores import InMemoryCheckpointer
 
     cp = InMemoryCheckpointer()
-    live_state = {"summary": "v1"}
+    live_state = {"summary": "v1", "offloaded": [1]}
     head = RunHead(agent_name="a", usage=Usage(), turns=1, context_state=live_state)
     await cp.append("r1", [InputEntry(role="user", content="hi")], head)
 
-    live_state["summary"] = "v2"  # the run keeps mutating its scratch
+    live_state["summary"] = "v2"  # the run keeps mutating its scratch...
+    live_state["offloaded"].append(2)  # ...including nested structures in place
     snap = await cp.load("r1")
     assert snap is not None
-    assert snap.context_state == {"summary": "v1"}  # frozen at append time
+    assert snap.context_state == {"summary": "v1", "offloaded": [1]}  # frozen
 
     snap.context_state["summary"] = "vandalized"  # a careless reader
+    snap.context_state["offloaded"].append(3)
     snap2 = await cp.load("r1")
     assert snap2 is not None
-    assert snap2.context_state == {"summary": "v1"}  # the store is unharmed
+    assert snap2.context_state == {"summary": "v1", "offloaded": [1]}  # unharmed

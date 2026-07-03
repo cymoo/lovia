@@ -11,6 +11,7 @@ row in ``snapshot_heads``; :class:`InMemoryCheckpointer` keeps them in dicts.
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -21,9 +22,16 @@ from ._sqlite import SQLiteStore
 
 
 def _frozen(head: RunHead) -> RunHead:
-    """An independent copy of ``head``'s mutable bits (usage, context_state)."""
+    """An independent copy of ``head``'s mutable bits (usage, context_state).
+
+    ``context_state`` is deep-copied: it is a ``JsonObject`` whose *nested*
+    lists/dicts the context policy mutates in place across turns, so a shallow
+    copy would still alias the live run state.
+    """
     return replace(
-        head, usage=head.usage.clone(), context_state=dict(head.context_state)
+        head,
+        usage=head.usage.clone(),
+        context_state=copy.deepcopy(head.context_state),
     )
 
 

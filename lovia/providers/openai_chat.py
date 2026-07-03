@@ -296,7 +296,13 @@ class OpenAIChatProvider:
             if settings.top_p is not None:
                 payload["top_p"] = settings.top_p
             if settings.max_tokens is not None:
-                payload["max_tokens"] = settings.max_tokens
+                # Current official models reject the legacy ``max_tokens``
+                # ("use 'max_completion_tokens'"), while compatible endpoints
+                # mostly accept only the legacy spelling.
+                if self._using_official_endpoint():
+                    payload["max_completion_tokens"] = settings.max_tokens
+                else:
+                    payload["max_tokens"] = settings.max_tokens
             if settings.stop is not None:
                 payload["stop"] = settings.stop
             if settings.parallel_tool_calls is not None:

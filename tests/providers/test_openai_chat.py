@@ -314,7 +314,9 @@ def test_build_payload_skips_compacted_reasoning_only_turn() -> None:
 
 
 def test_build_payload_maps_settings_and_stream_options() -> None:
-    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://example.test/v1"
+    )
 
     payload = provider._build_payload(
         [InputEntry(role="user", content="hi")],
@@ -342,6 +344,28 @@ def test_build_payload_maps_settings_and_stream_options() -> None:
     assert payload["stop"] == ["END"]
     assert payload["parallel_tool_calls"] is False
     assert payload["seed"] == 1
+
+
+def test_build_payload_uses_max_completion_tokens_on_official_endpoint() -> None:
+    def payload_for(base_url: str) -> dict[str, Any]:
+        provider = OpenAIChatProvider(
+            model="gpt-5", api_key="sk-test", base_url=base_url
+        )
+        return provider._build_payload(
+            [InputEntry(role="user", content="hi")],
+            tools=None,
+            response_format=None,
+            settings=ModelSettings(max_tokens=50),
+            stream=True,
+        )
+
+    official = payload_for("https://api.openai.com/v1")
+    assert official["max_completion_tokens"] == 50
+    assert "max_tokens" not in official
+
+    compatible = payload_for("https://api.deepseek.com")
+    assert compatible["max_tokens"] == 50
+    assert "max_completion_tokens" not in compatible
 
 
 def test_headers_keep_explicit_api_key_when_extra_headers_overlap() -> None:

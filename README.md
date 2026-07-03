@@ -630,6 +630,12 @@ pip install "lovia[ddg]"
 
 Custom search is just a `WebSearch` implementation passed to `web_search()`.
 
+> **Note:** `http_fetch` applies no SSRF filtering — it fetches whatever the
+> host can reach, including private/internal addresses. When the model is
+> exposed to untrusted input, gate it
+> (`dataclasses.replace(http_fetch, needs_approval=True)`) or isolate the
+> network.
+
 ## Plugins
 
 A **plugin** is lovia's one extension axis for bundling a feature.

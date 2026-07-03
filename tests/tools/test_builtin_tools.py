@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -110,6 +111,104 @@ async def test_http_fetch_rejects_non_http_schemes() -> None:
 def test_html_to_text_handles_malformed_markup() -> None:
     assert html_to_text("<p>ok<div") == "ok"
     assert html_to_text("plain text") == "plain text"
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_survives_bogus_charset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A server declaring an unknown charset must not crash the decode with a
+    # LookupError — the body is decoded with the utf-8 fallback instead.
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            content="héllo".encode(),
+            headers={"content-type": "text/plain; charset=totally-bogus"},
+        ),
+    )
+    out = await http_fetch.invoke({"url": "https://example.com"}, _ctx())
+    assert out.startswith("HTTP 200")
+    assert "héllo" in out
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_forwards_method_headers_and_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["x-api-key"] = request.headers.get("x-api-key")
+        seen["content-type"] = request.headers.get("content-type")
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"ok": True})
+
+    _mock_http(monkeypatch, handler)
+    out = await http_fetch.invoke(
+        {
+            "url": "https://api.example.com/things",
+            "method": "post",  # lowercase must be normalized
+            "headers": {"X-Api-Key": "secret"},
+            "body": {"name": "x", "tags": [1, 2]},
+        },
+        _ctx(),
+    )
+    assert out.startswith("HTTP 200")
+    assert seen["method"] == "POST"
+    assert seen["x-api-key"] == "secret"
+    assert seen["content-type"] == "application/json"
+    assert json.loads(seen["body"]) == {"name": "x", "tags": [1, 2]}
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_caps_download_at_1mb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, text="x" * 1_200_000, headers={"content-type": "text/plain"}
+        ),
+    )
+    out = await http_fetch.invoke(
+        {"url": "https://example.com/huge", "max_chars": 200}, _ctx()
+    )
+    assert "download capped at 1MB" in out
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_sniffs_body_when_content_type_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            httpx.Response(200, content=b"looks like text"),
+            httpx.Response(200, content=b"\x00\x01\x02binary"),
+        ]
+    )
+    _mock_http(monkeypatch, lambda request: next(responses))
+    textual = await http_fetch.invoke({"url": "https://example.com/a"}, _ctx())
+    assert "looks like text" in textual
+    binary = await http_fetch.invoke({"url": "https://example.com/b"}, _ctx())
+    assert "binary content not shown" in binary
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_passes_xml_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            text="<rss><item>hi</item></rss>",
+            headers={"content-type": "application/rss+xml"},
+        ),
+    )
+    out = await http_fetch.invoke({"url": "https://example.com/feed"}, _ctx())
+    assert "<rss><item>hi</item></rss>" in out
 
 
 # ---------------------------------------------------------------- time

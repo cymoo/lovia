@@ -6,6 +6,12 @@ re-serialized compactly, HTML is reduced to its visible text via the
 standard-library parser, other text passes through, binary returns
 metadata only — and finally clipped to ``max_chars`` with an explicit
 truncation notice.
+
+No SSRF filtering is applied: the tool fetches whatever the host can reach,
+including private/internal addresses (and redirects may lead there too).
+When the model is exposed to untrusted input, gate the tool — e.g.
+``dataclasses.replace(http_fetch, needs_approval=True)`` — or isolate the
+network instead.
 """
 
 from __future__ import annotations
@@ -121,7 +127,9 @@ def _render_body(content_type: str, body: bytes, charset: str) -> str:
         return extracted or text
     if content_type.startswith("text/") or content_type.endswith("+xml"):
         return text
-    if not content_type or _looks_textual(body):
+    # Unknown or missing content type: sniff. NUL bytes mean binary — showing
+    # replacement-character soup to the model helps nobody.
+    if _looks_textual(body):
         return text
     return f"(binary content not shown: {content_type or 'unknown type'}, {len(body)} bytes)"
 
@@ -183,7 +191,11 @@ async def http_fetch(
             raw = b"".join(chunks)[:_MAX_RESPONSE_BYTES]
             status = resp.status_code
             content_type = resp.headers.get("content-type", "")
-            charset = resp.charset_encoding or "utf-8"
+            # ``resp.encoding`` (unlike the raw ``charset_encoding`` header
+            # value) is validated against known codecs and falls back to
+            # utf-8, so a server sending ``charset=bogus`` can't crash the
+            # decode below with a LookupError.
+            charset = resp.encoding or "utf-8"
 
     media_type = content_type.split(";")[0].strip().lower()
     rendered = _render_body(media_type, raw, charset)

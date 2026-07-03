@@ -408,12 +408,15 @@ class MCPServerLike(Protocol):
     async def open(self) -> MCPConnection: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServer:
     """Base config for an MCP server. Use a concrete transport subclass.
 
     Immutable configuration only — opening it yields a separate
-    :class:`MCPConnection` that owns the live session.
+    :class:`MCPConnection` that owns the live session. Keyword-only on
+    purpose: the first positional slot would otherwise be ``name``, so
+    ``MCPServerStdio("npx")`` would silently configure a prefix instead of
+    a command.
     """
 
     name: str | None = None
@@ -464,11 +467,11 @@ class MCPServer:
         return conn
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServerStdio(MCPServer):
     """Run a local MCP server as a subprocess and connect over stdio."""
 
-    command: str = ""
+    command: str
     args: list[str] | None = None
     env: dict[str, str] | None = None
 
@@ -487,11 +490,11 @@ class MCPServerStdio(MCPServer):
         return lambda: stdio_client(params)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class MCPServerStreamableHTTP(MCPServer):
     """Connect to a remote MCP server over streamable HTTP."""
 
-    url: str = ""
+    url: str
     headers: dict[str, str] | None = None
 
     def _make_transport(self) -> Callable[[], Any]:

@@ -10,6 +10,8 @@ from lovia.plugins.mcp import (
     MCP,
     MCPConnection,
     MCPServer,
+    MCPServerStdio,
+    MCPServerStreamableHTTP,
     MCPToolResult,
     normalize_schema,
     render_mcp_content,
@@ -287,6 +289,27 @@ async def test_refresh_tools_relists() -> None:
     refreshed = await conn.refresh_tools()
     assert [t.name for t in refreshed] == ["a", "b"]
     assert session.list_calls == 2
+
+
+# --------------------------------------------------------------------------- #
+# Config construction
+# --------------------------------------------------------------------------- #
+def test_server_configs_are_keyword_only() -> None:
+    # Positionally the first slot would be the parent's ``name`` field, so
+    # MCPServerStdio("npx") would silently set a prefix instead of a command.
+    with pytest.raises(TypeError):
+        MCPServerStdio("npx")  # type: ignore[misc, call-arg]
+    with pytest.raises(TypeError):
+        MCPServerStreamableHTTP("http://localhost:8000/mcp")  # type: ignore[misc, call-arg]
+
+
+def test_server_configs_require_transport_field() -> None:
+    with pytest.raises(TypeError):
+        MCPServerStdio()  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        MCPServerStreamableHTTP()  # type: ignore[call-arg]
+    assert MCPServerStdio(command="uvx").command == "uvx"
+    assert MCPServerStreamableHTTP(url="http://x/mcp").url == "http://x/mcp"
 
 
 # --------------------------------------------------------------------------- #

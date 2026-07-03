@@ -567,6 +567,49 @@ def test_response_format_ignores_unsupported_openai_shapes() -> None:
     assert "output_config" not in payload
 
 
+def test_provider_options_canonical_key_beats_alias() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        entries=[InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            provider_options={"claude": {"top_k": 2}, "anthropic": {"top_k": 1}}
+        ),
+        stream=True,
+    )
+
+    assert payload["top_k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_client_and_allows_reuse() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    first = provider._http()
+    await provider.aclose()
+
+    assert first.is_closed
+    second = provider._http()
+    assert second is not first
+    assert not second.is_closed
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_leaves_injected_client_open() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    await provider.aclose()
+
+    assert not client.is_closed
+    await client.aclose()
+
+
 def test_headers_include_extra_headers_without_overriding_explicit_api_key() -> None:
     provider = AnthropicProvider(
         model="claude-haiku-4-5",
@@ -697,6 +740,54 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
         arguments='{"q":"x"}',
     )
     assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_use_with_prefilled_input_block() -> None:
+    """Some gateways deliver the full tool input in content_block_start."""
+    body = _sse(
+        [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "c1",
+                    "name": "add",
+                    "input": {"a": 1},
+                },
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_stop"},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    tool_delta = next(_deltas(deltas, ToolCallDelta))
+    assert json.loads(tool_delta.arguments) == {"a": 1}
+    entry = next(_deltas(deltas, EntryCompletedDelta)).entry
+    assert isinstance(entry, ToolCallEntry)
+    assert json.loads(entry.arguments) == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_stream_without_usage_or_stop_reason_reports_defaults() -> None:
+    body = _sse([{"type": "message_stop"}])
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    usage = next(_deltas(deltas, UsageDelta)).usage
+    assert (usage.input_tokens, usage.output_tokens) == (0, 0)
+    assert next(_deltas(deltas, FinishDelta)).reason is None
 
 
 @pytest.mark.asyncio

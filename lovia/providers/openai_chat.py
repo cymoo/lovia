@@ -308,7 +308,7 @@ class OpenAIChatProvider:
                 payload["stop"] = settings.stop
             if settings.parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = settings.parallel_tool_calls
-            payload.update(provider_options(settings, self.name, "openai"))
+            payload.update(provider_options(settings, "openai", self.name))
         if stream:
             # Asking for usage in the stream requires opt-in.
             payload.setdefault("stream_options", {"include_usage": True})

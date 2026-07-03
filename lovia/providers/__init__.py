@@ -3,13 +3,16 @@
 Importing :func:`provider_from_string` lets users write::
 
     Agent(model="openai:gpt-5.4", ...)
-    Agent(model="anthropic:claude-4-5-sonnet", ...)
+    Agent(model="anthropic:claude-sonnet-4-5", ...)
 
 while still allowing them to pass a :class:`Provider` instance directly.
 
 Third-party packages can register additional vendor prefixes through the
 ``lovia.providers`` entry-point group — see
-:func:`provider_from_string` for the contract.
+:func:`provider_from_string` for the contract. Entry points cannot shadow
+the built-in prefixes (a safety property: installing a package never
+silently reroutes ``openai:``/``anthropic:`` specs); overriding a built-in
+requires an explicit :func:`register_provider` call.
 """
 
 from __future__ import annotations

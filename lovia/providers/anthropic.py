@@ -155,7 +155,7 @@ class AnthropicProvider:
         stream: bool,
     ) -> JsonObject:
         extra = (
-            provider_options(settings, self.name, "claude")
+            provider_options(settings, "claude", self.name)
             if settings is not None
             else {}
         )
@@ -373,8 +373,7 @@ class AnthropicProvider:
                     elif etype == "message_delta":
                         delta = event.get("delta") or {}
                         stop_reason = delta.get("stop_reason") or stop_reason
-                        if u_raw := event.get("usage"):
-                            u = u_raw
+                        if u := event.get("usage"):
                             usage.output_tokens = u.get(
                                 "output_tokens", usage.output_tokens
                             )
@@ -386,8 +385,7 @@ class AnthropicProvider:
                                 usage.cache_read_tokens = u["cache_read_input_tokens"]
                     elif etype == "message_start":
                         message = event.get("message") or {}
-                        if u_raw := message.get("usage"):
-                            u = u_raw
+                        if u := message.get("usage"):
                             usage.input_tokens = u.get("input_tokens", 0)
                             usage.output_tokens = u.get("output_tokens", 0)
                             usage.cache_write_tokens = u.get(
@@ -602,8 +600,7 @@ def _is_context_overflow(status: int, body: str) -> bool:
         or "context limit" in lowered
         # Bedrock-hosted Claude behind gateways
         or "too many total text bytes" in lowered
-        or "max_tokens_to_sample" in lowered
-        and "exceeds" in lowered
+        or ("max_tokens_to_sample" in lowered and "exceeds" in lowered)
     )
 
 

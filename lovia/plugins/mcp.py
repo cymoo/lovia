@@ -548,7 +548,7 @@ class MCP:
         )
     """
 
-    name: str = "mcp"
+    name: str
 
     def __init__(self, *servers: MCPServerLike, name: str = "mcp") -> None:
         self.servers = tuple(servers)

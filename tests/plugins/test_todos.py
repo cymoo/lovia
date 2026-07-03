@@ -25,6 +25,21 @@ def test_replace_is_full_overwrite() -> None:
     assert [t.content for t in store.items] == ["c"]
 
 
+def test_replace_copies_inputs_and_returns_detached_list() -> None:
+    mine = _inputs(
+        {"content": "a", "status": "in_progress"},
+        {"content": "b", "status": "in_progress"},
+    )
+    store = TodoList()
+    returned = store.replace(mine)
+    # Normalization demoted the store's copy, not the caller's objects.
+    assert [t.status for t in mine] == ["in_progress", "in_progress"]
+    assert [t.status for t in store.items] == ["in_progress", "pending"]
+    # Mutating the returned list must not corrupt the store.
+    returned.append(TodoItem(content="sneaky"))
+    assert [t.content for t in store.items] == ["a", "b"]
+
+
 def test_normalize_keeps_one_in_progress() -> None:
     store = TodoList()
     store.replace(

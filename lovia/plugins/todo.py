@@ -7,8 +7,9 @@
 ``TodoItem`` is the per-item schema — both the model-facing tool input and the
 host-side record (the list is full-replace, so there is no per-item id).
 
-Observability: filter ``ToolCallCompleted`` where ``call.name == "todo_write"``;
-``ToolResultEntry.raw`` carries the structured ``list[TodoItem]``.
+Observability: filter ``ToolCallCompleted`` where ``call.name`` matches the
+configured ``tool_name`` (default ``"todo_write"``); ``ToolResultEntry.raw``
+carries the structured ``list[TodoItem]``.
 """
 
 from __future__ import annotations
@@ -104,9 +105,13 @@ class TodoList:
         self.items: list[TodoItem] = []
 
     def replace(self, inputs: list[TodoItem]) -> list[TodoItem]:
-        """Replace the whole list (the only mutation). Returns the new items."""
-        self.items = _normalize(list(inputs))
-        return self.items
+        """Replace the whole list (the only mutation). Returns the new items.
+
+        Items are copied on the way in (normalization must not mutate the
+        caller's objects) and the returned list is detached from the store.
+        """
+        self.items = _normalize([item.model_copy() for item in inputs])
+        return list(self.items)
 
     def rehydrate_from(self, entries: list[TranscriptEntry], *, tool_name: str) -> None:
         """Rebuild from the most recent parseable ``todo_write`` call in ``entries``.
@@ -158,13 +163,14 @@ _INSTRUCTIONS = (
 )
 
 
-def _make_tool(store: TodoList, tool_name: str) -> Tool:
-    def render_result(result: list[TodoItem], ctx: RunContext[Any]) -> str:
-        if not result:
-            return "Todo list cleared."
-        return "Updated todo list:\n" + render_todos(result)
+def _render_result(result: list[TodoItem], ctx: RunContext[Any]) -> str:
+    if not result:
+        return "Todo list cleared."
+    return "Updated todo list:\n" + render_todos(result)
 
-    @tool(name=tool_name, description=_TOOL_DESCRIPTION, result_renderer=render_result)
+
+def _make_tool(store: TodoList, tool_name: str) -> Tool:
+    @tool(name=tool_name, description=_TOOL_DESCRIPTION, result_renderer=_render_result)
     async def todo_write(
         ctx: RunContext[Any],
         todos: Annotated[

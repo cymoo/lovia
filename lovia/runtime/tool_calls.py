@@ -214,6 +214,13 @@ class ToolCallProcessor:
             result_text = f"Transferred to {result.handoff.target.name}" + (
                 f" ({result.reason})" if result.reason else ""
             )
+        elif is_error:
+            # The "Tool error: ..." string built above is runner-produced and
+            # final. Renderers format a tool's *return value*; routing error
+            # strings through them forced every renderer to special-case
+            # strings, and a success-shape renderer would crash here and mask
+            # the real failure behind "result rendering failed".
+            result_text = result
         else:
             try:
                 result_text = await render_tool_result(

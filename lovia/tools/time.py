@@ -95,5 +95,6 @@ async def sleep(
     seconds: Annotated[float, "How long to sleep, max 60s."],
 ) -> str:
     """Sleep for ``seconds`` (capped at 60 to avoid runaway calls)."""
-    await asyncio.sleep(min(max(seconds, 0.0), 60.0))
-    return f"slept {min(max(seconds, 0.0), 60.0)}s"
+    capped = min(max(seconds, 0.0), 60.0)
+    await asyncio.sleep(capped)
+    return f"slept {capped}s"

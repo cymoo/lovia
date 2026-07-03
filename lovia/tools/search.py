@@ -103,9 +103,9 @@ def _render_search_results(result: Any, ctx: Any) -> str:
 
     A readable block per hit (title / url / snippet) instead of raw JSON; the
     bare URL on its own line is what the web UI turns into a clickable link.
-    Only the success shape (a list of hits) is ours to format — anything else,
-    notably the runner's ``"Tool error: …"`` string from a raised exception,
-    passes through unchanged so real failures aren't swallowed as "No results.".
+    Only the success shape (a list of hits) is ours to format — the runner
+    never routes error strings through renderers, so anything else can only
+    arrive from a direct caller and falls back to the default rendering.
     """
     if not isinstance(result, list):
         return result if isinstance(result, str) else default_result_renderer(result)

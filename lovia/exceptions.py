@@ -72,6 +72,16 @@ class ToolError(LoviaError):
     tool_name: str | None = None
 
 
+class InvalidToolArguments(ToolError):
+    """Raised when a tool call's arguments fail schema validation.
+
+    Deterministic for the given arguments, so :func:`lovia.tools.run_tool`
+    does not retry it — the same args would fail the same way. It surfaces to
+    the model as a tool-error result carrying the validation message it needs
+    to correct the call.
+    """
+
+
 class MaxTurnsExceeded(LoviaError):
     """Raised when the runner exceeds ``max_turns`` without producing output."""
 

@@ -147,7 +147,8 @@ class Agent(Generic[TContext]):
     max_tool_output_chars: int | None = None
     # Optional agent-wide renderer applied to any tool whose own
     # ``result_renderer`` is ``None``. Useful for things like always
-    # JSON-serializing via a custom encoder.
+    # JSON-serializing via a custom encoder. Successful results only:
+    # runner-produced "Tool error: ..." strings bypass renderers.
     tool_result_renderer: "ToolResultRenderer | None" = None
     # Dynamic instruction fragments registered via @agent.instruction.
     # Rendered in registration order and appended after ``instructions``.

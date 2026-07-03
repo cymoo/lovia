@@ -33,18 +33,24 @@ from typing import (
 )
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..types import JsonObject, JsonSchema
-from ..exceptions import BudgetExceeded, RunCancelled, UserError
+from ..exceptions import (
+    BudgetExceeded,
+    InvalidToolArguments,
+    RunCancelled,
+    UserError,
+)
 from ..run_context import RunContext
-from ..schema import function_args_schema, validate_args
+from ..schema import build_args_validator, function_args_schema
 
 # Argument contract for the callables below. ``ApprovalPredicate``,
 # ``ToolInvoker``, and ``ToolPolicy`` all receive the *raw* arguments parsed
 # from the model's tool call (``json.loads(call.arguments or "{}")``). Pydantic
 # coercion, defaults, and validation happen only at the function boundary, inside
-# the generated ``invoke`` (via :func:`validate_args`). This is deliberate:
+# the generated ``invoke`` (via the validator prebuilt by
+# :func:`lovia.schema.build_args_validator`). This is deliberate:
 # validation is bound to the target function's signature, which only the innermost
 # ``invoke`` knows, so the surrounding wrappers stay schema-agnostic. A predicate
 # or policy that needs coerced/defaulted values should apply its own validation.
@@ -80,6 +86,9 @@ class ToolPolicy(Protocol):
 
 # Render the raw return value as the string the model receives. ``None`` uses
 # the default renderer (str for strings, json.dumps for everything else).
+# Renderers see *successful* results only: when a tool raises, the runner's
+# own "Tool error: ..." string is final and bypasses both the per-tool and
+# the agent-wide renderer.
 ToolResultRenderer = Callable[[Any, "RunContext[Any]"], "str | Awaitable[str]"]
 
 
@@ -109,10 +118,7 @@ class Tool:
     # Optional custom renderer for the result string the model sees.
     result_renderer: ToolResultRenderer | None = None
     # Advanced per-attempt policy chain. Policies compose in list order.
-    policies: tuple[ToolPolicy, ...] = field(default_factory=tuple)
-    # When True the runner passes the RunContext to invoke as the named kwarg.
-    _wants_context: bool = field(default=False, repr=False)
-    _context_param: str | None = field(default=None, repr=False)
+    policies: tuple[ToolPolicy, ...] = ()
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected
     # without firing its on_handoff side effects.
@@ -271,13 +277,16 @@ async def run_tool(
                     one_attempt(attempt_args, ctx), timeout=timeout
                 )
             return await one_attempt(attempt_args, ctx)
-        except (RunCancelled, BudgetExceeded):
-            # Not retried: neither condition can clear on its own, so retrying
-            # only burns attempts and backoff sleeps. They part ways upstream —
-            # the runner re-raises RunCancelled (run-global signal) but turns
-            # BudgetExceeded into a tool-error result (budgets are scoped: a
-            # sub-run's exhausted budget is a recoverable delegation failure,
-            # and the run's own budget is re-checked at the next safe point).
+        except (RunCancelled, BudgetExceeded, InvalidToolArguments):
+            # Not retried: none of these can clear on its own, so retrying only
+            # burns attempts and backoff sleeps. RunCancelled and BudgetExceeded
+            # part ways upstream — the runner re-raises RunCancelled (run-global
+            # signal) but turns BudgetExceeded into a tool-error result (budgets
+            # are scoped: a sub-run's exhausted budget is a recoverable
+            # delegation failure, and the run's own budget is re-checked at the
+            # next safe point). InvalidToolArguments is deterministic for the
+            # given args; it becomes a tool-error result carrying the validation
+            # message the model needs to correct the call.
             raise
         except Exception as exc:  # noqa: BLE001 — we want to retry any tool error
             last_exc = exc
@@ -422,12 +431,29 @@ def tool(
             else (inspect.getdoc(func) or "").strip()
         )
         parameters, _ = function_args_schema(func, strict=strict)
+        # Built once here: per-call validation must not pay for
+        # get_type_hints + create_model on every invocation.
+        validate = build_args_validator(func)
 
         context_param = _find_context_param(func)
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
-            kwargs = validate_args(func, args)
+            try:
+                kwargs = validate(args)
+            except ValidationError as exc:
+                # Distinguish bad arguments from failures of the tool body: the
+                # former are deterministic, so run_tool skips retries, and the
+                # compact message (no pydantic doc URLs) is what the model
+                # needs to correct the call.
+                details = "; ".join(
+                    f"{'.'.join(str(p) for p in err['loc']) or 'arguments'}: "
+                    f"{err['msg']}"
+                    for err in exc.errors(include_url=False)
+                )
+                raise InvalidToolArguments(
+                    f"Invalid arguments for tool {tool_name!r}: {details}"
+                ) from exc
             if context_param is not None:
                 kwargs[context_param] = ctx
             if is_async:
@@ -446,8 +472,6 @@ def tool(
             max_output_chars=max_output_chars,
             result_renderer=result_renderer,
             policies=tuple(policies),
-            _wants_context=context_param is not None,
-            _context_param=context_param,
         )
 
     if fn is None:

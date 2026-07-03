@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -112,6 +113,104 @@ def test_html_to_text_handles_malformed_markup() -> None:
     assert html_to_text("plain text") == "plain text"
 
 
+@pytest.mark.asyncio
+async def test_http_fetch_survives_bogus_charset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A server declaring an unknown charset must not crash the decode with a
+    # LookupError — the body is decoded with the utf-8 fallback instead.
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            content="héllo".encode(),
+            headers={"content-type": "text/plain; charset=totally-bogus"},
+        ),
+    )
+    out = await http_fetch.invoke({"url": "https://example.com"}, _ctx())
+    assert out.startswith("HTTP 200")
+    assert "héllo" in out
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_forwards_method_headers_and_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["x-api-key"] = request.headers.get("x-api-key")
+        seen["content-type"] = request.headers.get("content-type")
+        seen["body"] = request.read()
+        return httpx.Response(200, json={"ok": True})
+
+    _mock_http(monkeypatch, handler)
+    out = await http_fetch.invoke(
+        {
+            "url": "https://api.example.com/things",
+            "method": "post",  # lowercase must be normalized
+            "headers": {"X-Api-Key": "secret"},
+            "body": {"name": "x", "tags": [1, 2]},
+        },
+        _ctx(),
+    )
+    assert out.startswith("HTTP 200")
+    assert seen["method"] == "POST"
+    assert seen["x-api-key"] == "secret"
+    assert seen["content-type"] == "application/json"
+    assert json.loads(seen["body"]) == {"name": "x", "tags": [1, 2]}
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_caps_download_at_1mb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, text="x" * 1_200_000, headers={"content-type": "text/plain"}
+        ),
+    )
+    out = await http_fetch.invoke(
+        {"url": "https://example.com/huge", "max_chars": 200}, _ctx()
+    )
+    assert "download capped at 1MB" in out
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_sniffs_body_when_content_type_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            httpx.Response(200, content=b"looks like text"),
+            httpx.Response(200, content=b"\x00\x01\x02binary"),
+        ]
+    )
+    _mock_http(monkeypatch, lambda request: next(responses))
+    textual = await http_fetch.invoke({"url": "https://example.com/a"}, _ctx())
+    assert "looks like text" in textual
+    binary = await http_fetch.invoke({"url": "https://example.com/b"}, _ctx())
+    assert "binary content not shown" in binary
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_passes_xml_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            text="<rss><item>hi</item></rss>",
+            headers={"content-type": "application/rss+xml"},
+        ),
+    )
+    out = await http_fetch.invoke({"url": "https://example.com/feed"}, _ctx())
+    assert "<rss><item>hi</item></rss>" in out
+
+
 # ---------------------------------------------------------------- time
 
 
@@ -141,6 +240,11 @@ async def test_now_unknown_timezone_raises_tool_error() -> None:
 async def test_sleep_is_capped() -> None:
     out = await sleep.invoke({"seconds": 0.01}, _ctx())
     assert "slept" in out
+
+
+@pytest.mark.asyncio
+async def test_sleep_clamps_negative_to_zero() -> None:
+    assert await sleep.invoke({"seconds": -5}, _ctx()) == "slept 0.0s"
 
 
 # ---------------------------------------------------------------- current_date
@@ -224,12 +328,51 @@ def test_web_search_result_renderer() -> None:
     assert "Second" in out
     assert "[{" not in out and '"title"' not in out  # not raw JSON
     assert _render_search_results([], None) == "No results."
-    # A raised web_search exception reaches the renderer as the runner's error
-    # string; it must pass through, not be swallowed as "No results.".
-    assert (
-        _render_search_results("Tool error: network down", None)
-        == "Tool error: network down"
-    )
+    # Non-list shapes can only arrive from a direct caller (the runner never
+    # routes error strings through renderers); they fall back to the default
+    # rendering rather than being swallowed as "No results.".
+    assert _render_search_results("plain string", None) == "plain string"
+
+
+@pytest.mark.asyncio
+async def test_web_search_clamps_max_results() -> None:
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
+            seen["max_results"] = max_results
+            return []
+
+    s = web_search(Recorder())
+    await s.invoke({"query": "x", "max_results": 100}, _ctx())
+    assert seen["max_results"] == 20
+    await s.invoke({"query": "x", "max_results": 0}, _ctx())
+    assert seen["max_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_backend_maps_rows_and_forwards_args() -> None:
+    from lovia.tools.search import DuckDuckGoSearch
+
+    seen: dict[str, Any] = {}
+
+    class FakeDDGS:
+        def __enter__(self) -> "FakeDDGS":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
+            seen.update(query=query, max_results=max_results, timelimit=timelimit)
+            return [{"title": "T", "href": "https://x.example", "body": "B"}]
+
+    # Bypass __init__'s import dance — it is covered separately below.
+    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
+    backend._ddgs_cls = FakeDDGS
+    rows = await backend.search("q", max_results=7, time_range="w")
+    assert seen == {"query": "q", "max_results": 7, "timelimit": "w"}
+    assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
 
 
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,3 +411,65 @@ async def test_ask_human_resolves_via_channel() -> None:
     result = await tool_.invoke({"question": "what is the answer?"}, _ctx())
     await t
     assert result == "42"
+    # An answered question is fully forgotten.
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_cancel_raises_tool_error() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    task = asyncio.create_task(tool_.invoke({"question": "hi?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    channel.cancel(channel.pending[0].id, "operator went home")
+    with pytest.raises(ToolError, match="operator went home"):
+        await task
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_external_cancellation_cleans_up_channel() -> None:
+    # A tool timeout / run cancellation cancels the awaiting task from the
+    # outside; the channel must not keep a ghost question nobody can answer.
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    task = asyncio.create_task(tool_.invoke({"question": "hi?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    assert len(channel.pending) == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_close_cancels_all_pending() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    t1 = asyncio.create_task(tool_.invoke({"question": "one?"}, _ctx()))
+    t2 = asyncio.create_task(tool_.invoke({"question": "two?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    assert len(channel.pending) == 2
+    channel.close("shutting down")
+    for t in (t1, t2):
+        with pytest.raises(ToolError, match="shutting down"):
+            await t
+    assert channel.pending == [] and channel._futures == {}
+
+
+@pytest.mark.asyncio
+async def test_ask_human_concurrent_questions_resolve_independently() -> None:
+    channel = HumanChannel()
+    tool_ = ask_human(channel)
+
+    t1 = asyncio.create_task(tool_.invoke({"question": "first?"}, _ctx()))
+    t2 = asyncio.create_task(tool_.invoke({"question": "second?"}, _ctx()))
+    await asyncio.sleep(0.01)
+    by_text = {q.question: q.id for q in channel.pending}
+    channel.answer(by_text["second?"], "B")  # out of order on purpose
+    channel.answer(by_text["first?"], "A")
+    assert await t1 == "A"
+    assert await t2 == "B"

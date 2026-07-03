@@ -114,6 +114,47 @@ async def test_run_tool_does_not_retry_run_control_signals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_arguments_are_not_retried() -> None:
+    # Bad arguments are deterministic: retrying re-validates the same args and
+    # burns backoff sleeps before the model gets the message it needs.
+    from lovia.exceptions import InvalidToolArguments
+
+    attempts = {"n": 0}
+
+    async def probe(invoke, args, ctx):
+        attempts["n"] += 1
+        return await invoke(args, ctx)
+
+    @tool(retries=3, policies=[probe])
+    async def needs_int(count: int) -> str:
+        return str(count)
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    with pytest.raises(InvalidToolArguments, match="count"):
+        await run_tool(needs_int, {"count": {"not": "an int"}}, ctx)
+    assert attempts["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_arguments_message_reaches_model() -> None:
+    @tool
+    async def needs_int(count: int) -> str:
+        return str(count)
+
+    provider = ScriptedProvider(
+        [call("needs_int", {"count": "not-an-int"}), text("done")]
+    )
+    agent = Agent(name="a", model=provider, tools=[needs_int])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    # The model sees which argument failed and why — without pydantic doc URLs.
+    assert "Tool error" in last_tool.content
+    assert "count" in last_tool.content
+    assert "integer" in last_tool.content
+    assert "https://errors.pydantic.dev" not in last_tool.content
+
+
+@pytest.mark.asyncio
 async def test_retries_exhausted_surfaces_as_tool_error() -> None:
     @tool(retries=1)
     async def always_fail() -> str:
@@ -124,6 +165,41 @@ async def test_retries_exhausted_surfaces_as_tool_error() -> None:
     result = await Runner.run(agent, "go")
     last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
     assert "Tool error" in last_tool.content and "boom" in last_tool.content
+
+
+@pytest.mark.asyncio
+async def test_policy_can_short_circuit_without_invoking() -> None:
+    calls = {"n": 0}
+
+    async def cache(invoke, args, ctx):
+        return "cached"  # never calls invoke
+
+    @tool(policies=[cache])
+    async def expensive() -> str:
+        calls["n"] += 1
+        return "fresh"
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    assert await run_tool(expensive, {}, ctx) == "cached"
+    assert calls["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_timeout_applies_per_attempt_with_retries() -> None:
+    # The timeout is per attempt, not for the whole retry loop: a first
+    # attempt that times out still leaves the retry a full budget.
+    attempts = {"n": 0}
+
+    @tool(timeout=0.05, retries=1)
+    async def slow_then_fast() -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            await asyncio.sleep(1.0)
+        return "ok"
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    assert await run_tool(slow_then_fast, {}, ctx) == "ok"
+    assert attempts["n"] == 2
 
 
 @pytest.mark.asyncio
@@ -151,6 +227,45 @@ async def test_result_renderer_controls_string_sent_to_model() -> None:
     result = await Runner.run(agent, "go")
     last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
     assert last_tool.content == "<42>"
+
+
+@pytest.mark.asyncio
+async def test_tool_error_bypasses_custom_renderer() -> None:
+    # Renderers format a tool's return value; a raised error must reach the
+    # model as the runner's "Tool error: ..." string. Before, the error string
+    # was routed through the renderer, so a success-shape renderer crashed and
+    # masked the real cause behind "result rendering failed".
+    @tool(result_renderer=lambda r, ctx: f"<{r['n']}>")
+    async def broken() -> dict[str, int]:
+        raise ValueError("db unreachable")
+
+    provider = ScriptedProvider([call("broken", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[broken])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "Tool error: db unreachable"
+
+
+@pytest.mark.asyncio
+async def test_tool_error_bypasses_agent_level_renderer() -> None:
+    seen: list[Any] = []
+
+    def agent_renderer(r: Any, ctx: Any) -> str:
+        seen.append(r)
+        return f"[{r}]"
+
+    @tool
+    async def broken() -> str:
+        raise ValueError("boom")
+
+    provider = ScriptedProvider([call("broken", {}), text("done")])
+    agent = Agent(
+        name="a", model=provider, tools=[broken], tool_result_renderer=agent_renderer
+    )
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "Tool error: boom"
+    assert seen == []  # the renderer never saw the error string
 
 
 @pytest.mark.asyncio
@@ -223,6 +338,36 @@ def test_default_result_renderer_handles_common_python_values() -> None:
             "blob": "hello",
         }
     }
+
+
+def test_default_result_renderer_fallbacks() -> None:
+    # Sets become lists (element order not guaranteed).
+    assert sorted(json.loads(default_result_renderer({2, 1}))) == [1, 2]
+    # A leaf json.dumps can't handle falls back to str() of the converted tree
+    # rather than raising into the runner.
+    rendered = default_result_renderer({"obj": object()})
+    assert isinstance(rendered, str) and "object object" in rendered
+
+
+def test_clip_text_variants() -> None:
+    from lovia.tools.base import clip_text
+
+    text_in = "H" * 80 + "T" * 20
+    # Within the limit: untouched, not flagged.
+    assert clip_text(text_in, 100) == (text_in, False)
+    # Head-only mode keeps the first `limit` chars plus an explicit notice.
+    out, truncated = clip_text(text_in, 10)
+    assert truncated and out.startswith("H" * 10)
+    assert "showing 10 of 100 chars" in out
+    assert (
+        "try a smaller range" in clip_text(text_in, 10, hint="try a smaller range")[0]
+    )
+    # keep_tail mode preserves both ends around the notice.
+    out, truncated = clip_text(text_in, 10, keep_tail=True)
+    assert truncated and out.startswith("H" * 5) and out.endswith("T" * 5)
+    # Degenerate limit: only the notice survives.
+    out, truncated = clip_text(text_in, 0)
+    assert truncated and "showing 0 of 100 chars" in out
 
 
 # ---- RunContext annotation injection (carried over from Phase 1) ----

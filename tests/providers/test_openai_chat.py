@@ -206,6 +206,79 @@ def test_entries_to_openai_messages_keeps_reasoning_with_tool_call() -> None:
     ]
 
 
+def test_entries_to_openai_messages_can_exclude_reasoning() -> None:
+    out = entries_to_openai_messages(
+        [
+            ReasoningEntry(content="think", provider="openai-chat"),
+            ToolCallEntry(call_id="call_1", name="add", arguments='{"a":1}'),
+        ],
+        include_reasoning=False,
+    )
+
+    assert out == [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "add", "arguments": '{"a":1}'},
+                }
+            ],
+        }
+    ]
+
+
+def _reasoning_replayed(provider: OpenAIChatProvider) -> bool:
+    payload = provider._build_payload(
+        [
+            InputEntry(role="user", content="hi"),
+            ReasoningEntry(content="think", provider="openai-chat"),
+            AssistantTextEntry(content="ok"),
+            InputEntry(role="user", content="next"),
+        ],
+        tools=None,
+        response_format=None,
+        settings=None,
+        stream=True,
+    )
+    assistant = next(m for m in payload["messages"] if m["role"] == "assistant")
+    return "reasoning_content" in assistant
+
+
+def test_reasoning_replay_defaults_per_endpoint_host() -> None:
+    # DeepSeek requires the echo; the official API rejects the field;
+    # unknown compatible endpoints default to replaying.
+    assert _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://api.deepseek.com")
+    )
+    assert not _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://api.openai.com/v1")
+    )
+    assert _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://example.test/v1")
+    )
+
+
+def test_reasoning_replay_explicit_override_beats_host_default() -> None:
+    assert not _reasoning_replayed(
+        OpenAIChatProvider(
+            model="m",
+            api_key="k",
+            base_url="https://api.deepseek.com",
+            replay_reasoning=False,
+        )
+    )
+    assert _reasoning_replayed(
+        OpenAIChatProvider(
+            model="m",
+            api_key="k",
+            base_url="https://api.openai.com/v1",
+            replay_reasoning=True,
+        )
+    )
+
+
 def test_entries_to_openai_messages_coalesces_adjacent_user_entries() -> None:
     out = entries_to_openai_messages(
         [

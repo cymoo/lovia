@@ -107,8 +107,14 @@ def entries_to_openai_messages(
     entries: list[TranscriptEntry],
     *,
     reasoning_provider: str = "openai-chat",
+    include_reasoning: bool = True,
 ) -> list[JsonObject]:
-    """Serialize transcript entries to OpenAI Chat messages."""
+    """Serialize transcript entries to OpenAI Chat messages.
+
+    ``include_reasoning`` controls whether :class:`ReasoningEntry` values are
+    replayed as ``reasoning_content`` — endpoints disagree on the field (see
+    ``_REASONING_REPLAY_DEFAULTS``).
+    """
 
     out: list[JsonObject] = []
     pending_reasoning: str | None = None
@@ -136,7 +142,7 @@ def entries_to_openai_messages(
             flush_assistant()
             _append_input_message(out, entry)
         elif isinstance(entry, ReasoningEntry):
-            if entry.provider == reasoning_provider:
+            if include_reasoning and entry.provider == reasoning_provider:
                 pending_reasoning = (pending_reasoning or "") + entry.content
         elif isinstance(entry, AssistantTextEntry):
             pending_content = (pending_content or "") + entry.content
@@ -177,6 +183,11 @@ class OpenAIChatProvider:
             ambient proxy setting cannot make the provider require optional
             dependencies such as SOCKS support. Pass a custom client for more
             advanced transport configuration.
+        replay_reasoning: Whether ``reasoning_content`` from earlier turns is
+            replayed on assistant input messages. ``None`` (default) resolves
+            per endpoint host: DeepSeek requires the replay, the official
+            OpenAI API rejects the field, and unlisted hosts replay. Pass
+            ``True``/``False`` to override for endpoints we guess wrong.
     """
 
     name = "openai-chat"
@@ -192,6 +203,7 @@ class OpenAIChatProvider:
         default_headers: dict[str, str] | None = None,
         supports_json_schema: bool | None = None,
         trust_env: bool | None = None,
+        replay_reasoning: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -204,6 +216,7 @@ class OpenAIChatProvider:
         self._extra_headers = dict(default_headers or {})
         self._supports_json_schema = supports_json_schema
         self._trust_env = resolve_trust_env(trust_env)
+        self._replay_reasoning = replay_reasoning
 
     @property
     def supports_json_schema(self) -> bool:
@@ -218,6 +231,12 @@ class OpenAIChatProvider:
 
     def _using_official_endpoint(self) -> bool:
         return urlparse(self.base_url).hostname == "api.openai.com"
+
+    def _should_replay_reasoning(self) -> bool:
+        if self._replay_reasoning is not None:
+            return self._replay_reasoning
+        host = urlparse(self.base_url).hostname or ""
+        return _REASONING_REPLAY_DEFAULTS.get(host, True)
 
     def _check_ready(self) -> None:
         if self._using_official_endpoint() and not self._api_key:
@@ -261,7 +280,9 @@ class OpenAIChatProvider:
         payload: JsonObject = {
             "model": self.model,
             "messages": entries_to_openai_messages(
-                entries, reasoning_provider=self.name
+                entries,
+                reasoning_provider=self.name,
+                include_reasoning=self._should_replay_reasoning(),
             ),
             "stream": stream,
         }
@@ -385,6 +406,25 @@ class OpenAIChatProvider:
 
     def context_window(self, model: str) -> int | None:
         return _OPENAI_CONTEXT_WINDOWS.get(model)
+
+
+# Default for replaying ``reasoning_content`` on assistant input messages,
+# keyed by endpoint host. Endpoints disagree:
+#
+# * DeepSeek thinking models *require* it — omitting the field in a tool loop
+#   is a 400 ("The reasoning_content in the thinking mode must be passed back
+#   to the API"; verified live against deepseek-v4-pro, 2026-07). Kimi K2
+#   thinking documents the same requirement.
+# * The official OpenAI API neither emits nor accepts the field, so a
+#   transcript recorded against a compatible endpoint must not leak it there.
+#
+# Unlisted hosts replay: every known reasoning_content-emitting endpoint
+# tolerates or requires the echo. The ``replay_reasoning`` constructor
+# argument overrides this table per instance.
+_REASONING_REPLAY_DEFAULTS: dict[str, bool] = {
+    "api.deepseek.com": True,
+    "api.openai.com": False,
+}
 
 
 # OpenAI Chat returns 400 with ``code: context_length_exceeded`` (or a message

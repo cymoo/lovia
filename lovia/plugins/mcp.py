@@ -361,12 +361,22 @@ class MCPConnection:
             raise
         except Exception as exc:  # noqa: BLE001 - normalised into MCPError below
             if self.auto_reconnect and _is_connection_error(exc):
-                await self._reconnect()
+                try:
+                    await self._reconnect()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as rexc:  # noqa: BLE001 - normalised below
+                    raise MCPError(
+                        f"MCP tool {tool_name!r} failed: {exc}; "
+                        f"reconnect also failed: {rexc}",
+                        hint="The MCP server connection could not be recovered.",
+                        tool_name=tool_name,
+                    ) from rexc
                 try:
                     return await self._invoke_once(tool_name, args)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc2:  # noqa: BLE001
+                except Exception as exc2:  # noqa: BLE001 - normalised below
                     raise MCPError(
                         f"MCP tool {tool_name!r} failed after reconnect: {exc2}",
                         hint="The MCP server connection could not be recovered.",

@@ -222,6 +222,20 @@ async def test_reconnect_on_connection_error(monkeypatch: pytest.MonkeyPatch) ->
     assert healthy.calls == [("echo", {})]
 
 
+async def test_reconnect_failure_is_normalized_to_mcp_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_open(self: MCPConnection) -> None:
+        raise ConnectionRefusedError("server gone")
+
+    monkeypatch.setattr(MCPConnection, "_open_session", failing_open)
+    conn = MCPConnection(transport=lambda: None, auto_reconnect=True)
+    conn._session = FakeSession(error=ConnectionError("broken pipe"))
+
+    with pytest.raises(MCPError, match="reconnect also failed"):
+        await conn._call("echo", {})
+
+
 async def test_no_reconnect_on_application_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

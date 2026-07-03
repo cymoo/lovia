@@ -84,12 +84,11 @@ def test_message_translation_extracts_system_and_tool_blocks() -> None:
     assert assistant_blocks[1] == {"type": "text", "text": "working"}
     assert assistant_blocks[2]["type"] == "tool_use"
     assert assistant_blocks[2]["input"] == {"a": 1, "b": 2}
-    assert out[2]["content"][0] == {
-        "type": "tool_result",
-        "tool_use_id": "c1",
-        "content": "3",
-    }
-    assert out[2]["content"][1] == {"type": "text", "text": ""}
+    # The trailing empty user entry contributes nothing (the API rejects
+    # empty text blocks), leaving only the tool_result.
+    assert out[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "c1", "content": "3"}
+    ]
 
 
 def test_message_translation_forwards_tool_result_is_error() -> None:
@@ -106,6 +105,51 @@ def test_message_translation_forwards_tool_result_is_error() -> None:
         "content": "boom",
         "is_error": True,
     }
+
+
+def test_message_translation_skips_empty_content() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="system", content=[TextPart("")]),
+            InputEntry(role="user", content=""),
+            InputEntry(role="user", content=[TextPart(""), TextPart("hi")]),
+            AssistantTextEntry(content=""),
+            ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+        ]
+    )
+
+    system, _ = _to_anthropic_messages([InputEntry(role="system", content="")])
+    assert system is None
+    assert out[0] == {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+    assert [block["type"] for block in out[1]["content"]] == ["tool_use"]
+
+
+def test_message_translation_empty_user_between_assistant_turns() -> None:
+    """An all-empty user entry must not split the surrounding assistant blocks."""
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="user", content="go"),
+            AssistantTextEntry(content="first"),
+            InputEntry(role="user", content=""),
+            AssistantTextEntry(content="second"),
+        ]
+    )
+
+    assert [msg["role"] for msg in out] == ["user", "assistant"]
+    assert [block["text"] for block in out[1]["content"]] == ["first", "second"]
+
+
+def test_message_translation_keeps_non_text_parts_of_empty_text_message() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(
+                role="user",
+                content=[TextPart(""), ImagePart(url="https://x/y.png")],
+            )
+        ]
+    )
+
+    assert [block["type"] for block in out[0]["content"]] == ["image"]
 
 
 def test_message_translation_wraps_invalid_tool_arguments() -> None:
@@ -135,6 +179,65 @@ def test_message_translation_drops_orphan_thinking() -> None:
             ],
         }
     ]
+
+
+def test_message_translation_replays_redacted_thinking_with_tool_use() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            ReasoningEntry(
+                content="", provider="anthropic", metadata={"redacted": "blob=="}
+            ),
+            ToolCallEntry(call_id="c1", name="add", arguments='{"a":1}'),
+        ]
+    )
+
+    assert out[0]["content"][0] == {"type": "redacted_thinking", "data": "blob=="}
+    assert out[0]["content"][1]["type"] == "tool_use"
+
+
+def test_message_translation_drops_orphan_redacted_thinking() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            InputEntry(role="user", content="before"),
+            ReasoningEntry(
+                content="", provider="anthropic", metadata={"redacted": "blob=="}
+            ),
+            ReasoningEntry(content="stale", provider="anthropic"),
+            InputEntry(role="user", content="after"),
+        ]
+    )
+
+    assert all(
+        block["type"] == "text" for msg in out for block in msg["content"]
+    )
+
+
+def test_message_translation_honors_reasoning_provider_param() -> None:
+    entries: list[Any] = [
+        ReasoningEntry(content="think", provider="my-anthropic"),
+        ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+    ]
+
+    _, default_out = _to_anthropic_messages(entries)
+    _, custom_out = _to_anthropic_messages(entries, reasoning_provider="my-anthropic")
+
+    assert default_out[0]["content"][0]["type"] == "tool_use"
+    assert custom_out[0]["content"][0] == {"type": "thinking", "thinking": "think"}
+
+
+def test_message_translation_replay_thinking_off_drops_reasoning() -> None:
+    _, out = _to_anthropic_messages(
+        [
+            ReasoningEntry(content="think", provider="anthropic"),
+            ReasoningEntry(
+                content="", provider="anthropic", metadata={"redacted": "blob=="}
+            ),
+            ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+        ],
+        replay_thinking=False,
+    )
+
+    assert [block["type"] for block in out[0]["content"]] == ["tool_use"]
 
 
 def test_message_translation_keeps_thinking_with_tool_use() -> None:
@@ -377,6 +480,97 @@ def test_build_payload_extra_overrides_adapter_defaults() -> None:
     assert payload["stream"] is True
 
 
+def test_build_payload_gates_thinking_replay_by_endpoint_and_option() -> None:
+    entries = [
+        InputEntry(role="user", content="hi"),
+        ReasoningEntry(
+            content="think", provider="anthropic", metadata={"signature": "sig"}
+        ),
+        ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="3"),
+    ]
+
+    def block_types(payload: dict) -> list[str]:
+        return [
+            block["type"]
+            for message in payload["messages"]
+            if message["role"] == "assistant"
+            for block in message["content"]
+        ]
+
+    official = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="x",
+        base_url="https://api.anthropic.com/v1",
+    )
+    compatible = AnthropicProvider(
+        model="deepseek-v4-pro",
+        api_key="x",
+        base_url="https://api.deepseek.com/anthropic",
+    )
+    thinking_on = ModelSettings(
+        provider_options={
+            "anthropic": {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+        }
+    )
+    thinking_disabled = ModelSettings(
+        provider_options={"anthropic": {"thinking": {"type": "disabled"}}}
+    )
+
+    def build(provider: AnthropicProvider, settings: ModelSettings | None) -> dict:
+        return provider._build_payload(
+            entries, tools=None, response_format=None, settings=settings, stream=True
+        )
+
+    # Official endpoint: thinking blocks are rejected unless thinking is on.
+    assert block_types(build(official, None)) == ["tool_use"]
+    assert block_types(build(official, thinking_disabled)) == ["tool_use"]
+    assert block_types(build(official, thinking_on)) == ["thinking", "tool_use"]
+    # Default-on endpoints replay regardless of the option.
+    assert block_types(build(compatible, None)) == ["thinking", "tool_use"]
+
+    # official_api overrides the host inference in both directions: gateways
+    # forwarding to the official API get the strict gate, and the official
+    # host can be forced lenient.
+    strict_gateway = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="x",
+        base_url="https://gateway.example.test/anthropic",
+        official_api=True,
+    )
+    lenient_official = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="x",
+        base_url="https://api.anthropic.com/v1",
+        official_api=False,
+    )
+    assert block_types(build(strict_gateway, None)) == ["tool_use"]
+    assert block_types(build(lenient_official, None)) == ["thinking", "tool_use"]
+
+
+def test_build_payload_none_valued_option_removes_adapter_default() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        entries=[InputEntry(role="user", content="hi")],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "f", "parameters": {"type": "object"}},
+            }
+        ],
+        response_format=None,
+        settings=ModelSettings(
+            parallel_tool_calls=False,
+            provider_options={"anthropic": {"tool_choice": None}},
+        ),
+        stream=True,
+    )
+
+    # parallel_tool_calls=False would set tool_choice; None strips it.
+    assert "tool_choice" not in payload
+
+
 def test_response_format_ignores_unsupported_openai_shapes() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 
@@ -389,6 +583,49 @@ def test_response_format_ignores_unsupported_openai_shapes() -> None:
     )
 
     assert "output_config" not in payload
+
+
+def test_provider_options_canonical_key_beats_alias() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    payload = provider._build_payload(
+        entries=[InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            provider_options={"claude": {"top_k": 2}, "anthropic": {"top_k": 1}}
+        ),
+        stream=True,
+    )
+
+    assert payload["top_k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_client_and_allows_reuse() -> None:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+
+    first = provider._http()
+    await provider.aclose()
+
+    assert first.is_closed
+    second = provider._http()
+    assert second is not first
+    assert not second.is_closed
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_leaves_injected_client_open() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    await provider.aclose()
+
+    assert not client.is_closed
+    await client.aclose()
 
 
 def test_headers_include_extra_headers_without_overriding_explicit_api_key() -> None:
@@ -524,6 +761,94 @@ async def test_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_tool_use_with_prefilled_input_block() -> None:
+    """Some gateways deliver the full tool input in content_block_start."""
+    body = _sse(
+        [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "c1",
+                    "name": "add",
+                    "input": {"a": 1},
+                },
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_stop"},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    tool_delta = next(_deltas(deltas, ToolCallDelta))
+    assert json.loads(tool_delta.arguments) == {"a": 1}
+    entry = next(_deltas(deltas, EntryCompletedDelta)).entry
+    assert isinstance(entry, ToolCallEntry)
+    assert json.loads(entry.arguments) == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_stream_without_usage_or_stop_reason_reports_defaults() -> None:
+    body = _sse([{"type": "message_stop"}])
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    usage = next(_deltas(deltas, UsageDelta)).usage
+    assert (usage.input_tokens, usage.output_tokens) == (0, 0)
+    assert next(_deltas(deltas, FinishDelta)).reason is None
+
+
+@pytest.mark.asyncio
+async def test_stream_captures_redacted_thinking() -> None:
+    body = _sse(
+        [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "redacted_thinking", "data": "blob=="},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "hi"},
+            },
+            {"type": "content_block_stop", "index": 1},
+            {"type": "message_stop"},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    # Redacted content is encrypted: preserved for replay, never displayed.
+    assert not list(_deltas(deltas, ReasoningDelta))
+    completed = [delta.entry for delta in _deltas(deltas, EntryCompletedDelta)]
+    assert completed[0] == ReasoningEntry(
+        content="", provider="anthropic", metadata={"redacted": "blob=="}
+    )
+    assert completed[1] == AssistantTextEntry(content="hi")
+
+
+@pytest.mark.asyncio
 async def test_stream_error_raises_provider_error() -> None:
     body = _sse(
         [
@@ -602,4 +927,6 @@ def test_context_window_includes_current_claude_aliases() -> None:
     assert provider.context_window("claude-opus-4-8") == 200_000
     assert provider.context_window("claude-sonnet-4-6") == 200_000
     assert provider.context_window("claude-haiku-4-5") == 200_000
-    assert provider.context_window("claude-sonnet-4-5-20250929") is None
+    # Date-pinned snapshots share the alias's window; retired aliases don't.
+    assert provider.context_window("claude-sonnet-4-5-20250929") == 200_000
+    assert provider.context_window("claude-3-5-sonnet-20241022") is None

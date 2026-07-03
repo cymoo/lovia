@@ -9,6 +9,7 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 from __future__ import annotations
 
 import os
+import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
@@ -37,11 +38,18 @@ from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
 )
-from ._http import raise_for_provider_status, raise_for_transport_error
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+# Hosts that speak the official OpenAI API dialect: strict parameter set
+# (``max_completion_tokens``), native ``json_schema`` response_format, no
+# ``reasoning_content``. Subdomains match too, which covers the regional
+# data-residency hosts (``eu.api.openai.com``). Gateways that merely forward
+# to the official API can opt in via the ``official_api`` constructor flag.
+_OFFICIAL_HOSTS = ("api.openai.com",)
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +115,14 @@ def entries_to_openai_messages(
     entries: list[TranscriptEntry],
     *,
     reasoning_provider: str = "openai-chat",
+    include_reasoning: bool = True,
 ) -> list[JsonObject]:
-    """Serialize transcript entries to OpenAI Chat messages."""
+    """Serialize transcript entries to OpenAI Chat messages.
+
+    ``include_reasoning`` controls whether :class:`ReasoningEntry` values are
+    replayed as ``reasoning_content`` — endpoints disagree on the field (see
+    ``_REASONING_REPLAY_DEFAULTS``).
+    """
 
     out: list[JsonObject] = []
     pending_reasoning: str | None = None
@@ -136,7 +150,7 @@ def entries_to_openai_messages(
             flush_assistant()
             _append_input_message(out, entry)
         elif isinstance(entry, ReasoningEntry):
-            if entry.provider == reasoning_provider:
+            if include_reasoning and entry.provider == reasoning_provider:
                 pending_reasoning = (pending_reasoning or "") + entry.content
         elif isinstance(entry, AssistantTextEntry):
             pending_content = (pending_content or "") + entry.content
@@ -177,6 +191,19 @@ class OpenAIChatProvider:
             ambient proxy setting cannot make the provider require optional
             dependencies such as SOCKS support. Pass a custom client for more
             advanced transport configuration.
+        replay_reasoning: Whether ``reasoning_content`` from earlier turns is
+            replayed on assistant input messages. ``None`` (default) resolves
+            per endpoint host: DeepSeek requires the replay, the official
+            OpenAI API rejects the field, and unlisted hosts replay. Pass
+            ``True``/``False`` to override for endpoints we guess wrong.
+        official_api: Whether the endpoint speaks the official OpenAI API
+            dialect (``max_completion_tokens`` instead of ``max_tokens``,
+            native ``json_schema``, no ``reasoning_content``). ``None``
+            (default) infers from the host. Set ``True`` for gateways that
+            forward to the official API; the narrower ``supports_json_schema``
+            and ``replay_reasoning`` flags still win where both are given.
+            Does not affect the API-key requirement, which follows the real
+            host — a keyless gateway keeps working with ``official_api=True``.
     """
 
     name = "openai-chat"
@@ -192,11 +219,14 @@ class OpenAIChatProvider:
         default_headers: dict[str, str] | None = None,
         supports_json_schema: bool | None = None,
         trust_env: bool | None = None,
+        replay_reasoning: bool | None = None,
+        official_api: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
+        self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
         self._owns_client = client is None
@@ -204,25 +234,43 @@ class OpenAIChatProvider:
         self._extra_headers = dict(default_headers or {})
         self._supports_json_schema = supports_json_schema
         self._trust_env = resolve_trust_env(trust_env)
+        self._replay_reasoning = replay_reasoning
+        self._official_api = official_api
 
     @property
     def supports_json_schema(self) -> bool:
         """True when the endpoint supports OpenAI-style ``json_schema`` response_format.
 
-        Defaults to True only for the official OpenAI API; other compatible
-        endpoints vary in support. Override via the constructor parameter.
+        Defaults to True only for the official API dialect (see
+        ``official_api``); other compatible endpoints vary in support.
+        Override via the constructor parameter.
         """
         if self._supports_json_schema is not None:
             return self._supports_json_schema
-        return urlparse(self.base_url).hostname == "api.openai.com"
+        return self._speaks_official_api()
 
-    def _using_official_endpoint(self) -> bool:
-        return urlparse(self.base_url).hostname == "api.openai.com"
+    def _on_official_host(self) -> bool:
+        """The endpoint literally is the official API (auth requirements)."""
+        return host_matches(self._host, _OFFICIAL_HOSTS)
+
+    def _speaks_official_api(self) -> bool:
+        """The endpoint follows the official API dialect (request shape)."""
+        if self._official_api is not None:
+            return self._official_api
+        return self._on_official_host()
+
+    def _should_replay_reasoning(self) -> bool:
+        if self._replay_reasoning is not None:
+            return self._replay_reasoning
+        default = _REASONING_REPLAY_DEFAULTS.get(self._host)
+        if default is not None:
+            return default
+        return not self._speaks_official_api()
 
     def _check_ready(self) -> None:
-        if self._using_official_endpoint() and not self._api_key:
+        if self._on_official_host() and not self._api_key:
             raise UserError(
-                "OpenAI Chat provider requires an API key for api.openai.com",
+                f"OpenAI Chat provider requires an API key for {self._host}",
                 hint="Set OPENAI_API_KEY or pass api_key=...; use base_url=... for OpenAI-compatible endpoints that do not need one.",
             )
 
@@ -261,7 +309,9 @@ class OpenAIChatProvider:
         payload: JsonObject = {
             "model": self.model,
             "messages": entries_to_openai_messages(
-                entries, reasoning_provider=self.name
+                entries,
+                reasoning_provider=self.name,
+                include_reasoning=self._should_replay_reasoning(),
             ),
             "stream": stream,
         }
@@ -275,16 +325,24 @@ class OpenAIChatProvider:
             if settings.top_p is not None:
                 payload["top_p"] = settings.top_p
             if settings.max_tokens is not None:
-                payload["max_tokens"] = settings.max_tokens
+                # Current official models reject the legacy ``max_tokens``
+                # ("use 'max_completion_tokens'"), while compatible endpoints
+                # mostly accept only the legacy spelling.
+                if self._speaks_official_api():
+                    payload["max_completion_tokens"] = settings.max_tokens
+                else:
+                    payload["max_tokens"] = settings.max_tokens
             if settings.stop is not None:
                 payload["stop"] = settings.stop
             if settings.parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = settings.parallel_tool_calls
-            payload.update(provider_options(settings, self.name, "openai"))
+            payload.update(provider_options(settings, "openai", self.name))
         if stream:
             # Asking for usage in the stream requires opt-in.
             payload.setdefault("stream_options", {"include_usage": True})
-        return payload
+        # None marks explicit removal (see provider_options), giving users a
+        # way to strip adapter defaults for endpoints that reject them.
+        return {k: v for k, v in payload.items() if v is not None}
 
     async def stream(
         self,
@@ -343,8 +401,13 @@ class OpenAIChatProvider:
                         reasoning_parts.append(reasoning)
                         yield ReasoningDelta(text=reasoning)
 
-                    for tc in delta.get("tool_calls") or []:
-                        idx = tc.get("index", 0)
+                    for pos, tc in enumerate(delta.get("tool_calls") or []):
+                        # Gateways that omit ``index`` (or send it as null)
+                        # emit complete calls, so list position keeps parallel
+                        # calls in one chunk from collapsing into one slot.
+                        idx = tc.get("index")
+                        if not isinstance(idx, int):
+                            idx = pos
                         if tc.get("id"):
                             tool_call_ids[idx] = tc["id"]
                         fn = tc.get("function") or {}
@@ -356,7 +419,7 @@ class OpenAIChatProvider:
                             index=idx,
                             call_id=tool_call_ids.get(idx, ""),
                             name=tool_call_names.get(idx, ""),
-                            arguments=fn.get("arguments", ""),
+                            arguments=fn.get("arguments") or "",
                         )
 
                     if choice.get("finish_reason"):
@@ -384,7 +447,33 @@ class OpenAIChatProvider:
     # ----- ContextPolicy hooks ------------------------------------------------
 
     def context_window(self, model: str) -> int | None:
-        return _OPENAI_CONTEXT_WINDOWS.get(model)
+        window = _OPENAI_CONTEXT_WINDOWS.get(model)
+        if window is None:
+            # Date-pinned snapshots ("gpt-4.1-2025-04-14") share their
+            # alias's window.
+            window = _OPENAI_CONTEXT_WINDOWS.get(
+                re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
+            )
+        return window
+
+
+# Default for replaying ``reasoning_content`` on assistant input messages,
+# keyed by endpoint host. Endpoints disagree:
+#
+# * DeepSeek thinking models *require* it — omitting the field in a tool loop
+#   is a 400 ("The reasoning_content in the thinking mode must be passed back
+#   to the API"; verified live against deepseek-v4-pro, 2026-07). Kimi K2
+#   thinking documents the same requirement.
+# * The official OpenAI API neither emits nor accepts the field; that case is
+#   handled by the official-dialect check, not this table, so gateways
+#   forwarding to the official API inherit it via ``official_api=True``.
+#
+# Unlisted compatible hosts replay: every known reasoning_content-emitting
+# endpoint tolerates or requires the echo. The ``replay_reasoning``
+# constructor argument overrides both the table and the dialect default.
+_REASONING_REPLAY_DEFAULTS: dict[str, bool] = {
+    "api.deepseek.com": True,
+}
 
 
 # OpenAI Chat returns 400 with ``code: context_length_exceeded`` (or a message
@@ -424,9 +513,10 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return False
 
 
-# Context-window table for recent, commonly used OpenAI GPT model aliases. Keep
-# this intentionally small: date-pinned snapshots, o-series, retired models, and
-# niche aliases can fall back to reactive overflow handling.
+# Context-window table for recent, commonly used OpenAI GPT model aliases
+# (their date-pinned snapshots resolve via suffix stripping). Keep this
+# intentionally small: o-series, retired models, and niche aliases can fall
+# back to reactive overflow handling.
 _OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4.1": 1_047_576,
     "gpt-5": 400_000,

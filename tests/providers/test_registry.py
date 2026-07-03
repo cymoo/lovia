@@ -62,6 +62,28 @@ def test_register_provider_later_registration_wins() -> None:
         _REGISTRY.pop("openaix", None)
 
 
+def test_register_provider_prefix_is_case_insensitive() -> None:
+    from lovia.providers import _REGISTRY
+
+    try:
+        register_provider("FakeCo", lambda model: _FakeProvider(model))
+        p = provider_from_string("FAKECO:fake-1")
+        assert isinstance(p, _FakeProvider)
+        assert p.model == "fake-1"
+    finally:
+        _REGISTRY.pop("fakeco", None)
+
+
+def test_bare_claude_model_warns_about_missing_prefix(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="lovia.providers"):
+        provider = provider_from_string("claude-sonnet-4-5")
+
+    assert provider.name == "openai-chat"
+    assert any("anthropic:claude-sonnet-4-5" in r.message for r in caplog.records)
+
+
 def test_builtin_openai_routes_to_factory() -> None:
     """The built-in openai prefix is recognised (no ValueError)."""
     from lovia.providers import _BUILTIN
@@ -108,3 +130,53 @@ def test_entry_point_loading_is_targeted_and_reports_target_failure(
 
     with pytest.raises(ValueError, match="failed to load"):
         provider_from_string("broken:model")
+
+
+def test_entry_point_may_export_a_provider_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata
+    import lovia.providers as providers
+
+    class _ClassEntryPoint:
+        name = "classy"
+        value = "pkg:cls"
+
+        def load(self) -> object:
+            return _FakeProvider
+
+    monkeypatch.setattr(
+        importlib.metadata, "entry_points", lambda group: [_ClassEntryPoint()]
+    )
+    monkeypatch.setattr(providers, "_ENTRY_POINTS", None)
+
+    try:
+        p = provider_from_string("classy:model-1")
+    finally:
+        # Successful entry-point loads are cached into the runtime registry.
+        providers._REGISTRY.pop("classy", None)
+
+    assert isinstance(p, _FakeProvider)
+    assert p.model == "model-1"
+
+
+def test_entry_point_rejects_non_callable_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata
+    import lovia.providers as providers
+
+    class _BadEntryPoint:
+        name = "bad"
+        value = "pkg:obj"
+
+        def load(self) -> object:
+            return object()
+
+    monkeypatch.setattr(
+        importlib.metadata, "entry_points", lambda group: [_BadEntryPoint()]
+    )
+    monkeypatch.setattr(providers, "_ENTRY_POINTS", None)
+
+    with pytest.raises(ValueError, match="provider class or callable factory"):
+        provider_from_string("bad:model")

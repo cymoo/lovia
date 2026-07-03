@@ -147,8 +147,8 @@ async def test_live_summary_burst_preserves_key_fact():
 
     compacted = _compactions(seen)
     assert compacted, "expected at least one compaction burst"
-    assert any("summary" in e.reason for e in compacted)
-    assert any(e.summary for e in compacted)
+    assert any("summary" in e.notice.reason for e in compacted)
+    assert any(e.notice.summary for e in compacted)
     # The planted identifier survived real LLM summarization.
     assert "zanzibar" in (result.output or "").lower()
     # The session was never polluted by the summary.
@@ -238,7 +238,7 @@ async def test_live_tool_clearing_burst_mid_run():
 
     assert "TOKEN-3-OK" in (result.output or "")
     compacted = _compactions(seen)
-    assert compacted and any("clear" in e.reason for e in compacted)
+    assert compacted and any("clear" in e.notice.reason for e in compacted)
     # The real transcript still holds every full tool output.
     full_outputs = [
         e
@@ -333,7 +333,7 @@ async def test_live_offload_archives_to_store():
 
     assert result.output
     compacted = _compactions(seen)
-    assert compacted and any("offload" in e.reason for e in compacted)
+    assert compacted and any("offload" in e.notice.reason for e in compacted)
     assert await store.get("d1") == big
 
 

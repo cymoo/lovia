@@ -115,13 +115,18 @@ def _openai_chat_content_parts(content: object) -> JsonArray:
 
 
 def content_to_anthropic_blocks(content: str | list[ContentPart]) -> list[JsonObject]:
-    """Convert lovia content parts to Anthropic content blocks."""
+    """Convert lovia content parts to Anthropic content blocks.
+
+    Empty text produces no block — the API rejects empty text blocks, and
+    callers skip messages that end up with no blocks at all.
+    """
     if isinstance(content, str):
-        return [{"type": "text", "text": content}]
+        return [{"type": "text", "text": content}] if content else []
     out: list[JsonObject] = []
     for part in content:
         if isinstance(part, TextPart):
-            out.append({"type": "text", "text": part.text})
+            if part.text:
+                out.append({"type": "text", "text": part.text})
         elif isinstance(part, ImagePart):
             if part.url is not None:
                 source: JsonObject = {"type": "url", "url": part.url}

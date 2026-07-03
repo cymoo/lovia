@@ -11,6 +11,11 @@ Conversions worth noting:
   containing a ``tool_result`` block keyed by ``tool_use_id``.
 * Assistant tool calls become ``tool_use`` content blocks; we generate the
   ``id`` mapping on the fly.
+* ``thinking``/``redacted_thinking`` blocks round-trip through
+  :class:`ReasoningEntry` (signature and redacted data in ``metadata``). On
+  the official endpoint they are replayed only when the current request
+  enables thinking — the API rejects them otherwise. Compatible endpoints
+  with thinking on by default (e.g. DeepSeek's ``/anthropic``) always replay.
 * Streaming uses Anthropic's SSE event types (``content_block_delta``,
   ``message_delta``, ...) which we translate into :class:`ModelDelta` values
   consumed by the runner.
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
@@ -50,12 +56,18 @@ from ._content import (
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
-from ._http import raise_for_provider_status, raise_for_transport_error
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 _DEFAULT_VERSION = "2023-06-01"
+
+# Hosts that enforce the official Messages API strictness (e.g. thinking
+# blocks rejected unless the request enables thinking). Subdomains match too.
+# Gateways that merely forward to the official API can opt in via the
+# ``official_api`` constructor flag.
+_OFFICIAL_HOSTS = ("api.anthropic.com",)
 
 
 class AnthropicProvider:
@@ -81,12 +93,19 @@ class AnthropicProvider:
         default_max_tokens: int = 16_384,
         default_headers: dict[str, str] | None = None,
         trust_env: bool | None = None,
+        # Whether the endpoint enforces official Messages API strictness
+        # (thinking-block replay rules). None infers from the host; set True
+        # for gateways forwarding to the official API. Does not affect the
+        # API-key requirement, which follows the real host.
+        official_api: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
+        self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self._official_api = official_api
         self._client = client
         self._owns_client = client is None
         self._timeout = resolve_timeout(timeout)
@@ -110,15 +129,27 @@ class AnthropicProvider:
         return self._client
 
     def context_window(self, model: str) -> int | None:
-        return _ANTHROPIC_CONTEXT_WINDOWS.get(model)
+        window = _ANTHROPIC_CONTEXT_WINDOWS.get(model)
+        if window is None:
+            # Date-pinned snapshots ("claude-sonnet-4-5-20250929") share
+            # their alias's window.
+            window = _ANTHROPIC_CONTEXT_WINDOWS.get(re.sub(r"-\d{8}$", "", model))
+        return window
 
-    def _using_official_endpoint(self) -> bool:
-        return urlparse(self.base_url).hostname == "api.anthropic.com"
+    def _on_official_host(self) -> bool:
+        """The endpoint literally is the official API (auth requirements)."""
+        return host_matches(self._host, _OFFICIAL_HOSTS)
+
+    def _speaks_official_api(self) -> bool:
+        """The endpoint follows the official API strictness (request shape)."""
+        if self._official_api is not None:
+            return self._official_api
+        return self._on_official_host()
 
     def _check_ready(self) -> None:
-        if self._using_official_endpoint() and not self._api_key:
+        if self._on_official_host() and not self._api_key:
             raise UserError(
-                "Anthropic provider requires an API key for api.anthropic.com",
+                f"Anthropic provider requires an API key for {self._host}",
                 hint="Set ANTHROPIC_API_KEY or pass api_key=...; use base_url=... for compatible gateways that do not need one.",
             )
 
@@ -143,13 +174,24 @@ class AnthropicProvider:
         settings: ModelSettings | None,
         stream: bool,
     ) -> JsonObject:
-        system_blocks, anthropic_messages = _to_anthropic_messages(entries)
         extra = (
-            provider_options(settings, self.name, "claude")
+            provider_options(settings, "claude", self.name)
             if settings is not None
             else {}
         )
         cache_system = bool(extra.pop("cache_system", False))
+        thinking = extra.get("thinking")
+        thinking_off = thinking is None or (
+            isinstance(thinking, dict) and thinking.get("type") == "disabled"
+        )
+        # The official API rejects thinking blocks unless the request enables
+        # thinking, so strip stale replay state (e.g. the option was turned
+        # off mid-session). Compatible endpoints may think by default without
+        # the option being set, so only the official dialect gets the gate.
+        replay_thinking = not (self._speaks_official_api() and thinking_off)
+        system_blocks, anthropic_messages = _to_anthropic_messages(
+            entries, reasoning_provider=self.name, replay_thinking=replay_thinking
+        )
         if cache_system and system_blocks:
             # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
             system_blocks[-1] = {
@@ -204,7 +246,9 @@ class AnthropicProvider:
             # Provider-specific extras intentionally win over adapter defaults
             # such as output_config/tool_choice.
             payload.update(extra)
-        return payload
+        # None marks explicit removal (see provider_options), giving users a
+        # way to strip adapter defaults for endpoints that reject them.
+        return {k: v for k, v in payload.items() if v is not None}
 
     async def stream(
         self,
@@ -228,6 +272,7 @@ class AnthropicProvider:
         text_blocks: dict[int, list[str]] = {}
         thinking_blocks: dict[int, list[str]] = {}
         thinking_signatures: dict[int, str] = {}
+        redacted_data: dict[int, str] = {}
         usage = Usage()
         stop_reason: str | None = None
 
@@ -277,6 +322,10 @@ class AnthropicProvider:
                                 yield ReasoningDelta(text=thinking)
                             if signature := block.get("signature"):
                                 thinking_signatures[idx] = signature
+                        elif block.get("type") == "redacted_thinking":
+                            # Arrives complete; content is encrypted, so there
+                            # is nothing to surface as a display delta.
+                            redacted_data[idx] = block.get("data", "")
                     elif etype == "content_block_delta":
                         idx = event.get("index", 0)
                         delta = event.get("delta") or {}
@@ -323,6 +372,16 @@ class AnthropicProvider:
                                     metadata=metadata,
                                 )
                             )
+                        elif kind == "redacted_thinking":
+                            # Preserved so tool-use turns can replay the block;
+                            # dropping it makes the next request invalid.
+                            yield EntryCompletedDelta(
+                                ReasoningEntry(
+                                    content="",
+                                    provider=self.name,
+                                    metadata={"redacted": redacted_data.get(idx, "")},
+                                )
+                            )
                         elif kind == "tool_use":
                             yield EntryCompletedDelta(
                                 ToolCallEntry(
@@ -334,8 +393,7 @@ class AnthropicProvider:
                     elif etype == "message_delta":
                         delta = event.get("delta") or {}
                         stop_reason = delta.get("stop_reason") or stop_reason
-                        if u_raw := event.get("usage"):
-                            u = u_raw
+                        if u := event.get("usage"):
                             usage.output_tokens = u.get(
                                 "output_tokens", usage.output_tokens
                             )
@@ -347,8 +405,7 @@ class AnthropicProvider:
                                 usage.cache_read_tokens = u["cache_read_input_tokens"]
                     elif etype == "message_start":
                         message = event.get("message") or {}
-                        if u_raw := message.get("usage"):
-                            u = u_raw
+                        if u := message.get("usage"):
                             usage.input_tokens = u.get("input_tokens", 0)
                             usage.output_tokens = u.get("output_tokens", 0)
                             usage.cache_write_tokens = u.get(
@@ -444,12 +501,19 @@ def _append_user_message(out: list[JsonObject], content: list[JsonObject]) -> No
 
 def _to_anthropic_messages(
     entries: list[TranscriptEntry],
+    *,
+    reasoning_provider: str = "anthropic",
+    replay_thinking: bool = True,
 ) -> tuple[list[JsonObject] | None, list[JsonObject]]:
     """Translate transcript entries into Anthropic's API shape.
 
     Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
     ``None`` or a list of text blocks suitable for the Anthropic ``system``
     parameter (we use the block form so callers can attach ``cache_control``).
+
+    Only :class:`ReasoningEntry` values written by ``reasoning_provider`` are
+    replayed, and only when ``replay_thinking`` is set — the adapter turns it
+    off when the current request would be rejected for containing them.
     """
     system_parts: list[str] = []
     out: list[JsonObject] = []
@@ -459,7 +523,10 @@ def _to_anthropic_messages(
         nonlocal pending_blocks
         if not pending_blocks:
             return
-        if all(block.get("type") == "thinking" for block in pending_blocks):
+        if all(
+            block.get("type") in ("thinking", "redacted_thinking")
+            for block in pending_blocks
+        ):
             # Compaction may leave provider replay state without its assistant
             # action; Anthropic thinking blocks cannot stand alone either.
             pending_blocks = []
@@ -469,8 +536,8 @@ def _to_anthropic_messages(
 
     for entry in entries:
         if isinstance(entry, InputEntry) and entry.role == "system":
-            if entry.content:
-                system_parts.append(_text_only(entry.content))
+            if text := _text_only(entry.content):
+                system_parts.append(text)
             continue
 
         if isinstance(entry, ToolResultEntry):
@@ -486,7 +553,13 @@ def _to_anthropic_messages(
             continue
 
         if isinstance(entry, ReasoningEntry):
-            if entry.provider != "anthropic":
+            if entry.provider != reasoning_provider or not replay_thinking:
+                continue
+            redacted = entry.metadata.get("redacted")
+            if isinstance(redacted, str) and redacted:
+                pending_blocks.append(
+                    {"type": "redacted_thinking", "data": redacted}
+                )
                 continue
             block: JsonObject = {"type": "thinking", "thinking": entry.content}
             signature = entry.metadata.get("signature")
@@ -515,8 +588,13 @@ def _to_anthropic_messages(
             continue
 
         if isinstance(entry, InputEntry):
+            blocks = _content_to_anthropic_blocks(entry.content)
+            if not blocks:
+                # Nothing survives conversion (empty input); skipping without
+                # flushing lets assistant blocks around it stay one message.
+                continue
             flush_assistant()
-            _append_user_message(out, _content_to_anthropic_blocks(entry.content))
+            _append_user_message(out, blocks)
 
     flush_assistant()
     system_blocks: list[JsonObject] | None
@@ -530,26 +608,27 @@ def _to_anthropic_messages(
 # Anthropic returns 400 with ``invalid_request_error`` and a message like
 # "prompt is too long". Some gateway proxies relabel the status; we accept any
 # 4xx whose body matches one of the known phrases.
+_OVERFLOW_NEEDLES = (
+    "prompt is too long",
+    "input is too long",
+    "context window",
+    "context limit",  # "input length and `max_tokens` exceed context limit"
+    "too many total text bytes",  # Bedrock-hosted Claude behind gateways
+)
+
+
 def _is_context_overflow(status: int, body: str) -> bool:
     if status < 400 or status >= 500:
         return False
     lowered = body.lower()
-    return (
-        "prompt is too long" in lowered
-        or "input is too long" in lowered
-        or "context window" in lowered
-        # "input length and `max_tokens` exceed context limit" (current API)
-        or "context limit" in lowered
-        # Bedrock-hosted Claude behind gateways
-        or "too many total text bytes" in lowered
-        or "max_tokens_to_sample" in lowered
-        and "exceeds" in lowered
+    return any(needle in lowered for needle in _OVERFLOW_NEEDLES) or (
+        "max_tokens_to_sample" in lowered and "exceeds" in lowered
     )
 
 
-# Context-window table for recent, commonly used Anthropic aliases. Date-pinned
-# snapshots and retired Claude 3.x/older 4.x aliases fall back to reactive
-# overflow handling.
+# Context-window table for recent, commonly used Anthropic aliases (their
+# date-pinned snapshots resolve via suffix stripping). Retired Claude
+# 3.x/older 4.x aliases fall back to reactive overflow handling.
 #
 # Values are the *default* windows. The 1M-token variants are gated behind the
 # ``context-1m`` beta header, which this adapter does not send by default;

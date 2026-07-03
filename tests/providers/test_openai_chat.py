@@ -206,6 +206,79 @@ def test_entries_to_openai_messages_keeps_reasoning_with_tool_call() -> None:
     ]
 
 
+def test_entries_to_openai_messages_can_exclude_reasoning() -> None:
+    out = entries_to_openai_messages(
+        [
+            ReasoningEntry(content="think", provider="openai-chat"),
+            ToolCallEntry(call_id="call_1", name="add", arguments='{"a":1}'),
+        ],
+        include_reasoning=False,
+    )
+
+    assert out == [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "add", "arguments": '{"a":1}'},
+                }
+            ],
+        }
+    ]
+
+
+def _reasoning_replayed(provider: OpenAIChatProvider) -> bool:
+    payload = provider._build_payload(
+        [
+            InputEntry(role="user", content="hi"),
+            ReasoningEntry(content="think", provider="openai-chat"),
+            AssistantTextEntry(content="ok"),
+            InputEntry(role="user", content="next"),
+        ],
+        tools=None,
+        response_format=None,
+        settings=None,
+        stream=True,
+    )
+    assistant = next(m for m in payload["messages"] if m["role"] == "assistant")
+    return "reasoning_content" in assistant
+
+
+def test_reasoning_replay_defaults_per_endpoint_host() -> None:
+    # DeepSeek requires the echo; the official API rejects the field;
+    # unknown compatible endpoints default to replaying.
+    assert _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://api.deepseek.com")
+    )
+    assert not _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://api.openai.com/v1")
+    )
+    assert _reasoning_replayed(
+        OpenAIChatProvider(model="m", api_key="k", base_url="https://example.test/v1")
+    )
+
+
+def test_reasoning_replay_explicit_override_beats_host_default() -> None:
+    assert not _reasoning_replayed(
+        OpenAIChatProvider(
+            model="m",
+            api_key="k",
+            base_url="https://api.deepseek.com",
+            replay_reasoning=False,
+        )
+    )
+    assert _reasoning_replayed(
+        OpenAIChatProvider(
+            model="m",
+            api_key="k",
+            base_url="https://api.openai.com/v1",
+            replay_reasoning=True,
+        )
+    )
+
+
 def test_entries_to_openai_messages_coalesces_adjacent_user_entries() -> None:
     out = entries_to_openai_messages(
         [
@@ -241,7 +314,9 @@ def test_build_payload_skips_compacted_reasoning_only_turn() -> None:
 
 
 def test_build_payload_maps_settings_and_stream_options() -> None:
-    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://example.test/v1"
+    )
 
     payload = provider._build_payload(
         [InputEntry(role="user", content="hi")],
@@ -269,6 +344,97 @@ def test_build_payload_maps_settings_and_stream_options() -> None:
     assert payload["stop"] == ["END"]
     assert payload["parallel_tool_calls"] is False
     assert payload["seed"] == 1
+
+
+def test_build_payload_uses_max_completion_tokens_on_official_endpoint() -> None:
+    def payload_for(base_url: str) -> dict[str, Any]:
+        provider = OpenAIChatProvider(
+            model="gpt-5", api_key="sk-test", base_url=base_url
+        )
+        return provider._build_payload(
+            [InputEntry(role="user", content="hi")],
+            tools=None,
+            response_format=None,
+            settings=ModelSettings(max_tokens=50),
+            stream=True,
+        )
+
+    official = payload_for("https://api.openai.com/v1")
+    assert official["max_completion_tokens"] == 50
+    assert "max_tokens" not in official
+
+    compatible = payload_for("https://api.deepseek.com")
+    assert compatible["max_tokens"] == 50
+    assert "max_completion_tokens" not in compatible
+
+
+def test_provider_options_canonical_key_beats_alias() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://example.test/v1"
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            provider_options={"openai": {"seed": 2}, "openai-chat": {"seed": 1}}
+        ),
+        stream=True,
+    )
+
+    assert payload["seed"] == 1
+
+
+def test_entries_to_openai_messages_merges_adjacent_multimodal_user_entries() -> None:
+    out = entries_to_openai_messages(
+        [
+            InputEntry(
+                role="user",
+                content=[TextPart("look"), ImagePart(url="https://x/y.png")],
+            ),
+            InputEntry(role="user", content="more"),
+        ]
+    )
+
+    assert out == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "https://x/y.png"}},
+                {"type": "text", "text": "\n\n"},
+                {"type": "text", "text": "more"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_client_and_allows_reuse() -> None:
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test")
+
+    first = provider._http()
+    await provider.aclose()
+
+    assert first.is_closed
+    second = provider._http()
+    assert second is not first
+    assert not second.is_closed
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_leaves_injected_client_open() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    await provider.aclose()
+
+    assert not client.is_closed
+    await client.aclose()
 
 
 def test_headers_keep_explicit_api_key_when_extra_headers_overlap() -> None:
@@ -444,6 +610,147 @@ async def test_chat_context_overflow_is_classified() -> None:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
+def test_build_payload_none_valued_option_removes_adapter_default() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://example.test/v1"
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            provider_options={"openai-chat": {"stream_options": None}}
+        ),
+        stream=True,
+    )
+
+    # Endpoints that reject stream_options need a way to strip the default.
+    assert "stream_options" not in payload
+
+
+def test_context_window_resolves_date_pinned_snapshots() -> None:
+    provider = OpenAIChatProvider(model="gpt-4.1", api_key="sk-test")
+
+    assert provider.context_window("gpt-4.1") == 1_047_576
+    assert provider.context_window("gpt-4.1-2025-04-14") == 1_047_576
+    assert provider.context_window("o3-2025-04-16") is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_handles_null_arguments_and_missing_index() -> None:
+    body = _sse(
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                # Gateway style: complete calls, a null index,
+                                # a missing index, and a null arguments field.
+                                {
+                                    "id": "c1",
+                                    "index": None,
+                                    "function": {"name": "one", "arguments": None},
+                                },
+                                {
+                                    "id": "c2",
+                                    "function": {
+                                        "name": "two",
+                                        "arguments": '{"b":2}',
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    tool_deltas = list(_deltas(deltas, ToolCallDelta))
+    assert [(d.index, d.call_id, d.name, d.arguments) for d in tool_deltas] == [
+        (0, "c1", "one", ""),
+        (1, "c2", "two", '{"b":2}'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_assembles_interleaved_parallel_tool_calls() -> None:
+    body = _sse(
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "function": {"name": "one", "arguments": '{"a":'},
+                                },
+                                {
+                                    "index": 1,
+                                    "id": "c2",
+                                    "function": {"name": "two", "arguments": '{"b":'},
+                                },
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 1, "function": {"arguments": "2}"}},
+                                {"index": 0, "function": {"arguments": "1}"}},
+                            ]
+                        }
+                    }
+                ]
+            },
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    by_index: dict[int, list[str]] = {}
+    for delta in _deltas(deltas, ToolCallDelta):
+        by_index.setdefault(delta.index, []).append(delta.arguments)
+        assert delta.call_id == ("c1" if delta.index == 0 else "c2")
+        assert delta.name == ("one" if delta.index == 0 else "two")
+    assert "".join(by_index[0]) == '{"a":1}'
+    assert "".join(by_index[1]) == '{"b":2}'
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_without_usage_or_finish_reports_defaults() -> None:
+    """Compatible endpoints may omit usage and finish_reason entirely."""
+    body = _sse([{"choices": [{"delta": {"content": "hi"}}]}])
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    usage = next(_deltas(deltas, UsageDelta)).usage
+    assert (usage.input_tokens, usage.output_tokens) == (0, 0)
+    assert next(_deltas(deltas, FinishDelta)).reason is None
+
+
 def test_supports_json_schema_defaults_to_official_openai_only() -> None:
     assert OpenAIChatProvider(
         model="gpt-5", base_url="https://api.openai.com/v1"
@@ -456,6 +763,70 @@ def test_supports_json_schema_defaults_to_official_openai_only() -> None:
         base_url="https://example.test/v1",
         supports_json_schema=True,
     ).supports_json_schema
+
+
+def test_regional_official_host_follows_official_dialect() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://eu.api.openai.com/v1"
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_completion_tokens"] == 50
+    assert "max_tokens" not in payload
+    assert provider.supports_json_schema
+    assert not provider._should_replay_reasoning()
+
+
+def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5",
+        base_url="https://gateway.example.test/openai",
+        official_api=True,
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_completion_tokens"] == 50
+    assert provider.supports_json_schema
+    assert not provider._should_replay_reasoning()
+    # Dialect does not imply auth: a keyless gateway must stay usable.
+    provider._check_ready()
+
+
+def test_official_api_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    provider = OpenAIChatProvider(
+        model="gpt-5",
+        base_url="https://api.openai.com/v1",
+        official_api=False,
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_tokens"] == 50
+    assert not provider.supports_json_schema
+    # The real host still requires a key regardless of the dialect claim.
+    with pytest.raises(UserError, match="requires an API key"):
+        provider._check_ready()
 
 
 def test_reasoning_delta_event_emitted_by_runner() -> None:

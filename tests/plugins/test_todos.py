@@ -7,7 +7,7 @@ import json
 import pytest
 
 from lovia import Agent, Runner, Todo
-from lovia.plugins.todo import TodoItem, TodoList, render_todos
+from lovia.plugins.todo import TodoItem, TodoList, render_todos, todos_from_entries
 from lovia.transcript import InputEntry, ToolCallEntry
 
 from ..scripted_provider import ScriptedProvider, call, text
@@ -80,6 +80,27 @@ def test_rehydrate_tolerates_garbage() -> None:
     store = TodoList()
     store.rehydrate_from(transcript, tool_name="todo_write")  # no raise
     assert store.items == []
+
+
+def test_rehydrate_skips_malformed_latest_write() -> None:
+    # A malformed call never mutated the store, so the newest *valid* write is
+    # still the current state — the scan must not stop at the malformed one.
+    valid = {"todos": [{"content": "keep me"}]}
+    transcript = [
+        ToolCallEntry(call_id="c1", name="todo_write", arguments=json.dumps(valid)),
+        ToolCallEntry(call_id="c2", name="todo_write", arguments="not json"),
+        ToolCallEntry(
+            call_id="c3",
+            name="todo_write",
+            # JSON-valid but fails TodoItem validation.
+            arguments=json.dumps({"todos": [{"status": 123}]}),
+        ),
+    ]
+    store = TodoList()
+    store.rehydrate_from(transcript, tool_name="todo_write")
+    assert [t.content for t in store.items] == ["keep me"]
+    # The web-layer view agrees with the injector-side rehydration.
+    assert [t.content for t in todos_from_entries(transcript)] == ["keep me"]
 
 
 @pytest.mark.asyncio

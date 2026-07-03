@@ -109,17 +109,19 @@ class TodoList:
         return self.items
 
     def rehydrate_from(self, entries: list[TranscriptEntry], *, tool_name: str) -> None:
-        """Rebuild from the most recent ``todo_write`` call in ``entries``.
+        """Rebuild from the most recent parseable ``todo_write`` call in ``entries``.
 
         Used after a resume (fresh empty store) or a handoff (the new agent's
         store starts empty but the prior agent's writes are in the transcript).
+        A call whose arguments don't parse never mutated the store, so the scan
+        skips it and keeps looking for the newest valid write.
         """
         for entry in reversed(entries):
             if isinstance(entry, ToolCallEntry) and entry.name == tool_name:
                 inputs = _parse_todo_items(entry.arguments)
                 if inputs is not None:
                     self.replace(inputs)
-                return
+                    return
 
 
 def todos_from_entries(
@@ -131,12 +133,9 @@ def todos_from_entries(
     as a todo-write payload. Returns an empty list when none is found. Used by
     the web layer to surface current todos on session reload.
     """
-    for entry in reversed(entries):
-        if isinstance(entry, ToolCallEntry) and entry.name == tool_name:
-            inputs = _parse_todo_items(entry.arguments)
-            if inputs is not None:
-                return TodoList().replace(inputs)
-    return []
+    store = TodoList()
+    store.rehydrate_from(entries, tool_name=tool_name)
+    return store.items
 
 
 # -- plugin ------------------------------------------------------------------

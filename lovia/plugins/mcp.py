@@ -215,6 +215,7 @@ class MCPConnection:
     needs_approval: bool | ApprovalPredicate = False
     retries: int | None = None
     timeout: float | None = None
+    max_output_chars: int | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = False
@@ -332,6 +333,7 @@ class MCPConnection:
                     needs_approval=self.needs_approval,
                     retries=self.retries,
                     timeout=self.timeout,
+                    max_output_chars=self.max_output_chars,
                     result_renderer=renderer,
                 )
             )
@@ -425,6 +427,10 @@ class MCPServer:
     needs_approval: bool | ApprovalPredicate = False
     retries: int | None = None
     timeout: float | None = None
+    # Cap (in chars) on each tool's rendered output — MCP servers are the
+    # likeliest source of huge text payloads (inlined embedded resources).
+    # ``None`` defers to the agent's ``max_tool_output_chars``.
+    max_output_chars: int | None = None
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = True
@@ -454,6 +460,7 @@ class MCPServer:
             needs_approval=self.needs_approval,
             retries=self.retries,
             timeout=self.timeout,
+            max_output_chars=self.max_output_chars,
             result_renderer=self.result_renderer,
             auto_reconnect=self.auto_reconnect,
             close_after_run=close_after_run,

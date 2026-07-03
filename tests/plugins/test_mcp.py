@@ -336,6 +336,25 @@ async def test_config_open_is_owned_per_run(monkeypatch: pytest.MonkeyPatch) -> 
     await conn.close()
 
 
+async def test_policy_fields_reach_built_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_open(self: MCPConnection) -> None:
+        self._session = FakeSession(pages=[_page([_tool("echo")], None)])
+
+    monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
+
+    server = _FakeServer(
+        needs_approval=True, retries=2, timeout=1.5, max_output_chars=4096
+    )
+    conn = await server.open()
+    (tool,) = conn.tools()
+    assert tool.needs_approval is True
+    assert tool.retries == 2
+    assert tool.timeout == 1.5
+    assert tool.max_output_chars == 4096
+
+
 async def test_setup_failure_closes_owned_connections_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

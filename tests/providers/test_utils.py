@@ -5,6 +5,7 @@ import pytest
 
 from lovia.exceptions import ContextOverflowError, ProviderError
 from lovia.providers._http import (
+    host_matches,
     is_retryable_status,
     raise_for_provider_status,
     raise_for_transport_error,
@@ -107,6 +108,25 @@ def test_transport_error_retry_classification(
         )
 
     assert exc_info.value.retryable is retryable
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("api.openai.com", True),
+        ("eu.api.openai.com", True),  # regional data-residency host
+        ("a.b.api.openai.com", True),
+        # Lookalikes must not match.
+        ("evilapi.openai.com", False),
+        ("api.openai.com.evil.test", False),
+        ("openai.com", False),
+        ("example.test", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_host_matches(host: str | None, expected: bool) -> None:
+    assert host_matches(host, ("api.openai.com",)) is expected
 
 
 @pytest.mark.asyncio

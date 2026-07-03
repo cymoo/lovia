@@ -764,6 +764,70 @@ def test_supports_json_schema_defaults_to_official_openai_only() -> None:
     ).supports_json_schema
 
 
+def test_regional_official_host_follows_official_dialect() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5", api_key="sk-test", base_url="https://eu.api.openai.com/v1"
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_completion_tokens"] == 50
+    assert "max_tokens" not in payload
+    assert provider.supports_json_schema
+    assert not provider._should_replay_reasoning()
+
+
+def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
+    provider = OpenAIChatProvider(
+        model="gpt-5",
+        base_url="https://gateway.example.test/openai",
+        official_api=True,
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_completion_tokens"] == 50
+    assert provider.supports_json_schema
+    assert not provider._should_replay_reasoning()
+    # Dialect does not imply auth: a keyless gateway must stay usable.
+    provider._check_ready()
+
+
+def test_official_api_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    provider = OpenAIChatProvider(
+        model="gpt-5",
+        base_url="https://api.openai.com/v1",
+        official_api=False,
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(max_tokens=50),
+        stream=True,
+    )
+
+    assert payload["max_tokens"] == 50
+    assert not provider.supports_json_schema
+    # The real host still requires a key regardless of the dialect claim.
+    with pytest.raises(UserError, match="requires an API key"):
+        provider._check_ready()
+
+
 def test_reasoning_delta_event_emitted_by_runner() -> None:
     provider = ScriptedProvider([text("done.", reasoning="thinking...")])
     agent = Agent(name="a", model=provider)

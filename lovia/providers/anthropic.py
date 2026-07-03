@@ -56,12 +56,18 @@ from ._content import (
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
-from ._http import raise_for_provider_status, raise_for_transport_error
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 _DEFAULT_VERSION = "2023-06-01"
+
+# Hosts that enforce the official Messages API strictness (e.g. thinking
+# blocks rejected unless the request enables thinking). Subdomains match too.
+# Gateways that merely forward to the official API can opt in via the
+# ``official_api`` constructor flag.
+_OFFICIAL_HOSTS = ("api.anthropic.com",)
 
 
 class AnthropicProvider:
@@ -87,12 +93,19 @@ class AnthropicProvider:
         default_max_tokens: int = 16_384,
         default_headers: dict[str, str] | None = None,
         trust_env: bool | None = None,
+        # Whether the endpoint enforces official Messages API strictness
+        # (thinking-block replay rules). None infers from the host; set True
+        # for gateways forwarding to the official API. Does not affect the
+        # API-key requirement, which follows the real host.
+        official_api: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("ANTHROPIC_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
+        self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self._official_api = official_api
         self._client = client
         self._owns_client = client is None
         self._timeout = resolve_timeout(timeout)
@@ -123,11 +136,18 @@ class AnthropicProvider:
             window = _ANTHROPIC_CONTEXT_WINDOWS.get(re.sub(r"-\d{8}$", "", model))
         return window
 
-    def _using_official_endpoint(self) -> bool:
-        return urlparse(self.base_url).hostname == "api.anthropic.com"
+    def _on_official_host(self) -> bool:
+        """The endpoint literally is the official API (auth requirements)."""
+        return host_matches(self._host, _OFFICIAL_HOSTS)
+
+    def _speaks_official_api(self) -> bool:
+        """The endpoint follows the official API strictness (request shape)."""
+        if self._official_api is not None:
+            return self._official_api
+        return self._on_official_host()
 
     def _check_ready(self) -> None:
-        if self._using_official_endpoint() and not self._api_key:
+        if self._on_official_host() and not self._api_key:
             raise UserError(
                 "Anthropic provider requires an API key for api.anthropic.com",
                 hint="Set ANTHROPIC_API_KEY or pass api_key=...; use base_url=... for compatible gateways that do not need one.",
@@ -167,8 +187,8 @@ class AnthropicProvider:
         # The official API rejects thinking blocks unless the request enables
         # thinking, so strip stale replay state (e.g. the option was turned
         # off mid-session). Compatible endpoints may think by default without
-        # the option being set, so only the official endpoint gets the gate.
-        replay_thinking = not (self._using_official_endpoint() and thinking_off)
+        # the option being set, so only the official dialect gets the gate.
+        replay_thinking = not (self._speaks_official_api() and thinking_off)
         system_blocks, anthropic_messages = _to_anthropic_messages(
             entries, reasoning_provider=self.name, replay_thinking=replay_thinking
         )
@@ -588,19 +608,21 @@ def _to_anthropic_messages(
 # Anthropic returns 400 with ``invalid_request_error`` and a message like
 # "prompt is too long". Some gateway proxies relabel the status; we accept any
 # 4xx whose body matches one of the known phrases.
+_OVERFLOW_NEEDLES = (
+    "prompt is too long",
+    "input is too long",
+    "context window",
+    "context limit",  # "input length and `max_tokens` exceed context limit"
+    "too many total text bytes",  # Bedrock-hosted Claude behind gateways
+)
+
+
 def _is_context_overflow(status: int, body: str) -> bool:
     if status < 400 or status >= 500:
         return False
     lowered = body.lower()
-    return (
-        "prompt is too long" in lowered
-        or "input is too long" in lowered
-        or "context window" in lowered
-        # "input length and `max_tokens` exceed context limit" (current API)
-        or "context limit" in lowered
-        # Bedrock-hosted Claude behind gateways
-        or "too many total text bytes" in lowered
-        or ("max_tokens_to_sample" in lowered and "exceeds" in lowered)
+    return any(needle in lowered for needle in _OVERFLOW_NEEDLES) or (
+        "max_tokens_to_sample" in lowered and "exceeds" in lowered
     )
 
 

@@ -529,6 +529,24 @@ def test_build_payload_gates_thinking_replay_by_endpoint_and_option() -> None:
     # Default-on endpoints replay regardless of the option.
     assert block_types(build(compatible, None)) == ["thinking", "tool_use"]
 
+    # official_api overrides the host inference in both directions: gateways
+    # forwarding to the official API get the strict gate, and the official
+    # host can be forced lenient.
+    strict_gateway = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="x",
+        base_url="https://gateway.example.test/anthropic",
+        official_api=True,
+    )
+    lenient_official = AnthropicProvider(
+        model="claude-haiku-4-5",
+        api_key="x",
+        base_url="https://api.anthropic.com/v1",
+        official_api=False,
+    )
+    assert block_types(build(strict_gateway, None)) == ["tool_use"]
+    assert block_types(build(lenient_official, None)) == ["thinking", "tool_use"]
+
 
 def test_build_payload_none_valued_option_removes_adapter_default() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")

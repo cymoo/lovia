@@ -15,6 +15,18 @@ def is_retryable_status(status_code: int) -> bool:
     return status_code in (408, 429) or 500 <= status_code < 600
 
 
+def host_matches(host: str | None, domains: tuple[str, ...]) -> bool:
+    """True when ``host`` is one of ``domains`` or a subdomain of one.
+
+    Subdomain matching keeps regional hosts (``eu.api.openai.com``) on the
+    same behavior as their apex without letting lookalike domains
+    (``evilapi.openai.com``) slip through.
+    """
+    if not host:
+        return False
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
 async def raise_for_provider_status(
     response: httpx.Response,
     *,

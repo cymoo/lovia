@@ -38,11 +38,18 @@ from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
 )
-from ._http import raise_for_provider_status, raise_for_transport_error
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+# Hosts that speak the official OpenAI API dialect: strict parameter set
+# (``max_completion_tokens``), native ``json_schema`` response_format, no
+# ``reasoning_content``. Subdomains match too, which covers the regional
+# data-residency hosts (``eu.api.openai.com``). Gateways that merely forward
+# to the official API can opt in via the ``official_api`` constructor flag.
+_OFFICIAL_HOSTS = ("api.openai.com",)
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +196,14 @@ class OpenAIChatProvider:
             per endpoint host: DeepSeek requires the replay, the official
             OpenAI API rejects the field, and unlisted hosts replay. Pass
             ``True``/``False`` to override for endpoints we guess wrong.
+        official_api: Whether the endpoint speaks the official OpenAI API
+            dialect (``max_completion_tokens`` instead of ``max_tokens``,
+            native ``json_schema``, no ``reasoning_content``). ``None``
+            (default) infers from the host. Set ``True`` for gateways that
+            forward to the official API; the narrower ``supports_json_schema``
+            and ``replay_reasoning`` flags still win where both are given.
+            Does not affect the API-key requirement, which follows the real
+            host — a keyless gateway keeps working with ``official_api=True``.
     """
 
     name = "openai-chat"
@@ -205,11 +220,13 @@ class OpenAIChatProvider:
         supports_json_schema: bool | None = None,
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
+        official_api: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
+        self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
         self._owns_client = client is None
@@ -218,29 +235,40 @@ class OpenAIChatProvider:
         self._supports_json_schema = supports_json_schema
         self._trust_env = resolve_trust_env(trust_env)
         self._replay_reasoning = replay_reasoning
+        self._official_api = official_api
 
     @property
     def supports_json_schema(self) -> bool:
         """True when the endpoint supports OpenAI-style ``json_schema`` response_format.
 
-        Defaults to True only for the official OpenAI API; other compatible
-        endpoints vary in support. Override via the constructor parameter.
+        Defaults to True only for the official API dialect (see
+        ``official_api``); other compatible endpoints vary in support.
+        Override via the constructor parameter.
         """
         if self._supports_json_schema is not None:
             return self._supports_json_schema
-        return urlparse(self.base_url).hostname == "api.openai.com"
+        return self._speaks_official_api()
 
-    def _using_official_endpoint(self) -> bool:
-        return urlparse(self.base_url).hostname == "api.openai.com"
+    def _on_official_host(self) -> bool:
+        """The endpoint literally is the official API (auth requirements)."""
+        return host_matches(self._host, _OFFICIAL_HOSTS)
+
+    def _speaks_official_api(self) -> bool:
+        """The endpoint follows the official API dialect (request shape)."""
+        if self._official_api is not None:
+            return self._official_api
+        return self._on_official_host()
 
     def _should_replay_reasoning(self) -> bool:
         if self._replay_reasoning is not None:
             return self._replay_reasoning
-        host = urlparse(self.base_url).hostname or ""
-        return _REASONING_REPLAY_DEFAULTS.get(host, True)
+        default = _REASONING_REPLAY_DEFAULTS.get(self._host)
+        if default is not None:
+            return default
+        return not self._speaks_official_api()
 
     def _check_ready(self) -> None:
-        if self._using_official_endpoint() and not self._api_key:
+        if self._on_official_host() and not self._api_key:
             raise UserError(
                 "OpenAI Chat provider requires an API key for api.openai.com",
                 hint="Set OPENAI_API_KEY or pass api_key=...; use base_url=... for OpenAI-compatible endpoints that do not need one.",
@@ -300,7 +328,7 @@ class OpenAIChatProvider:
                 # Current official models reject the legacy ``max_tokens``
                 # ("use 'max_completion_tokens'"), while compatible endpoints
                 # mostly accept only the legacy spelling.
-                if self._using_official_endpoint():
+                if self._speaks_official_api():
                     payload["max_completion_tokens"] = settings.max_tokens
                 else:
                     payload["max_tokens"] = settings.max_tokens
@@ -434,15 +462,15 @@ class OpenAIChatProvider:
 #   is a 400 ("The reasoning_content in the thinking mode must be passed back
 #   to the API"; verified live against deepseek-v4-pro, 2026-07). Kimi K2
 #   thinking documents the same requirement.
-# * The official OpenAI API neither emits nor accepts the field, so a
-#   transcript recorded against a compatible endpoint must not leak it there.
+# * The official OpenAI API neither emits nor accepts the field; that case is
+#   handled by the official-dialect check, not this table, so gateways
+#   forwarding to the official API inherit it via ``official_api=True``.
 #
-# Unlisted hosts replay: every known reasoning_content-emitting endpoint
-# tolerates or requires the echo. The ``replay_reasoning`` constructor
-# argument overrides this table per instance.
+# Unlisted compatible hosts replay: every known reasoning_content-emitting
+# endpoint tolerates or requires the echo. The ``replay_reasoning``
+# constructor argument overrides both the table and the dialect default.
 _REASONING_REPLAY_DEFAULTS: dict[str, bool] = {
     "api.deepseek.com": True,
-    "api.openai.com": False,
 }
 
 

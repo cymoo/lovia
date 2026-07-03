@@ -28,6 +28,20 @@ Supported transports:
 * :class:`MCPServerStdio` — launch a subprocess and speak MCP over stdio.
 * :class:`MCPServerStreamableHTTP` — connect to a streamable-HTTP MCP endpoint.
 
+Caveats:
+
+* Reconnect + retry is **at-least-once**: if the transport dies after the
+  server executed the call but before the response arrived, the retry runs the
+  side effect twice. Set ``auto_reconnect=False`` for non-idempotent tools.
+* A persistent connection may be reused across *sequential* runs; sharing one
+  across **concurrent** runs is unsupported — reconnection is not synchronized,
+  so overlapping reconnects can leak a transport and fail the other run's
+  in-flight calls.
+* On Python < 3.12, combining a per-tool ``timeout`` with ``auto_reconnect``
+  can leak the old transport on reconnect: ``asyncio.wait_for`` runs attempts
+  in a separate task there, and anyio transports must be closed from the task
+  that opened them. Python 3.12+ is unaffected.
+
 Deliberate non-goals (keep the surface small): MCP prompts, resource browsing,
 sampling, OAuth, heartbeats/subscriptions, and hosted MCP.
 """
@@ -276,6 +290,9 @@ class MCPConnection:
         self._session = session
 
     async def _reconnect(self) -> None:
+        # Must run in the task that opened the session: anyio transports bind
+        # their cancel scopes to the entering task (see module Caveats for the
+        # Python < 3.12 wait_for interaction).
         old = self._exit_stack
         self._session = None
         self._exit_stack = None

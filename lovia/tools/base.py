@@ -33,10 +33,15 @@ from typing import (
 )
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..types import JsonObject, JsonSchema
-from ..exceptions import BudgetExceeded, RunCancelled, UserError
+from ..exceptions import (
+    BudgetExceeded,
+    InvalidToolArguments,
+    RunCancelled,
+    UserError,
+)
 from ..run_context import RunContext
 from ..schema import function_args_schema, validate_args
 
@@ -274,13 +279,16 @@ async def run_tool(
                     one_attempt(attempt_args, ctx), timeout=timeout
                 )
             return await one_attempt(attempt_args, ctx)
-        except (RunCancelled, BudgetExceeded):
-            # Not retried: neither condition can clear on its own, so retrying
-            # only burns attempts and backoff sleeps. They part ways upstream —
-            # the runner re-raises RunCancelled (run-global signal) but turns
-            # BudgetExceeded into a tool-error result (budgets are scoped: a
-            # sub-run's exhausted budget is a recoverable delegation failure,
-            # and the run's own budget is re-checked at the next safe point).
+        except (RunCancelled, BudgetExceeded, InvalidToolArguments):
+            # Not retried: none of these can clear on its own, so retrying only
+            # burns attempts and backoff sleeps. RunCancelled and BudgetExceeded
+            # part ways upstream — the runner re-raises RunCancelled (run-global
+            # signal) but turns BudgetExceeded into a tool-error result (budgets
+            # are scoped: a sub-run's exhausted budget is a recoverable
+            # delegation failure, and the run's own budget is re-checked at the
+            # next safe point). InvalidToolArguments is deterministic for the
+            # given args; it becomes a tool-error result carrying the validation
+            # message the model needs to correct the call.
             raise
         except Exception as exc:  # noqa: BLE001 — we want to retry any tool error
             last_exc = exc
@@ -430,7 +438,21 @@ def tool(
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
-            kwargs = validate_args(func, args)
+            try:
+                kwargs = validate_args(func, args)
+            except ValidationError as exc:
+                # Distinguish bad arguments from failures of the tool body: the
+                # former are deterministic, so run_tool skips retries, and the
+                # compact message (no pydantic doc URLs) is what the model
+                # needs to correct the call.
+                details = "; ".join(
+                    f"{'.'.join(str(p) for p in err['loc']) or 'arguments'}: "
+                    f"{err['msg']}"
+                    for err in exc.errors(include_url=False)
+                )
+                raise InvalidToolArguments(
+                    f"Invalid arguments for tool {tool_name!r}: {details}"
+                ) from exc
             if context_param is not None:
                 kwargs[context_param] = ctx
             if is_async:

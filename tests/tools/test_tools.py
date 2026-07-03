@@ -114,6 +114,47 @@ async def test_run_tool_does_not_retry_run_control_signals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_arguments_are_not_retried() -> None:
+    # Bad arguments are deterministic: retrying re-validates the same args and
+    # burns backoff sleeps before the model gets the message it needs.
+    from lovia.exceptions import InvalidToolArguments
+
+    attempts = {"n": 0}
+
+    async def probe(invoke, args, ctx):
+        attempts["n"] += 1
+        return await invoke(args, ctx)
+
+    @tool(retries=3, policies=[probe])
+    async def needs_int(count: int) -> str:
+        return str(count)
+
+    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    with pytest.raises(InvalidToolArguments, match="count"):
+        await run_tool(needs_int, {"count": {"not": "an int"}}, ctx)
+    assert attempts["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_arguments_message_reaches_model() -> None:
+    @tool
+    async def needs_int(count: int) -> str:
+        return str(count)
+
+    provider = ScriptedProvider(
+        [call("needs_int", {"count": "not-an-int"}), text("done")]
+    )
+    agent = Agent(name="a", model=provider, tools=[needs_int])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    # The model sees which argument failed and why — without pydantic doc URLs.
+    assert "Tool error" in last_tool.content
+    assert "count" in last_tool.content
+    assert "integer" in last_tool.content
+    assert "https://errors.pydantic.dev" not in last_tool.content
+
+
+@pytest.mark.asyncio
 async def test_retries_exhausted_surfaces_as_tool_error() -> None:
     @tool(retries=1)
     async def always_fail() -> str:

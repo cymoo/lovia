@@ -215,6 +215,37 @@ async def test_agent_as_tool_budget_is_per_invocation() -> None:
     assert child_results == ["child done", "child done"]
 
 
+async def test_agent_as_tool_child_budget_exhaustion_is_a_tool_error() -> None:
+    # Budgets are scoped: a sub-run blowing ITS OWN budget is a recoverable
+    # delegation failure — the parent sees a tool error and continues, exactly
+    # like the sub-run's MaxTurnsExceeded (and unlike RunCancelled, which is
+    # run-global and terminates the parent).
+    from lovia import RunBudget
+    from lovia.transcript import ToolResultEntry
+
+    child = Agent(name="Child", model=ScriptedProvider([text("hi")]))
+    # The child's single model call uses 2 tokens; a 1-token budget trips
+    # right after it.
+    parent = Agent(
+        name="Parent",
+        model=ScriptedProvider(
+            [call("ask_child", {"input": "go"}, call_id="c1"), text("recovered")]
+        ),
+        tools=[child.as_tool(budget=RunBudget(max_total_tokens=1))],
+    )
+
+    result = await Runner.run(parent, "delegate")
+
+    assert result.output == "recovered"
+    [child_result] = [
+        e
+        for e in result.entries
+        if isinstance(e, ToolResultEntry) and e.call_id == "c1"
+    ]
+    assert child_result.is_error
+    assert "exceeds budget" in child_result.output
+
+
 def test_slug_produces_provider_legal_ascii_tool_names() -> None:
     from lovia.handoff import _slug, build_handoff_tool, Handoff
 

@@ -272,9 +272,12 @@ async def run_tool(
                 )
             return await one_attempt(attempt_args, ctx)
         except (RunCancelled, BudgetExceeded):
-            # Run-control signals, not tool failures: the condition won't
-            # clear on its own, so retrying only burns attempts and backoff
-            # sleeps while delaying the run's termination.
+            # Not retried: neither condition can clear on its own, so retrying
+            # only burns attempts and backoff sleeps. They part ways upstream —
+            # the runner re-raises RunCancelled (run-global signal) but turns
+            # BudgetExceeded into a tool-error result (budgets are scoped: a
+            # sub-run's exhausted budget is a recoverable delegation failure,
+            # and the run's own budget is re-checked at the next safe point).
             raise
         except Exception as exc:  # noqa: BLE001 — we want to retry any tool error
             last_exc = exc

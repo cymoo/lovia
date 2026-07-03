@@ -187,6 +187,15 @@ class ToolCallProcessor:
             # Consistent with the pre-tool ``cancel_token.check()`` above, and the
             # path an agent-as-tool sub-run takes when it inherits and trips the
             # parent's token.
+            #
+            # BudgetExceeded is deliberately NOT re-raised here: budgets are
+            # scoped, not run-global. One escaping a tool is a *sub-run's own*
+            # budget (agent-as-tool) — a recoverable delegation failure, fed
+            # back to the model exactly like the sub-run's MaxTurnsExceeded.
+            # This run's own budget needs no help from this path: the loop
+            # re-checks it before the next tool call (above) and at every turn
+            # boundary, so an actually-exhausted run still stops at the next
+            # safe point before any further model call or tool execution.
             raise
         except Exception as exc:
             result = f"Tool error: {exc}"
@@ -219,7 +228,10 @@ class ToolCallProcessor:
                 # The tool itself already ran; only rendering failed. Convert
                 # to an error result instead of crashing the run — a crash
                 # here would leave a dangling call, and a resume would then
-                # re-execute the (possibly non-idempotent) tool.
+                # re-execute the (possibly non-idempotent) tool. BudgetExceeded
+                # included, as in the invoke path above: budgets are scoped,
+                # and this run's own budget is re-checked at the next safe
+                # point regardless.
                 logger.warning(
                     "tool.render_error: %s call_id=%s (%s: %s)",
                     tool.name,

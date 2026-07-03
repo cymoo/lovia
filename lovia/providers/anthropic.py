@@ -11,6 +11,11 @@ Conversions worth noting:
   containing a ``tool_result`` block keyed by ``tool_use_id``.
 * Assistant tool calls become ``tool_use`` content blocks; we generate the
   ``id`` mapping on the fly.
+* ``thinking``/``redacted_thinking`` blocks round-trip through
+  :class:`ReasoningEntry` (signature and redacted data in ``metadata``). On
+  the official endpoint they are replayed only when the current request
+  enables thinking — the API rejects them otherwise. Compatible endpoints
+  with thinking on by default (e.g. DeepSeek's ``/anthropic``) always replay.
 * Streaming uses Anthropic's SSE event types (``content_block_delta``,
   ``message_delta``, ...) which we translate into :class:`ModelDelta` values
   consumed by the runner.
@@ -143,13 +148,24 @@ class AnthropicProvider:
         settings: ModelSettings | None,
         stream: bool,
     ) -> JsonObject:
-        system_blocks, anthropic_messages = _to_anthropic_messages(entries)
         extra = (
             provider_options(settings, self.name, "claude")
             if settings is not None
             else {}
         )
         cache_system = bool(extra.pop("cache_system", False))
+        thinking = extra.get("thinking")
+        thinking_off = thinking is None or (
+            isinstance(thinking, dict) and thinking.get("type") == "disabled"
+        )
+        # The official API rejects thinking blocks unless the request enables
+        # thinking, so strip stale replay state (e.g. the option was turned
+        # off mid-session). Compatible endpoints may think by default without
+        # the option being set, so only the official endpoint gets the gate.
+        replay_thinking = not (self._using_official_endpoint() and thinking_off)
+        system_blocks, anthropic_messages = _to_anthropic_messages(
+            entries, reasoning_provider=self.name, replay_thinking=replay_thinking
+        )
         if cache_system and system_blocks:
             # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
             system_blocks[-1] = {
@@ -228,6 +244,7 @@ class AnthropicProvider:
         text_blocks: dict[int, list[str]] = {}
         thinking_blocks: dict[int, list[str]] = {}
         thinking_signatures: dict[int, str] = {}
+        redacted_data: dict[int, str] = {}
         usage = Usage()
         stop_reason: str | None = None
 
@@ -277,6 +294,10 @@ class AnthropicProvider:
                                 yield ReasoningDelta(text=thinking)
                             if signature := block.get("signature"):
                                 thinking_signatures[idx] = signature
+                        elif block.get("type") == "redacted_thinking":
+                            # Arrives complete; content is encrypted, so there
+                            # is nothing to surface as a display delta.
+                            redacted_data[idx] = block.get("data", "")
                     elif etype == "content_block_delta":
                         idx = event.get("index", 0)
                         delta = event.get("delta") or {}
@@ -321,6 +342,16 @@ class AnthropicProvider:
                                     content="".join(thinking_blocks.get(idx, [])),
                                     provider=self.name,
                                     metadata=metadata,
+                                )
+                            )
+                        elif kind == "redacted_thinking":
+                            # Preserved so tool-use turns can replay the block;
+                            # dropping it makes the next request invalid.
+                            yield EntryCompletedDelta(
+                                ReasoningEntry(
+                                    content="",
+                                    provider=self.name,
+                                    metadata={"redacted": redacted_data.get(idx, "")},
                                 )
                             )
                         elif kind == "tool_use":
@@ -444,12 +475,19 @@ def _append_user_message(out: list[JsonObject], content: list[JsonObject]) -> No
 
 def _to_anthropic_messages(
     entries: list[TranscriptEntry],
+    *,
+    reasoning_provider: str = "anthropic",
+    replay_thinking: bool = True,
 ) -> tuple[list[JsonObject] | None, list[JsonObject]]:
     """Translate transcript entries into Anthropic's API shape.
 
     Returns ``(system_blocks, messages)`` where ``system_blocks`` is either
     ``None`` or a list of text blocks suitable for the Anthropic ``system``
     parameter (we use the block form so callers can attach ``cache_control``).
+
+    Only :class:`ReasoningEntry` values written by ``reasoning_provider`` are
+    replayed, and only when ``replay_thinking`` is set — the adapter turns it
+    off when the current request would be rejected for containing them.
     """
     system_parts: list[str] = []
     out: list[JsonObject] = []
@@ -459,7 +497,10 @@ def _to_anthropic_messages(
         nonlocal pending_blocks
         if not pending_blocks:
             return
-        if all(block.get("type") == "thinking" for block in pending_blocks):
+        if all(
+            block.get("type") in ("thinking", "redacted_thinking")
+            for block in pending_blocks
+        ):
             # Compaction may leave provider replay state without its assistant
             # action; Anthropic thinking blocks cannot stand alone either.
             pending_blocks = []
@@ -486,7 +527,13 @@ def _to_anthropic_messages(
             continue
 
         if isinstance(entry, ReasoningEntry):
-            if entry.provider != "anthropic":
+            if entry.provider != reasoning_provider or not replay_thinking:
+                continue
+            redacted = entry.metadata.get("redacted")
+            if isinstance(redacted, str) and redacted:
+                pending_blocks.append(
+                    {"type": "redacted_thinking", "data": redacted}
+                )
                 continue
             block: JsonObject = {"type": "thinking", "thinking": entry.content}
             signature = entry.metadata.get("signature")

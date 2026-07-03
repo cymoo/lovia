@@ -5,8 +5,9 @@ intrinsically workspace-scoped: each resolves the active
 :class:`~lovia.workspace.protocol.WorkspaceSession` from
 ``RunContext.workspace`` — the runner injects it when the agent has a
 ``workspace=`` configured — and delegates to it. The session enforces the
-workspace policy's path and command rules, so file/shell access is always
-confined; there is no unconfined variant.
+workspace policy's path ACL and command rules on every operation (deny
+raises there; the ``needs_approval`` predicates here resolve the ask side),
+so there is no ungated variant of these tools.
 
 The module depends only on :mod:`lovia.tools.base` (the ``@tool``
 infrastructure), keeping the package dependency one-directional:
@@ -15,7 +16,7 @@ infrastructure), keeping the package dependency one-directional:
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable, Literal
 
 from pydantic import Field
 
@@ -54,6 +55,38 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
     return workspace
 
 
+def _path_needs_approval(
+    *ops: Literal["read", "write"],
+) -> Callable[[dict[str, Any], RunContext[Any]], bool]:
+    """Approval predicate for a path-taking tool.
+
+    Returns True when the policy decision for the tool's ``path`` argument is
+    ``ask`` for any of the given ops (and none of them is ``deny`` — a denied
+    call fails at the session anyway, so asking the human first would be
+    noise). With no workspace the tool cannot touch anything — let it run so
+    ``require_workspace`` surfaces its setup hint instead of a confusing
+    "not approved". With a live workspace but malformed args or a broken
+    policy, fail closed: ask rather than run unjudged.
+    """
+
+    def _needs(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
+        workspace = ctx.workspace
+        if workspace is None:
+            return False
+        path = args.get("path", ".")
+        if not isinstance(path, str):
+            return True
+        try:
+            decisions = [workspace.decide_path(path, write=op == "write") for op in ops]
+        except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
+            return True
+        if "deny" in decisions:
+            return False
+        return "ask" in decisions
+
+    return _needs
+
+
 # ---------------------------------------------------------------------------
 # Renderers — the strings the model actually sees
 # ---------------------------------------------------------------------------
@@ -88,12 +121,15 @@ def _render_entries(result: Any, ctx: RunContext[Any]) -> Any:
         return "(no entries)"
     lines = []
     for entry in result:
+        suffix = ""
+        if entry.symlink_target is not None:
+            suffix = f"  -> {entry.symlink_target}"
         if entry.is_dir:
-            lines.append(f"{entry.path}/")
+            lines.append(f"{entry.path}/{suffix}")
         elif entry.size is not None:
-            lines.append(f"{entry.path}  ({entry.size} bytes)")
+            lines.append(f"{entry.path}  ({entry.size} bytes){suffix}")
         else:
-            lines.append(entry.path)
+            lines.append(f"{entry.path}{suffix}")
     if getattr(result, "truncated", False):
         lines.append(
             f"… (truncated at {len(result)} entries; narrow the path/pattern "
@@ -147,18 +183,21 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
 @tool(
     name="read_file",
     description=(
-        "Read a UTF-8 text file from the workspace.\n"
-        "- path is workspace-relative (e.g. 'src/app.py'); absolute paths are rejected.\n"
+        "Read a UTF-8 text file.\n"
+        "- path is workspace-relative (e.g. 'src/app.py') or absolute; paths "
+        "outside the workspace may require user approval or be denied by "
+        "policy.\n"
         "- Large files are truncated; use start/end (1-based line numbers, inclusive) "
         "to read in pages.\n"
         "- Always read a file before editing it so edit_file gets exact text.\n"
         "- Binary files decode to replacement characters and aren't useful here."
     ),
+    needs_approval=_path_needs_approval("read"),
     result_renderer=_render_file_content,
 )
 async def read_file(
     ctx: RunContext[Any],
-    path: Annotated[str, "Workspace-relative file path."],
+    path: Annotated[str, "Workspace-relative or absolute file path."],
     start: Annotated[
         int | None, Field(default=None, ge=1, description="1-based start line.")
     ] = None,
@@ -173,17 +212,20 @@ async def read_file(
 @tool(
     name="write_file",
     description=(
-        "Create or overwrite a UTF-8 text file in the workspace.\n"
+        "Create or overwrite a UTF-8 text file.\n"
+        "- path is workspace-relative or absolute; writes outside the "
+        "workspace are usually denied or need user approval.\n"
         "- Writes the full content; parent directories are created automatically.\n"
         "- Prefer edit_file for targeted changes to an existing file — write_file "
         "replaces the whole file and loses anything you did not include.\n"
         "- Set create_only=true to fail instead of overwriting an existing file."
     ),
+    needs_approval=_path_needs_approval("write"),
     result_renderer=_render_file_change,
 )
 async def write_file(
     ctx: RunContext[Any],
-    path: Annotated[str, "Workspace-relative file path."],
+    path: Annotated[str, "Workspace-relative or absolute file path."],
     content: Annotated[str, "Full file content to write."],
     create_only: Annotated[
         bool,
@@ -207,11 +249,12 @@ async def write_file(
         "- Set replace_all=true to replace every occurrence (e.g. renaming a "
         "symbol across one file)."
     ),
+    needs_approval=_path_needs_approval("read", "write"),
     result_renderer=_render_edit_result,
 )
 async def edit_file(
     ctx: RunContext[Any],
-    path: Annotated[str, "Workspace-relative file path."],
+    path: Annotated[str, "Workspace-relative or absolute file path."],
     old: Annotated[str, "Exact existing text to replace."],
     new: Annotated[str, "Replacement text."],
     replace_all: Annotated[
@@ -233,13 +276,15 @@ async def edit_file(
         "- With pattern: returns paths matching a glob relative to path, e.g. "
         "'**/*.py' for all Python files recursively.\n"
         "- Hidden files (dotfiles) are skipped unless include_hidden=true.\n"
+        "- Symlinks are shown with their resolved target ('link -> /target').\n"
         "- To search file *contents*, use grep_files instead."
     ),
+    needs_approval=_path_needs_approval("read"),
     result_renderer=_render_entries,
 )
 async def list_files(
     ctx: RunContext[Any],
-    path: Annotated[str, "Workspace-relative directory path."] = ".",
+    path: Annotated[str, "Workspace-relative or absolute directory path."] = ".",
     pattern: Annotated[
         str | None,
         Field(default=None, description="Optional glob pattern, e.g. '**/*.py'."),
@@ -270,17 +315,19 @@ async def list_files(
         "- Returns matching lines as 'path:line: text', capped at max_matches.\n"
         "- Scope the search with path (directory) and/or glob (filename "
         "pattern, e.g. '*.py').\n"
+        "- path may be a directory to search recursively, or a single file.\n"
         "- Dotfiles are skipped unless include_hidden=true; binary files and "
         "policy-denied paths are always skipped.\n"
         "- This is the fastest way to locate code or text; prefer it over "
         "reading files one by one."
     ),
+    needs_approval=_path_needs_approval("read"),
     result_renderer=_render_matches,
 )
 async def grep_files(
     ctx: RunContext[Any],
     pattern: Annotated[str, "Regular expression to search for."],
-    path: Annotated[str, "Workspace-relative directory to search."] = ".",
+    path: Annotated[str, "Directory (or single file) to search."] = ".",
     glob: Annotated[
         str | None,
         Field(
@@ -320,16 +367,23 @@ async def grep_files(
 
 
 def _shell_needs_approval(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
-    # Fail closed when we can't consult a policy: ask rather than run unjudged.
-    # (With no workspace the tool then surfaces the setup error; with malformed
-    # args validation fails after approval — either way nothing runs unasked.)
+    # With no workspace nothing can run — require_workspace raises its setup
+    # hint, so don't hide it behind an approval prompt. With a workspace but
+    # malformed args or a broken policy, fail closed: ask rather than run
+    # unjudged (validation then fails after approval; nothing runs unasked).
     workspace = ctx.workspace
     if workspace is None:
-        return True
+        return False
     command = args.get("command")
-    if not isinstance(command, str):
+    cwd = args.get("cwd", ".")
+    if not isinstance(command, str) or not isinstance(cwd, str):
         return True
-    return workspace.policy.decide_command(command) == "ask"
+    try:
+        # The session's combined verdict: static command rules merged with
+        # the path ACL over the command's path claims and working directory.
+        return workspace.decide_command(command, cwd) == "ask"
+    except Exception:  # noqa: BLE001 — never run unjudged on a bad policy
+        return True
 
 
 def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
@@ -364,12 +418,14 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
         "--yes instead). Long-running commands are killed at the timeout.\n"
         "- stdout/stderr are captured and truncated when large; pipe through "
         "filters (grep, head, tail) to keep output focused.\n"
-        "- The command runs as the host user and is NOT sandboxed: destructive "
-        "or out-of-workspace commands may be denied by policy or require "
-        "approval. Never run destructive commands (rm -rf, git reset --hard, "
-        "force-push, ...) unless the user explicitly asked — and don't use the "
-        "shell to reach paths the file tools refuse (denied paths, outside the "
-        "root); that is against policy and visible in the transcript.\n"
+        "- The same path policy that governs the file tools also governs "
+        "commands: paths named in a command (arguments, redirect targets, "
+        "cwd) are checked, so a command touching denied or out-of-workspace "
+        "paths is denied or requires user approval — the shell is not a way "
+        "around the file tools.\n"
+        "- The command runs as the host user and is NOT OS-sandboxed. Never "
+        "run destructive commands (rm -rf, git reset --hard, force-push, ...) "
+        "unless the user explicitly asked.\n"
         "- Prefer the dedicated tools over shell equivalents: read_file over "
         "cat, grep_files over grep/rg, list_files over ls/find, edit_file "
         "over sed."

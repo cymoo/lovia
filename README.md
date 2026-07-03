@@ -905,6 +905,7 @@ agent = Agent(
     workspace=Workspace.local(
         ".",
         mode="coding",
+        readable=("~/reference-docs",),   # extra read scope outside the root
         denied_paths=(".env*",),
         command_rules=(
             CommandRule("pytest", "allow"),
@@ -914,17 +915,26 @@ agent = Agent(
 )
 ```
 
+Files and shell commands share one `allow` / `ask` / `deny` policy. Paths may
+be workspace-relative or absolute; symlinks are judged by where they resolve,
+so a `.venv/bin/python` pointing at the system interpreter just works when the
+policy allows it. `ask` decisions surface through the same approval channel as
+shell commands.
+
 Modes:
 
-| Mode | Tools |
-| --- | --- |
-| `readonly` | `read_file`, `list_files`, `grep_files` |
-| `coding` | read tools plus `write_file`, `edit_file`, `shell` with approval by default |
-| `trusted` | coding tools with shell allowed by default |
+| Mode | Inside the root | Outside the root | Shell default |
+| --- | --- | --- | --- |
+| `readonly` | read only | denied | no shell |
+| `coding` | read + write | reads ask, writes denied | ask |
+| `trusted` | read + write | reads allowed, writes ask | allow |
 
-Workspace paths are root-relative; absolute paths, `..` escapes, and symlink
-escapes are rejected. The local shell still runs as the host user, so use
-containerized or remote workspace backends when you need hard isolation.
+Grant more with `readable=` / `writable=` (or full `path_rules=`); block paths
+with `denied_paths` — denied paths are refused by the file tools *and* by
+shell commands that name them (redirect targets included). The command-level
+path guard is lexical and advisory — the local shell still runs as the host
+user, so use the `ShellExecutor` seam (OS sandboxing) or a future container
+backend when you need hard isolation.
 
 ## Web UI
 

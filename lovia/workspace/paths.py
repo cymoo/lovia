@@ -1,97 +1,75 @@
-"""Path normalization and confinement for workspace file operations."""
+"""Path resolution and classification for workspace file operations.
+
+The old model rejected everything that escaped the workspace root; this one
+*classifies* instead: any input path — workspace-relative, absolute, or
+``~``-prefixed — is resolved (symlinks followed) and tagged as inside or
+outside the root. What a resolved path may be used for is then a policy
+question (:meth:`WorkspacePolicy.decide_path`), not a path-syntax one.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
+from dataclasses import dataclass
+from pathlib import Path
 
-from .errors import PathOutsideWorkspaceError
-
-__all__ = [
-    "ensure_inside",
-    "normalize_relative_path",
-    "resolve_existing",
-    "resolve_parent",
-]
+__all__ = ["ResolvedPath", "resolve_path"]
 
 
-def normalize_relative_path(path: str) -> str:
-    """Return a normalized workspace-relative POSIX path.
+@dataclass(frozen=True)
+class ResolvedPath:
+    """A fully resolved path plus its relation to the workspace root.
 
-    Absolute paths are rejected. ``..`` segments are allowed only when they do
-    not escape above the workspace root.
+    Attributes:
+        raw: The original input string (as the model supplied it).
+        abs: The resolved absolute path. Symlinks in existing components are
+            followed; a missing tail is appended lexically (non-strict
+            resolution), so write targets that don't exist yet still resolve.
+        rel: The workspace-relative POSIX path when ``abs`` is inside the
+            root (``"."`` for the root itself), ``None`` when outside.
     """
 
-    if not path or path == ".":
-        return "."
-    pp = PurePosixPath(path)
-    if pp.is_absolute():
-        raise PathOutsideWorkspaceError(
-            f"Path {path!r} is absolute.",
-            hint="Use a path relative to the workspace root, e.g. 'src/app.py'.",
-        )
+    raw: str
+    abs: Path
+    rel: str | None
 
-    parts: list[str] = []
-    for part in pp.parts:
-        if part in ("", "."):
-            continue
-        if part == "..":
-            if not parts:
-                raise PathOutsideWorkspaceError(
-                    f"Path {path!r} escapes the workspace root.",
-                    hint="Use a path relative to the workspace root.",
-                )
-            parts.pop()
-            continue
-        parts.append(part)
-    return "/".join(parts) if parts else "."
+    @property
+    def inside(self) -> bool:
+        return self.rel is not None
+
+    @property
+    def abs_posix(self) -> str:
+        return self.abs.as_posix()
+
+    def display(self) -> str:
+        """Workspace-relative form when inside the root, absolute otherwise."""
+        return self.rel if self.rel is not None else self.abs.as_posix()
 
 
-def ensure_inside(root: Path, target: Path, original: str) -> Path:
-    """Return ``target`` if it resolves under ``root``, else raise."""
+def resolve_path(root: Path, path: str, *, base: Path | None = None) -> ResolvedPath:
+    """Resolve ``path`` against the workspace and classify it.
 
-    root = root.resolve()
-    resolved = target.resolve()
+    ``path`` may be workspace-relative (resolved against ``base``, which
+    defaults to ``root``), absolute, or start with ``~``. ``..`` segments and
+    symlinks are not rejected — they are resolved, and the resulting target
+    is what the policy judges. ``root`` must already be resolved (the session
+    resolves it once at construction).
+    """
+    raw = path
+    if not path:
+        path = "."
+    p = Path(path)
+    if path.startswith("~"):
+        try:
+            p = p.expanduser()
+        except RuntimeError:
+            # No resolvable home directory — leave the path literal; the
+            # operation will fail later with a clear "not a file" error.
+            pass
+    if not p.is_absolute():
+        p = (base if base is not None else root) / p
+    resolved = p.resolve()
     try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise PathOutsideWorkspaceError(
-            f"Path {original!r} resolves outside the workspace root {root}.",
-            hint="Check for symlinks pointing outside the workspace root.",
-        ) from exc
-    return resolved
-
-
-def resolve_existing(root: Path, path: str) -> Path:
-    """Resolve an existing workspace-relative path under ``root``."""
-
-    rel = normalize_relative_path(path)
-    target = root if rel == "." else root / rel
-    return ensure_inside(root, target, path)
-
-
-def resolve_parent(root: Path, path: str) -> tuple[Path, str]:
-    """Resolve the parent directory for a write path under ``root``.
-
-    Missing parent directories are permitted, but any existing symlink in the
-    parent chain must still resolve inside ``root``.
-    """
-
-    rel = normalize_relative_path(path)
-    if rel == ".":
-        raise PathOutsideWorkspaceError(
-            "Cannot write to the workspace root as a file.",
-            hint="Provide a file path relative to the workspace root.",
-        )
-    parts = PurePosixPath(rel).parts
-    parent = root
-    for part in parts[:-1]:
-        candidate = parent / part
-        if candidate.exists() or candidate.is_symlink():
-            parent = ensure_inside(root, candidate, path)
-        else:
-            parent = candidate
-    ensure_inside(root, parent if parent.exists() else parent.parent, path)
-    target = parent / parts[-1]
-    if target.exists() or target.is_symlink():
-        ensure_inside(root, target, path)
-    return parent, parts[-1]
+        rel = resolved.relative_to(root).as_posix()
+    except ValueError:
+        rel = None
+    return ResolvedPath(raw=raw, abs=resolved, rel=rel)

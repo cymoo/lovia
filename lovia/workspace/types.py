@@ -46,15 +46,17 @@ class EditResult(BaseModel):
 class DirEntry(BaseModel):
     """One entry returned by ``list_files``.
 
-    ``path`` is workspace-relative; for a plain directory listing it is the
-    entry's path under the listed directory, for a pattern match it is the
-    full matched path.
+    ``path`` is workspace-relative when the entry is inside the workspace
+    root, absolute otherwise. ``symlink_target`` carries the resolved target
+    when the entry is a symlink, so listings show where a link leads before
+    anything tries to read it.
     """
 
     path: str
     is_dir: bool
     size: int | None = None
     mtime: float | None = None
+    symlink_target: str | None = None
 
 
 class GrepMatch(BaseModel):

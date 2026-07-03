@@ -518,7 +518,11 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
     policy = getattr(workspace, "policy", None)
     if policy is None or _is_loopback(host):
         return
-    if getattr(policy, "allow_shell", False) or getattr(policy, "allow_write", False):
+    write_capable = (
+        getattr(policy, "write", "deny") != "deny"
+        or getattr(policy, "write_outside", "deny") != "deny"
+    )
+    if getattr(policy, "allow_shell", False) or write_capable:
         log.warning(
             "binding to non-loopback host %r with a write/shell-capable workspace: "
             "anyone who can reach this port can make the agent edit files or run "

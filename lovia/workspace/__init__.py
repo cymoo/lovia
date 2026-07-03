@@ -1,28 +1,29 @@
 """Workspaces: scoped filesystem/shell surfaces for agent tools.
 
 A workspace gives an agent's file and shell tools a root directory and a
-permission policy. The local backend confines file operations to the root
-and gates shell commands through allow/ask/deny rules; hard OS isolation is
-the job of future sandboxed backends implementing the same protocols.
+permission policy. Paths and shell commands share one three-valued ACL
+(allow / ask / deny): the local backend enforces ``deny`` in the session,
+routes ``ask`` through the human-approval channel, and judges shell commands
+with the same path rules via a lexical guard; hard OS isolation is the job
+of sandboxing executors or future backends implementing the same protocols.
 """
 
 from __future__ import annotations
 
 from .errors import (
-    PathOutsideWorkspaceError,
     PermissionDeniedError,
-    WorkspaceBackendError,
     WorkspaceClosedError,
     WorkspaceError,
 )
 from .local import LocalWorkspaceSession
-from .policy import CommandRule, Decision, WorkspacePolicy
+from .policy import CommandRule, Decision, FileOp, PathRule, WorkspacePolicy
 
-# ``WorkspaceLike`` / ``WorkspaceSession`` are the extension protocols for
-# authoring a custom backend; they stay importable from here (and from
-# ``lovia.workspace.protocol``) but are kept out of ``__all__`` so the
-# advertised surface is the handful of types day-to-day users actually touch.
-from .protocol import WorkspaceLike, WorkspaceSession  # noqa: F401
+# ``WorkspaceLike`` / ``WorkspaceSession`` / ``ShellExecutor`` are the
+# extension protocols for authoring a custom backend or sandboxing executor;
+# they stay importable from here (and from ``lovia.workspace.protocol``) but
+# are kept out of ``__all__`` so the advertised surface is the handful of
+# types day-to-day users actually touch.
+from .protocol import ShellExecutor, WorkspaceLike, WorkspaceSession  # noqa: F401
 from .types import (
     CommandResult,
     DirEntry,
@@ -33,7 +34,6 @@ from .types import (
     WorkspaceLimits,
     WorkspaceMode,
 )
-from ..tools.base import clip_text
 from .workspace import LocalWorkspace, Workspace
 
 __all__ = [
@@ -44,17 +44,16 @@ __all__ = [
     "EditResult",
     "FileChange",
     "FileContent",
+    "FileOp",
     "GrepMatch",
     "LocalWorkspace",
     "LocalWorkspaceSession",
-    "PathOutsideWorkspaceError",
+    "PathRule",
     "PermissionDeniedError",
     "Workspace",
-    "WorkspaceBackendError",
     "WorkspaceClosedError",
     "WorkspaceError",
     "WorkspaceLimits",
     "WorkspaceMode",
     "WorkspacePolicy",
-    "clip_text",
 ]

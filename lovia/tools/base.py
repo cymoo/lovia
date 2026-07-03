@@ -43,13 +43,14 @@ from ..exceptions import (
     UserError,
 )
 from ..run_context import RunContext
-from ..schema import function_args_schema, validate_args
+from ..schema import build_args_validator, function_args_schema
 
 # Argument contract for the callables below. ``ApprovalPredicate``,
 # ``ToolInvoker``, and ``ToolPolicy`` all receive the *raw* arguments parsed
 # from the model's tool call (``json.loads(call.arguments or "{}")``). Pydantic
 # coercion, defaults, and validation happen only at the function boundary, inside
-# the generated ``invoke`` (via :func:`validate_args`). This is deliberate:
+# the generated ``invoke`` (via the validator prebuilt by
+# :func:`lovia.schema.build_args_validator`). This is deliberate:
 # validation is bound to the target function's signature, which only the innermost
 # ``invoke`` knows, so the surrounding wrappers stay schema-agnostic. A predicate
 # or policy that needs coerced/defaulted values should apply its own validation.
@@ -433,13 +434,16 @@ def tool(
             else (inspect.getdoc(func) or "").strip()
         )
         parameters, _ = function_args_schema(func, strict=strict)
+        # Built once here: per-call validation must not pay for
+        # get_type_hints + create_model on every invocation.
+        validate = build_args_validator(func)
 
         context_param = _find_context_param(func)
         is_async = inspect.iscoroutinefunction(func)
 
         async def invoke(args: dict[str, Any], ctx: "RunContext[Any]") -> Any:
             try:
-                kwargs = validate_args(func, args)
+                kwargs = validate(args)
             except ValidationError as exc:
                 # Distinguish bad arguments from failures of the tool body: the
                 # former are deterministic, so run_tool skips retries, and the

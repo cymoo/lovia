@@ -142,11 +142,16 @@ def function_args_schema(
     return schema, param_names
 
 
-def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, object]:
-    """Validate ``data`` against ``fn``'s signature and coerce types.
+def build_args_validator(
+    fn: Callable[..., object],
+) -> Callable[[JsonObject], dict[str, object]]:
+    """Build a reusable argument validator for ``fn``.
 
-    Uses pydantic so that e.g. ``"3"`` becomes ``3`` when the annotation is
-    ``int``. Returns the cleaned kwargs dict. Values are read back as
+    The signature is resolved and the pydantic model constructed once, so
+    callers on a hot path (every tool invocation) don't pay for
+    ``get_type_hints`` + ``create_model`` per call. The returned callable
+    validates a parsed-JSON dict and returns coerced kwargs (e.g. ``"3"``
+    becomes ``3`` for an ``int`` annotation). Values are read back as
     attributes (not ``model_dump``) so parameters annotated with a pydantic
     model or dataclass receive the validated instance, not a plain dict.
     """
@@ -155,10 +160,24 @@ def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, obje
         default = param.default if param.default is not inspect.Parameter.empty else ...
         fields[name] = (annotation, default)
     if not fields:
-        return {}
+        return lambda data: {}
     Model = create_model(f"{fn.__name__.title()}Args", **fields)  # type: ignore[call-overload]
-    validated = Model(**data)
-    return {name: getattr(validated, name) for name in fields}
+    names = list(fields)
+
+    def validate(data: JsonObject) -> dict[str, object]:
+        validated = Model(**data)
+        return {name: getattr(validated, name) for name in names}
+
+    return validate
+
+
+def validate_args(fn: Callable[..., object], data: JsonObject) -> dict[str, object]:
+    """Validate ``data`` against ``fn``'s signature and coerce types.
+
+    One-shot convenience around :func:`build_args_validator`; prefer the
+    builder when validating repeatedly for the same function.
+    """
+    return build_args_validator(fn)(data)
 
 
 def coerce_output(tp: object, data: object) -> object:

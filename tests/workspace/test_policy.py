@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from lovia.workspace import CommandRule, PathRule, WorkspacePolicy
@@ -196,11 +198,28 @@ def test_absolute_pattern_covers_subtree() -> None:
 
 def test_denied_paths_accept_absolute_patterns() -> None:
     policy = WorkspacePolicy(read_outside="allow", denied_paths=("/etc/ssl/**",))
-    assert (
-        policy.decide_path(rel=None, abs_posix="/etc/ssl/private/key", op="read")
-        == "deny"
-    )
-    assert policy.decide_path(rel=None, abs_posix="/etc/hosts", op="read") == "allow"
+    # abs_posix is always resolved in practice (the session resolves before
+    # deciding); the pattern is canonicalized to match, so a symlinked prefix
+    # like macOS /etc -> /private/etc does not defeat the rule.
+    denied = Path("/etc/ssl/private/key").resolve().as_posix()
+    allowed = Path("/etc/hosts").resolve().as_posix()
+    assert policy.decide_path(rel=None, abs_posix=denied, op="read") == "deny"
+    assert policy.decide_path(rel=None, abs_posix=allowed, op="read") == "allow"
+
+
+def test_absolute_pattern_matches_through_symlinked_prefix(tmp_path) -> None:
+    # decide_path compares against a *resolved* absolute path; the pattern
+    # must be resolved too, or a symlinked prefix silently defeats it
+    # (the macOS /etc -> /private/etc class of bug).
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)  # /…/link -> /…/real
+    policy = WorkspacePolicy(read_outside="allow", denied_paths=(f"{link}/**",))
+    # A path reached via the real location must still be denied by the
+    # link-spelled pattern.
+    resolved = (real / "secret.key").resolve().as_posix()
+    assert policy.decide_path(rel=None, abs_posix=resolved, op="read") == "deny"
 
 
 def test_bare_denied_patterns_match_outside_the_root_too() -> None:

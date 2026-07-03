@@ -758,6 +758,16 @@ class LocalWorkspaceSession:
             start_new_session=True,
         )
         self._procs.add(proc)
+        # close() may have run during the await above, after _check_open() and
+        # before this registration — in which case it snapshotted an empty set
+        # and this child would never be reaped. Re-check and self-reap so
+        # close() stays best-effort even under that race.
+        if self._closed:
+            self._procs.discard(proc)
+            _kill_process_group(proc)
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
 
         try:
             stdout_b, stderr_b = await asyncio.wait_for(

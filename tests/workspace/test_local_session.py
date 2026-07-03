@@ -822,6 +822,28 @@ async def test_exit_code_reports_signal_death(tmp_path) -> None:
     assert result.ok is False
 
 
+async def test_run_started_during_close_self_reaps(tmp_path) -> None:
+    # Race: close() runs while run() is awaiting create_subprocess_shell, so
+    # the child registers into an already-snapshotted set. run() must observe
+    # _closed after registering and reap its own child rather than orphan it.
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+
+    real_create = asyncio.create_subprocess_shell
+
+    async def _closing_create(*args, **kwargs):
+        proc = await real_create(*args, **kwargs)
+        await session.close()  # close() snapshots _procs before the add
+        return proc
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(asyncio, "create_subprocess_shell", _closing_create)
+        with pytest.raises(WorkspaceClosedError):
+            await session.run(f"sleep 1 && touch {marker}", timeout=30)
+    await asyncio.sleep(1.2)
+    assert not marker.exists()  # the child was killed, not orphaned
+
+
 # ---------------------------------------------------------------------------
 # Shell path guard (decide_command at the session)
 # ---------------------------------------------------------------------------

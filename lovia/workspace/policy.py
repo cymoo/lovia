@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -86,23 +87,40 @@ def _path_matches(rel_path: str, pattern: str) -> bool:
     return any(fnmatch(segment, pat) for segment in rel_path.split("/"))
 
 
-def _abs_matches(abs_posix: str, pattern: str) -> bool:
-    """Match a resolved absolute POSIX path against a ``/``- or ``~``-pattern.
+@lru_cache(maxsize=1024)
+def _canonical_pattern(pattern: str) -> str | None:
+    """Expand ``~`` and canonicalize an absolute-style pattern's real prefix.
 
-    Like the relative match, a pattern also covers everything beneath it, so
-    ``"~/notes"`` grants/denies the whole subtree.
+    ``decide_path`` compares against a *resolved* absolute path, so the
+    pattern must be resolved too or a symlinked prefix silently defeats it
+    (macOS ``/etc`` → ``/private/etc``; a symlinked home). ``Path.resolve``
+    follows only components that exist, leaving glob segments (``*``, ``**``)
+    untouched — ``/etc/ssl/**`` → ``/private/etc/ssl/**``. Cached because
+    patterns are static and this runs per entry during list/grep. Returns
+    ``None`` when the pattern is empty or has no resolvable home.
     """
     pat = pattern
     if pat.startswith("~"):
         try:
             pat = Path(pat).expanduser().as_posix()
         except RuntimeError:
-            # No resolvable home directory: the pattern cannot match any
-            # resolved absolute path, so treat it as a non-match rather than
-            # crash every decision.
-            return False
+            return None
+    try:
+        pat = Path(pat).resolve().as_posix()
+    except OSError:
+        pass
     pat = pat.rstrip("/")
-    if not pat:
+    return pat or None
+
+
+def _abs_matches(abs_posix: str, pattern: str) -> bool:
+    """Match a resolved absolute POSIX path against a ``/``- or ``~``-pattern.
+
+    Like the relative match, a pattern also covers everything beneath it, so
+    ``"~/notes"`` grants/denies the whole subtree.
+    """
+    pat = _canonical_pattern(pattern)
+    if pat is None:
         return False
     return fnmatch(abs_posix, pat) or fnmatch(abs_posix, pat + "/*")
 

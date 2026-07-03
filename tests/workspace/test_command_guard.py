@@ -31,6 +31,26 @@ def test_pseudo_devices_are_not_claims() -> None:
     assert extract_path_claims("cat /dev/disk0") == [("read", "/dev/disk0")]
 
 
+def test_write_arguments_are_recorded_as_reads_by_design() -> None:
+    # Only shell *redirection* is classified as a write; an argument a program
+    # treats as an output path is indistinguishable from a read argument
+    # lexically, so it is recorded as a read (documented limitation). The
+    # decision stays bounded: coding still asks on outside paths; trusted is
+    # trusted. See the module docstring.
+    assert extract_path_claims("cp src.txt /etc/hosts") == [
+        ("read", "src.txt"),
+        ("read", "/etc/hosts"),
+    ]
+    assert extract_path_claims("tar -f /backup/out.tar") == [
+        ("read", "/backup/out.tar")
+    ]
+    # A redirection to the same place IS a write claim.
+    assert extract_path_claims("cat src.txt > /etc/hosts") == [
+        ("read", "src.txt"),
+        ("write", "/etc/hosts"),
+    ]
+
+
 def test_key_value_tokens_yield_rooted_values() -> None:
     assert extract_path_claims("dd of=/dev/disk0") == [("read", "/dev/disk0")]
     assert extract_path_claims("FOO=/etc/x cmd") == [("read", "/etc/x")]

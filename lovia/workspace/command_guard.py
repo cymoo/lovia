@@ -23,8 +23,21 @@ deliberately one-sided:
   root or match a denied pattern change the verdict, and those are exactly
   the ones worth flagging.
 
-Hard enforcement is the job of a sandboxed executor (Seatbelt/bubblewrap) or
-an isolated backend implementing the same session protocol.
+**Read vs write is only distinguished for shell redirection.** Shell syntax
+marks its own writes — ``>``, ``>>``, ``&>`` — and those become ``write``
+claims. An *argument* that a program happens to treat as an output path
+(``dd of=/dev/x``, ``cp src /etc/hosts``, ``tar -f out.tar``) is
+indistinguishable from a read argument without per-command semantics, so
+every non-redirection token is recorded as a ``read``. The consequence is
+bounded: in ``coding`` (``read_outside="ask"``) an outside write argument
+still stops at approval — it asks instead of denying, but does not slip
+through; only in ``trusted`` (``read_outside="allow"``) does it pass
+unprompted, which is the point of ``trusted`` (shell already defaults to
+``allow`` there). Classifying such arguments as writes would demand a
+per-command allow-list that is both unbounded and prone to false positives
+(``--config=/etc/app.conf`` is a read). Mandatory write enforcement is the
+job of a sandboxed executor (Seatbelt/bubblewrap) or an isolated backend
+implementing the same session protocol.
 """
 
 from __future__ import annotations

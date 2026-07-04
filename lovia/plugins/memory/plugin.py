@@ -542,8 +542,19 @@ class Memory:
     def _resolve_model(
         self, ctx: RunContext[Any]
     ) -> "str | Provider | list[str | Provider]":
-        # ``self.model`` overrides; otherwise reuse the host agent's model.
-        return self.model if self.model is not None else ctx.agent.model
+        # ``self.model`` overrides; otherwise reuse the host agent's model. A
+        # mid-run host always has one (its providers resolved at run start),
+        # but a hand-built RunContext in a unit test may not — raise a clear
+        # error rather than assert, so the gap is diagnosable everywhere.
+        if self.model is not None:
+            return self.model
+        model = ctx.agent.model
+        if model is None:
+            raise UserError(
+                "Memory has no model to run on: the host agent has none configured",
+                hint="pass Memory(model=...) or set the host Agent's model",
+            )
+        return model
 
     def _should_expand(self) -> bool:
         if self.expand_query == "auto":

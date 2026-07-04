@@ -61,6 +61,18 @@ def test_resolve_verify_insecure_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolve_verify() is False
 
 
+def test_resolve_verify_insecure_accepts_truthy_spellings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOVIA_HTTP_CA_BUNDLE", raising=False)
+    for val in ("true", "yes", "on", "ON", " True "):
+        monkeypatch.setenv("LOVIA_HTTP_INSECURE", val)
+        assert resolve_verify() is False
+    for val in ("0", "false", "no", ""):
+        monkeypatch.setenv("LOVIA_HTTP_INSECURE", val)
+        assert resolve_verify() is not False  # verification stays on
+
+
 # -------------------------------------------------------------- timeout -
 
 

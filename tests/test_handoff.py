@@ -267,6 +267,24 @@ def test_slug_produces_provider_legal_ascii_tool_names() -> None:
     assert tool_name.startswith("transfer_to_agent_")
 
 
+def test_generated_tool_names_fit_provider_length_cap() -> None:
+    from lovia.handoff import Handoff, agent_as_tool, build_handoff_tool
+
+    long_a = "very_long_agent_name_" + "a" * 60
+    long_b = "very_long_agent_name_" + "b" * 60
+
+    name_a = build_handoff_tool(Handoff(target=Agent(name=long_a))).name
+    name_b = build_handoff_tool(Handoff(target=Agent(name=long_b))).name
+    assert len(name_a) <= 64 and len(name_b) <= 64
+    assert name_a.startswith("transfer_to_very_long_agent_name_")
+    assert name_a != name_b  # digest suffix keeps distinct agents distinct
+    # Stable across calls, like the digest fallback above.
+    assert name_a == build_handoff_tool(Handoff(target=Agent(name=long_a))).name
+
+    ask_name = agent_as_tool(Agent(name=long_a)).name
+    assert len(ask_name) <= 64 and ask_name.startswith("ask_very_long")
+
+
 async def test_agent_as_tool_inherits_tracer() -> None:
     # The sub-run inherits the parent's tracer (internal RunContext plumbing)
     # so its spans join the parent's trace instead of vanishing into a

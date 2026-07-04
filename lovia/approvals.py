@@ -42,11 +42,11 @@ class ApprovalChannel:
 
     def approve(self, call_id: str, *, scope: str | None = None) -> None:
         """Allow the tool call. No-op if already resolved or unknown."""
-        self._resolve(call_id, True, scope=scope)
+        self.resolve(call_id, True, scope=scope)
 
     def reject(self, call_id: str, *, scope: str | None = None) -> None:
         """Deny the tool call. No-op if already resolved or unknown."""
-        self._resolve(call_id, False, scope=scope)
+        self.resolve(call_id, False, scope=scope)
 
     def is_pending(self, call_id: str, *, scope: str | None = None) -> bool:
         fut = self._pending.get((scope, call_id))
@@ -71,10 +71,3 @@ class ApprovalChannel:
     def discard(self, call_id: str, *, scope: str | None = None) -> None:
         """Forget a pending approval entry after its waiter has completed."""
         self._pending.pop((scope, call_id), None)
-
-    def _resolve(
-        self, call_id: str, decision: bool, *, scope: str | None = None
-    ) -> None:
-        fut = self._pending.get((scope, call_id))
-        if fut is not None and not fut.done():
-            fut.set_result(decision)

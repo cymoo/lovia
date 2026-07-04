@@ -32,6 +32,10 @@ if TYPE_CHECKING:
 
 HANDOFF_TOOL_PREFIX = "transfer_to_"
 
+# Provider tool-name grammars cap length at 64 (OpenAI and Anthropic both
+# enforce ``^[a-zA-Z0-9_-]{1,64}$``); generated names must fit under it.
+_TOOL_NAME_MAX = 64
+
 
 # Internal sentinel that the runner recognises in a tool result to mean
 # "switch the active agent to ``handoff.target`` and continue". ``reason`` is
@@ -70,7 +74,9 @@ class Handoff:
 def build_handoff_tool(handoff: Handoff) -> Tool:
     """Build the ``transfer_to_<name>`` tool that triggers ``handoff``."""
     target = handoff.target
-    tool_name = handoff.name or f"{HANDOFF_TOOL_PREFIX}{_slug(target.name)}"
+    tool_name = handoff.name or HANDOFF_TOOL_PREFIX + _slug(
+        target.name, max_len=_TOOL_NAME_MAX - len(HANDOFF_TOOL_PREFIX)
+    )
     # The default description is deliberately generic: the agent name alone is a
     # thin routing signal. When the parent must choose between similar agents,
     # set ``Handoff.description`` with the target's specialty — that is the knob
@@ -162,7 +168,7 @@ def agent_as_tool(
     runner-created mailbox, reachable from its tools and hooks as
     ``ctx.mailbox``.
     """
-    tool_name = name or f"ask_{_slug(agent.name)}"
+    tool_name = name or "ask_" + _slug(agent.name, max_len=_TOOL_NAME_MAX - len("ask_"))
     tool_desc = (
         description or f"Delegate a task to the {agent.name} agent and get its answer."
     )
@@ -212,16 +218,21 @@ def agent_as_tool(
     )
 
 
-def _slug(s: str) -> str:
+def _slug(s: str, *, max_len: int = _TOOL_NAME_MAX) -> str:
     """Make a string safe to use as a provider-legal tool name.
 
-    Tool-name grammars are ASCII-only at every major provider (OpenAI enforces
-    ``^[a-zA-Z0-9_-]{1,64}$``), so non-ASCII characters are dropped rather than
-    passed through — ``str.isalnum`` alone would keep e.g. CJK characters and
-    produce a name the provider rejects with a 400. A name with nothing to keep
-    falls back to a stable digest so distinct agents still get distinct tool
-    names; set ``Handoff.name`` / ``as_tool(name=...)`` for a readable override
-    (the tool description carries the original agent name either way).
+    Tool-name grammars are ASCII-only and length-capped at every major
+    provider (OpenAI enforces ``^[a-zA-Z0-9_-]{1,64}$``), so non-ASCII
+    characters are dropped rather than passed through — ``str.isalnum`` alone
+    would keep e.g. CJK characters and produce a name the provider rejects
+    with a 400. A name with nothing to keep falls back to a stable digest, and
+    one longer than ``max_len`` is truncated with a digest suffix — either way
+    distinct agents still get distinct tool names; set ``Handoff.name`` /
+    ``as_tool(name=...)`` for a readable override (the tool description
+    carries the original agent name either way).
+
+    ``max_len`` bounds the slug itself: callers subtract their prefix
+    (``transfer_to_`` / ``ask_``) from the provider's 64-char cap.
     """
     out = []
     for ch in s.lower():
@@ -230,9 +241,14 @@ def _slug(s: str) -> str:
         elif ch in (" ", "-"):
             out.append("_")
     slug = "".join(out)
-    if slug:
-        return slug
-    if not s:
-        return "agent"
-    digest = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
-    return f"agent_{digest}"
+    if not slug:
+        if not s:
+            return "agent"
+        digest = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
+        return f"agent_{digest}"
+    if len(slug) > max_len:
+        # Digest the full original name so two long names that share a
+        # truncated prefix still map to distinct tool names.
+        digest = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
+        slug = f"{slug[: max_len - 9]}_{digest}"
+    return slug

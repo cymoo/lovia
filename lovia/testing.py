@@ -20,6 +20,7 @@ concurrency-safe. Build a fresh instance (and agent) per run; with
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from .messages import AssistantTurn, Message, ToolCall, Usage
@@ -36,6 +37,13 @@ from .transcript import (
     UsageDelta,
     entries_to_messages,
 )
+
+
+@dataclass
+class _ScriptedTurn(AssistantTurn):
+    """An :class:`AssistantTurn` that also carries scripted reasoning text."""
+
+    reasoning: str | None = None
 
 
 class ScriptedProvider:
@@ -70,7 +78,7 @@ class ScriptedProvider:
     ) -> AsyncIterator[ModelDelta]:
         msg = self._pop(entries)
         # Reasoning streams first (matches Anthropic ordering).
-        reasoning = getattr(msg, "_scripted_reasoning_content", None)
+        reasoning = getattr(msg, "reasoning", None)
         if reasoning:
             for ch in reasoning:
                 yield ReasoningDelta(text=ch)
@@ -92,13 +100,11 @@ class ScriptedProvider:
 
 def text(content: str, *, reasoning: str | None = None) -> AssistantTurn:
     """A scripted turn that answers with plain text."""
-    msg = AssistantTurn(
+    return _ScriptedTurn(
         content=content,
         usage=Usage(input_tokens=1, output_tokens=1),
+        reasoning=reasoning,
     )
-    if reasoning is not None:
-        setattr(msg, "_scripted_reasoning_content", reasoning)
-    return msg
 
 
 def call(
@@ -140,6 +146,7 @@ def _copy(m: Message) -> Message:
     return Message(
         role=m.role,
         content=m.content,
+        reasoning=m.reasoning,
         tool_calls=list(m.tool_calls),
         tool_call_id=m.tool_call_id,
         name=m.name,

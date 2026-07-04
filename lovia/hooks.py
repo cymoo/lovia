@@ -104,12 +104,14 @@ class AgentHooks:
         broken log/metrics handler must not abort the run it watches.
         """
         # First the catch-alls so listeners that mutate state see events
-        # in the same order the runner emits them.
-        for fn in self._any:
+        # in the same order the runner emits them. Snapshot both registries so
+        # a handler registering new hooks mid-dispatch doesn't mutate the
+        # structures being iterated.
+        for fn in list(self._any):
             await _call_handler(fn, event, ctx)
-        for event_type, listeners in self._listeners.items():
+        for event_type, listeners in list(self._listeners.items()):
             if isinstance(event, event_type):
-                for fn in listeners:
+                for fn in list(listeners):
                     await _call_handler(fn, event, ctx)
 
 

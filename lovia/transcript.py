@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Callable, Literal, Union
 
 from .types import JsonObject
-from .parts import ContentPart, FilePart, ImagePart, TextPart
+from .parts import ContentPart, FilePart, ImagePart, TextPart, text_of
 from .messages import AssistantTurn, Message, ToolCall, Usage
 
 # ---------------------------------------------------------------------------
@@ -430,18 +430,14 @@ def messages_to_entries(messages: list[Message]) -> list[TranscriptEntry]:
             if m.reasoning:
                 out.append(ReasoningEntry(content=m.reasoning))
             if m.content:
-                # ``content`` may be a list[ContentPart]; flatten to text for
-                # the AssistantTextEntry (richer shapes are 9d territory).
-                from .parts import text_of
-
+                # ``content`` may be a list[ContentPart]; assistant parts are
+                # flattened to text — AssistantTextEntry only carries a string.
                 out.append(AssistantTextEntry(content=text_of(m.content)))
             for tc in m.tool_calls:
                 out.append(
                     ToolCallEntry(call_id=tc.id, name=tc.name, arguments=tc.arguments)
                 )
         elif m.role == "tool":
-            from .parts import text_of
-
             out.append(
                 ToolResultEntry(
                     call_id=m.tool_call_id or "",

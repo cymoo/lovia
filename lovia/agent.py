@@ -24,6 +24,7 @@ from typing import (
     Union,
 )
 
+from .exceptions import UserError
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
 from .reliability import RetryPolicy
@@ -81,7 +82,10 @@ class Agent(Generic[TContext]):
             fragments can be registered with the :meth:`instruction` decorator
             and appended at render time.
         model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.4"``)
-            or a pre-built :class:`Provider` instance.
+            or a pre-built :class:`Provider` instance. Required before the
+            agent can run — there is deliberately no default vendor, so an
+            agent left unconfigured raises :class:`UserError` when its
+            providers are resolved rather than silently calling one vendor.
         tools: Tools the agent may call.
         output_type: Pydantic model, dataclass, TypedDict, or builtin type that
             describes the structured final output. ``str`` (the default) means
@@ -109,7 +113,7 @@ class Agent(Generic[TContext]):
 
     name: str
     instructions: "str | InstructionsFn" = ""
-    model: "str | Provider | list[str | Provider]" = "openai:gpt-5.4"
+    model: "str | Provider | list[str | Provider] | None" = None
     tools: list[Tool] = field(default_factory=list)
     output_type: Any = str
     # When ``True`` (default), a failed structured-output parse triggers one
@@ -163,13 +167,19 @@ class Agent(Generic[TContext]):
         When ``model`` is a single value the chain has length 1. When it is a
         list, each entry is resolved and the runner tries them in order.
         """
-        models: list[Any]
+        if self.model is None:
+            raise UserError(
+                f"Agent {self.name!r} has no model configured",
+                hint='pass model="vendor:model" (e.g. "openai:gpt-5.4") '
+                "or a Provider instance",
+            )
+        models: list[str | Provider]
         if isinstance(self.model, list):
             models = list(self.model)
         else:
             models = [self.model]
         if not models:
-            raise ValueError("Agent.model must not be empty")
+            raise UserError(f"Agent {self.name!r} model list must not be empty")
         return [provider_from_string(m) if isinstance(m, str) else m for m in models]
 
     def resolve_provider(self) -> Provider:
@@ -203,9 +213,7 @@ class Agent(Generic[TContext]):
 
     def with_instructions(self, fn: InstructionsFn) -> "Agent[TContext]":
         """Return a clone with one additional dynamic instructions fragment."""
-        new = self.clone()
-        new._fragments = (*self._fragments, fn)
-        return new
+        return self.clone(_fragments=(*self._fragments, fn))
 
     async def render_system_prompt(
         self, ctx: "RunContext[Any]", *, extra: "str | InstructionsFn | None" = None
@@ -274,12 +282,10 @@ class Agent(Generic[TContext]):
         """Return a copy of this agent with selected fields overridden.
 
         Dynamic system-prompt fragments registered on the source agent are
-        copied immutably so the clone inherits them without sharing mutable
-        prompt state.
+        carried over as an immutable tuple, so the clone inherits them without
+        sharing mutable prompt state.
         """
-        new = replace(self, **overrides)
-        new._fragments = self._fragments
-        return new
+        return replace(self, **overrides)
 
     # ------------------------------------------------------------------ #
     # Convenience instance methods — thin wrappers over Runner

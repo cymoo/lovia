@@ -60,6 +60,19 @@ async def test_output_guardrail_passing_yields_normal_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_guardrail_returning_empty_string_means_ok() -> None:
+    # Contract: only a *non-empty* string (or True) is a violation, so a
+    # falsy "" must let the run proceed rather than trip with a blank reason.
+    async def noisy_ok(messages: list[Any], ctx: Any) -> str:
+        return ""
+
+    provider = ScriptedProvider([text("fine")])
+    agent = Agent(name="a", model=provider, input_guardrails=[noisy_ok])
+    result = await Runner.run(agent, "hi")
+    assert result.output == "fine"
+
+
+@pytest.mark.asyncio
 async def test_sync_guardrail_returning_bool_is_supported() -> None:
     def block_all(messages: list[Any], ctx: Any) -> bool:
         return True

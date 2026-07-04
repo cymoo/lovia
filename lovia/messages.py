@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .parts import ContentPart, FilePart, ImagePart, TextPart, text_of
+from .parts import ContentPart, normalize_content, text_of
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -118,11 +118,7 @@ def user(
     content: "str | ContentPart | list[ContentPart]",
 ) -> Message:
     """Build a user message from a string, a single part, or a part list."""
-    if isinstance(content, str):
-        return Message(role="user", content=content)
-    if isinstance(content, (TextPart, ImagePart, FilePart)):
-        return Message(role="user", content=[content])
-    return Message(role="user", content=list(content))
+    return Message(role="user", content=normalize_content(content))
 
 
 def assistant(text: str) -> Message:

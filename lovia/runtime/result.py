@@ -10,6 +10,7 @@ from .. import events
 from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..messages import Message, Usage
+from ..reliability import CancelToken
 from ..transcript import TranscriptEntry, entries_to_messages
 
 
@@ -66,20 +67,42 @@ class RunResult:
 class RunHandle:
     """Awaitable, async-iterable handle to a streamed run.
 
-    Iteration is single-shot. After iteration finishes (or an exception
-    escapes), :meth:`result` returns the :class:`RunResult` or re-raises the
-    same exception.
+    Iteration is single-shot and **never raises for run failures**: every
+    stream ends with exactly one terminal event —
+    :class:`~lovia.events.RunCompleted` or :class:`~lovia.events.RunFailed` —
+    and then stops. :meth:`result` returns the :class:`RunResult`, or raises
+    the failure (:class:`~lovia.exceptions.RunCancelled`,
+    :class:`~lovia.exceptions.BudgetExceeded`, ...), so the ``async for`` body
+    stays free of try/except. Only ``asyncio`` task cancellation and other
+    ``BaseException``\\ s still propagate through iteration.
+
+    :meth:`cancel` requests cooperative cancellation without needing a
+    pre-wired :class:`~lovia.CancelToken`.
     """
 
     def __init__(
-        self, _stream: AsyncIterator[events.Event], approvals: ApprovalChannel
+        self,
+        _stream: AsyncIterator[events.Event],
+        approvals: ApprovalChannel,
+        cancel_token: CancelToken,
     ) -> None:
         self._stream = _stream
         self._result: RunResult | None = None
         self._error: BaseException | None = None
         self._done = asyncio.Event()
         self._consumed = False
+        self._cancel_token = cancel_token
         self.approvals = approvals
+
+    def cancel(self, reason: str | None = None) -> None:
+        """Request cooperative cancellation of this run.
+
+        Same effect as cancelling the run's :class:`~lovia.CancelToken`: the
+        loop stops at the next safe point, the stream ends with
+        :class:`~lovia.events.RunFailed`, and :meth:`result` raises
+        :class:`~lovia.exceptions.RunCancelled`.
+        """
+        self._cancel_token.cancel(reason)
 
     def __aiter__(self) -> AsyncIterator[events.Event]:
         return self._iter()
@@ -99,7 +122,15 @@ class RunHandle:
             # abandonment, not re-raise GeneratorExit.
             self._done.set()
             raise
+        except Exception as exc:
+            # Terminal run failure. The loop already emitted RunFailed and
+            # persisted terminal state; end iteration cleanly and hold the
+            # exception for result().
+            self._error = exc
+            self._done.set()
         except BaseException as exc:
+            # asyncio.CancelledError, KeyboardInterrupt, ...: not a run
+            # outcome — record for result() but let it propagate.
             self._error = exc
             self._done.set()
             raise

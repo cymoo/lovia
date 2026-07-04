@@ -164,7 +164,10 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "event": "context_compacted",
             "data": json.dumps({"session_id": ev.session_id, **asdict(ev.notice)}),
         }
-    if isinstance(ev, events.ErrorOccurred):
+    if isinstance(ev, (events.ErrorOccurred, events.RunFailed)):
+        # Same wire shape for both: a tool-scoped error and a terminal run
+        # failure render identically in the UI; terminal-ness is implied by
+        # the stream ending right after a RunFailed.
         return {
             "event": "error",
             "data": json.dumps(

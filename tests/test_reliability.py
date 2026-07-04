@@ -345,10 +345,18 @@ async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
     )
 
     discarded = 0
+    failed: events.RunFailed | None = None
+    handle = Runner.stream(agent, "hi", retry=retry)
+    async for ev in handle:
+        if isinstance(ev, events.OutputDiscarded):
+            discarded += 1
+        elif isinstance(ev, events.RunFailed):
+            failed = ev
+
+    # Iteration ends with a terminal RunFailed; result() raises the error.
+    assert failed is not None and isinstance(failed.error, ProviderError)
     with pytest.raises(ProviderError):
-        async for ev in Runner.stream(agent, "hi", retry=retry):
-            if isinstance(ev, events.OutputDiscarded):
-                discarded += 1
+        await handle.result()
 
     assert provider.attempts == 3
     # One reset before each of the two retries — none after the final failure.

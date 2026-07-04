@@ -436,7 +436,7 @@ class RunLoop:
                     # be cancelled and drop the checkpoint.
                     await asyncio.shield(self.checkpoints.save_terminal(state, exc))
                 if isinstance(exc, Exception):
-                    yield await self._emit(state, events.ErrorOccurred(error=exc))
+                    yield await self._emit(state, events.RunFailed(error=exc))
                 raise
 
     # ------------------------------------------------------------------ #

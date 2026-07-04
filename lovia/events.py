@@ -234,17 +234,38 @@ class ApprovalRequired(ToolEvent):
 
 @dataclass
 class ErrorOccurred(ErrorEvent):
+    """A non-terminal error scoped to one tool call.
+
+    Emitted for tool failures, render failures, and approval predicate/handler
+    errors; the run continues (the model sees an error result). Terminal
+    run-level failures are :class:`RunFailed` instead.
+    """
+
     error: BaseException
-    #: The tool call being processed when the error occurred (tool failures,
-    #: render failures, approval predicate/handler errors); ``None`` for
-    #: run-level errors. Needed to attribute an error once one turn's tool
-    #: events interleave across concurrently-executing calls.
+    #: The tool call being processed when the error occurred. Needed to
+    #: attribute an error once one turn's tool events interleave across
+    #: concurrently-executing calls.
     call: ToolCall | None = None
 
 
 @dataclass
 class RunCompleted(RunEvent):
     result: "RunResult"
+
+
+@dataclass
+class RunFailed(RunEvent):
+    """Terminal event: the run ended without a result.
+
+    Exactly one of :class:`RunCompleted` / :class:`RunFailed` closes every
+    stream — iteration then ends; it never raises. ``error`` is the exception
+    the run ended with (:class:`~lovia.exceptions.RunCancelled` for a
+    cooperative cancel, :class:`~lovia.exceptions.BudgetExceeded`,
+    :class:`~lovia.exceptions.ProviderError`, ...), and
+    :meth:`~lovia.RunHandle.result` raises that same exception.
+    """
+
+    error: BaseException
 
 
 @dataclass

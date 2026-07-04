@@ -105,7 +105,7 @@ class Runner:
             tracer=tracer,
             parent_usage=_parent_usage,
         )
-        return RunHandle(loop.stream(), loop.approvals)
+        return RunHandle(loop.stream(), loop.approvals, loop.cancel_token)
 
     @staticmethod
     async def run(

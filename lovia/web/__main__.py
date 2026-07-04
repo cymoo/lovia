@@ -264,7 +264,7 @@ def resolve_model(cli_model: str | None) -> str:
         raise CliError(
             "no model configured.",
             hint="pass --model (e.g. openai:gpt-5.5) or set LOVIA_MODEL / "
-            "OPENAI_DEFAULT_MODEL.",
+            "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL.",
         )
     return model
 

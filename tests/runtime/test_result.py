@@ -88,6 +88,20 @@ async def test_iteration_ends_cleanly_on_failure() -> None:
         await handle.result()
 
 
+async def test_runfailed_without_raise_still_fails_result() -> None:
+    # A producer honoring the terminal-event contract on its own — emit
+    # RunFailed, end cleanly, never raise — must not read as abandonment.
+    async def _stream_fails_politely() -> AsyncIterator[events.Event]:
+        yield events.TextDelta(delta="partial")
+        yield events.RunFailed(error=RuntimeError("polite failure"))
+
+    handle = _handle(_stream_fails_politely())
+    async for _ in handle:
+        pass
+    with pytest.raises(RuntimeError, match="polite failure"):
+        await handle.result()
+
+
 async def test_task_cancellation_still_propagates() -> None:
     # asyncio-level cancellation is not a run outcome: it must escape the
     # iteration rather than be swallowed into the terminal-event contract.

@@ -121,6 +121,12 @@ class RunHandle:
             async for ev in self._stream:
                 if isinstance(ev, events.RunCompleted):
                     self._result = ev.result
+                elif isinstance(ev, events.RunFailed):
+                    # Honor the terminal-event contract on its own: a producer
+                    # that emits RunFailed and then ends cleanly (without also
+                    # raising, as RunLoop happens to) must still make result()
+                    # raise the run's error rather than report abandonment.
+                    self._error = ev.error
                 yield ev
         except GeneratorExit:
             # The consumer broke out of iteration. Don't record this as the

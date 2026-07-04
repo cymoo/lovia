@@ -68,9 +68,16 @@ class HumanChannel:
         Questions asked before iteration starts are queued and delivered
         first. Single consumer: two concurrent iterations would split the
         feed between them. A question already resolved (answered, cancelled,
-        or timed out) while queued is skipped.
+        or timed out) while queued is skipped. Started on an already-closed
+        channel, the iterator ends immediately.
         """
         while True:
+            # After close() nothing is ever enqueued again, so awaiting an
+            # empty feed would hang forever. Drain any backlog (close() only
+            # enqueues one sentinel; an iterator started later must not wait
+            # for a second one), then end.
+            if self._closed and self._feed.empty():
+                return
             q = await self._feed.get()
             if q is None:
                 return

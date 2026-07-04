@@ -80,3 +80,20 @@ async def test_ask_after_close_fails_fast() -> None:
     channel.close()
     with pytest.raises(ToolError, match="closed"):
         channel._new_question("too late?")
+
+
+async def test_questions_started_after_close_ends_immediately() -> None:
+    # Nothing is ever enqueued after close(), so a late iterator must return
+    # instead of awaiting a feed that can only stay silent forever.
+    channel = HumanChannel()
+    channel.close()
+
+    async def consume_twice() -> int:
+        seen = 0
+        async for _ in channel.questions():  # consumes the close sentinel
+            seen += 1
+        async for _ in channel.questions():  # empty feed: must not hang
+            seen += 1
+        return seen
+
+    assert await asyncio.wait_for(consume_twice(), timeout=1) == 0

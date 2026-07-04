@@ -144,9 +144,3 @@ async def test_cancel_delegates_to_token() -> None:
     handle = RunHandle(_stream_completes(), ApprovalChannel(), token)
     handle.cancel("user clicked stop")
     assert token.is_cancelled
-
-
-def test_error_occurred_is_a_deprecated_alias() -> None:
-    # Renamed once RunFailed took the run-level role; same class object so
-    # isinstance checks and hooks.on registrations against either name work.
-    assert events.ErrorOccurred is events.ToolCallFailed

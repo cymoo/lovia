@@ -311,10 +311,3 @@ class ContextCompacted(ContextEvent):
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
     notice: CompactionNotice
-
-
-# Deprecated alias (since 0.9): ``ErrorOccurred`` was renamed once ``RunFailed``
-# took over the run-level role and this event became tool-scoped. Same class
-# object, so ``isinstance`` checks and ``hooks.on`` registrations written
-# against either name keep working. Will be removed after one minor release.
-ErrorOccurred = ToolCallFailed

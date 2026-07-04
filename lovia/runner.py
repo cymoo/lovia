@@ -42,7 +42,7 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         mailbox: Mailbox | None = None,
-        retry: RetryPolicy | None = RetryPolicy(),
+        retry: RetryPolicy | None = None,
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
         session_id: str | None = None,
@@ -55,7 +55,17 @@ class Runner:
         """Start a run and return a :class:`RunHandle`.
 
         The handle is both awaitable (for the final :class:`RunResult`) and
-        async-iterable (for the event stream).
+        async-iterable (for the event stream). Iteration ends with a terminal
+        :class:`~lovia.events.RunCompleted` or :class:`~lovia.events.RunFailed`
+        event and never raises for run failures; ``await handle.result()``
+        (or awaiting the handle) returns the result or raises the run's error.
+
+        ``retry`` and ``context_policy`` default to the *agent's* posture
+        (:attr:`Agent.retry` / :attr:`Agent.context_policy`); pass a value to
+        override for this run only. To disable provider retries for one call
+        pass ``RetryPolicy(max_attempts=1)`` (``None`` means "inherit"). The
+        run-scoped *limits* — ``max_turns``, ``budget``, ``cancel_token`` —
+        have no agent-side counterpart by design.
 
         **Idempotent runs.** When ``checkpoint`` is given,
         ``checkpoint.if_run_exists`` decides what happens if that run id already
@@ -97,8 +107,13 @@ class Runner:
             budget=budget,
             cancel_token=cancel_token,
             mailbox=mailbox,
-            retry=retry,
-            context_policy=context_policy,
+            # Posture resolution: explicit per-run override, else the agent's.
+            # (The initial agent's posture governs the whole run, handoffs
+            # included — a transfer changes who speaks, not the run's spine.)
+            retry=retry if retry is not None else agent.retry,
+            context_policy=(
+                context_policy if context_policy is not None else agent.context_policy
+            ),
             session=session,
             session_id=session_id,
             checkpoint=checkpoint,
@@ -119,7 +134,7 @@ class Runner:
         budget: RunBudget | None = None,
         cancel_token: CancelToken | None = None,
         mailbox: Mailbox | None = None,
-        retry: RetryPolicy | None = RetryPolicy(),
+        retry: RetryPolicy | None = None,
         context_policy: ContextPolicy | None = None,
         session: Session | None = None,
         session_id: str | None = None,

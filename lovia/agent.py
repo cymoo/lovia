@@ -97,6 +97,18 @@ class Agent(Generic[TContext]):
         handoffs: Agents (or :class:`Handoff` objects) the model may transfer
             control to via a synthetic ``transfer_to_<name>`` tool.
         settings: Sampling parameters forwarded to the provider.
+        retry: Provider retry posture (:class:`~lovia.RetryPolicy`) applied to
+            every run of this agent; ``None`` disables provider retries.
+            :meth:`Runner.run` may override it per call. Placement rule:
+            *posture* (how the agent behaves when infrastructure hiccups —
+            retries, tool-retry defaults, fallback models, context policy)
+            lives on the agent; *limits* (how much one request may spend —
+            ``max_turns``, ``budget``, ``timeout``, cancellation) live on the
+            run.
+        context_policy: How this agent's context is shaped for each model
+            call (:class:`~lovia.ContextPolicy`). ``None`` (default) means the
+            runner's standard :class:`~lovia.Compaction`. Per-call override
+            via :meth:`Runner.run` wins.
         workspace: Optional :class:`~lovia.workspace.Workspace` (or anything
             implementing ``WorkspaceLike``) scoping file/shell tools to a
             directory and policy. Its tool bundle is merged at run time and
@@ -123,6 +135,10 @@ class Agent(Generic[TContext]):
     output_repair: "bool | OutputRepairStrategy" = True
     handoffs: list["Agent[Any] | Handoff"] = field(default_factory=list)
     settings: ModelSettings = field(default_factory=ModelSettings)
+    # Reliability/context *posture* — see the placement rule in the class
+    # docstring. Both may be overridden per call on ``Runner.run``.
+    retry: "RetryPolicy | None" = field(default_factory=RetryPolicy)
+    context_policy: "ContextPolicy | None" = None
     workspace: "WorkspaceLike | None" = None
     # Declarative features that bundle tools, per-turn view injectors, static
     # system-prompt text, and event hooks. Each is activated once per run (and
@@ -260,7 +276,7 @@ class Agent(Generic[TContext]):
         description: str | None = None,
         max_turns: int = 50,
         budget: "RunBudget | None" = None,
-        retry: "RetryPolicy | None" = RetryPolicy(),
+        retry: "RetryPolicy | None" = None,
         context_policy: "ContextPolicy | None" = None,
     ) -> Tool:
         """Expose this agent as a :class:`Tool` callable by other agents.

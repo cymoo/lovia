@@ -61,6 +61,7 @@ def create_app(
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     default_budget_factory: Callable[[], RunBudget] | None = None,
+    approval_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",
@@ -87,6 +88,12 @@ def create_app(
     the agent loop per request and ``budget`` (a :class:`RunBudget`) bounds
     token spend. ``retry`` (a :class:`RetryPolicy`) overrides the agent's own
     provider-retry posture for server-driven turns; ``None`` inherits it.
+
+    ``approval_timeout`` auto-denies a pending tool approval after that many
+    seconds (default ``None``: wait forever). Set it when using scheduled runs
+    with approval-gated tools — a clientless run parked on an approval otherwise
+    occupies one of the ``max_background_runs`` slots until someone opens the
+    chat and decides.
 
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
@@ -125,6 +132,7 @@ def create_app(
         tracer=tracer,
         max_background_runs=max_background_runs,
         default_budget_factory=default_budget_factory,
+        approval_timeout=approval_timeout,
     )
 
     @asynccontextmanager
@@ -188,6 +196,7 @@ def serve(
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
+    approval_timeout: float | None = None,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
@@ -220,6 +229,7 @@ def serve(
         budget=budget,
         retry=retry,
         tracer=tracer,
+        approval_timeout=approval_timeout,
         ui=ui,
         empty_title=empty_title,
         empty_description=empty_description,

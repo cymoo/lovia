@@ -529,3 +529,120 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
     assert not any(m.tool_calls for m in msgs)  # the dangling call was trimmed
     assert any(m.role == "user" and m.content == "go" for m in msgs)
     assert any(m.role == "assistant" and m.content == "on it" for m in msgs)
+
+
+# ------------------------------------------------------------------ phase-1 -
+
+
+@pytest.mark.asyncio
+async def test_start_conflicts_when_session_already_reserved() -> None:
+    from fastapi import HTTPException
+
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.supervisor.start(
+        session_id="s1", agent=agent, input="go", is_new=True, title_message=None
+    )
+    # A second start for the same session must 409, not silently orphan the
+    # first controller (two tabs submitting at once race exactly like this).
+    with pytest.raises(HTTPException) as ei:
+        await deps.supervisor.start(
+            session_id="s1",
+            agent=agent,
+            input="again",
+            is_new=False,
+            title_message=None,
+        )
+    assert ei.value.status_code == 409
+    assert deps.supervisor.cancel("s1")
+
+
+@pytest.mark.asyncio
+async def test_delete_session_stops_live_run_without_orphan_transcript() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")
+        res = await ac.delete("/api/sessions/s1")
+        assert res.status_code == 200
+        await _wait_run(ac, "s1", gone=True)
+        release.set()
+        # The SSE closes only after the run task's finally (persist decision
+        # included) has executed — safe to assert "nothing re-appeared" after.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+    store = app.state.store
+    assert await store.get("s1") is None  # metadata stays gone
+    assert await store.session.load("s1") == []  # no orphan transcript rows
+    assert len(provider.calls) == 1  # the run never reached turn 2
+
+
+@pytest.mark.asyncio
+async def test_delete_all_sessions_stops_live_runs() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")
+        assert (await ac.delete("/api/sessions")).status_code == 200
+        await _wait_run(ac, "s1", gone=True)
+        release.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        assert (await ac.get("/api/sessions")).json() == []
+    assert await app.state.store.session.load("s1") == []
+
+
+@pytest.mark.asyncio
+async def test_approval_timeout_denies_and_completes_run() -> None:
+    @tool(needs_approval=True)
+    async def sensitive() -> str:
+        """Sensitive."""
+        return "did it"
+
+    provider = ScriptedProvider([call("sensitive", {}, call_id="c1"), text("ack")])
+    agent = Agent(name="bot", model=provider, tools=[sensitive])
+    app = _app(agent, approval_timeout=0.3)
+    async with _client(app) as ac:
+        task, lines = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", status="blocked_on_approval")
+        # Nobody approves: the timeout must deny and let the run finish.
+        await asyncio.wait_for(task, timeout=5)
+        await _wait_run(ac, "s1", gone=True)
+    evs = _parse_sse("\n".join(lines))
+    kinds = [e for e, _ in evs]
+    assert "approval_required" in kinds
+    assert kinds[-1] == "done"
+    denied = [d for (e, d) in evs if e == "tool_result"]
+    assert denied and "not approved" in str(denied[0].get("result"))
+    assert not any("did it" in str(d.get("result")) for d in denied)
+
+
+@pytest.mark.asyncio
+async def test_blocking_chat_conflicts_with_live_run() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent)
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")
+        # The non-streaming endpoint must not race a second run onto the session.
+        res = await ac.post("/api/chat", json={"message": "hi", "session_id": "s1"})
+        assert res.status_code == 409
+        release.set()
+        await asyncio.wait_for(task, timeout=5)

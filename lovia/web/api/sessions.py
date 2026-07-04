@@ -69,7 +69,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:
-        """Delete every session's transcript and metadata."""
+        """Delete every session's transcript and metadata (stopping live runs)."""
+        for sid, _ctrl in deps.supervisor:
+            deps.supervisor.cancel(sid, discard=True)
         await store.delete_all()
         return {"ok": True}
 
@@ -169,6 +171,10 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
+        # Stop a live run first (discarding its partial transcript) — otherwise
+        # it keeps burning tokens and re-persists entries for the deleted chat
+        # when it winds down.
+        deps.supervisor.cancel(session_id, discard=True)
         await store.delete(session_id)
         return {"ok": True}
 

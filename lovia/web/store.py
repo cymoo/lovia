@@ -345,9 +345,15 @@ class ChatStore:
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
-        for m in await self.list_all():
-            await self._drop_checkpoint(m.id)
-            await self.session.clear(m.id)
+        # Read every id directly — ``list_all`` caps at its limit, which would
+        # leave the transcripts/checkpoints of sessions beyond one page orphaned
+        # while the unconditional row delete below wiped their metadata.
+        ids = await self._read_all(
+            "SELECT id FROM chat_sessions", (), lambda row: row[0]
+        )
+        for session_id in ids:
+            await self._drop_checkpoint(session_id)
+            await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions")
 
     async def _drop_checkpoint(self, session_id: str) -> None:
@@ -359,11 +365,13 @@ class ChatStore:
             await self.checkpointer.delete(run_id)
 
     async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
-        """Search sessions whose title or id contains ``query``."""
-        pattern = f"%{query}%"
+        """Search sessions whose title or id contains ``query`` (literally —
+        LIKE wildcards in the query are escaped, so "100%" matches "100%")."""
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
-            "WHERE title LIKE ? OR id LIKE ? "
+            "WHERE title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
             (pattern, pattern, limit),
             ChatMeta.from_row,

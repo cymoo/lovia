@@ -209,6 +209,15 @@ class Agent(Generic[TContext]):
     def instruction(self, fn: InstructionsFn) -> InstructionsFn:
         """Register a dynamic instructions fragment.
 
+        Registration mutates this agent in place — the one deliberate
+        exception to the "immutable by convention" rule, kept for decorator
+        ergonomics. The boundary with :meth:`clone` is copy-on-register:
+        fragments registered *before* a clone are carried into it; fragments
+        registered *after* affect only the agent they were registered on.
+        Register fragments at definition time (right after constructing the
+        agent), or use :meth:`with_instructions` for a purely functional
+        variant.
+
         The decorated callable receives the run context and returns (or
         awaits) a string. All fragments are concatenated to ``instructions``
         at render time, in registration order, separated by blank lines —

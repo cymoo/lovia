@@ -6,8 +6,10 @@ from the last snapshot instead of starting over — built for crashes,
 deploys, and queue-worker hand-offs.
 
 The demo fetches three chapters, one tool call per turn. Phase 1 "crashes"
-(cancels) after the first chapter is safely checkpointed; phase 2 re-issues
-the identical call and finishes the job without refetching chapter 1.
+(``handle.cancel()``) after the first chapter is safely checkpointed; the
+stream ends with a ``RunFailed`` event — iteration never raises — and
+``handle.result()`` raises ``RunCancelled``. Phase 2 re-issues the identical
+call and finishes the job without refetching chapter 1.
 
 Run::
 
@@ -17,29 +19,23 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from lovia import (
     Agent,
-    CancelToken,
     CheckpointOptions,
     RunCancelled,
     Runner,
     SQLiteCheckpointer,
     events,
+    model_from_env,
     tool,
 )
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 CHAPTERS = {
     1: "A stranger arrives in the harbour town at dusk.",
@@ -76,18 +72,14 @@ async def main() -> None:
     await cp.delete(run_id)  # clean slate so the demo is repeatable
 
     # ── Phase 1: the run dies mid-flight ─────────────────────────────────
-    cancel = CancelToken()
-    handle = Runner.stream(
-        agent, TASK, checkpoint=CheckpointOptions(cp, run_id), cancel_token=cancel
-    )
+    handle = Runner.stream(agent, TASK, checkpoint=CheckpointOptions(cp, run_id))
+    async for ev in handle:
+        if isinstance(ev, events.TurnStarted) and ev.turn == 2:
+            # Turn 1 (chapter 1) is snapshotted; "crash" before turn 2 acts.
+            handle.cancel("simulated crash")
     try:
-        async for ev in handle:
-            if isinstance(ev, events.TurnStarted) and ev.turn == 2:
-                # Turn 1 (chapter 1) is snapshotted; "crash" before turn 2 acts.
-                cancel.cancel()
         await handle.result()
     except RunCancelled:
-        # The stream (and result) surface the cancellation as an exception.
         print(f"phase 1: crashed after fetching chapters {fetched}")
 
     snap = await cp.load(run_id)

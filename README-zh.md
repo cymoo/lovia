@@ -162,6 +162,11 @@ async def user_tier(ctx) -> str:
 strict = agent.clone(instructions="只输出带引用的回答。")
 ```
 
+`@agent.instruction` 是 agent「约定不可变」之下唯一有意保留的原地修改,为的是
+装饰器的书写体验。它与 `clone()` 的边界是「注册时拷贝」:clone 之前注册的
+fragment 会带进克隆体,clone 之后注册的只影响原 agent——所以请在构造 agent 后
+立即注册 fragment,或改用纯函数式的 `with_instructions()`。
+
 ### Runner
 
 ```python
@@ -190,6 +195,11 @@ async for ev in handle:
 
 result = await handle.result()
 ```
+
+迭代永不抛出运行错误:每个流都以且仅以一个终端事件收尾——`RunCompleted`,
+或携带异常的 `RunFailed`——循环体因此不需要 try/except。`handle.result()`
+返回 `RunResult`,或抛出这次运行的错误(`RunCancelled`、`BudgetExceeded`
+等)。`handle.cancel()` 直接请求协作式取消,无需预先接线 `CancelToken`。
 
 ### Tools
 
@@ -283,6 +293,16 @@ agent = Agent(
 ```
 
 自定义 provider 只需实现 `Provider` 协议；也可以通过 `lovia.providers` entry point 注册。
+
+不想在脚本里写死模型时,用唯一钦定的环境变量查找——依次读
+`LOVIA_MODEL`、`OPENAI_DEFAULT_MODEL` / `ANTHROPIC_DEFAULT_MODEL`,
+什么都没配则带着配置提示大声失败:
+
+```python
+from lovia import model_from_env
+
+agent = Agent(name="assistant", model=model_from_env())
+```
 
 ## 多 Agent 工作流
 
@@ -380,10 +400,12 @@ agent = Agent(
     tools=[ask_human(channel)],
 )
 
-# 在你的 UI 或事件循环中：
-for question in channel.pending:
+# 操作员一侧就是一个循环——channel.close() 时结束：
+async for question in channel.questions():
     channel.answer(question.id, "使用方案 A。")
 ```
+
+(轮询式 UI 仍可用 `channel.pending`。)
 
 ## Session 与 Checkpoint
 
@@ -436,16 +458,21 @@ timeout——当数据库文件被多个写入方共享时使用，例如多个 
 仍保存在 session/checkpoint 中；当上下文窗口吃紧时，它会在模型调用前归档超大的
 工具结果、清理较旧的工具结果，并在必要时总结更早的历史。
 
+上下文策略属于 agent 的「姿态」——在 agent 上配置一次,所有运行自动继承;
+`Runner.run(..., context_policy=...)` 可对单次调用覆盖:
+
 ```python
-from lovia import Compaction, Runner
+from lovia import Agent, Compaction
 
-policy = Compaction(
-    context_window=200_000,
-    compact_at=0.75,
-    compact_to=0.50,
+agent = Agent(
+    name="companion",
+    model="deepseek-v4-pro",
+    context_policy=Compaction(
+        context_window=200_000,
+        compact_at=0.75,
+        compact_to=0.50,
+    ),
 )
-
-result = await Runner.run(agent, "继续。", context_policy=policy)
 ```
 
 `Compaction` 会自动提供 `recall_tool_result` 工具。模型可以凭 `call_id` 找回
@@ -488,18 +515,25 @@ agent = Agent(
 )
 ```
 
-预算、取消和重试策略都需要显式传入：
+可靠性旋钮遵循同一条摆放规则。**姿态**——agent 面对基础设施抖动时如何表现——
+放在 `Agent` 上:provider `retry`(默认开启;`retry=None` 关闭)、
+`default_tool_retries` / `default_tool_timeout`、`model=[...]` 回退链、
+`context_policy`。**额度**——一次请求最多花多少——是 run 级参数:
+`max_turns`、`budget` 与取消。
 
 ```python
 from lovia import RetryPolicy, RunBudget
 
+agent = agent.clone(retry=RetryPolicy(max_attempts=3))  # 姿态
+
 result = await Runner.run(
     agent,
     "分析这些日志。",
-    budget=RunBudget(max_tool_calls=20, max_seconds=60),
-    retry=RetryPolicy(max_attempts=3),
+    budget=RunBudget(max_tool_calls=20, max_seconds=60),  # 额度
 )
 ```
+
+(`Runner.run(..., retry=...)` 仍可对单次调用覆盖姿态。)
 
 生命周期 hooks 接收的正是流式输出使用的同一套类型化事件。每个 handler 都以
 `handler(event, ctx)` 的形式被调用：既拿到事件，也拿到本次运行的 `RunContext`
@@ -590,6 +624,9 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 - **`llm_judge(rubric)`** 用模型给语义打分（默认读
   `$LOVIA_EVAL_JUDGE_MODEL`），它也只是一个普通检查项——把
   `lovia.testing.ScriptedProvider` 作为它的 `model`，整个套件即可离线运行。
+- **`Case(model=...)`** 对单个 case 覆盖 agent 的模型（每次采样克隆 agent）。
+  离线套件用它给每个 case 配自己的脚本化 transcript；线上套件用它把某个
+  case 钉在另一个模型上。
 - **错误也是数据。** 某次采样抛异常只记为该样本的 `error` 并单独判负；
   一个坏 case 或坏检查项不会中断整个套件。
 - **基线对比。** `report.save(path)`、`Report.load(path)` 加上

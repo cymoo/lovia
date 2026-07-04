@@ -26,7 +26,6 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
@@ -37,18 +36,14 @@ from lovia import (
     RunContext,
     Runner,
     events,
+    model_from_env,
 )
 from lovia.transcript import AssistantTextEntry, InputEntry
 from lovia.stores import InMemorySession
 
 load_dotenv()
 
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 # A toy in-memory long-term memory so the example stays self-contained.
@@ -84,6 +79,17 @@ async def main() -> None:
         model=MODEL,
         # recall_tool_result is provided automatically by the Compaction policy.
         hooks=hooks,
+        # Context policy is agent *posture*: set it once here, and every run
+        # inherits it (Runner.run(context_policy=...) can still override one
+        # call). Tight budget so this demo definitely compacts on the first
+        # real turn — in production set context_window to the model's actual
+        # window, or omit it and let provider.context_window decide.
+        context_policy=Compaction(
+            context_window=2_000,
+            reserve_output_tokens=500,
+            compact_at=0.5,
+            compact_to=0.3,
+        ),
     )
 
     # Pre-seed a session with 30 fake turns so the next call is "huge".
@@ -103,22 +109,11 @@ async def main() -> None:
         )
     await session.append("u-mei", seeded)
 
-    # Tight budget so this demo definitely compacts on the first real turn.
-    # In production you'd set context_window to the model's actual context
-    # window (or omit it and let provider.context_window decide).
-    policy = Compaction(
-        context_window=2_000,
-        reserve_output_tokens=500,
-        compact_at=0.5,
-        compact_to=0.3,
-    )
-
     result = await Runner.run(
         agent,
         "Now in one sentence, who am I talking to?",
         session=session,
         session_id="u-mei",
-        context_policy=policy,
     )
     print("Assistant:", result.output)
     print()

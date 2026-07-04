@@ -11,10 +11,11 @@ Three ideas cover the whole API:
 Non-determinism is measured, not retried away: give a case ``samples=4,
 pass_threshold=0.75`` and it must pass at least 3 of 4 runs.
 
-This example runs **offline**: the tutor agent and the judge both replay
-``lovia.testing.ScriptedProvider`` scripts. For a live suite, point the agent
-at a real model and drop the ``model=`` override on ``llm_judge`` (it defaults
-to ``$LOVIA_EVAL_JUDGE_MODEL``).
+This example runs **offline**: one shared agent definition, and every case
+supplies its own scripted transcript via ``Case(model=ScriptedProvider(...))``
+— the judge is scripted the same way. For a live suite, put a real model on
+the agent, drop the per-case ``model=``, and drop the ``model=`` override on
+``llm_judge`` (it defaults to ``$LOVIA_EVAL_JUDGE_MODEL``).
 
 Run::
 
@@ -36,25 +37,8 @@ async def add(a: float, b: float) -> float:
     return a + b
 
 
-# One canned transcript per case, in suite order. A ScriptedProvider pops a
-# shared list, so every sample gets a fresh agent from the factory below;
-# concurrency=1 keeps cases running in order, each pulling its own script.
-SCRIPTS = iter(
-    [
-        [call("add", {"a": 2, "b": 3}), text("2 + 3 = 5, calculated with the tool.")],
-        [text("Anything times zero is zero — no calculator needed: 0.")],
-        [
-            text(
-                "0.1 and 0.2 have no exact binary representation, so their "
-                "sum carries a tiny rounding error: 0.30000000000000004."
-            )
-        ],
-    ]
-)
-
-
-def tutor() -> Agent[None]:
-    return Agent(name="tutor", model=ScriptedProvider(next(SCRIPTS)), tools=[add])
+# One agent definition for the whole suite; each case brings its own model.
+tutor = Agent(name="tutor", tools=[add])
 
 
 def concise(result: RunResult) -> bool:
@@ -67,10 +51,19 @@ async def main() -> None:
         Case(
             "What is 2 + 3?",
             checks=[contains("5"), tool_called("add")],
+            model=ScriptedProvider(
+                [
+                    call("add", {"a": 2, "b": 3}),
+                    text("2 + 3 = 5, calculated with the tool."),
+                ]
+            ),
         ),
         Case(
             "What is 10 * 0?",
             checks=[contains("0"), concise],
+            model=ScriptedProvider(
+                [text("Anything times zero is zero — no calculator needed: 0.")]
+            ),
         ),
         Case(
             "Why is 0.1 + 0.2 != 0.3 in floating point?",
@@ -84,10 +77,18 @@ async def main() -> None:
                     ),
                 )
             ],
+            model=ScriptedProvider(
+                [
+                    text(
+                        "0.1 and 0.2 have no exact binary representation, so their "
+                        "sum carries a tiny rounding error: 0.30000000000000004."
+                    )
+                ]
+            ),
         ),
     ]
 
-    report = await evaluate(tutor, cases, concurrency=1)
+    report = await evaluate(tutor, cases)
     print(report)
 
     # Baselines: save today's report, diff tomorrow's against it in CI.

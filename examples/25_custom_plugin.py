@@ -25,23 +25,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
-from lovia import Agent, PluginInstance, RunContext, Runner, tool
+from lovia import Agent, PluginInstance, RunContext, Runner, tool, model_from_env
 from lovia.transcript import InputEntry, TranscriptEntry
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 @dataclass

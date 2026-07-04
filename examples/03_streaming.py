@@ -2,7 +2,10 @@
 
 ``Runner.stream`` returns a ``RunHandle`` that is both async-iterable
 (yields typed events) and awaitable (resolves to the final ``RunResult``).
-Every example that needs live output builds on this loop.
+Iteration never raises: every stream ends with a terminal ``RunCompleted``
+or ``RunFailed`` event, and ``handle.result()`` returns the result or
+raises the run's error. Every example that needs live output builds on
+this loop.
 
 Run::
 
@@ -12,19 +15,13 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, events
+from lovia import Agent, Runner, events, model_from_env
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 async def main() -> None:

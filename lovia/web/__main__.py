@@ -54,7 +54,6 @@ INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_SKILLS_DIR = "skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
-DEFAULT_MAX_RETRIES = 2
 DEFAULT_MAX_TURNS = 50
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
@@ -187,7 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="provider retry attempts after the first on transient errors "
-        "(env LOVIA_MAX_RETRIES, default 2; 0 disables)",
+        "(env LOVIA_MAX_RETRIES; default: the agent's retry posture, "
+        "3 retries; 0 disables)",
     )
     p.add_argument(
         "--provider-timeout",
@@ -269,12 +269,15 @@ def resolve_model(cli_model: str | None) -> str:
     return model
 
 
-def resolve_max_retries(cli: int | None) -> int:
-    """Provider retry attempts after the first (flag > LOVIA_MAX_RETRIES > 2)."""
-    value = (
-        cli if cli is not None else _env_int("LOVIA_MAX_RETRIES", DEFAULT_MAX_RETRIES)
-    )
-    if value < 0:
+def resolve_max_retries(cli: int | None) -> int | None:
+    """Explicit provider retry count, or ``None`` for the agent's posture.
+
+    Precedence: ``--max-retries`` flag, then ``LOVIA_MAX_RETRIES``. ``None``
+    means no override — the agent's own :class:`RetryPolicy` (3 retries by
+    default) applies.
+    """
+    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_RETRIES")
+    if value is not None and value < 0:
         raise CliError(f"--max-retries must be >= 0, got {value}")
     return value
 
@@ -537,7 +540,13 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["LOVIA_PROVIDER_TIMEOUT"] = str(args.provider_timeout)
         if args.trust_env:
             os.environ["LOVIA_PROVIDER_TRUST_ENV"] = "1"
-        retry = RetryPolicy(max_attempts=resolve_max_retries(args.max_retries) + 1)
+        # None = no override: the agent's own retry posture applies.
+        max_retries = resolve_max_retries(args.max_retries)
+        retry = (
+            RetryPolicy(max_attempts=max_retries + 1)
+            if max_retries is not None
+            else None
+        )
 
         host = _first(args.host, os.getenv("LOVIA_HOST")) or "127.0.0.1"
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)

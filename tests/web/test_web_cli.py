@@ -553,7 +553,8 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_max_retries_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_MAX_RETRIES", raising=False)
-    assert cli.resolve_max_retries(None) == 2  # default
+    # No flag, no env -> None: the agent's own retry posture applies.
+    assert cli.resolve_max_retries(None) is None
     monkeypatch.setenv("LOVIA_MAX_RETRIES", "5")
     assert cli.resolve_max_retries(None) == 5  # env
     assert cli.resolve_max_retries(0) == 0  # flag wins; 0 disables retries

@@ -11,11 +11,15 @@ the slow part across calls:
   other calls of the same turn; see :meth:`RunLoop._tool_phase` for the
   orchestration and barrier semantics.
 
-Between the two, every outcome (missing tool, duplicate handoff, malformed
-arguments, denial, error, success) appends exactly one
-:class:`ToolResultEntry`, so the transcript never contains a dangling tool
-call. Results append in completion order — safe, because everything
-downstream pairs calls to results by ``call_id``, never by position.
+Between the two, every call that reaches a terminal outcome (missing tool,
+duplicate handoff, malformed arguments, denial, error, success) appends
+exactly one :class:`ToolResultEntry` — such calls never dangle. Calls
+interrupted by an abort are the deliberate exception: ``RunCancelled``, a
+checkpoint store failure, or the consumer abandoning the stream cancels the
+turn's in-flight tasks, and a cancelled call leaves no entry — it stays
+pending and a resume re-executes it (see ``pending_tool_calls``). Results
+append in completion order — safe, because everything downstream pairs
+calls to results by ``call_id``, never by position.
 """
 
 from __future__ import annotations
@@ -219,11 +223,12 @@ class ToolCallProcessor:
 
         ``ToolCallStarted``, the invocation inside a ``tool_call_span``,
         handoff-signal capture, rendering, truncation, the transcript append,
-        and ``ToolCallCompleted``. Appends exactly one
-        :class:`ToolResultEntry` in every outcome (success, tool error,
-        render failure) so the transcript never holds a dangling call.
-        Re-raises :class:`RunCancelled` (a run-global signal); converts every
-        other failure into an error result.
+        and ``ToolCallCompleted``. Every terminal outcome (success, tool
+        error, render failure) appends exactly one :class:`ToolResultEntry`;
+        only a call whose task is cancelled mid-flight (sibling cancellation
+        when the batch aborts) appends nothing — it stays a pending call that
+        a resume re-executes. Re-raises :class:`RunCancelled` (a run-global
+        signal); converts every other failure into an error result.
 
         May run concurrently with other ``execute`` calls of the same turn:
         it only appends to ``state.transcript`` (order-insensitive — results

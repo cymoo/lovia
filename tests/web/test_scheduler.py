@@ -510,7 +510,7 @@ async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
         await sched.run_due()  # a fires (blocks); b hits 429 and defers
 
         assert len(deps.supervisor._controllers) == 1  # only 'a' is live
-        assert len(await store.list_all()) == 1  # 'b' left no orphan session row
+        assert len(await store.list()) == 1  # 'b' left no orphan session row
         a = await store.get_schedule("a")
         b = await store.get_schedule("b")
         assert a is not None and a.next_fire > now  # advanced

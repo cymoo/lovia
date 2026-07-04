@@ -37,6 +37,16 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     store = deps.store
     session = deps.session
 
+    async def upsert_session(sid: str, agent_name: str, message: str) -> bool:
+        """Insert/touch the session's metadata row; returns whether it's new."""
+        is_new = (await store.get(sid)) is None
+        await store.upsert(
+            sid,
+            agent=agent_name,
+            title=provisional_title(message) if is_new else None,
+        )
+        return is_new
+
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
         # Blocking, non-streaming turn — runs to completion inside the request
@@ -53,12 +63,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 detail="a streaming run is active for this session; "
                 "use /api/chat/stream to attach or inject",
             )
-        is_new = (await store.get(sid)) is None
-        await store.upsert(
-            sid,
-            agent=agent.name,
-            title=provisional_title(req.message) if is_new else None,
-        )
+        is_new = await upsert_session(sid, agent.name, req.message)
         result = await Runner.run(
             agent,
             req.message,
@@ -86,12 +91,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # rejecting it before the upsert avoids littering empty "New chat" rows.
         if not req.message.strip() and deps.supervisor.get(sid) is None:
             raise HTTPException(status_code=422, detail="empty message")
-        is_new = (await store.get(sid)) is None
-        await store.upsert(
-            sid,
-            agent=agent.name,
-            title=provisional_title(req.message) if is_new else None,
-        )
+        is_new = await upsert_session(sid, agent.name, req.message)
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects

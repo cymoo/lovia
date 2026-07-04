@@ -324,7 +324,8 @@ class ChatStore:
             ChatMeta.from_row,
         )
 
-    async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
+    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
+        """Return chat metadata, pinned first, then most recent activity."""
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
@@ -345,7 +346,7 @@ class ChatStore:
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
-        # Read every id directly — ``list_all`` caps at its limit, which would
+        # Read every id directly — ``list`` caps at its limit, which would
         # leave the transcripts/checkpoints of sessions beyond one page orphaned
         # while the unconditional row delete below wiped their metadata.
         ids = await self._read_all(
@@ -376,13 +377,6 @@ class ChatStore:
             (pattern, pattern, limit),
             ChatMeta.from_row,
         )
-
-    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
-        """Return chat metadata ordered by most recent activity.
-
-        Alias of :meth:`list_all`; both names are part of the public surface.
-        """
-        return await self.list_all(limit=limit)
 
     # ---- active run tracking --------------------------------------------
 

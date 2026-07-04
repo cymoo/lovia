@@ -50,14 +50,6 @@ class ChatResponse(BaseModel):
     usage: dict[str, int]
 
 
-class MarkdownRequest(BaseModel):
-    text: str = Field(max_length=200_000)
-
-
-class MarkdownResponse(BaseModel):
-    html: str
-
-
 class ApprovalRequest(BaseModel):
     session_id: str
     call_id: str
@@ -104,7 +96,7 @@ class RunInfo(BaseModel):
     session_id: str
     run_id: str | None = None
     agent: str
-    status: str
+    status: Literal["running", "blocked_on_approval"]
     turns: int
 
 

@@ -14,9 +14,10 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...plugins import todos_from_entries
-from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
+from ...transcript import entries_to_messages
 from ..schemas import (
     ChatSessionInfo,
+    MessageOut,
     RunInfo,
     SessionDetail,
     SessionPatch,
@@ -28,10 +29,60 @@ from .serialization import (
     export_md,
     export_txt,
     message_to_json_dict,
-    messages_to_out,
     segments_to_out,
     session_info,
+    view_messages,
 )
+
+_RESUMABLE = ("interrupted", "running")
+
+
+async def _session_view(
+    deps: RouterDeps, session_id: str, *, created_at: float, updated_at: float
+) -> tuple[list[MessageOut], str | None]:
+    """Resolve the transcript view + reconnect pointer for one session.
+
+    * Live supervised run → flat history spliced with the checkpoint's entries
+      so far, advertising the run's id (even before its first checkpoint) so
+      the client reconnects — attach then delivers the authoritative snapshot.
+    * No live run but a resumable checkpoint (restart recovery) → the same
+      splice, advertising the stored pointer; a stale pointer is cleaned up.
+    * Finished → rebuilt from segments so persisted per-run compaction notices
+      replay (a live run surfaces compaction over SSE instead).
+    """
+    store, session = deps.store, deps.session
+
+    live = deps.supervisor.get(session_id)
+    if live is not None:
+        entries = await session.load(session_id)
+        if store.checkpointer is not None and live.run_id is not None:
+            snapshot = await store.checkpointer.load(live.run_id)
+            if snapshot is not None and snapshot.status in _RESUMABLE:
+                entries = entries + list(snapshot.entries)
+        view = view_messages(entries, created_at=created_at, updated_at=updated_at)
+        return view, live.run_id
+
+    candidate = (
+        await store.get_active_run_id(session_id)
+        if store.checkpointer is not None
+        else None
+    )
+    if candidate and store.checkpointer is not None:
+        snapshot = await store.checkpointer.load(candidate)
+        if snapshot is not None and snapshot.status in _RESUMABLE:
+            entries = await session.load(session_id) + list(snapshot.entries)
+            view = view_messages(entries, created_at=created_at, updated_at=updated_at)
+            return view, candidate
+        # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
+        await store.clear_active_run_id(session_id)
+        if snapshot is not None:
+            await store.checkpointer.delete(candidate)
+
+    segments = await session.segments(session_id)
+    return (
+        segments_to_out(segments, created_at=created_at, updated_at=updated_at),
+        None,
+    )
 
 
 def build_sessions_router(deps: RouterDeps) -> APIRouter:
@@ -45,16 +96,12 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         limit: int = Query(200, ge=1, le=1000),
     ) -> list[ChatSessionInfo]:
         metas = (
-            await store.search(q, limit=limit)
-            if q
-            else await store.list_all(limit=limit)
+            await store.search(q, limit=limit) if q else await store.list(limit=limit)
         )
         return [session_info(m) for m in metas]
 
     @router.get("/api/runs", response_model=list[RunInfo])
-    async def list_runs(
-        status: str = Query("active", pattern="^active$"),
-    ) -> list[RunInfo]:
+    async def list_runs() -> list[RunInfo]:
         """Currently-live supervised runs (in-memory; authoritative for active)."""
         return [
             RunInfo(
@@ -78,79 +125,19 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/sessions/{session_id}", response_model=SessionDetail)
     async def get_session(session_id: str) -> SessionDetail:
         meta = await store.get(session_id)
-        # A live supervised run owns the session: report its run_id (even before
-        # the first checkpoint) and don't treat the pointer as stale. The client
-        # reconnects → attach delivers the authoritative snapshot anyway.
-        live = deps.supervisor.get(session_id)
-        active_run_id: str | None = live.run_id if live is not None else None
-
-        # A finished session (no live run, no resumable checkpoint) is rebuilt
-        # from segments so persisted per-run compaction notices replay. A live or
-        # resuming run splices checkpoint entries on top of the flat transcript and
-        # surfaces compaction over the live SSE stream instead.
-        entries: list[TranscriptEntry] = []
-        finished = False
-
-        if live is not None:
-            entries = await session.load(session_id)
-            if store.checkpointer is not None and live.run_id is not None:
-                snapshot = await store.checkpointer.load(live.run_id)
-                if snapshot is not None and snapshot.status in (
-                    "interrupted",
-                    "running",
-                ):
-                    entries = entries + [
-                        e
-                        for e in snapshot.entries
-                        if not (isinstance(e, InputEntry) and e.role == "system")
-                    ]
-        elif store.checkpointer is not None:
-            # No live run, but a checkpoint may hold an interrupted run to resume
-            # (restart recovery). Prefer its entries; clean up a stale pointer.
-            candidate = await store.get_active_run_id(session_id)
-            snapshot = await store.checkpointer.load(candidate) if candidate else None
-            if (
-                candidate
-                and snapshot is not None
-                and snapshot.status in ("interrupted", "running")
-            ):
-                history = await session.load(session_id)
-                run_entries = [
-                    e
-                    for e in snapshot.entries
-                    if not (isinstance(e, InputEntry) and e.role == "system")
-                ]
-                entries = history + run_entries
-                active_run_id = candidate
-            else:
-                if candidate:
-                    await store.clear_active_run_id(session_id)
-                    if snapshot is not None:
-                        await store.checkpointer.delete(candidate)
-                finished = True
-        else:
-            finished = True
-
         now = time.time()
         created = meta.created_at if meta else now
         updated = meta.updated_at if meta else now
-        if finished:
-            out_entries = segments_to_out(
-                await session.segments(session_id),
-                created_at=created,
-                updated_at=updated,
-            )
-        else:
-            out_entries = messages_to_out(
-                entries_to_messages(entries), created_at=created, updated_at=updated
-            )
+        entries, active_run_id = await _session_view(
+            deps, session_id, created_at=created, updated_at=updated
+        )
         return SessionDetail(
             id=meta.id if meta else session_id,
             title=meta.title if meta else None,
             agent=meta.agent if meta else None,
             created_at=created,
             updated_at=updated,
-            entries=out_entries,
+            entries=entries,
             active_run_id=active_run_id,
         )
 

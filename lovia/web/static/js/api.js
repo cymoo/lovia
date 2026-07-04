@@ -28,12 +28,6 @@ export const api = {
   listAgents: () => fetch('/api/agents').then(_json),
   getAgent: (name) => fetch(`/api/agents/${encodeURIComponent(name)}`).then(_json),
   info: () => fetch('/api/info').then(_json),
-  renderMarkdown: (text) =>
-    fetch('/api/markdown', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ text }),
-    }).then(_json),
 
   // ---- chat ----
   // Non-streaming turn. `body`: { message, agent?, session_id? }.

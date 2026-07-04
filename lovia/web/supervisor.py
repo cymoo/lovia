@@ -43,7 +43,7 @@ from ..transcript import (
     TranscriptEntry,
     drop_dangling_tool_calls,
 )
-from .api.serialization import view_messages
+from .api.serialization import drop_system_entries, view_messages
 from .schemas import MessageOut
 from .sse import event_to_sse
 
@@ -606,11 +606,7 @@ class RunSupervisor:
             resume_from=snapshot,
             delete_on_success=True,
         )
-        seed = [
-            e
-            for e in snapshot.entries
-            if not (isinstance(e, InputEntry) and e.role == "system")
-        ]
+        seed = drop_system_entries(list(snapshot.entries))
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,

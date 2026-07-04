@@ -70,17 +70,36 @@ class PluginInstance:
 
     Every field is optional: a plugin contributes any subset. Stateful plugins
     build their store in ``setup`` and close ``tools``/``view_injectors`` over
-    it so all contributions share the same instance. Set ``aclose`` to a
-    coroutine to release resources opened during ``setup``.
+    it so all contributions share the same instance.
     """
 
     tools: list[Tool] = field(default_factory=list)
+    """Merged into the agent's tool set (one namespace; clashes are reported
+    like any other tool source)."""
+
     view_injectors: list[ViewInjector] = field(default_factory=list)
+    """Callables evaluated every turn that append transient entries to the
+    tail of that turn's model view — never written to the transcript or the
+    session, so they neither accumulate nor bust the cached prompt prefix."""
+
     instructions: str | None = None
+    """Static text appended to the system prompt, rendered once at run
+    start."""
+
     hooks: AgentHooks | None = None
+    """An :class:`~lovia.hooks.AgentHooks` receiving every run event,
+    dispatched alongside the agent's own hooks."""
+
     input_guardrails: list[GuardrailFn] = field(default_factory=list)
+    """Guardrails merged with the agent's own at the input checkpoint; the
+    runner — never the plugin — owns the abort."""
+
     output_guardrails: list[GuardrailFn] = field(default_factory=list)
+    """Guardrails merged with the agent's own at the output checkpoint."""
+
     aclose: Callable[[], Awaitable[None]] = _noop_aclose
+    """Coroutine awaited (LIFO, best effort) when the run ends — release
+    resources opened during ``setup`` here."""
 
 
 class Plugin(Protocol):

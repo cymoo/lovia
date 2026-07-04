@@ -78,8 +78,18 @@ async def test_provider_http_error_detects_context_overflow() -> None:
 
 @pytest.mark.parametrize(
     ("status", "retryable"),
-    [(408, True), (429, True), (500, True), (503, True), (599, True),
-     (400, False), (401, False), (403, False), (404, False), (413, False)],
+    [
+        (408, True),
+        (429, True),
+        (500, True),
+        (503, True),
+        (599, True),
+        (400, False),
+        (401, False),
+        (403, False),
+        (404, False),
+        (413, False),
+    ],
 )
 def test_is_retryable_status(status: int, retryable: bool) -> None:
     assert is_retryable_status(status) is retryable

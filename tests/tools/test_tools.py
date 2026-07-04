@@ -480,7 +480,7 @@ async def test_per_tool_cap_overrides_agent_default() -> None:
     assert len(entry.output) < 700
 
 
-async def test_no_cap_keeps_full_output_and_raw() -> None:
+async def test_output_under_default_cap_keeps_full_output_and_raw() -> None:
     from lovia.transcript import ToolResultEntry
 
     @tool
@@ -496,10 +496,43 @@ async def test_no_cap_keeps_full_output_and_raw() -> None:
     assert entry.raw == {"data": "z" * 10_000}
 
 
-async def test_huge_output_drops_raw_even_without_cap() -> None:
-    # raw mirrors the output, so retaining it for a huge result doubles run
+async def test_default_cap_truncates_runaway_output() -> None:
+    # The 200K default is a tripwire for pathological payloads that would
+    # otherwise bloat every checkpoint and session write.
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def runaway() -> str:
+        """Return a pathological payload."""
+        return "z" * 250_000
+
+    provider = ScriptedProvider([call("runaway", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[runaway])
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert len(entry.output) < 250_000
+    assert "tool output truncated" in entry.output
+
+
+async def test_cap_none_opts_out_of_the_default() -> None:
+    from lovia.transcript import ToolResultEntry
+
+    @tool
+    def runaway() -> str:
+        """Return a pathological payload."""
+        return "z" * 250_000
+
+    provider = ScriptedProvider([call("runaway", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[runaway], max_tool_output_chars=None)
+    result = await Runner.run(agent, "go")
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert "z" * 250_000 in entry.output  # stored in full
+
+
+async def test_large_output_drops_raw_even_under_cap() -> None:
+    # raw mirrors the output, so retaining it for a large result doubles run
     # memory and every checkpoint/session serialization; the output itself
-    # stays untouched (no cap configured).
+    # stays untouched (well under the default cap).
     from lovia.transcript import ToolResultEntry
 
     @tool

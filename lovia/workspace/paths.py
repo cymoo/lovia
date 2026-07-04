@@ -17,20 +17,19 @@ __all__ = ["ResolvedPath", "resolve_path"]
 
 @dataclass(frozen=True)
 class ResolvedPath:
-    """A fully resolved path plus its relation to the workspace root.
-
-    Attributes:
-        raw: The original input string (as the model supplied it).
-        abs: The resolved absolute path. Symlinks in existing components are
-            followed; a missing tail is appended lexically (non-strict
-            resolution), so write targets that don't exist yet still resolve.
-        rel: The workspace-relative POSIX path when ``abs`` is inside the
-            root (``"."`` for the root itself), ``None`` when outside.
-    """
+    """A fully resolved path plus its relation to the workspace root."""
 
     raw: str
+    """The original input string (as the model supplied it)."""
+
     abs: Path
+    """The resolved absolute path. Symlinks in existing components are
+    followed; a missing tail is appended lexically (non-strict resolution),
+    so write targets that don't exist yet still resolve."""
+
     rel: str | None
+    """The workspace-relative POSIX path when ``abs`` is inside the root
+    (``"."`` for the root itself); ``None`` when outside."""
 
     @property
     def inside(self) -> bool:

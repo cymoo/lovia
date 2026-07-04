@@ -310,8 +310,9 @@ class RunController:
                 events.UserMessageInjected,
                 events.HandoffOccurred,
                 events.ContextCompacted,
-                events.ErrorOccurred,
+                events.ToolCallFailed,
                 events.RunCompleted,
+                events.RunFailed,
             ),
         ):
             self.in_flight_buffer.append(ev)
@@ -395,7 +396,7 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
-                    if isinstance(ev, events.ErrorOccurred):
+                    if isinstance(ev, events.RunFailed):
                         error_seen = True
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
@@ -415,6 +416,11 @@ class RunController:
                         finally:
                             self.pending_approval = None
                             self.status = "running"
+                if not succeeded:
+                    # The stream ends with RunFailed instead of raising;
+                    # re-raise the terminal error here so the except path
+                    # below classifies and persists it exactly as before.
+                    await handle.result()
                 if (
                     self._is_new
                     and succeeded
@@ -448,7 +454,7 @@ class RunController:
                 # Publish via _publish so the synthesized error also lands in the
                 # snapshot mirror / in-flight buffer — a dropped client that
                 # re-attaches then still replays the terminal error.
-                self._publish(events.ErrorOccurred(error=exc))
+                self._publish(events.RunFailed(error=exc))
             # A non-resumable ("failed") end is never offered for reconnect, so the
             # next GET would silently drop its checkpoint and the partial work would
             # vanish on reload. Flag it so the finally folds it into the Session.

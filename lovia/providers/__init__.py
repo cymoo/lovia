@@ -18,9 +18,11 @@ requires an explicit :func:`register_provider` call.
 from __future__ import annotations
 
 import logging
+import os
 from importlib.metadata import EntryPoint
 from typing import Callable, cast
 
+from ..exceptions import UserError
 from .base import ModelSettings, Provider
 from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
@@ -32,6 +34,7 @@ __all__ = [
     "Provider",
     "AnthropicProvider",
     "OpenAIChatProvider",
+    "model_from_env",
     "provider_from_string",
     "register_provider",
 ]
@@ -150,3 +153,36 @@ def provider_from_string(spec: str) -> Provider:
         f"lovia.providers.register_provider or the 'lovia.providers' "
         f"entry-point group."
     )
+
+
+def model_from_env(*, required: bool = True) -> str | None:
+    """Return the model id configured in the environment.
+
+    Checks, in order: ``LOVIA_MODEL``, ``OPENAI_DEFAULT_MODEL``,
+    ``ANTHROPIC_DEFAULT_MODEL``. The value is whatever ``Agent(model=...)``
+    accepts — usually ``"vendor:model"``; a bare id from
+    ``OPENAI_DEFAULT_MODEL`` routes to the OpenAI-compatible provider, which
+    is the intended path for ``OPENAI_BASE_URL`` services (DeepSeek, Ollama,
+    vLLM, ...); a bare ``ANTHROPIC_DEFAULT_MODEL`` gets the ``anthropic:``
+    prefix so it routes to the right adapter.
+
+    With ``required=True`` (the default) a missing configuration raises
+    :class:`~lovia.UserError` with a setup hint — the fail-loudly behavior
+    scripts want. Pass ``required=False`` to get ``None`` instead and layer
+    your own fallback (the web CLI does this to add its ``--model`` flag).
+    """
+    value = os.getenv("LOVIA_MODEL") or os.getenv("OPENAI_DEFAULT_MODEL")
+    if not value:
+        anthropic = os.getenv("ANTHROPIC_DEFAULT_MODEL")
+        if anthropic:
+            value = anthropic if ":" in anthropic else f"anthropic:{anthropic}"
+    if value:
+        return value
+    if required:
+        raise UserError(
+            "no model configured in the environment",
+            hint='set LOVIA_MODEL (e.g. "openai:gpt-5.5" or '
+            '"anthropic:claude-4-8-opus"), or OPENAI_DEFAULT_MODEL / '
+            "ANTHROPIC_DEFAULT_MODEL",
+        )
+    return None

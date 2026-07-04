@@ -38,12 +38,11 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
-from ..providers import ModelSettings, provider_from_string
-from ..providers.base import context_window as provider_context_window
+from ..providers import ModelSettings, model_from_env
 from ..reliability import RetryPolicy
 from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
-from .app import DEFAULT_CONTEXT_WINDOW, serve
+from .app import serve
 from .scheduling import Scheduling
 from .store import ChatStore
 
@@ -55,7 +54,6 @@ INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
 DEFAULT_SKILLS_DIR = "skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
-DEFAULT_MAX_RETRIES = 2
 DEFAULT_MAX_TURNS = 50
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
@@ -188,7 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="provider retry attempts after the first on transient errors "
-        "(env LOVIA_MAX_RETRIES, default 2; 0 disables)",
+        "(env LOVIA_MAX_RETRIES; default: the agent's retry posture, "
+        "3 retries; 0 disables)",
     )
     p.add_argument(
         "--provider-timeout",
@@ -209,7 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="model context window in tokens used for compaction "
-        "(env LOVIA_CONTEXT_WINDOW, default: auto-detect, else 200K)",
+        "(env LOVIA_CONTEXT_WINDOW; default: ask the provider, reactive "
+        "overflow handling when unknown)",
     )
     p.add_argument(
         "--max-turns",
@@ -259,27 +259,25 @@ def load_env_files(env_files: list[str] | None) -> None:
 
 
 def resolve_model(cli_model: str | None) -> str:
-    model = _first(
-        cli_model,
-        os.getenv("LOVIA_MODEL"),
-        os.getenv("OPENAI_DEFAULT_MODEL"),
-        os.getenv("ANTHROPIC_DEFAULT_MODEL"),
-    )
+    model = cli_model or model_from_env(required=False)
     if not model:
         raise CliError(
             "no model configured.",
             hint="pass --model (e.g. openai:gpt-5.5) or set LOVIA_MODEL / "
-            "OPENAI_DEFAULT_MODEL.",
+            "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL.",
         )
     return model
 
 
-def resolve_max_retries(cli: int | None) -> int:
-    """Provider retry attempts after the first (flag > LOVIA_MAX_RETRIES > 2)."""
-    value = (
-        cli if cli is not None else _env_int("LOVIA_MAX_RETRIES", DEFAULT_MAX_RETRIES)
-    )
-    if value < 0:
+def resolve_max_retries(cli: int | None) -> int | None:
+    """Explicit provider retry count, or ``None`` for the agent's posture.
+
+    Precedence: ``--max-retries`` flag, then ``LOVIA_MAX_RETRIES``. ``None``
+    means no override — the agent's own :class:`RetryPolicy` (3 retries by
+    default) applies.
+    """
+    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_RETRIES")
+    if value is not None and value < 0:
         raise CliError(f"--max-retries must be >= 0, got {value}")
     return value
 
@@ -300,34 +298,23 @@ def resolve_max_tokens(cli: int | None) -> int | None:
     return value
 
 
-def _detect_context_window(model: str) -> int | None:
-    """Best-effort lookup of a model's context window; ``None`` if unknown."""
-    try:
-        provider = provider_from_string(model)
-        return provider_context_window(provider, getattr(provider, "model", None))
-    except Exception:  # noqa: BLE001 - detection must never break the launcher
-        return None
+def resolve_context_window(cli: int | None) -> int | None:
+    """Explicit compaction window in tokens, or ``None`` for auto.
 
-
-def resolve_context_window(cli: int | None, model: str) -> int:
-    """Compaction context window in tokens.
-
-    Precedence: ``--context-window`` flag, ``LOVIA_CONTEXT_WINDOW``, the model's
-    advertised window, then a 200K fallback for OpenAI-compatible endpoints not
-    in the context-window table.
+    Precedence: ``--context-window`` flag, then ``LOVIA_CONTEXT_WINDOW``.
+    ``None`` means no explicit override — ``Compaction`` asks the provider for
+    the model's advertised window at call time and falls back to reactive
+    overflow handling when it is unknown.
     """
     value = cli if cli is not None else _env_int_optional("LOVIA_CONTEXT_WINDOW")
-    if value is not None:
-        if value < 1:
-            raise CliError(f"--context-window must be >= 1, got {value}")
-        return value
-    return _detect_context_window(model) or DEFAULT_CONTEXT_WINDOW
+    if value is not None and value < 1:
+        raise CliError(f"--context-window must be >= 1, got {value}")
+    return value
 
 
 def resolve_context_policy(args: argparse.Namespace) -> ContextPolicy:
     """Compaction policy for the default agent (honors --context-window)."""
-    window = resolve_context_window(args.context_window, resolve_model(args.model))
-    return Compaction(context_window=window)
+    return Compaction(context_window=resolve_context_window(args.context_window))
 
 
 def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
@@ -553,7 +540,13 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["LOVIA_PROVIDER_TIMEOUT"] = str(args.provider_timeout)
         if args.trust_env:
             os.environ["LOVIA_PROVIDER_TRUST_ENV"] = "1"
-        retry = RetryPolicy(max_attempts=resolve_max_retries(args.max_retries) + 1)
+        # None = no override: the agent's own retry posture applies.
+        max_retries = resolve_max_retries(args.max_retries)
+        retry = (
+            RetryPolicy(max_attempts=max_retries + 1)
+            if max_retries is not None
+            else None
+        )
 
         host = _first(args.host, os.getenv("LOVIA_HOST")) or "127.0.0.1"
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)

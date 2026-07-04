@@ -21,12 +21,11 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from .types import JsonObject
 from .tools import Tool
-from .reliability import RetryPolicy
 
 if TYPE_CHECKING:
     from .agent import Agent
     from .run_context import RunContext
-    from .reliability import RunBudget
+    from .reliability import RetryPolicy, RunBudget
     from .context.policy import ContextPolicy
 
 
@@ -49,26 +48,25 @@ class _HandoffSignal:
 
 @dataclass
 class Handoff:
-    """A handoff target with optional customisation.
-
-    Attributes:
-        target: The agent to transfer control to.
-        name: Override for the ``transfer_to_<name>`` tool name.
-        description: Override for the tool description shown to the model. This
-            is the routing signal the parent agent sees — set it to the target's
-            specialty when the default ("Transfer to the <name> agent...") is too
-            thin to route on reliably.
-        on_handoff: Optional callback invoked when the handoff fires; receives
-            the parsed arguments (a single ``reason`` string by default) and
-            the run context.
-    """
+    """A handoff target with optional customisation."""
 
     target: "Agent[Any]"
+    """The agent to transfer control to."""
+
     name: str | None = None
+    """Override for the ``transfer_to_<name>`` tool name."""
+
     description: str | None = None
+    """Override for the tool description shown to the model. This is the
+    routing signal the parent agent sees — set it to the target's specialty
+    when the default ("Transfer to the <name> agent...") is too thin to
+    route on reliably."""
+
     on_handoff: (
         Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[None] | None] | None
     ) = None
+    """Callback invoked when the handoff fires; receives the parsed tool
+    arguments (a single ``reason`` string by default) and the run context."""
 
 
 def build_handoff_tool(handoff: Handoff) -> Tool:
@@ -132,7 +130,7 @@ def agent_as_tool(
     description: str | None = None,
     max_turns: int = 50,
     budget: "RunBudget | None" = None,
-    retry: "RetryPolicy | None" = RetryPolicy(),
+    retry: "RetryPolicy | None" = None,
     context_policy: "ContextPolicy | None" = None,
 ) -> Tool:
     """Wrap ``agent`` as a tool callable by another agent.
@@ -145,7 +143,9 @@ def agent_as_tool(
     The execution-policy keywords (``max_turns``, ``budget``, ``retry``,
     ``context_policy``) are fixed here by the developer and forwarded to the
     sub-run; they are *not* exposed to the model, which only controls the
-    free-form ``input``. Bound ``max_turns`` especially: a delegated sub-agent
+    free-form ``input``. ``retry`` and ``context_policy`` left as ``None``
+    inherit the wrapped agent's own posture, exactly like a direct
+    :meth:`Runner.run`. Bound ``max_turns`` especially: a delegated sub-agent
     loops on its own, and the run default is generous. The sub-run inherits the
     parent's ``context`` and accumulates into its :class:`Usage` automatically.
     ``budget`` is copied per invocation, so its limits (``max_seconds``,

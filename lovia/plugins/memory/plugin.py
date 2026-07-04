@@ -472,44 +472,53 @@ class Memory:
 
     :meth:`remember` and :meth:`forget` are also public methods, so code can
     seed or clean Notes without a model in the loop.
-
-    Fields:
-        root: Directory for the default stores. Ignored for a tier whose store
-            is passed explicitly.
-        notes: Custom hot-tier store; default builds ``MEMORY.md`` under root.
-        index: Custom cold-tier index. Leave unset for the default (keyword,
-            or hybrid when ``embedder`` is given); ``None`` disables recall.
-        embedder: Adds a semantic arm to the *default* index. Mutually
-            exclusive with ``index=`` — a custom index embeds however it wants.
-        auto_curate: When ``True`` (default), one model call at run end
-            promotes durable facts into Notes and writes an episode summary
-            into the archive (plus a consolidation call when Notes outgrow
-            their budget). Set ``False`` for purely manual memory.
-        expand_query: Expand recall queries with LLM-generated synonyms and
-            translations before searching. ``"auto"`` (default) enables this
-            only for the default keyword-only index — lexical search needs the
-            help; a semantic arm doesn't.
-        summarize_recall: When ``True`` (default), ``recall`` returns a model-
-            written summary of the hits rather than the raw excerpts.
-        recall_k: Number of hits ``recall`` retrieves.
-        notes_budget: Char budget for Notes; exceeding it triggers
-            consolidation and is what the meter in the prompt reports.
-        model: Model for the curation side-queries. ``None`` (default) reuses
-            the host agent's model.
-        name: Plugin name.
     """
 
     root: str | os.PathLike[str] = _DEFAULT_ROOT
+    """Directory for the default stores. Ignored for a tier whose store is
+    passed explicitly."""
+
     notes: "NotesStore | None" = None
+    """Custom hot-tier store; the default builds ``MEMORY.md`` under
+    ``root``."""
+
     index: "Index | EllipsisType | None" = ...
+    """Custom cold-tier index. Leave unset for the default (keyword, or
+    hybrid when ``embedder`` is given); ``None`` disables recall."""
+
     embedder: "Embedder | None" = None
+    """Adds a semantic arm to the *default* index. Mutually exclusive with
+    ``index=`` — a custom index embeds however it wants."""
+
     auto_curate: bool = True
+    """When ``True`` (default), one model call at run end promotes durable
+    facts into Notes and writes an episode summary into the archive (plus a
+    consolidation call when Notes outgrow their budget). ``False`` = purely
+    manual memory."""
+
     expand_query: "bool | Literal['auto']" = "auto"
+    """Expand recall queries with LLM-generated synonyms and translations
+    before searching. ``"auto"`` (default) enables this only for the default
+    keyword-only index — lexical search needs the help; a semantic arm
+    doesn't."""
+
     summarize_recall: bool = True
+    """When ``True`` (default), ``recall`` returns a model-written summary
+    of the hits rather than the raw excerpts."""
+
     recall_k: int = 5
+    """Number of hits ``recall`` retrieves."""
+
     notes_budget: int = _DEFAULT_NOTES_BUDGET
+    """Char budget for Notes; exceeding it triggers consolidation and is
+    what the meter in the prompt reports."""
+
     model: "str | Provider | list[str | Provider] | None" = None
+    """Model for the curation side-queries. ``None`` (default) reuses the
+    host agent's model."""
+
     name: str = "memory"
+    """Plugin name."""
 
     def __post_init__(self) -> None:
         if self.notes is None:

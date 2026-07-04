@@ -21,66 +21,70 @@ from ..transcript import TranscriptEntry
 
 @dataclass
 class CompactionRequest:
-    """Everything a context policy needs to produce a per-call view.
-
-    Attributes:
-        entries: The full, real transcript. **Read-only** — a policy returns a
-            new list for the model call and never mutates ``entries``.
-        provider: Provider selected for the next model call, if known.
-        model: Model name passed to the provider.
-        last_input_tokens: Last observed provider input-token count. Lags the
-            current transcript by one call; the default pipeline uses it to
-            *calibrate* its estimates rather than trusting it directly.
-        overflow: ``True`` when the provider already raised
-            :class:`~lovia.ContextOverflowError`; the policy should compact
-            more aggressively.
-        scratch: Mutable state owned by the runner, seeded fresh at the start of
-            a run. A policy keeps its derived state here (the default pipeline
-            stores its sticky decisions and calibration); the runner round-trips
-            it through the checkpoint for resume, and persists it to the finished
-            run's session-segment ``meta`` so the next run on the same session
-            inherits it — no extra hook is needed to carry state forward.
-    """
+    """Everything a context policy needs to produce a per-call view."""
 
     entries: list[TranscriptEntry]
+    """The full, real transcript. **Read-only** — a policy returns a new
+    list for the model call and never mutates ``entries``."""
+
     provider: Provider | None = None
+    """Provider selected for the next model call, if known."""
+
     model: str | None = None
+    """Model name passed to the provider."""
+
     last_input_tokens: int | None = None
+    """Last observed provider input-token count. Lags the current transcript
+    by one call; the default pipeline uses it to *calibrate* its estimates
+    rather than trusting it directly."""
+
     overflow: bool = False
+    """``True`` when the provider already raised
+    :class:`~lovia.ContextOverflowError`; compact more aggressively."""
+
     scratch: dict[str, Any] = field(default_factory=dict)
+    """Mutable state owned by the runner, seeded fresh at run start. A policy
+    keeps its derived state here (the default pipeline stores its sticky
+    decisions and calibration); the runner round-trips it through the
+    checkpoint for resume and persists it to the finished run's
+    session-segment ``meta``, so the next run on the same session inherits it
+    — no extra hook needed."""
 
 
 @dataclass
 class ContextResult:
-    """The per-call view a context policy produced.
-
-    Attributes:
-        entries: Transcript entries to send to the provider for this call.
-        changed: Whether ``entries`` differs from the input transcript. With
-            a sticky policy this is ``True`` on every call after the first
-            compaction (the view replays earlier decisions).
-        compacted: Whether **new** compaction decisions were made on *this*
-            call. The runner emits :class:`~lovia.events.ContextCompacted`
-            only when this is set, so sticky replays don't spam events.
-        reason: Stable machine-readable reason for the rewrite (e.g.
-            ``"clear"``, ``"offload+summary"``, ``"reactive_summary"``,
-            ``"sticky_replay"``).
-        summary: Summary text newly produced during this call, if any.
-        tokens_before: Estimated prompt tokens of the raw transcript.
-        tokens_after: Estimated prompt tokens of the returned view.
-        detail: Human-readable bullets describing what the policy did this call
-            (e.g. ``["2 tool results offloaded"]``), surfaced verbatim in the
-            compaction notice and the web UI. Empty for a no-op or a replay.
-    """
+    """The per-call view a context policy produced."""
 
     entries: list[TranscriptEntry]
+    """Transcript entries to send to the provider for this call."""
+
     changed: bool = False
+    """Whether ``entries`` differs from the input transcript. With a sticky
+    policy this is ``True`` on every call after the first compaction (the
+    view replays earlier decisions)."""
+
     compacted: bool = False
+    """Whether **new** compaction decisions were made on *this* call. The
+    runner emits :class:`~lovia.events.ContextCompacted` only when this is
+    set, so sticky replays don't spam events."""
+
     reason: str | None = None
+    """Stable machine-readable reason for the rewrite (e.g. ``"clear"``,
+    ``"offload+summary"``, ``"reactive_summary"``, ``"sticky_replay"``)."""
+
     summary: str | None = None
+    """Summary text newly produced during this call, if any."""
+
     tokens_before: int | None = None
+    """Estimated prompt tokens of the raw transcript."""
+
     tokens_after: int | None = None
+    """Estimated prompt tokens of the returned view."""
+
     detail: list[str] = field(default_factory=list)
+    """Human-readable bullets describing what the policy did this call
+    (e.g. ``["2 tool results offloaded"]``), surfaced verbatim in the
+    compaction notice and the web UI. Empty for a no-op or a replay."""
 
 
 class ContextPolicy(Protocol):

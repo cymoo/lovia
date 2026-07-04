@@ -18,12 +18,11 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner, Skills
+from lovia import Agent, Runner, Skills, model_from_env
 from lovia.events import (
     TextDelta,
     ReasoningDelta,
@@ -36,12 +35,7 @@ from lovia.workspace import Workspace
 
 load_dotenv()
 
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 SKILLS_DIR = Path(__file__).parent / "skills"
 

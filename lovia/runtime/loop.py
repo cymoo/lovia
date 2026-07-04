@@ -159,9 +159,10 @@ class RunLoop:
         # active, which a field on the initial agent could not express.
         self.tracer = tracer
         self.retry = retry
-        self.context_policy: ContextPolicy = context_policy or Compaction(
-            context_window=200_000
-        )
+        # Belt for direct RunLoop construction; the public path (Runner)
+        # already resolved this to the agent's policy. Compaction() sizes
+        # itself to the provider's advertised window at call time.
+        self.context_policy: ContextPolicy = context_policy or Compaction()
         self.run_id = checkpoint.resolved_run_id if checkpoint is not None else None
         self.checkpointer = checkpoint.checkpointer if checkpoint is not None else None
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,

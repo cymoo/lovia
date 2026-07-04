@@ -38,12 +38,11 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
-from ..providers import ModelSettings, model_from_env, provider_from_string
-from ..providers.base import context_window as provider_context_window
+from ..providers import ModelSettings, model_from_env
 from ..reliability import RetryPolicy
 from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
-from .app import DEFAULT_CONTEXT_WINDOW, serve
+from .app import serve
 from .scheduling import Scheduling
 from .store import ChatStore
 
@@ -209,7 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="model context window in tokens used for compaction "
-        "(env LOVIA_CONTEXT_WINDOW, default: auto-detect, else 200K)",
+        "(env LOVIA_CONTEXT_WINDOW; default: ask the provider, reactive "
+        "overflow handling when unknown)",
     )
     p.add_argument(
         "--max-turns",
@@ -295,34 +295,23 @@ def resolve_max_tokens(cli: int | None) -> int | None:
     return value
 
 
-def _detect_context_window(model: str) -> int | None:
-    """Best-effort lookup of a model's context window; ``None`` if unknown."""
-    try:
-        provider = provider_from_string(model)
-        return provider_context_window(provider, getattr(provider, "model", None))
-    except Exception:  # noqa: BLE001 - detection must never break the launcher
-        return None
+def resolve_context_window(cli: int | None) -> int | None:
+    """Explicit compaction window in tokens, or ``None`` for auto.
 
-
-def resolve_context_window(cli: int | None, model: str) -> int:
-    """Compaction context window in tokens.
-
-    Precedence: ``--context-window`` flag, ``LOVIA_CONTEXT_WINDOW``, the model's
-    advertised window, then a 200K fallback for OpenAI-compatible endpoints not
-    in the context-window table.
+    Precedence: ``--context-window`` flag, then ``LOVIA_CONTEXT_WINDOW``.
+    ``None`` means no explicit override — ``Compaction`` asks the provider for
+    the model's advertised window at call time and falls back to reactive
+    overflow handling when it is unknown.
     """
     value = cli if cli is not None else _env_int_optional("LOVIA_CONTEXT_WINDOW")
-    if value is not None:
-        if value < 1:
-            raise CliError(f"--context-window must be >= 1, got {value}")
-        return value
-    return _detect_context_window(model) or DEFAULT_CONTEXT_WINDOW
+    if value is not None and value < 1:
+        raise CliError(f"--context-window must be >= 1, got {value}")
+    return value
 
 
 def resolve_context_policy(args: argparse.Namespace) -> ContextPolicy:
     """Compaction policy for the default agent (honors --context-window)."""
-    window = resolve_context_window(args.context_window, resolve_model(args.model))
-    return Compaction(context_window=window)
+    return Compaction(context_window=resolve_context_window(args.context_window))
 
 
 def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:

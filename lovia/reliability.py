@@ -150,18 +150,24 @@ class RetryPolicy:
     so concurrent retries don't synchronize.
 
     ``max_attempts`` is the total number of calls to :meth:`Provider.stream`
-    (the first call counts as attempt 1), so ``max_attempts=3`` means at most
-    two retries and ``max_attempts=1`` disables retrying.
+    (the first call counts as attempt 1), so ``max_attempts=4`` means at most
+    three retries and ``max_attempts=1`` disables retrying.
+
+    The defaults lean patient — network blips, timeouts, and 429s are routine
+    for long-running agents: 4 attempts with a jittered ~1s/2s/4s schedule,
+    capped at 30s per wait. Interactive callers that prefer failing fast can
+    tighten per agent (``Agent(retry=RetryPolicy(max_attempts=2))``) or per
+    run.
 
     If you supply :class:`Agent.model` as a list, the policy is applied
     *per-provider*; the runner moves to the next provider once retries on the
     current one are exhausted.
     """
 
-    max_attempts: int = 3
+    max_attempts: int = 4
     restart_on_partial: bool = True
-    backoff_base: float = 0.5
-    backoff_max: float = 8.0
+    backoff_base: float = 1.0
+    backoff_max: float = 30.0
     retry_on: RetryPredicate = field(default=_default_retry_on)
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
 

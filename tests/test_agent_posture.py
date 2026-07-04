@@ -111,7 +111,21 @@ async def test_run_context_policy_overrides_agent() -> None:
 def test_agent_default_posture() -> None:
     agent = Agent(name="a")
     assert isinstance(agent.retry, RetryPolicy)  # retries on by default
-    assert agent.context_policy is None  # falls back to the loop's Compaction
+    # The default is a real Compaction() — visible in the field definition,
+    # sizing itself to the provider's window at call time — not a None that
+    # some other layer silently replaces with a constant.
+    assert isinstance(agent.context_policy, Compaction)
+    assert agent.max_tool_output_chars == 200_000
+
+
+def test_retry_policy_defaults_are_patient() -> None:
+    # Network blips and 429s are routine for long-running agents; the
+    # defaults are the contract, so pin them.
+    policy = RetryPolicy()
+    assert policy.max_attempts == 4
+    assert policy.backoff_base == 1.0
+    assert policy.backoff_max == 30.0
+    assert policy.restart_on_partial is True
 
 
 def test_context_policy_protocol_accepts_compaction() -> None:

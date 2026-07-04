@@ -24,6 +24,7 @@ from typing import (
     Union,
 )
 
+from .context.compaction import Compaction
 from .exceptions import UserError
 from .handoff import Handoff, agent_as_tool
 from .providers import ModelSettings, Provider, provider_from_string
@@ -106,9 +107,12 @@ class Agent(Generic[TContext]):
             ``max_turns``, ``budget``, ``timeout``, cancellation) live on the
             run.
         context_policy: How this agent's context is shaped for each model
-            call (:class:`~lovia.ContextPolicy`). ``None`` (default) means the
-            runner's standard :class:`~lovia.Compaction`. Per-call override
-            via :meth:`Runner.run` wins.
+            call (:class:`~lovia.ContextPolicy`). The default is a plain
+            :class:`~lovia.Compaction`, which sizes itself to the provider's
+            advertised context window at call time and falls back to reactive
+            overflow handling when the window is unknown. Per-call override
+            via :meth:`Runner.run` wins; pass ``NoopContextPolicy()`` to
+            disable compaction.
         workspace: Optional :class:`~lovia.workspace.Workspace` (or anything
             implementing ``WorkspaceLike``) scoping file/shell tools to a
             directory and policy. Its tool bundle is merged at run time and
@@ -138,7 +142,7 @@ class Agent(Generic[TContext]):
     # Reliability/context *posture* — see the placement rule in the class
     # docstring. Both may be overridden per call on ``Runner.run``.
     retry: "RetryPolicy | None" = field(default_factory=RetryPolicy)
-    context_policy: "ContextPolicy | None" = None
+    context_policy: "ContextPolicy" = field(default_factory=Compaction)
     workspace: "WorkspaceLike | None" = None
     # Declarative features that bundle tools, per-turn view injectors, static
     # system-prompt text, and event hooks. Each is activated once per run (and
@@ -157,14 +161,15 @@ class Agent(Generic[TContext]):
     # characters. Anything longer is truncated (head + tail kept, with a
     # marker) *before* it enters the transcript, and the raw return value is
     # dropped — bounding memory, checkpoint, and session cost for tools that
-    # can return huge payloads. Lossy by design: the cut middle is gone (the
+    # can return huge payloads. Lossy: the cut middle is gone (the
     # ``recall_tool_result`` tool sees the truncated version too); tools that
     # need full-fidelity recovery should write to the workspace themselves.
-    # ``None`` (default) stores outputs in full. Per-tool ``max_output_chars``
-    # overrides this. Lossless-by-default is deliberate: this is a framework, so
-    # the safe default is to never silently drop a tool's output — opt into a cap
-    # (here or per-tool) when you need to bound transcript/checkpoint/token cost.
-    max_tool_output_chars: int | None = None
+    # The default (200_000 chars ≈ 50K tokens) is a tripwire, not a policy:
+    # far above any legitimate single result, it only catches runaway
+    # payloads that would otherwise bloat every checkpoint and session write.
+    # Per-tool ``max_output_chars`` overrides it; ``None`` stores outputs in
+    # full.
+    max_tool_output_chars: int | None = 200_000
     # Optional agent-wide renderer applied to any tool whose own
     # ``result_renderer`` is ``None``. Useful for things like always
     # JSON-serializing via a custom encoder. Successful results only:

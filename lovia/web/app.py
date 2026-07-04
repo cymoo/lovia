@@ -29,8 +29,6 @@ from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
-DEFAULT_CONTEXT_WINDOW = 200_000  # 200K
-
 
 def _normalise(
     agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",

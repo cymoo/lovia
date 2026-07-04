@@ -437,6 +437,10 @@ result = await Runner.run(
 )
 ```
 
+Both SQLite stores accept `wal=True` (off by default) to enable WAL journal
+mode plus a busy timeout — use it when the database file is shared with other
+writers, e.g. several stores in one file or a multi-process web deployment.
+
 Both stores are **append-only**: a `Session` accumulates finished runs (one
 segment each — a run that completed, or one the caller finalized) while a
 checkpoint holds the run that may still resume, so the full transcript is

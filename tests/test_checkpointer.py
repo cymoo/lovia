@@ -837,3 +837,22 @@ def test_snapshot_to_dict_round_trip_preserves_multimodal_content() -> None:
     raw_entry = restored.entries[2]
     assert isinstance(raw_entry, ToolResultEntry)
     assert raw_entry.raw == {"value": 42}
+
+
+def test_snapshot_from_dict_defaults_missing_optional_fields() -> None:
+    # On-disk snapshots outlive code versions: a payload written before newer
+    # optional fields existed must still load, with defaults applied.
+    snap = RunSnapshot.from_dict(
+        {
+            "run_id": "r",
+            "entries": [],
+            "agent_name": "a",
+            "status": "running",
+        }
+    )
+    assert snap.turns == 0
+    assert snap.usage.total_tokens == 0
+    assert snap.output is None and snap.error is None
+    assert snap.last_input_tokens is None
+    assert snap.context_state == {}
+    assert snap.updated_at > 0

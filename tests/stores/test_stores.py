@@ -325,3 +325,123 @@ async def test_in_memory_checkpointer_freezes_head_state() -> None:
     snap2 = await cp.load("r1")
     assert snap2 is not None
     assert snap2.context_state == {"summary": "v1", "offloaded": [1]}  # unharmed
+
+
+# ------------------------------------------------- SQLiteCheckpointer store ---
+
+
+def _head(turns: int = 1, status: str = "running"):
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+
+    return RunHead(agent_name="a", usage=Usage(), turns=turns, status=status)  # type: ignore[arg-type]
+
+
+async def test_sqlite_checkpointer_append_rolls_back_partial_writes() -> None:
+    # The ":memory:" connection is shared and outlives the call: without a
+    # rollback, the turn row left uncommitted by a mid-append failure (between
+    # the turn INSERT and the head INSERT) would ride the NEXT append's
+    # commit() — duplicating the delta, so a resume would replay entries (and
+    # re-execute tools) twice.
+    import sqlite3
+
+    from lovia.stores import SQLiteCheckpointer
+
+    cp = SQLiteCheckpointer(":memory:")
+    await cp.append("r1", [InputEntry(role="user", content="one")], _head(turns=1))
+
+    conn = cp._connect()
+    conn.execute("ALTER TABLE snapshot_heads RENAME TO snapshot_heads_gone")
+    conn.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        await cp.append("r1", [InputEntry(role="user", content="two")], _head(turns=2))
+    conn.execute("ALTER TABLE snapshot_heads_gone RENAME TO snapshot_heads")
+    conn.commit()
+
+    # The retry (as save_terminal would do with the same delta) must store the
+    # delta exactly once.
+    await cp.append("r1", [InputEntry(role="user", content="two")], _head(turns=2))
+    snap = await cp.load("r1")
+    assert snap is not None
+    assert [e.content for e in snap.entries] == ["one", "two"]  # type: ignore[union-attr]
+
+
+async def test_checkpointer_head_only_append_adds_no_turn_row() -> None:
+    # An empty-entries append (e.g. marking completion) refreshes the head
+    # without growing the entry log.
+    from lovia.stores import SQLiteCheckpointer
+
+    cp = SQLiteCheckpointer(":memory:")
+    await cp.append("r1", [InputEntry(role="user", content="hi")], _head(turns=1))
+    await cp.append("r1", [], _head(turns=1, status="completed"))
+
+    snap = await cp.load("r1")
+    assert snap is not None
+    assert snap.status == "completed"
+    assert [e.content for e in snap.entries] == ["hi"]  # type: ignore[union-attr]
+    conn = cp._connect()
+    rows = conn.execute("SELECT COUNT(*) FROM snapshot_turns").fetchone()[0]
+    assert rows == 1
+
+
+async def test_sqlite_stores_keep_non_ascii_verbatim() -> None:
+    # ensure_ascii=False: CJK content round-trips AND is stored unescaped
+    # (readable, and roughly half the bytes of \\uXXXX escapes).
+    from lovia.stores import SQLiteCheckpointer
+
+    s = SQLiteSession(":memory:")
+    await s.append(
+        "u1",
+        [InputEntry(role="user", content="你好，世界")],
+        run_id="r1",
+        meta={"备注": "中文元数据"},
+    )
+    segs = await s.segments("u1")
+    assert segs[0].entries[0].content == "你好，世界"  # type: ignore[union-attr]
+    assert segs[0].meta == {"备注": "中文元数据"}
+    row = (
+        s._connect()
+        .execute("SELECT entries_json, meta_json FROM session_runs WHERE run_id = 'r1'")
+        .fetchone()
+    )
+    assert "你好，世界" in row[0] and "中文元数据" in row[1]
+
+    cp = SQLiteCheckpointer(":memory:")
+    await cp.append("r1", [AssistantTextEntry(content="答案是四十二")], _head())
+    snap = await cp.load("r1")
+    assert snap is not None
+    assert snap.entries[0].content == "答案是四十二"  # type: ignore[union-attr]
+    turn_row = (
+        cp._connect().execute("SELECT entries_json FROM snapshot_turns").fetchone()
+    )
+    assert "答案是四十二" in turn_row[0]
+
+
+async def test_same_run_id_under_two_sessions_both_stored() -> None:
+    # Idempotency is scoped to (session_id, run_id), not run_id alone.
+    s = SQLiteSession(":memory:")
+    await s.append("u1", [InputEntry(role="user", content="one")], run_id="r")
+    await s.append("u2", [InputEntry(role="user", content="two")], run_id="r")
+    assert [e.content for e in await s.load("u1")] == ["one"]  # type: ignore[union-attr]
+    assert [e.content for e in await s.load("u2")] == ["two"]  # type: ignore[union-attr]
+
+
+async def test_wal_option_enables_wal_journal_mode(tmp_path: Path) -> None:
+    from lovia.stores import SQLiteCheckpointer
+
+    s = SQLiteSession(tmp_path / "wal.db", wal=True)
+    await s.append("u1", [InputEntry(role="user", content="hi")], run_id="r1")
+    assert [e.content for e in await s.load("u1")] == ["hi"]  # type: ignore[union-attr]
+    with s._conn() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    # Default stays off (SQLite's default journal mode, not WAL).
+    plain = SQLiteSession(tmp_path / "plain.db")
+    await plain.append("u1", [InputEntry(role="user", content="hi")])
+    with plain._conn() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] != "wal"
+
+    cp = SQLiteCheckpointer(tmp_path / "wal.db", wal=True)
+    await cp.append("r1", [InputEntry(role="user", content="hi")], _head())
+    snap = await cp.load("r1")
+    assert snap is not None and len(snap.entries) == 1

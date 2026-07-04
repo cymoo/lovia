@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from collections import defaultdict
 from pathlib import Path
 from uuid import uuid4
@@ -168,7 +169,7 @@ CREATE TABLE IF NOT EXISTS session_runs (
     run_id TEXT NOT NULL,
     entries_json TEXT NOT NULL,
     meta_json TEXT,
-    created_at REAL NOT NULL DEFAULT (julianday('now')),
+    created_at REAL NOT NULL,
     UNIQUE(session_id, run_id)
 );
 CREATE INDEX IF NOT EXISTS idx_session_runs_sid
@@ -184,15 +185,18 @@ class SQLiteSession(SQLiteStore, Session):
     old row is never rewritten. ``segments`` returns each run in insertion
     order (the autoincrement ``id``, since ``run_id`` is opaque); ``load``
     (inherited) flattens them.
+
+    ``wal=True`` enables WAL journal mode + a busy timeout for stores whose
+    file is shared with other writers (another process, or the checkpoint/meta
+    stores of a web deployment); see :class:`~lovia.stores._sqlite.SQLiteStore`.
     """
 
-    def __init__(self, path: str | Path) -> None:
-        super().__init__(path, _SESSION_SCHEMA)
+    def __init__(self, path: str | Path, *, wal: bool = False) -> None:
+        super().__init__(path, _SESSION_SCHEMA, wal=wal)
 
     async def segments(self, session_id: str) -> list[Segment]:
         def _impl() -> list[Segment]:
-            conn = self._connect()
-            try:
+            with self._conn() as conn:
                 rows = conn.execute(
                     "SELECT run_id, entries_json, meta_json FROM session_runs "
                     "WHERE session_id = ? ORDER BY id ASC",
@@ -206,8 +210,6 @@ class SQLiteSession(SQLiteStore, Session):
                     )
                     for r in rows
                 ]
-            finally:
-                self._release(conn)
 
         return await self._run(_impl)
 
@@ -220,37 +222,32 @@ class SQLiteSession(SQLiteStore, Session):
         meta: JsonObject | None = None,
     ) -> str:
         rid = run_id if run_id is not None else uuid4().hex
+        # Serialize on the event loop (atomic w.r.t. other tasks) so the
+        # worker thread never reads shared entry/meta objects.
+        entries_json = json.dumps(
+            [entry_to_dict(e) for e in entries], ensure_ascii=False
+        )
+        meta_json = json.dumps(meta, ensure_ascii=False) if meta is not None else None
+        created_at = time.time()
 
         def _impl() -> None:
-            conn = self._connect()
-            try:
+            with self._tx() as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO session_runs "
-                    "(session_id, run_id, entries_json, meta_json) VALUES (?, ?, ?, ?)",
-                    (
-                        session_id,
-                        rid,
-                        json.dumps([entry_to_dict(e) for e in entries]),
-                        json.dumps(meta) if meta is not None else None,
-                    ),
+                    "(session_id, run_id, entries_json, meta_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (session_id, rid, entries_json, meta_json, created_at),
                 )
-                conn.commit()
-            finally:
-                self._release(conn)
 
         await self._run(_impl)
         return rid
 
     async def clear(self, session_id: str) -> None:
         def _impl() -> None:
-            conn = self._connect()
-            try:
+            with self._tx() as conn:
                 conn.execute(
                     "DELETE FROM session_runs WHERE session_id = ?", (session_id,)
                 )
-                conn.commit()
-            finally:
-                self._release(conn)
 
         await self._run(_impl)
 
@@ -265,8 +262,9 @@ class SQLiteSession(SQLiteStore, Session):
         _validate_trim_args(keep_chars, keep_runs)
 
         def _impl() -> int:
-            conn = self._connect()
-            try:
+            # _tx: a mid-trim failure rolls back the partial rewrite instead
+            # of leaving it to ride the next operation's commit().
+            with self._tx() as conn:
                 rows = conn.execute(
                     "SELECT id, entries_json FROM session_runs "
                     "WHERE session_id = ? ORDER BY id ASC",
@@ -280,21 +278,14 @@ class SQLiteSession(SQLiteStore, Session):
                         conn.execute(
                             "UPDATE session_runs SET entries_json = ? WHERE id = ?",
                             (
-                                json.dumps([entry_to_dict(e) for e in trimmed_entries]),
+                                json.dumps(
+                                    [entry_to_dict(e) for e in trimmed_entries],
+                                    ensure_ascii=False,
+                                ),
                                 row_id,
                             ),
                         )
                         total += trimmed
-                conn.commit()
                 return total
-            except BaseException:
-                # The ":memory:" handle is shared and outlives this call: a
-                # partial trim left uncommitted here would be silently
-                # committed by the next operation's commit(). (File-backed
-                # connections roll back on close, but be explicit for both.)
-                conn.rollback()
-                raise
-            finally:
-                self._release(conn)
 
         return await self._run(_impl)

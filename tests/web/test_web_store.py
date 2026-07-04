@@ -246,3 +246,24 @@ async def test_migration_backfills_pinned_on_legacy_db(tmp_path: Path) -> None:
     again = ChatStore.sqlite(path)
     meta = await again.get("legacy")
     assert meta is not None and meta.pinned is True
+
+
+async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:
+    # ChatStore.sqlite(wal=True) points session, checkpointer, and metadata at
+    # one WAL-mode file; everything still round-trips.
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+
+    store = ChatStore.sqlite(tmp_path / "x.db", wal=True)
+    await store.upsert("s1", agent="bot")
+    await store.session.append("s1", [AssistantTextEntry(content="hi")])
+    assert store.checkpointer is not None
+    await store.checkpointer.append(
+        "run-1", [], RunHead(agent_name="bot", usage=Usage(), turns=1)
+    )
+
+    assert (await store.get("s1")) is not None
+    assert len(await store.session.load("s1")) == 1
+    assert (await store.checkpointer.load("run-1")) is not None
+    with store._meta._conn() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

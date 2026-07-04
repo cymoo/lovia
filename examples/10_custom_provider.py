@@ -7,7 +7,7 @@ what an adapter has to produce.
 
 Run::
 
-    python examples/20_custom_provider.py
+    python examples/10_custom_provider.py
 """
 
 from __future__ import annotations
@@ -60,9 +60,7 @@ class EchoProvider:
         # Find the last user message and echo it, streamed token-by-token so a
         # consumer sees real deltas.
         messages = entries_to_messages(entries)
-        last_user = next(
-            (m.text for m in reversed(messages) if m.role == "user"), ""
-        )
+        last_user = next((m.text for m in reversed(messages) if m.role == "user"), "")
         reply = f"echo: {last_user.upper()}"
         for word in reply.split(" "):
             yield TextDelta(text=word + " ")
@@ -79,7 +77,9 @@ async def main() -> None:
     print(result.output)  # -> echo: HELLO CUSTOM PROVIDERS
 
     # A fallback chain works too: try a flaky provider first, fall back to echo.
-    agent = agent.clone(model=[EchoProvider("echo-primary"), EchoProvider("echo-backup")])
+    agent = agent.clone(
+        model=[EchoProvider("echo-primary"), EchoProvider("echo-backup")]
+    )
     print((await Runner.run(agent, "fallbacks compose")).output)
 
 

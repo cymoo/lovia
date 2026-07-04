@@ -3,7 +3,7 @@
 Run::
 
     pip install -e .[web]
-    python examples/17_web_api.py
+    python examples/27_web_api.py
     # open http://127.0.0.1:8000  (a ~40-line custom page, NOT the bundled UI)
 
 ``create_app(agent, ui=False)`` gives a pure JSON + SSE server — no bundled chat

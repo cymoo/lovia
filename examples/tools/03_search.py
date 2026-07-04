@@ -6,12 +6,16 @@ Install with::
 
 Or plug your own backend by implementing the :class:`WebSearch` Protocol
 and passing it to ``web_search(my_backend)``.
+
+Run::
+
+    python examples/tools/03_search.py
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 

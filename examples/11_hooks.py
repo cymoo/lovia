@@ -8,6 +8,10 @@ Each handler is called as ``handler(event, ctx)``: it receives the event and
 the run's live ``RunContext`` — the dynamic run state (``session_id``, the
 active agent, cumulative usage, ...). Handlers that only need the event ignore
 ``ctx``.
+
+Run::
+
+    python examples/11_hooks.py
 """
 
 from __future__ import annotations
@@ -15,12 +19,11 @@ from __future__ import annotations
 import asyncio
 import os
 
-from lovia import Agent, AgentHooks, RunContext, Runner, events, tool
-
 from dotenv import load_dotenv
 
-load_dotenv()
+from lovia import Agent, AgentHooks, RunContext, Runner, events, tool
 
+load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
 if not MODEL:
     raise SystemExit(

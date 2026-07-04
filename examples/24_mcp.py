@@ -12,8 +12,8 @@ Prerequisites:
 
 Run::
 
-    python examples/26_mcp.py
-    MCP_CITY="San Francisco" python examples/26_mcp.py
+    python examples/24_mcp.py
+    MCP_CITY="San Francisco" python examples/24_mcp.py
 """
 
 from __future__ import annotations

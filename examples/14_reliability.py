@@ -1,12 +1,17 @@
-"""Production safety nets: budgets, retries, cancellation, provider fallback.
+"""Production reliability: budgets, retries, timeouts, cancellation, fallback.
 
-This example demonstrates four orthogonal reliability primitives:
+Five orthogonal safety nets, each one line to adopt:
 
-* :class:`RunBudget` caps tokens, tool calls and wall-clock per run.
+* :class:`RunBudget` caps tokens, tool calls, and wall-clock per run.
 * :class:`RetryPolicy` retries transient provider errors with backoff.
+* ``@tool(retries=..., timeout=...)`` does the same for a flaky tool.
 * :class:`CancelToken` cooperatively cancels a run from outside.
-* A ``model=[...]`` list creates an automatic provider fallback chain — if
-  the first provider keeps failing, the next one is tried.
+* ``model=[primary, fallback]`` fails over to the next provider when the
+  first keeps erroring.
+
+Run::
+
+    python examples/14_reliability.py
 """
 
 from __future__ import annotations
@@ -27,7 +32,6 @@ from lovia import (
 )
 
 load_dotenv()
-
 MODEL = os.environ.get("LOVIA_MODEL")
 if not MODEL:
     raise SystemExit(
@@ -38,23 +42,27 @@ if not MODEL:
 # Optional second model demonstrating the provider fallback chain.
 FALLBACK_MODEL = os.environ.get("LOVIA_FALLBACK_MODEL")
 
+_attempts = {"count": 0}
 
-@tool
-async def slow_search(query: str) -> str:
-    """Pretend to do an expensive search."""
-    await asyncio.sleep(0.1)
-    return f"results for {query!r}: 42"
+
+@tool(retries=2, timeout=5.0)
+async def stock_quote(symbol: str) -> str:
+    """Return a quote from a backend that fails on its first attempt."""
+    _attempts["count"] += 1
+    if _attempts["count"] == 1:
+        raise RuntimeError("upstream hiccup")  # retried transparently
+    return f"{symbol}: 101.70 (attempt {_attempts['count']})"
 
 
 async def main() -> None:
     agent = Agent(
         name="resilient",
-        instructions="Answer concisely.",
-        # ``model`` accepts a list of providers; the runner falls through on
-        # repeated provider errors. Set LOVIA_FALLBACK_MODEL to see the chain
-        # in action; without it the agent runs on the primary model alone.
+        instructions="Answer concisely using the stock_quote tool.",
+        # ``model`` accepts a list; the runner falls through on repeated
+        # provider errors. Set LOVIA_FALLBACK_MODEL to arm the chain — without
+        # it the agent runs on the primary model alone.
         model=[MODEL, FALLBACK_MODEL] if FALLBACK_MODEL else MODEL,
-        tools=[slow_search],
+        tools=[stock_quote],
     )
 
     budget = RunBudget(
@@ -62,20 +70,20 @@ async def main() -> None:
         max_tool_calls=10,
         max_seconds=60,
     )
-    retry = RetryPolicy(max_attempts=3)
+    retry = RetryPolicy(max_attempts=3)  # provider-level, with backoff
     cancel = CancelToken()
 
-    # Cancel the run after 5 seconds from another task.
+    # Cancel the run from outside if it takes too long overall.
     async def watchdog() -> None:
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         cancel.cancel()
 
-    asyncio.create_task(watchdog())
+    watchdog_task = asyncio.create_task(watchdog())
 
     try:
         result = await Runner.run(
             agent,
-            "Search for 'lovia' and summarise.",
+            "Get the ACME quote and comment on it in one sentence.",
             budget=budget,
             retry=retry,
             cancel_token=cancel,
@@ -84,6 +92,8 @@ async def main() -> None:
         print("usage:", result.usage)
     except BudgetExceeded as exc:
         print("budget hit:", exc)
+    finally:
+        watchdog_task.cancel()
 
 
 if __name__ == "__main__":

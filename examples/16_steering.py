@@ -17,6 +17,10 @@ handler's push is already visible on that same turn's model call, while a push
 from anywhere else (a tool, another event, outside the run) lands on the
 following turn. Whatever is still queued when the run ends stays in a
 caller-supplied mailbox for the next run; a runner-created default is gone.
+
+Run::
+
+    python examples/16_steering.py
 """
 
 from __future__ import annotations

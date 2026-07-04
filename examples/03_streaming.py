@@ -1,12 +1,20 @@
-"""Consume the event stream and print text deltas as they arrive."""
+"""Consume the event stream and print text as it arrives.
+
+``Runner.stream`` returns a ``RunHandle`` that is both async-iterable
+(yields typed events) and awaitable (resolves to the final ``RunResult``).
+Every example that needs live output builds on this loop.
+
+Run::
+
+    python examples/03_streaming.py
+"""
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
-from rich.console import Console
 
 from lovia import Agent, Runner, events
 
@@ -17,7 +25,6 @@ if not MODEL:
         'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
         'or "anthropic:claude-4-8-opus"'
     )
-console = Console()
 
 
 async def main() -> None:
@@ -26,20 +33,19 @@ async def main() -> None:
         instructions="You write short, vivid stories.",
         model=MODEL,
     )
-    # ``stream`` returns a ``RunHandle`` that is both async-iterable
-    # (yields events) and awaitable (resolves to the final ``RunResult``).
     handle = Runner.stream(agent, "Tell me a 4-sentence story about a fox.")
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
-            console.print(ev.delta, end="", soft_wrap=True, markup=False)
+            print(ev.delta, end="", flush=True)
         elif isinstance(ev, events.OutputDiscarded):
-            # A transient mid-stream error discarded the partial output; the
-            # turn restarts. A plain stdout consumer can't unprint, so just
-            # mark the reset — what follows replaces everything above it.
-            console.print("\n[dim][output reset — retrying][/dim]\n", markup=True)
+            # A transient mid-stream error discarded the partial output and the
+            # turn restarts. Plain stdout can't unprint, so just mark the reset —
+            # what follows replaces everything above it.
+            print("\n[output reset — retrying]\n")
     result = await handle.result()
-    console.print(
-        f"\n[dim]done · turns={result.turns} · output tokens={result.usage.output_tokens}[/dim]"
+    print(
+        f"\n\n[done · turns={result.turns} · "
+        f"output tokens={result.usage.output_tokens}]"
     )
 
 

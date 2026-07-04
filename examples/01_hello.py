@@ -1,18 +1,19 @@
-"""Minimal "hello world" agent backed by OpenAI Chat Completions.
+"""Minimal agent: one model call, no tools.
 
 Run::
 
-    OPENAI_API_KEY=sk-... python examples/01_hello.py
+    cp .env.example .env   # once: set LOVIA_MODEL and your API key
+    python examples/01_hello.py
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
-
-from lovia import Agent, Runner
+import os
 
 from dotenv import load_dotenv
+
+from lovia import Agent, Runner
 
 load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
@@ -32,6 +33,9 @@ async def main() -> None:
     result = await Runner.run(agent, "Say hello in three languages.")
     print(result.output)
     print(f"\n[turns={result.turns} usage={result.usage}]")
+
+    # In a plain script or notebook you can skip asyncio entirely:
+    #     result = agent.run_sync("Say hello in three languages.")
 
 
 if __name__ == "__main__":

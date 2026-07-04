@@ -1,18 +1,24 @@
 """Multi-agent triage with ``handoffs``.
 
-The triage agent decides whether the user wants billing or technical help and
-transfers control to the matching specialist. The conversation continues in
-the same loop, so the specialist sees the full transcript.
+The triage agent transfers control to a specialist, which continues in the
+same run loop and sees the full transcript. List a plain ``Agent`` to accept
+the derived ``transfer_to_<name>`` tool, or wrap it in :class:`Handoff` to
+set the routing description the parent sees and to observe the transfer.
+
+Run::
+
+    python examples/07_handoff.py
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
-
-from lovia import Agent, Runner
+import os
+from typing import Any
 
 from dotenv import load_dotenv
+
+from lovia import Agent, Handoff, RunContext, Runner
 
 load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
@@ -34,22 +40,38 @@ support = Agent(
     model=MODEL,
 )
 
+
+def log_transfer(args: dict[str, Any], ctx: RunContext[Any]) -> None:
+    print(f"[handoff] -> Support (reason: {args.get('reason')})")
+
+
 triage = Agent(
     name="Triage",
     instructions=(
-        "Route the user to the right specialist. "
-        "If they mention money, transfer to Billing. "
-        "If they mention bugs or errors, transfer to Support."
+        "You are the first line of support. Route the user to the right "
+        "specialist with a transfer tool instead of answering yourself."
     ),
     model=MODEL,
-    handoffs=[billing, support],
+    handoffs=[
+        billing,  # plain agent: tool name and description are derived
+        Handoff(
+            target=support,
+            description="Product bugs, crashes, or error messages.",
+            on_handoff=log_transfer,
+        ),
+    ],
 )
 
 
 async def main() -> None:
-    result = await Runner.run(triage, "Your app crashed when I clicked save.")
-    print(f"Resolved by: {result.final_agent.name}")
-    print(result.output)
+    for question in (
+        "I was charged twice this month.",
+        "Your app crashed when I clicked save.",
+    ):
+        result = await Runner.run(triage, question)
+        print(f"Q: {question}")
+        print(f"[resolved by {result.final_agent.name}]")
+        print(result.output, "\n")
 
 
 if __name__ == "__main__":

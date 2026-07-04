@@ -5,7 +5,7 @@ agent query it freely via the workspace ``shell`` tool and write the chart repor
 
 Run::
 
-    python examples/25_data_analysis.py
+    python examples/29_data_analysis.py
 
 Open ``tmp/report.html`` in a browser to view the charts.
 """

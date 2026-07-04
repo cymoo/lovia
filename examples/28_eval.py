@@ -18,7 +18,7 @@ to ``$LOVIA_EVAL_JUDGE_MODEL``).
 
 Run::
 
-    python examples/29_eval.py
+    python examples/28_eval.py
 """
 
 from __future__ import annotations

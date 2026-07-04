@@ -310,7 +310,7 @@ class RunController:
                 events.UserMessageInjected,
                 events.HandoffOccurred,
                 events.ContextCompacted,
-                events.ErrorOccurred,
+                events.ToolCallFailed,
                 events.RunCompleted,
                 events.RunFailed,
             ),

@@ -109,7 +109,7 @@ class ToolCallProcessor:
         # Unknown tool and the malformed-arguments case below are *model-input*
         # errors, not runtime failures: they are fed back to the model as an
         # error tool-result and surfaced to observers via
-        # ``ToolCallCompleted(is_error=True)`` — not as ``ErrorOccurred``, which
+        # ``ToolCallCompleted(is_error=True)`` — not as ``ToolCallFailed``, which
         # carries a ``BaseException`` (there is none here). No ``ToolCallStarted``
         # precedes them because the tool never starts; see the event docstrings.
         tool = state.active.tools_by_name.get(call.name)
@@ -169,7 +169,7 @@ class ToolCallProcessor:
                 type(exc).__name__,
                 exc,
             )
-            yield events.ErrorOccurred(error=exc, call=call)
+            yield events.ToolCallFailed(error=exc, call=call)
             err = f"Tool {call.name} was not approved (approval check failed)."
             yield self._rejected(state, call, err)
             return
@@ -195,7 +195,7 @@ class ToolCallProcessor:
                         type(exc).__name__,
                         exc,
                     )
-                    yield events.ErrorOccurred(error=exc, call=call)
+                    yield events.ToolCallFailed(error=exc, call=call)
                     decision = False
                 self._apply_handler_decision(call.id, decision)
             if not fut.done():
@@ -282,7 +282,7 @@ class ToolCallProcessor:
                 type(exc).__name__,
                 exc,
             )
-            yield events.ErrorOccurred(error=exc, call=call)
+            yield events.ToolCallFailed(error=exc, call=call)
 
         if isinstance(result, _HandoffSignal):
             state.pending_handoff = result
@@ -321,7 +321,7 @@ class ToolCallProcessor:
                     type(exc).__name__,
                     exc,
                 )
-                yield events.ErrorOccurred(error=exc, call=call)
+                yield events.ToolCallFailed(error=exc, call=call)
                 result = f"Tool error: result rendering failed: {exc}"
                 result_text = result
                 is_error = True

@@ -3,7 +3,7 @@
 Specifically the fail-closed corners of the approval gate:
 
 * the ``approval_handler`` itself raising — must be logged, surfaced as an
-  ``ErrorOccurred`` event, and treated as a denial;
+  ``ToolCallFailed`` event, and treated as a denial;
 * a handler returning ``"ask"`` in a *non-streaming* run, where there is no
   consumer to resolve the request, so it must fall through to default-deny.
 """
@@ -39,7 +39,7 @@ async def test_raising_handler_is_denied_and_surfaces_error_event() -> None:
     async for ev in handle:
         if isinstance(ev, events.ApprovalRequired):
             pass  # deliberately do NOT resolve -> handler gets consulted
-        elif isinstance(ev, events.ErrorOccurred):
+        elif isinstance(ev, events.ToolCallFailed):
             errors.append(ev.error)
     result = await handle.result()
 
@@ -87,7 +87,7 @@ async def test_raising_approval_predicate_denies_without_dangling_call() -> None
     handle = Runner.stream(agent, "go")
     errors: list[BaseException] = []
     async for ev in handle:
-        if isinstance(ev, events.ErrorOccurred):
+        if isinstance(ev, events.ToolCallFailed):
             errors.append(ev.error)
     result = await handle.result()
 
@@ -124,7 +124,7 @@ async def test_raising_result_renderer_becomes_error_result() -> None:
     handle = Runner.stream(agent, "go")
     errors: list[BaseException] = []
     async for ev in handle:
-        if isinstance(ev, events.ErrorOccurred):
+        if isinstance(ev, events.ToolCallFailed):
             errors.append(ev.error)
     result = await handle.result()
 

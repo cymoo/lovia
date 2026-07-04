@@ -233,19 +233,23 @@ class ApprovalRequired(ToolEvent):
 
 
 @dataclass
-class ErrorOccurred(ErrorEvent):
+class ToolCallFailed(ErrorEvent):
     """A non-terminal error scoped to one tool call.
 
     Emitted for tool failures, render failures, and approval predicate/handler
-    errors; the run continues (the model sees an error result). Terminal
-    run-level failures are :class:`RunFailed` instead.
+    errors; the run continues (the model sees an error result). This event
+    carries the actual exception; the paired
+    :class:`ToolCallCompleted` (``is_error=True``) carries the string the
+    model sees. Terminal run-level failures are :class:`RunFailed` instead.
     """
 
     error: BaseException
-    #: The tool call being processed when the error occurred. Needed to
-    #: attribute an error once one turn's tool events interleave across
-    #: concurrently-executing calls.
+    """The exception raised while processing the call."""
+
     call: ToolCall | None = None
+    """The tool call being processed when the error occurred. Needed to
+    attribute an error once one turn's tool events interleave across
+    concurrently-executing calls."""
 
 
 @dataclass
@@ -305,3 +309,10 @@ class ContextCompacted(ContextEvent):
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
     notice: CompactionNotice
+
+
+# Deprecated alias (since 0.9): ``ErrorOccurred`` was renamed once ``RunFailed``
+# took over the run-level role and this event became tool-scoped. Same class
+# object, so ``isinstance`` checks and ``hooks.on`` registrations written
+# against either name keep working. Will be removed after one minor release.
+ErrorOccurred = ToolCallFailed

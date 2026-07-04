@@ -36,7 +36,7 @@ Typical use::
     async def log_tool(ev: events.ToolCallStarted, ctx: RunContext):
         print("→", ev.call.name, "in session", ctx.session_id)
 
-    @hooks.on((events.RunCompleted, events.ErrorOccurred))
+    @hooks.on((events.RunCompleted, events.RunFailed))
     def at_end(ev, ctx):
         print("end:", type(ev).__name__)
 

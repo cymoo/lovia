@@ -25,4 +25,4 @@ python examples/workflows/01_prompt_chaining.py
 ```
 
 Each script reads configuration from the `.env` file at the project root.
-Set `OPENAI_DEFAULT_MODEL` to override the model used by the examples.
+Set `LOVIA_MODEL` to choose the model used by the examples (required), e.g. `LOVIA_MODEL="openai:gpt-5.4"`.

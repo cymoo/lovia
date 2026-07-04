@@ -15,10 +15,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 translator = Agent(
     name="Translator",
     instructions="Translate the user's text to French. Reply with the translation only.",
-    model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+    model=MODEL,
 )
 
 writer = Agent(
@@ -27,7 +34,7 @@ writer = Agent(
         "Draft a short tweet in English, then use the translate tool to render it in French. "
         "Return both versions."
     ),
-    model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+    model=MODEL,
     tools=[
         translator.as_tool(
             name="translate_to_french", description="Translate to French."

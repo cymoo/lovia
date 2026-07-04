@@ -28,7 +28,12 @@ from lovia import Agent, Runner, events
 from lovia.plugins.mcp import MCPServerStdio, MCP
 
 load_dotenv()
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
 CITY = os.getenv("MCP_CITY", "Shanghai")
 console = Console()
 

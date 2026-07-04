@@ -21,6 +21,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 @tool
 async def now() -> str:
@@ -52,7 +59,7 @@ async def main() -> None:
     agent = Agent(
         name="Clock",
         instructions="Use the now tool to answer time questions.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         tools=[now],
         hooks=hooks,
     )

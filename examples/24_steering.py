@@ -30,6 +30,13 @@ from lovia import Agent, AgentHooks, Mailbox, RunContext, Runner, events, tool
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 CHAPTERS = [
     "A stranger arrives in the harbour town and asks for the lighthouse keeper.",
     "The keeper denies ever having met the stranger; the logbook says otherwise.",
@@ -65,7 +72,7 @@ def deadline(ev: events.TurnStarted, ctx: RunContext) -> None:
 async def main() -> None:
     agent = Agent(
         name="book-reviewer",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-chat"),
+        model=MODEL,
         instructions=(
             "You are reviewing a short novel, one chapter per turn: call "
             "read_chapter starting at 1, reflect briefly, and continue with "

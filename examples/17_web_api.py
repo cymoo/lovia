@@ -33,6 +33,13 @@ from lovia.web import create_app
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 @tool
 async def add(a: float, b: float) -> float:
@@ -88,7 +95,7 @@ def main() -> None:
     agent = Agent(
         name="lovia",
         instructions="You are a friendly assistant. Keep replies short.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         tools=[add],
     )
 

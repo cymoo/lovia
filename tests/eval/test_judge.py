@@ -39,6 +39,20 @@ async def test_judge_passes_at_threshold() -> None:
     assert r.name == "llm_judge"
 
 
+def test_judge_without_model_or_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No silent vendor default: model= or $LOVIA_EVAL_JUDGE_MODEL is required.
+    from lovia import UserError
+
+    monkeypatch.delenv("LOVIA_EVAL_JUDGE_MODEL", raising=False)
+    with pytest.raises(UserError, match="no model configured"):
+        llm_judge("Any rubric.")
+
+
+def test_judge_reads_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_EVAL_JUDGE_MODEL", "openai:gpt-5.4")
+    llm_judge("Any rubric.")  # builds without raising
+
+
 async def test_judge_fails_below_threshold() -> None:
     judge = llm_judge(
         "Answer names the correct capital.",

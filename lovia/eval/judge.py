@@ -13,6 +13,7 @@ from typing import cast
 from pydantic import BaseModel, Field
 
 from ..agent import Agent
+from ..exceptions import UserError
 from ..parts import text_of
 from ..providers import ModelSettings, Provider
 from ..runner import Runner
@@ -49,17 +50,21 @@ def llm_judge(
 
     Passes when the judge's score reaches ``threshold``. ``model`` accepts a
     ``"vendor:model"`` string or a :class:`~lovia.Provider` instance (a
-    scripted provider makes the judge deterministic in tests); it defaults to
-    ``$LOVIA_EVAL_JUDGE_MODEL``. Each evaluation is one model call — judge
-    cost scales with ``samples`` × number of judge checks.
+    scripted provider makes the judge deterministic in tests); when omitted,
+    ``$LOVIA_EVAL_JUDGE_MODEL`` is used, and if neither is set a
+    :class:`UserError` is raised — grading quality depends on the judge
+    model, so lovia never picks one silently. Each evaluation is one model
+    call — judge cost scales with ``samples`` × number of judge checks.
     """
     if not 0.0 <= threshold <= 1.0:
         raise ValueError("llm_judge threshold must be within 0..1")
-    resolved: str | Provider = (
-        model
-        if model is not None
-        else os.getenv("LOVIA_EVAL_JUDGE_MODEL", "openai:gpt-5.4")
-    )
+    resolved = model if model is not None else os.getenv("LOVIA_EVAL_JUDGE_MODEL")
+    if not resolved:
+        raise UserError(
+            "llm_judge has no model configured",
+            hint='pass llm_judge(..., model="vendor:model") '
+            "or set LOVIA_EVAL_JUDGE_MODEL",
+        )
     judge: Agent[None] = Agent(
         name="lovia-eval-judge",
         instructions=_INSTRUCTIONS,

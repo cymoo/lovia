@@ -17,6 +17,13 @@ from lovia import Agent, GuardrailTripped, Runner
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 async def block_pii(messages: list[Any], ctx: Any) -> str | None:
     """Refuse to process anything that smells like an SSN."""
@@ -41,7 +48,7 @@ async def main() -> None:
             "Answer questions concisely. Always include a '[source]' tag at "
             "the end of every factual answer."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         input_guardrails=[block_pii],
         output_guardrails=[require_citation],
     )

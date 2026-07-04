@@ -22,7 +22,9 @@ export const store = {
   reasoningStart: 0,
   reasoningEnd: 0,
   todoNode: null,
-  todoCollapsed: false,
+  // On phones the panel is bottom-anchored and would cover the conversation
+  // (and approval buttons) — start it collapsed there; the toggle still works.
+  todoCollapsed: window.matchMedia("(max-width: 720px)").matches,
   todos: [],
   lastMessage: null,
   // Set when the current run created a brand-new session whose title is being

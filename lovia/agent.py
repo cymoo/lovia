@@ -81,7 +81,7 @@ class Agent(Generic[TContext]):
             ``ctx.deps``) and returns one (sync or async). Additional dynamic
             fragments can be registered with the :meth:`instruction` decorator
             and appended at render time.
-        model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.4"``)
+        model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.5"``)
             or a pre-built :class:`Provider` instance. Required before the
             agent can run — there is deliberately no default vendor, so an
             agent left unconfigured raises :class:`UserError` when its
@@ -170,7 +170,7 @@ class Agent(Generic[TContext]):
         if self.model is None:
             raise UserError(
                 f"Agent {self.name!r} has no model configured",
-                hint='pass model="vendor:model" (e.g. "openai:gpt-5.4") '
+                hint='pass model="vendor:model" (e.g. "openai:gpt-5.5") '
                 "or a Provider instance",
             )
         models: list[str | Provider]

@@ -63,7 +63,7 @@ def _live_model() -> str:
         pytest.skip("opt-in: set LOVIA_LIVE_TESTS=1 to run live provider tests")
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY is not configured")
-    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.4")
+    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.5")
 
 
 def _agent(model_name: str, instructions: str, **kw) -> Agent:

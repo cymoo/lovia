@@ -43,6 +43,13 @@ from lovia.stores import InMemorySession
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 # A toy in-memory long-term memory so the example stays self-contained.
 class _DictMemory:
@@ -74,7 +81,7 @@ async def main() -> None:
     agent = Agent(
         name="companion",
         instructions="You are a helpful, concise companion.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         # recall_tool_result is provided automatically by the Compaction policy.
         hooks=hooks,
     )

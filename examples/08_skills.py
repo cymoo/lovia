@@ -30,6 +30,13 @@ from lovia.workspace import Workspace
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 SKILLS_DIR = Path(__file__).parent / "skills"
 
 async def main() -> None:
@@ -37,7 +44,7 @@ async def main() -> None:
     agent = Agent(
         name="SupportBot",
         instructions= "You are a customer support agent.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         workspace=Workspace.local('.', mode="trusted"),
         plugins=[Skills(SKILLS_DIR)],
     )

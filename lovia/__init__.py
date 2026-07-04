@@ -12,7 +12,7 @@ Typical use::
     agent = Agent(
         name="calc",
         instructions="You are a helpful calculator.",
-        model="openai:gpt-5.4",
+        model="openai:gpt-5.5",
         tools=[add],
     )
 

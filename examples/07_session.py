@@ -17,13 +17,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 async def main() -> None:
     session = SQLiteSession(Path("/tmp/lovia_demo.db"))
     agent = Agent(
         name="Companion",
         instructions="You remember the user across turns.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
     )
 
     r1 = await Runner.run(agent, "Hi, I'm Mei.", session=session, session_id="user-mei")

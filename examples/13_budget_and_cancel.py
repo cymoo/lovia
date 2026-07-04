@@ -28,6 +28,16 @@ from lovia import (
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
+# Optional second model demonstrating the provider fallback chain.
+FALLBACK_MODEL = os.environ.get("LOVIA_FALLBACK_MODEL")
+
 
 @tool
 async def slow_search(query: str) -> str:
@@ -41,12 +51,9 @@ async def main() -> None:
         name="resilient",
         instructions="Answer concisely.",
         # ``model`` accepts a list of providers; the runner falls through on
-        # repeated provider errors. Here we just use one DeepSeek model, but
-        # you could add a second model name as a backup.
-        model=[
-            os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
-            os.getenv("OPENAI_FALLBACK_MODEL", "deepseek-chat"),
-        ],
+        # repeated provider errors. Set LOVIA_FALLBACK_MODEL to see the chain
+        # in action; without it the agent runs on the primary model alone.
+        model=[MODEL, FALLBACK_MODEL] if FALLBACK_MODEL else MODEL,
         tools=[slow_search],
     )
 

@@ -62,7 +62,7 @@ def test_truncate_repr_clips_before_sanitizing() -> None:
 
 def test_agent_model_label_string_model() -> None:
     assert (
-        agent_model_label(Agent(name="a", model="openai:gpt-5.4")) == "openai:gpt-5.4"
+        agent_model_label(Agent(name="a", model="openai:gpt-5.5")) == "openai:gpt-5.5"
     )
 
 
@@ -79,9 +79,9 @@ def test_agent_model_label_list_of_providers() -> None:
 
 def test_agent_model_label_list_of_spec_strings_is_unquoted() -> None:
     # String specs in a fallback list are labels already; they must not go
-    # through repr() and come out quoted ("'openai:gpt-5.4'").
-    agent = Agent(name="a", model=["openai:gpt-5.4", "anthropic:claude"])
-    assert agent_model_label(agent) == "openai:gpt-5.4,anthropic:claude"
+    # through repr() and come out quoted ("'openai:gpt-5.5'").
+    agent = Agent(name="a", model=["openai:gpt-5.5", "anthropic:claude"])
+    assert agent_model_label(agent) == "openai:gpt-5.5,anthropic:claude"
 
 
 def test_agent_model_label_single_provider_prefers_model_then_name() -> None:

@@ -22,6 +22,13 @@ from lovia.stores.checkpointer import SQLiteCheckpointer
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 @tool
 async def lookup(topic: str) -> str:
@@ -34,7 +41,7 @@ async def main() -> None:
     agent = Agent(
         name="researcher",
         instructions="Answer briefly using the lookup tool when helpful.",
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         tools=[lookup],
     )
 

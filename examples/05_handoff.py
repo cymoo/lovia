@@ -15,7 +15,12 @@ from lovia import Agent, Runner
 from dotenv import load_dotenv
 
 load_dotenv()
-MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4")
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
 
 billing = Agent(
     name="Billing",

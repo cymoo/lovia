@@ -9,7 +9,7 @@ module:attribute`` at your own ``Agent`` to serve that instead.
 Examples::
 
     python -m lovia.web                           # default agent, ./skills, cwd workspace
-    python -m lovia.web --port 9000 --model openai:gpt-5.4
+    python -m lovia.web --port 9000 --model openai:gpt-5.5
     python -m lovia.web --skills-dir ./skills --skills-dir ./team-skills
     python -m lovia.web --memory-dir ./mem        # persist memory under ./mem
     python -m lovia.web --no-memory               # disable long-term memory
@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--model",
-        help="model id, e.g. openai:gpt-5.4 (env LOVIA_MODEL, then "
+        help="model id, e.g. openai:gpt-5.5 (env LOVIA_MODEL, then "
         "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL)",
     )
     p.add_argument(
@@ -268,7 +268,7 @@ def resolve_model(cli_model: str | None) -> str:
     if not model:
         raise CliError(
             "no model configured.",
-            hint="pass --model (e.g. openai:gpt-5.4) or set LOVIA_MODEL / "
+            hint="pass --model (e.g. openai:gpt-5.5) or set LOVIA_MODEL / "
             "OPENAI_DEFAULT_MODEL.",
         )
     return model

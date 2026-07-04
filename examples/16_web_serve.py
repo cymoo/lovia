@@ -25,6 +25,13 @@ from lovia.web import serve
 
 load_dotenv()
 
+MODEL = os.environ.get("LOVIA_MODEL")
+if not MODEL:
+    raise SystemExit(
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
+        'or "anthropic:claude-4-8-opus"'
+    )
+
 
 @tool(needs_approval=True)
 async def send_email(to: str, subject: str, body: str) -> str:
@@ -41,7 +48,7 @@ def main() -> None:
             "You are a friendly assistant. Use tools when helpful. "
             "Keep replies short and conversational. Ask for clarification if the question is ambiguous."
         ),
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.4"),
+        model=MODEL,
         tools=[send_email, duckduckgo_search()],
         plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),

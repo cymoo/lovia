@@ -996,7 +996,7 @@ and a trusted workspace on the current directory — and serves the chat UI.
 
 ```bash
 python -m lovia.web                                    # zero-config
-python -m lovia.web --port 9000 --model openai:gpt-5.4
+python -m lovia.web --port 9000 --model deepseek-v4-pro
 python -m lovia.web --skills-dir ./skills --workspace-mode readonly
 python -m lovia.web --memory-dir ./mem                 # persist memory under ./mem
 python -m lovia.web --app myagents:assistant           # serve your own Agent

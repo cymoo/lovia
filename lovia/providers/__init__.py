@@ -2,7 +2,7 @@
 
 Importing :func:`provider_from_string` lets users write::
 
-    Agent(model="openai:gpt-5.4", ...)
+    Agent(model="openai:gpt-5.5", ...)
     Agent(model="anthropic:claude-sonnet-4-5", ...)
 
 while still allowing them to pass a :class:`Provider` instance directly.

@@ -66,12 +66,13 @@ async def main() -> None:
 
     @hooks.on(events.ContextCompacted)
     async def _record(ev: events.ContextCompacted, ctx: RunContext) -> None:
+        notice = ev.notice  # the JSON-safe summary of what compaction did
         print(
-            f"[compacted] reason={ev.reason} "
-            f"tokens={ev.metadata.get('tokens_before')}→{ev.metadata.get('tokens_after')}"
+            f"[compacted] reason={notice.reason} "
+            f"tokens={notice.tokens_before}→{notice.tokens_after}"
         )
-        if ev.summary:
-            await long_term.add(ev.summary, metadata={"session_id": ev.session_id})
+        if notice.summary:
+            await long_term.add(notice.summary, metadata={"session_id": ev.session_id})
 
     agent = Agent(
         name="companion",

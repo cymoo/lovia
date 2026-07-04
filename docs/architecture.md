@@ -14,7 +14,7 @@ lovia/
   runtime/          # *** The real orchestration lives here ***
     loop.py         #   RunLoop — the only module with mutable state
     model_turn.py   #   Calls the provider, assembles deltas → AssistantTurn
-    tool_calls.py   #   Dispatches tool calls, handoff, approval, final_output
+    tool_calls.py   #   Tool-call preflight (gates/approval) + execute (parallel-capable)
     run_state.py    #   RunState (mutable per-run) + ActiveAgent (per-agent derived state)
     checkpoint.py   #   CheckpointWriter
     result.py       #   RunHandle (async iterator + awaitable) and RunResult
@@ -105,7 +105,13 @@ Provider registration supports the `lovia.providers` entry-point group for third
 
 ## Tool merging
 
-Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins (which now include MCP, skills, and todos), `agent.workspace`, handoffs, and the synthetic `final_output` tool (when structured output falls back to tool mode).
+Tools from several sources are merged in `RunLoop._collect_tools()` with name-conflict detection: `agent.tools`, plugins (which now include MCP, skills, and todos), `agent.workspace`, handoffs, and context-policy tools such as `recall_tool_result` (added last; shadowed silently by an explicit tool of the same name). Structured output never contributes a tool — the non-native fallback lives in the system prompt (`output.py:format_output_instructions`).
+
+## Parallel tool execution
+
+One turn's tool calls run **concurrently by default**. `RunLoop._tool_phase` splits each call in two (`runtime/tool_calls.py`): `preflight()` — cancel/budget checks, tool lookup, handoff dedup, argument parsing, and the approval flow — runs serially in request order on the loop's generator body (so approval backpressure and budget determinism are exactly the serial semantics), while ready calls execute in background tasks (`ToolCallProcessor.execute()`) whose events funnel through one `asyncio.Queue` back onto that body. That drain point is the single place events reach hooks and the stream consumer and checkpoints are saved — hook ordering and the per-result durability cadence survive unchanged. Results append to the transcript in completion order, which is safe because every consumer pairs calls to results by `call_id`, never by position.
+
+`Tool.parallel=False` (`@tool(parallel=...)`) opts a tool out: it becomes an **execution barrier** — in-flight calls finish, the tool runs alone, then dispatching resumes. Handoff tools are always barriers (whatever their flag), which keeps first-handoff-wins race-free; the built-in workspace mutators (`write_file`, `edit_file`, `shell`) default to `parallel=False` so filesystem/process side effects never race within a turn. A `BudgetExceeded` from preflight stops dispatching but drains in-flight calls to completion (the `RunBudget` contract); `RunCancelled` and checkpoint-store failures cancel the in-flight siblings promptly — their dangling calls are re-executed by a resume, exactly like a serial abort's not-yet-run calls.
 
 ## Workspace permission model
 
@@ -128,7 +134,7 @@ A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled
 Handoffs use a **sentinel pattern** across three modules. When a handoff tool is invoked (`transfer_to_<name>`):
 
 1. `handoff.py:build_handoff_tool()` — the tool's invoke returns a `_HandoffSignal(handoff=...)` dataclass (carrying the per-call `reason`) instead of a normal result.
-2. `runtime/tool_calls.py:ToolCallProcessor.process()` — detects `_HandoffSignal` via `isinstance()`, sets `state.pending_handoff`, and writes a text result to the transcript.
+2. `runtime/tool_calls.py:ToolCallProcessor.execute()` — detects `_HandoffSignal` via `isinstance()`, sets `state.pending_handoff`, and writes a text result to the transcript. Handoff tools always execute as **barriers** (never concurrently with other calls of the turn), which is what keeps "the first handoff of a turn wins" race-free under parallel tool execution.
 3. `runtime/loop.py:RunLoop._apply_handoff()` — after the tool calls are processed, the loop checks `state.pending_handoff`; if set, it resolves a fresh `ActiveAgent` for the target via `_resolve_active()` (its own providers, tools, structured output, workspace, and plugin contributions) and swaps it in atomically with `RunState.activate()`, then rewrites the leading system message via `_reset_transcript_for_handoff()`.
 
 This keeps the runner's main loop simple: handoff is just another tool result, flagged with a sentinel type. A handoff swaps only the leading system message for the target agent's and carries the conversation body across intact — the new agent sees the full prior context, tool calls included (providers replay calls for tools the new agent lacks fine, as long as each call keeps its paired result). The run-level `extra_instructions` addendum is re-applied to every agent reached by a handoff.

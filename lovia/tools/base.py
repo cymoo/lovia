@@ -6,7 +6,7 @@ only thing that invokes it, so the surface area stays small:
 * ``name``, ``description``, ``parameters`` form the JSON Schema the model sees.
 * ``invoke`` runs the underlying callable with already-validated kwargs.
 * Simple policy kwargs (``needs_approval``, ``retries``, ``timeout``,
-  ``result_renderer``) cover the common cases.
+  ``result_renderer``, ``parallel``) cover the common cases.
 * Advanced callers can pass composable ``policies``.
 """
 
@@ -119,6 +119,16 @@ class Tool:
     result_renderer: ToolResultRenderer | None = None
     # Advanced per-attempt policy chain. Policies compose in list order.
     policies: tuple[ToolPolicy, ...] = ()
+    # Whether this call may execute concurrently with other tool calls of the
+    # same assistant turn. ``False`` makes the call an execution barrier: the
+    # runner first waits for every in-flight call of the turn to finish, then
+    # runs this tool alone, then resumes spawning. Set it on tools with
+    # non-reentrant side effects (shared mutable deps, ordered writes). Note
+    # that a sync tool runs on a thread, and cancelling its call cannot
+    # interrupt the thread. Distinct from ``ModelSettings.parallel_tool_calls``,
+    # the request-side knob for whether the model may *emit* several calls in
+    # one turn.
+    parallel: bool = True
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected
     # without firing its on_handoff side effects.
@@ -367,6 +377,7 @@ def tool(
     max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
+    parallel: bool = True,
     strict: bool = False,
 ) -> Tool: ...
 
@@ -383,6 +394,7 @@ def tool(
     max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
+    parallel: bool = True,
     strict: bool = False,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
 
@@ -398,6 +410,7 @@ def tool(
     max_output_chars: int | None = None,
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
+    parallel: bool = True,
     strict: bool = False,
 ) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Decorate a function to turn it into a :class:`Tool`.
@@ -421,6 +434,13 @@ def tool(
     enter the transcript and their raw return value is dropped, bounding
     memory and storage for tools that can return huge payloads. ``None``
     falls back to the agent's ``max_tool_output_chars`` (default: unlimited).
+
+    ``parallel=False`` opts the tool out of concurrent execution: calls of
+    one assistant turn normally run in parallel, but this tool becomes an
+    execution barrier — every in-flight call finishes first, the tool runs
+    alone, then the rest of the turn's calls proceed. Use it for tools with
+    non-reentrant side effects. Cancelling a batch cannot interrupt a sync
+    tool's thread (it finishes in the background).
     """
 
     def make(func: Callable[..., Any]) -> Tool:
@@ -472,6 +492,7 @@ def tool(
             max_output_chars=max_output_chars,
             result_renderer=result_renderer,
             policies=tuple(policies),
+            parallel=parallel,
         )
 
     if fn is None:

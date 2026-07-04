@@ -150,6 +150,11 @@ class ToolCallStarted(ToolEvent):
     Only fires for calls that reach execution. Calls rejected beforehand —
     unknown tool, malformed arguments, or denied approval — skip straight to
     :class:`ToolCallCompleted` with ``is_error=True`` and never emit this event.
+
+    Tool calls of one turn execute concurrently (unless a tool opts out via
+    ``Tool.parallel=False``), so events of *different* calls may interleave;
+    correlate by ``ev.call.id``. For any single call, ``ToolCallStarted``
+    still precedes its own ``ToolCallCompleted``.
     """
 
     call: ToolCall
@@ -163,6 +168,9 @@ class ToolCallCompleted(ToolEvent):
     rejected before execution (see above), so consumers must not assume the two
     pair up. ``is_error`` plus ``result`` distinguish the outcomes (e.g. the
     "is not available" / "Invalid JSON" / "was not approved" messages).
+    Completions arrive in completion order, not request order — with parallel
+    execution a later-requested call can finish first (see
+    :class:`ToolCallStarted` on interleaving).
     """
 
     call: ToolCall
@@ -193,6 +201,10 @@ class ApprovalRequired(ToolEvent):
 
     If none of those paths resolve the request, the runner defaults to
     **deny** so the run cannot hang.
+
+    While the stream is suspended at this event, other tool calls of the same
+    turn may still be executing; their events are delivered after the
+    consumer resumes the stream.
     """
 
     call: ToolCall
@@ -223,6 +235,11 @@ class ApprovalRequired(ToolEvent):
 @dataclass
 class ErrorOccurred(ErrorEvent):
     error: BaseException
+    #: The tool call being processed when the error occurred (tool failures,
+    #: render failures, approval predicate/handler errors); ``None`` for
+    #: run-level errors. Needed to attribute an error once one turn's tool
+    #: events interleave across concurrently-executing calls.
+    call: ToolCall | None = None
 
 
 @dataclass

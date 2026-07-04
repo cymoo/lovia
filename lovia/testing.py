@@ -116,6 +116,26 @@ def call(
     )
 
 
+def batch(
+    *specs: "tuple[str, dict[str, Any]] | tuple[str, dict[str, Any], str]",
+) -> AssistantTurn:
+    """A scripted turn that requests several tool calls at once.
+
+    Each spec is ``(name, args)`` or ``(name, args, call_id)``; ids default to
+    ``call_<index>_<name>`` so duplicate tool names stay distinct.
+    """
+    tool_calls = []
+    for idx, spec in enumerate(specs):
+        name, args = spec[0], spec[1]
+        call_id = spec[2] if len(spec) == 3 else f"call_{idx}_{name}"
+        tool_calls.append(ToolCall(id=call_id, name=name, arguments=json.dumps(args)))
+    return AssistantTurn(
+        content=None,
+        tool_calls=tool_calls,
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+
+
 def _copy(m: Message) -> Message:
     return Message(
         role=m.role,
@@ -126,4 +146,4 @@ def _copy(m: Message) -> Message:
     )
 
 
-__all__ = ["ScriptedProvider", "call", "text"]
+__all__ = ["ScriptedProvider", "batch", "call", "text"]

@@ -105,6 +105,13 @@ def build_handoff_tool(handoff: Handoff) -> Tool:
         description=description,
         parameters=parameters,
         invoke=invoke,
+        # A handoff is inherently exclusive: running as an execution barrier
+        # (never concurrently with other calls) is what guarantees the
+        # first-handoff-wins dedup — ``state.pending_handoff`` is fully set
+        # before any later call of the turn is even preflighted. The runner
+        # also treats ``_handoff`` itself as a barrier, so this flag cannot
+        # be overridden into a race.
+        parallel=False,
         # Lets the runner reject a second handoff in the same turn *before*
         # invoking it (and firing its on_handoff side effects) — the first
         # handoff of a turn wins.

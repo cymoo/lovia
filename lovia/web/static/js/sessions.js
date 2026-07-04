@@ -5,6 +5,7 @@ import { promptDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
+import { formatDateTime, formatTimeSmart } from './util.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
@@ -75,7 +76,9 @@ function renderSessions() {
     main.title = s.title || s.id;
     main.innerHTML = `<div class="session-title"></div><div class="session-meta"></div>`;
     main.querySelector('.session-title').textContent = s.title || 'New chat';
-    main.querySelector('.session-meta').textContent = formatTime(s.updated_at);
+    const meta = main.querySelector('.session-meta');
+    meta.textContent = formatTimeSmart(s.updated_at);
+    meta.title = formatDateTime(s.updated_at);
     main.addEventListener('click', () => switchSession(s.id));
 
     // At-rest pin marker (hidden on hover, where the menu takes its place).
@@ -317,18 +320,6 @@ export function initSearch() {
     clearTimeout(_searchTimer);
     _searchTimer = setTimeout(() => loadSessions(sessionSearch.value.trim()), 250);
   });
-}
-
-// ---- Utility -------------------------------------------------------------
-function formatTime(ts) {
-  if (!ts) return '';
-  // Accept seconds or ms
-  const ms = ts > 1e12 ? ts : ts * 1000;
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return String(ts);
-  // ISO format without timezone: YYYY-MM-DD HH:MM
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ---- Init ----------------------------------------------------------------

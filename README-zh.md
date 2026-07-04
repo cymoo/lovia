@@ -413,6 +413,10 @@ result = await Runner.run(
 )
 ```
 
+两个 SQLite store 都接受 `wal=True`（默认关闭），开启 WAL 日志模式和 busy
+timeout——当数据库文件被多个写入方共享时使用，例如多个 store 共用一个文件、
+或多进程部署的 web 服务。
+
 这两类 store 都是 **append-only**：`Session` 累积已经结束的 run（每个 run
 一个 segment，可以是成功完成的，也可以是调用方主动 finalize 的）；checkpoint
 保存的是仍可 resume 的那次 run。因此，完整 transcript 等于 `session.load()`

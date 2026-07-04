@@ -167,23 +167,27 @@ class ChatStore:
         *,
         meta_path: str | Path,
         checkpointer: Checkpointer | None = None,
+        wal: bool = False,
     ) -> None:
         self.session = session
-        self._meta = SQLiteStore(str(meta_path), _META_SCHEMA)
+        # ``wal`` covers only the metadata store owned here; a caller-supplied
+        # Session/Checkpointer configures its own (see ChatStore.sqlite, which
+        # sets all three consistently).
+        self._meta = SQLiteStore(str(meta_path), _META_SCHEMA, wal=wal)
         self.checkpointer: Checkpointer | None = checkpointer
         self._migrate()
 
     def _migrate(self) -> None:
         """Apply schema additions made after the initial release (idempotent).
 
-        ``SQLiteStore`` re-runs ``CREATE TABLE IF NOT EXISTS`` on every connect,
-        which never adds a column to a table that already exists — so a column
-        added later needs a guarded ``ALTER TABLE`` for pre-existing databases.
-        The ``pinned`` index lives here (not in ``_META_SCHEMA``) because that
-        script also runs against legacy DBs before this migration adds the column.
+        ``SQLiteStore`` ensures the base schema on first connect, but ``CREATE
+        TABLE IF NOT EXISTS`` never adds a column to a table that already
+        exists — so a column added later needs a guarded ``ALTER TABLE`` for
+        pre-existing databases. The ``pinned`` index lives here (not in
+        ``_META_SCHEMA``) because that script also runs against legacy DBs
+        before this migration adds the column.
         """
-        conn = self._meta._connect()
-        try:
+        with self._meta._tx() as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
             if "pinned" not in cols:
                 try:
@@ -201,21 +205,14 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
-            conn.commit()
-        finally:
-            self._meta._release(conn)
 
     # ---- low-level helpers ----------------------------------------------
-    # One connect/commit/release dance, shared by every metadata method.
+    # One transaction/read dance, shared by every metadata method.
 
     async def _write(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         def _impl() -> None:
-            conn = self._meta._connect()
-            try:
+            with self._meta._tx() as conn:
                 conn.execute(sql, params)
-                conn.commit()
-            finally:
-                self._meta._release(conn)
 
         await self._meta._run(_impl)
 
@@ -223,12 +220,9 @@ class ChatStore:
         self, sql: str, params: tuple[Any, ...], map_row: Callable[[Any], _T]
     ) -> _T | None:
         def _impl() -> _T | None:
-            conn = self._meta._connect()
-            try:
+            with self._meta._conn() as conn:
                 row = conn.execute(sql, params).fetchone()
                 return map_row(row) if row is not None else None
-            finally:
-                self._meta._release(conn)
 
         return await self._meta._run(_impl)
 
@@ -236,24 +230,27 @@ class ChatStore:
         self, sql: str, params: tuple[Any, ...], map_row: Callable[[Any], _T]
     ) -> list[_T]:
         def _impl() -> list[_T]:
-            conn = self._meta._connect()
-            try:
+            with self._meta._conn() as conn:
                 rows = conn.execute(sql, params).fetchall()
                 return [map_row(r) for r in rows]
-            finally:
-                self._meta._release(conn)
 
         return await self._meta._run(_impl)
 
     # ---- factories ------------------------------------------------------
 
     @classmethod
-    def sqlite(cls, path: str | Path) -> "ChatStore":
-        """Persistent store: transcripts, metadata, and checkpoints in one file."""
+    def sqlite(cls, path: str | Path, *, wal: bool = False) -> "ChatStore":
+        """Persistent store: transcripts, metadata, and checkpoints in one file.
+
+        Three stores share that file; pass ``wal=True`` when running multiple
+        workers (or to let readers proceed during writes) — it enables WAL
+        journal mode and a busy timeout on all three.
+        """
         return cls(
-            SQLiteSession(path),
+            SQLiteSession(path, wal=wal),
             meta_path=path,
-            checkpointer=SQLiteCheckpointer(path),
+            checkpointer=SQLiteCheckpointer(path, wal=wal),
+            wal=wal,
         )
 
     @classmethod

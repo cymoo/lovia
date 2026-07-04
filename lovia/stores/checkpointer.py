@@ -44,6 +44,10 @@ class InMemoryCheckpointer:
     mutating as the run proceeds. ``load`` hands out copies for the same
     reason: a caller mutating the returned snapshot must not corrupt the
     store.
+
+    No lock: the method bodies contain no ``await``, so each call is atomic
+    on the event loop as-is. (:class:`~lovia.stores.session.InMemorySession`
+    carries one only as belt-and-braces should an await ever creep in.)
     """
 
     def __init__(self) -> None:
@@ -85,22 +89,39 @@ CREATE TABLE IF NOT EXISTS snapshot_turns (
 
 
 class SQLiteCheckpointer(SQLiteStore):
-    """Persist a run to SQLite as append-only turn rows plus one head row."""
+    """Persist a run to SQLite as append-only turn rows plus one head row.
 
-    def __init__(self, path: str | Path) -> None:
-        super().__init__(path, _CHECKPOINT_SCHEMA)
+    ``wal=True`` enables WAL journal mode + a busy timeout for stores whose
+    file is shared with other writers (another process, or the session/meta
+    stores of a web deployment); see :class:`~lovia.stores._sqlite.SQLiteStore`.
+    """
+
+    def __init__(self, path: str | Path, *, wal: bool = False) -> None:
+        super().__init__(path, _CHECKPOINT_SCHEMA, wal=wal)
 
     async def append(
         self, run_id: str, entries: list[TranscriptEntry], head: RunHead
     ) -> None:
-        await self._run(lambda: self._append_sync(run_id, entries, head))
+        # Serialize on the event loop, not in the worker thread: ``head``
+        # aliases the run's live ``context_state`` and the entries are shared
+        # objects, so snapshotting them here (atomically w.r.t. other tasks)
+        # keeps the thread free of any view of mutable run state.
+        entries_json = (
+            json.dumps([entry_to_dict(e) for e in entries], ensure_ascii=False)
+            if entries
+            else None
+        )
+        head_json = head.to_json()
+        updated_at = head.updated_at
+        await self._run(
+            lambda: self._append_sync(run_id, entries_json, head_json, updated_at)
+        )
 
     def _append_sync(
-        self, run_id: str, entries: list[TranscriptEntry], head: RunHead
+        self, run_id: str, entries_json: str | None, head_json: str, updated_at: float
     ) -> None:
-        conn = self._connect()
-        try:
-            if entries:
+        with self._tx() as conn:
+            if entries_json is not None:
                 next_seq = conn.execute(
                     "SELECT COALESCE(MAX(seq), -1) + 1 FROM snapshot_turns "
                     "WHERE run_id = ?",
@@ -109,23 +130,19 @@ class SQLiteCheckpointer(SQLiteStore):
                 conn.execute(
                     "INSERT INTO snapshot_turns (run_id, seq, entries_json) "
                     "VALUES (?, ?, ?)",
-                    (run_id, next_seq, json.dumps([entry_to_dict(e) for e in entries])),
+                    (run_id, next_seq, entries_json),
                 )
             conn.execute(
                 "INSERT OR REPLACE INTO snapshot_heads (run_id, head_json, updated_at) "
                 "VALUES (?, ?, ?)",
-                (run_id, head.to_json(), head.updated_at),
+                (run_id, head_json, updated_at),
             )
-            conn.commit()
-        finally:
-            self._release(conn)
 
     async def load(self, run_id: str) -> RunSnapshot | None:
         return await self._run(lambda: self._load_sync(run_id))
 
     def _load_sync(self, run_id: str) -> RunSnapshot | None:
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             head_row = conn.execute(
                 "SELECT head_json FROM snapshot_heads WHERE run_id = ?", (run_id,)
             ).fetchone()
@@ -141,17 +158,11 @@ class SQLiteCheckpointer(SQLiteStore):
             for r in rows:
                 entries.extend(entry_from_dict(d) for d in json.loads(r[0]))
             return RunSnapshot.from_parts(run_id, entries, head)
-        finally:
-            self._release(conn)
 
     async def delete(self, run_id: str) -> None:
         await self._run(lambda: self._delete_sync(run_id))
 
     def _delete_sync(self, run_id: str) -> None:
-        conn = self._connect()
-        try:
+        with self._tx() as conn:
             conn.execute("DELETE FROM snapshot_turns WHERE run_id = ?", (run_id,))
             conn.execute("DELETE FROM snapshot_heads WHERE run_id = ?", (run_id,))
-            conn.commit()
-        finally:
-            self._release(conn)

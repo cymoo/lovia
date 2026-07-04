@@ -103,19 +103,6 @@ def test_list_agents_single() -> None:
     assert data == [{"name": "writer", "instructions": "be helpful", "tools": []}]
 
 
-def test_markdown_endpoint_renders_and_escapes_html() -> None:
-    c = TestClient(_app(_make_agent([text("hi")])))
-    res = c.post(
-        "/api/markdown",
-        json={"text": "**bold**\n\n<script>alert(1)</script>"},
-    )
-    assert res.status_code == 200
-    html = res.json()["html"]
-    assert "<strong>bold</strong>" in html
-    assert "<script>" not in html
-    assert "&lt;script&gt;" in html
-
-
 def test_list_agents_multi_and_pick() -> None:
     a = _make_agent([text("a")])
     b = _make_agent([text("b")])
@@ -829,17 +816,20 @@ async def test_inject_mid_run_emits_user_injected_event() -> None:
 
         consumer = asyncio.create_task(consume())
 
-        # Wait until the run is live (mailbox registered), then inject.
-        for _ in range(100):
-            r = await ac.post(
-                "/api/chat/inject", json={"session_id": "s1", "message": "meanwhile"}
-            )
-            if r.json().get("accepted"):
+        # Wait until turn 1 is actually underway (the model has been called) so
+        # the injection is mid-run — an earlier inject would be drained at turn
+        # 1's start and land before the tool call.
+        for _ in range(250):
+            if provider.calls:
                 break
             await asyncio.sleep(0.02)
         else:
             consumer.cancel()
-            raise AssertionError("inject was never accepted")
+            raise AssertionError("run never reached turn 1")
+        r = await ac.post(
+            "/api/chat/inject", json={"session_id": "s1", "message": "meanwhile"}
+        )
+        assert r.json().get("accepted")
 
         release.set()  # let the tool finish → turn 2 drains the injected message
         await asyncio.wait_for(consumer, timeout=5)
@@ -1015,3 +1005,32 @@ async def test_uninject_withdraws_a_queued_message() -> None:
     assert "user_injected" not in [e[0] for e in evs]
     # The model never saw the withdrawn message.
     assert all("oops" not in str(m.content) for msgs in provider.calls for m in msgs)
+
+
+# ----------------------------------------------------------- phase-1 fixes -
+
+
+def test_chat_rejects_empty_message() -> None:
+    c = TestClient(_app(_make_agent([text("hi")])))
+    assert c.post("/api/chat", json={"message": "   "}).status_code == 422
+    # Stream: an empty message with no live run to attach to is also a 422 —
+    # and must not leave an empty "New chat" row behind.
+    assert c.post("/api/chat/stream", json={"message": ""}).status_code == 422
+    assert c.get("/api/sessions").json() == []
+
+
+def test_coerce_handles_datetime_fields_in_structured_output() -> None:
+    import datetime as dt
+    import json as _json
+
+    from pydantic import BaseModel
+
+    from lovia.web.sse import _coerce
+
+    class Report(BaseModel):
+        title: str
+        due: dt.datetime
+
+    out = _coerce(Report(title="x", due=dt.datetime(2026, 7, 5, 12, 0)))
+    # Must round-trip through json.dumps — the SSE `done` event depends on it.
+    assert _json.loads(_json.dumps(out)) == {"title": "x", "due": "2026-07-05T12:00:00"}

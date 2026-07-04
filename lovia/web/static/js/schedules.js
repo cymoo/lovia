@@ -7,16 +7,8 @@ import { store } from './store.js';
 import { showDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-
-// ---- formatting ----------------------------------------------------------
-function fmtTime(ts) {
-  if (!ts) return '';
-  const ms = ts > 1e12 ? ts : ts * 1000; // accept seconds or millis
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return String(ts);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+import { formatDateTime } from './util.js';
+import { switchSession } from './sessions.js';
 
 function humanizeEvery(expr) {
   const secs = Number(expr);
@@ -29,9 +21,16 @@ function humanizeEvery(expr) {
 function describeTrigger(s) {
   if (s.trigger_kind === 'every') return humanizeEvery(s.trigger_expr);
   if (s.trigger_kind === 'cron') return `cron ${s.trigger_expr}`;
-  if (s.trigger_kind === 'at') return `at ${fmtTime(Number(s.trigger_expr))}`;
+  if (s.trigger_kind === 'at') return `at ${formatDateTime(Number(s.trigger_expr))}`;
   return `${s.trigger_kind} ${s.trigger_expr}`;
 }
+
+// One-line format reminder per trigger kind, shown under the form.
+const TRIGGER_HINTS = {
+  every: 'Interval in seconds — 3600 runs hourly.',
+  cron: 'min hour day month weekday — e.g. "0 9 * * 1-5" = weekdays at 09:00.',
+  at: 'Runs once at the chosen local time.',
+};
 
 // ---- the adaptive trigger-expression input -------------------------------
 // `every` → integer seconds, `cron` → a cron string, `at` → a local datetime
@@ -67,6 +66,17 @@ function exprValue(kind, input) {
   return v;
 }
 
+// The inverse, for editing: epoch-seconds string → datetime-local value.
+function epochToLocalInput(expr) {
+  const d = new Date(Number(expr) * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
 // ---- the dialog ----------------------------------------------------------
 // A one-shot `at` that's no longer active and whose time has passed has already
 // fired (or was missed): it's done, not paused. Resuming it would only re-run a
@@ -79,7 +89,7 @@ function isDone(s) {
   );
 }
 
-function rowEl(s, onChange) {
+function rowEl(s, { onChange, onEdit, onOpenSession }) {
   const done = isDone(s);
   const item = document.createElement('div');
   item.className = 'sched-item' + (s.active ? '' : ' paused');
@@ -93,20 +103,46 @@ function rowEl(s, onChange) {
   const meta = document.createElement('div');
   meta.className = 'sched-item-meta';
   meta.textContent = s.active
-    ? `${describeTrigger(s)} · next ${fmtTime(s.next_fire)}`
+    ? `${describeTrigger(s)} · next ${formatDateTime(s.next_fire)}`
     : `${describeTrigger(s)} · ${done ? 'done' : 'paused'}`;
+  // Answer "where did my scheduled run go?" — jump to the last fire's chat.
+  if (s.last_session_id) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'sched-last-run';
+    link.textContent = 'last run ↗';
+    link.title = 'Open the chat of the most recent run';
+    link.addEventListener('click', () => onOpenSession(s.last_session_id));
+    meta.append(' · ', link);
+  }
   main.append(prompt, meta);
 
   const actions = document.createElement('div');
   actions.className = 'sched-item-actions';
+  const btn = (title, iconName, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.title = title;
+    b.innerHTML = icon(iconName, { size: 14 });
+    b.addEventListener('click', fn);
+    actions.append(b);
+    return b;
+  };
 
-  // A finished one-shot can't meaningfully resume — only offer Delete.
+  btn('Run now', 'zap', async () => {
+    try {
+      await api.runSchedule(s.id);
+      toast('Fired — running in the background');
+    } catch (err) {
+      toast(err.message || 'Couldn’t run schedule', { type: 'error' });
+    } finally {
+      onChange();
+    }
+  });
+
+  // A finished one-shot can't meaningfully resume — no pause/resume for it.
   if (!done) {
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.title = s.active ? 'Pause' : 'Resume';
-    toggle.innerHTML = icon(s.active ? 'pause' : 'play', { size: 14 });
-    toggle.addEventListener('click', async () => {
+    btn(s.active ? 'Pause' : 'Resume', s.active ? 'pause' : 'play', async () => {
       try {
         await api.setScheduleActive(s.id, !s.active);
         onChange();
@@ -114,14 +150,11 @@ function rowEl(s, onChange) {
         toast(err.message || 'Couldn’t update schedule', { type: 'error' });
       }
     });
-    actions.append(toggle);
   }
 
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.title = 'Delete';
-  del.innerHTML = icon('x', { size: 14 });
-  del.addEventListener('click', async () => {
+  btn('Edit', 'pencil', () => onEdit(s));
+
+  btn('Delete', 'x', async () => {
     if (!(await confirmDialog('Delete this schedule?'))) return;
     try {
       await api.deleteSchedule(s.id);
@@ -132,7 +165,6 @@ function rowEl(s, onChange) {
     }
   });
 
-  actions.append(del);
   item.append(main, actions);
   return item;
 }
@@ -155,8 +187,10 @@ export async function openSchedulesDialog() {
           <option value="at">At</option>
         </select>
         <span class="sched-expr-wrap"></span>
+        <button type="button" class="btn btn-ghost btn-sm sched-cancel-edit" hidden>Cancel</button>
         <button type="submit" class="btn btn-primary btn-sm">Add</button>
       </div>
+      <div class="sched-hint"></div>
     </form>
     <div class="sched-list"></div>`;
 
@@ -165,7 +199,11 @@ export async function openSchedulesDialog() {
   const agentSel = panel.querySelector('.sched-agent');
   const kindSel = panel.querySelector('.sched-kind');
   const exprWrap = panel.querySelector('.sched-expr-wrap');
+  const hintEl = panel.querySelector('.sched-hint');
+  const submitBtn = panel.querySelector('.sched-form [type="submit"]');
+  const cancelEditBtn = panel.querySelector('.sched-cancel-edit');
   const listEl = panel.querySelector('.sched-list');
+  let editingId = null; // non-null → the form saves an existing schedule
 
   // Agent picker only when there's a choice to make.
   if (store.agents.length > 1) {
@@ -183,10 +221,38 @@ export async function openSchedulesDialog() {
 
   let exprInput = buildExprInput(kindSel.value);
   exprWrap.appendChild(exprInput);
+  const syncHint = () => { hintEl.textContent = TRIGGER_HINTS[kindSel.value] || ''; };
+  syncHint();
   kindSel.addEventListener('change', () => {
     exprInput = buildExprInput(kindSel.value);
     exprWrap.replaceChildren(exprInput);
+    syncHint();
   });
+
+  function exitEditMode() {
+    editingId = null;
+    input.value = '';
+    submitBtn.textContent = 'Add';
+    cancelEditBtn.hidden = true;
+  }
+
+  // Prefill the form from an existing row; submit then PATCHes it in place.
+  function enterEditMode(s) {
+    editingId = s.id;
+    input.value = s.input;
+    if (store.agents.length > 1 && s.agent) agentSel.value = s.agent;
+    kindSel.value = s.trigger_kind;
+    exprInput = buildExprInput(s.trigger_kind);
+    exprInput.value =
+      s.trigger_kind === 'at' ? epochToLocalInput(s.trigger_expr) : s.trigger_expr;
+    exprWrap.replaceChildren(exprInput);
+    syncHint();
+    submitBtn.textContent = 'Save';
+    cancelEditBtn.hidden = false;
+    input.focus();
+  }
+
+  cancelEditBtn.addEventListener('click', exitEditMode);
 
   async function refresh() {
     try {
@@ -195,7 +261,18 @@ export async function openSchedulesDialog() {
         listEl.innerHTML = '<div class="sched-empty">No schedules yet.</div>';
         return;
       }
-      listEl.replaceChildren(...rows.map((s) => rowEl(s, refresh)));
+      listEl.replaceChildren(
+        ...rows.map((s) =>
+          rowEl(s, {
+            onChange: refresh,
+            onEdit: enterEditMode,
+            onOpenSession: (sid) => {
+              dialog.close();
+              switchSession(sid).catch(() => {});
+            },
+          }),
+        ),
+      );
     } catch (err) {
       listEl.innerHTML = '<div class="sched-empty">Couldn’t load schedules.</div>';
     }
@@ -215,11 +292,16 @@ export async function openSchedulesDialog() {
     const body = { input: message, trigger_kind: kindSel.value, trigger_expr };
     if (store.agents.length > 1) body.agent = agentSel.value;
     try {
-      await api.createSchedule(body);
-      input.value = '';
+      if (editingId) {
+        await api.updateSchedule(editingId, body);
+        exitEditMode();
+      } else {
+        await api.createSchedule(body);
+        input.value = '';
+      }
       await refresh();
     } catch (err) {
-      toast(err.message || 'Couldn’t create schedule', { type: 'error' });
+      toast(err.message || 'Couldn’t save schedule', { type: 'error' });
     }
   });
 

@@ -1,4 +1,4 @@
-"""Agent introspection + markdown rendering routes."""
+"""Agent introspection routes."""
 
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
-from ..markdown import render_markdown
-from ..schemas import AgentInfo, MarkdownRequest, MarkdownResponse
+from ..schemas import AgentInfo
 from .deps import RouterDeps
 
 
@@ -41,9 +40,5 @@ def build_agents_router(deps: RouterDeps) -> APIRouter:
         if agent is None:
             raise HTTPException(status_code=404, detail=f"unknown agent {name!r}")
         return agent_info(name, agent)
-
-    @router.post("/api/markdown", response_model=MarkdownResponse)
-    async def markdown(req: MarkdownRequest) -> MarkdownResponse:
-        return MarkdownResponse(html=render_markdown(req.text))
 
     return router

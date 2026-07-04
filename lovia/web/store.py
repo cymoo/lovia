@@ -324,7 +324,12 @@ class ChatStore:
             ChatMeta.from_row,
         )
 
-    async def list_all(self, *, limit: int = 200) -> list[ChatMeta]:
+    # ``Sequence`` (not ``list[...]``) on the read methods: this method shadows
+    # the ``list`` builtin inside the class body, so a later ``list[ChatMeta]``
+    # annotation would resolve to the method and fail strict mypy. Matches the
+    # schedule reads (``list_schedules``/``due_schedules``) anyway.
+    async def list(self, *, limit: int = 200) -> Sequence[ChatMeta]:
+        """Return chat metadata, pinned first, then most recent activity."""
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
@@ -345,9 +350,15 @@ class ChatStore:
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
-        for m in await self.list_all():
-            await self._drop_checkpoint(m.id)
-            await self.session.clear(m.id)
+        # Read every id directly — ``list`` caps at its limit, which would
+        # leave the transcripts/checkpoints of sessions beyond one page orphaned
+        # while the unconditional row delete below wiped their metadata.
+        ids = await self._read_all(
+            "SELECT id FROM chat_sessions", (), lambda row: row[0]
+        )
+        for session_id in ids:
+            await self._drop_checkpoint(session_id)
+            await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions")
 
     async def _drop_checkpoint(self, session_id: str) -> None:
@@ -358,23 +369,18 @@ class ChatStore:
         if run_id:
             await self.checkpointer.delete(run_id)
 
-    async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
-        """Search sessions whose title or id contains ``query``."""
-        pattern = f"%{query}%"
+    async def search(self, query: str, *, limit: int = 200) -> Sequence[ChatMeta]:
+        """Search sessions whose title or id contains ``query`` (literally —
+        LIKE wildcards in the query are escaped, so "100%" matches "100%")."""
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
-            "WHERE title LIKE ? OR id LIKE ? "
+            "WHERE title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
             (pattern, pattern, limit),
             ChatMeta.from_row,
         )
-
-    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
-        """Return chat metadata ordered by most recent activity.
-
-        Alias of :meth:`list_all`; both names are part of the public surface.
-        """
-        return await self.list_all(limit=limit)
 
     # ---- active run tracking --------------------------------------------
 
@@ -446,6 +452,26 @@ class ChatStore:
             f"SELECT {_SCHED_COLS} FROM schedules WHERE id = ?",
             (schedule_id,),
             ScheduleRow.from_row,
+        )
+
+    async def update_schedule(self, row: ScheduleRow) -> None:
+        """Overwrite every mutable column of the schedule (keyed by ``row.id``)."""
+        await self._write(
+            "UPDATE schedules SET agent = ?, input = ?, session_id = ?, "
+            "trigger_kind = ?, trigger_expr = ?, next_fire = ?, active = ?, "
+            "last_session_id = ?, updated_at = ? WHERE id = ?",
+            (
+                row.agent,
+                row.input,
+                row.session_id,
+                row.trigger_kind,
+                row.trigger_expr,
+                row.next_fire,
+                int(row.active),
+                row.last_session_id,
+                row.updated_at,
+                row.id,
+            ),
         )
 
     async def delete_schedule(self, schedule_id: str) -> bool:

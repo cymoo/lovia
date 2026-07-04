@@ -28,12 +28,6 @@ export const api = {
   listAgents: () => fetch('/api/agents').then(_json),
   getAgent: (name) => fetch(`/api/agents/${encodeURIComponent(name)}`).then(_json),
   info: () => fetch('/api/info').then(_json),
-  renderMarkdown: (text) =>
-    fetch('/api/markdown', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ text }),
-    }).then(_json),
 
   // ---- chat ----
   // Non-streaming turn. `body`: { message, agent?, session_id? }.
@@ -122,12 +116,25 @@ export const api = {
     fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
       _jsonOrDetail,
     ),
+  // Partial update: any subset of { input, agent, session_id, trigger_kind,
+  // trigger_expr, active } — the server revalidates and recomputes next_fire.
+  updateSchedule: (id, body) =>
+    fetch(`/api/schedules/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
   setScheduleActive: (id, active) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ active }),
-    }).then(_json),
+    }).then(_jsonOrDetail),
+  // Fire a schedule immediately; 409 (with detail) when it can't run now.
+  runSchedule: (id) =>
+    fetch(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
+      _jsonOrDetail,
+    ),
 };
 
 // Like `_json`, but raises the server's `{detail}` message (422/404) so the

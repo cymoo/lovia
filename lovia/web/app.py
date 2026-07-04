@@ -61,8 +61,10 @@ def create_app(
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     default_budget_factory: Callable[[], RunBudget] | None = None,
+    approval_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     ui: bool = True,
+    cors_origins: Sequence[str] | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
@@ -88,10 +90,18 @@ def create_app(
     token spend. ``retry`` (a :class:`RetryPolicy`) overrides the agent's own
     provider-retry posture for server-driven turns; ``None`` inherits it.
 
+    ``approval_timeout`` auto-denies a pending tool approval after that many
+    seconds (default ``None``: wait forever). Set it when using scheduled runs
+    with approval-gated tools — a clientless run parked on an approval otherwise
+    occupies one of the ``max_background_runs`` slots until someone opens the
+    chat and decides.
+
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
     JSON + SSE server you drive from your own front-end (see
-    :func:`lovia.web.build_api_router`).
+    :func:`lovia.web.build_api_router`). ``cors_origins`` lists the origins such
+    a front-end is served from (e.g. ``["http://localhost:5173"]``) — omitted,
+    no CORS headers are sent and cross-origin browsers are refused.
 
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines.
@@ -125,6 +135,7 @@ def create_app(
         tracer=tracer,
         max_background_runs=max_background_runs,
         default_budget_factory=default_budget_factory,
+        approval_timeout=approval_timeout,
     )
 
     @asynccontextmanager
@@ -146,6 +157,15 @@ def create_app(
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_origins),
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.include_router(build_api_router(deps))
     if ui:
         app.include_router(
@@ -188,7 +208,9 @@ def serve(
     budget: RunBudget | None = None,
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
+    approval_timeout: float | None = None,
     ui: bool = True,
+    cors_origins: Sequence[str] | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
@@ -220,7 +242,9 @@ def serve(
         budget=budget,
         retry=retry,
         tracer=tracer,
+        approval_timeout=approval_timeout,
         ui=ui,
+        cors_origins=cors_origins,
         empty_title=empty_title,
         empty_description=empty_description,
     )

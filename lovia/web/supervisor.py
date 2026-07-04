@@ -43,7 +43,7 @@ from ..transcript import (
     TranscriptEntry,
     drop_dangling_tool_calls,
 )
-from .api.serialization import view_messages
+from .api.serialization import drop_system_entries, view_messages
 from .schemas import MessageOut
 from .sse import event_to_sse
 
@@ -220,6 +220,10 @@ class RunController:
         self._is_new = is_new
         self._title_message = title_message
         self._user_cancelled = False
+        # Set when the session itself is being deleted: skip the partial-persist
+        # in the finally, or the wind-down would re-create transcript rows for a
+        # chat that no longer exists.
+        self._discard_partial = False
         self.task: asyncio.Task[None] | None = None
 
     # -- lifecycle ------------------------------------------------------- #
@@ -267,6 +271,29 @@ class RunController:
         self.cancel.cancel("user requested stop" if user else "server shutdown")
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
+
+    async def _await_approval(self, ev: events.ApprovalRequired) -> None:
+        """Await the HTTP decision for ``ev``, denying after ``approval_timeout``.
+
+        Without the timeout a clientless (scheduled) run parked on an approval
+        holds its concurrency slot forever — ``RunBudget.max_seconds`` is only
+        checked at turn boundaries, which a parked run never reaches.
+        """
+        decision = self.deps.approvals.await_decision(self.session_id, ev)
+        if self.deps.approval_timeout is None:
+            await decision
+            return
+        try:
+            await asyncio.wait_for(decision, self.deps.approval_timeout)
+        except asyncio.TimeoutError:
+            # wait_for cancelled the awaiter, which default-denies on the way
+            # out — the runner unblocks with a rejection; the run continues.
+            log.info(
+                "approval %s for session %s timed out after %.0fs: denied",
+                ev.call.id,
+                self.session_id,
+                self.deps.approval_timeout,
+            )
 
     async def _persist_partial(self, run_id: str) -> None:
         """Fold this run's completed turns into the durable Session.
@@ -408,11 +435,10 @@ class RunController:
                         # iterator until the decision lands (mirrors the old
                         # drive_stream). The awaiter is THIS task, not the HTTP
                         # request, so a detach can't release it.
-                        deps.approvals.register(sid, ev)
                         self.pending_approval = ev
                         self.status = "blocked_on_approval"
                         try:
-                            await deps.approvals.await_decision(sid, ev)
+                            await self._await_approval(ev)
                         finally:
                             self.pending_approval = None
                             self.status = "running"
@@ -478,7 +504,8 @@ class RunController:
                 # ``not succeeded`` skips a leg the loop already persisted (e.g. a
                 # cancel landing on an auto-chain hop, where this run_id names the
                 # not-yet-started next leg and the mirror is the prior, saved one).
-                if not succeeded:
+                # ``_discard_partial`` skips it when the session is being deleted.
+                if not succeeded and not self._discard_partial:
                     await self._persist_partial(rid)
                 await store.checkpointer.delete(rid)
                 await store.clear_active_run_id(sid, expected=rid)
@@ -530,9 +557,12 @@ class RunSupervisor:
         title_message: str | None,
         autostart: bool = False,
     ) -> RunController:
+        if session_id in self._controllers:
+            raise HTTPException(
+                status_code=409, detail="a run is already active for this session"
+            )
         if len(self._controllers) >= self.max_background_runs:
             raise HTTPException(status_code=429, detail="too many concurrent runs")
-        ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex)
         seed: list[TranscriptEntry] = (
             [InputEntry(role="user", content=input)] if input else []
         )
@@ -542,12 +572,29 @@ class RunSupervisor:
             session_id=session_id,
             agent=agent,
             first_input=input,
-            first_checkpoint=ckpt,
+            first_checkpoint=None,
             seed_entries=seed,
             is_new=is_new,
             title_message=title_message,
         )
+        # Reserve the session slot BEFORE the checkpoint await: two concurrent
+        # starts (e.g. two tabs submitting at once) would otherwise both pass the
+        # caller's live-check and the second would silently orphan the first's
+        # running task. The loser now gets the 409 above and attaches instead.
         self._controllers[session_id] = ctrl
+        try:
+            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex)
+        except BaseException:
+            self._controllers.pop(session_id, None)
+            # A concurrent request may have attached during that await; close
+            # the hub so its SSE ends instead of waiting on a task that will
+            # never start. (After a *successful* start there is no such hang:
+            # the caller reaches subscribe_live with no awaits in between, and
+            # autostart begins the task right below.)
+            ctrl.hub.close()
+            raise
+        ctrl._first_ckpt = ckpt
+        ctrl.run_id = ckpt.resolved_run_id if ckpt is not None else None
         if autostart:
             # Clientless (scheduled) run: begin the task now, with no subscriber.
             ctrl._ensure_begun()
@@ -556,16 +603,16 @@ class RunSupervisor:
     async def start_resume(
         self, *, session_id: str, agent: Agent[Any], snapshot: RunSnapshot
     ) -> RunController:
+        if session_id in self._controllers:
+            raise HTTPException(
+                status_code=409, detail="a run is already active for this session"
+            )
         ckpt = CheckpointOptions(
             checkpointer=self.deps.store.checkpointer,
             resume_from=snapshot,
             delete_on_success=True,
         )
-        seed = [
-            e
-            for e in snapshot.entries
-            if not (isinstance(e, InputEntry) and e.role == "system")
-        ]
+        seed = drop_system_entries(list(snapshot.entries))
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,
@@ -580,13 +627,16 @@ class RunSupervisor:
         self._controllers[session_id] = ctrl
         return ctrl
 
-    def cancel(self, session_id: str) -> bool:
+    def cancel(self, session_id: str, *, discard: bool = False) -> bool:
+        """Cancel the live run, if any. ``discard`` additionally drops the
+        partial transcript instead of persisting it — for session deletion."""
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
             return False
         # Evict synchronously so an immediate follow-up /stream starts fresh;
         # the task winds down + deletes its checkpoint in the background.
         self._controllers.pop(session_id, None)
+        ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
 

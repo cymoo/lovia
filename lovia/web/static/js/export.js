@@ -7,6 +7,7 @@
 // carries reasoning + tool calls per message.
 import { api } from './api.js';
 import { toast } from './toast.js';
+import { escapeHtml } from './util.js';
 
 // Turn a session title into a safe download filename. Replaces characters that
 // are illegal on common filesystems, collapses whitespace, drops trailing dots
@@ -21,13 +22,6 @@ export function exportFilename(title, ext) {
     .slice(0, 80)
     .trim();
   return `${base || 'lovia-chat'}.${ext}`;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
-  );
 }
 
 function mdToHtml(text) {

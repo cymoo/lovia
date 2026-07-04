@@ -155,7 +155,9 @@ export function promptDialog(message, defaultValue = '') {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn-ghost';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => dialog.close(null));
+    // Cancel closes with '' (same as Esc) — dialog.close(null) would coerce
+    // the returnValue to the string "null", indistinguishable from typing it.
+    cancelBtn.addEventListener('click', () => dialog.close(''));
 
     const okBtn = document.createElement('button');
     okBtn.className = 'btn btn-primary';
@@ -164,7 +166,7 @@ export function promptDialog(message, defaultValue = '') {
 
     actions.appendChild(cancelBtn);
     actions.appendChild(okBtn);
-    const dialog = showDialog({ body, actions, onClose: (val) => resolve(val && val !== 'null' ? val : null) });
+    const dialog = showDialog({ body, actions, onClose: (val) => resolve(val || null) });
     setTimeout(() => input.focus(), 100);
   });
 }

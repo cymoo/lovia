@@ -267,3 +267,32 @@ async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:
     assert (await store.checkpointer.load("run-1")) is not None
     with store._meta._conn() as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+async def test_delete_all_clears_beyond_one_list_page() -> None:
+    # delete_all must sweep EVERY session — not just the first list() page —
+    # or transcripts/checkpoints past the page limit are orphaned while their
+    # metadata rows vanish.
+    store = ChatStore.in_memory()
+    n = 230  # > the 200-row default list page
+    for i in range(n):
+        sid = f"s{i:03d}"
+        await store.upsert(sid)
+        await store.session.append(sid, [AssistantTextEntry(content=f"m{i}")])
+    await store.delete_all()
+    assert await store.list(limit=1000) == []
+    for sid in ("s000", "s150", f"s{n - 1:03d}"):
+        assert await store.session.load(sid) == []
+
+
+async def test_search_treats_like_wildcards_literally() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("a", title="Progress: 100% done")
+    await store.upsert("b", title="under_score name")
+    await store.upsert("c", title="plain title")
+
+    assert [m.id for m in await store.search("100%")] == ["a"]
+    assert [m.id for m in await store.search("under_score")] == ["b"]
+    assert await store.search("100_") == []  # _ is literal, not any-char
+    # A lone backslash in the query must not break the ESCAPE clause.
+    assert await store.search("\\") == []

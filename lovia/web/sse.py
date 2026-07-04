@@ -71,7 +71,13 @@ def _coerce(value: object) -> JsonValue:
     """Make non-JSON-serialisable outputs (e.g. pydantic models) safe for SSE."""
     dump = getattr(value, "model_dump", None)
     if callable(dump):
-        return cast(JsonValue, dump())
+        # mode="json" stringifies datetime/UUID/Decimal fields — a plain dump
+        # keeps them as Python objects and json.dumps would then fail, killing
+        # the SSE stream right before its `done` event.
+        try:
+            return cast(JsonValue, dump(mode="json"))
+        except TypeError:  # a model_dump that doesn't take mode
+            return cast(JsonValue, dump())
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -177,11 +183,15 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     if isinstance(ev, events.RunCompleted):
         return {
             "event": "done",
+            # default=str: last-resort stringification for exotic values nested
+            # inside a dict/list output — never lose the terminal event over
+            # one unserialisable field.
             "data": json.dumps(
                 {
                     "output": _coerce(ev.result.output),
                     "usage": usage_dict(ev.result.usage),
-                }
+                },
+                default=str,
             ),
         }
     return None

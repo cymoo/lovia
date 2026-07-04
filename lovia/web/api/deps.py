@@ -66,6 +66,10 @@ class RouterDeps:
     # Factory for the default budget given to a supervised run when no explicit
     # ``budget`` is set — bounds an abandoned, clientless run.
     default_budget_factory: Callable[[], RunBudget] | None = None
+    # Auto-deny a pending tool approval after this many seconds (None = wait
+    # forever). Without it a clientless (scheduled) run parked on an approval
+    # holds one of the ``max_background_runs`` slots indefinitely.
+    approval_timeout: float | None = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)

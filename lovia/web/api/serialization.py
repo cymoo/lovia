@@ -33,6 +33,14 @@ def session_info(meta: ChatMeta) -> ChatSessionInfo:
     )
 
 
+def drop_system_entries(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
+    """Strip ``system`` input entries — they are re-generated per run, so no
+    view (session detail, attach snapshot, resume seed) should replay them."""
+    return [
+        e for e in entries if not (isinstance(e, InputEntry) and e.role == "system")
+    ]
+
+
 def _tool_calls(m: Message) -> list[dict[str, Any]]:
     return [
         {"id": c.id, "name": c.name, "arguments": c.arguments} for c in m.tool_calls
@@ -95,12 +103,7 @@ def segments_to_out(
     all_msgs: list[Message] = []
     boundaries: list[tuple[int, dict[str, Any]]] = []  # (msg index, notice)
     for seg in segments:
-        cleaned = [
-            e
-            for e in seg.entries
-            if not (isinstance(e, InputEntry) and e.role == "system")
-        ]
-        all_msgs.extend(entries_to_messages(cleaned))
+        all_msgs.extend(entries_to_messages(drop_system_entries(seg.entries)))
         notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
             boundaries.append((len(all_msgs), notice))
@@ -124,14 +127,12 @@ def view_messages(
     entries: list[TranscriptEntry], *, created_at: float, updated_at: float
 ) -> list[MessageOut]:
     """Project a transcript (session history + a run's own entries) to the
-    session-detail message shape, dropping any ``system`` entry (it's
-    re-generated per run). Shared by ``GET /api/sessions/{id}`` and the live
-    re-attach snapshot so both render byte-identically."""
-    cleaned = [
-        e for e in entries if not (isinstance(e, InputEntry) and e.role == "system")
-    ]
+    session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
+    live re-attach snapshot so both render byte-identically."""
     return messages_to_out(
-        entries_to_messages(cleaned), created_at=created_at, updated_at=updated_at
+        entries_to_messages(drop_system_entries(entries)),
+        created_at=created_at,
+        updated_at=updated_at,
     )
 
 

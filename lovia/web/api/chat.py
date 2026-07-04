@@ -27,7 +27,7 @@ from ..schemas import (
     InjectRequest,
 )
 from ..sse import _coerce, usage_dict
-from ..supervisor import forward
+from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from .deps import RouterDeps
 
@@ -37,18 +37,33 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     store = deps.store
     session = deps.session
 
+    async def upsert_session(sid: str, agent_name: str, message: str) -> bool:
+        """Insert/touch the session's metadata row; returns whether it's new."""
+        is_new = (await store.get(sid)) is None
+        await store.upsert(
+            sid,
+            agent=agent_name,
+            title=provisional_title(message) if is_new else None,
+        )
+        return is_new
+
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
         # Blocking, non-streaming turn — runs to completion inside the request
         # and is NOT supervised (not detachable).
+        if not req.message.strip():
+            raise HTTPException(status_code=422, detail="empty message")
         agent = deps.pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
-        is_new = (await store.get(sid)) is None
-        await store.upsert(
-            sid,
-            agent=agent.name,
-            title=provisional_title(req.message) if is_new else None,
-        )
+        if deps.supervisor.get(sid) is not None:
+            # A supervised run owns this session; a second concurrent run would
+            # interleave two transcripts. Stream endpoints attach/inject instead.
+            raise HTTPException(
+                status_code=409,
+                detail="a streaming run is active for this session; "
+                "use /api/chat/stream to attach or inject",
+            )
+        is_new = await upsert_session(sid, agent.name, req.message)
         result = await Runner.run(
             agent,
             req.message,
@@ -72,15 +87,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     async def chat_stream(req: ChatRequest) -> EventSourceResponse:
         agent = deps.pick(req.agent)
         sid = req.session_id or uuid.uuid4().hex
-        is_new = (await store.get(sid)) is None
-        await store.upsert(
-            sid,
-            agent=agent.name,
-            title=provisional_title(req.message) if is_new else None,
-        )
+        # An empty message is only meaningful as a pure attach to a live run;
+        # rejecting it before the upsert avoids littering empty "New chat" rows.
+        if not req.message.strip() and deps.supervisor.get(sid) is None:
+            raise HTTPException(status_code=422, detail="empty message")
+        is_new = await upsert_session(sid, agent.name, req.message)
 
-        live = deps.supervisor.get(sid)
-        if live is not None:
+        def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects
             # (Phase 1); this connection attaches to co-watch it.
             if req.message.strip():
@@ -89,6 +102,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 forward(live.attach(with_snapshot=True), sid=sid, emit_session=True)
             )
 
+        live = deps.supervisor.get(sid)
+        if live is not None:
+            return attach(live)
+        if not req.message.strip():
+            # The live run we would have attached to ended mid-request.
+            raise HTTPException(status_code=422, detail="empty message")
+
         # No live run → start a fresh supervised run. Delete any stranded
         # checkpoint first so a later reconnect won't pick up a stale snapshot.
         if store.checkpointer is not None:
@@ -96,13 +116,21 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             if old_run_id:
                 await store.checkpointer.delete(old_run_id)
 
-        ctrl = await deps.supervisor.start(
-            session_id=sid,
-            agent=agent,
-            input=req.message,
-            is_new=is_new,
-            title_message=req.message,
-        )
+        try:
+            ctrl = await deps.supervisor.start(
+                session_id=sid,
+                agent=agent,
+                input=req.message,
+                is_new=is_new,
+                title_message=req.message,
+            )
+        except HTTPException as exc:
+            # Lost a concurrent-start race (two tabs submitting at once): the
+            # winner owns the run, so deliver this message by injecting into it.
+            live = deps.supervisor.get(sid)
+            if exc.status_code == 409 and live is not None:
+                return attach(live)
+            raise
         return EventSourceResponse(
             forward(ctrl.subscribe_live(), sid=sid, emit_session=True)
         )
@@ -200,11 +228,24 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 detail=f"agent {snapshot.agent_name!r} is no longer registered",
             )
 
-        ctrl = await deps.supervisor.start_resume(
-            session_id=session_id,
-            agent=deps.agents[snapshot.agent_name],
-            snapshot=snapshot,
-        )
+        try:
+            ctrl = await deps.supervisor.start_resume(
+                session_id=session_id,
+                agent=deps.agents[snapshot.agent_name],
+                snapshot=snapshot,
+            )
+        except HTTPException as exc:
+            # Lost a concurrent-reconnect race: attach to the winner's run.
+            live = deps.supervisor.get(session_id)
+            if exc.status_code == 409 and live is not None:
+                return EventSourceResponse(
+                    forward(
+                        live.attach(with_snapshot=True),
+                        sid=session_id,
+                        emit_session=True,
+                    )
+                )
+            raise
         return EventSourceResponse(
             forward(ctrl.subscribe_live(), sid=session_id, emit_session=True)
         )

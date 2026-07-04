@@ -141,14 +141,26 @@ class Scheduler:
         for sched in await self.store.due_schedules(now):
             await self._fire(sched, now)
 
-    async def _fire(self, sched: ScheduleRow, now: float) -> None:
+    async def fire_now(self, sched: ScheduleRow) -> str | None:
+        """Fire ``sched`` immediately (``POST /api/schedules/{id}/run``).
+
+        Counts as a regular fire: the cadence advances (an interval restarts
+        from now, a one-shot completes) but a paused schedule stays paused.
+        Returns the target session id, or ``None`` when the fire was skipped.
+        """
+        return await self._fire(sched, time.time())
+
+    async def _fire(self, sched: ScheduleRow, now: float) -> str | None:
+        """Fire one schedule; returns the session it ran/injected into, or
+        ``None`` when skipped (agent unavailable, previous run still live, or
+        deferred at the concurrency cap)."""
         agent_name = sched.agent or self.deps.default_agent
         if agent_name is None or agent_name not in self.deps.agents:
             log.warning(
                 "schedule %s: agent %r unavailable; advancing", sched.id, sched.agent
             )
             await self._advance(sched, now, last_session_id=sched.last_session_id)
-            return
+            return None
         agent = self.deps.agents[agent_name]
 
         if sched.session_id is not None:
@@ -158,7 +170,7 @@ class Scheduler:
             if live is not None:
                 live.inject(sched.input)
                 await self._advance(sched, now, last_session_id=target)
-                return
+                return target
             is_new = (await self.store.get(target)) is None
         else:
             # Fresh session per fire — but skip if the previous fire's run is
@@ -167,7 +179,7 @@ class Scheduler:
             if prev is not None and self.deps.supervisor.get(prev) is not None:
                 log.info("schedule %s: previous run still active; skipping", sched.id)
                 await self._advance(sched, now, last_session_id=prev)
-                return
+                return None
             target = uuid.uuid4().hex
             is_new = True
 
@@ -195,9 +207,10 @@ class Scheduler:
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
                 if is_new:
                     await self.store.delete(target)
-                return
+                return None
             raise
         await self._advance(sched, now, last_session_id=target)
+        return target
 
     async def _advance(
         self, sched: ScheduleRow, now: float, *, last_session_id: str | None
@@ -206,6 +219,8 @@ class Scheduler:
         await self.store.mark_fired(
             sched.id,
             next_fire=nxt if nxt is not None else now,  # one-shot: unused once inactive
-            active=nxt is not None,
+            # ``and sched.active`` keeps a manually-fired paused schedule paused
+            # (the polling loop only ever fires active rows, where it's a no-op).
+            active=nxt is not None and sched.active,
             last_session_id=last_session_id,
         )

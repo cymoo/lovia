@@ -15,8 +15,6 @@ import logging
 import os
 import ssl
 
-import certifi
-
 __all__ = ["resolve_timeout", "resolve_trust_env", "resolve_verify"]
 
 logger = logging.getLogger(__name__)
@@ -26,6 +24,12 @@ _CA_BUNDLE_ENV = "LOVIA_HTTP_CA_BUNDLE"
 _PROVIDER_TIMEOUT_ENV = "LOVIA_PROVIDER_TIMEOUT"
 _TRUST_ENV_ENV = "LOVIA_PROVIDER_TRUST_ENV"
 _DEFAULT_TIMEOUT = 60.0
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_truthy(name: str) -> bool:
+    """Whether env var ``name`` holds a truthy value (``1``/``true``/``yes``/``on``)."""
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
 
 
 def resolve_verify() -> ssl.SSLContext | bool:
@@ -33,8 +37,9 @@ def resolve_verify() -> ssl.SSLContext | bool:
 
     Priority:
 
-    * ``LOVIA_HTTP_INSECURE=1`` disables certificate verification — use only on
-      trusted networks; it exposes the connection to man-in-the-middle attacks.
+    * ``LOVIA_HTTP_INSECURE`` (truthy: ``1``/``true``/``yes``/``on``) disables
+      certificate verification — use only on trusted networks; it exposes the
+      connection to man-in-the-middle attacks.
     * ``LOVIA_HTTP_CA_BUNDLE`` selects a PEM bundle for internal or self-signed
       certificates.
     * the optional ``truststore`` package, when installed, uses the operating
@@ -46,13 +51,18 @@ def resolve_verify() -> ssl.SSLContext | bool:
     :class:`ssl.SSLContext` (httpx deprecates ``verify=<path string>``) or
     ``False`` to disable verification.
     """
-    if os.environ.get(_INSECURE_ENV) == "1":
+    if _env_truthy(_INSECURE_ENV):
         return False
     if ca := os.environ.get(_CA_BUNDLE_ENV):
         return ssl.create_default_context(cafile=ca)
     try:
         import truststore
     except ImportError:
+        # certifi reaches us transitively via httpx, not as a declared
+        # dependency — import it only on this fallback path so ``import lovia``
+        # never hard-requires it.
+        import certifi
+
         return ssl.create_default_context(cafile=certifi.where())
     context: ssl.SSLContext = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     return context
@@ -93,5 +103,4 @@ def resolve_trust_env(trust_env: bool | None) -> bool:
     """
     if trust_env is not None:
         return trust_env
-    raw = os.environ.get(_TRUST_ENV_ENV, "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return _env_truthy(_TRUST_ENV_ENV)

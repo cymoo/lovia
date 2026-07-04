@@ -17,7 +17,7 @@ indicates the value is acceptable.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Awaitable, Callable, Protocol, Union
+from typing import Any, Awaitable, Callable, Union
 
 from .exceptions import GuardrailTripped
 from .messages import Message
@@ -25,24 +25,13 @@ from .run_context import RunContext
 
 
 GuardrailVerdict = Union[None, str, bool]
-"""``None``/``False`` mean OK; a non-empty string or ``True`` triggers a violation."""
-
-
-class InputGuardrail(Protocol):
-    """A callable invoked with the initial transcript."""
-
-    async def __call__(
-        self, messages: list[Message], ctx: RunContext[Any]
-    ) -> GuardrailVerdict: ...
-
-
-class OutputGuardrail(Protocol):
-    """A callable invoked with the run's final output value."""
-
-    async def __call__(self, output: Any, ctx: RunContext[Any]) -> GuardrailVerdict: ...
+"""Falsy (``None``/``False``/``""``) means OK; a non-empty string or ``True``
+triggers a violation."""
 
 
 # Accept any callable, sync or async, returning a verdict or raising directly.
+# Input guardrails are called as ``fn(messages, ctx)``, output guardrails as
+# ``fn(output, ctx)`` — see the module docstring.
 GuardrailFn = Callable[..., "GuardrailVerdict | Awaitable[GuardrailVerdict]"]
 
 
@@ -57,7 +46,7 @@ async def _run_guardrail(
     verdict = guard(arg, ctx)
     if inspect.isawaitable(verdict):
         verdict = await verdict
-    if verdict is None or verdict is False:
+    if not verdict:
         return
     if verdict is True:
         raise GuardrailTripped(f"{kind} guardrail rejected the value")

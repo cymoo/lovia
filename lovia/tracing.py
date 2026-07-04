@@ -11,7 +11,8 @@ Out of the box you get three implementations:
   ``Runner.run``/``Runner.stream`` so the runner never has to ``if tracer is not None``.
 * :class:`ConsoleTracer` — prints an indented tree to a ``logging`` logger.
   Useful for quick demos and local debugging; **not** intended for
-  production. It honours ``min_level`` so you can filter noisy spans.
+  production. It honours ``min_duration_ms`` so you can skip noisy
+  short-lived spans.
 * :class:`InMemoryTracer` — records spans in a list. Useful in tests.
 """
 

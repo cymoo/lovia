@@ -1,5 +1,7 @@
 # lovia examples
 
+[中文文档](./README-zh.md)
+
 Every file is a small, self-contained, runnable script for one feature.
 Read them in order and you have a tour of the framework; copy any one of
 them and you have a starting point.

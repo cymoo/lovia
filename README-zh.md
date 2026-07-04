@@ -1033,7 +1033,7 @@ app.include_router(build_api_router(deps))
 
 `examples/` 目录是一条按编号排列的学习路径，每个脚本都自包含、可直接运行——
 `cp .env.example .env`，设好 `LOVIA_MODEL`，从 `01_hello.py` 开始。完整索引和
-配置说明见 [examples/README.md](examples/README.md)。
+配置说明见 [examples/README-zh.md](examples/README-zh.md)。
 
 | 分组 | 文件 | 覆盖内容 |
 | --- | --- | --- |

@@ -177,7 +177,7 @@ class OpenAIChatProvider:
     """OpenAI Chat Completions API adapter.
 
     Args:
-        model: The model identifier sent to the API (e.g. ``"gpt-5.4"``).
+        model: The model identifier sent to the API (e.g. ``"gpt-5.5"``).
         api_key: API key. Defaults to ``$OPENAI_API_KEY``.
         base_url: Override to target an OpenAI-compatible endpoint.
         client: Optional pre-built :class:`httpx.AsyncClient`. If omitted we

@@ -28,7 +28,7 @@ load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
 if not MODEL:
     raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.4" '
+        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
         'or "anthropic:claude-4-8-opus"'
     )
 

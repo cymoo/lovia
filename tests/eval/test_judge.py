@@ -49,7 +49,7 @@ def test_judge_without_model_or_env_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_judge_reads_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOVIA_EVAL_JUDGE_MODEL", "openai:gpt-5.4")
+    monkeypatch.setenv("LOVIA_EVAL_JUDGE_MODEL", "openai:gpt-5.5")
     llm_judge("Any rubric.")  # builds without raising
 
 

@@ -16,31 +16,37 @@ from ..transcript import TranscriptEntry, entries_to_messages
 
 @dataclass
 class RunResult:
-    """The terminal state of a completed run.
-
-    ``entries`` is **this run's own** transcript: the run's input plus everything
-    it produced (assistant / reasoning / tool entries), across handoffs. It
-    deliberately excludes the system prompt and prior session history, so it is
-    the same whether the run finished fresh or was rebuilt from a checkpoint
-    snapshot. For the *full* transcript (system + prior history + this run), read
-    ``RunContext.entries`` inside a hook, or ``Session.load()`` after the run.
-
-    ``messages`` is a derived, lossy chat-format view of ``entries`` (so it,
-    too, is this-run-only and does not lead with the system message).
-
-    ``finish_reason`` is the provider-reported finish reason of the run's
-    final model turn (``"stop"``, ``"length"``, ...) — check it to tell a
-    complete answer from a ``max_tokens``-truncated one. ``None`` when the
-    provider reported none or the result was replayed from a completed
-    checkpoint (it is not persisted in snapshots).
-    """
+    """The terminal state of a completed run."""
 
     output: Any
+    """The final answer: a ``str``, or an instance of the run's
+    ``output_type``."""
+
     entries: list[TranscriptEntry]
+    """**This run's own** transcript: the run's input plus everything it
+    produced (assistant / reasoning / tool entries), across handoffs. It
+    deliberately excludes the system prompt and prior session history, so it
+    is the same whether the run finished fresh or was rebuilt from a
+    checkpoint snapshot. For the *full* transcript, read
+    ``RunContext.entries`` inside a hook, or ``Session.load()`` after the
+    run."""
+
     final_agent: Agent[Any]
+    """The agent that produced the final output (differs from the initial
+    agent after a handoff)."""
+
     usage: Usage
+    """Cumulative token usage, agent-as-tool sub-runs included."""
+
     turns: int
+    """Number of model turns the run took."""
+
     finish_reason: str | None = None
+    """Provider-reported finish reason of the final model turn (``"stop"``,
+    ``"length"``, ...) — check it to tell a complete answer from a
+    ``max_tokens``-truncated one. ``None`` when the provider reported none or
+    the result was replayed from a completed checkpoint (it is not persisted
+    in snapshots)."""
 
     @property
     def messages(self) -> list[Message]:

@@ -42,10 +42,21 @@ class RunBudget:
     """
 
     max_input_tokens: int | None = None
+    """Cap on cumulative input tokens; ``None`` = unconstrained."""
+
     max_output_tokens: int | None = None
+    """Cap on cumulative output tokens; ``None`` = unconstrained."""
+
     max_total_tokens: int | None = None
+    """Cap on cumulative input+output tokens; ``None`` = unconstrained."""
+
     max_tool_calls: int | None = None
+    """Cap on *requested* tool calls, rejected ones included; ``None`` =
+    unconstrained."""
+
     max_seconds: float | None = None
+    """Wall-clock cap, measured from the first check; ``None`` =
+    unconstrained."""
 
     _started_at: float | None = field(default=None, init=False, repr=False)
     _tool_calls: int = field(default=0, init=False, repr=False)
@@ -165,11 +176,25 @@ class RetryPolicy:
     """
 
     max_attempts: int = 4
+    """Total calls to ``Provider.stream`` (the first counts as attempt 1):
+    ``4`` means at most three retries; ``1`` disables retrying."""
+
     restart_on_partial: bool = True
+    """Also recover from errors after streaming began, discarding the partial
+    output (an ``OutputDiscarded`` event) and re-streaming the turn. ``False``
+    propagates mid-stream errors immediately."""
+
     backoff_base: float = 1.0
+    """First-retry delay in seconds; doubles each retry (±50% jitter)."""
+
     backoff_max: float = 30.0
+    """Ceiling on any single backoff delay, in seconds."""
+
     retry_on: RetryPredicate = field(default=_default_retry_on)
+    """Predicate deciding which exceptions are transient."""
+
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
+    """Sleep function — override in tests to skip real waiting."""
 
     def backoff_delay(self, attempt: int) -> float:
         """Jittered exponential delay before retrying after ``attempt`` failures."""

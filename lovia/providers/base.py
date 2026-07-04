@@ -35,17 +35,30 @@ from ..transcript import TranscriptEntry, ModelDelta
 class ModelSettings:
     """Sampling parameters and other knobs forwarded to the provider.
 
-    Only widely supported fields live here. Provider-specific settings belong
-    in ``provider_options`` under the adapter's provider key, which prevents
-    fallback chains from leaking vendor-only knobs across providers.
+    Only widely supported fields live here; on every field ``None`` means
+    "don't send it — let the provider apply its own default".
     """
 
     temperature: float | None = None
+    """Sampling temperature; higher is more random."""
+
     top_p: float | None = None
+    """Nucleus-sampling probability mass."""
+
     max_tokens: int | None = None
+    """Cap on output tokens per model response."""
+
     stop: list[str] | None = None
+    """Sequences at which the model stops generating."""
+
     parallel_tool_calls: bool | None = None
+    """Whether the model may request several tool calls in one turn."""
+
     provider_options: dict[str, JsonObject] = field(default_factory=dict)
+    """Vendor-only knobs, keyed by adapter name (``"openai"``,
+    ``"anthropic"``, ...). Keys pass through to that adapter's wire payload —
+    a fallback chain never leaks one vendor's knobs into another's request.
+    A ``None`` value strips an adapter default the endpoint rejects."""
 
 
 def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:

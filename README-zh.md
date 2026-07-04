@@ -1000,10 +1000,10 @@ python -m lovia.web --app myagents:assistant           # 启动你自己的 Agen
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`，否则用通用提示 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 构建默认 agent |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | `2`（首次之后的重试次数；`0` 关闭） |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | agent 自身的重试姿态,即 3 次重试（`0` 关闭） |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60` 秒 |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider 默认值 |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 自动检测，否则 200K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | 向 provider 询问；未知时走 reactive 兜底 |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭（开启后读取 `HTTP(S)_PROXY`） |
 

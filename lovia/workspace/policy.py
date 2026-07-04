@@ -181,40 +181,45 @@ class PathRule:
 
 @dataclass(frozen=True)
 class WorkspacePolicy:
-    """What the workspace tools are allowed to do.
-
-    Attributes:
-        write: Decision for writes *inside* the workspace root. Reads inside
-            the root are always allowed — a workspace the agent cannot read
-            is pointless.
-        read_outside: Decision for reads outside the root (reached via an
-            absolute path, ``~``, ``..`` or a symlink target).
-        write_outside: Decision for writes outside the root.
-        path_rules: Ordered ACL consulted before the defaults above;
-            first match wins. See :class:`PathRule`.
-        denied_paths: Sugar for the common case — patterns that neither
-            reads nor writes may touch, checked before ``path_rules``.
-            Same pattern language as :class:`PathRule`.
-        allow_shell: When False the shell tool is excluded and every command
-            decision is ``deny``.
-        shell_default: Decision for commands no rule matches.
-        command_rules: Evaluated first-match-wins per command segment;
-            compound commands (``;``, ``&&``, ``||``, ``|``, ``&``, newlines)
-            take the most restrictive decision across their segments.
-        command_decider: optional per-segment hook consulted *before* the
-            static ``command_rules``; return a :data:`Decision` to override or
-            ``None`` to fall through. See :data:`CommandDecider`.
-    """
+    """What the workspace tools are allowed to do."""
 
     write: Decision = "allow"
+    """Decision for writes *inside* the workspace root. Reads inside the
+    root are always allowed — a workspace the agent cannot read is
+    pointless."""
+
     read_outside: Decision = "deny"
+    """Decision for reads outside the root (reached via an absolute path,
+    ``~``, ``..`` or a symlink target)."""
+
     write_outside: Decision = "deny"
+    """Decision for writes outside the root."""
+
     path_rules: tuple[PathRule, ...] = ()
+    """Ordered ACL consulted before the defaults above; first match wins.
+    See :class:`PathRule`."""
+
     denied_paths: tuple[str, ...] = ()
+    """Sugar for the common case — patterns that neither reads nor writes
+    may touch, checked before ``path_rules``. Same pattern language as
+    :class:`PathRule`."""
+
     allow_shell: bool = True
+    """When ``False`` the shell tool is excluded and every command decision
+    is ``deny``."""
+
     shell_default: Decision = "ask"
+    """Decision for commands no rule matches."""
+
     command_rules: tuple[CommandRule, ...] = ()
+    """Evaluated first-match-wins per command segment; compound commands
+    (``;``, ``&&``, ``||``, ``|``, ``&``, newlines) take the most restrictive
+    decision across their segments."""
+
     command_decider: "CommandDecider | None" = None
+    """Per-segment hook consulted *before* the static ``command_rules``:
+    return a :data:`Decision` to override or ``None`` to fall through. See
+    :data:`CommandDecider`."""
 
     def __post_init__(self) -> None:
         # ``allow_shell=False`` already forces every command to ``deny`` in

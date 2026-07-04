@@ -1058,10 +1058,10 @@ installed (or pass `--env-file`). Model credentials use the provider's own
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
 | `--app MODULE:ATTR` | `LOVIA_APP` | build default agent |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | `2` (retries after the first; `0` disables) |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | the agent's retry posture, 3 retries (`0` disables) |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 200K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | ask the provider; reactive fallback when unknown |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
 

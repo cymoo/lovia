@@ -210,7 +210,8 @@ method handles both triggers:
   checkpoints persist them. Tools that can return huge payloads should be
   capped at the source: built-in workspace tools already truncate
   (`max_read_chars`/`max_output_chars` on `Workspace`), and user tools are
-  capped via `Agent.max_tool_output_chars` or per-tool
+  capped via `Agent.max_tool_output_chars` (default 200K chars — a tripwire
+  for runaway payloads; `None` opts out) or per-tool
   `@tool(max_output_chars=...)` — `ToolCallProcessor` truncates (head + tail
   + marker) before the entry is stored and drops the raw value. This is
   deliberately lossy; `recall_tool_result` sees the truncated version.

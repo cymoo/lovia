@@ -75,106 +75,129 @@ class Agent(Generic[TContext]):
     object passed to :meth:`Runner.run` as ``context=...``. Tools annotated
     with ``RunContext[TContext]`` receive a typed context handle.
 
-    Fields:
-        name: Human-readable agent name; also used to derive handoff tool names.
-        instructions: A static base system prompt, or a callable that
-            receives the run's :class:`RunContext` (reach user deps via
-            ``ctx.deps``) and returns one (sync or async). Additional dynamic
-            fragments can be registered with the :meth:`instruction` decorator
-            and appended at render time.
-        model: Either a ``"vendor:model"`` string (e.g. ``"openai:gpt-5.5"``)
-            or a pre-built :class:`Provider` instance. Required before the
-            agent can run — there is deliberately no default vendor, so an
-            agent left unconfigured raises :class:`UserError` when its
-            providers are resolved rather than silently calling one vendor.
-        tools: Tools the agent may call.
-        output_type: Pydantic model, dataclass, TypedDict, or builtin type that
-            describes the structured final output. ``str`` (the default) means
-            free-form text. :meth:`Runner.run` may override this per call.
-        output_repair: When ``True`` (the default), and the model produces an
-            output that fails to parse against ``output_type``, the runner
-            asks the model once to fix it. Set to ``False`` to fail fast with
-            :class:`OutputValidationError`.
-        handoffs: Agents (or :class:`Handoff` objects) the model may transfer
-            control to via a synthetic ``transfer_to_<name>`` tool.
-        settings: Sampling parameters forwarded to the provider.
-        retry: Provider retry posture (:class:`~lovia.RetryPolicy`) applied to
-            every run of this agent; ``None`` disables provider retries.
-            :meth:`Runner.run` may override it per call. Placement rule:
-            *posture* (how the agent behaves when infrastructure hiccups —
-            retries, tool-retry defaults, fallback models, context policy)
-            lives on the agent; *limits* (how much one request may spend —
-            ``max_turns``, ``budget``, ``timeout``, cancellation) live on the
-            run.
-        context_policy: How this agent's context is shaped for each model
-            call (:class:`~lovia.ContextPolicy`). The default is a plain
-            :class:`~lovia.Compaction`, which sizes itself to the provider's
-            advertised context window at call time and falls back to reactive
-            overflow handling when the window is unknown. Per-call override
-            via :meth:`Runner.run` wins; pass ``NoopContextPolicy()`` to
-            disable compaction.
-        workspace: Optional :class:`~lovia.workspace.Workspace` (or anything
-            implementing ``WorkspaceLike``) scoping file/shell tools to a
-            directory and policy. Its tool bundle is merged at run time and
-            its live session is injected into ``RunContext.workspace``.
-        hooks: Optional :class:`AgentHooks` instance receiving lifecycle events.
-        approval_handler: Optional callable consulted whenever a tool with
-            ``needs_approval`` is about to run. Returns an
-            :data:`ApprovalDecision` — ``True``/``"allow"`` to permit,
-            ``False``/``"deny"`` to block, ``"ask"`` to defer to the streaming
-            consumer. If ``None`` and no streaming consumer resolves the
-            :class:`~lovia.events.ApprovalRequired` event, the call is denied
-            by default.
+    Two conventions hold across every field (each field documents its own
+    specifics — hover it in your editor):
+
+    * **Posture vs limits.** Posture — how the agent behaves when
+      infrastructure hiccups (``retry``, ``default_tool_retries`` /
+      ``default_tool_timeout``, the ``model`` fallback chain,
+      ``context_policy``) — lives here and is inherited by every run. Limits —
+      how much one request may spend (``max_turns``, ``budget``,
+      cancellation) — are :meth:`Runner.run` arguments.
+    * **Defaults are literal.** ``None`` never hides a constant: it means
+      off, inherit, or auto-created, per the field's doc. Concrete defaults
+      appear in the field definition itself.
     """
 
     name: str
+    """Human-readable agent name; also used to derive handoff tool names."""
+
     instructions: "str | InstructionsFn" = ""
+    """The base system prompt: a static string, or a callable receiving the
+    run's :class:`RunContext` (reach user deps via ``ctx.deps``) and returning
+    one, sync or async. Additional dynamic fragments can be registered with
+    the :meth:`instruction` decorator and are appended at render time."""
+
     model: "str | Provider | list[str | Provider] | None" = None
+    """A ``"vendor:model"`` string (e.g. ``"openai:gpt-5.5"``), a pre-built
+    :class:`Provider` instance, or a list of either — the runner falls through
+    the list on repeated provider errors. Required before the agent can run:
+    there is deliberately no default vendor, so an unconfigured agent raises
+    :class:`UserError` instead of silently calling one. See also
+    :func:`lovia.model_from_env`."""
+
     tools: list[Tool] = field(default_factory=list)
+    """Tools the agent may call."""
+
     output_type: Any = str
-    # When ``True`` (default), a failed structured-output parse triggers one
-    # repair prompt before giving up. Set to ``False`` to fail fast,
-    # or pass an :class:`~lovia.output.OutputRepairStrategy` instance for
-    # custom retry policies (multi-attempt, localised prompts, etc.).
+    """Pydantic model, dataclass, TypedDict, or builtin type describing the
+    structured final output. ``str`` (the default) means free-form text.
+    :meth:`Runner.run` may override this per call."""
+
     output_repair: "bool | OutputRepairStrategy" = True
+    """When ``True`` (default), a failed structured-output parse triggers one
+    repair prompt before giving up. ``False`` fails fast with
+    :class:`OutputValidationError`; an
+    :class:`~lovia.output.OutputRepairStrategy` instance customizes the retry
+    policy (multi-attempt, localised prompts, ...)."""
+
     handoffs: list["Agent[Any] | Handoff"] = field(default_factory=list)
+    """Agents (or :class:`Handoff` wrappers) the model may transfer control to
+    via a synthetic ``transfer_to_<name>`` tool."""
+
     settings: ModelSettings = field(default_factory=ModelSettings)
-    # Reliability/context *posture* — see the placement rule in the class
-    # docstring. Both may be overridden per call on ``Runner.run``.
+    """Sampling parameters forwarded to the provider."""
+
     retry: "RetryPolicy | None" = field(default_factory=RetryPolicy)
+    """Provider retry posture applied to every run of this agent. The default
+    :class:`~lovia.RetryPolicy` retries transient errors (3 retries, jittered
+    backoff); ``None`` disables provider retries. :meth:`Runner.run` may
+    override it per call."""
+
     context_policy: "ContextPolicy" = field(default_factory=Compaction)
+    """How this agent's context is shaped for each model call. The default
+    :class:`~lovia.Compaction` sizes itself to the provider's advertised
+    context window at call time and falls back to reactive overflow handling
+    when the window is unknown. Per-call override via :meth:`Runner.run`
+    wins; pass ``NoopContextPolicy()`` to disable compaction."""
+
     workspace: "WorkspaceLike | None" = None
-    # Declarative features that bundle tools, per-turn view injectors, static
-    # system-prompt text, and event hooks. Each is activated once per run (and
-    # per agent on a handoff). See :mod:`lovia.plugins` and
-    # :func:`lovia.plugins.todo`.
+    """Optional :class:`~lovia.workspace.Workspace` (or any ``WorkspaceLike``)
+    scoping file/shell tools to a directory and permission policy. Its tool
+    bundle is merged at run time and its live session is injected into
+    ``RunContext.workspace``. ``None`` = no filesystem/shell tools."""
+
     plugins: list["Plugin"] = field(default_factory=list)
+    """Declarative features bundling tools, per-turn view injectors, static
+    system-prompt text, hooks, and guardrails. Each is activated once per run
+    (and per agent on a handoff). See :mod:`lovia.plugins`."""
+
     hooks: "AgentHooks | None" = None
+    """Optional :class:`AgentHooks` whose handlers receive every run event.
+    ``None`` = no observers."""
+
     approval_handler: ApprovalHandler | None = None
+    """Programmatic policy consulted when a tool gated by ``needs_approval``
+    is about to run: return ``True``/``"allow"`` to permit, ``False``/
+    ``"deny"`` to block, ``"ask"`` to defer to the streaming consumer. With
+    ``None``, the streaming consumer decides — and an unresolved request is
+    denied, so runs never hang."""
+
     input_guardrails: list["GuardrailFn"] = field(default_factory=list)
+    """Checks run against the input before the first model call; returning a
+    reason string (or ``True``) aborts with :class:`GuardrailTripped`."""
+
     output_guardrails: list["GuardrailFn"] = field(default_factory=list)
-    # Default policies applied to every tool whose own field is ``None``.
-    # Tools may still override either knob individually.
+    """Checks run against the final output before it is returned; same
+    contract as ``input_guardrails``."""
+
     default_tool_retries: int = 0
+    """Retries applied to every tool whose own ``retries`` is ``None``.
+    Per-tool ``@tool(retries=...)`` overrides."""
+
     default_tool_timeout: float | None = None
-    # Cap on the rendered tool-output string stored in the transcript, in
-    # characters. Anything longer is truncated (head + tail kept, with a
-    # marker) *before* it enters the transcript, and the raw return value is
-    # dropped — bounding memory, checkpoint, and session cost for tools that
-    # can return huge payloads. Lossy: the cut middle is gone (the
-    # ``recall_tool_result`` tool sees the truncated version too); tools that
-    # need full-fidelity recovery should write to the workspace themselves.
-    # The default (200_000 chars ≈ 50K tokens) is a tripwire, not a policy:
-    # far above any legitimate single result, it only catches runaway
-    # payloads that would otherwise bloat every checkpoint and session write.
-    # Per-tool ``max_output_chars`` overrides it; ``None`` stores outputs in
-    # full.
+    """Per-attempt timeout (seconds) for every tool whose own ``timeout`` is
+    ``None``. ``None`` = no timeout. Per-tool ``@tool(timeout=...)``
+    overrides."""
+
     max_tool_output_chars: int | None = 200_000
-    # Optional agent-wide renderer applied to any tool whose own
-    # ``result_renderer`` is ``None``. Useful for things like always
-    # JSON-serializing via a custom encoder. Successful results only:
-    # runner-produced "Tool error: ..." strings bypass renderers.
+    """Cap on the rendered tool-output string stored in the transcript, in
+    characters. Anything longer is truncated (head + tail kept, with a
+    marker) before it enters the transcript, and the raw return value is
+    dropped — bounding memory, checkpoint, and session cost. Lossy: the cut
+    middle is gone (``recall_tool_result`` sees the truncated version too);
+    tools needing full-fidelity recovery should write to the workspace. The
+    default (200 000 chars ≈ 50K tokens) is a tripwire, not a policy — far
+    above any legitimate single result, it only catches runaway payloads.
+    Per-tool ``max_output_chars`` overrides it; ``None`` stores outputs in
+    full."""
+
     tool_result_renderer: "ToolResultRenderer | None" = None
+    """Agent-wide renderer applied to any tool whose own ``result_renderer``
+    is ``None`` (e.g. always JSON-serialize via a custom encoder). Successful
+    results only: runner-produced ``"Tool error: ..."`` strings bypass
+    renderers. ``None`` = the default rendering."""
+
     # Dynamic instruction fragments registered via @agent.instruction.
     # Rendered in registration order and appended after ``instructions``.
     # Not a public field — use the decorator or ``with_instructions`` instead.

@@ -175,11 +175,13 @@ class ToolCallCompleted(ToolEvent):
 
     call: ToolCall
     result: Any
+    """The raw, un-rendered return value — for observability and type-aware
+    consumers (e.g. the todo card)."""
+
     is_error: bool = False
-    #: The rendered result string the model received — the live twin of
-    #: ``ToolResultEntry.output``. ``result`` stays the raw, un-rendered value
-    #: (for observability and type-aware consumers like the todo card).
     output: str = ""
+    """The rendered result string the model received — the live twin of
+    ``ToolResultEntry.output``."""
 
 
 @dataclass

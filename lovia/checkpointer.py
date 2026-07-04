@@ -223,10 +223,23 @@ class CheckpointOptions:
     """
 
     checkpointer: Checkpointer | None = None
+    """The store snapshots are written to and loaded from."""
+
     run_id: str | None = None
+    """Per-run idempotency key: re-issuing the same call under the same id
+    resumes (or replays) instead of starting over."""
+
     if_run_exists: IfRunExists = "resume"
+    """What to do when ``run_id`` already has a snapshot: ``"resume"``
+    (continue, or replay if completed), ``"restart"`` (overwrite), ``"fail"``
+    (raise), or ``"resume_only"`` (resume, raising if nothing is stored)."""
+
     delete_on_success: bool = False
+    """Drop the snapshot once the run completes — for runs whose durable
+    record lives elsewhere (e.g. a Session)."""
+
     resume_from: RunSnapshot | None = None
+    """A snapshot to rehydrate directly, bypassing the ``run_id`` lookup."""
 
     def __post_init__(self) -> None:
         if self.if_run_exists not in _IF_RUN_EXISTS:

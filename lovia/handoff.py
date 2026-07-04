@@ -48,26 +48,25 @@ class _HandoffSignal:
 
 @dataclass
 class Handoff:
-    """A handoff target with optional customisation.
-
-    Attributes:
-        target: The agent to transfer control to.
-        name: Override for the ``transfer_to_<name>`` tool name.
-        description: Override for the tool description shown to the model. This
-            is the routing signal the parent agent sees — set it to the target's
-            specialty when the default ("Transfer to the <name> agent...") is too
-            thin to route on reliably.
-        on_handoff: Optional callback invoked when the handoff fires; receives
-            the parsed arguments (a single ``reason`` string by default) and
-            the run context.
-    """
+    """A handoff target with optional customisation."""
 
     target: "Agent[Any]"
+    """The agent to transfer control to."""
+
     name: str | None = None
+    """Override for the ``transfer_to_<name>`` tool name."""
+
     description: str | None = None
+    """Override for the tool description shown to the model. This is the
+    routing signal the parent agent sees — set it to the target's specialty
+    when the default ("Transfer to the <name> agent...") is too thin to
+    route on reliably."""
+
     on_handoff: (
         Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[None] | None] | None
     ) = None
+    """Callback invoked when the handoff fires; receives the parsed tool
+    arguments (a single ``reason`` string by default) and the run context."""
 
 
 def build_handoff_tool(handoff: Handoff) -> Tool:

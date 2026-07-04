@@ -543,7 +543,11 @@ class Memory:
         self, ctx: RunContext[Any]
     ) -> "str | Provider | list[str | Provider]":
         # ``self.model`` overrides; otherwise reuse the host agent's model.
-        return self.model if self.model is not None else ctx.agent.model
+        if self.model is not None:
+            return self.model
+        model = ctx.agent.model
+        assert model is not None  # the host agent is mid-run, so it resolved one
+        return model
 
     def _should_expand(self) -> bool:
         if self.expand_query == "auto":

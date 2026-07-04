@@ -145,6 +145,8 @@ class RouterDeps:
         provisional: str,
     ) -> None:
         model = self.title_model or self.agents[agent_name].model
+        if model is None:  # pragma: no cover - a just-run agent has a model
+            return
         try:
             title = await generate_title(user_msg, output, model=model)
             # Compare-and-set: skip if the user renamed the chat meanwhile.

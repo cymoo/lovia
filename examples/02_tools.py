@@ -14,21 +14,15 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from pydantic import Field
 
-from lovia import Agent, Runner, enable_logging, tool
+from lovia import Agent, Runner, enable_logging, tool, model_from_env
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 enable_logging()  # Logs each tool call and its result to the console.
 

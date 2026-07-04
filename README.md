@@ -181,6 +181,13 @@ Create request-specific variants with `clone()`:
 strict = agent.clone(instructions="Answer with citations only.")
 ```
 
+`@agent.instruction` is the one deliberate in-place mutation on an otherwise
+immutable agent, kept for decorator ergonomics. The boundary with `clone()`
+is copy-on-register: fragments registered before a clone are carried into it,
+fragments registered after affect only the original — so register fragments
+right after constructing the agent, or use `with_instructions()` for a purely
+functional variant.
+
 ### Runner
 
 ```python
@@ -209,6 +216,12 @@ async for ev in handle:
 
 result = await handle.result()
 ```
+
+Iteration never raises: every stream closes with exactly one terminal event —
+`RunCompleted`, or `RunFailed` carrying the error — so the loop body needs no
+try/except. `handle.result()` returns the `RunResult` or raises the run's
+error (`RunCancelled`, `BudgetExceeded`, ...). `handle.cancel()` requests
+cooperative cancellation without pre-wiring a `CancelToken`.
 
 ### Tools
 
@@ -307,6 +320,16 @@ agent = Agent(
 Custom providers implement the `Provider` protocol and can be registered with
 the `lovia.providers` entry-point group.
 
+Scripts that should not hard-code a model use the one blessed env lookup —
+`LOVIA_MODEL`, then `OPENAI_DEFAULT_MODEL` / `ANTHROPIC_DEFAULT_MODEL` — and
+fail loudly with a setup hint when nothing is configured:
+
+```python
+from lovia import model_from_env
+
+agent = Agent(name="assistant", model=model_from_env())
+```
+
 ## Multi-Agent Workflows
 
 ### Handoff
@@ -404,10 +427,12 @@ agent = Agent(
     tools=[ask_human(channel)],
 )
 
-# Somewhere in your UI/event loop:
-for question in channel.pending:
+# The operator side is one loop — it ends when you call channel.close():
+async for question in channel.questions():
     channel.answer(question.id, "Use option A.")
 ```
+
+(`channel.pending` still exists for poll-style UIs.)
 
 ## Sessions and Checkpoints
 
@@ -463,16 +488,21 @@ transcript stays in the session/checkpoint, while the per-model-call view can
 offload huge tool results, clear older tool results, and summarize old history
 under token pressure.
 
+Context policy is agent *posture* — set it once on the agent and every run
+inherits it; `Runner.run(..., context_policy=...)` overrides a single call:
+
 ```python
-from lovia import Compaction, Runner
+from lovia import Agent, Compaction
 
-policy = Compaction(
-    context_window=200_000,
-    compact_at=0.75,
-    compact_to=0.50,
+agent = Agent(
+    name="companion",
+    model="deepseek-v4-pro",
+    context_policy=Compaction(
+        context_window=200_000,
+        compact_at=0.75,
+        compact_to=0.50,
+    ),
 )
-
-result = await Runner.run(agent, "Continue.", context_policy=policy)
 ```
 
 `Compaction` automatically provides a `recall_tool_result` tool so the model
@@ -517,18 +547,26 @@ agent = Agent(
 )
 ```
 
-Budgets, cancellation, and retry policies are explicit:
+Reliability knobs follow one placement rule. *Posture* — how the agent behaves
+when infrastructure hiccups — lives on the `Agent`: provider `retry` (on by
+default; `retry=None` disables), `default_tool_retries` / `default_tool_timeout`,
+the `model=[...]` fallback chain, and `context_policy`. *Limits* — how much one
+request may spend — are per-run arguments: `max_turns`, `budget`, and
+cancellation.
 
 ```python
 from lovia import RetryPolicy, RunBudget
 
+agent = agent.clone(retry=RetryPolicy(max_attempts=3))  # posture
+
 result = await Runner.run(
     agent,
     "Analyze these logs.",
-    budget=RunBudget(max_tool_calls=20, max_seconds=60),
-    retry=RetryPolicy(max_attempts=3),
+    budget=RunBudget(max_tool_calls=20, max_seconds=60),  # limits
 )
 ```
+
+(`Runner.run(..., retry=...)` still overrides the posture for one call.)
 
 Lifecycle hooks receive the same typed events used by streaming. Each handler is
 called as `handler(event, ctx)` — it gets the event plus the run's live
@@ -622,6 +660,9 @@ The details that keep suites honest and cheap:
   `$LOVIA_EVAL_JUDGE_MODEL`) and is just another check — pass a
   `lovia.testing.ScriptedProvider` as its `model` and the whole suite runs
   offline.
+- **`Case(model=...)`** overrides the agent's model for one case (the agent is
+  cloned per sample). Offline suites give every case its own scripted
+  transcript this way; live suites pin a case to a different model.
 - **Errors are data.** A sample that raises records its `error` and fails
   alone; one broken case or check never aborts the suite.
 - **Baselines.** `report.save(path)`, `Report.load(path)`, and
@@ -1017,10 +1058,10 @@ installed (or pass `--env-file`). Model credentials use the provider's own
 | `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
 | `--app MODULE:ATTR` | `LOVIA_APP` | build default agent |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | `2` (retries after the first; `0` disables) |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | the agent's retry posture, 3 retries (`0` disables) |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
 | `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | auto-detect, else 200K |
+| `--context-window` | `LOVIA_CONTEXT_WINDOW` | ask the provider; reactive fallback when unknown |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
 

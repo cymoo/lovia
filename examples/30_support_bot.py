@@ -5,8 +5,8 @@ Everything from earlier examples in one ~100-line app:
 * streaming output with tool-call progress,
 * a ``needs_approval`` refund gate resolved from the keyboard,
 * ``SQLiteSession`` persistence — restart the script and it remembers,
-* default ``Compaction`` so a long-running chat never overflows the
-  model's context window.
+* agent-level ``Compaction`` posture so a long-running chat never
+  overflows the model's context window.
 
 Run::
 
@@ -19,22 +19,25 @@ Type ``/new`` for a fresh conversation, ``/quit`` to exit.
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Compaction, Runner, Session, SQLiteSession, events, tool
+from lovia import (
+    Agent,
+    Compaction,
+    Runner,
+    Session,
+    SQLiteSession,
+    events,
+    tool,
+    model_from_env,
+)
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 ORDERS = {
     "A-1001": {"item": "Mechanical keyboard", "status": "delivered", "price": 89.00},
@@ -69,19 +72,15 @@ agent = Agent(
     ),
     model=MODEL,
     tools=[lookup_order, issue_refund],
+    # Posture: every run of this agent compacts long chats the same way.
+    context_policy=Compaction(),
 )
-
-# Created once and reused: compaction decisions are sticky per run, and the
-# policy is stateless across runs, so sharing one instance is the norm.
-POLICY = Compaction()
 
 
 async def one_turn(
     session: Session, session_id: str, text: str, *, auto_approve: bool = False
 ) -> None:
-    handle = Runner.stream(
-        agent, text, session=session, session_id=session_id, context_policy=POLICY
-    )
+    handle = Runner.stream(agent, text, session=session, session_id=session_id)
     async for ev in handle:
         if isinstance(ev, events.TextDelta):
             print(ev.delta, end="", flush=True)

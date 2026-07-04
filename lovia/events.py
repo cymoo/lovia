@@ -175,11 +175,13 @@ class ToolCallCompleted(ToolEvent):
 
     call: ToolCall
     result: Any
+    """The raw, un-rendered return value — for observability and type-aware
+    consumers (e.g. the todo card)."""
+
     is_error: bool = False
-    #: The rendered result string the model received — the live twin of
-    #: ``ToolResultEntry.output``. ``result`` stays the raw, un-rendered value
-    #: (for observability and type-aware consumers like the todo card).
     output: str = ""
+    """The rendered result string the model received — the live twin of
+    ``ToolResultEntry.output``."""
 
 
 @dataclass
@@ -233,18 +235,43 @@ class ApprovalRequired(ToolEvent):
 
 
 @dataclass
-class ErrorOccurred(ErrorEvent):
+class ToolCallFailed(ErrorEvent):
+    """A non-terminal error scoped to one tool call.
+
+    Emitted for tool failures, render failures, and approval predicate/handler
+    errors; the run continues (the model sees an error result). This event
+    carries the actual exception; the paired
+    :class:`ToolCallCompleted` (``is_error=True``) carries the string the
+    model sees. Terminal run-level failures are :class:`RunFailed` instead.
+    """
+
     error: BaseException
-    #: The tool call being processed when the error occurred (tool failures,
-    #: render failures, approval predicate/handler errors); ``None`` for
-    #: run-level errors. Needed to attribute an error once one turn's tool
-    #: events interleave across concurrently-executing calls.
+    """The exception raised while processing the call."""
+
     call: ToolCall | None = None
+    """The tool call being processed when the error occurred. Needed to
+    attribute an error once one turn's tool events interleave across
+    concurrently-executing calls."""
 
 
 @dataclass
 class RunCompleted(RunEvent):
     result: "RunResult"
+
+
+@dataclass
+class RunFailed(RunEvent):
+    """Terminal event: the run ended without a result.
+
+    Exactly one of :class:`RunCompleted` / :class:`RunFailed` closes every
+    stream — iteration then ends; it never raises. ``error`` is the exception
+    the run ended with (:class:`~lovia.exceptions.RunCancelled` for a
+    cooperative cancel, :class:`~lovia.exceptions.BudgetExceeded`,
+    :class:`~lovia.exceptions.ProviderError`, ...), and
+    :meth:`~lovia.RunHandle.result` raises that same exception.
+    """
+
+    error: BaseException
 
 
 @dataclass
@@ -284,3 +311,10 @@ class ContextCompacted(ContextEvent):
     entries_before: list[TranscriptEntry]
     entries_after: list[TranscriptEntry]
     notice: CompactionNotice
+
+
+# Deprecated alias (since 0.9): ``ErrorOccurred`` was renamed once ``RunFailed``
+# took over the run-level role and this event became tool-scoped. Same class
+# object, so ``isinstance`` checks and ``hooks.on`` registrations written
+# against either name keep working. Will be removed after one minor release.
+ErrorOccurred = ToolCallFailed

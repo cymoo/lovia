@@ -27,26 +27,46 @@ AgentSource = Union[Agent[Any], Callable[[], Agent[Any]]]
 
 @dataclass
 class Case:
-    """One eval scenario: an input plus the checks its run must satisfy.
-
-    ``name`` defaults to a snippet of the input. ``samples`` reruns the case
-    to measure non-deterministic behavior; the case passes when at least
-    ``pass_threshold`` of its samples pass. ``context`` / ``output_type`` /
-    ``max_turns`` are forwarded to :meth:`~lovia.Runner.run` per sample;
-    ``timeout`` bounds each sample's wall-clock seconds; ``metadata`` is
-    carried through to the :class:`~lovia.eval.CaseResult` untouched.
-    """
+    """One eval scenario: an input plus the checks its run must satisfy."""
 
     input: str | list[Message]
+    """The user input the sample runs with."""
+
     checks: Sequence[Check] = ()
+    """Checks the run's :class:`~lovia.RunResult` must satisfy — built-in
+    matchers, ``llm_judge``, or any ``(RunResult) -> CheckResult | bool``."""
+
     name: str = ""
+    """Report label; defaults to a snippet of the input."""
+
     samples: int = 1
+    """Reruns per case, to measure non-deterministic behavior."""
+
     pass_threshold: float = 1.0
+    """Fraction of samples that must pass (``samples=4,
+    pass_threshold=0.75`` = at least 3 of 4)."""
+
     context: Any = None
+    """Forwarded to :meth:`~lovia.Runner.run` as ``context=`` per sample."""
+
     output_type: Any = None
+    """Per-sample ``output_type`` override; ``None`` = the agent's own."""
+
+    model: Any = None
+    """Overrides the agent's model for this case (anything ``Agent.model``
+    accepts); the agent is cloned per sample with it. This is how an offline
+    suite gives every case its own :class:`~lovia.testing.ScriptedProvider`
+    script while sharing one agent definition, and how a live suite pins one
+    case to a different model. ``None`` = the agent's own model."""
+
     max_turns: int = 50
+    """Turn cap forwarded to :meth:`~lovia.Runner.run` per sample."""
+
     timeout: float | None = None
+    """Wall-clock cap per sample, in seconds; ``None`` = no cap."""
+
     metadata: dict[str, Any] = field(default_factory=dict)
+    """Carried through to the :class:`~lovia.eval.CaseResult` untouched."""
 
     def __post_init__(self) -> None:
         if self.samples < 1:
@@ -118,6 +138,8 @@ async def _run_sample(
     price: Callable[[Usage], float] | None,
 ) -> SampleResult:
     resolved = agent if isinstance(agent, Agent) else agent()
+    if case.model is not None:
+        resolved = resolved.clone(model=case.model)
     sample = SampleResult()
     started = time.monotonic()
     try:

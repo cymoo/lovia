@@ -35,7 +35,9 @@ def test_resolve_model_falls_back_to_anthropic(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("LOVIA_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_DEFAULT_MODEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-x")
-    assert cli.resolve_model(None) == "claude-x"
+    # A bare Anthropic id gets its vendor prefix so it routes to the right
+    # adapter instead of warn-routing to the OpenAI-compatible one.
+    assert cli.resolve_model(None) == "anthropic:claude-x"
 
 
 def test_resolve_model_errors_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -551,7 +553,8 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_max_retries_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_MAX_RETRIES", raising=False)
-    assert cli.resolve_max_retries(None) == 2  # default
+    # No flag, no env -> None: the agent's own retry posture applies.
+    assert cli.resolve_max_retries(None) is None
     monkeypatch.setenv("LOVIA_MAX_RETRIES", "5")
     assert cli.resolve_max_retries(None) == 5  # env
     assert cli.resolve_max_retries(0) == 0  # flag wins; 0 disables retries
@@ -589,36 +592,26 @@ def test_resolve_max_tokens_rejects_non_positive() -> None:
 
 
 def test_resolve_context_window_explicit_wins() -> None:
-    assert cli.resolve_context_window(123_456, "anthropic:claude-opus-4-8") == 123_456
+    assert cli.resolve_context_window(123_456) == 123_456
 
 
 def test_resolve_context_window_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_CONTEXT_WINDOW", "100000")
-    assert cli.resolve_context_window(None, "openai:gpt-x") == 100_000
+    assert cli.resolve_context_window(None) == 100_000
 
 
-def test_resolve_context_window_autodetects_known_model(
+def test_resolve_context_window_defaults_to_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LOVIA_CONTEXT_WINDOW", raising=False)
-    # A known Anthropic alias resolves to its real window, not the 64K default.
-    assert cli.resolve_context_window(None, "anthropic:claude-opus-4-8") == 200_000
-
-
-def test_resolve_context_window_falls_back_for_unknown(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("LOVIA_CONTEXT_WINDOW", raising=False)
-    # An endpoint not in the context-window table uses the conservative default.
-    assert (
-        cli.resolve_context_window(None, "openai:mystery-model")
-        == cli.DEFAULT_CONTEXT_WINDOW
-    )
+    # No flag, no env -> None: Compaction asks the provider at call time and
+    # falls back to reactive overflow handling when the window is unknown.
+    assert cli.resolve_context_window(None) is None
 
 
 def test_resolve_context_window_rejects_zero() -> None:
     with pytest.raises(UserError, match="must be >= 1"):
-        cli.resolve_context_window(0, "m")
+        cli.resolve_context_window(0)
 
 
 def test_parser_reliability_flags() -> None:

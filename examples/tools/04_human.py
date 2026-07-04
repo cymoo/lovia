@@ -1,8 +1,9 @@
 """Ask-a-human — the agent suspends until a human answers via the channel.
 
-In production wire the channel to a chat UI / Slack bot / HTTP endpoint;
-here we answer from the terminal. ``channel.pending`` lists open questions;
-``channel.answer(id, text)`` resolves one.
+The operator side is one loop: ``async for q in channel.questions()`` yields
+each question as the model asks it and ends when the channel is closed. In
+production the loop body forwards to a chat UI / Slack bot / HTTP endpoint;
+here we answer from the terminal.
 
 Run::
 
@@ -12,34 +13,25 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Runner
+from lovia import Agent, Runner, model_from_env
 from lovia.tools.human import HumanChannel, ask_human
 
 load_dotenv()
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 async def main() -> None:
     channel = HumanChannel()
 
-    async def answer_when_asked() -> None:
-        # Poll until a question shows up, then answer it from stdin.
-        while True:
-            await asyncio.sleep(0.5)
-            for q in channel.pending:
-                ans = input(f"\n[human] {q.question}\n> ")
-                channel.answer(q.id, ans)
+    async def operator() -> None:
+        async for q in channel.questions():
+            # input() blocks the loop; fine for a demo, use your UI in prod.
+            channel.answer(q.id, input(f"\n[human] {q.question}\n> "))
 
-    poll = asyncio.create_task(answer_when_asked())
+    op = asyncio.create_task(operator())
 
     agent = Agent(
         name="Concierge",
@@ -49,7 +41,9 @@ async def main() -> None:
     )
     result = await Runner.run(agent, "Book me a table somewhere nice tonight.")
     print(result.output)
-    poll.cancel()
+
+    channel.close()  # ends the operator's questions() loop
+    await op
 
 
 if __name__ == "__main__":

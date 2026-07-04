@@ -42,10 +42,21 @@ class RunBudget:
     """
 
     max_input_tokens: int | None = None
+    """Cap on cumulative input tokens; ``None`` = unconstrained."""
+
     max_output_tokens: int | None = None
+    """Cap on cumulative output tokens; ``None`` = unconstrained."""
+
     max_total_tokens: int | None = None
+    """Cap on cumulative input+output tokens; ``None`` = unconstrained."""
+
     max_tool_calls: int | None = None
+    """Cap on *requested* tool calls, rejected ones included; ``None`` =
+    unconstrained."""
+
     max_seconds: float | None = None
+    """Wall-clock cap, measured from the first check; ``None`` =
+    unconstrained."""
 
     _started_at: float | None = field(default=None, init=False, repr=False)
     _tool_calls: int = field(default=0, init=False, repr=False)
@@ -150,20 +161,40 @@ class RetryPolicy:
     so concurrent retries don't synchronize.
 
     ``max_attempts`` is the total number of calls to :meth:`Provider.stream`
-    (the first call counts as attempt 1), so ``max_attempts=3`` means at most
-    two retries and ``max_attempts=1`` disables retrying.
+    (the first call counts as attempt 1), so ``max_attempts=4`` means at most
+    three retries and ``max_attempts=1`` disables retrying.
+
+    The defaults lean patient — network blips, timeouts, and 429s are routine
+    for long-running agents: 4 attempts with a jittered ~1s/2s/4s schedule,
+    capped at 30s per wait. Interactive callers that prefer failing fast can
+    tighten per agent (``Agent(retry=RetryPolicy(max_attempts=2))``) or per
+    run.
 
     If you supply :class:`Agent.model` as a list, the policy is applied
     *per-provider*; the runner moves to the next provider once retries on the
     current one are exhausted.
     """
 
-    max_attempts: int = 3
+    max_attempts: int = 4
+    """Total calls to ``Provider.stream`` (the first counts as attempt 1):
+    ``4`` means at most three retries; ``1`` disables retrying."""
+
     restart_on_partial: bool = True
-    backoff_base: float = 0.5
-    backoff_max: float = 8.0
+    """Also recover from errors after streaming began, discarding the partial
+    output (an ``OutputDiscarded`` event) and re-streaming the turn. ``False``
+    propagates mid-stream errors immediately."""
+
+    backoff_base: float = 1.0
+    """First-retry delay in seconds; doubles each retry (±50% jitter)."""
+
+    backoff_max: float = 30.0
+    """Ceiling on any single backoff delay, in seconds."""
+
     retry_on: RetryPredicate = field(default=_default_retry_on)
+    """Predicate deciding which exceptions are transient."""
+
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
+    """Sleep function — override in tests to skip real waiting."""
 
     def backoff_delay(self, attempt: int) -> float:
         """Jittered exponential delay before retrying after ``attempt`` failures."""

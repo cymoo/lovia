@@ -14,23 +14,17 @@ context-window overflow.
 
 from __future__ import annotations
 
-import os
 
 from dotenv import load_dotenv
 
-from lovia import Agent, Compaction, Todo, tool, enable_logging
+from lovia import Agent, Compaction, Todo, tool, enable_logging, model_from_env
 from lovia.tools import duckduckgo_search
 from lovia.workspace import Workspace
 from lovia.web import serve
 
 load_dotenv()
 
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 @tool(needs_approval=True)
@@ -52,19 +46,14 @@ def main() -> None:
         tools=[send_email, duckduckgo_search()],
         plugins=[Todo()],
         workspace=Workspace.local(".", mode="trusted"),
+        # Compaction posture rides on the agent; the server inherits it.
+        # Cheap moves first (archive/clear old tool results), an incremental
+        # LLM summary as the last resort, all decisions sticky so the prompt
+        # prefix stays cache-friendly. Omit context_window to ask the provider
+        # for the active model's window.
+        context_policy=Compaction(context_window=1_000_000),
     )
-    # Default policy: cheap moves first (archive/clear old tool results),
-    # an incremental LLM summary as the last resort, all decisions sticky so
-    # the prompt prefix stays cache-friendly. Omit context_window to ask the
-    # provider for the active model's window and fall back to the reactive
-    # overflow path when the window is unknown.
-    policy = Compaction(context_window=1_000_000)
-    serve(
-        agent,
-        host="127.0.0.1",
-        port=8000,
-        context_policy=policy,
-    )
+    serve(agent, host="127.0.0.1", port=8000)
 
 
 if __name__ == "__main__":

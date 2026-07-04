@@ -207,9 +207,7 @@ def test_message_translation_drops_orphan_redacted_thinking() -> None:
         ]
     )
 
-    assert all(
-        block["type"] == "text" for msg in out for block in msg["content"]
-    )
+    assert all(block["type"] == "text" for msg in out for block in msg["content"])
 
 
 def test_message_translation_honors_reasoning_provider_param() -> None:

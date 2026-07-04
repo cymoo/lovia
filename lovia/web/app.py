@@ -16,7 +16,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ..agent import Agent
-from ..context import Compaction, ContextPolicy
+from ..context import ContextPolicy
 from ..providers import Provider
 from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
@@ -28,8 +28,6 @@ from .store import ChatStore
 from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
-
-DEFAULT_CONTEXT_WINDOW = 200_000  # 200K
 
 
 def _normalise(
@@ -59,7 +57,7 @@ def create_app(
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
-    retry: RetryPolicy | None = RetryPolicy(),
+    retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     default_budget_factory: Callable[[], RunBudget] | None = None,
@@ -80,12 +78,15 @@ def create_app(
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
 
-    ``context_policy`` defaults to :class:`Compaction` with a
-    200 K token cap.  Pass ``NoopContextPolicy()`` to disable compaction.
+    ``context_policy`` is a server-level override applied to every served
+    agent; ``None`` (default) lets each agent's own ``context_policy`` — or
+    the standard :class:`Compaction` — apply. Pass ``NoopContextPolicy()``
+    to disable compaction server-wide.
 
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
-    the agent loop per request, ``budget`` (a :class:`RunBudget`) bounds token
-    spend, and ``retry`` (a :class:`RetryPolicy`) governs provider retries.
+    the agent loop per request and ``budget`` (a :class:`RunBudget`) bounds
+    token spend. ``retry`` (a :class:`RetryPolicy`) overrides the agent's own
+    provider-retry posture for server-driven turns; ``None`` inherits it.
 
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
@@ -106,10 +107,6 @@ def create_app(
     else:
         chat_store = ChatStore.sqlite(_default_db_path(agents))
 
-    effective_policy: ContextPolicy = context_policy or Compaction(
-        context_window=DEFAULT_CONTEXT_WINDOW
-    )
-
     approvals = ApprovalRegistry()
 
     deps = RouterDeps(
@@ -117,7 +114,9 @@ def create_app(
         store=chat_store,
         approvals=approvals,
         title=title,
-        context_policy=effective_policy,
+        # ``None`` = no server-level override: each agent's own context_policy
+        # (or the loop's default Compaction) applies per run.
+        context_policy=context_policy,
         title_model=title_model,
         generate_titles=generate_titles,
         max_turns=max_turns,
@@ -167,7 +166,7 @@ def create_app(
     app.state.store = chat_store
     app.state.session = chat_store.session
     app.state.approvals = approvals
-    app.state.context_policy = effective_policy
+    app.state.context_policy = context_policy
     app.state.tracer = tracer
     app.state.deps = deps
     return app
@@ -187,7 +186,7 @@ def serve(
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
-    retry: RetryPolicy | None = RetryPolicy(),
+    retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     ui: bool = True,
     empty_title: str = "Wake up, Neo.",
@@ -196,10 +195,10 @@ def serve(
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking).
 
-    ``max_turns`` / ``budget`` / ``retry`` set the per-request run limits (see
-    :func:`create_app`); ``ui=False`` serves the JSON + SSE API only; any
-    remaining keyword arguments are forwarded to ``uvicorn.run`` (e.g.
-    ``log_level``, ``reload``, ``workers``).
+    ``max_turns`` / ``budget`` set the per-request run limits and ``retry``
+    overrides the agent's retry posture (see :func:`create_app`); ``ui=False``
+    serves the JSON + SSE API only; any remaining keyword arguments are
+    forwarded to ``uvicorn.run`` (e.g. ``log_level``, ``reload``, ``workers``).
     """
     try:
         import uvicorn

@@ -72,6 +72,7 @@ from .providers import (
     ModelSettings,
     OpenAIChatProvider,
     Provider,
+    model_from_env,
 )
 from .reliability import CancelToken, RetryPolicy, RunBudget
 from .steering import Mailbox
@@ -152,6 +153,7 @@ __all__ = [
     "assistant",
     "enable_logging",
     "events",
+    "model_from_env",
     "system",
     "tool",
     "user",

@@ -23,22 +23,16 @@ Useful endpoints (see ``/api/docs`` for the full schema):
 
 from __future__ import annotations
 
-import os
 
 from dotenv import load_dotenv
 from fastapi.responses import HTMLResponse
 
-from lovia import Agent, tool
+from lovia import Agent, tool, model_from_env
 from lovia.web import create_app
 
 load_dotenv()
 
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 @tool

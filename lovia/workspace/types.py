@@ -91,30 +91,35 @@ class WorkspaceLimits:
     ``Agent.max_tool_output_chars``, which is a transcript/storage backstop
     applied to every tool's rendered output regardless of source.
 
-    Attributes:
-        max_file_read_chars: Max characters returned by one ``read_file`` call
-            (drives pagination; the result is flagged ``truncated``).
-        max_file_read_bytes: Files larger than this are read only up to a
-            bounded prefix, so a huge file can't exhaust memory.
-        max_shell_output_chars: Max characters of one command's stdout/stderr
-            captured (each stream clipped independently).
-        max_grep_file_bytes: Files larger than this are skipped by grep.
-        max_grep_line_chars: Each matched grep line is clipped to this.
-        max_list_results: Default cap on entries returned by ``list_files``.
-        max_grep_matches: Default cap on matches returned by ``grep``.
+    Two different axes, hence the very different magnitudes: ``*_chars`` cap
+    how much text is returned to the model (a context budget; results are
+    paginated/clipped and flagged ``truncated``), while ``*_bytes`` cap how
+    much is loaded from disk (a memory/OOM guard).
     """
 
-    # Two different axes, hence the very different magnitudes:
-    #   *_chars — how much text is returned to the model (a context budget; the
-    #             result is paginated/clipped and flagged ``truncated``).
-    #   *_bytes — how much is loaded from disk (a memory/OOM guard).
     max_file_read_chars: int = 50_000
+    """Max characters returned by one ``read_file`` call (drives pagination;
+    the result is flagged ``truncated``)."""
+
     max_file_read_bytes: int = 10_000_000
+    """Files larger than this are read only up to a bounded prefix, so a
+    huge file can't exhaust memory."""
+
     max_shell_output_chars: int = 30_000
+    """Max characters of one command's stdout/stderr captured (each stream
+    clipped independently)."""
+
     max_grep_file_bytes: int = 5_000_000
+    """Files larger than this are skipped by grep."""
+
     max_grep_line_chars: int = 400
+    """Each matched grep line is clipped to this."""
+
     max_list_results: int = 500
+    """Default cap on entries returned by ``list_files``."""
+
     max_grep_matches: int = 100
+    """Default cap on matches returned by ``grep``."""
 
 
 class ClippedList(list[_ItemT]):

@@ -28,17 +28,12 @@ import subprocess
 import tempfile
 import textwrap
 
-from lovia import Agent, Runner, tool
+from lovia import Agent, Runner, tool, model_from_env
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.environ.get("LOVIA_MODEL")
-if not MODEL:
-    raise SystemExit(
-        'Set LOVIA_MODEL first (env or .env), e.g. "openai:gpt-5.5" '
-        'or "anthropic:claude-4-8-opus"'
-    )
+MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
 
 # ---------------------------------------------------------------------------

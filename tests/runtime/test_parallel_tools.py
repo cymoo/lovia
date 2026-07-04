@@ -397,10 +397,10 @@ async def test_error_occurred_carries_the_failing_call() -> None:
         ),
         tools=[boom, fine],
     )
-    errors: list[events.ErrorOccurred] = []
+    errors: list[events.ToolCallFailed] = []
     handle = Runner.stream(agent, "go")
     async for ev in handle:
-        if isinstance(ev, events.ErrorOccurred):
+        if isinstance(ev, events.ToolCallFailed):
             errors.append(ev)
     result = await handle.result()
     assert result.output == "done"

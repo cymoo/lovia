@@ -30,13 +30,19 @@ if not MODEL:
 
 billing = Agent(
     name="Billing",
-    instructions="You handle invoices, refunds, and subscription questions.",
+    instructions=(
+        "You handle invoices, refunds, and subscription questions. "
+        "The conversation is yours now — resolve the issue directly."
+    ),
     model=MODEL,
 )
 
 support = Agent(
     name="Support",
-    instructions="You debug product issues. Ask for reproduction steps.",
+    instructions=(
+        "You debug product issues. The conversation is yours now — help the "
+        "user directly and ask for reproduction steps."
+    ),
     model=MODEL,
 )
 

@@ -80,13 +80,14 @@ async def main() -> None:
     handle = Runner.stream(
         agent, TASK, checkpoint=CheckpointOptions(cp, run_id), cancel_token=cancel
     )
-    async for ev in handle:
-        if isinstance(ev, events.TurnStarted) and ev.turn == 2:
-            # Turn 1 (chapter 1) is snapshotted; "crash" before turn 2 acts.
-            cancel.cancel()
     try:
+        async for ev in handle:
+            if isinstance(ev, events.TurnStarted) and ev.turn == 2:
+                # Turn 1 (chapter 1) is snapshotted; "crash" before turn 2 acts.
+                cancel.cancel()
         await handle.result()
     except RunCancelled:
+        # The stream (and result) surface the cancellation as an exception.
         print(f"phase 1: crashed after fetching chapters {fetched}")
 
     snap = await cp.load(run_id)

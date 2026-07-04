@@ -23,7 +23,7 @@ import logging
 import time
 from collections import Counter
 from contextlib import AsyncExitStack
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 if TYPE_CHECKING:
@@ -41,15 +41,17 @@ from .utils import (
     supports_json_schema,
     truncate_repr,
 )
-from .tool_calls import ToolCallProcessor
+from .tool_calls import PreflightResult, ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
 from ..checkpointer import CheckpointOptions
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
 from ..exceptions import (
+    BudgetExceeded,
     ContextOverflowError,
     MaxTurnsExceeded,
     OutputValidationError,
+    RunCancelled,
     UserError,
 )
 from ..guardrails import (
@@ -864,12 +866,164 @@ class RunLoop:
         calls: list[ToolCall],
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
-        for call in calls:
-            async for ev in processor.process(call, state=state, tracer=tracer):
-                yield await self._emit(state, ev)
-            # Persist after each tool result so a crash mid tool-execution can
-            # resume by draining the calls that still have no matching result.
-            await self.checkpoints.save_running(state)
+        """Execute one turn's tool calls, concurrently where allowed.
+
+        Two-phase per call: ``preflight`` (cancel/budget, lookup, handoff
+        dedup, argument parsing, approval) runs serially in request order on
+        this generator body — so approval backpressure and budget determinism
+        are exactly the serial loop's — while ready calls with
+        ``Tool.parallel=True`` execute in background tasks whose events
+        funnel through one queue back onto this body. That drain point (see
+        :meth:`_drain_batch`) is the single place events reach hooks and the
+        consumer and checkpoints are saved, preserving both the hook-ordering
+        contract and the per-result durability cadence. Transcript results
+        therefore append in completion order — safe, everything downstream is
+        ``call_id``-keyed (providers, resume drain, compaction windows).
+
+        ``Tool.parallel=False`` — and every handoff tool, whatever its flag —
+        is an execution barrier: in-flight calls finish first, the tool runs
+        inline and alone, then spawning resumes. A batch of only such tools
+        reproduces the serial loop verbatim.
+
+        Aborts: a ``BudgetExceeded`` from preflight stops *spawning* but lets
+        in-flight calls finish and persist (the RunBudget contract) — only
+        unstarted calls are left dangling for a resume to drain. Anything
+        else (``RunCancelled``, a checkpoint store failure, an unexpected
+        bug, the consumer abandoning the stream) cancels the in-flight tasks
+        promptly; their calls dangle and a resume re-executes them, exactly
+        as a serial abort left every not-yet-run call.
+        """
+        batch = _ToolBatch()
+        budget_abort: BudgetExceeded | None = None
+        try:
+            for call in calls:
+                # Surface (and persist) finished work before the next gate —
+                # latency only; correctness never depends on this sweep.
+                async for ev in self._drain_batch(state, batch, wait=False):
+                    yield ev
+
+                outcome = PreflightResult()
+                try:
+                    async for ev in processor.preflight(call, outcome, state=state):
+                        yield await self._emit(state, ev)
+                        if isinstance(ev, events.ToolCallCompleted):
+                            # Preflight rejections append their error entry
+                            # too — keep the per-result save cadence for them.
+                            await self.checkpoints.save_running(state)
+                except BudgetExceeded as exc:
+                    budget_abort = exc
+                    break
+                if outcome.ready is None:
+                    continue  # rejected: entry + ToolCallCompleted already out
+                tool, args = outcome.ready
+
+                if tool._handoff or not tool.parallel:
+                    # Execution barrier. ``_handoff`` is checked on its own so
+                    # a hand-built Tool(_handoff=True, parallel=True) still
+                    # cannot race the first-handoff-wins dedup.
+                    async for ev in self._drain_batch(state, batch, wait=True):
+                        yield ev
+                    async for ev in processor.execute(
+                        call, tool, args, state=state, tracer=tracer
+                    ):
+                        yield await self._emit(state, ev)
+                    # Persist after each tool result so a crash mid
+                    # tool-execution can resume by draining the calls that
+                    # still have no matching result.
+                    await self.checkpoints.save_running(state)
+                else:
+                    gen = processor.execute(
+                        call, tool, args, state=state, tracer=tracer
+                    )
+                    batch.active += 1
+                    # create_task copies the current context, so the
+                    # ContextVar-based tracer depth nests per task.
+                    batch.tasks.append(asyncio.create_task(_pump(gen, batch.queue)))
+
+            async for ev in self._drain_batch(state, batch, wait=True):
+                yield ev
+            if budget_abort is not None:
+                # Raised only after the drain: in-flight results are saved,
+                # so a resume re-executes nothing that already ran.
+                raise budget_abort
+        finally:
+            # Reached on: a pump failure re-raised by a drain, RunCancelled or
+            # BudgetExceeded from preflight, a save_running store failure,
+            # GeneratorExit (consumer abandoned the stream), or normal
+            # completion (everything below is then a no-op). NO yields here —
+            # an async generator must not yield while closing; plain awaits
+            # are fine. If the consuming task is itself being cancelled the
+            # gather may be interrupted after cancel() was already delivered —
+            # the tasks then die on their own (best-effort teardown, matching
+            # the shield-only-the-terminal-save posture of the run loop).
+            for task in batch.tasks:
+                task.cancel()
+            if batch.tasks:
+                await asyncio.gather(*batch.tasks, return_exceptions=True)
+                # Pumps swallow their exception into the queue marker (the
+                # tasks themselves never carry one), so secondary failures —
+                # siblings that broke while the first failure was already
+                # propagating — are logged from the abandoned queue.
+                while True:
+                    try:
+                        item = batch.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if (
+                        isinstance(item, _PumpEnded)
+                        and item.error is not None
+                        and not isinstance(
+                            item.error, (asyncio.CancelledError, RunCancelled)
+                        )
+                    ):
+                        logger.warning(
+                            "tool.batch_teardown: sibling tool call also failed: %r",
+                            item.error,
+                        )
+
+    async def _drain_batch(
+        self, state: RunState, batch: _ToolBatch, *, wait: bool
+    ) -> AsyncIterator[events.Event]:
+        """Surface queued events from the batch's in-flight tool tasks.
+
+        ``wait=False``: pop whatever is ready and return (the between-calls
+        sweep). ``wait=True``: block until every spawned pump has ended (the
+        barrier / end-of-batch drain) — when ``batch.active`` hits zero the
+        queue is exhausted, since nothing enqueues after the last marker.
+
+        This is the batch's single serialization point: every event reaches
+        hooks and the consumer here (``_emit`` + yield, in queue order), and
+        each ``ToolCallCompleted`` is followed by a checkpoint save —
+        ``CheckpointWriter`` bookkeeping assumes saves never overlap, so they
+        must only ever happen on this generator body, never inside tasks. A
+        failure marker re-raises the pump's exception (first failure wins);
+        teardown of the surviving tasks belongs to ``_tool_phase``'s
+        ``finally``, so abandoning this generator mid-drain is safe.
+        """
+        while batch.active > 0 or not batch.queue.empty():
+            if wait:
+                item = await batch.queue.get()
+            else:
+                try:
+                    item = batch.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+            if isinstance(item, _PumpEnded):
+                batch.active -= 1
+                if item.error is not None:
+                    raise item.error
+                continue
+            yield await self._emit(state, item)
+            if isinstance(item, events.ToolCallCompleted):
+                # Persist after each tool result so a crash mid tool-execution
+                # can resume by draining the calls that still have no matching
+                # result.
+                await self.checkpoints.save_running(state)
+                # Serial parity for cooperative cancellation: the serial loop
+                # checked the token before each call; check after each
+                # completed result so a mid-batch cancel() stops the batch at
+                # the next result instead of the next turn.
+                self.cancel_token.check()
 
     async def _apply_handoff(
         self, state: RunState, resources: AsyncExitStack, tracer: Tracer
@@ -1379,6 +1533,57 @@ def pending_tool_calls(entries: list[TranscriptEntry]) -> list[ToolCall]:
                 ToolCall(id=entry.call_id, name=entry.name, arguments=entry.arguments)
             )
     return pending
+
+
+@dataclass
+class _PumpEnded:
+    """Terminal marker a pump enqueues after its execute() stream ends.
+
+    ``error`` carries the exception that ended the stream (``RunCancelled``
+    escaping a tool, an unexpected bug, or the ``CancelledError`` injected by
+    teardown) instead of leaving it on the task: the drain loop re-raises the
+    first failure it dequeues, and teardown never sees unretrieved task
+    exceptions.
+    """
+
+    error: BaseException | None = None
+
+
+@dataclass
+class _ToolBatch:
+    """Drain state for one turn's tool batch (single consumer: the loop)."""
+
+    queue: "asyncio.Queue[events.Event | _PumpEnded]" = field(
+        default_factory=asyncio.Queue
+    )
+    tasks: list["asyncio.Task[None]"] = field(default_factory=list)
+    # Pumps spawned minus _PumpEnded markers dequeued. Zero means every
+    # spawned execute() stream has ended AND its events are already queued
+    # (FIFO: a task's events always precede its own marker).
+    active: int = 0
+
+
+async def _pump(
+    gen: AsyncIterator[events.Event],
+    queue: "asyncio.Queue[events.Event | _PumpEnded]",
+) -> None:
+    """Drive one execute() generator, forwarding its events into ``queue``.
+
+    ALWAYS ends by enqueueing :class:`_PumpEnded` — the drain loop counts
+    markers to know when the batch is done. Exceptions ride the marker rather
+    than staying on the task (see :class:`_PumpEnded`). ``put_nowait`` on the
+    unbounded queue is synchronous, so this coroutine's only suspension
+    points are inside the generator (i.e. inside the tool) — a teardown
+    ``cancel()`` can only land there, where execute()'s exception structure
+    already leaves no bogus result entry behind.
+    """
+    error: BaseException | None = None
+    try:
+        async for ev in gen:
+            queue.put_nowait(ev)
+    except BaseException as exc:  # noqa: BLE001 — forwarded via the marker
+        error = exc
+    queue.put_nowait(_PumpEnded(error=error))
 
 
 def _push_cleanup(

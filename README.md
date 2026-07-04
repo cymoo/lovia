@@ -98,7 +98,8 @@ only when the product asks for them.
 | When you need... | Add... |
 | --- | --- |
 | A quick script or notebook helper | `Agent.run_sync(...)` |
-| Tool calling | `@tool` functions |
+| Tool calling | `@tool` functions (parallel by default) |
+| A tool whose side effects must not overlap | `@tool(parallel=False)` |
 | Typed final answers | `output_type=YourModel` |
 | Live UI updates | `Runner.stream(...)` and typed events |
 | Multi-turn chat | `SQLiteSession` or your own `Session` |
@@ -236,6 +237,23 @@ def search_docs(
 ```
 
 Sync tools run in a worker thread. Async tools are awaited directly.
+
+When the model requests several tool calls in one turn, they **execute
+concurrently by default**. Tools whose side effects must not overlap opt out
+with `parallel=False`, which turns the call into an execution barrier: every
+in-flight call of the turn finishes first, the tool runs alone, then the rest
+proceed.
+
+```python
+@tool(parallel=False)
+async def apply_migration(name: str) -> str:
+    """Apply a database migration (never concurrently with other tools)."""
+    return "applied"
+```
+
+Handoff tools and the built-in workspace mutators (`write_file`, `edit_file`,
+`shell`) are barriers by default; read-only tools stay parallel. Tool events
+of one turn may interleave in the stream — correlate them by `event.call.id`.
 
 ## Structured Output
 

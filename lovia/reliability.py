@@ -21,9 +21,12 @@ from .messages import Usage
 class RunBudget:
     """Hard limits on a single run.
 
-    The runner checks the budget *between* model turns and *before* invoking a
-    tool. Tools and model calls that are already in flight when the budget
-    trips are allowed to finish; the check happens at the next safe point.
+    The runner checks the budget *between* model turns and at each tool
+    call's preflight (before it is dispatched). Tools and model calls that
+    are already in flight when the budget trips are allowed to finish — under
+    parallel tool execution a trip stops *dispatching* further calls and
+    drains the in-flight ones to completion; the check happens at the next
+    safe point.
 
     ``max_tool_calls`` counts every *requested* tool call — including ones the
     runner rejects (unknown tool, malformed arguments, denied approval), not
@@ -94,8 +97,10 @@ class CancelToken:
     """A cooperative cancellation signal.
 
     Pass one to :meth:`Runner.run` and call :meth:`cancel` from any task to
-    request termination. The runner checks the token between turns and before
-    each tool call, raising :class:`RunCancelled` at the next safe point.
+    request termination. The runner checks the token between turns, at each
+    tool call's preflight, and after each completed tool result — raising
+    :class:`RunCancelled` at the next safe point (a mid-batch cancel also
+    cancels the batch's still-running sibling calls).
     """
 
     _cancelled: bool = field(default=False, init=False)

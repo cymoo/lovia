@@ -222,6 +222,9 @@ async def read_file(
     ),
     needs_approval=_path_needs_approval("write"),
     result_renderer=_render_file_change,
+    # Mutates the shared workspace: run as an execution barrier so two writes
+    # (or a write racing a shell command) cannot interleave within one turn.
+    parallel=False,
 )
 async def write_file(
     ctx: RunContext[Any],
@@ -251,6 +254,8 @@ async def write_file(
     ),
     needs_approval=_path_needs_approval("read", "write"),
     result_renderer=_render_edit_result,
+    # Mutates the shared workspace — barrier, same as write_file.
+    parallel=False,
 )
 async def edit_file(
     ctx: RunContext[Any],
@@ -432,6 +437,9 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
     ),
     needs_approval=_shell_needs_approval,
     result_renderer=_render_command_result,
+    # A command can mutate anything in the workspace — barrier, so it never
+    # races file tools or another command within one turn.
+    parallel=False,
 )
 async def shell(
     ctx: RunContext[Any],

@@ -1,4 +1,22 @@
-"""Tool-call execution and approval handling for the runner."""
+"""Tool-call execution and approval handling for the runner.
+
+One requested call flows through two stages, split so the loop can overlap
+the slow part across calls:
+
+* :meth:`ToolCallProcessor.preflight` — the serial gates (cancel/budget,
+  tool lookup, handoff dedup, argument parsing, the approval flow). Runs on
+  the loop's generator body, one call at a time, in request order.
+* :meth:`ToolCallProcessor.execute` — the invocation itself (span, retries,
+  rendering, truncation, the transcript append). May run concurrently with
+  other calls of the same turn; see :meth:`RunLoop._tool_phase` for the
+  orchestration and barrier semantics.
+
+Between the two, every outcome (missing tool, duplicate handoff, malformed
+arguments, denial, error, success) appends exactly one
+:class:`ToolResultEntry`, so the transcript never contains a dangling tool
+call. Results append in completion order — safe, because everything
+downstream pairs calls to results by ``call_id``, never by position.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +34,7 @@ from ..exceptions import RunCancelled
 from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
-from ..tools import render_tool_result, run_tool, truncate_tool_output
+from ..tools import Tool, render_tool_result, run_tool, truncate_tool_output
 from ..tracing import Tracer, tool_call_span
 from ..transcript import ToolResultEntry
 
@@ -33,25 +51,45 @@ _KEEP_RAW_MAX_CHARS = 16_000
 
 
 @dataclass
+class PreflightResult:
+    """Outcome accumulator for :meth:`ToolCallProcessor.preflight`.
+
+    An async generator cannot return a value (same pattern as
+    :class:`~lovia.runtime.run_state.ModelTurnResult`): preflight yields its
+    events and records the decision here. ``ready`` is ``None`` when the call
+    was rejected during preflight — its error :class:`ToolResultEntry` and
+    ``ToolCallCompleted(is_error=True)`` were already produced — otherwise
+    the resolved ``(tool, parsed_args)`` to execute.
+    """
+
+    ready: tuple[Tool, dict[str, Any]] | None = None
+
+
+@dataclass
 class ToolCallProcessor:
     approvals: ApprovalChannel
     cancel_token: CancelToken = field(default_factory=CancelToken)
     budget: RunBudget | None = None
 
-    async def process(
+    async def preflight(
         self,
         call: ToolCall,
+        outcome: PreflightResult,
         *,
         state: RunState,
-        tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
-        """Execute one assistant-requested tool call.
+        """Gate one requested call before execution.
 
-        Appends a :class:`ToolResultEntry` to ``state.transcript`` in every
-        outcome (missing tool, duplicate handoff, malformed arguments, denial,
-        error, success) so the transcript never contains a dangling tool call.
-        A handoff tool records its signal in ``state.pending_handoff``; the
-        first handoff of a turn wins and later ones are rejected unrun.
+        Serial, in request order: cancel/budget checks, tool lookup, handoff
+        dedup, argument parsing, and the approval flow. Every rejection
+        appends its error :class:`ToolResultEntry` (via :meth:`_rejected`)
+        and yields the matching ``ToolCallCompleted(is_error=True)``; only a
+        call that passes every gate fills ``outcome`` for execution. A
+        handoff already pending for this turn rejects later handoffs unrun —
+        the first handoff of a turn wins, and the loser's ``on_handoff``
+        side effects never fire. May raise :class:`RunCancelled` (cancel
+        check) or :class:`BudgetExceeded` (per-call cap) — the only
+        exceptions that escape rather than becoming rejections.
         """
 
         self.cancel_token.check()
@@ -80,7 +118,10 @@ class ToolCallProcessor:
         if tool._handoff and state.pending_handoff is not None:
             # First handoff of the turn wins. Rejecting *before* invoke means
             # the loser's ``on_handoff`` side effects never fire and the
-            # transcript never claims a transfer that won't happen.
+            # transcript never claims a transfer that won't happen. Sound
+            # under parallel execution because handoff tools only ever run as
+            # execution barriers: a winning handoff has fully executed (and
+            # set ``pending_handoff``) before any later call is preflighted.
             target = state.pending_handoff.handoff.target.name
             err = (
                 f"Handoff not performed: this turn already transferred to "
@@ -124,7 +165,7 @@ class ToolCallProcessor:
                 type(exc).__name__,
                 exc,
             )
-            yield events.ErrorOccurred(error=exc)
+            yield events.ErrorOccurred(error=exc, call=call)
             err = f"Tool {call.name} was not approved (approval check failed)."
             yield self._rejected(state, call, err)
             return
@@ -150,7 +191,7 @@ class ToolCallProcessor:
                         type(exc).__name__,
                         exc,
                     )
-                    yield events.ErrorOccurred(error=exc)
+                    yield events.ErrorOccurred(error=exc, call=call)
                     decision = False
                 self._apply_handler_decision(call.id, decision)
             if not fut.done():
@@ -162,6 +203,34 @@ class ToolCallProcessor:
                 denial = f"Tool {call.name} was not approved."
                 yield self._rejected(state, call, denial)
                 return
+
+        outcome.ready = (tool, args)
+
+    async def execute(
+        self,
+        call: ToolCall,
+        tool: Tool,
+        args: dict[str, Any],
+        *,
+        state: RunState,
+        tracer: Tracer,
+    ) -> AsyncIterator[events.Event]:
+        """Run one preflighted call to its terminal outcome.
+
+        ``ToolCallStarted``, the invocation inside a ``tool_call_span``,
+        handoff-signal capture, rendering, truncation, the transcript append,
+        and ``ToolCallCompleted``. Appends exactly one
+        :class:`ToolResultEntry` in every outcome (success, tool error,
+        render failure) so the transcript never holds a dangling call.
+        Re-raises :class:`RunCancelled` (a run-global signal); converts every
+        other failure into an error result.
+
+        May run concurrently with other ``execute`` calls of the same turn:
+        it only appends to ``state.transcript`` (order-insensitive — results
+        are ``call_id``-keyed) and, for handoff tools, writes
+        ``state.pending_handoff`` (never racy: the loop runs handoffs as
+        execution barriers, alone).
+        """
 
         yield events.ToolCallStarted(call=call)
         logger.info(
@@ -184,18 +253,19 @@ class ToolCallProcessor:
         except RunCancelled:
             # A run-control signal, not a tool failure — let it propagate so the
             # run terminates instead of being swallowed into a tool-error result.
-            # Consistent with the pre-tool ``cancel_token.check()`` above, and the
-            # path an agent-as-tool sub-run takes when it inherits and trips the
-            # parent's token.
+            # Consistent with the pre-tool ``cancel_token.check()`` in preflight,
+            # and the path an agent-as-tool sub-run takes when it inherits and
+            # trips the parent's token.
             #
             # BudgetExceeded is deliberately NOT re-raised here: budgets are
             # scoped, not run-global. One escaping a tool is a *sub-run's own*
             # budget (agent-as-tool) — a recoverable delegation failure, fed
             # back to the model exactly like the sub-run's MaxTurnsExceeded.
             # This run's own budget needs no help from this path: the loop
-            # re-checks it before the next tool call (above) and at every turn
-            # boundary, so an actually-exhausted run still stops at the next
-            # safe point before any further model call or tool execution.
+            # re-checks it before the next tool call (in preflight) and at
+            # every turn boundary, so an actually-exhausted run still stops at
+            # the next safe point before any further model call or tool
+            # execution.
             raise
         except Exception as exc:
             result = f"Tool error: {exc}"
@@ -207,7 +277,7 @@ class ToolCallProcessor:
                 type(exc).__name__,
                 exc,
             )
-            yield events.ErrorOccurred(error=exc)
+            yield events.ErrorOccurred(error=exc, call=call)
 
         if isinstance(result, _HandoffSignal):
             state.pending_handoff = result
@@ -246,7 +316,7 @@ class ToolCallProcessor:
                     type(exc).__name__,
                     exc,
                 )
-                yield events.ErrorOccurred(error=exc)
+                yield events.ErrorOccurred(error=exc, call=call)
                 result = f"Tool error: result rendering failed: {exc}"
                 result_text = result
                 is_error = True

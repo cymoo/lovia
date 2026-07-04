@@ -627,7 +627,7 @@ The details that keep suites honest and cheap:
 - **Baselines.** `report.save(path)`, `Report.load(path)`, and
   `current.compare(baseline)` flag regressions / improvements in CI.
 
-See `examples/29_eval.py` for an offline, fully scripted suite.
+See `examples/28_eval.py` for an offline, fully scripted suite.
 
 ## Built-In Tools
 
@@ -1087,35 +1087,21 @@ reader) — import it, or read it as a reference for any language.
 
 ## Examples
 
-The `examples/` directory is a set of runnable scripts. A useful reading order:
+The `examples/` directory is a numbered learning path of self-contained,
+runnable scripts — `cp .env.example .env`, set `LOVIA_MODEL`, and start with
+`01_hello.py`. See [examples/README.md](examples/README.md) for the full
+index and setup notes.
 
-| Path | What it shows |
-| --- | --- |
-| `examples/01_hello.py` | minimal agent |
-| `examples/02_tools.py` | tool calling |
-| `examples/03_streaming.py` | streaming events |
-| `examples/04_structured_output.py` | validated output |
-| `examples/05_handoff.py` | specialist handoff |
-| `examples/06_agent_as_tool.py` | delegate to an agent as a tool |
-| `examples/07_session.py` | persisted chat history |
-| `examples/08_skills.py` | reusable skill instruction bundles |
-| `examples/10_hooks.py` | lifecycle event hooks |
-| `examples/11_approval.py` | human-in-the-loop approval |
-| `examples/14_guardrails.py` | input/output guardrails |
-| `examples/15_resume.py` | checkpoint and resume |
-| `examples/16_web_serve.py` | built-in web UI |
-| `examples/17_web_api.py` | API-only server + a custom front-end |
-| `examples/18_context_policy.py` | view-only context compaction |
-| `examples/20_custom_provider.py` | implement the `Provider` protocol (runs offline) |
-| `examples/21_dx.py` | sync calls, per-call output types, and other DX shortcuts |
-| `examples/28_memory.py` | long-term memory across runs with the `Memory` plugin |
-| `examples/23_workspace_agent.py` | scoped coding workspace |
-| `examples/24_steering.py` | mid-run message injection (caller- and hook-side steering) |
-| `examples/25_data_analysis.py` | data analysis agent |
-| `examples/26_mcp.py` | MCP server tools |
-| `examples/27_todos.py` | todo plugin and per-turn reminders |
-| `examples/29_eval.py` | offline agent evals: checks, LLM judge, baseline diff |
-| `examples/workflows/` | prompt chaining, routing, parallelization, evaluator loops, autonomous agents |
+| Section | Files | Covers |
+| --- | --- | --- |
+| Fundamentals | `01`–`06` | hello, tools, streaming, structured output, sessions, multimodal |
+| Multi-agent | `07`–`08` | handoff, agent-as-tool |
+| Models & providers | `09`–`10` | `ModelSettings`, compatible endpoints, custom `Provider` (offline) |
+| Control & production | `11`–`18` | hooks, approval, guardrails, reliability, resume, steering, compaction, dependency injection |
+| Workspace & plugins | `19`–`25` | workspace, coding agent, todos, skills, memory, MCP, writing a plugin |
+| Serving & apps | `26`–`30` | web UI, JSON/SSE API, evals, data analysis, terminal support bot |
+| `examples/tools/` | | one script per built-in tool family |
+| `examples/workflows/` | | prompt chaining, routing, parallelization, orchestrator-workers, evaluator loops, autonomous agents |
 
 ## Install Extras
 

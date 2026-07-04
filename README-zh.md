@@ -595,7 +595,7 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 - **基线对比。** `report.save(path)`、`Report.load(path)` 加上
   `current.compare(baseline)`，在 CI 里直接标出回归与改进。
 
-完整的离线脚本化套件见 `examples/29_eval.py`。
+完整的离线脚本化套件见 `examples/28_eval.py`。
 
 ## 内置工具
 
@@ -1031,35 +1031,20 @@ app.include_router(build_api_router(deps))
 
 ## 示例
 
-`examples/` 目录是一组可直接运行的脚本，建议按下面的顺序浏览：
+`examples/` 目录是一条按编号排列的学习路径，每个脚本都自包含、可直接运行——
+`cp .env.example .env`，设好 `LOVIA_MODEL`，从 `01_hello.py` 开始。完整索引和
+配置说明见 [examples/README.md](examples/README.md)。
 
-| 路径 | 展示内容 |
-| --- | --- |
-| `examples/01_hello.py` | 最小 agent |
-| `examples/02_tools.py` | 工具调用 |
-| `examples/03_streaming.py` | 流式事件 |
-| `examples/04_structured_output.py` | 校验后的结构化输出 |
-| `examples/05_handoff.py` | 移交给专家 agent |
-| `examples/06_agent_as_tool.py` | 把 agent 当作工具委派 |
-| `examples/07_session.py` | 持久化聊天历史 |
-| `examples/08_skills.py` | 可复用 skill 指令包 |
-| `examples/10_hooks.py` | 生命周期事件 hooks |
-| `examples/11_approval.py` | 人类审批 |
-| `examples/14_guardrails.py` | 输入/输出护栏 |
-| `examples/15_resume.py` | 检查点与恢复 |
-| `examples/16_web_serve.py` | 内置 Web UI |
-| `examples/17_web_api.py` | 仅 API 的服务 + 自建前端 |
-| `examples/18_context_policy.py` | 只改变视图的上下文压缩 |
-| `examples/20_custom_provider.py` | 实现 `Provider` 协议（离线可跑） |
-| `examples/21_dx.py` | 同步调用、临时输出类型等开发体验快捷方式 |
-| `examples/23_workspace_agent.py` | 受权限约束的代码工作区 |
-| `examples/24_steering.py` | 运行中注入消息（调用方和 hook 两侧的 steering） |
-| `examples/25_data_analysis.py` | 数据分析 agent |
-| `examples/26_mcp.py` | MCP server 工具 |
-| `examples/27_todos.py` | todo 插件和每轮提醒 |
-| `examples/28_memory.py` | 用 `Memory` 插件实现跨 run 长期记忆 |
-| `examples/29_eval.py` | 离线 agent 评测：检查项、LLM 评审、基线对比 |
-| `examples/workflows/` | prompt chaining、routing、parallelization、evaluator loop、自主 agent |
+| 分组 | 文件 | 覆盖内容 |
+| --- | --- | --- |
+| 基础 | `01`–`06` | hello、工具、流式、结构化输出、会话、多模态 |
+| 多 agent | `07`–`08` | handoff、agent 即工具 |
+| 模型与 provider | `09`–`10` | `ModelSettings`、兼容端点、自定义 `Provider`（离线可跑） |
+| 控制与生产 | `11`–`18` | hooks、审批、护栏、可靠性、断点恢复、steering、上下文压缩、依赖注入 |
+| 工作区与插件 | `19`–`25` | 工作区、编码 agent、todo、skills、记忆、MCP、自写插件 |
+| 服务与应用 | `26`–`30` | Web UI、JSON/SSE API、评测、数据分析、终端客服 bot |
+| `examples/tools/` | | 每个内置工具族一个脚本 |
+| `examples/workflows/` | | prompt chaining、routing、parallelization、orchestrator-workers、evaluator loop、自主 agent |
 
 ## 安装可选依赖
 

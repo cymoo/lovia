@@ -557,9 +557,7 @@ def _to_anthropic_messages(
                 continue
             redacted = entry.metadata.get("redacted")
             if isinstance(redacted, str) and redacted:
-                pending_blocks.append(
-                    {"type": "redacted_thinking", "data": redacted}
-                )
+                pending_blocks.append({"type": "redacted_thinking", "data": redacted})
                 continue
             block: JsonObject = {"type": "thinking", "thinking": entry.content}
             signature = entry.metadata.get("signature")

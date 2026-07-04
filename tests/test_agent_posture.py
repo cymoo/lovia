@@ -91,9 +91,7 @@ class _MarkerPolicy:
 
 async def test_agent_context_policy_is_used() -> None:
     policy = _MarkerPolicy()
-    agent = Agent(
-        name="a", model=ScriptedProvider([text("ok")]), context_policy=policy
-    )
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), context_policy=policy)
     result = await Runner.run(agent, "hi")
     assert result.output == "ok"
     assert policy.calls >= 1

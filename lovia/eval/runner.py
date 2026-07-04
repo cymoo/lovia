@@ -35,6 +35,13 @@ class Case:
     ``max_turns`` are forwarded to :meth:`~lovia.Runner.run` per sample;
     ``timeout`` bounds each sample's wall-clock seconds; ``metadata`` is
     carried through to the :class:`~lovia.eval.CaseResult` untouched.
+
+    ``model`` overrides the agent's model for this case (anything
+    ``Agent.model`` accepts — a ``"vendor:model"`` string, a provider
+    instance, or a fallback list); the agent is cloned per sample with it.
+    This is how an offline suite gives every case its own
+    :class:`~lovia.testing.ScriptedProvider` script while sharing one agent
+    definition, and how a live suite pins one case to a different model.
     """
 
     input: str | list[Message]
@@ -44,6 +51,7 @@ class Case:
     pass_threshold: float = 1.0
     context: Any = None
     output_type: Any = None
+    model: Any = None
     max_turns: int = 50
     timeout: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -118,6 +126,8 @@ async def _run_sample(
     price: Callable[[Usage], float] | None,
 ) -> SampleResult:
     resolved = agent if isinstance(agent, Agent) else agent()
+    if case.model is not None:
+        resolved = resolved.clone(model=case.model)
     sample = SampleResult()
     started = time.monotonic()
     try:

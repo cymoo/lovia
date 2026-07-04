@@ -38,7 +38,7 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
-from ..providers import ModelSettings, provider_from_string
+from ..providers import ModelSettings, model_from_env, provider_from_string
 from ..providers.base import context_window as provider_context_window
 from ..reliability import RetryPolicy
 from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
@@ -259,12 +259,7 @@ def load_env_files(env_files: list[str] | None) -> None:
 
 
 def resolve_model(cli_model: str | None) -> str:
-    model = _first(
-        cli_model,
-        os.getenv("LOVIA_MODEL"),
-        os.getenv("OPENAI_DEFAULT_MODEL"),
-        os.getenv("ANTHROPIC_DEFAULT_MODEL"),
-    )
+    model = cli_model or model_from_env(required=False)
     if not model:
         raise CliError(
             "no model configured.",

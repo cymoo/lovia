@@ -35,7 +35,9 @@ def test_resolve_model_falls_back_to_anthropic(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("LOVIA_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_DEFAULT_MODEL", raising=False)
     monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-x")
-    assert cli.resolve_model(None) == "claude-x"
+    # A bare Anthropic id gets its vendor prefix so it routes to the right
+    # adapter instead of warn-routing to the OpenAI-compatible one.
+    assert cli.resolve_model(None) == "anthropic:claude-x"
 
 
 def test_resolve_model_errors_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:

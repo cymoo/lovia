@@ -8,6 +8,7 @@ import { showDialog, confirmDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { formatDateTime } from './util.js';
+import { switchSession } from './sessions.js';
 
 function humanizeEvery(expr) {
   const secs = Number(expr);
@@ -88,7 +89,7 @@ function isDone(s) {
   );
 }
 
-function rowEl(s, { onChange, onEdit }) {
+function rowEl(s, { onChange, onEdit, onOpenSession }) {
   const done = isDone(s);
   const item = document.createElement('div');
   item.className = 'sched-item' + (s.active ? '' : ' paused');
@@ -104,6 +105,16 @@ function rowEl(s, { onChange, onEdit }) {
   meta.textContent = s.active
     ? `${describeTrigger(s)} · next ${formatDateTime(s.next_fire)}`
     : `${describeTrigger(s)} · ${done ? 'done' : 'paused'}`;
+  // Answer "where did my scheduled run go?" — jump to the last fire's chat.
+  if (s.last_session_id) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'sched-last-run';
+    link.textContent = 'last run ↗';
+    link.title = 'Open the chat of the most recent run';
+    link.addEventListener('click', () => onOpenSession(s.last_session_id));
+    meta.append(' · ', link);
+  }
   main.append(prompt, meta);
 
   const actions = document.createElement('div');
@@ -251,7 +262,16 @@ export async function openSchedulesDialog() {
         return;
       }
       listEl.replaceChildren(
-        ...rows.map((s) => rowEl(s, { onChange: refresh, onEdit: enterEditMode })),
+        ...rows.map((s) =>
+          rowEl(s, {
+            onChange: refresh,
+            onEdit: enterEditMode,
+            onOpenSession: (sid) => {
+              dialog.close();
+              switchSession(sid).catch(() => {});
+            },
+          }),
+        ),
       );
     } catch (err) {
       listEl.innerHTML = '<div class="sched-empty">Couldn’t load schedules.</div>';

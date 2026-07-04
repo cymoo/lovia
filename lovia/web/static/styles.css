@@ -1723,6 +1723,16 @@ dialog.custom-dialog::backdrop {
   color: var(--muted-2);
   line-height: 1.5;
 }
+.sched-last-run {
+  padding: 0;
+  font-size: inherit;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sched-last-run:hover {
+  color: var(--accent);
+}
 .sched-input {
   resize: vertical;
   min-height: 42px;

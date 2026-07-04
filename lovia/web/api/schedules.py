@@ -35,6 +35,7 @@ def _info(row: ScheduleRow) -> ScheduleInfo:
         trigger_expr=row.trigger_expr,
         next_fire=row.next_fire,
         active=row.active,
+        last_session_id=row.last_session_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

@@ -141,6 +141,8 @@ class ScheduleInfo(BaseModel):
     trigger_expr: str
     next_fire: float
     active: bool
+    # Session of the most recent fire — lets a UI link to the run's results.
+    last_session_id: str | None = None
     created_at: float
     updated_at: float
 

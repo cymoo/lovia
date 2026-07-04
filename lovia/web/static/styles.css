@@ -5,6 +5,8 @@
 /* ---- Design tokens ---------------------------------------------------- */
 :root,
 [data-theme="light"] {
+  /* Native form controls / scrollbars follow the active theme. */
+  color-scheme: light;
   --bg: #faf9f7;
   --surface: #ffffff;
   --surface-2: #f5f4f1;
@@ -50,6 +52,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0f0e0d;
   --surface: #1a1917;
   --surface-2: #232220;
@@ -105,6 +108,7 @@ body {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: 100vh;
+  grid-template-rows: 100dvh;
   grid-template-areas: "sidebar main";
   overflow: hidden;
   transition: grid-template-columns 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -154,6 +158,7 @@ textarea {
   flex-direction: column;
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   transition:
     background 0.15s,
@@ -374,6 +379,7 @@ body.sidebar-collapsed .sidebar {
   flex-direction: column;
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -1798,6 +1804,7 @@ html {
     left: 0;
     width: var(--sidebar-w);
     height: 100vh;
+    height: 100dvh;
     z-index: 50;
     transform: translateX(-100%);
     transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);

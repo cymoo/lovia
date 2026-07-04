@@ -64,6 +64,7 @@ def create_app(
     approval_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     ui: bool = True,
+    cors_origins: Sequence[str] | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
@@ -98,7 +99,9 @@ def create_app(
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
     JSON + SSE server you drive from your own front-end (see
-    :func:`lovia.web.build_api_router`).
+    :func:`lovia.web.build_api_router`). ``cors_origins`` lists the origins such
+    a front-end is served from (e.g. ``["http://localhost:5173"]``) — omitted,
+    no CORS headers are sent and cross-origin browsers are refused.
 
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines.
@@ -154,6 +157,15 @@ def create_app(
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
+    if cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_origins),
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.include_router(build_api_router(deps))
     if ui:
         app.include_router(
@@ -198,6 +210,7 @@ def serve(
     tracer: Tracer | None = None,
     approval_timeout: float | None = None,
     ui: bool = True,
+    cors_origins: Sequence[str] | None = None,
     empty_title: str = "Wake up, Neo.",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
@@ -231,6 +244,7 @@ def serve(
         tracer=tracer,
         approval_timeout=approval_timeout,
         ui=ui,
+        cors_origins=cors_origins,
         empty_title=empty_title,
         empty_description=empty_description,
     )

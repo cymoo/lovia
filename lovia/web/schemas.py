@@ -116,7 +116,20 @@ class ScheduleSpec(BaseModel):
 
 
 class SchedulePatch(BaseModel):
-    active: bool
+    """Partial update for a schedule — any subset of fields.
+
+    Changing the trigger revalidates it and recomputes ``next_fire``; resuming
+    (``active: true``) also recomputes it so stale slots don't fire. Passing
+    ``session_id: null`` explicitly detaches the schedule (fresh session per
+    fire); omitting the field keeps the current binding.
+    """
+
+    input: str | None = Field(default=None, max_length=10_000_000)
+    agent: str | None = None
+    session_id: str | None = None
+    trigger_kind: Literal["cron", "every", "at"] | None = None
+    trigger_expr: str | None = Field(default=None, max_length=200)
+    active: bool | None = None
 
 
 class ScheduleInfo(BaseModel):

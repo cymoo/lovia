@@ -450,6 +450,26 @@ class ChatStore:
             ScheduleRow.from_row,
         )
 
+    async def update_schedule(self, row: ScheduleRow) -> None:
+        """Overwrite every mutable column of the schedule (keyed by ``row.id``)."""
+        await self._write(
+            "UPDATE schedules SET agent = ?, input = ?, session_id = ?, "
+            "trigger_kind = ?, trigger_expr = ?, next_fire = ?, active = ?, "
+            "last_session_id = ?, updated_at = ? WHERE id = ?",
+            (
+                row.agent,
+                row.input,
+                row.session_id,
+                row.trigger_kind,
+                row.trigger_expr,
+                row.next_fire,
+                int(row.active),
+                row.last_session_id,
+                row.updated_at,
+                row.id,
+            ),
+        )
+
     async def delete_schedule(self, schedule_id: str) -> bool:
         """Delete a schedule; returns whether it existed."""
         existed = (await self.get_schedule(schedule_id)) is not None

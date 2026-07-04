@@ -1,14 +1,16 @@
-"""Schedule routes: list / create / delete / pause-resume scheduled runs.
+"""Schedule routes: list / fetch / create / edit / delete / run-now.
 
 The scheduler loop itself lives in :mod:`lovia.web.scheduler` and is started by
-``create_app``'s lifespan; these endpoints only persist the schedule rows it
-polls.
+``create_app``'s lifespan; these endpoints persist the schedule rows it polls
+(plus a run-now that fires through the same machinery, loop not required).
 """
 
 from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import replace
+from typing import Any
 
 try:
     from fastapi import APIRouter, HTTPException
@@ -17,7 +19,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-from ..scheduler import initial_next_fire, validate_trigger
+from ..scheduler import Scheduler, initial_next_fire, validate_trigger
 from ..schemas import ScheduleInfo, SchedulePatch, ScheduleSpec
 from ..store import ScheduleRow
 from .deps import RouterDeps
@@ -38,36 +40,55 @@ def _info(row: ScheduleRow) -> ScheduleInfo:
     )
 
 
+def _resolve_agent_name(deps: RouterDeps, name: str | None) -> str:
+    """Validate an explicit agent name, or fall back to the server default."""
+    agent_name = name or deps.default_agent
+    if agent_name is None or agent_name not in deps.agents:
+        # Distinguish "named an unknown agent" from "named none and there's no
+        # default" (multi-agent server) — the latter reported a useless `None`.
+        detail = (
+            f"unknown agent {agent_name!r}"
+            if agent_name is not None
+            else "no agent specified and no default is available"
+        )
+        raise HTTPException(status_code=404, detail=detail)
+    return agent_name
+
+
+def _validated_next_fire(kind: str, expr: str) -> float:
+    """Validate a trigger and compute its first fire; ValueError → 422."""
+    try:
+        validate_trigger(kind, expr)
+        return initial_next_fire(kind, expr, now=time.time())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def build_schedules_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
     store = deps.store
+    # Fire-now shares the polling loop's machinery (inject/skip/defer rules)
+    # without needing that loop to run — this instance is never start()ed.
+    fire_scheduler = Scheduler(deps)
 
     @router.get("/api/schedules", response_model=list[ScheduleInfo])
     async def list_schedules() -> list[ScheduleInfo]:
         return [_info(r) for r in await store.list_schedules()]
+
+    @router.get("/api/schedules/{schedule_id}", response_model=ScheduleInfo)
+    async def get_schedule(schedule_id: str) -> ScheduleInfo:
+        row = await store.get_schedule(schedule_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        return _info(row)
 
     @router.post("/api/schedules", response_model=ScheduleInfo)
     async def create_schedule(spec: ScheduleSpec) -> ScheduleInfo:
         message = spec.input.strip()
         if not message:
             raise HTTPException(status_code=422, detail="empty input")
-        agent_name = spec.agent or deps.default_agent
-        if agent_name is None or agent_name not in deps.agents:
-            # Distinguish "named an unknown agent" from "named none and there's no
-            # default" (multi-agent server) — the latter reported a useless `None`.
-            detail = (
-                f"unknown agent {agent_name!r}"
-                if agent_name is not None
-                else "no agent specified and no default is available"
-            )
-            raise HTTPException(status_code=404, detail=detail)
-        try:
-            validate_trigger(spec.trigger_kind, spec.trigger_expr)
-            next_fire = initial_next_fire(
-                spec.trigger_kind, spec.trigger_expr, now=time.time()
-            )
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        agent_name = _resolve_agent_name(deps, spec.agent)
+        next_fire = _validated_next_fire(spec.trigger_kind, spec.trigger_expr)
 
         now = time.time()
         row = ScheduleRow(
@@ -97,17 +118,54 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
         row = await store.get_schedule(schedule_id)
         if row is None:
             raise HTTPException(status_code=404, detail="schedule not found")
-        if patch.active and not row.active:
-            # Resume: recompute next_fire from now so it doesn't fire stale slots.
-            try:
-                nxt = initial_next_fire(
-                    row.trigger_kind, row.trigger_expr, now=time.time()
-                )
-            except (ValueError, RuntimeError):
-                nxt = row.next_fire
-            await store.set_schedule_active(schedule_id, active=True, next_fire=nxt)
-        elif not patch.active and row.active:
-            await store.set_schedule_active(schedule_id, active=False)
-        return _info((await store.get_schedule(schedule_id)) or row)
+        provided = patch.model_fields_set
+
+        changes: dict[str, Any] = {}
+        if patch.input is not None:
+            message = patch.input.strip()
+            if not message:
+                raise HTTPException(status_code=422, detail="empty input")
+            changes["input"] = message
+        if patch.agent is not None:
+            changes["agent"] = _resolve_agent_name(deps, patch.agent)
+        if "session_id" in provided:
+            # Explicit null detaches (fresh session per fire); omitted keeps.
+            changes["session_id"] = patch.session_id
+
+        kind = patch.trigger_kind or row.trigger_kind
+        expr = (
+            patch.trigger_expr if patch.trigger_expr is not None else row.trigger_expr
+        )
+        trigger_changed = kind != row.trigger_kind or expr != row.trigger_expr
+        resuming = patch.active is True and not row.active
+        if trigger_changed:
+            changes.update(trigger_kind=kind, trigger_expr=expr)
+        if trigger_changed or resuming:
+            # A new trigger starts from now; a resume also recomputes so the
+            # schedule doesn't immediately fire slots that lapsed while paused.
+            changes["next_fire"] = _validated_next_fire(kind, expr)
+        if patch.active is not None:
+            changes["active"] = patch.active
+
+        if changes:
+            row = replace(row, updated_at=time.time(), **changes)
+            await store.update_schedule(row)
+        return _info(row)
+
+    @router.post("/api/schedules/{schedule_id}/run")
+    async def run_schedule(schedule_id: str) -> dict[str, Any]:
+        """Fire a schedule immediately (advancing its cadence; paused stays
+        paused). 409 when skipped — previous run still live or at capacity."""
+        row = await store.get_schedule(schedule_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        target = await fire_scheduler.fire_now(row)
+        if target is None:
+            raise HTTPException(
+                status_code=409,
+                detail="not fired: previous run still active, agent unavailable, "
+                "or at the concurrency cap",
+            )
+        return {"ok": True, "session_id": target}
 
     return router

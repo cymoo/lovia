@@ -518,3 +518,156 @@ async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
     finally:
         release.set()
         await _drain_runs(deps)
+
+
+# --------------------------------------------------------------------------- #
+# phase-3 API surface: edit, fetch, run-now
+# --------------------------------------------------------------------------- #
+
+
+def test_api_get_single_schedule() -> None:
+    app = _app(_agent([text("hi")]), ChatStore.in_memory())
+    c = TestClient(app)
+    sid = c.post(
+        "/api/schedules",
+        json={"input": "ping", "trigger_kind": "every", "trigger_expr": "300"},
+    ).json()["id"]
+    assert c.get(f"/api/schedules/{sid}").json()["input"] == "ping"
+    assert c.get("/api/schedules/nope").status_code == 404
+
+
+def test_api_patch_edits_fields_and_recomputes_next_fire() -> None:
+    app = _app(_agent([text("hi")]), ChatStore.in_memory())
+    c = TestClient(app)
+    created = c.post(
+        "/api/schedules",
+        json={
+            "input": "ping",
+            "session_id": "chat-1",
+            "trigger_kind": "every",
+            "trigger_expr": "300",
+        },
+    ).json()
+    sid = created["id"]
+
+    # Edit the prompt only: trigger untouched, next_fire unchanged.
+    r = c.patch(f"/api/schedules/{sid}", json={"input": "pong"})
+    assert r.status_code == 200, r.text
+    assert r.json()["input"] == "pong"
+    assert r.json()["next_fire"] == created["next_fire"]
+
+    # Change the trigger: next_fire recomputed from now.
+    r = c.patch(
+        f"/api/schedules/{sid}",
+        json={"trigger_kind": "every", "trigger_expr": "60"},
+    )
+    assert r.json()["trigger_expr"] == "60"
+    assert 0 < r.json()["next_fire"] - time.time() <= 61
+
+    # Explicit null detaches the session binding; omitting keeps it.
+    r = c.patch(f"/api/schedules/{sid}", json={"session_id": None})
+    assert r.json()["session_id"] is None
+    r = c.patch(f"/api/schedules/{sid}", json={"input": "still pong"})
+    assert r.json()["session_id"] is None
+
+    # Bad edits are rejected without side effects.
+    assert c.patch(f"/api/schedules/{sid}", json={"input": "  "}).status_code == 422
+    assert (
+        c.patch(
+            f"/api/schedules/{sid}",
+            json={"trigger_kind": "every", "trigger_expr": "0"},
+        ).status_code
+        == 422
+    )
+    assert c.patch(f"/api/schedules/{sid}", json={"agent": "ghost"}).status_code == 404
+    assert c.get(f"/api/schedules/{sid}").json()["input"] == "still pong"
+
+
+@pytest.mark.asyncio
+async def test_run_now_fires_and_advances_without_unpausing() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("done")]), store)
+    deps = app.state.deps
+
+    far = time.time() + 3600
+    await store.add_schedule(_row(id="s1", next_fire=far, active=False))
+    row = await store.get_schedule("s1")
+    assert row is not None
+
+    target = await Scheduler(deps).fire_now(row)
+    assert target is not None
+    # The fire ran headless into a fresh session…
+    for _ in range(250):
+        if deps.supervisor.get(target) is None:
+            break
+        await asyncio.sleep(0.02)
+    assert (await store.session.load(target)) != []
+    # …the cadence advanced, and the paused schedule stayed paused.
+    after = await store.get_schedule("s1")
+    assert after is not None
+    assert after.active is False
+    assert after.last_session_id == target
+
+
+@pytest.mark.asyncio
+async def test_run_now_endpoint_409s_while_previous_fire_is_live() -> None:
+    import httpx
+
+    release = asyncio.Event()
+
+    @tool
+    async def block() -> str:
+        """Block until released."""
+        await release.wait()
+        return "ok"
+
+    store = ChatStore.in_memory()
+    app = _app(
+        _agent([call("block", {}, call_id="c1"), text("done")], tools=[block]), store
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        sid = (
+            await ac.post(
+                "/api/schedules",
+                json={"input": "go", "trigger_kind": "every", "trigger_expr": "3600"},
+            )
+        ).json()["id"]
+        first = await ac.post(f"/api/schedules/{sid}/run")
+        assert first.status_code == 200, first.text
+        target = first.json()["session_id"]
+        assert app.state.deps.supervisor.get(target) is not None
+
+        # The previous fire is still running: run-now must refuse, not pile up.
+        second = await ac.post(f"/api/schedules/{sid}/run")
+        assert second.status_code == 409
+
+        release.set()
+        for _ in range(250):
+            if app.state.deps.supervisor.get(target) is None:
+                break
+            await asyncio.sleep(0.02)
+        assert (await ac.post(f"/api/schedules/{sid}/run")).status_code == 200
+        # Let the second fire finish so shutdown doesn't cancel it mid-flight.
+        for sid2, _ in list(app.state.deps.supervisor):
+            for _ in range(250):
+                if app.state.deps.supervisor.get(sid2) is None:
+                    break
+                await asyncio.sleep(0.02)
+
+
+def test_cors_origins_enables_cross_origin_requests() -> None:
+    app = create_app(
+        _agent([text("hi")]),
+        store=ChatStore.in_memory(),
+        generate_titles=False,
+        cors_origins=["http://localhost:5173"],
+    )
+    c = TestClient(app)
+    r = c.get("/api/info", headers={"origin": "http://localhost:5173"})
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    # Origins not on the list get no CORS headers.
+    r = c.get("/api/info", headers={"origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in r.headers

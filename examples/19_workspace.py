@@ -1,8 +1,12 @@
-"""Direct workspace session usage.
+"""Direct workspace session usage — no agent, no model, runs offline.
+
+``Workspace`` is a plain library: scoped file access plus policy-checked
+shell execution. ``20_workspace_agent.py`` hands the same object to an
+agent, which turns these calls into tools.
 
 Run::
 
-    python examples/22_workspace.py
+    python examples/19_workspace.py
 """
 
 from __future__ import annotations

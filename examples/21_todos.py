@@ -6,6 +6,10 @@ current list to the model — without ever bloating the persisted transcript.
 
 Observability: the structured list rides on each ``todo_write`` result, so a UI
 can render progress by filtering ``ToolCallCompleted`` for the tool.
+
+Run::
+
+    python examples/21_todos.py
 """
 
 from __future__ import annotations
@@ -43,12 +47,19 @@ async def main() -> None:
 
     # Stream events and surface the live todo list as it changes.
     async for event in Runner.stream(agent, task):
-        if isinstance(event, events.ToolCallCompleted) and event.call.name == "todo_write":
+        if (
+            isinstance(event, events.ToolCallCompleted)
+            and event.call.name == "todo_write"
+        ):
             items: list[TodoItem] = event.result  # structured list[TodoItem]
             print("\n— todo list —")
             for t in items:
                 box = {"pending": " ", "in_progress": "~", "completed": "x"}[t.status]
-                label = t.active_form if (t.status == "in_progress" and t.active_form) else t.content
+                label = (
+                    t.active_form
+                    if (t.status == "in_progress" and t.active_form)
+                    else t.content
+                )
                 print(f"  [{box}] {label}")
 
 

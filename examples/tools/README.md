@@ -8,12 +8,12 @@ style lovia uses everywhere.
 | --- | --- | --- |
 | `01_http.py` | `lovia.tools.http.http_fetch` | Fetch a URL and let the model summarize it |
 | `02_time.py` | `lovia.tools.time.now`, `sleep` | Give the model controlled access to time |
-| `07_search.py` | `lovia.tools.search.duckduckgo_search_tool` | Requires `pip install "lovia[ddg]"` |
-| `09_human.py` | `HumanChannel` + `ask_human` | Let the model ask an operator for missing information |
+| `03_search.py` | `lovia.tools.search.duckduckgo_search` | Requires `pip install "lovia[ddg]"` |
+| `04_human.py` | `HumanChannel` + `ask_human` | Let the model ask an operator for missing information |
 
 For filesystem and shell tools (`read_file`, `write_file`, `edit_file`,
-`list_files`, `grep_files`, `shell`), see `examples/22_workspace.py` and
-`examples/23_workspace_agent.py`. They are wired automatically when an agent
+`list_files`, `grep_files`, `shell`), see `examples/19_workspace.py` and
+`examples/20_workspace_agent.py`. They are wired automatically when an agent
 has `workspace=Workspace.local(...)` configured, so path and command policy
 live in one place.
 

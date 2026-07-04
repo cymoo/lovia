@@ -20,7 +20,7 @@ This example shows the default ``Compaction`` doing its job:
 
 Run::
 
-    python examples/18_context_policy.py
+    python examples/17_context_compaction.py
 """
 
 from __future__ import annotations

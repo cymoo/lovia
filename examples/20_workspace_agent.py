@@ -5,7 +5,7 @@ allow rules below let read-only commands run without prompting.
 
 Run::
 
-    python examples/23_workspace_agent.py
+    python examples/20_workspace_agent.py
 """
 
 from __future__ import annotations

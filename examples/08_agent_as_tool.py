@@ -2,6 +2,11 @@
 
 Unlike ``handoffs`` (which transfers control), ``as_tool`` runs the sub-agent
 as a self-contained call and returns its final output as the tool result.
+The child runs its own sub-loop and does not see the parent's history.
+
+Run::
+
+    python examples/08_agent_as_tool.py
 """
 
 from __future__ import annotations
@@ -9,12 +14,11 @@ from __future__ import annotations
 import asyncio
 import os
 
-from lovia import Agent, Runner
-
 from dotenv import load_dotenv
 
-load_dotenv()
+from lovia import Agent, Runner
 
+load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
 if not MODEL:
     raise SystemExit(

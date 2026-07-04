@@ -1,9 +1,14 @@
-"""``now`` / ``sleep`` — the world's smallest clock."""
+"""``now`` / ``sleep`` — the world's smallest clock.
+
+Run::
+
+    python examples/tools/02_time.py
+"""
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 

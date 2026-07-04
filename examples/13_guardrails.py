@@ -3,6 +3,10 @@
 A guardrail is just an async (or sync) callable. Returning a reason string
 (or ``True``) blocks the run with :class:`GuardrailTripped`; returning
 ``None``/``False`` allows it.
+
+Run::
+
+    python examples/13_guardrails.py
 """
 
 from __future__ import annotations

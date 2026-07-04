@@ -3,7 +3,7 @@
 Run::
 
     pip install -e .[web]
-    python examples/16_web_serve.py
+    python examples/26_web_serve.py
     # open http://127.0.0.1:8000
 
 Demonstrates the optional ``lovia.web`` layer: REST endpoints, SSE streaming,

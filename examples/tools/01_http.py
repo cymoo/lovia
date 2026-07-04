@@ -1,9 +1,14 @@
-"""HTTP fetch — drop a single ``Tool`` into the agent and ask for a URL."""
+"""HTTP fetch — drop a single ``Tool`` into the agent and ask for a URL.
+
+Run::
+
+    python examples/tools/01_http.py
+"""
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 

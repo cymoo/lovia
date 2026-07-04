@@ -7,6 +7,12 @@ contains a realistic skill with:
 * ``references/international-orders.md`` — supplementary docs (Level 3)
 * ``scripts/calculate_refund.py`` — executable script
 * ``assets/refund-email.txt`` — email template
+
+The agent needs a workspace so it can read references and run skill scripts.
+
+Run::
+
+    python examples/22_skills.py
 """
 
 from __future__ import annotations
@@ -39,13 +45,14 @@ if not MODEL:
 
 SKILLS_DIR = Path(__file__).parent / "skills"
 
+
 async def main() -> None:
     # Provide a shell tool so the model can execute skill scripts.
     agent = Agent(
         name="SupportBot",
-        instructions= "You are a customer support agent.",
+        instructions="You are a customer support agent.",
         model=MODEL,
-        workspace=Workspace.local('.', mode="trusted"),
+        workspace=Workspace.local(".", mode="trusted"),
         plugins=[Skills(SKILLS_DIR)],
     )
 

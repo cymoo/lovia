@@ -1,13 +1,18 @@
 """Ask-a-human — the agent suspends until a human answers via the channel.
 
 In production wire the channel to a chat UI / Slack bot / HTTP endpoint;
-here we answer from the terminal.
+here we answer from the terminal. ``channel.pending`` lists open questions;
+``channel.answer(id, text)`` resolves one.
+
+Run::
+
+    python examples/tools/04_human.py
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
 
 from dotenv import load_dotenv
 
@@ -30,7 +35,7 @@ async def main() -> None:
         # Poll until a question shows up, then answer it from stdin.
         while True:
             await asyncio.sleep(0.5)
-            for q in list(channel._pending.values()):
+            for q in channel.pending:
                 ans = input(f"\n[human] {q.question}\n> ")
                 channel.answer(q.id, ans)
 

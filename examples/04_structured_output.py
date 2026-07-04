@@ -1,20 +1,24 @@
-"""Structured output via ``output_type``.
+"""Structured output: get a validated Python object instead of prose.
 
-For OpenAI Chat Completions the runner sets ``response_format`` to a JSON
-schema. For other providers it falls back to a synthetic ``final_output``
-tool the model must call to finish.
+Set ``output_type`` on the agent (or per call) and ``result.output`` is an
+instance of that type. Providers with native JSON-schema support use it;
+for the rest the runner falls back to a synthetic ``final_output`` tool.
+
+Run::
+
+    python examples/04_structured_output.py
 """
 
 from __future__ import annotations
-import os
 
 import asyncio
+import os
+from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from lovia import Agent, Runner
-
-from dotenv import load_dotenv
 
 load_dotenv()
 MODEL = os.environ.get("LOVIA_MODEL")
@@ -31,6 +35,12 @@ class WeatherReport(BaseModel):
     summary: str
 
 
+class Alert(BaseModel):
+    severity: Literal["info", "watch", "warning"]
+    headline: str
+    advice: str
+
+
 async def main() -> None:
     agent = Agent(
         name="Weather",
@@ -38,9 +48,21 @@ async def main() -> None:
         model=MODEL,
         output_type=WeatherReport,
     )
+
+    # 1. The agent's default output type.
     result = await Runner.run(agent, "Make up a sunny report for Lisbon.")
-    print(repr(result.output))
-    print(result.output.summary)
+    report: WeatherReport = result.output
+    print(repr(report))
+    print(report.summary)
+
+    # 2. Override the output type for one call — no agent clone needed.
+    alert_result = await Runner.run(
+        agent,
+        "A typhoon is approaching Okinawa. Issue an alert.",
+        output_type=Alert,
+    )
+    alert: Alert = alert_result.output
+    print(f"\n[{alert.severity}] {alert.headline}\n{alert.advice}")
 
 
 if __name__ == "__main__":

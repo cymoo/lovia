@@ -17,12 +17,12 @@ Recall quality escalates one argument at a time::
     Memory("./memory", index=my_index)             # bring your own engine
 
 Both tiers live under the directory you pass, so a fact learned in one run is
-known in the next — even in a fresh process. Delete ``/tmp/lovia_memory`` to
+known in the next — even in a fresh process. Delete ``tmp/lovia_memory`` to
 reset.
 
 Run::
 
-    python examples/28_memory.py
+    python examples/23_memory.py
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ async def main() -> None:
         name="assistant",
         instructions="You are a concise personal assistant.",
         model=MODEL,
-        plugins=[Memory("/tmp/lovia_memory")],
+        plugins=[Memory("tmp/lovia_memory")],
     )
 
     # First run: state a durable preference. The plugin promotes it into Notes

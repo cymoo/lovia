@@ -6,10 +6,29 @@ const darkToggle = document.getElementById('dark-toggle');
 const themeIcon = darkToggle?.querySelector('.theme-icon');
 
 // ---- Theme -------------------------------------------------------------
+// The static <meta name="theme-color" media=…> pair in the template follows
+// the OS. Once JS owns the theme (saved preference may oppose the OS), browser
+// chrome must follow the *resolved* theme: swap the pair for one meta fed from
+// the live --bg token, so it also stays right if the palette ever changes.
+function syncThemeColor() {
+  document
+    .querySelectorAll('meta[name="theme-color"][media]')
+    .forEach((m) => m.remove());
+  let meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+  }
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  if (bg) meta.content = bg;
+}
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   store.theme = theme;
   localStorage.setItem('lovia-theme', theme);
+  syncThemeColor();
   // Show the destination: a sun in dark mode (click → light), a moon in light.
   if (themeIcon) themeIcon.innerHTML = icon(theme === 'dark' ? 'sun' : 'moon', { size: 17 });
 }

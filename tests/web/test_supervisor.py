@@ -646,3 +646,41 @@ async def test_blocking_chat_conflicts_with_live_run() -> None:
         assert res.status_code == 409
         release.set()
         await asyncio.wait_for(task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
+    """If checkpoint init fails mid-start, a subscriber that attached during the
+    reservation window must be released (hub closed), not left hanging on a
+    task that will never begin."""
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    app = _app(agent)
+    deps = app.state.deps
+
+    entered = asyncio.Event()
+    proceed = asyncio.Event()
+
+    async def failing_set_active(self, session_id, run_id):
+        entered.set()
+        await proceed.wait()
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(type(deps.store), "set_active_run_id", failing_set_active)
+
+    start_task = asyncio.create_task(
+        deps.supervisor.start(
+            session_id="s1", agent=agent, input="go", is_new=True, title_message=None
+        )
+    )
+    await entered.wait()
+    live = deps.supervisor.get("s1")
+    assert live is not None  # reserved during the window
+    attachment = live.attach(with_snapshot=True)
+
+    proceed.set()
+    with pytest.raises(RuntimeError, match="db down"):
+        await start_task
+    assert deps.supervisor.get("s1") is None  # reservation rolled back
+    # The window attacher's subscription ends promptly instead of hanging.
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(attachment.subscription.__anext__(), timeout=2)

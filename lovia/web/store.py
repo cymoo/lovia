@@ -324,7 +324,11 @@ class ChatStore:
             ChatMeta.from_row,
         )
 
-    async def list(self, *, limit: int = 200) -> list[ChatMeta]:
+    # ``Sequence`` (not ``list[...]``) on the read methods: this method shadows
+    # the ``list`` builtin inside the class body, so a later ``list[ChatMeta]``
+    # annotation would resolve to the method and fail strict mypy. Matches the
+    # schedule reads (``list_schedules``/``due_schedules``) anyway.
+    async def list(self, *, limit: int = 200) -> Sequence[ChatMeta]:
         """Return chat metadata, pinned first, then most recent activity."""
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
@@ -365,7 +369,7 @@ class ChatStore:
         if run_id:
             await self.checkpointer.delete(run_id)
 
-    async def search(self, query: str, *, limit: int = 200) -> list[ChatMeta]:
+    async def search(self, query: str, *, limit: int = 200) -> Sequence[ChatMeta]:
         """Search sessions whose title or id contains ``query`` (literally —
         LIKE wildcards in the query are escaped, so "100%" matches "100%")."""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

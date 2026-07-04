@@ -586,6 +586,12 @@ class RunSupervisor:
             ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex)
         except BaseException:
             self._controllers.pop(session_id, None)
+            # A concurrent request may have attached during that await; close
+            # the hub so its SSE ends instead of waiting on a task that will
+            # never start. (After a *successful* start there is no such hang:
+            # the caller reaches subscribe_live with no awaits in between, and
+            # autostart begins the task right below.)
+            ctrl.hub.close()
             raise
         ctrl._first_ckpt = ckpt
         ctrl.run_id = ckpt.resolved_run_id if ckpt is not None else None

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from . import events
 from .agent import Agent
-from .checkpointer import CheckpointOptions
+from .checkpointer import CheckpointOptions, Checkpointer, RunHead, RunSnapshot
 from .stores import (
     InMemoryCheckpointer,
     InMemorySession,
@@ -100,6 +100,7 @@ __all__ = [
     "CancelToken",
     "Message",
     "CheckpointOptions",
+    "Checkpointer",
     "ContextOverflowError",
     "Compaction",
     "ContextPolicy",
@@ -132,7 +133,9 @@ __all__ = [
     "RunCancelled",
     "RunContext",
     "RunHandle",
+    "RunHead",
     "RunResult",
+    "RunSnapshot",
     "Runner",
     "SQLiteCheckpointer",
     "SQLiteSession",

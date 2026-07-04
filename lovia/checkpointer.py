@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from .types import JsonObject
 from .exceptions import UserError
@@ -27,7 +27,7 @@ from .messages import Usage
 RunStatus = Literal["running", "interrupted", "completed", "failed"]
 IfRunExists = Literal["resume", "restart", "fail", "resume_only"]
 
-_IF_RUN_EXISTS: set[str] = {"resume", "restart", "fail", "resume_only"}
+_IF_RUN_EXISTS: frozenset[str] = frozenset(get_args(IfRunExists))
 
 
 def _usage_to_dict(usage: Usage) -> JsonObject:

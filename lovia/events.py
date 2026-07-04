@@ -121,7 +121,7 @@ class MessageCompleted(MessageEvent):
     """One assistant turn fully assembled.
 
     ``entries`` is the slice of new :class:`TranscriptEntry` values produced by that
-    turn — typically a :class:`ReasoningEntry`, a :class:`AssistantTextEntry`,
+    turn — typically a :class:`ReasoningEntry`, an :class:`AssistantTextEntry`,
     and any :class:`ToolCallEntry`\\ s the model requested. Subscribers can
     pattern-match on the concrete entry types.
     """

@@ -108,7 +108,10 @@ class RunCancelled(LoviaError):
 
 
 class GuardrailTripped(LoviaError):
-    """Raised when an input or output :class:`~lovia.Guardrail` rejects a value."""
+    """Raised when an input or output guardrail rejects a value.
+
+    See :mod:`lovia.guardrails` for the guardrail calling convention.
+    """
 
 
 class ContextOverflowError(LoviaError):

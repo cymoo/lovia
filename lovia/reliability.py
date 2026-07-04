@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from .exceptions import BudgetExceeded, RunCancelled
+from .exceptions import BudgetExceeded, ProviderError, RunCancelled
 from .messages import Usage
 
 
@@ -126,14 +126,12 @@ RetryPredicate = Callable[[BaseException], bool]
 
 
 def _default_retry_on(exc: BaseException) -> bool:
-    from .exceptions import ProviderError
-
-    return (
-        isinstance(exc, ProviderError) and getattr(exc, "retryable", None) is not False
-    )
+    return isinstance(exc, ProviderError) and exc.retryable is not False
 
 
-@dataclass
+# Frozen: instances are shared (they are the default value of several
+# ``retry=`` parameters), so the policy must stay immutable.
+@dataclass(frozen=True)
 class RetryPolicy:
     """Exponential-backoff retry policy applied around provider calls.
 

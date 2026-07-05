@@ -65,9 +65,14 @@ function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('hidden', !state.available);
+  const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
     setOpen(false);
-  } else if (localStorage.getItem('lovia-files-open') === '1' && !state.open) {
+  } else if (
+    !phone && // on phones the panel is a transient drawer — never auto-open
+    localStorage.getItem('lovia-files-open') === '1' &&
+    !state.open
+  ) {
     setOpen(true);
   }
 }
@@ -295,6 +300,8 @@ function renderText(content, path) {
   return pre;
 }
 
+// Returns false when the file couldn't be read (so link-following can retry
+// with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
   els.viewer.classList.remove('hidden');
@@ -320,7 +327,7 @@ async function openFile(path, { silent = false } = {}) {
     img.alt = name;
     img.src = api.workspaceRawUrl({ agent: store.agent, path }) + `&t=${Date.now()}`;
     els.viewerBody.replaceChildren(img);
-    return;
+    return true;
   }
 
   let data;
@@ -328,9 +335,9 @@ async function openFile(path, { silent = false } = {}) {
     data = await api.workspaceFile({ agent: store.agent, path });
   } catch (err) {
     els.viewerBody.replaceChildren(viewerNote(err.message || 'Couldn’t read file'));
-    return;
+    return false;
   }
-  if (state.viewing?.path !== path) return; // user opened something else meanwhile
+  if (state.viewing?.path !== path) return true; // user opened something else meanwhile
 
   if (data.binary) {
     const dl = document.createElement('a');
@@ -341,7 +348,7 @@ async function openFile(path, { silent = false } = {}) {
     els.viewerBody.replaceChildren(
       viewerNote('Binary file — no preview.', dl),
     );
-    return;
+    return true;
   }
 
   state.viewing.end = data.end;
@@ -349,6 +356,27 @@ async function openFile(path, { silent = false } = {}) {
   state.viewing.truncated = data.truncated;
   state.viewing.content = data.content;
   renderViewerContent();
+  return true;
+}
+
+// Links inside rendered markdown: keep the user in the app. Externals open a
+// new tab; relative hrefs open in the viewer — resolved against the current
+// file's directory first, then (authors often mean root-relative) the root.
+async function followViewerLink(href) {
+  const base = dirname(state.viewing?.path || '');
+  const joined = href.startsWith('/')
+    ? href.slice(1)
+    : (base ? `${base}/` : '') + href;
+  const parts = [];
+  for (const part of joined.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  const fileRelative = parts.join('/');
+  const rootRelative = href.replace(/^\.?\//, '');
+  if (await openFile(fileRelative)) return;
+  if (rootRelative !== fileRelative) await openFile(rootRelative);
 }
 
 function renderViewerContent() {
@@ -460,6 +488,18 @@ export function initFiles() {
   els.copyPath.addEventListener('click', async () => {
     if (!state.viewing) return;
     if (await copyToClipboard(state.viewing.path)) toast('Path copied');
+  });
+  els.viewerBody.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a || !els.viewerBody.contains(a)) return;
+    const href = a.getAttribute('href') || '';
+    e.preventDefault();
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');
+      return; // other schemes (mailto: etc.) — ignore inside the viewer
+    }
+    if (href.startsWith('#')) return;
+    followViewerLink(href);
   });
 
   document.addEventListener('keydown', (e) => {

@@ -83,37 +83,40 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
+# Locale-agnostic paths: mkdocs-static-i18n (folder mode) resolves each entry
+# against the active language folder — docs/en/… for the default build,
+# docs/zh/… for the zh build (falling back to en if a translation is missing).
 nav:
-  - Home: en/README.md
+  - Home: README.md
   - Getting started:
-      - Quickstart: en/quickstart.md
-      - Core concepts: en/concepts.md
+      - Quickstart: quickstart.md
+      - Core concepts: concepts.md
   - Core:
-      - Agents: en/agents.md
-      - Running agents: en/running.md
-      - Streaming: en/streaming.md
-      - Tools: en/tools.md
-      - Built-in tools: en/built-in-tools.md
-      - Structured output: en/structured-output.md
-      - Providers & models: en/providers.md
+      - Agents: agents.md
+      - Running agents: running.md
+      - Streaming: streaming.md
+      - Tools: tools.md
+      - Built-in tools: built-in-tools.md
+      - Structured output: structured-output.md
+      - Providers & models: providers.md
   - Composition:
-      - Multi-agent: en/multi-agent.md
-      - Plugins: en/plugins.md
-      - Skills: en/skills.md
-      - MCP: en/mcp.md
-      - Memory: en/memory.md
+      - Multi-agent: multi-agent.md
+      - Plugins: plugins.md
+      - Skills: skills.md
+      - MCP: mcp.md
+      - Memory: memory.md
   - Production:
-      - Sessions & checkpoints: en/sessions-and-checkpoints.md
-      - Context management: en/context.md
-      - Human in the loop: en/human-in-the-loop.md
-      - Guardrails: en/guardrails.md
-      - Reliability: en/reliability.md
-      - Observability: en/observability.md
-      - Workspace: en/workspace.md
+      - Sessions & checkpoints: sessions-and-checkpoints.md
+      - Context management: context.md
+      - Human in the loop: human-in-the-loop.md
+      - Guardrails: guardrails.md
+      - Reliability: reliability.md
+      - Observability: observability.md
+      - Workspace: workspace.md
   - Serving & quality:
-      - Web UI & server: en/web.md
-      - HTTP API: en/http-api.md
-      - Evals: en/eval.md
-      - Testing: en/testing.md
+      - Web UI & server: web.md
+      - HTTP API: http-api.md
+      - Evals: eval.md
+      - Testing: testing.md
   - Internals:
       - Architecture: architecture.md

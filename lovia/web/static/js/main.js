@@ -5,6 +5,7 @@ import { initTheme, initSidebarToggle } from './ui.js';
 import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 import { initSchedules } from './schedules.js';
+import { initFiles } from './files.js';
 import { toast } from './toast.js';
 
 // ---- Page config --------------------------------------------------------
@@ -43,11 +44,13 @@ async function loadAgents() {
       select.addEventListener('change', () => {
         store.agent = select.value;
         clearChat();
+        store.emit('agent-changed', store.agent);
         document.getElementById('prompt')?.focus();
       });
     } else if (select) {
       if (switcher) switcher.classList.add('hidden');
     }
+    store.emit('agents-loaded', store.agents);
   } catch (err) {
     console.error('loadAgents:', err);
     toast('Couldn’t load agents', { type: 'error' });
@@ -101,6 +104,7 @@ function initKeyboardShortcuts() {
   initComposer();
   initSessions();
   initSchedules();
+  initFiles();
   initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();

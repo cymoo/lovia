@@ -56,6 +56,7 @@
 
 <!-- Main -->
 <main class="page">
+<div class="chat-main">
   <header class="topbar">
     <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button" title="Show sidebar" aria-label="Show sidebar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
     <button id="sidebar-toggle" class="btn-icon hamburger-btn" type="button" aria-label="Toggle sidebar">
@@ -71,6 +72,9 @@
           <button type="button" class="export-menu-item" role="menuitem" data-format="html">HTML</button>
         </div>
       </div>
+      <button id="files-btn" class="btn-icon hidden" type="button" title="Files" aria-label="Workspace files">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      </button>
       <button id="schedules-btn" class="btn-icon hidden" type="button" title="Scheduled runs" aria-label="Scheduled runs">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       </button>
@@ -111,6 +115,35 @@
       </button>
     </div>
   </form>
+</div>
+
+<!-- Files panel — read-only window into the agent's workspace -->
+<aside id="files-panel" class="files-panel" aria-label="Workspace files">
+  <div class="files-head">
+    <div class="files-tabs" role="tablist" aria-label="File view">
+      <button id="files-tab-recent" class="files-tab active" type="button" role="tab" aria-selected="true">Recent</button>
+      <button id="files-tab-browse" class="files-tab" type="button" role="tab" aria-selected="false">Browse</button>
+    </div>
+    <div class="files-head-actions">
+      <button id="files-refresh" class="btn-icon" type="button" title="Refresh" aria-label="Refresh files"></button>
+      <button id="files-close" class="btn-icon" type="button" title="Close" aria-label="Close files panel"></button>
+    </div>
+  </div>
+  <nav id="files-crumbs" class="files-crumbs hidden" aria-label="Directory path"></nav>
+  <div id="files-list" class="files-list"></div>
+  <section id="files-viewer" class="files-viewer hidden" aria-label="File preview">
+    <div class="files-viewer-head">
+      <span id="files-viewer-name" class="files-viewer-name" title=""></span>
+      <div class="files-viewer-actions">
+        <button id="files-md-toggle" class="btn-icon hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
+        <button id="files-copy-path" class="btn-icon" type="button" title="Copy path" aria-label="Copy file path"></button>
+        <a id="files-download" class="btn-icon" title="Download" aria-label="Download file" download></a>
+        <button id="files-viewer-close" class="btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
+      </div>
+    </div>
+    <div id="files-viewer-body" class="files-viewer-body"></div>
+  </section>
+</aside>
 </main>
 
 <!-- Templates -->

@@ -4,7 +4,8 @@
 
 Every file is a small, self-contained, runnable script for one feature.
 Read them in order and you have a tour of the framework; copy any one of
-them and you have a starting point.
+them and you have a starting point. Each feature's full guide lives in
+[docs/en](../docs/en/README.md).
 
 ## Setup
 

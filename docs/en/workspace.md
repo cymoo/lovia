@@ -30,7 +30,11 @@ agent = Agent(
 The workspace contributes its tool bundle at run time, injects a generated
 `## Workspace` section into the system prompt (derived from the policy, so
 the prompt never promises more than the session enforces), and exposes its
-live session to custom tools as `ctx.workspace`.
+live session to custom tools as `ctx.workspace`. `mode` takes a
+`WorkspaceMode` (`"readonly"` / `"coding"` / `"trusted"`); denials raise
+`PermissionDeniedError` and closed-session use raises
+`WorkspaceClosedError` (both `WorkspaceError`, itself a `ToolError` — the
+model sees them and adapts).
 
 ## Modes
 
@@ -151,7 +155,11 @@ same gate: `read_text` / `write_text` / `edit_text` / `list_files` /
 `grep` / `run`, plus `decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
 Deny raises; `ask` returns as a decision your tool's own `needs_approval`
-predicate can honor.
+predicate can honor. (`Workspace.local(...)` returns a `LocalWorkspace`
+whose `open()` yields a `LocalWorkspaceSession`; the calls return typed
+results — `FileContent`, `FileChange`, `EditResult`, `DirEntry`,
+`GrepMatch`, `CommandResult` — and `PathRule.ops` takes `FileOp` values,
+`"read"`/`"write"`.)
 
 By default each run opens a fresh session and closes it at run end; the
 `.session()` context manager above holds one open across runs

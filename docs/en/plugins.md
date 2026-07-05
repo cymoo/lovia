@@ -50,8 +50,9 @@ a run only through the same checkpoint the agent's own guardrails use.
 
 ## View injectors: the per-turn seam
 
-The novel slot. An injector is called with the live `RunContext` each turn
-and returns transcript entries to append to **that turn's model view**:
+The novel slot. A `ViewInjector` is called with the live `RunContext` each
+turn and returns transcript entries to append to **that turn's model
+view**:
 
 ```python
 def inject(ctx: RunContext) -> list[TranscriptEntry] | None:
@@ -167,9 +168,11 @@ await Runner.run(agent, "Implement a small REST API with tests and docs.")
 `Todo` gives the model a `todo_write` tool (full-replace: every call passes
 the complete list) plus a view injector that re-shows the current list each
 turn as a `<system-reminder>` block — visible pressure to keep the plan
-updated, at zero transcript growth. Items carry `content`, `status`
+updated, at zero transcript growth. Items carry `content`, a `TodoStatus`
 (`pending` / `in_progress` / `completed`; at most one in-progress — extras
-are demoted, not rejected), and an optional `active_form` label.
+are demoted, not rejected), and an optional `active_form` label; the
+run-scoped store is a `TodoList`, and `render_todos(items)` produces the
+checklist string the model sees.
 
 Configuration: `Todo(tool_name="todo_write", inject=True, instructions=...)` —
 set `instructions=None` to drop the usage guidance, `inject=False` to keep

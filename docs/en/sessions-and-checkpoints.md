@@ -21,8 +21,8 @@ result = await Runner.run(agent, "What is my project called?", session=session, 
 You control `session_id` — key it by user, thread, ticket, whatever your
 product calls a conversation. The runner loads prior history at run start
 and, when the run **completes**, appends the run's own entries as one
-*segment*. Two implementations ship: `SQLiteSession(path, *, wal=False)`
-and `InMemorySession()`.
+`Segment` (run id + entries + opaque per-run `meta`). Two implementations
+ship: `SQLiteSession(path, *, wal=False)` and `InMemorySession()`.
 
 ### The contract
 
@@ -79,11 +79,11 @@ result = await Runner.run(
 ```
 
 The loop snapshots after the model turn and after **every tool result**, so
-a crash loses at most the work in flight. A snapshot holds the run's own
-entries plus a small head: active agent name, usage, turn count, status
-(`running` / `interrupted` / `completed` / `failed`), and the context
-policy's carried state. Your `context` object is *not* snapshotted — you
-re-supply it when resuming.
+a crash loses at most the work in flight. A `RunSnapshot` holds the run's
+own entries plus a small mutable head (`RunHead`): active agent name,
+usage, turn count, status (`running` / `interrupted` / `completed` /
+`failed`), and the context policy's carried state. Your `context` object is
+*not* snapshotted — you re-supply it when resuming.
 
 ### `run_id` is an idempotency key
 

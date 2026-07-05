@@ -79,10 +79,14 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
   name the first occurrence wins (later ones are logged and skipped).
 - **`usage_rules`** replaces the default usage block appended after the
   index; pass `""` to omit rules entirely.
-- **`filter`** receives each skill's `SkillMetadata` (`name`,
-  `description`, `extra`) and returns `True` to keep it. It is a real
-  boundary, not cosmetics: a filtered-out skill is invisible in the index
-  *and* unloadable by the tools.
+- **`filter`** (any `SkillFilter` — a predicate) receives each skill's
+  `SkillMetadata` (`name`, `description`, `extra`) and returns `True` to
+  keep it. It is a real boundary, not cosmetics: a filtered-out skill is
+  invisible in the index *and* unloadable by the tools.
+
+Skill-layer failures raise `SkillsError` (with `skill_name`/`path`/`hint`)
+at setup time; inside the tools they are caught and returned to the model
+as plain error strings instead.
 
 ## Custom backends
 

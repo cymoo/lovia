@@ -116,8 +116,8 @@ it is intentionally small.
 ## ChatStore
 
 `ChatStore` is the storage bundle behind the API: a `Session` (transcripts)
-plus a metadata table (titles, timestamps, pins, the resumable
-`active_run_id`) plus a checkpointer and the schedules table.
+plus a metadata table (`ChatMeta` rows — titles, timestamps, pins, the
+resumable `active_run_id`) plus a checkpointer and the schedules table.
 `ChatStore.sqlite(path, wal=False)` keeps everything in one file;
 `ChatStore.in_memory()` is for tests and demos; `ChatStore(session=...,
 meta_path=...)` wraps a custom `Session` backend while keeping the

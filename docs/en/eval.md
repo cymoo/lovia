@@ -75,8 +75,9 @@ def concise(result) -> bool:
 ```
 
 A check that raises fails *itself* (with the exception as the reason),
-never the suite. For graded results, return a
-`CheckResult(name=..., passed=..., score=..., reason=...)`.
+never the suite — `run_check` normalizes every outcome into a
+`CheckResult(name=..., passed=..., score=..., reason=...)`; return one
+yourself for graded results.
 
 Built-ins: `contains(value, ignore_case=False)` / `not_contains`,
 `regex(pattern)`, `equals(value)`, `matches(spec)` (recursive
@@ -110,8 +111,9 @@ report = await evaluate(agent_or_factory, cases, concurrency=4, fail_fast=False,
                         price=lambda u: u.input_tokens * 3e-6 + u.output_tokens * 15e-6)
 ```
 
-- **Agent or factory.** A zero-arg factory is invoked per *sample* — pass
-  one whenever the agent is stateful (scripted providers, stateful tools).
+- **Agent or factory** (the `AgentSource` union). A zero-arg factory is
+  invoked per *sample* — pass one whenever the agent is stateful (scripted
+  providers, stateful tools).
 - **Concurrency is across cases** (default 4); a case's samples run
   sequentially; a sample's checks run concurrently.
 - **Errors are data.** A sample that raises (or times out) records its
@@ -121,9 +123,11 @@ report = await evaluate(agent_or_factory, cases, concurrency=4, fail_fast=False,
 
 ## Reports and baselines
 
-`Report.passed`, `.pass_rate`, and per-case `CaseResult.pass_rate` /
-`.pass_at_k(k)` (the unbiased estimator) cover the numbers; `print(report)`
-gives the summary above. For CI:
+A `Report` holds one `CaseResult` per case, each holding one
+`SampleResult` per sample (checks, output, usage, latency, optional cost,
+error). `Report.passed`, `.pass_rate`, and per-case `CaseResult.pass_rate`
+/ `.pass_at_k(k)` (the unbiased estimator) cover the numbers;
+`print(report)` gives the summary above. For CI:
 
 ```python
 report.save("eval-baseline.json")            # once, on a good run
@@ -134,9 +138,9 @@ print(diff)                                   # regressions / improvements / add
 assert diff.ok                                # truthy ⇔ no regressions
 ```
 
-`compare` joins by case **name** (duplicate names are an error — name your
-cases when inputs repeat); improvements and added/removed cases are
-reported but don't fail `diff.ok`.
+`compare` returns a `Diff` and joins by case **name** (duplicate names are
+an error — name your cases when inputs repeat); improvements and
+added/removed cases are reported but don't fail `diff.ok`.
 
 ## Sharp edges
 

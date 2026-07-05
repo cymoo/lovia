@@ -160,7 +160,15 @@ policy = Compaction(stages=[DropOldImages(), ClearToolResults()])
 
 Stages *plan* (record sticky decisions); rendering is a pure function of
 transcript + state. Never make a stage undo a decision — monotonicity is
-what keeps the prefix cache-stable.
+what keeps the prefix cache-stable. A stage's `ctx` is a `StageContext`
+(the request, the sticky `CompactionState`, a `TokenCounter`, the
+`TokenBudget`, the protected-tail boundary, the aggressive flag); the
+pieces Compaction itself is built from are exported for reuse —
+`render_view`, the `clear_marker` / `offload_marker` / `summary_entry`
+builders, `transcript_to_text`, `OffloadRecord` / `SummaryState`, and the
+summarizer's `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /
+`SUMMARY_WRAPPER` templates (customize `LLMSummarizer(prompt=...,
+required_sections=...)` rather than forking it).
 
 **A custom `ContextPolicy`** replaces everything: one method,
 `async compact(req: CompactionRequest) -> ContextResult`. The request

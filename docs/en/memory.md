@@ -121,13 +121,15 @@ class Index(Protocol):
 ```
 
 Compose arms with `|` — `KeywordIndex(...) | VectorIndex(...) | my_arm` is
-one RRF-fused hybrid whose reads fail open (a broken arm is skipped) and
-whose writes go to every arm. (`embedder=` and `index=` are mutually
-exclusive — the embedder is sugar for building the hybrid.)
+one RRF-fused `HybridIndex` whose reads fail open (a broken arm is skipped)
+and whose writes go to every arm; any index gains the `|` operator by
+mixing in `Fusable`. (`embedder=` and `index=` are mutually exclusive — the
+embedder is sugar for building the hybrid.)
 
 Likewise the hot tier: `NotesStore` is two methods (`load`/`save` a fact
 list); all normalization, dedup, and budget policy stays in the plugin, so
-a Redis- or DB-backed store is a dozen lines.
+a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
+`MEMORY.md` writer — is the reference one).
 
 ## Configuration reference
 

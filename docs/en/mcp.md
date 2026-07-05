@@ -71,15 +71,17 @@ async with server.session() as conn:      # opened once
 ```
 
 The run never closes a connection you opened (`close_after_run` is `False`
-on a live connection); its lifetime is the `async with` block. One
+on a live `MCPConnection`); its lifetime is the `async with` block. One
 persistent connection serves *sequential* runs — concurrent runs over a
 single MCP session are unsupported; give each concurrent worker its own.
 
 ## How MCP tools behave
 
-- Tool schemas are normalized into ordinary lovia `Tool`s — they validate,
-  render, truncate, and appear in [streaming events](streaming.md) exactly
-  like native tools.
+- Tool schemas are normalized into ordinary lovia `Tool`s
+  (`normalize_schema` repairs loose ones) — they validate, render,
+  truncate, and appear in [streaming events](streaming.md) exactly like
+  native tools. A custom `result_renderer` on the server receives the raw
+  `MCPToolResult`; the default rendering is `render_mcp_content`.
 - **Failures split in two.** A protocol-level tool failure (the server
   answered with `isError`) is rendered back to the model as
   `[tool error] ...` so it can self-correct — not raised. A

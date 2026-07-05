@@ -61,12 +61,12 @@
   --shadow-md: 0 2px 4px rgba(28, 24, 18, 0.04), 0 10px 28px -8px rgba(28, 24, 18, 0.12);
   --shadow-lg: 0 4px 12px -2px rgba(28, 24, 18, 0.07), 0 20px 56px -12px rgba(28, 24, 18, 0.18);
 
-  /* type */
+  /* type — system stacks only: no webfont request, native CJK rendering */
   --sans:
-    "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* shape */
   --radius-xs: 5px;

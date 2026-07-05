@@ -4,7 +4,10 @@ An agent isn't real to anyone until they can talk to it. The optional web
 layer is a small FastAPI app — chat UI, SSE streaming, sessions with
 titles, approvals, schedules, a memory editor, a read-only file panel — that
 serves any lovia agent, and whose [HTTP API](http-api.md) stands alone when
-you'd rather bring your own front-end.
+you'd rather bring your own front-end. The bundled page is fully
+self-contained — vendored renderers, system fonts, no CDN or font-origin
+requests — so it loads the same on an intranet, offline, or behind a
+firewall.
 
 ```bash
 pip install "lovia[web]"

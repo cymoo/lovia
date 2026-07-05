@@ -1,0 +1,119 @@
+site_name: lovia
+site_description: A lightweight and elegant Agent framework
+site_url: https://cymoo.github.io/lovia/
+site_author: wakenee
+copyright: Copyright &copy; wakenee — MIT License
+
+repo_name: cymoo/lovia
+repo_url: https://github.com/cymoo/lovia
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+hooks:
+  - mkdocs_hooks.py
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 中文
+          build: true
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      # GitHub-style, Unicode-preserving slugs so the hand-written CJK anchors
+      # in the zh docs (e.g. `#记忆如何写入`) resolve on the built site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: en/README.md
+  - Getting started:
+      - Quickstart: en/quickstart.md
+      - Core concepts: en/concepts.md
+  - Core:
+      - Agents: en/agents.md
+      - Running agents: en/running.md
+      - Streaming: en/streaming.md
+      - Tools: en/tools.md
+      - Built-in tools: en/built-in-tools.md
+      - Structured output: en/structured-output.md
+      - Providers & models: en/providers.md
+  - Composition:
+      - Multi-agent: en/multi-agent.md
+      - Plugins: en/plugins.md
+      - Skills: en/skills.md
+      - MCP: en/mcp.md
+      - Memory: en/memory.md
+  - Production:
+      - Sessions & checkpoints: en/sessions-and-checkpoints.md
+      - Context management: en/context.md
+      - Human in the loop: en/human-in-the-loop.md
+      - Guardrails: en/guardrails.md
+      - Reliability: en/reliability.md
+      - Observability: en/observability.md
+      - Workspace: en/workspace.md
+  - Serving & quality:
+      - Web UI & server: en/web.md
+      - HTTP API: en/http-api.md
+      - Evals: en/eval.md
+      - Testing: en/testing.md
+  - Internals:
+      - Architecture: architecture.md

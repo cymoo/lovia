@@ -46,6 +46,10 @@ examples = [
     "python-dotenv>=1.0.0",
     "rich>=13.7",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocs-static-i18n>=1.2",
+]
 dev = [
     "build>=1.2",
     "croniter>=2.0",

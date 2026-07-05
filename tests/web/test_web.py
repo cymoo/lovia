@@ -106,6 +106,7 @@ def test_list_agents_single() -> None:
             "instructions": "be helpful",
             "tools": [],
             "workspace": False,
+            "memory": False,
         }
     ]
 
@@ -657,6 +658,7 @@ def test_get_agent_by_name() -> None:
         "instructions": "be helpful",
         "tools": [],
         "workspace": False,
+        "memory": False,
     }
     assert c.get("/api/agents/nope").status_code == 404
 
@@ -774,7 +776,13 @@ def test_build_api_router_is_embeddable() -> None:
     c = TestClient(app)
     assert c.get("/healthz").json() == {"status": "ok"}
     assert c.get("/api/agents").json() == [
-        {"name": "bot", "instructions": "", "tools": [], "workspace": False}
+        {
+            "name": "bot",
+            "instructions": "",
+            "tools": [],
+            "workspace": False,
+            "memory": False,
+        }
     ]
 
 

@@ -175,6 +175,32 @@ async def test_public_remember_and_forget(tmp_path) -> None:
     assert await mem._notes_store().load() == []
 
 
+async def test_notes_body_and_replace_notes(tmp_path) -> None:
+    # The editor seam: read the canonical body, replace it wholesale with the
+    # same normalization/dedup policy every other Notes write applies.
+    mem = Memory(tmp_path / "mem", index=None)
+    assert await mem.notes_body() == ""
+    await mem.remember("likes jazz")
+    assert await mem.notes_body() == "- likes jazz"
+
+    stored = await mem.replace_notes(
+        "# a heading, ignored\n"
+        "- uses  vim   daily\n"
+        "not a bullet, ignored\n"
+        "- USES VIM DAILY\n"  # case-insensitive dup of the one above
+        "-not a bullet either (no space)\n"
+        "- \n"  # empty fact → ignored
+        "- speaks French\n"
+    )
+    assert stored == "- uses vim daily\n- speaks French"
+    assert await mem.notes_body() == stored
+    assert await mem._notes_store().load() == ["uses vim daily", "speaks French"]
+
+    # Replacing with an empty body clears the notes.
+    assert await mem.replace_notes("") == ""
+    assert await mem.notes_body() == ""
+
+
 # ---------------------------------------------------------------------------
 # Construction: the three-step ladder (default / embedder= / index=)
 # ---------------------------------------------------------------------------

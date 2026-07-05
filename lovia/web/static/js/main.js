@@ -6,6 +6,7 @@ import { initComposer, detachStream, renderHistory, resetChatForNewSession, runR
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
+import { initMemory } from './memory.js';
 import { toast } from './toast.js';
 
 // ---- Page config --------------------------------------------------------
@@ -105,6 +106,7 @@ function initKeyboardShortcuts() {
   initSessions();
   initSchedules();
   initFiles();
+  initMemory();
   initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();

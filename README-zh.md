@@ -829,7 +829,9 @@ Memory("./memory", index=my_index)             # 使用你自己的检索引擎
 它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后再补救。
 
 `remember` / `forget` 同时也是公开方法（如 `await mem.remember("...")`），
-代码可以在没有模型参与的情况下预置或清理 Notes。
+代码可以在没有模型参与的情况下预置或清理 Notes；`notes_body` / `replace_notes`
+面向编辑器场景，整体读取和替换整份列表——web UI 侧栏的 **Memory** 编辑器
+（`GET` / `PUT /api/memory`）就建立在这对方法之上。
 
 **自带后端。** 两个层级背后各有一个刻意收窄的协议。`NotesStore` 只有两个方法：
 `load` / `save` 一组事实，归一化、去重和预算控制都留在插件里；`Index` 就是上面提到的

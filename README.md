@@ -879,7 +879,9 @@ view-only, the digest runs once at run end over the complete transcript: it is
 curation (promoting the few durable facts into the small hot tier), not rescue.
 
 `remember` / `forget` are also public methods (`await mem.remember("...")`),
-so code can seed or clean Notes without a model in the loop.
+so code can seed or clean Notes without a model in the loop; `notes_body` /
+`replace_notes` read and replace the whole list for editor flows. The web UI's
+sidebar **Memory** editor (`GET` / `PUT /api/memory`) is built on that pair.
 
 **Bring your own backend.** Each tier sits behind a deliberately narrow
 protocol. `NotesStore` is two methods (`load`/`save` a fact list — all

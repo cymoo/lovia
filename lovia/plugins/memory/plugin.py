@@ -626,6 +626,34 @@ class Memory:
             await notes.save(kept)
         return True
 
+    async def notes_body(self) -> str:
+        """The current Notes as their canonical ``- fact`` body (may be ``""``).
+
+        The read half of the editing seam; :meth:`replace_notes` is the write
+        half. The web UI's memory editor is built on the pair.
+        """
+        return _format_facts(await self._notes_store().load())
+
+    async def replace_notes(self, body: str) -> str:
+        """Replace Notes wholesale with the facts parsed from ``body``.
+
+        The bulk counterpart to :meth:`remember` / :meth:`forget`, for editor
+        flows (the web UI, imports): ``body`` uses the same ``- fact`` per line
+        form :meth:`notes_body` returns. Non-bullet lines are ignored, facts
+        are normalized and case-insensitively deduplicated — the same policy
+        every other Notes write applies. Returns the canonical body stored.
+        """
+        facts: list[str] = []
+        seen: set[str] = set()
+        for fact in _parse_facts(body):
+            norm = _normalize_fact(fact)
+            if norm and norm.lower() not in seen:
+                facts.append(norm)
+                seen.add(norm.lower())
+        async with self._notes_lock:
+            await self._notes_store().save(facts)
+        return _format_facts(facts)
+
     # -- setup -----------------------------------------------------------------
 
     async def setup(self) -> PluginInstance:

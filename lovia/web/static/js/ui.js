@@ -40,11 +40,19 @@ export function initTheme() {
   });
 }
 
-// ---- Sidebar toggle (mobile) -------------------------------------------
+// ---- Sidebar collapse / mobile drawer ------------------------------------
+// Two layers decide desktop visibility: the user's persisted preference, and
+// an ephemeral "auto" claim the Files panel makes when the viewport is too
+// tight for three columns (see files.js). The auto layer is never persisted —
+// a reload re-derives it — and an explicit expand clears it: the user's word
+// beats ours.
 const overlay = document.getElementById('sidebar-overlay');
 let sidebarOpen = false;
+let sidebarAutoCollapsed = false;
 const sidebarCollapseBtn = document.getElementById('sidebar-collapse');
 const sidebarExpandBtn = document.getElementById('sidebar-expand');
+
+const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
 
 function openSidebar() {
   sidebarOpen = true;
@@ -58,21 +66,33 @@ function closeSidebar() {
   overlay?.classList.remove('open');
 }
 
-function applySidebarCollapsed(collapsed) {
-  if (window.matchMedia('(max-width: 720px)').matches) {
-    document.body.classList.remove('sidebar-collapsed');
-    return;
-  }
+function syncSidebar() {
+  document.body.classList.toggle(
+    'sidebar-collapsed',
+    !isPhone() && (store.sidebarCollapsed || sidebarAutoCollapsed),
+  );
+}
+
+// A user gesture: persisted, and expanding overrides any auto claim.
+function setSidebarCollapsed(collapsed) {
   store.sidebarCollapsed = collapsed;
-  document.body.classList.toggle('sidebar-collapsed', collapsed);
   localStorage.setItem('lovia-sidebar-collapsed', collapsed ? '1' : '0');
+  if (!collapsed) sidebarAutoCollapsed = false;
+  syncSidebar();
+}
+
+// The Files panel claims the sidebar's space while open on a tight viewport
+// and releases it on close.
+export function setSidebarAutoCollapsed(claimed) {
+  sidebarAutoCollapsed = claimed;
+  syncSidebar();
 }
 
 export function initSidebarToggle() {
-  applySidebarCollapsed(store.sidebarCollapsed);
+  syncSidebar();
   document.getElementById('sidebar-toggle')?.addEventListener('click', openSidebar);
-  sidebarCollapseBtn?.addEventListener('click', () => applySidebarCollapsed(true));
-  sidebarExpandBtn?.addEventListener('click', () => applySidebarCollapsed(false));
+  sidebarCollapseBtn?.addEventListener('click', () => setSidebarCollapsed(true));
+  sidebarExpandBtn?.addEventListener('click', () => setSidebarCollapsed(false));
   overlay?.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && sidebarOpen) closeSidebar();
@@ -80,14 +100,18 @@ export function initSidebarToggle() {
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => applySidebarCollapsed(store.sidebarCollapsed), 120);
+    resizeTimer = setTimeout(syncSidebar, 120);
   });
 }
 
 // ---- Native Dialog -----------------------------------------------------
-export function showDialog({ body, actions, onClose } = {}) {
-  const existing = document.querySelector('dialog.custom-dialog');
-  if (existing) existing.close();
+// `stack: true` layers the dialog on top of an already-open one (a confirm
+// inside an editor) instead of replacing it.
+export function showDialog({ body, actions, onClose, stack = false } = {}) {
+  if (!stack) {
+    const existing = document.querySelector('dialog.custom-dialog');
+    if (existing) existing.close();
+  }
 
   const dialog = document.createElement('dialog');
   dialog.className = 'custom-dialog';
@@ -145,7 +169,12 @@ export function confirmDialog(message) {
 
     actions.appendChild(cancelBtn);
     actions.appendChild(okBtn);
-    const dialog = showDialog({ body, actions, onClose: (val) => resolve(val === 'ok') });
+    const dialog = showDialog({
+      body,
+      actions,
+      stack: true, // confirms may layer on an open editor (schedules, memory)
+      onClose: (val) => resolve(val === 'ok'),
+    });
   });
 }
 

@@ -32,6 +32,7 @@ from ..schemas import ServerInfo
 from .agents import build_agents_router
 from .chat import build_chat_router
 from .deps import RouterDeps
+from .memory import build_memory_router, memory_plugin
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
 from .workspace import build_workspace_router, workspace_cfg
@@ -68,6 +69,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "workspace": any(
                     workspace_cfg(a) is not None for a in deps.agents.values()
                 ),
+                "memory": any(
+                    memory_plugin(a) is not None for a in deps.agents.values()
+                ),
             },
         )
 
@@ -76,4 +80,5 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     router.include_router(build_sessions_router(deps))
     router.include_router(build_schedules_router(deps))
     router.include_router(build_workspace_router(deps))
+    router.include_router(build_memory_router(deps))
     return router

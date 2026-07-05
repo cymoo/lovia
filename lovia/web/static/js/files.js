@@ -11,7 +11,7 @@
 // shell run; this module owns everything else.
 import { store } from './store.js';
 import { api } from './api.js';
-import { copyToClipboard } from './ui.js';
+import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { formatBytes, formatTimeSmart, highlightIn, renderMarkdown } from './util.js';
@@ -46,6 +46,96 @@ function isTouched(entryPath) {
   return false;
 }
 
+// ---- Panel sizing -----------------------------------------------------------
+// The divider on the panel's left edge drags the width (arrow keys nudge it,
+// double-click resets). The width lives in a `--files-w` CSS var and persists
+// per browser; unset, the stylesheet default applies.
+const WIDTH_KEY = 'lovia-files-w';
+const MIN_W = 300;
+const RESERVED_W = 520; // keep at least this much viewport for the chat column
+
+const isPhone = () => window.matchMedia('(max-width: 720px)').matches;
+const clampW = (w) =>
+  Math.min(Math.max(Math.round(w), MIN_W), Math.max(MIN_W, window.innerWidth - RESERVED_W));
+const panelWidth = () => els.panel.getBoundingClientRect().width;
+
+function applyWidth(px) {
+  if (px == null) document.documentElement.style.removeProperty('--files-w');
+  else document.documentElement.style.setProperty('--files-w', `${clampW(px)}px`);
+}
+
+// Three columns need room. While the panel is open on a viewport too tight
+// for sidebar + panel + a comfortable chat column, it claims the sidebar's
+// space; the claim is released on close (and beaten by an explicit expand —
+// the two layers live in ui.js).
+function claimSpace() {
+  if (isPhone()) return; // the phone drawer overlays, it doesn't push
+  if (!state.open) {
+    setSidebarAutoCollapsed(false);
+    return;
+  }
+  const sidebarW =
+    parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'),
+      10,
+    ) || 272;
+  setSidebarAutoCollapsed(window.innerWidth < sidebarW + panelWidth() + 760);
+}
+
+function initResizer() {
+  const saved = Number(localStorage.getItem(WIDTH_KEY));
+  if (saved) applyWidth(saved);
+
+  const rz = els.resizer;
+  let startX = 0;
+  let startW = 0;
+
+  const persistWidth = () => {
+    localStorage.setItem(WIDTH_KEY, String(Math.round(panelWidth())));
+    claimSpace();
+  };
+
+  rz.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    startX = e.clientX;
+    startW = panelWidth();
+    rz.setPointerCapture(e.pointerId);
+    document.body.classList.add('files-resizing');
+  });
+  rz.addEventListener('pointermove', (e) => {
+    if (!rz.hasPointerCapture(e.pointerId)) return;
+    applyWidth(startW + (startX - e.clientX)); // panel sits right: left = wider
+  });
+  const endDrag = (e) => {
+    if (!rz.hasPointerCapture(e.pointerId)) return;
+    rz.releasePointerCapture(e.pointerId);
+    document.body.classList.remove('files-resizing');
+    persistWidth();
+  };
+  rz.addEventListener('pointerup', endDrag);
+  rz.addEventListener('pointercancel', endDrag);
+
+  rz.addEventListener('dblclick', () => {
+    applyWidth(null);
+    localStorage.removeItem(WIDTH_KEY);
+    claimSpace();
+  });
+  rz.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowLeft' ? 24 : e.key === 'ArrowRight' ? -24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    applyWidth(panelWidth() + step);
+    persistWidth();
+  });
+
+  // A window resize can re-tighten (or free) the space the open panel needs.
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(claimSpace, 120);
+  });
+}
+
 // ---- Panel open/close -----------------------------------------------------
 // `persist: false` is for forced closes (agent without a workspace) — they
 // must not overwrite the user's remembered open/closed preference.
@@ -54,6 +144,7 @@ function setOpen(open, { persist = true } = {}) {
   els.panel.classList.toggle('open', state.open);
   els.btn?.setAttribute('aria-expanded', String(state.open));
   if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
+  claimSpace();
   if (state.open) refresh();
 }
 
@@ -463,12 +554,15 @@ export function initFiles() {
   els.copyPath = document.getElementById('files-copy-path');
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
+  els.resizer = document.getElementById('files-resizer');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   els.close.innerHTML = icon('x', { size: 16 });
   els.copyPath.innerHTML = icon('copy', { size: 14 });
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
+
+  if (els.resizer) initResizer();
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
   els.close.addEventListener('click', () => setOpen(false));

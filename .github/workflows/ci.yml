@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch: # manual re-deploy of the docs site without a new commit
 
 jobs:
   lint:
@@ -52,23 +53,20 @@ jobs:
       - name: Build site (strict)
         run: uv run mkdocs build --strict
 
-  # Build the MkDocs site and publish it to GitHub Pages. Only runs when
-  # commits land on main; the `github-pages` environment's branch policy
-  # rejects deployments from any other ref, so this job is gated accordingly.
+  # Build the MkDocs site and upload it as the Pages artifact. Split from the
+  # deploy job so a failed deploy can be re-run on its own without re-uploading
+  # a second `github-pages` artifact (which makes deploy-pages fail with
+  # "Multiple artifacts named github-pages"). Runs on main pushes and on manual
+  # dispatch; PR validation is handled by `docs-check` above.
   docs:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [lint, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    concurrency:
-      group: pages
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -86,6 +84,23 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+  # Publish the uploaded artifact to GitHub Pages. Isolated so re-running only
+  # this job never produces a duplicate artifact. The github-pages environment's
+  # branch policy rejects non-main refs, so it inherits the gating via `needs`.
+  deploy:
+    needs: docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4

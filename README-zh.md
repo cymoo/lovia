@@ -1,6 +1,6 @@
 # lovia
 
-[English](./README.md) · [文档](./docs/zh/README.md) · [示例](./examples/README-zh.md)
+[English](./README.md) · [文档](https://cymoo.github.io/lovia/zh/) · [示例](./examples/README-zh.md)
 
 lovia 是一个优雅、克制的 Python agent 框架，适合想要掌控 agent
 循环、又不想从零搭完所有基础设施的开发者。它把 agent 应用里反复出现的
@@ -43,12 +43,12 @@ pip install "lovia[web]" && python -m lovia.web
 
 Anthropic 也内置支持：设置 `ANTHROPIC_API_KEY`，然后使用
 `model="anthropic:claude-4-8-opus"`。模型相关的更多内容见
-[Provider 与模型](./docs/zh/providers.md)。
+[Provider 与模型](https://cymoo.github.io/lovia/zh/providers/)。
 
 ## 文档
 
-这份 README 是一次快速巡礼。[完整文档](./docs/zh/README.md)按功能逐页展开，
-建议从[快速上手](./docs/zh/quickstart.md)和[核心概念](./docs/zh/concepts.md)
+这份 README 是一次快速巡礼。[完整文档](https://cymoo.github.io/lovia/zh/)按功能逐页展开，
+建议从[快速上手](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)
 开始；[示例](./examples/README-zh.md)则是一条按编号排列、可以直接运行的学习路径。
 
 ## 为什么是 lovia
@@ -93,7 +93,7 @@ agent = Agent(
 )
 ```
 
-→ [Agent](./docs/zh/agents.md)
+→ [Agent](https://cymoo.github.io/lovia/zh/agents/)
 
 ### 运行与流式输出
 
@@ -112,7 +112,7 @@ async for ev in handle:
 result = await handle.result()
 ```
 
-→ [运行 agent](./docs/zh/running.md) · [流式输出](./docs/zh/streaming.md)
+→ [运行 agent](https://cymoo.github.io/lovia/zh/running/) · [流式输出](https://cymoo.github.io/lovia/zh/streaming/)
 
 ### 工具
 
@@ -141,7 +141,7 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
-→ [工具](./docs/zh/tools.md) · [内置工具](./docs/zh/built-in-tools.md)
+→ [工具](https://cymoo.github.io/lovia/zh/tools/) · [内置工具](https://cymoo.github.io/lovia/zh/built-in-tools/)
 
 ### 结构化输出
 
@@ -163,7 +163,7 @@ result = await Runner.run(agent, "给 Python 开发者总结 Transformer。")
 print(result.output.title)
 ```
 
-→ [结构化输出](./docs/zh/structured-output.md)
+→ [结构化输出](https://cymoo.github.io/lovia/zh/structured-output/)
 
 ### Provider
 
@@ -180,7 +180,7 @@ agent = Agent(
 )
 ```
 
-→ [Provider 与模型](./docs/zh/providers.md)
+→ [Provider 与模型](https://cymoo.github.io/lovia/zh/providers/)
 
 ### 多 Agent
 
@@ -218,7 +218,7 @@ manager = Agent(
 )
 ```
 
-→ [多 Agent](./docs/zh/multi-agent.md)
+→ [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)
 
 ### 人工介入
 
@@ -240,7 +240,7 @@ async for ev in Runner.stream(agent, "给订单 A123 退款。"):
         ev.approve()          # 或 ev.reject()
 ```
 
-→ [人工介入](./docs/zh/human-in-the-loop.md)
+→ [人工介入](https://cymoo.github.io/lovia/zh/human-in-the-loop/)
 
 ### Session 与 Checkpoint
 
@@ -261,7 +261,7 @@ result = await Runner.run(
 )
 ```
 
-→ [Session 与 Checkpoint](./docs/zh/sessions-and-checkpoints.md)
+→ [Session 与 Checkpoint](https://cymoo.github.io/lovia/zh/sessions-and-checkpoints/)
 
 ### 上下文压缩
 
@@ -277,7 +277,7 @@ agent = Agent(
 )
 ```
 
-→ [上下文管理](./docs/zh/context.md)
+→ [上下文管理](https://cymoo.github.io/lovia/zh/context/)
 
 ### 护栏与可靠性
 
@@ -308,7 +308,7 @@ result = await Runner.run(
 )
 ```
 
-→ [护栏](./docs/zh/guardrails.md) · [可靠性](./docs/zh/reliability.md)
+→ [护栏](https://cymoo.github.io/lovia/zh/guardrails/) · [可靠性](https://cymoo.github.io/lovia/zh/reliability/)
 
 ### 观察与运行中调整
 
@@ -333,8 +333,8 @@ handle = Runner.stream(agent.clone(hooks=hooks), "分析这些日志。", mailbo
 mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一轮可见
 ```
 
-→ [可观测性](./docs/zh/observability.md) ·
-[可靠性](./docs/zh/reliability.md#运行中追加指令)
+→ [可观测性](https://cymoo.github.io/lovia/zh/observability/) ·
+[可靠性](https://cymoo.github.io/lovia/zh/reliability/#运行中追加指令)
 
 ### 工作区
 
@@ -358,7 +358,7 @@ agent = Agent(
 )
 ```
 
-→ [工作区](./docs/zh/workspace.md)
+→ [工作区](https://cymoo.github.io/lovia/zh/workspace/)
 
 ### 插件
 
@@ -389,8 +389,8 @@ agent = Agent(
 
 自己写插件，只需要一个 `name` 和一个返回贡献内容的异步 `setup()`。
 
-→ [插件](./docs/zh/plugins.md) · [技能](./docs/zh/skills.md) ·
-[MCP](./docs/zh/mcp.md)
+→ [插件](https://cymoo.github.io/lovia/zh/plugins/) · [技能](https://cymoo.github.io/lovia/zh/skills/) ·
+[MCP](https://cymoo.github.io/lovia/zh/mcp/)
 
 ### 记忆
 
@@ -409,7 +409,7 @@ Memory("./memory", embedder=OpenAIEmbedder())  # + 语义检索 -> 混合召回
 Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
 ```
 
-→ [记忆](./docs/zh/memory.md)
+→ [记忆](https://cymoo.github.io/lovia/zh/memory/)
 
 ### Web UI
 
@@ -430,7 +430,7 @@ python -m lovia.web --port 9000 --model deepseek-v4-pro   # 或零配置启动
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的
 FastAPI 应用中，在同一套端点上做自定义前端。
 
-→ [Web UI 与服务端](./docs/zh/web.md) · [HTTP API](./docs/zh/http-api.md)
+→ [Web UI 与服务端](https://cymoo.github.io/lovia/zh/web/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)
 
 ### 评测
 
@@ -451,7 +451,7 @@ print(report)
 assert report.passed
 ```
 
-→ [评测](./docs/zh/eval.md)
+→ [评测](https://cymoo.github.io/lovia/zh/eval/)
 
 ### 测试
 
@@ -466,7 +466,7 @@ provider = ScriptedProvider([
 ])
 ```
 
-→ [测试](./docs/zh/testing.md)
+→ [测试](https://cymoo.github.io/lovia/zh/testing/)
 
 ## 示例
 
@@ -497,4 +497,4 @@ pip install -e ".[dev]"
 ```
 
 标记为 `live_provider` 的真实端点测试默认跳过，需要显式开启。面向贡献者的
-内部机制文档见 [docs/architecture.md](docs/architecture.md)。
+内部机制文档见 [docs/architecture.md](https://cymoo.github.io/lovia/zh/architecture/)。

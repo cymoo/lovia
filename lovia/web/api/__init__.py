@@ -34,6 +34,7 @@ from .chat import build_chat_router
 from .deps import RouterDeps
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
+from .workspace import build_workspace_router, workspace_cfg
 
 __all__ = ["RouterDeps", "build_api_router"]
 
@@ -64,6 +65,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "checkpointing": deps.store.checkpointer is not None,
                 "titles": deps.generate_titles,
                 "scheduling": True,
+                "workspace": any(
+                    workspace_cfg(a) is not None for a in deps.agents.values()
+                ),
             },
         )
 
@@ -71,4 +75,5 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     router.include_router(build_chat_router(deps))
     router.include_router(build_sessions_router(deps))
     router.include_router(build_schedules_router(deps))
+    router.include_router(build_workspace_router(deps))
     return router

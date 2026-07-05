@@ -14,6 +14,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ..schemas import AgentInfo
 from .deps import RouterDeps
+from .workspace import workspace_cfg
 
 
 def agent_info(name: str, agent: Agent[Any]) -> AgentInfo:
@@ -24,6 +25,7 @@ def agent_info(name: str, agent: Agent[Any]) -> AgentInfo:
         if isinstance(agent.instructions, str)
         else None,
         tools=[t.name for t in (agent.tools or [])],
+        workspace=workspace_cfg(agent) is not None,
     )
 
 

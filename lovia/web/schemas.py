@@ -11,6 +11,41 @@ class AgentInfo(BaseModel):
     name: str
     instructions: str | None = None
     tools: list[str] = Field(default_factory=list)
+    # True when the agent has a browsable local workspace (the Files panel
+    # shows itself only for such agents).
+    workspace: bool = False
+
+
+class WorkspaceInfo(BaseModel):
+    """The browsable workspace of one agent — just its display name.
+
+    Deliberately NOT the absolute root path: the UI doesn't need it and a
+    served page shouldn't advertise server filesystem layout.
+    """
+
+    name: str
+
+
+class WorkspaceEntry(BaseModel):
+    """One file/directory in a listing (mirrors ``lovia.workspace.DirEntry``)."""
+
+    path: str
+    is_dir: bool
+    size: int | None = None
+    mtime: float | None = None
+    symlink_target: str | None = None
+
+
+class WorkspaceFile(BaseModel):
+    """File content for the viewer (mirrors ``FileContent`` + a binary flag)."""
+
+    path: str
+    content: str
+    start: int = 1
+    end: int = 0
+    total_lines: int = 0
+    truncated: bool = False
+    binary: bool = False
 
 
 class ServerInfo(BaseModel):

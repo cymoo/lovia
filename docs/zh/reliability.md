@@ -1,7 +1,7 @@
 # 可靠性
 
 Agent 运行的失败大致分两类：基础设施抖动（429、流断开）和行为失控（工具调用循环、预算爆炸）。
-lovia 把对应旋钮分开，并遵循一条放置规则：
+lovia 把对应控制项分开，并遵循一条放置规则：
 
 - **姿态**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，每次运行继承它：
   `retry`、`model=[...]` fallback 链、`default_tool_retries` / `default_tool_timeout`、
@@ -23,7 +23,7 @@ result = await Runner.run(
 ```
 
 某个请求确实特殊时，可以按调用覆盖姿态（`Runner.run(..., retry=...,
-context_policy=...)`）。**初始** agent 的姿态支配整个运行，包括 handoff 之后。
+context_policy=...)`）。**初始** agent 的姿态贯穿整个运行，包括 handoff 之后。
 
 ## Provider 重试
 
@@ -40,7 +40,7 @@ jitter 的指数退避大约是 1s / 2s / 4s，每次等待上限 30s。`retry=N
 
 什么算临时错误来自 [provider 适配器](providers.md#网络超时代理tls)：HTTP 408/429/5xx、网络超时、
 中途断连可重试；4xx 配置错误不重试；`ContextOverflowError` 永不重试，而是进入
-[reactive compaction](context.md)，修真正的问题。
+[reactive compaction](context.md)，修正真正的问题。
 
 **`restart_on_partial`** 是值得知道的 flag：长运行里 provider 发了半段话后中途断开很常见。开启时
 （默认），runner 会丢弃这个不完整 turn，并发出 [`OutputDiscarded`](streaming.md#模型输出)，让 UI
@@ -61,7 +61,7 @@ preflight 时检查它：
 | 字段 | 限制 |
 | --- | --- |
 | `max_input_tokens` / `max_output_tokens` / `max_total_tokens` | 累计 token |
-| `max_tool_calls` | **请求的**工具调用数；被拒绝的也算，所以模型一直 spam 坏工具名也会撞上限 |
+| `max_tool_calls` | **请求的**工具调用数；被拒绝的也算，所以模型反复请求错误工具名也会撞上限 |
 | `max_seconds` | wall clock，从第一次检查开始 |
 
 语义：触发预算会在下一个安全点抛 `BudgetExceeded`。已经在跑的工具调用可以**完成并持久化**
@@ -86,7 +86,7 @@ token.cancel("用户点击停止")        # 或：handle.cancel("...")
 ```
 
 运行会在下一个安全点以 `RunCancelled` 结束（stream 中表现为 `RunFailed`）；批量工具调用中途取消时，
-仍在运行的 sibling 调用也会被取消。token 在每次运行中始终存在，工具和 hooks 可以通过
+仍在运行的同批调用也会被取消。token 在每次运行中始终存在，工具和 hooks 可以通过
 `ctx.cancel_token` 拿到，所以运行可以**取消自己**（比如 hook 发现危险模式，或工具检测到不可恢复状态）。
 子运行继承父运行的 token：一次取消停止整棵树。
 
@@ -95,7 +95,7 @@ token.cancel("用户点击停止")        # 或：handle.cancel("...")
 
 ## 运行中追加指令
 
-取消的反向能力：`Mailbox` 把消息送**进**正在运行的 agent。runner 会在每个 turn 开始时 drain 它，
+取消的另一面：`Mailbox` 把消息送**进**正在运行的 agent。runner 会在每个 turn 开始时取出其中的消息，
 并把每条消息作为普通用户消息追加进去：
 
 ```python
@@ -106,7 +106,7 @@ handle = Runner.stream(agent, "分析这些日志。", mailbox=mailbox)
 mailbox.push("重点看 14:00 左右的 5xx 峰值。")   # 下一轮可见
 ```
 
-工具和 hooks 会通过 `ctx.mailbox` 拿到同一个 channel。如果你没有提供，runner 会为本次运行创建一个；
+工具和 hooks 会通过 `ctx.mailbox` 拿到同一个通道。如果你没有提供，runner 会为本次运行创建一个；
 因此运行可以在没有外部接线的情况下给自己追加指令：
 
 ```python
@@ -123,12 +123,12 @@ def deadline(ev, ctx: RunContext):
 
 精确语义：
 
-- drain 只发生在 **turn 开始**，不会在 turn 中途发生。`TurnStarted` hook 会在本 turn drain 前一点触发，
+- 取消息只发生在 **turn 开始**，不会在 turn 中途发生。`TurnStarted` hook 会在本 turn 取消息前一点触发，
   所以从这个 hook push 的消息会落到当前 turn；其他地方 push 的消息会落到下一 turn。
-- 每条被 drain 的消息都会发出 [`UserMessageInjected`](streaming.md#模型输出)，并立即持久化
+- 每条被取出的消息都会发出 [`UserMessageInjected`](streaming.md#模型输出)，并立即持久化
   （崩溃不会丢掉已消费消息）。
-- `push()` 返回 token；`remove(token)` 可以撤回尚未被 drain 的消息。
-- 运行结束时还排着的消息会留在**调用方提供的** mailbox 中（可以喂给下一次运行）；runner 创建的默认
+- `push()` 返回 token；`remove(token)` 可以撤回尚未被取出的消息。
+- 运行结束时还排着的消息会留在**调用方提供的** mailbox 中（可以交给下一次运行）；runner 创建的默认
   mailbox 在运行后无法访问。最后一轮中 push 的消息没人会看到。
 - [Agent-as-tool](multi-agent.md#agent-as-tool) 子运行拥有自己的 mailbox，刻意不使用父运行的。
 

@@ -38,7 +38,7 @@ guardrail 是任意 callable，同步或异步都可以：
 用两种方式表示违规：
 
 - **抛 `GuardrailTripped("reason")`**：显式，携带你的消息；
-- **返回 truthy 值**：非空字符串会作为原因（`"output guardrail: Missing source citation."`）；
+- **返回真值**：非空字符串会作为原因（`"output guardrail: Missing source citation."`）；
   `True` 产生通用原因。`None`、`False`、`""` 表示通过。
 
 触发护栏会**结束运行**：`Runner.run` 抛 `GuardrailTripped`；stream 以携带该错误的 `RunFailed`

@@ -1,6 +1,6 @@
 # 运行 agent
 
-`Runner` 把一个 `Agent` 和一份输入变成一次运行。它本身无状态；所有每次运行的状态
+`Runner` 把一个 `Agent` 和一份输入变成一次运行。它本身无状态；所有单次运行状态
 都存在它启动的循环里。它只暴露三个入口，区别仅在于你怎样消费这次运行。
 
 ```python
@@ -8,7 +8,7 @@ from lovia import Runner
 
 result = await Runner.run(agent, "写一段发布说明。")      # 跑到完成
 result = Runner.run_sync(agent, "总结这个文件。")         # 脚本 / REPL
-handle = Runner.stream(agent, "解释上下文压缩。")         # 事件边发生边消费
+handle = Runner.stream(agent, "解释上下文压缩。")         # 边发生边消费事件
 ```
 
 `agent.run(...)` / `agent.run_sync(...)` / `agent.stream(...)` 是同一组调用，
@@ -18,7 +18,7 @@ handle = Runner.stream(agent, "解释上下文压缩。")         # 事件边发
 
 **`Runner.run(agent, input, **options) -> RunResult`**：等待运行完成并返回最终结果。
 失败会抛异常（`GuardrailTripped`、`BudgetExceeded`、`ProviderError` 等，见
-[错误目录](concepts.md#出错时会看到什么)）。
+[错误清单](concepts.md#出错时会看到什么)）。
 
 **`Runner.run_sync(...)`**：同样的事，但用 `asyncio.run()` 包起来，适合尚未使用
 async 的代码。如果在已经运行的事件循环里调用，会抛 `UserError`，hint 里会告诉你
@@ -85,7 +85,7 @@ result = await Runner.run(
 ### 图片和文件
 
 消息内容除了字符串，也可以是类型化 part 列表：`TextPart`、`ImagePart`、`FilePart`。
-provider 会把它们翻译成自己的 wire format：
+provider 会把它们转换成自己的请求格式：
 
 ```python
 from lovia import ImagePart, Runner, TextPart, user
@@ -124,7 +124,7 @@ result = await Runner.run(
 | `turns` | 本次运行用了多少个模型 turn |
 | `finish_reason` | 最后一轮 provider 报告的结束原因；检查 `"stop"` 和 `"length"` 可发现被 `max_tokens` 截断的答案 |
 
-`entries` 刻意不包含 system prompt 和之前的 session 历史，因此无论运行是新鲜完成，
+`entries` 刻意不包含 system prompt 和之前的 session 历史，因此无论运行是刚刚完成，
 还是从 checkpoint 重建出来，它都一致。要看完整对话，可以在 hook 里读取
 `ctx.entries`，或运行结束后调用 `session.load()`。
 
@@ -137,11 +137,11 @@ result = await Runner.run(
 - **模型回复既没有内容也没有工具调用时，运行会完成**，输出为空字符串（会记录 warning）。
   这几乎总是 provider 抖动或 `max_tokens` 截断；相信空答案前先检查 `finish_reason`。
 - **`run_sync` 拥有事件循环**：它拒绝在现有事件循环里运行。notebook 里如果已经有
-  live loop，请用 `await Runner.run(...)`。
+  已有正在运行的事件循环，请用 `await Runner.run(...)`。
 
 ## 延伸阅读
 
-- [流式输出](streaming.md)：`Runner.stream` 背后的事件目录
+- [流式输出](streaming.md)：`Runner.stream` 背后的事件清单
 - [Session 与 Checkpoint](sessions-and-checkpoints.md)：持久化选项
 - [可靠性](reliability.md)：预算、取消、运行中追加指令、重试
 - 示例：[`01_hello.py`](../../examples/01_hello.py)，

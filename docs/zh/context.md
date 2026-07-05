@@ -147,7 +147,7 @@ required_sections=...)`，不要 fork 它。
 
 ## 容易踩的点
 
-- **Compaction 不是内存上限。** **transcript** 保留完整输出；只有 view 缩小。失控 payload 要在源头由
+- **Compaction 不是内存上限。** **transcript** 保留完整输出；只有 view 缩小。失控载荷要在源头由
   [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
 - **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
   触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
@@ -155,7 +155,7 @@ required_sections=...)`，不要 fork 它。
 - **未知窗口意味着没有主动压缩。** OpenAI 兼容端点上的自定义模型通常不报告窗口；不设置
   `context_window=...` 就只能依赖 reactive 路径。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于
-  policy 实例。clone agent 会共享 policy 实例；变体请各给各的。
+  policy 实例。clone agent 会共享 policy 实例；变体请各自配置一个。
 
 ## 延伸阅读
 

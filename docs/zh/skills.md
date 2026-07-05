@@ -23,11 +23,11 @@ skill 的上下文成本被拆成三步：
    （`` `name` — description``，加额外 frontmatter），后面跟使用规则。在真正需要前，
    一个 skill 只花这点上下文。
 2. **`load_skill(name)`**：插件提供的工具。当模型判断某个 skill 适用时，返回完整
-   `SKILL.md` body。
+   `SKILL.md` 正文。
 3. **`read_skill_file(name, relpath)`**：原样读取被引用的文件，比如
    `references/refund-tiers.md`、脚本或模板。
 
-body 每次加载都会从磁盘懒读取，不缓存。因此修改 skill 后，下一次调用就会生效，不需要重启。
+正文每次加载都会从磁盘懒读取，不缓存。因此修改 skill 后，下一次调用就会生效，不需要重启。
 
 ## skill 的结构
 
@@ -79,7 +79,7 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
 skill 层失败会在 setup 时抛 `SkillsError`（带 `skill_name`/`path`/`hint`）；工具内部的失败会
 被捕获，并以普通错误字符串返回给模型。
 
-## 自定义 backend
+## 自定义后端
 
 目录只是一种来源；底层接口是公开的：
 
@@ -104,8 +104,8 @@ agent = Agent(..., plugins=[Skills(catalog)])
 
 - **阻止路径穿越**：`read_skill_file` 会解析目标路径，并要求它仍在 skill 目录内；
   skill 名也会直接拒绝 `/`、`\` 和 `..`。
-- **加载内容被框定为数据**：`load_skill` 会用 BEGIN/END reference-material marker 包住 body
-  （并中和 body 内伪造的 marker），所以 skill 文件里的 instructions 弱于你的 system prompt；
+- **加载内容被框定为数据**：`load_skill` 会用 BEGIN/END reference-material marker 包住正文
+  （并中和正文内伪造的 marker），所以 skill 文件里的 instructions 弱于你的 system prompt；
   输出会在 100k 字符处截断。
 
 ## 容易踩的点
@@ -113,7 +113,7 @@ agent = Agent(..., plugins=[Skills(catalog)])
 - **skill 文件 IO 绕过工作区 ACL。** `load_skill` 和 `read_skill_file` 做自己的读取；
   即使 skill 目录在[工作区](workspace.md)根目录之外，或匹配 `denied_paths`，也仍能加载。
   请把 skill 目录视为可信内容；只有**执行**附带脚本时才会经过工作区 shell 策略。
-- **description 是路由表面。** 模糊 description 会让模型永远不加载（或总是加载）这个 skill。
+- **description 是路由信号。** 模糊 description 会让模型永远不加载（或总是加载）这个 skill。
   像写工具 description 一样写它：任务化、具体、带触发词。
 - **索引在一次运行中静态。** 目录中新加的 skill 会在下一次运行出现
   （或长生命周期 source 调用 `rescan()` 后出现），不会在当前对话中途冒出来。

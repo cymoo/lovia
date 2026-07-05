@@ -2,8 +2,8 @@
 
 用户能和 agent 对话，它才算真正可用。可选 web 层是一个小型 FastAPI 应用：聊天 UI、SSE
 流式输出、带标题的 session、审批、定时任务、记忆编辑器、只读文件面板。它可以服务任意 lovia
-agent；如果你想自带前端，[HTTP API](http-api.md) 也能独立使用。内置页面是完全自包含的：
-渲染器 vendored、系统字体、无 CDN 或字体源请求，所以内网、离线、防火墙后都能正常加载。
+agent；如果你想自带前端，[HTTP API](http-api.md) 也能独立使用。内置页面完全自包含：
+渲染器随包提供，使用系统字体，不请求 CDN 或字体源，所以内网、离线、防火墙后都能正常加载。
 
 ```bash
 pip install "lovia[web]"
@@ -33,7 +33,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 | `db_path` / `store` / `session` | cwd 下的 `<agent>.db` | transcript + metadata 存在哪里（[`ChatStore`](http-api.md#chatstore)） |
 | `max_turns` / `budget` / `retry` / `context_policy` / `tracer` | — | 应用于每个被服务运行的设置 |
 | `generate_titles` / `title_model` | `True` / 服务 agent 的模型 | 后台 LLM 聊天标题；标题生成前显示第一条用户消息，手动重命名始终优先 |
-| `approval_timeout` | `None` | N 秒后自动拒绝 pending 审批 |
+| `approval_timeout` | `None` | N 秒后自动拒绝未处理审批 |
 | `max_background_runs` | `8`（`create_app`） | 并发 supervised runs；超额启动返回 HTTP 429 |
 | `ui` | `True` | `False` = 只提供 API（没有 `GET /` 或 `/static`） |
 | `cors_origins` | `None` | 不设置 = 不发 CORS header（跨域浏览器请求会被拒） |
@@ -44,7 +44,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 `python -m lovia.web` 会创建一个默认 agent 并启动服务。具体组合是：模型来自环境变量；
 存在 `./skills` 时加载 `Skills("./skills")`；启用 `Todo()` checklist；启用 `Scheduling`
 （agent 可以提出未来运行，审批门禁）；在 `./.lovia/memory` 下启用后台整理的 `Memory`；
-工具包含 `now` + `http_fetch`（安装了 `ddg` backend 时再加 `web_search`）；当前目录上启用
+工具包含 `now` + `http_fetch`（安装了 `ddg` 后端时再加 `web_search`）；当前目录上启用
 **trusted 工作区**；把今天日期作为 instruction 片段；如果存在 `AGENTS.md`，就用它作为 instructions。
 
 每个选项按 flag → env var → default 的顺序读取。安装了 `python-dotenv` 时，会自动加载
@@ -80,7 +80,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 
 被服务的运行是 **supervised** 的：运行是服务端拥有的 task，SSE 连接只是订阅者。笔记本中途合盖，
 运行仍会继续；重新打开聊天会重新 attach。客户端先收到已完成 turn 的权威 snapshot，再收到当前
-turn 在途事件的回放（包括仍在等待的 approval），然后接上 live tail。
+turn 在途事件的回放（包括仍在等待的 approval），然后接上实时流。
 
 相关生命周期：
 
@@ -100,7 +100,7 @@ turn 在途事件的回放（包括仍在等待的 approval），然后接上 li
 - **`schedule_run` 工具**（默认 agent，或你自己的 agent 上使用 `Scheduling(store)`）允许**模型**
   提出后续运行，比如“周五提醒我”。它带[审批](human-in-the-loop.md)门禁，所以没有点击确认就不会被安排。
   `continue_session=True` 会把结果落在同一聊天中；否则每次触发都会打开一个新 session。
-- **投递 at-most-once 且合并**：上一次触发仍在运行时，新触发会跳过（不排队）；暂停的 schedule 保持暂停
+- **至多投递一次，并合并重叠触发**：上一次触发仍在运行时，新触发会跳过（不排队）；暂停的 schedule 保持暂停
   （用 `PATCH` 修改 `active`，用 `POST .../run` 手动触发）。
 
 ## 容易踩的点
@@ -109,14 +109,14 @@ turn 在途事件的回放（包括仍在等待的 approval），然后接上 li
   非 loopback host 和可写工作区组合时会大声警告，因为这相当于“以你的用户身份远程执行代码”。
 - **默认工作区模式是在 cwd 上 `trusted`**。这适合项目目录里的个人助手，不适合共享环境。先用
   `--workspace-mode readonly` 或 `--no-workspace`，之后再逐步放开。
-- **supervised 状态是进程内的。** live runs、approvals、SSE hubs 都在内存里：请运行一个进程
-  （`workers=1`）。SQLite stores 使用 `wal`，所以**数据**能存活；多 worker 部署需要 sticky routing，
+- **supervised 状态是进程内的。** 正在运行的任务、approvals、SSE hubs 都在内存里：请运行一个进程
+  （`workers=1`）。SQLite stores 使用 `wal`，所以**数据**能存活；多 worker 部署需要粘性路由，
   通常不值得做。
 - **`/api/chat`（阻塞）不是 supervised**：不能 reconnect，也不能 attach。UI 应该使用
   `/api/chat/stream`；阻塞路由是给脚本用的。
 
 ## 延伸阅读
 
-- [HTTP API](http-api.md)：每个端点、SSE wire format、自带前端之外的接入方式
-- [记忆](memory.md#记忆如何写入)：侧边栏编辑器的 backend
+- [HTTP API](http-api.md)：每个端点、SSE 传输格式、自带前端之外的接入方式
+- [记忆](memory.md#记忆如何写入)：侧边栏编辑器的后端
 - 示例：[`26_web_serve.py`](../../examples/26_web_serve.py)

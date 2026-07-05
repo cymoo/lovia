@@ -44,7 +44,7 @@ agent = Agent(
 
 ## Web 搜索
 
-`lovia.tools.search`：可插拔搜索工具。内置 backend 是 DuckDuckGo（不需要 API key），
+`lovia.tools.search`：可插拔搜索工具。内置后端是 DuckDuckGo（不需要 API key），
 位于 `ddg` extra 中：
 
 ```bash
@@ -54,15 +54,15 @@ pip install "lovia[ddg]"
 ```python
 from lovia.tools.search import duckduckgo_search, web_search
 
-tools = [duckduckgo_search()]            # 内置 backend
-tools = [web_search(MySearchBackend())]  # 或你自己的 backend
+tools = [duckduckgo_search()]            # 内置后端
+tools = [web_search(MySearchBackend())]  # 或你自己的后端
 ```
 
 工具默认名为 `web_search`（可用 `name=` 覆盖），接收 `query`、`max_results`
 （1–20，默认 5）和可选的时间范围过滤 `time_range`（`"d"` / `"w"` / `"m"` /
 `"y"`）。结果会渲染成可读的标题/URL/snippet 块，而不是裸 JSON。
 
-自定义 backend 实现一个方法即可，即 `WebSearch` protocol：
+自定义后端只需要实现一个方法，也就是 `WebSearch` protocol：
 
 ```python
 class WebSearch(Protocol):
@@ -71,7 +71,7 @@ class WebSearch(Protocol):
     ) -> list[SearchResult]: ...
 ```
 
-backend 必须能安全处理并发调用。显式传入 backend（`web_search(impl)`）意味着缺失的
+后端必须能安全处理并发调用。显式传入后端（`web_search(impl)`）意味着缺失的
 可选依赖会在构造时失败，而不是运行到一半才失败。
 
 ## 时间
@@ -117,9 +117,9 @@ async for q in channel.questions():   # channel.close() 后结束
 
 - **`http_fetch` 是最锋利的内置工具。** 和不可信输入组合时，它就是 SSRF 原语。
   公开暴露前请加门禁或沙箱网络。
-- **`duckduckgo_search()` 会急切构造。** 缺少 `ddgs` 包时，它会在构建时抛
-  `UserError`。这正是你想在启动时看到的 fail-fast，而不是运行中捕获后忽略。
-- **搜索结果质量取决于 backend。** DDG backend 不需要 key，但实际使用中有频率限制；
+- **`duckduckgo_search()` 会立即构造。** 缺少 `ddgs` 包时，它会在构建时抛
+  `UserError`。这正是你想在启动时看到的快速失败，而不是运行中捕获后忽略。
+- **搜索结果质量取决于后端。** DDG 后端不需要 key，但实际使用中有频率限制；
   生产应用通常会换成自己的 `WebSearch`。
 
 ## 延伸阅读

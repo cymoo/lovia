@@ -1,7 +1,7 @@
 # 评测
 
-单元测试能确认接线，但很难判断 agent **表现**如何：答得对不对、有没有调用正确工具、是否足够简洁。
-尤其当行为本身非确定时更是如此。`lovia.eval` 让你用 `Case` 写下输入和验收条件；
+单元测试能确认代码有没有接好，但很难判断 agent **表现**如何：答得对不对、有没有调用正确工具、是否足够简洁。
+尤其当行为本身不确定时更是如此。`lovia.eval` 让你用 `Case` 写下输入和验收条件；
 验收条件可以是普通函数，也可以是 LLM judge。`evaluate()` 会跑完整套 case，并返回一个可以打印、
 断言、和基线对比的 `Report`。
 
@@ -14,7 +14,7 @@ cases = [
     Case(
         "写一首关于春天的俳句",
         checks=[llm_judge("一首 5-7-5 音节、能唤起春天意象的俳句")],
-        samples=4,               # 非确定性被度量，而不是靠重试掩盖：
+        samples=4,               # 把不确定性量出来，而不是靠重试掩盖：
         pass_threshold=0.75,      # 4 个 sample 至少 3 个通过即通过
     ),
 ]
@@ -37,16 +37,16 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 | --- | --- | --- |
 | `input` | 必填 | 字符串，或 `list[Message]` |
 | `checks` | `()` | 通过标准（一个 sample 必须全部通过） |
-| `name` | 从 input 派生 | 报告标签，也是 `compare()` 的 join key |
+| `name` | 从 input 派生 | 报告标签，也是 `compare()` 的匹配键 |
 | `samples` | `1` | 同一个 case 运行 N 次；非确定性会变成数字 |
 | `pass_threshold` | `1.0` | case 通过所需的 sample 通过比例 |
 | `context` | `None` | 作为运行 deps 转发 |
 | `output_type` / `max_turns` | agent 的配置 / `50` | 每个 case 的运行设置 |
 | `model` | agent 的配置 | 把 agent clone 到另一个模型上运行这个 case |
-| `timeout` | `None` | 每个 sample 的 wall-clock 上限；timeout 是失败 sample，不是崩掉整个 suite |
+| `timeout` | `None` | 每个 sample 的 wall-clock 上限；timeout 是失败 sample，不会让整个套件崩掉 |
 | `metadata` | `{}` | 原样携带到结果 |
 
-`Case(model=...)` 很常用：live suite 可以把某个 case 固定到不同模型；**离线 suite 给每个 case
+`Case(model=...)` 很常用：在线评测可以把某个 case 固定到不同模型；**离线评测给每个 case
 自己的 scripted transcript**：
 
 ```python
@@ -64,7 +64,7 @@ Case(
 
 ## Checks
 
-任何 `(RunResult) -> CheckResult | bool` callable 都可以，同步或异步都行。内置 matcher、
+任何 `(RunResult) -> CheckResult | bool` callable 都可以，同步或异步都行。内置匹配器、
 LLM judge 和你自己的函数是同一种东西：
 
 ```python
@@ -72,19 +72,19 @@ def concise(result) -> bool:
     return len(str(result.output)) < 400
 ```
 
-抛异常的 check 只会让**自己**失败（异常作为原因），不会让整个 suite 崩掉。`run_check` 会把所有结果
+抛异常的 check 只会让**自己**失败（异常作为原因），不会让整个套件崩掉。`run_check` 会把所有结果
 规范化成 `CheckResult(name=..., passed=..., score=..., reason=...)`；需要分数型结果时也可以自己返回一个。
 
-内置项：`contains(value, ignore_case=False)` / `not_contains`、`regex(pattern)`、
+内置检查：`contains(value, ignore_case=False)` / `not_contains`、`regex(pattern)`、
 `equals(value)`、`matches(spec)`（结构化输出的递归子集匹配：忽略额外字段，列表长度必须精确；也可传谓词）、
 `tool_called(name)` / `tool_not_called(name)`、`max_turns(n)`、`max_tokens(n)`、`no_error()`
 （运行中没有失败工具调用）。可用 `all_of(...)`、`any_of(...)` 和
 `weighted({check: weight, ...}, threshold=0.7)` 组合；weighted 会把子 score（或通过/失败）合成一个
-带分数 verdict。
+带分数的判断结果。
 
 ### LLM 裁判
 
-`llm_judge(rubric, *, model=None, threshold=0.7)` 可以评估 matcher 难以表达的语义：
+`llm_judge(rubric, *, model=None, threshold=0.7)` 可以评估匹配器难以表达的语义：
 
 ```python
 llm_judge("礼貌、可执行，并提出一个具体下一步。")
@@ -93,7 +93,7 @@ llm_judge("礼貌、可执行，并提出一个具体下一步。")
 底层它只是另一个 check，运行另一个 agent（`output_type=Verdict{score, reasoning}`，
 temperature 0）。裁判模型来自 `model=` 或 `$LOVIA_EVAL_JUDGE_MODEL`，**不会**静默使用被测 agent。
 `passed = score >= threshold`。把 `ScriptedProvider` 作为 `model` 传入，裁判也可以离线运行；
-这就是整个 suite 在 CI 中免费运行的方式。
+这样整套评测就能在 CI 中免费跑。
 
 ## 运行套件
 
@@ -105,7 +105,7 @@ report = await evaluate(agent_or_factory, cases, concurrency=4, fail_fast=False,
 - **Agent 或工厂**（`AgentSource` union）。零参工厂会按**sample**调用；当 agent 有状态时
   （scripted provider、有状态工具），请传工厂。
 - **并发发生在 case 之间**（默认 4）；一个 case 的 samples 串行运行；一个 sample 的 checks 并发运行。
-- **错误是数据。** sample 抛异常或 timeout 会记录自己的 `error` 并失败；suite 总会跑完。
+- **错误是数据。** sample 抛异常或 timeout 会记录自己的 `error` 并失败；套件总会跑完。
   `fail_fast=True` 会串行运行 case，并在第一个失败 **case** 后停止。
 - **`price=`** 把 usage 转成成本；报告会显示 `· $0.0421`。
 
@@ -122,16 +122,16 @@ report.save("eval-baseline.json")            # 一次，在一个好结果上保
 current = await evaluate(agent, cases)
 diff = current.compare(Report.load("eval-baseline.json"))
 print(diff)                                   # regressions / improvements / added / removed
-assert diff.ok                                # truthy ⇔ 没有 regression
+assert diff.ok                                # 为真 ⇔ 没有 regression
 ```
 
-`compare` 返回 `Diff`，按 case **name** join（重复名称会报错；输入重复时请手动命名 case）。
+`compare` 返回 `Diff`，按 case **name** 匹配（重复名称会报错；输入重复时请手动命名 case）。
 improvement 和新增/删除 case 会报告，但不会让 `diff.ok` 失败。
 
 ## 容易踩的点
 
 - **裁判成本按 `samples × judge-checks × cases` 增长**，每个 judge evaluation 都是一次模型调用。
-  只把 judge 用在真正需要语义判断的 case 上；matcher 是免费的。
+  只把 judge 用在真正需要语义判断的 case 上；匹配器是免费的。
 - **现成 `Agent` 实例会在 samples 间复用**，除非设置了 `model=` 或传入工厂。无状态 agent 没问题；
   scripted agent 不适合，第二个 sample 会发现脚本空了。
 - **`samples` 是度量，不是修复。** `pass_threshold < 1.0` 表达的是你能接受的波动；如果某个 case
@@ -142,4 +142,4 @@ improvement 和新增/删除 case 会报告，但不会让 `diff.ok` 失败。
 
 - [测试](testing.md)：`ScriptedProvider`，eval 和 judge 离线模式共用的引擎
 - [护栏](guardrails.md)：输出 check 在运行时的对应物
-- 示例：[`28_eval.py`](../../examples/28_eval.py)：完整离线 scripted suite，带 scripted judge
+- 示例：[`28_eval.py`](../../examples/28_eval.py)：完整离线 scripted 评测套件，带 scripted judge

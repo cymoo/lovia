@@ -16,7 +16,7 @@ agent = Agent(
 
 ## 字段
 
-每个字段都有字面默认值。`None` 不会暗藏某个常量；它表示关闭、继承或自动创建。
+每个字段都有显式默认值。`None` 不会暗藏某个常量；它表示关闭、继承或自动创建。
 
 | 字段 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ agent = Agent(
 | `handoffs` | `[]` | 模型可以[移交控制权](multi-agent.md)的 agent（或 `Handoff` 包装器） |
 | `settings` | `ModelSettings()` | 传给 provider 的采样参数 |
 | `retry` | `RetryPolicy()` | provider 重试姿态（3 次重试、带 jitter 的退避）；`None` 表示关闭 |
-| `context_policy` | `Compaction()` | 每次调用的 view 如何成形；见[上下文管理](context.md) |
+| `context_policy` | `Compaction()` | 每次调用的 view 如何生成；见[上下文管理](context.md) |
 | `workspace` | `None` | 受策略限制的文件/shell 工具；见[工作区](workspace.md) |
 | `plugins` | `[]` | 能力包；见[插件](plugins.md) |
 | `hooks` | `None` | 观察每个运行事件的 `AgentHooks`；见[可观测性](observability.md) |
@@ -38,7 +38,7 @@ agent = Agent(
 | `default_tool_retries` | `0` | 没有自行设置重试的工具使用这个值 |
 | `default_tool_timeout` | `None` | 没有自行设置超时的工具每次尝试使用这个值 |
 | `max_tool_output_chars` | `200_000` | 防止工具输出失控撑大 transcript 的保险线（见[工具](tools.md#输出截断)） |
-| `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有 renderer 时使用 |
+| `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有渲染器时使用 |
 
 和可靠性相关的字段遵循一个值得记住的规则：**姿态放在 agent 上，限制放在运行上**。
 见[可靠性](reliability.md)。
@@ -134,7 +134,7 @@ result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps(
 ## 运行 agent
 
 `agent.run(...)`、`agent.run_sync(...)`、`agent.stream(...)` 都只是对应
-`Runner` 方法的薄封装。完整参数面，包括 session、预算、checkpoint、运行中追加指令等，
+`Runner` 方法的薄封装。完整参数，包括 session、预算、checkpoint、运行中追加指令等，
 见[运行 agent](running.md)。
 
 ## 容易踩的点
@@ -148,7 +148,7 @@ result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps(
 
 ## 延伸阅读
 
-- [运行 agent](running.md)：完整 run/stream 参数面
+- [运行 agent](running.md)：完整 run/stream 参数
 - [Provider 与模型](providers.md)：`model=` 接受哪些形式
 - 示例：[`01_hello.py`](../../examples/01_hello.py)，
   [`18_dependencies.py`](../../examples/18_dependencies.py)

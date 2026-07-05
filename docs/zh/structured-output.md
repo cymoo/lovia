@@ -48,7 +48,7 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
 
 按 provider 自动选择两种策略：
 
-- **原生路径**：支持结构化输出的 provider（OpenAI `response_format`、Anthropic
+- **原生接口**：支持结构化输出的 provider（OpenAI `response_format`、Anthropic
   output format）会在请求里收到 JSON Schema，并由服务端约束。
 - **Prompt fallback**：其他 provider 会让 lovia 在 system prompt 后追加一个
   “Output format” 块，要求模型只回复一个符合 schema 的 JSON 文档。它放在 system
@@ -96,5 +96,5 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
 ## 延伸阅读
 
 - [Agent](agents.md)：`output_type` 和 `output_repair` 放在哪里
-- [Provider 与模型](providers.md)：哪些 provider 走原生路径
+- [Provider 与模型](providers.md)：哪些 provider 走原生接口
 - 示例：[`04_structured_output.py`](../../examples/04_structured_output.py)

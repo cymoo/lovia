@@ -52,7 +52,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 **按运行（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在
 运行结束时关闭。这种方式无状态、稳健，代价是每次运行都要付出子进程/握手成本。
 
-**持久连接。** 如果很多运行都打到同一服务器，可以自己打开 session，再把 live connection
+**持久连接。** 如果很多运行都打到同一服务器，可以自己打开 session，再把已打开的连接
 传进去。`MCPServerLike` 同时支持配置和连接：
 
 ```python
@@ -64,7 +64,7 @@ async with server.session() as conn:      # 只打开一次
     await Runner.run(agent, "现在抓取 RFC 索引。")   # 同一连接
 ```
 
-运行不会关闭你自己打开的连接（live `MCPConnection` 的 `close_after_run` 为 `False`）；
+运行不会关闭你自己打开的连接（已打开的 `MCPConnection` 的 `close_after_run` 为 `False`）；
 它的生命周期就是 `async with` block。一个持久连接用于**顺序**运行；单个 MCP session 不支持
 并发运行。并发 worker 请各自拿自己的连接。
 
@@ -83,15 +83,15 @@ async with server.session() as conn:      # 只打开一次
 
 ## 容易踩的点
 
-- **`auto_reconnect` 意味着 at-least-once。** 调用中途断开后，会在新连接上重试一次；
+- **`auto_reconnect` 意味着至少执行一次。** 调用中途断开后，会在新连接上重试一次；
   非幂等副作用（如 `create_ticket`）可能发生两次。对会修改状态的服务器，设置
   `auto_reconnect=False`，让模型看到错误。
 - **MCP 工具默认并发运行**，和所有工具一样。如果服务器工具会修改共享状态，它们没有天然屏障；
-  可以用 `include_tools` 拆成两个 server entry，或用 `needs_approval` 给危险工具加门禁。
+  可以用 `include_tools` 拆成两个服务器条目，或用 `needs_approval` 给危险工具加门禁。
 - **`needs_approval` 是按服务器，不是按工具。** “读工具自由，写工具门禁”的惯用做法，是把同一
   服务器拆成两个 `MCPServer` 条目（同 command，不同 `include_tools`）。
 - **stdio 服务器默认继承你的进程环境**，除非传 `env=`；没有 `cwd` 选项。需要工作目录时，
-  用 wrapper script 启动。
+  用包装脚本启动。
 
 ## 延伸阅读
 

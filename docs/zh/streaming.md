@@ -1,8 +1,8 @@
 # 流式输出
 
 UI 不能等到 `RunResult` 出来才响应：文本生成时要立刻显示，工具开始调用时要更新状态，
-审批请求一阻塞就要弹出来。`Runner.stream` 会为这些过程产出类型化事件；同一套事件
-也驱动 [hooks](observability.md)，所以事件目录只需要学一次。
+审批请求一阻塞就要弹出来。`Runner.stream` 会在这些过程中产出类型化事件；同一套事件
+也驱动 [hooks](observability.md)，所以事件清单只需要学一次。
 
 ```python
 from lovia import Runner, events
@@ -38,7 +38,7 @@ result = await handle.result()
 3. **同一轮里的工具事件会交错。** 工具默认并发执行，所以请用 `ev.call.id` 关联事件，
    不要靠相邻位置判断。
 
-## 事件目录
+## 事件清单
 
 ### 运行与 turn 生命周期
 
@@ -48,7 +48,7 @@ result = await handle.result()
 | `TurnStarted` | `agent`, `turn` | 每个 turn，在模型调用前 |
 | `TurnEnded` | `agent`, `turn` | 每个 turn，在工具完成后 |
 | `RunCompleted` | `result` | 终止事件：运行成功 |
-| `RunFailed` | `error` | 终止事件：运行没有结果 |
+| `RunFailed` | `error` | 终止事件：运行失败 |
 
 ### 模型输出
 
@@ -86,7 +86,7 @@ UI 最容易写错的细节：
   `ToolCallFailed`。
 - 处理 `ApprovalRequired` 时，可以在循环继续交还控制权给 runner 前调用
   `ev.approve()` 或 `ev.reject()`；也可以稍后通过 `handle.approvals` 处理。
-  当 turn 需要答案而请求仍未处理时，默认**拒绝**，所以健忘的 UI 不会挂住运行。
+  当 turn 需要答案而请求仍未处理时，默认**拒绝**，所以没处理审批的 UI 不会挂住运行。
   同一 turn 里其他调用会在流停在审批事件上时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
 
 ### 转移与上下文
@@ -115,11 +115,11 @@ async for ev in handle:
         ev.approve() if ok else ev.reject()
 ```
 
-**服务端 fan-out**：把事件喂给自己的消息总线或 SSE 编码器。内置
+**服务端分发**：把事件转发给自己的消息总线或 SSE 编码器。内置
 [HTTP API](http-api.md) 正是这样做的；`lovia/web/sse.py` 是一个可用的翻译参考。
 
 **没有 UI 的可观测性**：即使没人消费 stream，同一套事件也会到达
-[hooks](observability.md)。做指标时更推荐 hooks，这样 instrumentation 不依赖谁在迭代。
+[hooks](observability.md)。做指标时更推荐 hooks，这样观测逻辑不依赖谁在迭代。
 
 ## 容易踩的点
 
@@ -133,7 +133,7 @@ async for ev in handle:
 
 ## 延伸阅读
 
-- [运行 agent](running.md)：handle 和 result 表面
+- [运行 agent](running.md)：handle 和 result 的用法
 - [人工介入](human-in-the-loop.md)：处理审批的所有方式
 - [可观测性](observability.md)：同一套事件，作为 hooks 使用
 - 示例：[`03_streaming.py`](../../examples/03_streaming.py)

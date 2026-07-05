@@ -1,8 +1,8 @@
 # lovia 中文文档
 
-这些指南按功能逐页深入。想快速了解全貌，请看
+这些指南按功能分篇展开。想快速了解全貌，请看
 [中文 README](../../README-zh.md)；想边跑边学，请看
-[示例](../../examples/README-zh.md)。这里则是你真正使用时会反复回来查的参考。
+[示例](../../examples/README-zh.md)。这里更适合真正上手后反复查阅。
 
 ## 建议先读
 
@@ -19,13 +19,13 @@
 
 ### 核心
 
-日常会用到的表面：定义 agent、运行它们，以及塑造它们能做什么、怎么回答。
+日常会碰到的核心入口：定义 agent、运行它们，并约束它们能做什么、怎么回答。
 
 | 指南 | 内容 |
 | --- | --- |
 | [Agent](agents.md) | `Agent` 字段、静态和动态 instructions、`clone()`、每次运行的依赖 |
 | [运行 agent](running.md) | `run` / `run_sync` / `stream`、输入（含图片和文件）、`RunResult`、错误 |
-| [流式输出](streaming.md) | 类型化事件目录，以及如何基于它构建 UI |
+| [流式输出](streaming.md) | 类型化事件清单，以及如何基于它构建 UI |
 | [工具](tools.md) | `@tool`、schema 推导、并发执行和屏障、重试、策略 |
 | [内置工具](built-in-tools.md) | HTTP fetch、Web 搜索和时间工具 |
 | [结构化输出](structured-output.md) | `output_type`、校验、自动修复 |
@@ -70,8 +70,8 @@
 
 ## 内部机制
 
-[架构笔记](../architecture.md)记录了框架本身如何构建：模块地图、runner 内部、
-关键不变量。它主要写给贡献者，但当指南里的“为什么”还不够时，也很值得一读。
+[架构笔记](../architecture.md)记录了框架本身的构造方式：模块地图、runner 内部、
+关键不变量。它主要写给贡献者；当指南里的“为什么”还不够时，也值得一读。
 
 ---
 

@@ -1,6 +1,6 @@
 # 多 Agent
 
-lovia 里的多 agent 组合刻意保持原子：两个原语，底层都实现为普通工具，没有编排 DSL。
+lovia 里的多 agent 组合刻意保持小而清楚：两个原语，底层都实现为普通工具，没有编排 DSL。
 **Handoff** 会移交控制权：专家继续同一段对话。**Agent-as-tool** 是委派：子 agent 回答
 一个有边界的问题，父 agent 接着往下走。更大的模式都用普通 Python 组合它们。
 
@@ -65,7 +65,7 @@ triage = Agent(
 | `description` | 通用转交文本 | **路由信号**。父 agent 需要在相似专家间选择时，请写清目标专长 |
 | `on_handoff` | `None` | handoff 触发时调用的同步或异步回调 `(args, ctx)`；`args` 携带模型可选的 `reason` |
 
-默认 description 故意很薄（只有 agent 名称），所以 `description` 才是让路由可靠的旋钮。
+默认 description 故意很简略（只有 agent 名称），所以 `description` 是让路由可靠的关键设置。
 
 ### Handoff 语义
 
@@ -106,7 +106,7 @@ retry=None, context_policy=None)`：
 - `budget` 每次调用都会复制一份，所以限制作用于每个子运行，而不是跨调用累计。
 - 子运行会**继承**父运行的 `context`（deps）、`cancel_token`（一次取消停止整棵树）和
   tracer（span 接到同一条 trace）；token 用量会折入父运行的 `usage`。
-- 子运行拥有**自己的 mailbox**。这不是父运行的 mailbox，因为 mailbox drain 是破坏性的，
+- 子运行拥有**自己的 mailbox**。这不是父运行的 mailbox，因为从 mailbox 取消息会消费它，
   注入消息也只应发给一段对话。
 - 子运行耗尽自己的预算时，会作为工具错误结果反馈给父 agent，让父 agent 处理。这是可恢复
   的委派失败，不是结束父运行的失败（见[错误语义](tools.md#错误语义)）。
@@ -130,13 +130,13 @@ retry=None, context_policy=None)`：
 ## 容易踩的点
 
 - **Handoff 目标需要可发现的 description。** 两个专家如果都用默认 description，
-  router 看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。
+  路由视角看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。
 - **被覆盖的 `output_type` 跟着运行，而不是跟着 agent。**
   `Runner.run(..., output_type=...)` 覆盖会绑定 handoff 到达的每个 agent；没有覆盖时，
   各 agent 使用自己的 `output_type`。triage → specialist 链如果输出类型不同，契约会在运行中变化。
 - **非 ASCII agent 名会生成 digest 工具名。** `transfer_to_agent_a1b2c3d4` 能正常路由，
   但日志不好读；需要可读名称时设置 `Handoff(name=...)` / `as_tool(name=...)`。
-- **很深的 as-tool 树会悄悄放大成本。** 用量向上折叠，所以 `result.usage` 是**整棵树**
+- **很深的 agent-as-tool 层级会悄悄放大成本。** 用量向上折叠，所以 `result.usage` 是**整个调用层级**
   的总量。根运行要按这个预算。
 
 ## 延伸阅读

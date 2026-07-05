@@ -6,20 +6,8 @@ lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
 It gives you the pieces most agent apps eventually need — tools, streaming,
 structured output, sessions, handoff, approvals, guardrails, workspaces,
-skills, MCP, context compaction, checkpoint/resume, and a tiny web UI — while
-keeping the core direct enough to read, replace, and extend.
-
-The core abstractions are few:
-
-- an `Agent` is immutable configuration;
-- a `Runner` executes one run;
-- a `@tool` is just a typed Python function;
-- `Handoff` and `agent.as_tool()` are the two atomic ways to compose agents;
-- plugins package reusable capability without taking over control flow. MCP,
-  Skills, Todo, and long-term memory can all be expressed as plugins.
-
-That is the tradeoff: handle the recurring hard parts of agent applications,
-but avoid turning the framework into a platform.
+skills, MCP, context compaction, checkpoint/resume, and a tiny web UI — and
+handles those recurring hard parts without turning into a platform.
 
 ```bash
 pip install lovia
@@ -57,19 +45,18 @@ result = agent.run_sync(
 print(result.output)
 ```
 
-Here `./skills` points at your team's skill directory; remove
+Or serve a full chat UI — memory, skills, scheduling, and a workspace on
+the current directory included — in one line:
+
+```bash
+pip install "lovia[web]" && python -m lovia.web
+```
+
+In the code above, `./skills` points at your team's skill directory; remove
 `Skills("./skills")` until you have one. Set `OPENAI_API_KEY` for the
 official OpenAI endpoint, or set `OPENAI_BASE_URL` for OpenAI-compatible
 services such as DeepSeek, Ollama, or vLLM. Anthropic is built in too:
 `model="anthropic:claude-4-8-opus"`.
-
-Or skip the code entirely — the zero-config playground serves a chat UI
-with memory, skills, scheduling, and a workspace on the current directory:
-
-```bash
-pip install "lovia[web]"
-python -m lovia.web
-```
 
 ## Documentation
 
@@ -81,85 +68,33 @@ one feature per page — start with the
 
 ## Why lovia
 
-lovia favors composable primitives over a new universe of abstractions. It
-stays close to ordinary Python: dataclasses, protocols, async functions, and
-explicit composition.
+Composable primitives instead of a new universe of abstractions, staying
+close to ordinary Python — dataclasses, protocols, async functions, explicit
+composition:
 
-- **It is readable.** `lovia/runner.py` is a facade; the mutable run state
-  lives in `lovia/runtime/loop.py`. When something surprises you, the path
-  through the code is short.
-- **It is provider-neutral without an adapter tax.** Built-in providers speak
-  OpenAI Chat Completions and Anthropic Messages directly over `httpx`. A
-  custom provider is a `Protocol`, not a subclassing project.
-- **Context management is replaceable.** The default `Compaction` changes only
-  what the model sees on the next call. Sessions and checkpoints keep the full
-  transcript, and advanced users can provide their own `ContextPolicy`.
-- **Multi-agent composition stays atomic.** Handoff transfers control to a
-  specialist; agent-as-tool delegates a bounded subtask. Both are primitives,
-  not an orchestration DSL you have to adopt wholesale.
-- **It has production seams, not a production costume.** Approvals, budgets,
+- **Few abstractions.** An `Agent` is immutable configuration; a `Runner`
+  executes one run; a `@tool` is a typed Python function; `Handoff` and
+  `agent.as_tool()` compose agents; plugins package everything reusable.
+- **Readable.** `lovia/runner.py` is a facade; the mutable run state lives in
+  `lovia/runtime/loop.py`. When something surprises you, the path through the
+  code is short.
+- **Provider-neutral without an adapter tax.** Built-in providers speak OpenAI
+  Chat Completions and Anthropic Messages directly over `httpx`; a custom
+  provider is a `Protocol`, not a subclassing project.
+- **Replaceable context management.** The default `Compaction` changes only
+  what the model sees on the next call — the full transcript survives — and
+  your own `ContextPolicy` can take over.
+- **Atomic multi-agent.** Handoff transfers control; agent-as-tool delegates a
+  subtask. Primitives, not an orchestration DSL you adopt wholesale.
+- **Production seams, not a production costume.** Approvals, budgets,
   cancellation, mid-run steering, retries, hooks, scoped workspace tools, and
-  checkpoint/resume are explicit knobs you can wire into your own app.
-- **It has one extension axis.** Plugins bundle tools, prompt additions,
-  per-turn view injectors, hooks, guardrails, and cleanup. Skills, MCP, todo
-  lists, and long-term memory all use the same mechanism.
-
-## Start small, add only what you need
-
-You can use lovia as a tiny wrapper around a model call, then add capabilities
-only when the product asks for them.
-
-| When you need... | Add... | Guide |
-| --- | --- | --- |
-| A quick script or notebook helper | `Agent.run_sync(...)` | [Running](./docs/en/running.md) |
-| Tool calling | `@tool` functions (parallel by default) | [Tools](./docs/en/tools.md) |
-| A tool whose side effects must not overlap | `@tool(parallel=False)` | [Tools](./docs/en/tools.md) |
-| Typed final answers | `output_type=YourModel` | [Structured output](./docs/en/structured-output.md) |
-| Live UI updates | `Runner.stream(...)` and typed events | [Streaming](./docs/en/streaming.md) |
-| Multi-turn chat | `SQLiteSession` or your own `Session` | [Sessions](./docs/en/sessions-and-checkpoints.md) |
-| Crash recovery, idempotent runs | `CheckpointOptions` | [Checkpoints](./docs/en/sessions-and-checkpoints.md#checkpoints) |
-| Multi-agent routing or delegation | `handoffs=[...]` or `agent.as_tool()` | [Multi-agent](./docs/en/multi-agent.md) |
-| Human approval | `@tool(needs_approval=True)` | [Human in the loop](./docs/en/human-in-the-loop.md) |
-| Files and shell commands | `Workspace.local(...)` | [Workspace](./docs/en/workspace.md) |
-| Long context survival | `Compaction` (auto-provides recall) | [Context](./docs/en/context.md) |
-| Memory across conversations | `Memory(...)` | [Memory](./docs/en/memory.md) |
-| Reusable capabilities | `PluginInstance`, `Skills`, `Todo`, or `MCP` | [Plugins](./docs/en/plugins.md) |
-| Behavioral test suites | `lovia.eval` | [Evals](./docs/en/eval.md) |
-
-## Philosophy
-
-lovia optimizes for four things, in this order. The order matters.
-
-1. **Concise.** A feature should fit in your head. The public surface should
-   be obvious, and internals should be readable when you need to debug.
-2. **Lightweight.** The core should import quickly, install cleanly, and avoid
-   dragging in infrastructure you did not ask for.
-3. **Extensible.** Real applications need their own providers, storage,
-   policies, tools, and UI. lovia gives you seams instead of lock-in.
-4. **General-purpose.** The built-ins are practical, but not magical. They are
-   examples of the same extension points you can use yourself.
-
-The design pressure is restraint. If a feature can be a short user-side recipe,
-it should not become framework surface area. If it belongs in the framework, it
-should compose with the existing loop instead of creating a new one.
-
-## How the pieces fit
-
-Each run follows the same shape:
-
-```text
-Agent + input
-  -> RunLoop loads session/checkpoint state
-  -> plugins contribute tools, instructions, hooks, guardrails, view injectors
-  -> context policy renders a per-call model view
-  -> provider streams typed deltas
-  -> tools, approvals, handoff, guardrails, and hooks run at explicit checkpoints
-  -> the run's own entries are appended to the session; the run is checkpointed
-```
-
-The boundaries that make this predictable — transcript vs view, session vs
-checkpoint, posture vs limits — are the subject of
-[core concepts](./docs/en/concepts.md).
+  checkpoint/resume are explicit knobs.
+- **One extension axis.** Plugins bundle tools, prompt additions, per-turn
+  view injectors, hooks, guardrails, and cleanup — Skills, MCP, Todo, and
+  Memory all use the same mechanism.
+- **Restraint as policy.** Concise over clever, lightweight over bundled,
+  seams over lock-in; if a feature can be a short user-side recipe, it does
+  not become framework surface area.
 
 ## The tour
 
@@ -277,8 +212,10 @@ scripted = Agent(name="ci", model=model_from_env())  # LOVIA_MODEL, fail-loudly
 
 ### Multi-agent
 
-Two primitives, both ordinary tools underneath. Handoff transfers the
-conversation to a specialist; agent-as-tool delegates a bounded subtask:
+Two primitives, both ordinary tools underneath. **Handoff** transfers the
+conversation — the specialist continues with the full history and answers
+the user. **Agent-as-tool** delegates a bounded subtask — the child sees
+only the prompt and its answer comes back as a tool result:
 
 ```python
 from lovia import Agent, Runner
@@ -290,11 +227,21 @@ triage = Agent(
     name="triage",
     instructions="Route the user to the right specialist.",
     model="deepseek-v4-pro",
-    handoffs=[billing, support],
-    tools=[support.as_tool(description="Ask the tech specialist a question.")],
+    handoffs=[billing, support],       # handoff: the specialist takes over
 )
-
 result = await Runner.run(triage, "I was charged twice.")
+```
+
+```python
+summarizer = Agent(name="summarizer", instructions="Summarize text in five bullets.",
+                   model="deepseek-v4-pro")
+
+manager = Agent(
+    name="manager",
+    instructions="Delegate summarization when useful.",
+    model="deepseek-v4-pro",
+    tools=[summarizer.as_tool(description="Summarize a passage.")],  # delegate a subtask
+)
 ```
 
 → [Multi-agent](./docs/en/multi-agent.md)
@@ -441,8 +388,7 @@ agent = Agent(
 ### Plugins
 
 One extension axis: a plugin contributes tools, prompt text, per-turn view
-injectors, hooks, and guardrails — never control flow. Todo, Skills, and MCP
-are all plugins:
+injectors, hooks, and guardrails — never control flow:
 
 ```python
 from lovia import Agent, Skills, Todo
@@ -452,21 +398,29 @@ agent = Agent(
     name="builder",
     model="deepseek-v4-pro",
     plugins=[
-        Todo(),                      # externalized checklist, re-shown every turn
-        Skills("./skills"),          # instruction bundles, loaded on demand
+        Todo(),
+        Skills("./skills"),
         MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])),
     ],
 )
 ```
 
+- **`Todo()`** — gives the model a checklist for multi-step work; the current
+  list is re-shown every turn without growing the transcript.
+- **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
+  one-line index stays in the prompt, full content loads on demand.
+- **`MCP(server)`** — tools from Model Context Protocol servers, stdio or
+  HTTP, with per-server name prefixes and approval gates.
+
+Writing your own is a `name` plus one async `setup()` returning the
+contributions.
+
 → [Plugins](./docs/en/plugins.md) · [Skills](./docs/en/skills.md) · [MCP](./docs/en/mcp.md)
 
 ### Memory
 
-Long-term memory from two tiers and three verbs: char-budgeted **Notes**
-always in the prompt (`remember`/`forget`), a searchable **Archive** of past
-conversations on demand (`recall`) — zero-config SQLite FTS5, escalating one
-argument at a time:
+Long-term memory across conversations — always-in-prompt **Notes** plus a
+searchable **Archive**, zero-config, upgradeable one argument at a time:
 
 ```python
 from lovia import Agent, Memory
@@ -485,8 +439,7 @@ Memory("./memory", index=None)                 # notes only, no archive
 ### Web UI
 
 A small FastAPI app — SSE streaming, sessions with titles, approvals,
-schedules, a memory editor — whose runs survive browser disconnects. The
-JSON + SSE API stands alone for your own front-end:
+schedules, a memory editor — whose runs survive browser disconnects:
 
 ```python
 from lovia.web import serve
@@ -497,6 +450,11 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```bash
 python -m lovia.web --port 9000 --model deepseek-v4-pro   # or zero-config
 ```
+
+The bundled page is optional: everything is exposed as a JSON + SSE REST
+API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
+mounting the router into your own FastAPI app — lets you build a custom
+front-end on the same endpoints.
 
 → [Web UI & server](./docs/en/web.md) · [HTTP API](./docs/en/http-api.md)
 

@@ -175,8 +175,10 @@ required_sections=...)` rather than forking it).
 carries the entries (read-only), the provider, `last_input_tokens`, the
 `overflow` flag, and a `scratch` dict the runner round-trips through
 checkpoints for you. Return the view plus `changed`/`compacted` flags and
-optional token counts. An optional `tools()` method contributes tools
-(how recall ships). `lovia/context/policy.py` is a one-screen read.
+optional token counts. An optional `tools()` method contributes tools —
+`make_recall_tool(store)` from `lovia.tools.recall` is the factory
+`Compaction` uses to ship recall, reusable by any policy that drops
+content. `lovia/context/policy.py` is a one-screen read.
 
 ## Sharp edges
 

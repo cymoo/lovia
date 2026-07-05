@@ -125,17 +125,6 @@ The tool call blocks until an answer arrives, the question is cancelled, or
 the channel closes. Full semantics — polling, cancellation, thread safety —
 in [Human in the loop](human-in-the-loop.md#ask-a-human).
 
-## Recall
-
-`recall_tool_result` retrieves the full output of an earlier tool call by
-`call_id` after [context compaction](context.md) replaced it with a marker
-in the model's view. **You never add it yourself** — a compacting context
-policy provides it automatically and the marker text tells the model how to
-use it. It reads from the policy's result store first, falling back to the
-transcript, so recovery works without re-running tools that have side
-effects. (`lovia.tools.recall.make_recall_tool` is the factory, for custom
-context policies that want the same behavior.)
-
 ## Sharp edges
 
 - **`http_fetch` is the sharpest built-in.** Combined with untrusted input

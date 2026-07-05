@@ -231,7 +231,7 @@ or lifecycle.
 
 ## See also
 
-- [Built-in tools](built-in-tools.md) — HTTP, search, time, recall
+- [Built-in tools](built-in-tools.md) — HTTP, search, time
 - [Human in the loop](human-in-the-loop.md) — approval gates
 - [Plugins](plugins.md) — packaging tools with instructions and lifecycle
 - Example: [`02_tools.py`](../../examples/02_tools.py)

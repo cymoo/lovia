@@ -29,7 +29,7 @@ can do and say.
 | [Running agents](running.md) | `run` / `run_sync` / `stream`, inputs (including images and files), `RunResult`, errors |
 | [Streaming](streaming.md) | the typed event catalog and how to build UIs on it |
 | [Tools](tools.md) | `@tool`, schema derivation, parallel execution and barriers, retries, policies |
-| [Built-in tools](built-in-tools.md) | HTTP fetch, web search, time, and the recall tool |
+| [Built-in tools](built-in-tools.md) | HTTP fetch, web search, and time utilities |
 | [Structured output](structured-output.md) | `output_type`, validation, automatic repair |
 | [Providers & models](providers.md) | model strings, OpenAI-compatible endpoints, fallback chains, custom providers, prompt caching, reasoning models |
 

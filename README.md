@@ -1,212 +1,114 @@
 # lovia
 
-[中文文档](./README-zh.md)
+[中文文档](./README-zh.md) · [Documentation](./docs/en/README.md) · [Examples](./examples/README.md)
 
 lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
-It gives you the pieces most agent apps eventually need — tools, streaming,
-structured output, sessions, handoff, approvals, guardrails, workspaces,
-skills, MCP, context compaction, checkpoint/resume, and a tiny web UI — while
-keeping the core direct enough to read, replace, and extend.
-
-The core abstractions are few:
-
-- an `Agent` is immutable configuration;
-- a `Runner` executes one run;
-- a `@tool` is just a typed Python function;
-- `Handoff` and `agent.as_tool()` are the two atomic ways to compose agents;
-- plugins package reusable capability without taking over control flow. MCP,
-  Skills, Todo, and long-term memory can all be expressed as plugins.
-
-That is the tradeoff: handle the recurring hard parts of agent applications,
-but avoid turning the framework into a platform.
+It covers the recurring hard parts of agent applications — tools, sessions,
+approvals, context, serving — without turning into a platform.
 
 ```bash
 pip install lovia
 ```
 
 ```python
-from lovia import Agent, Skills, Todo, tool
-from lovia.workspace import Workspace
+from lovia import Agent, tool
 
 
 @tool
-def lookup_ticket(ticket_id: str) -> str:
-    """Look up an internal support ticket."""
-    return f"{ticket_id}: waiting for customer reply"
+def get_order(order_id: str) -> str:
+    """Look up an order's status by id."""
+    return f"Order {order_id}: shipped 2 days ago, arriving Thursday."
 
 
+# Set OPENAI_API_KEY in your environment first; for OpenAI-compatible
+# services (DeepSeek, Ollama, vLLM, ...) also set OPENAI_BASE_URL.
 agent = Agent(
-    name="operator",
-    instructions=(
-        "You are a customer-support operator. "
-        "Before replying, confirm the ticket state, then use team policy "
-        "to give a clear, restrained, actionable response."
-    ),
+    name="support",
+    instructions="You are a customer-support agent. Look the order up before "
+    "answering, and reply in one or two concrete sentences.",
     model="deepseek-v4-pro",
-    tools=[lookup_ticket],
-    plugins=[Todo(), Skills("./skills")],
-    workspace=Workspace.local(".", mode="trusted"),
+    tools=[get_order],
 )
 
-# run_sync() drops the asyncio boilerplate for scripts and notebooks; from
-# async code use `await Runner.run(agent, ...)` instead (see Runner below).
-result = agent.run_sync(
-    "Check ticket T-1001 and draft a reply using our team guidelines.",
-)
+# run_sync() suits scripts and notebooks; from async code,
+# use `await Runner.run(agent, ...)` instead.
+result = agent.run_sync("Where is my order A-1042?")
 print(result.output)
 ```
 
-Here `./skills` points at your team's skill directory; remove
-`Skills("./skills")` until you have one.
+Or serve a full chat UI — memory, skills, scheduling, and a workspace on
+the current directory included — in one line:
 
-Set `OPENAI_API_KEY` for the official OpenAI endpoint, or set
-`OPENAI_BASE_URL` for OpenAI-compatible services such as DeepSeek, Ollama, or
-vLLM. Anthropic is built in too:
-`model="anthropic:claude-4-8-opus"`.
+```bash
+pip install "lovia[web]" && python -m lovia.web
+```
+
+Anthropic is built in too — set `ANTHROPIC_API_KEY` and use
+`model="anthropic:claude-4-8-opus"`; everything else about models lives in
+[Providers & models](./docs/en/providers.md).
+
+## Documentation
+
+This README is the tour. The [documentation](./docs/en/README.md) goes deep,
+one feature per page — start with the
+[quickstart](./docs/en/quickstart.md) and
+[core concepts](./docs/en/concepts.md) — and the
+[examples](./examples/README.md) are a numbered, runnable learning path.
 
 ## Why lovia
 
-lovia favors composable primitives over a new universe of abstractions. It
-stays close to ordinary Python: dataclasses, protocols, async functions, and
-explicit composition.
+Composable primitives, ordinary Python — no new universe of abstractions:
 
-- **It is readable.** `lovia/runner.py` is a facade; the mutable run state lives
-  in `lovia/runtime/loop.py`. When something surprises you, the path through
-  the code is short.
-- **It is provider-neutral without an adapter tax.** Built-in providers speak
-  OpenAI Chat Completions and Anthropic Messages directly over `httpx`. A custom
-  provider is a `Protocol`, not a subclassing project.
-- **Context management is replaceable.** The default `Compaction` changes only
-  what the model sees on the next call. Sessions and checkpoints keep the full
-  transcript, and advanced users can provide their own `ContextPolicy`.
-- **Multi-agent composition stays atomic.** Handoff transfers control to a
-  specialist agent; agent-as-tool delegates a bounded subtask. Both are
-  primitives, not an orchestration DSL you have to adopt wholesale.
-- **It has production seams, not a production costume.** Approvals, budgets,
-  cancellation, mid-run steering, retries, hooks, scoped workspace tools, and
-  checkpoint/resume are explicit knobs you can wire into your own app.
-- **It has one extension axis.** Plugins bundle tools, prompt additions,
-  per-turn view injectors, hooks, guardrails, and cleanup. Skills, MCP, todo
-  lists, and long-term memory can use the same mechanism.
+- **Few abstractions.** An `Agent` is immutable configuration, a `Runner`
+  executes one run, a `@tool` is a typed function; handoff and agent-as-tool
+  compose agents; plugins package the rest.
+- **Readable.** The run loop lives in one file; when something surprises
+  you, the path through the code is short.
+- **Provider-neutral, no adapter tax.** OpenAI and Anthropic built in over
+  `httpx`, any OpenAI-compatible endpoint works, and a custom provider is a
+  `Protocol` — not a subclassing project.
+- **Context management that keeps history.** Compaction reshapes only what
+  the model sees next call; the transcript is never rewritten.
+- **Production seams, not a production costume.** Approvals, budgets,
+  cancellation, mid-run steering, retries, checkpoint/resume — explicit
+  knobs you wire into your own app.
+- **One extension axis.** Skills, MCP, Todo, and Memory are all plugins on
+  the same seam you get for your own capabilities.
 
-## Start small, add only what you need
+The design pressure throughout is restraint: if a feature can be a short
+user-side recipe, it stays out of the framework.
 
-You can use lovia as a tiny wrapper around a model call, then add capabilities
-only when the product asks for them.
+## The tour
 
-| When you need... | Add... |
-| --- | --- |
-| A quick script or notebook helper | `Agent.run_sync(...)` |
-| Tool calling | `@tool` functions (parallel by default) |
-| A tool whose side effects must not overlap | `@tool(parallel=False)` |
-| Typed final answers | `output_type=YourModel` |
-| Live UI updates | `Runner.stream(...)` and typed events |
-| Multi-turn chat | `SQLiteSession` or your own `Session` |
-| Long-running work | `CheckpointOptions` |
-| Multi-agent routing or delegation | `handoffs=[...]` or `agent.as_tool()` |
-| Human approval | `@tool(needs_approval=True)` |
-| Files and shell commands | `Workspace.local(...)` |
-| Long context survival | `Compaction` (auto-provides `recall_tool_result`) |
-| Custom context behavior | implement your own `ContextPolicy` |
-| Reusable capabilities | `PluginInstance`, `Skills`, `Todo`, or `MCP` |
+Every stop below has a full guide; each snippet runs as written.
 
-## Philosophy
+### Agents
 
-lovia optimizes for four things, in this order. The order matters.
-
-1. **Concise.** A feature should fit in your head. The public surface should
-   be obvious, and internals should be readable when you need to debug.
-2. **Lightweight.** The core should import quickly, install cleanly, and avoid
-   dragging in infrastructure you did not ask for.
-3. **Extensible.** Real applications need their own providers, storage,
-   policies, tools, and UI. lovia gives you seams instead of lock-in.
-4. **General-purpose.** The built-ins are practical, but not magical. They are
-   examples of the same extension points you can use yourself.
-
-The design pressure is restraint. If a feature can be a short user-side recipe,
-it should not become framework surface area. If it belongs in the framework, it
-should compose with the existing loop instead of creating a new one.
-
-## How the pieces fit
-
-Each run follows the same shape:
-
-```text
-Agent + input
-  -> RunLoop loads session/checkpoint state
-  -> plugins contribute tools, instructions, hooks, guardrails, view injectors
-  -> context policy renders a per-call model view
-  -> provider streams typed deltas
-  -> tools, approvals, handoff, guardrails, and hooks run at explicit checkpoints
-  -> the run's own entries are appended to the session; the run is checkpointed
-```
-
-Two boundaries are worth remembering:
-
-- **Session vs checkpoint.** A `Session` is conversation memory across calls.
-  A checkpoint is a crash-recovery snapshot for one idempotent run.
-- **Transcript vs view.** The transcript is the source of truth. Context
-  compaction only renders a smaller view for the provider, so long
-  conversations can keep moving without rewriting history.
-
-## The Core API
-
-### Agent
-
-`Agent` is declarative runtime configuration. It has no conversation state, so
-it is safe to reuse across requests.
+An `Agent` is declarative configuration — no conversation state, safe to
+share, cheap to `clone()`. Prompt fragments can be dynamic per run:
 
 ```python
 from lovia import Agent
 
-agent = Agent(
-    name="writer",
-    instructions="Write concrete, concise answers.",
-    model="deepseek-v4-pro",
-)
-```
+agent = Agent(name="writer", instructions="Write concrete, concise answers.",
+              model="deepseek-v4-pro")
 
-Dynamic prompt fragments can depend on per-run context:
-
-```python
 @agent.instruction
 async def user_tier(ctx) -> str:
     return f"User tier: {ctx.deps['tier']}"
 ```
 
-Create request-specific variants with `clone()`:
+→ [Agents](./docs/en/agents.md)
+
+### Running and streaming
+
+One run, three consumption styles — and the stream handle is both
+async-iterable and awaitable. Iteration never raises: every stream ends with
+exactly one terminal event.
 
 ```python
-strict = agent.clone(instructions="Answer with citations only.")
-```
-
-`@agent.instruction` is the one deliberate in-place mutation on an otherwise
-immutable agent, kept for decorator ergonomics. The boundary with `clone()`
-is copy-on-register: fragments registered before a clone are carried into it,
-fragments registered after affect only the original — so register fragments
-right after constructing the agent, or use `with_instructions()` for a purely
-functional variant.
-
-### Runner
-
-```python
-from lovia import Runner
-
-result = await Runner.run(agent, "Draft a release note.")
-print(result.output)
-```
-
-For scripts and REPLs you can call the agent directly:
-
-```python
-result = agent.run_sync("Summarize this file.")
-```
-
-The handle returned by `stream()` is both async-iterable and awaitable:
-
-```python
-from lovia import events
+from lovia import Runner, events
 
 handle = Runner.stream(agent, "Explain context windows in one paragraph.")
 
@@ -217,27 +119,19 @@ async for ev in handle:
 result = await handle.result()
 ```
 
-Iteration never raises: every stream closes with exactly one terminal event —
-`RunCompleted`, or `RunFailed` carrying the error — so the loop body needs no
-try/except. `handle.result()` returns the `RunResult` or raises the run's
-error (`RunCancelled`, `BudgetExceeded`, ...). `handle.cancel()` requests
-cooperative cancellation without pre-wiring a `CancelToken`.
+→ [Running](./docs/en/running.md) · [Streaming](./docs/en/streaming.md)
 
 ### Tools
 
-Any typed Python callable can become a tool. lovia derives the tool schema from
-type hints, docstrings, `Annotated`, and Pydantic `Field` metadata.
+Typed Python functions; the schema comes from signatures, docstrings,
+`Annotated`, and Pydantic `Field`s. One turn's calls execute concurrently by
+default — tools with non-reentrant side effects opt out and become execution
+barriers:
 
 ```python
 from typing import Annotated
 from pydantic import Field
 from lovia import tool
-
-
-@tool
-async def lookup_order(order_id: str) -> str:
-    """Look up an order by id."""
-    return f"{order_id}: shipped"
 
 
 @tool(strict=True)
@@ -247,32 +141,20 @@ def search_docs(
 ) -> list[str]:
     """Search internal documentation."""
     return []
-```
 
-Sync tools run in a worker thread. Async tools are awaited directly.
 
-When the model requests several tool calls in one turn, they **execute
-concurrently by default**. Tools whose side effects must not overlap opt out
-with `parallel=False`, which turns the call into an execution barrier: every
-in-flight call of the turn finishes first, the tool runs alone, then the rest
-proceed.
-
-```python
 @tool(parallel=False)
 async def apply_migration(name: str) -> str:
     """Apply a database migration (never concurrently with other tools)."""
     return "applied"
 ```
 
-Handoff tools and the built-in workspace mutators (`write_file`, `edit_file`,
-`shell`) are barriers by default; read-only tools stay parallel. Tool events
-of one turn may interleave in the stream — correlate them by `event.call.id`.
+→ [Tools](./docs/en/tools.md) · [Built-in tools](./docs/en/built-in-tools.md)
 
-## Structured Output
+### Structured output
 
-Pass a Pydantic model, dataclass, `TypedDict`, or supported Python type and the
-final result is validated for you. If parsing fails, lovia asks the model once
-to repair the response by default.
+Pass a Pydantic model, dataclass, `TypedDict`, or plain type; the final
+answer is validated — and repaired once, by default, when it doesn't parse:
 
 ```python
 from pydantic import BaseModel
@@ -284,61 +166,42 @@ class Brief(BaseModel):
     bullets: list[str]
 
 
-agent = Agent(
-    name="summarizer",
-    model="deepseek-v4-pro",
-    output_type=Brief,
-)
-
+agent = Agent(name="summarizer", model="deepseek-v4-pro", output_type=Brief)
 result = await Runner.run(agent, "Summarize lovia for a Python developer.")
 print(result.output.title)
 ```
 
-You can override output type per call:
+→ [Structured output](./docs/en/structured-output.md)
+
+### Providers
+
+Model strings, provider instances, or a fallback chain; OpenAI-compatible
+endpoints ride `OPENAI_BASE_URL`, prompt caching and reasoning models are
+handled per host, and a custom provider is a small `Protocol`:
 
 ```python
-result = await Runner.run(agent, "Return a launch checklist.", output_type=list[str])
-```
-
-## Provider Choice
-
-Use a model string, a provider instance, or a fallback chain:
-
-```python
-from lovia import Agent, ModelSettings
+from lovia import Agent, ModelSettings, model_from_env
 
 agent = Agent(
     name="assistant",
-    model=[
-        "anthropic:claude-4-8-opus",
-        "deepseek-v4-pro",
-    ],
+    model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"],  # fallback chain
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
+
+scripted = Agent(name="ci", model=model_from_env())  # LOVIA_MODEL, fail-loudly
 ```
 
-Custom providers implement the `Provider` protocol and can be registered with
-the `lovia.providers` entry-point group.
+→ [Providers & models](./docs/en/providers.md)
 
-Scripts that should not hard-code a model use the one blessed env lookup —
-`LOVIA_MODEL`, then `OPENAI_DEFAULT_MODEL` / `ANTHROPIC_DEFAULT_MODEL` — and
-fail loudly with a setup hint when nothing is configured:
+### Multi-agent
 
-```python
-from lovia import model_from_env
-
-agent = Agent(name="assistant", model=model_from_env())
-```
-
-## Multi-Agent Workflows
-
-### Handoff
-
-Handoff lets one agent transfer control to a specialist. The transcript follows
-the handoff, so the specialist continues with the full conversation.
+Two primitives, both ordinary tools underneath. **Handoff** transfers the
+conversation — the specialist continues with the full history and answers
+the user. **Agent-as-tool** delegates a bounded subtask — the child sees
+only the prompt and its answer comes back as a tool result:
 
 ```python
-from lovia import Agent, Handoff, Runner
+from lovia import Agent, Runner
 
 billing = Agent(name="billing", instructions="Handle billing issues.", model="deepseek-v4-pro")
 support = Agent(name="support", instructions="Handle technical issues.", model="deepseek-v4-pro")
@@ -347,149 +210,75 @@ triage = Agent(
     name="triage",
     instructions="Route the user to the right specialist.",
     model="deepseek-v4-pro",
-    handoffs=[billing, support],
+    handoffs=[billing, support],       # handoff: the specialist takes over
 )
-
 result = await Runner.run(triage, "I was charged twice.")
 ```
 
-### Agent As Tool
-
-Use an agent as a delegated subroutine:
-
 ```python
-summarizer = Agent(
-    name="summarizer",
-    instructions="Summarize text in five bullets.",
-    model="deepseek-v4-pro",
-)
+summarizer = Agent(name="summarizer", instructions="Summarize text in five bullets.",
+                   model="deepseek-v4-pro")
 
 manager = Agent(
     name="manager",
     instructions="Delegate summarization when useful.",
     model="deepseek-v4-pro",
-    tools=[summarizer.as_tool(description="Summarize a passage.")],
+    tools=[summarizer.as_tool(description="Summarize a passage.")],  # delegate a subtask
 )
 ```
 
-The sub-agent runs in its own loop and returns its final output as the tool
-result.
+→ [Multi-agent](./docs/en/multi-agent.md)
 
-## Human Control
+### Human in the loop
 
-### Tool Approval
-
-Gate sensitive actions with `needs_approval=True`.
+Gate sensitive tools; resolve from your UI, a server-side policy, or an
+out-of-band channel — unresolved approvals deny, so runs never hang:
 
 ```python
-from lovia import tool
+from lovia import Runner, events, tool
 
 
 @tool(needs_approval=True)
 async def refund(order_id: str, amount_cents: int) -> str:
     """Issue a refund."""
     return "refunded"
-```
 
-In streaming mode, resolve approvals from your UI:
 
-```python
-from lovia import events
-
-handle = Runner.stream(agent, "Refund order A123.")
-
-async for ev in handle:
+async for ev in Runner.stream(agent, "Refund order A123."):
     if isinstance(ev, events.ApprovalRequired):
         ev.approve()          # or ev.reject()
 ```
 
-For server-side policy:
+→ [Human in the loop](./docs/en/human-in-the-loop.md)
+
+### Sessions and checkpoints
+
+Sessions persist conversations across runs; checkpoints make single runs
+crash-safe and idempotent — re-issuing a completed `run_id` replays its
+result without calling the model:
 
 ```python
-agent = Agent(
-    ...,
-    approval_handler=lambda call, ctx: "ask" if call.name == "refund" else "allow"
-)
-```
-
-### Ask A Human
-
-`ask_human` lets the model request operator input through your application.
-
-```python
-from lovia.tools.human import HumanChannel, ask_human
-
-channel = HumanChannel()
-
-agent = Agent(
-    name="assistant",
-    model="deepseek-v4-pro",
-    tools=[ask_human(channel)],
-)
-
-# The operator side is one loop — it ends when you call channel.close():
-async for question in channel.questions():
-    channel.answer(question.id, "Use option A.")
-```
-
-(`channel.pending` still exists for poll-style UIs.)
-
-## Sessions and Checkpoints
-
-Sessions persist conversation transcript across calls:
-
-```python
-from lovia.stores import SQLiteSession
+from lovia import CheckpointOptions, Runner, SQLiteCheckpointer, SQLiteSession
 
 session = SQLiteSession("chat.db")
-
 await Runner.run(agent, "My project is called Atlas.", session=session, session_id="u1")
-result = await Runner.run(agent, "What is my project called?", session=session, session_id="u1")
-```
 
-Checkpoints are for crash recovery and idempotent long runs:
-
-```python
-from lovia import CheckpointOptions
-from lovia.stores import SQLiteCheckpointer
-
-checkpoint = SQLiteCheckpointer("runs.db")
-
+cp = SQLiteCheckpointer("runs.db")
 result = await Runner.run(
     agent,
     "Migrate the report format.",
-    checkpoint=CheckpointOptions(checkpoint, "report-migration-42"),
+    checkpoint=CheckpointOptions(cp, "report-migration-42"),
 )
 ```
 
-Both SQLite stores accept `wal=True` (off by default) to enable WAL journal
-mode plus a busy timeout — use it when the database file is shared with other
-writers, e.g. several stores in one file or a multi-process web deployment.
+→ [Sessions & checkpoints](./docs/en/sessions-and-checkpoints.md)
 
-Both stores are **append-only**: a `Session` accumulates finished runs (one
-segment each — a run that completed, or one the caller finalized) while a
-checkpoint holds the run that may still resume, so the full transcript is
-`session.load()` plus the in-flight snapshot. History is immutable — each run
-appends its own entries; nothing is ever rewritten. Give each run a `run_id`
-that is unique per checkpointer (e.g. `uuid4().hex`) — it is the checkpoint's
-only key and, unlike a session, is not scoped by `session_id`.
+### Context compaction
 
-Re-issuing a completed `run_id` replays its result without calling the model,
-and re-applies session persistence idempotently (keyed by `run_id`) — a crash
-between checkpoint finalization and the session append heals on the next
-replay instead of losing the run from the conversation history. To tell a
-complete answer from a `max_tokens`-truncated one, check
-`result.finish_reason` (e.g. `"stop"` vs `"length"`).
-
-## Context Management
-
-Long conversations use `Compaction` by default. It is view-only: the full
-transcript stays in the session/checkpoint, while the per-model-call view can
-offload huge tool results, clear older tool results, and summarize old history
-under token pressure.
-
-Context policy is agent *posture* — set it once on the agent and every run
-inherits it; `Runner.run(..., context_policy=...)` overrides a single call:
+Long conversations survive the window without rewriting history: compaction
+is view-only, keeps the prompt prefix stable for provider caches, and
+auto-provides `recall_tool_result` so the model can retrieve what the view
+dropped:
 
 ```python
 from lovia import Agent, Compaction
@@ -497,113 +286,50 @@ from lovia import Agent, Compaction
 agent = Agent(
     name="companion",
     model="deepseek-v4-pro",
-    context_policy=Compaction(
-        context_window=200_000,
-        compact_at=0.75,
-        compact_to=0.50,
-    ),
+    context_policy=Compaction(context_window=200_000, compact_at=0.75, compact_to=0.50),
 )
 ```
 
-`Compaction` automatically provides a `recall_tool_result` tool so the model
-can recover a compacted tool result by `call_id` without re-running it — no
-manual wiring. To archive large tool outputs to a store (recall reads them
-back, and an ephemeral store falls back to the transcript), give the policy a
-result store:
+→ [Context management](./docs/en/context.md)
+
+### Guardrails and reliability
+
+Guardrails veto runs at the input/output boundary. Reliability follows one
+placement rule — retry posture on the agent, per-run limits on the run:
 
 ```python
-from lovia.context import Compaction, FileResultStore
-
-policy = Compaction(context_window=200_000, store=FileResultStore(".cache/results"))
-```
-
-Disable automatic compaction with `from lovia.context import NoopContextPolicy`
-and pass `context_policy=NoopContextPolicy()`.
-
-## Guardrails, Reliability, Hooks
-
-Input and output guardrails are async callables. Raise `GuardrailTripped` or
-return a truthy violation message to stop the run.
-
-```python
+from lovia import Agent, RetryPolicy, RunBudget, Runner
 from lovia.exceptions import GuardrailTripped
 
 
-async def no_email_addresses(messages, ctx):
-    if any("@" in str(m.content) for m in messages):
-        raise GuardrailTripped("Email addresses are not allowed.")
-
-
 async def must_cite(output, ctx):
-    if "source:" not in output.lower():
+    if "source:" not in str(output).lower():
         return "Missing source citation."
 
 
-agent = Agent(
-    name="researcher",
-    model="deepseek-v4-pro",
-    input_guardrails=[no_email_addresses],
-    output_guardrails=[must_cite],
-)
+agent = Agent(name="researcher", model="deepseek-v4-pro",
+              output_guardrails=[must_cite],
+              retry=RetryPolicy(max_attempts=2))            # posture
+
+result = await Runner.run(agent, "Analyze these logs.",
+                          budget=RunBudget(max_tool_calls=20, max_seconds=60))  # limits
 ```
 
-Reliability knobs follow one placement rule. *Posture* — how the agent behaves
-when infrastructure hiccups — lives on the `Agent`: provider `retry` (on by
-default; `retry=None` disables), `default_tool_retries` / `default_tool_timeout`,
-the `model=[...]` fallback chain, and `context_policy`. *Limits* — how much one
-request may spend — are per-run arguments: `max_turns`, `budget`, and
-cancellation.
+→ [Guardrails](./docs/en/guardrails.md) · [Reliability](./docs/en/reliability.md)
+
+### Hooks and steering
+
+Hooks observe every run event (fail-open, same types as streaming); the
+mailbox is the inbound dual of cancellation — push a message into a live run
+and the model sees it next turn. A run can even steer itself:
 
 ```python
-from lovia import RetryPolicy, RunBudget
-
-agent = agent.clone(retry=RetryPolicy(max_attempts=3))  # posture
-
-result = await Runner.run(
-    agent,
-    "Analyze these logs.",
-    budget=RunBudget(max_tool_calls=20, max_seconds=60),  # limits
-)
-```
-
-(`Runner.run(..., retry=...)` still overrides the posture for one call.)
-
-Lifecycle hooks receive the same typed events used by streaming. Each handler is
-called as `handler(event, ctx)` — it gets the event plus the run's live
-`RunContext` (the dynamic run state: `session_id`, the active agent, cumulative
-usage, ...):
-
-```python
-from lovia import RunContext, events
+from lovia import Mailbox, RunContext, Runner, events
 from lovia.hooks import AgentHooks
 
 hooks = AgentHooks()
 
 
-@hooks.on(events.ToolCallStarted)
-async def log_tool(ev, ctx: RunContext):
-    print(ev.call.name, ev.call.arguments)
-
-
-@hooks.on(events.RunCompleted)
-async def on_done(ev, ctx: RunContext):
-    print("done:", ctx.session_id, ev.result.usage)
-
-
-agent = agent.clone(hooks=hooks)
-```
-
-Mid-run steering is the inbound dual of cancellation: push a message into a
-live run and the model sees it as a normal user turn at the next turn start (a
-`TurnStarted` hook fires just before its turn's drain, so its push lands on
-that very turn). Tools and hooks reach the same channel as `ctx.mailbox` — the
-runner creates a mailbox per run when you don't supply one — so a run can also
-steer itself, with no outside plumbing:
-
-```python
-from lovia import Mailbox
-
-# ``hooks`` and ``agent`` continue from the snippet above.
 @hooks.on(events.TurnStarted)
 def deadline(ev, ctx: RunContext):
     if ev.turn == 9:
@@ -611,370 +337,17 @@ def deadline(ev, ctx: RunContext):
 
 
 mailbox = Mailbox()
-handle = Runner.stream(agent, "Analyze these logs.", mailbox=mailbox)
+handle = Runner.stream(agent.clone(hooks=hooks), "Analyze these logs.", mailbox=mailbox)
 mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 ```
 
-## Evaluation
+→ [Observability](./docs/en/observability.md) · [Reliability](./docs/en/reliability.md#steering-a-live-run)
 
-`lovia.eval` turns "does my agent behave?" into a declarative suite. Three
-ideas cover the whole API: a `Case` pairs an input with checks; a check is any
-callable `(RunResult) -> CheckResult | bool`, sync or async — built-in
-matchers, the LLM judge, and your own functions are all the same thing; and
-`evaluate()` returns a `Report` you can print, assert on, and diff against a
-baseline.
+### Workspace
 
-```python
-from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
-
-cases = [
-    Case("What is the capital of France?", checks=[contains("Paris")]),
-    Case("What's 23.4 * 91?", checks=[tool_called("calculator")]),
-    Case(
-        "Write a haiku about spring",
-        checks=[llm_judge("A 5-7-5 haiku that evokes spring")],
-        samples=4,  # non-determinism is measured, not retried away:
-        pass_threshold=0.75,  # pass if at least 3 of 4 samples pass
-    ),
-]
-
-report = await evaluate(agent, cases)
-print(report)
-assert report.passed
-```
-
-```
-eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
-  ✓ What is the capital of France?  1/1
-  ✓ What's 23.4 * 91?               1/1
-  ✗ Write a haiku about spring      2/4  llm_judge (score 0.55) — third line has eight syllables
-```
-
-The details that keep suites honest and cheap:
-
-- **Any function is a check.** `lambda r: r.turns <= 3` works. Built-ins:
-  `contains` / `not_contains`, `regex`, `equals`, `matches` (subset-match
-  structured output), `tool_called` / `tool_not_called`, `max_turns`,
-  `max_tokens`, `no_error`, composable with `all_of` / `any_of` / `weighted`.
-- **`llm_judge(rubric)`** grades semantics with a model (defaults to
-  `$LOVIA_EVAL_JUDGE_MODEL`) and is just another check — pass a
-  `lovia.testing.ScriptedProvider` as its `model` and the whole suite runs
-  offline.
-- **`Case(model=...)`** overrides the agent's model for one case (the agent is
-  cloned per sample). Offline suites give every case its own scripted
-  transcript this way; live suites pin a case to a different model.
-- **Errors are data.** A sample that raises records its `error` and fails
-  alone; one broken case or check never aborts the suite.
-- **Baselines.** `report.save(path)`, `Report.load(path)`, and
-  `current.compare(baseline)` flag regressions / improvements in CI.
-
-See `examples/28_eval.py` for an offline, fully scripted suite.
-
-## Built-In Tools
-
-Nothing is imported into your agent automatically. Pick the tools you want.
-
-```python
-from lovia.tools.http import http_fetch
-from lovia.tools.search import duckduckgo_search
-
-agent = Agent(
-    name="researcher",
-    model="deepseek-v4-pro",
-    tools=[http_fetch, duckduckgo_search()],
-)
-```
-
-Install DuckDuckGo search support with:
-
-```bash
-pip install "lovia[ddg]"
-```
-
-Custom search is just a `WebSearch` implementation passed to `web_search()`.
-
-> **Note:** `http_fetch` applies no SSRF filtering — it fetches whatever the
-> host can reach, including private/internal addresses. When the model is
-> exposed to untrusted input, gate it
-> (`dataclasses.replace(http_fetch, needs_approval=True)`) or isolate the
-> network.
-
-## Plugins
-
-A **plugin** is lovia's one extension axis for bundling a feature.
-
-A single object contributes any mix of: `tools`, system-prompt `instructions`, per-turn
-`view_injectors` (transient reminders, never written to the transcript), event
-`hooks`, and `input_guardrails` / `output_guardrails`.
-
-The runner activates each plugin **once per run** (and once per agent on a handoff) by awaiting its async
-`setup()`, and releases anything it opened via `aclose()` when the run ends.
-
-Plugins are purely additive — they never drive control flow; the loop keeps the
-abort, retry, and handoff. Skills, MCP, and the todo list below are all built-in
-plugins.
-
-### Todo lists
-
-The built-in todo plugin gives the model a checklist tool and re-shows the
-current list every turn, without bloating the persisted transcript:
-
-```python
-from lovia import Agent, Runner, Todo
-
-agent = Agent(
-    name="builder",
-    instructions="Complete multi-step work carefully.",
-    model="deepseek-v4-pro",
-    plugins=[Todo()],
-)
-
-await Runner.run(agent, "Implement a small REST API with tests and docs.")
-```
-
-### Skills
-
-Skills are reusable instruction bundles following the Agent Skills
-specification. lovia exposes skill metadata up front, then lets the model load
-full instructions and referenced files only when needed.
-
-```python
-from lovia import Agent, Skills
-
-agent = Agent(
-    name="support",
-    instructions="Help customers using the right policy.",
-    model="deepseek-v4-pro",
-    plugins=[Skills("./skills")],
-)
-```
-
-A skill directory holds `SKILL.md` with YAML frontmatter, plus optional
-`references/`, `scripts/`, and `assets/` files. Pass several directories, or
-scope the catalog with a filter:
-
-```python
-plugins=[Skills("./skills", "./team-skills")]
-plugins=[Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", []))]
-```
-
-For a custom backend, pass a `SkillSource` (or a pre-built `SkillCategory`) instead of
-paths.
-
-### MCP
-
-[Model Context Protocol](https://modelcontextprotocol.io) servers expose their
-tools to the agent. Install the optional dependency:
-
-```bash
-pip install "lovia[mcp]"
-```
-
-```python
-from lovia import Agent
-from lovia.plugins.mcp import MCPServerStdio, MCP
-
-agent = Agent(
-    name="assistant",
-    model="deepseek-v4-pro",
-    plugins=[
-        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
-    ],
-)
-```
-
-By default each run opens and closes the server. To reuse one connection across
-runs, open a session and pass the live connection instead:
-
-```python
-server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
-
-async with server.session() as conn:
-    agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[MCP(conn)])
-    await Runner.run(agent, "Fetch https://example.com and summarize it.")
-```
-
-`MCP()` takes several servers — `MCP(a, b)` — and `MCPServer.name` prefixes a
-server's tools (`web__fetch`) to keep names unique.
-
-### Memory
-
-`Memory` gives an agent long-term memory that persists across runs and sessions,
-built from two tiers and three verbs the model already understands:
-
-- **Notes** (the *hot* tier) — a tiny, char-budgeted block that is **always
-  injected** into the system prompt: the user's stable preferences and durable
-  facts. The model curates it with `remember(fact)` / `forget(fact)`, and (by
-  default) the plugin promotes durable facts into it automatically at run end.
-- **Archive** (the *cold* tier) — a full-text-searchable store of past
-  conversations, pulled in only on demand with `recall(query)`.
-
-```python
-from lovia import Agent, Memory
-
-agent = Agent(
-    name="assistant",
-    model="deepseek-v4-pro",
-    plugins=[Memory("./.lovia/memory")],
-)
-```
-
-Recall quality escalates one argument at a time:
-
-```python
-Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
-Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm → hybrid recall
-Memory("./memory", index=my_index)             # bring your own retrieval engine
-```
-
-- **Zero-config** is stdlib SQLite FTS5 (bm25 over a CJK-aware bigram index),
-  and the LLM — the one model an agent always has — covers the lexical gaps:
-  `recall` queries are expanded with synonyms and translations before searching
-  (`expand_query="auto"`), and at run end a single digest call both promotes
-  durable facts into Notes and writes a self-contained episode summary into the
-  Archive, where it searches far better than raw chat fragments.
-- **`embedder=`** upgrades the default index to a keyword|vector hybrid fused
-  by Reciprocal Rank Fusion — semantic and cross-lingual recall with zero new
-  dependencies. Vectors live in SQLite; `OpenAIEmbedder` speaks to any
-  OpenAI-compatible `/embeddings` endpoint (official API, BGE-M3 on
-  SiliconFlow, DashScope, a local server — `OPENAI_EMBEDDING_BASE_URL` /
-  `OPENAI_EMBEDDING_API_KEY` override the chat endpoint's env vars, since chat
-  and embeddings often live on different hosts). Query expansion turns itself
-  off — the semantic arm covers it.
-- **`index=`** replaces the retrieval engine outright. An `Index` is three
-  methods over plain docs (`add` / `remove` / `search`, upsert by `Doc.id`) —
-  implement it over Elasticsearch, a vector database, whatever — and compose
-  arms with `|`: `KeywordIndex(...) | VectorIndex(...) | my_arm` is one
-  RRF-fused hybrid. `index=None` disables the cold tier and the `recall` tool.
-
-The default stores live under the root you pass:
-
-```
-.lovia/memory/
-├── MEMORY.md      # hot tier: one fact per line, always in context, human-editable
-├── archive.db     # cold tier: keyword index of past conversations
-└── vectors.db     # cold tier: vector arm (only with embedder=)
-```
-
-> **Privacy.** The Archive persists user and assistant message text to disk, so
-> it can retain sensitive content. Store the memory directory somewhere with
-> appropriate access control, and pass `index=None` to keep no searchable
-> record of past conversations.
-
-Behavior is tuned with optional flags:
-
-| Field | Default | Effect |
-| --- | --- | --- |
-| `auto_curate` | `True` | One digest call at run end: durable facts → Notes, episode summary → Archive; consolidates Notes over budget |
-| `expand_query` | `"auto"` | Expand `recall` queries with LLM synonyms/translations; `"auto"` = only for the lexical-only default index |
-| `summarize_recall` | `True` | `recall` returns a model-written summary of the hits, not raw excerpts |
-| `recall_k` | `5` | How many hits `recall` retrieves |
-| `notes_budget` | `2000` | Char budget for Notes — the prompt meter and the consolidation trigger |
-| `model` | host model | Model used for the curation side-queries |
-
-The curation and recall side-queries dogfood `Runner.run` with a tool-less,
-plugin-less sub-agent and structured output — so they reuse your provider chain
-and can't recurse. Because lovia's transcript is durable and compaction is
-view-only, the digest runs once at run end over the complete transcript: it is
-curation (promoting the few durable facts into the small hot tier), not rescue.
-By default it runs inline — when `Runner.run` returns, memory is settled — but
-a long-lived host can pass `curate_in_background=True` so the run's final event
-isn't held back by curation's model calls; `await mem.drain()` settles anything
-in flight (the bundled web server opts in and drains on shutdown).
-
-`remember` / `forget` are also public methods (`await mem.remember("...")`),
-so code can seed or clean Notes without a model in the loop; `notes_body` /
-`replace_notes` read and replace the whole list for editor flows. The web UI's
-sidebar **Memory** editor (`GET` / `PUT /api/memory`) is built on that pair.
-
-**Bring your own backend.** Each tier sits behind a deliberately narrow
-protocol. `NotesStore` is two methods (`load`/`save` a fact list — all
-normalization, dedup, and budgeting policy stays in the plugin), and `Index` is
-the three-method retrieval seam above, with no lovia types beyond `Doc`/`Hit`.
-Doc ids are deterministic (`run_id:seq`), so a re-ingested run upserts instead
-of duplicating — a backend only needs honest upsert-by-id semantics:
-
-```python
-from lovia import Agent, Memory
-
-agent = Agent(name="assistant", plugins=[Memory(notes=my_notes, index=my_index)])
-```
-
-Custom backends are long-lived and shared by every run, so they must be safe
-for concurrent use; the plugin never closes them.
-
-### Writing a plugin
-
-A plugin is any object with a `name` and an `async setup()` that returns a `PluginInstance`.
-
-State that should be **fresh per run** is built inside `setup`
-(like the todo list above); state that should **persist across runs and
-sessions** is held on the plugin and passed in at construction.
-
-Here is a glossary plugin — it wraps a backend you supply, created once and
-shared by every run, so a term defined in one conversation is known in the next.
-(This is exactly the pattern the built-in `Memory` plugin above is built on.)
-
-```python
-from dataclasses import dataclass
-from typing import Protocol
-
-from lovia import Agent, PluginInstance, tool
-
-
-class Glossary(Protocol):
-    """Your shared backend — a DB, a file, an in-memory dict."""
-
-    async def define(self, term: str, meaning: str) -> None: ...
-    async def lookup(self, term: str) -> str | None: ...
-
-
-@dataclass
-class GlossaryPlugin:
-    """Cross-session glossary the agent can write to and read back."""
-
-    store: Glossary  # long-lived, shared by every run — not rebuilt per run
-    name: str = "glossary"
-
-    async def setup(self) -> PluginInstance:
-        store = self.store
-
-        @tool
-        async def define(term: str, meaning: str) -> str:
-            """Record what a domain term means, for this and later sessions."""
-            await store.define(term, meaning)
-            return f"Noted: {term}."
-
-        return PluginInstance(
-            tools=[define],
-            instructions="Use `define` to record domain terms the user explains.",
-        )
-
-
-store = MyGlossary()  # your Glossary backend: just async define() and lookup()
-agent = Agent(name="assistant", model="deepseek-v4-pro", plugins=[GlossaryPlugin(store)])
-```
-
-Because that backend is shared across (possibly concurrent) runs it must be safe
-for concurrent use, and the plugin never closes it — its lifecycle belongs to
-whoever created it. (Contrast the todo plugin, whose store is rebuilt inside
-`setup` for each run.)
-
-`PluginInstance` carries any subset of these contributions:
-
-| Field | Effect |
-| --- | --- |
-| `tools` | merged into the agent's tool set |
-| `instructions` | appended to the system prompt |
-| `view_injectors` | entries appended to the model's view each turn — never persisted |
-| `hooks` | an `AgentHooks` that observes run events (metrics, audit, …) |
-| `input_guardrails` / `output_guardrails` | run at the loop's checkpoints, with the agent's own; the loop keeps the abort |
-| `aclose` | coroutine awaited at run end to release resources opened in `setup` |
-
-## Workspace Agents
-
-`Workspace` adds file and shell tools scoped to a root directory and permission
-policy.
+File and shell tools scoped to a root, governed by one `allow`/`ask`/`deny`
+policy over paths *and* commands — `ask` decisions ride the normal approval
+channel:
 
 ```python
 from lovia import Agent
@@ -987,45 +360,69 @@ agent = Agent(
     workspace=Workspace.local(
         ".",
         mode="coding",
-        readable=("~/reference-docs",),   # extra read scope outside the root
         denied_paths=(".env*",),
-        command_rules=(
-            CommandRule("pytest", "allow"),
-            CommandRule("rm -rf", "deny"),
-        ),
+        command_rules=(CommandRule("pytest", "allow"), CommandRule("rm -rf", "deny")),
     ),
 )
 ```
 
-Files and shell commands share one `allow` / `ask` / `deny` policy. Paths may
-be workspace-relative or absolute; symlinks are judged by where they resolve,
-so a `.venv/bin/python` pointing at the system interpreter just works when the
-policy allows it. `ask` decisions surface through the same approval channel as
-shell commands.
+→ [Workspace](./docs/en/workspace.md)
 
-Modes:
+### Plugins
 
-| Mode | Inside the root | Outside the root | Shell default |
-| --- | --- | --- | --- |
-| `readonly` | read only | denied | no shell |
-| `coding` | read + write | reads ask, writes denied | ask |
-| `trusted` | read + write | reads allowed, writes ask | allow |
+One extension axis: a plugin contributes tools, prompt text, per-turn view
+injectors, hooks, and guardrails — never control flow:
 
-Grant more with `readable=` / `writable=` (or full `path_rules=`); block paths
-with `denied_paths` — denied paths are refused by the file tools *and* by
-shell commands that name them (redirect targets included). The command-level
-path guard is lexical and advisory — the local shell still runs as the host
-user, so use the `ShellExecutor` seam (OS sandboxing) or a future container
-backend when you need hard isolation.
+```python
+from lovia import Agent, Skills, Todo
+from lovia.plugins.mcp import MCP, MCPServerStdio
 
-## Web UI
-
-The optional web layer is a small FastAPI app with SSE streaming, sessions,
-markdown rendering, and approval routes.
-
-```bash
-pip install "lovia[web]"
+agent = Agent(
+    name="builder",
+    model="deepseek-v4-pro",
+    plugins=[
+        Todo(),
+        Skills("./skills"),
+        MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])),
+    ],
+)
 ```
+
+- **`Todo()`** — gives the model a checklist for multi-step work; the current
+  list is re-shown every turn without growing the transcript.
+- **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
+  one-line index stays in the prompt, full content loads on demand.
+- **`MCP(server)`** — tools from Model Context Protocol servers, stdio or
+  HTTP, with per-server name prefixes and approval gates.
+
+Writing your own is a `name` plus one async `setup()` returning the
+contributions.
+
+→ [Plugins](./docs/en/plugins.md) · [Skills](./docs/en/skills.md) · [MCP](./docs/en/mcp.md)
+
+### Memory
+
+Long-term memory across conversations — always-in-prompt **Notes** plus a
+searchable **Archive**, zero-config, upgradeable one argument at a time:
+
+```python
+from lovia import Agent, Memory
+from lovia.plugins import OpenAIEmbedder
+
+agent = Agent(name="assistant", model="deepseek-v4-pro",
+              plugins=[Memory("./.lovia/memory")])
+
+Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
+Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm -> hybrid recall
+Memory("./memory", index=None)                 # notes only, no archive
+```
+
+→ [Memory](./docs/en/memory.md)
+
+### Web UI
+
+A small FastAPI app — SSE streaming, sessions with titles, approvals,
+schedules, a memory editor — whose runs survive browser disconnects:
 
 ```python
 from lovia.web import serve
@@ -1033,124 +430,64 @@ from lovia.web import serve
 serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
-### Command line
-
-No code required: `python -m lovia.web` builds a default agent — model from env,
-skills from `./skills`, long-term memory under `./.lovia/memory`, a todo
-checklist, model-driven scheduled runs (the agent can schedule its own
-follow-ups, with your approval), built-in tools (time, HTTP fetch, web search),
-and a trusted workspace on the current directory — and serves the chat UI.
-
 ```bash
-python -m lovia.web                                    # zero-config
-python -m lovia.web --port 9000 --model deepseek-v4-pro
-python -m lovia.web --skills-dir ./skills --workspace-mode readonly
-python -m lovia.web --memory-dir ./mem                 # persist memory under ./mem
-python -m lovia.web --app myagents:assistant           # serve your own Agent
+python -m lovia.web --port 9000 --model deepseek-v4-pro   # or zero-config
 ```
 
-Common options also read `LOVIA_*` env vars (precedence: **flag > env > default**),
-and a `.env` in the current directory loads automatically when `python-dotenv` is
-installed (or pass `--env-file`). Model credentials use the provider's own
-`OPENAI_API_KEY` / `OPENAI_BASE_URL` (Anthropic: `ANTHROPIC_*`).
+The bundled page is optional: everything is exposed as a JSON + SSE REST
+API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
+mounting the router into your own FastAPI app — lets you build a custom
+front-end on the same endpoints.
 
-| Option | Env var | Default |
-| --- | --- | --- |
-| `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
-| `--db` | `LOVIA_DB` | `<agent>.db` in cwd |
-| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | required |
-| `--skills-dir` (repeatable) | `LOVIA_SKILLS_DIR` | `./skills` if present |
-| `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` (on) |
-| `--workspace` / `--workspace-mode` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` |
-| `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
-| `--app MODULE:ATTR` | `LOVIA_APP` | build default agent |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | the agent's retry posture, 3 retries (`0` disables) |
-| `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
-| `--max-tokens` | `LOVIA_MAX_TOKENS` | provider default |
-| `--context-window` | `LOVIA_CONTEXT_WINDOW` | ask the provider; reactive fallback when unknown |
-| `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
-| `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
+→ [Web UI & server](./docs/en/web.md) · [HTTP API](./docs/en/http-api.md)
 
-`--provider-timeout` and `--trust-env` are honored directly by the providers, so
-they also apply to `--app` agents and library use; `--max-retries` / `--max-turns`
-apply to every served run, while `--max-tokens` / `--context-window` configure the
-default agent only.
+### Evals
 
-For TLS behind an intranet CA, `LOVIA_HTTP_CA_BUNDLE` points all outbound HTTPS
-(model providers and the `http_fetch` tool) at a custom PEM bundle, and
-`LOVIA_HTTP_INSECURE=1` disables verification (use only on trusted networks).
-The `web` extra bundles `truststore`, so the OS certificate store is trusted
-automatically — what the browser already trusts, no env needed.
-
-The default agent also gets always-on built-ins: a `todo_write` checklist plus
-`now` (time), `http_fetch`, and `web_search` tools. Web search needs the `ddg`
-extra (bundled with `lovia[web]`); if it is missing, that one tool is skipped.
-
-`--version` prints the version; `python -m lovia.web --help` lists every flag.
-
-### Build your own UI
-
-The HTTP API is decoupled from the bundled chat page, so you can keep the JSON +
-SSE endpoints and drop in your own front-end. Either turn the bundled UI off:
+Behavioral test suites: a `Case` pairs input with checks, any function is a
+check, the LLM judge is just another check, and reports diff against a
+baseline in CI:
 
 ```python
-from lovia.web import create_app
+from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
 
-app = create_app(agent, ui=False)   # no GET / and no /static — API only
+report = await evaluate(agent, [
+    Case("What is the capital of France?", checks=[contains("Paris")]),
+    Case("What's 23.4 * 91?", checks=[tool_called("calculator")]),
+    Case("Write a haiku about spring",
+         checks=[llm_judge("A 5-7-5 haiku that evokes spring")],
+         samples=4, pass_threshold=0.75),
+])
+print(report)
+assert report.passed
 ```
 
-…or mount the UI-free router into your own FastAPI app:
+→ [Evals](./docs/en/eval.md)
+
+### Testing
+
+Everything runs offline against a scripted provider — real tools, real loop,
+canned model:
 
 ```python
-from fastapi import FastAPI
-from lovia.web import RouterDeps, build_api_router, ChatStore
-from lovia.web.approvals import ApprovalRegistry
+from lovia.testing import ScriptedProvider, call, text
 
-deps = RouterDeps(
-    agents={"bot": agent},
-    store=ChatStore.in_memory(),
-    approvals=ApprovalRegistry(),
-)
-app = FastAPI()
-app.include_router(build_api_router(deps))
+provider = ScriptedProvider([
+    call("add", {"a": 2, "b": 3}, call_id="c1"),
+    text("The answer is 5."),
+])
 ```
 
-Key endpoints (browse the full schema at `/api/docs`):
-
-| Method & path | Purpose |
-| --- | --- |
-| `GET /api/info` | server title, agents, version, capabilities |
-| `GET /api/agents`, `GET /api/agents/{name}` | list / fetch agents |
-| `POST /api/chat` | one blocking turn → `{output, session_id, usage}` |
-| `POST /api/chat/stream` | SSE stream of a turn (`text_delta`, `tool_call`, `done`, …) |
-| `POST /api/chat/approve`, `POST /api/chat/cancel` | resolve an approval / stop a stream |
-| `GET /api/sessions` | list chats (`?q=` search, `?limit=`); `DELETE` clears all |
-| `GET`/`PATCH`/`DELETE /api/sessions/{id}` | transcript / rename / delete |
-| `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
-| `GET`/`POST /api/schedules`, `DELETE`/`PATCH /api/schedules/{id}` | list / create / delete / pause scheduled runs (cron · interval · at) |
-
-`lovia/web/static/js/api.js` is a ready-made browser client (including an SSE
-reader) — import it, or read it as a reference for any language.
+→ [Testing](./docs/en/testing.md)
 
 ## Examples
 
-The `examples/` directory is a numbered learning path of self-contained,
-runnable scripts — `cp .env.example .env`, set `LOVIA_MODEL`, and start with
-`01_hello.py`. See [examples/README.md](examples/README.md) for the full
-index and setup notes.
+The `examples/` directory is a numbered learning path of thirty
+self-contained, runnable scripts — from `01_hello.py` to a terminal support
+bot — plus one script per built-in tool family (`tools/`) and the classic
+agentic patterns in plain Python (`workflows/`). Setup and the full index:
+[examples/README.md](examples/README.md).
 
-| Section | Files | Covers |
-| --- | --- | --- |
-| Fundamentals | `01`–`06` | hello, tools, streaming, structured output, sessions, multimodal |
-| Multi-agent | `07`–`08` | handoff, agent-as-tool |
-| Models & providers | `09`–`10` | `ModelSettings`, compatible endpoints, custom `Provider` (offline) |
-| Control & production | `11`–`18` | hooks, approval, guardrails, reliability, resume, steering, compaction, dependency injection |
-| Workspace & plugins | `19`–`25` | workspace, coding agent, todos, skills, memory, MCP, writing a plugin |
-| Serving & apps | `26`–`30` | web UI, JSON/SSE API, evals, data analysis, terminal support bot |
-| `examples/tools/` | | one script per built-in tool family |
-| `examples/workflows/` | | prompt chaining, routing, parallelization, orchestrator-workers, evaluator loops, autonomous agents |
-
-## Install Extras
+## Install extras
 
 | Need | Install |
 | --- | --- |
@@ -1160,12 +497,6 @@ index and setup notes.
 | Web UI | `pip install "lovia[web]"` |
 | Runnable examples | `pip install "lovia[examples,web]"` |
 | Development | `pip install -e ".[dev]"` |
-
-`examples` contains dependencies used only by runnable demos, such as
-`python-dotenv`, `rich`, and `ddgs`. `dev` contains repository maintenance
-dependencies: `pytest`, `ruff`, `mypy`, `build`, `twine`, and the web test
-stack. They stay separate so normal development does not install demo-only
-packages.
 
 ## Development
 
@@ -1177,6 +508,6 @@ pip install -e ".[dev]"
 .venv/bin/python -m mypy lovia
 ```
 
-The `examples/` directory contains runnable scripts for the major features.
-Live provider tests are marked `live_provider` and stay skipped unless enabled
-explicitly.
+Live provider tests are marked `live_provider` and stay skipped unless
+enabled explicitly. Contributor-facing internals are documented in
+[docs/architecture.md](docs/architecture.md).

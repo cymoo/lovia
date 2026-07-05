@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -22,6 +23,7 @@ from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
 from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
+from .api.memory import memory_plugin
 from .approvals import ApprovalRegistry
 from .scheduler import Scheduler
 from .store import ChatStore
@@ -150,6 +152,14 @@ def create_app(
         finally:
             await scheduler.stop()
             await deps.supervisor.shutdown()
+            # Background memory curation (curate_in_background) gets a bounded
+            # window to land — a clean stop shouldn't drop the last run's
+            # curation, but must not hang shutdown on a stuck model call.
+            for agent in deps.agents.values():
+                plugin = memory_plugin(agent)
+                if plugin is not None:
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(plugin.drain(), timeout=15.0)
 
     app = FastAPI(
         title=title,

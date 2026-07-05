@@ -8,6 +8,7 @@ the 404 shape for agents without the plugin.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent  # noqa: E402
 from lovia.plugins.memory import Memory  # noqa: E402
+from lovia.plugins.memory import plugin as plugin_mod  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -104,3 +106,24 @@ def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> N
         "/api/memory", params={"agent": "bot"}, json={"content": ""}
     ).json()
     assert wiped["content"] == "" and wiped["used"] == 0
+
+
+# ------------------------------------------------------------- shutdown -
+
+
+def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> None:
+    # A clean server stop must not drop the last run's curation: the digest
+    # below is still sleeping when the lifespan shutdown begins, and only the
+    # drain in create_app's lifespan gets it onto disk.
+    async def slow_digest(entries, current, model):
+        await asyncio.sleep(0.3)
+        return plugin_mod._RunDigest(facts=["survives shutdown"], summary="")
+
+    monkeypatch.setattr(plugin_mod, "_digest", slow_digest)
+    mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
+    bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])
+    app = create_app({"bot": bot}, store=ChatStore.in_memory(), generate_titles=False)
+
+    with TestClient(app) as client:  # the context manager runs the lifespan
+        assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
+    assert (tmp_path / "mem" / "MEMORY.md").read_text() == "- survives shutdown"

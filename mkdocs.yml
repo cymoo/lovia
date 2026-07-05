@@ -58,6 +58,41 @@ plugins:
         - locale: zh
           name: 中文
           build: true
+          # nav labels are static strings from `nav:`, so translate them for the
+          # zh build. Values mirror each page's own H1 for consistency; MCP and
+          # HTTP API are identical in both languages and left untranslated.
+          nav_translations:
+            Home: 首页
+            Getting started: 快速开始
+            Quickstart: 快速上手
+            Core concepts: 核心概念
+            Core: 核心
+            Agents: Agent
+            Running agents: 运行 agent
+            Streaming: 流式输出
+            Tools: 工具
+            Built-in tools: 内置工具
+            Structured output: 结构化输出
+            Providers & models: Provider 与模型
+            Composition: 组合
+            Multi-agent: 多 Agent
+            Plugins: 插件
+            Skills: 技能
+            Memory: 记忆
+            Production: 生产
+            Sessions & checkpoints: Session 与 Checkpoint
+            Context management: 上下文管理
+            Human in the loop: 人工介入
+            Guardrails: 护栏
+            Reliability: 可靠性
+            Observability: 可观测性
+            Workspace: 工作区
+            Serving & quality: 服务与质量
+            Web UI & server: Web UI 与服务端
+            Evals: 评测
+            Testing: 测试
+            Internals: 内部机制
+            Architecture: 架构
 
 markdown_extensions:
   - toc:

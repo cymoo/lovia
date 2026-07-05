@@ -97,6 +97,21 @@ async def test_list_files_renderer_marks_dirs(session, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_files_root_name_miss_hints_dot(tmp_path) -> None:
+    # Models sometimes call list_files with the workspace's *name* (the prompt
+    # shows it as a label); the error must teach the certain retry: '.'.
+    root = tmp_path / "ws-dir"
+    root.mkdir()
+    ctx = _ctx(LocalWorkspaceSession(root=str(root)))
+    with pytest.raises(ToolError, match=r"try list_files\('\.'\)"):
+        await list_files.invoke({"path": "ws-dir"}, ctx)
+    # Any other missing directory keeps the plain error — no misleading hint.
+    with pytest.raises(ToolError) as ei:
+        await list_files.invoke({"path": "nope-dir"}, ctx)
+    assert "list_files('.')" not in str(ei.value)
+
+
+@pytest.mark.asyncio
 async def test_grep_files_renderer(session) -> None:
     ctx = _ctx(session)
     raw = await grep_files.invoke({"pattern": "beta"}, ctx)

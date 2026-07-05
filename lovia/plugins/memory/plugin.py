@@ -496,6 +496,16 @@ class Memory:
     consolidation call when Notes outgrow their budget). ``False`` = purely
     manual memory."""
 
+    curate_in_background: bool = False
+    """Run the end-of-run curation as a background task instead of inline.
+
+    Inline (default) suits scripts and tests: when ``Runner.run`` returns,
+    memory is settled. A long-lived host (the bundled web server does this)
+    turns it on so the run's final event isn't held back by curation's model
+    calls; :meth:`drain` awaits whatever is still in flight. Curation is
+    best-effort in both modes — failures log a warning, never raise — but a
+    process that exits without draining may lose the last run's curation."""
+
     expand_query: "bool | Literal['auto']" = "auto"
     """Expand recall queries with LLM-generated synonyms and translations
     before searching. ``"auto"`` (default) enables this only for the default
@@ -547,6 +557,9 @@ class Memory:
             self._lexical_only = False
         # Serializes read-modify-write cycles on Notes (tools + curation).
         self._notes_lock = asyncio.Lock()
+        # Strong refs to background curation tasks (curate_in_background):
+        # without them the event loop may garbage-collect a task mid-flight.
+        self._curation_tasks: set[asyncio.Task[None]] = set()
 
     def _resolve_model(
         self, ctx: RunContext[Any]
@@ -625,6 +638,34 @@ class Memory:
                 return False
             await notes.save(kept)
         return True
+
+    async def notes_body(self) -> str:
+        """The current Notes as their canonical ``- fact`` body (may be ``""``).
+
+        The read half of the editing seam; :meth:`replace_notes` is the write
+        half. The web UI's memory editor is built on the pair.
+        """
+        return _format_facts(await self._notes_store().load())
+
+    async def replace_notes(self, body: str) -> str:
+        """Replace Notes wholesale with the facts parsed from ``body``.
+
+        The bulk counterpart to :meth:`remember` / :meth:`forget`, for editor
+        flows (the web UI, imports): ``body`` uses the same ``- fact`` per line
+        form :meth:`notes_body` returns. Non-bullet lines are ignored, facts
+        are normalized and case-insensitively deduplicated — the same policy
+        every other Notes write applies. Returns the canonical body stored.
+        """
+        facts: list[str] = []
+        seen: set[str] = set()
+        for fact in _parse_facts(body):
+            norm = _normalize_fact(fact)
+            if norm and norm.lower() not in seen:
+                facts.append(norm)
+                seen.add(norm.lower())
+        async with self._notes_lock:
+            await self._notes_store().save(facts)
+        return _format_facts(facts)
 
     # -- setup -----------------------------------------------------------------
 
@@ -726,9 +767,22 @@ class Memory:
             if finalized:
                 return
             finalized = True
-            await self._curate(index, ev.result.entries, ctx)
+            if self.curate_in_background:
+                # Off the hot path: the run's final event shouldn't wait for
+                # curation's model calls. _curate never raises (best-effort
+                # throughout), so the task can't die loudly.
+                task = asyncio.create_task(self._curate(index, ev.result.entries, ctx))
+                self._curation_tasks.add(task)
+                task.add_done_callback(self._curation_tasks.discard)
+            else:
+                await self._curate(index, ev.result.entries, ctx)
 
         return hooks
+
+    async def drain(self) -> None:
+        """Wait for in-flight background curation (a no-op when inline)."""
+        while self._curation_tasks:
+            await asyncio.gather(*tuple(self._curation_tasks), return_exceptions=True)
 
     async def _curate(
         self,

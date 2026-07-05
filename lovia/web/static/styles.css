@@ -258,6 +258,51 @@ body.sidebar-collapsed .sidebar {
   gap: 2px;
 }
 .sidebar-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.011em;
+  color: var(--ink);
+}
+
+/* Top nav — app-level destinations (New chat, Memory, Scheduled runs):
+   icon + label rows above the chats section. */
+.sidebar-nav {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 10px 6px;
+}
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  text-align: left;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.sidebar-nav-item:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.sidebar-nav-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: color var(--t-fast);
+}
+.sidebar-nav-item:hover svg {
+  color: var(--ink-2);
+}
+
+.sidebar-section-label {
+  flex-shrink: 0;
+  padding: 12px 22px 6px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -615,20 +660,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   overflow: hidden;
 }
 
-/* When the plan panel is open on a wide screen, reserve a right rail for it so
-   it never sits on top of the conversation; below this width it floats as
-   glass over the content (a short-lived overlap while scrolled to the top).
-   The reservation applies to the transcript AND the composer (and the jump-
-   to-latest button) so the whole content column shifts as one. */
-@media (min-width: 1200px) {
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript,
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .composer {
-    padding-right: 356px;
-  }
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .scroll-bottom-btn {
-    left: calc(50% - 166px);
-  }
-}
+/* The plan (todo) panel floats as frosted glass OVER the transcript at every
+   width — the content column never shifts or shrinks for it. Readability
+   comes from the card's blur + tint (see .todo-card). */
 
 /* Floating "jump to latest" affordance, shown only when scrolled up. */
 .scroll-bottom-btn {
@@ -1148,6 +1182,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   animation: fade-in var(--t-med) var(--ease);
+  /* a pan viewer, not a text surface: dragging must never start a selection */
+  user-select: none;
+  -webkit-user-select: none;
 }
 @keyframes fade-in {
   from {
@@ -1933,6 +1970,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .sidebar .btn-icon:hover {
   background: var(--surface-3);
 }
+/* The Files toggle shows its panel's state. */
+#files-btn[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
 
 /* Inline lucide icons sit in flex-centered buttons — render them block-level so
    there's no baseline descender gap throwing off vertical centering. */
@@ -2223,12 +2265,77 @@ dialog.custom-dialog::backdrop {
   }
 }
 
+/* ---- Memory editor ------------------------------------------------------
+   The agent's Notes (hot-tier memory), readable and editable as the same
+   "- fact" per line markdown it stores. */
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.memory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.memory-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.memory-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.memory-hint code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  padding: 1px 4px;
+}
+.memory-editor {
+  margin-top: 0;
+  min-height: 280px;
+  max-height: 52vh;
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+.memory-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.memory-meter {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.memory-meter.warn {
+  color: var(--warn);
+}
+.memory-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---- Files panel ---------------------------------------------------------
    Read-only window into the agent's workspace: Recent list first (what did
-   the assistant just make), breadcrumb browsing second, viewer below. */
+   the assistant just make), breadcrumb browsing second, viewer below.
+   `--files-w` (set by the drag divider, persisted) overrides the fluid
+   default; the `min()` keeps a stale saved width from starving the chat. */
 .files-panel {
   display: none;
-  width: clamp(340px, 28vw, 440px);
+  position: relative;
+  width: min(var(--files-w, clamp(340px, 28vw, 440px)), calc(100vw - 520px));
+  min-width: 300px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
@@ -2240,6 +2347,41 @@ dialog.custom-dialog::backdrop {
 }
 [data-theme="dark"] .files-panel {
   background: var(--bg);
+}
+
+/* Divider on the panel's left edge: drag to resize, arrow keys to nudge,
+   double-click to reset. The visible accent line lights up on hover/drag. */
+.files-resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.files-resizer::after {
+  content: "";
+  position: absolute;
+  left: 3px; /* sits over the panel's border-left */
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.files-resizer:hover::after,
+.files-resizer:focus-visible::after,
+body.files-resizing .files-resizer::after {
+  opacity: 0.55;
+}
+body.files-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .files-head {
@@ -2497,7 +2639,8 @@ dialog.custom-dialog::backdrop {
   margin-left: auto;
 }
 
-/* Mobile: a full-height drawer sliding in from the right. */
+/* Mobile: a full-height drawer sliding in from the right (no resizing —
+   the drawer overlays the chat instead of pushing it). */
 @media (max-width: 720px) {
   .files-panel {
     display: flex;
@@ -2506,6 +2649,7 @@ dialog.custom-dialog::backdrop {
     right: 0;
     bottom: 0;
     width: min(420px, 100%);
+    min-width: 0;
     z-index: 70;
     border-left: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
@@ -2514,6 +2658,9 @@ dialog.custom-dialog::backdrop {
   }
   .files-panel.open {
     transform: none;
+  }
+  .files-resizer {
+    display: none;
   }
   .files-viewer {
     height: 55%;

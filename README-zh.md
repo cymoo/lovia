@@ -827,9 +827,15 @@ Memory("./memory", index=my_index)             # 使用你自己的检索引擎
 又不会递归触发 `Memory` 自身。lovia 会完整保留 transcript，context compaction
 只影响传给模型的视图，所以整理只需要在 run 结束时针对完整 transcript 跑一次：
 它做的是整理，把少量长期事实放进小而稳定的热层，而不是在上下文丢失后再补救。
+整理默认内联执行——`Runner.run` 返回时记忆已落定；常驻进程可传
+`curate_in_background=True` 让整理转入后台任务，run 的最后一个事件不再被
+整理的模型调用拖住；`await mem.drain()` 可等待在途整理完成（自带的 web
+server 即如此配置，并会在关停时 drain）。
 
 `remember` / `forget` 同时也是公开方法（如 `await mem.remember("...")`），
-代码可以在没有模型参与的情况下预置或清理 Notes。
+代码可以在没有模型参与的情况下预置或清理 Notes；`notes_body` / `replace_notes`
+面向编辑器场景，整体读取和替换整份列表——web UI 侧栏的 **Memory** 编辑器
+（`GET` / `PUT /api/memory`）就建立在这对方法之上。
 
 **自带后端。** 两个层级背后各有一个刻意收窄的协议。`NotesStore` 只有两个方法：
 `load` / `save` 一组事实，归一化、去重和预算控制都留在插件里；`Index` 就是上面提到的

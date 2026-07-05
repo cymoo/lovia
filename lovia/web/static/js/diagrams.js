@@ -187,6 +187,7 @@ function openLightbox(fig) {
 
   let dragging = false, ox = 0, oy = 0;
   stage.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); // panning, not selecting the diagram's text
     dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
     stage.setPointerCapture(e.pointerId); stage.classList.add('grabbing');
   });

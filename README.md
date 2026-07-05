@@ -877,9 +877,15 @@ plugin-less sub-agent and structured output — so they reuse your provider chai
 and can't recurse. Because lovia's transcript is durable and compaction is
 view-only, the digest runs once at run end over the complete transcript: it is
 curation (promoting the few durable facts into the small hot tier), not rescue.
+By default it runs inline — when `Runner.run` returns, memory is settled — but
+a long-lived host can pass `curate_in_background=True` so the run's final event
+isn't held back by curation's model calls; `await mem.drain()` settles anything
+in flight (the bundled web server opts in and drains on shutdown).
 
 `remember` / `forget` are also public methods (`await mem.remember("...")`),
-so code can seed or clean Notes without a model in the loop.
+so code can seed or clean Notes without a model in the loop; `notes_body` /
+`replace_notes` read and replace the whole list for editor flows. The web UI's
+sidebar **Memory** editor (`GET` / `PUT /api/memory`) is built on that pair.
 
 **Bring your own backend.** Each tier sits behind a deliberately narrow
 protocol. `NotesStore` is two methods (`load`/`save` a fact list — all

@@ -113,9 +113,13 @@ class LocalWorkspace:
         root_name = Path(self.root).expanduser().resolve().name or str(self.root)
         lines = [
             "## Workspace",
-            f"You work in a workspace rooted at {root_name!r}. File paths may "
-            "be workspace-relative (preferred) or absolute; symlinks resolve "
-            "to their targets and are judged by where they lead.",
+            # The name is a label, never a path: presenting it path-like makes
+            # models call list_files('<name>') and miss ('.' is the root).
+            f"You work in a workspace named {root_name!r}. Its root directory "
+            "is '.' — address files with workspace-relative paths ('.', "
+            "'notes/plan.md'; preferred) or absolute ones, never with the "
+            "workspace name. Symlinks resolve to their targets and are judged "
+            "by where they lead.",
             "Explore with list_files and grep_files; read a file before editing "
             "it; use edit_file for targeted changes and write_file for new files "
             "or full rewrites. Large reads and command output are truncated — "

@@ -16,6 +16,7 @@ infrastructure), keeping the package dependency one-directional:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Any, Callable, Literal
 
 from pydantic import Field
@@ -23,6 +24,7 @@ from pydantic import Field
 from ..exceptions import ToolError
 from ..run_context import RunContext
 from ..tools.base import tool
+from .errors import WorkspaceError
 from .protocol import WorkspaceSession
 from .types import (
     CommandResult,
@@ -289,7 +291,10 @@ async def edit_file(
 )
 async def list_files(
     ctx: RunContext[Any],
-    path: Annotated[str, "Workspace-relative or absolute directory path."] = ".",
+    path: Annotated[
+        str,
+        "Directory to list, workspace-relative or absolute ('.' is the workspace root).",
+    ] = ".",
     pattern: Annotated[
         str | None,
         Field(default=None, description="Optional glob pattern, e.g. '**/*.py'."),
@@ -307,9 +312,26 @@ async def list_files(
         ),
     ] = None,
 ) -> list[DirEntry]:
-    return await require_workspace(ctx).list_files(
-        path, pattern=pattern, include_hidden=include_hidden, max_results=max_results
-    )
+    session = require_workspace(ctx)
+    try:
+        return await session.list_files(
+            path,
+            pattern=pattern,
+            include_hidden=include_hidden,
+            max_results=max_results,
+        )
+    except WorkspaceError as exc:
+        # Models sometimes address the root by the workspace's *name*. The
+        # miss round-trips anyway, so make the retry a certainty: put the
+        # actual root path in the error.
+        root = getattr(session, "root", None)
+        root_name = Path(root).expanduser().resolve().name if root else None
+        if exc.hint is None and root_name and path.strip().strip("/") == root_name:
+            exc.hint = (
+                f"{root_name!r} is the workspace's name, not a path inside it "
+                "— the root itself is '.'; try list_files('.')."
+            )
+        raise
 
 
 @tool(

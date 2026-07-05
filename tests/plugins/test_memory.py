@@ -175,6 +175,32 @@ async def test_public_remember_and_forget(tmp_path) -> None:
     assert await mem._notes_store().load() == []
 
 
+async def test_notes_body_and_replace_notes(tmp_path) -> None:
+    # The editor seam: read the canonical body, replace it wholesale with the
+    # same normalization/dedup policy every other Notes write applies.
+    mem = Memory(tmp_path / "mem", index=None)
+    assert await mem.notes_body() == ""
+    await mem.remember("likes jazz")
+    assert await mem.notes_body() == "- likes jazz"
+
+    stored = await mem.replace_notes(
+        "# a heading, ignored\n"
+        "- uses  vim   daily\n"
+        "not a bullet, ignored\n"
+        "- USES VIM DAILY\n"  # case-insensitive dup of the one above
+        "-not a bullet either (no space)\n"
+        "- \n"  # empty fact → ignored
+        "- speaks French\n"
+    )
+    assert stored == "- uses vim daily\n- speaks French"
+    assert await mem.notes_body() == stored
+    assert await mem._notes_store().load() == ["uses vim daily", "speaks French"]
+
+    # Replacing with an empty body clears the notes.
+    assert await mem.replace_notes("") == ""
+    assert await mem.notes_body() == ""
+
+
 # ---------------------------------------------------------------------------
 # Construction: the three-step ladder (default / embedder= / index=)
 # ---------------------------------------------------------------------------
@@ -509,6 +535,28 @@ async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     assert summary_doc.meta["session_id"] == "s1"
     assert summary_doc.id.endswith(":summary")
     assert all(d.when > 0 for d in index.added)
+
+
+async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> None:
+    # With curate_in_background the run returns while the digest is still
+    # parked on the gate (inline mode would deadlock here); drain() settles it.
+    gate = asyncio.Event()
+
+    async def fake_digest(entries, current, model):
+        await gate.wait()
+        return _RunDigest(facts=["works at Dawn Café"], summary="")
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
+    agent = Agent(name="a", model=ScriptedProvider([text("hi")]), plugins=[mem])
+    await Runner.run(agent, "hello")
+
+    assert mem._curation_tasks  # curation is in flight, not done inline
+    assert await mem._notes_store().load() == []
+    gate.set()
+    await mem.drain()
+    assert not mem._curation_tasks
+    assert "works at Dawn Café" in await mem._notes_store().load()
 
 
 async def test_auto_curate_false_ingests_messages_only(tmp_path, monkeypatch) -> None:

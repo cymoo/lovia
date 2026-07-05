@@ -151,6 +151,16 @@ export const api = {
   // Raw bytes URL — inline image preview, or any file with download=true.
   workspaceRawUrl: ({ agent, path, download } = {}) =>
     `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
+
+  // ---- memory (the agent's editable Notes) ----
+  getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_jsonOrDetail),
+  // Replaces the notes wholesale; returns the canonical stored form.
+  putMemory: ({ agent, content }) =>
+    fetch(`/api/memory${qs({ agent })}`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ content }),
+    }).then(_jsonOrDetail),
 };
 
 // Like `_json`, but raises the server's `{detail}` message (422/404) so the

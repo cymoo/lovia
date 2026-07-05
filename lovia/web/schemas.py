@@ -14,6 +14,28 @@ class AgentInfo(BaseModel):
     # True when the agent has a browsable local workspace (the Files panel
     # shows itself only for such agents).
     workspace: bool = False
+    # True when the agent carries a Memory plugin (the sidebar's Memory
+    # editor shows itself only for such agents).
+    memory: bool = False
+
+
+class MemoryNotes(BaseModel):
+    """An agent's hot-tier Notes, as shown in the memory editor.
+
+    ``content`` is the canonical ``- fact`` per line markdown body; ``used`` is
+    its length in chars against the plugin's ``budget`` (the meter the agent
+    itself sees in its prompt).
+    """
+
+    content: str
+    used: int
+    budget: int
+
+
+class MemoryUpdate(BaseModel):
+    """Replace the Notes wholesale with an edited body (see ``MemoryNotes``)."""
+
+    content: str = Field(max_length=1_000_000)
 
 
 class WorkspaceInfo(BaseModel):

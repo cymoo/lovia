@@ -205,8 +205,8 @@ html {
   scrollbar-color: var(--border-strong) transparent;
 }
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -215,7 +215,7 @@ html {
   background: var(--border-strong);
   border-radius: 8px;
   /* inset the thumb so it reads as a slim floating rail */
-  border: 3px solid transparent;
+  border: 1.5px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -609,10 +609,16 @@ body.sidebar-collapsed .sidebar-expand-btn {
 
 /* When the plan panel is open on a wide screen, reserve a right rail for it so
    it never sits on top of the conversation; below this width it floats as
-   glass over the content (a short-lived overlap while scrolled to the top). */
+   glass over the content (a short-lived overlap while scrolled to the top).
+   The reservation applies to the transcript AND the composer (and the jump-
+   to-latest button) so the whole content column shifts as one. */
 @media (min-width: 1200px) {
-  .chat-region:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript {
+  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript,
+  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .composer {
     padding-right: 356px;
+  }
+  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .scroll-bottom-btn {
+    left: calc(50% - 166px);
   }
 }
 
@@ -656,7 +662,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   overflow-y: auto;
   overscroll-behavior: contain;
   /* content starts below the glass topbar and clears the composer pill */
-  padding: calc(var(--topbar-h) + 28px) 24px 20px;
+  padding: calc(var(--topbar-h) + 28px) 24px 24px;
 }
 
 /* ---- Empty state --------------------------------------------------------- */
@@ -762,7 +768,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
 }
 .turn.user {
   justify-content: flex-end;
-  margin-bottom: 26px;
+  /* room for the hover action row that sits below the bubble */
+  margin-bottom: 34px;
 }
 @keyframes turn-in {
   from {
@@ -785,6 +792,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   width: 100%;
 }
 .turn.user .bubble {
+  position: relative; /* anchors the action row below the bubble */
   width: fit-content;
   min-width: min(120px, 100%);
   max-width: min(640px, 84%);
@@ -840,10 +848,20 @@ body.sidebar-collapsed .sidebar-expand-btn {
   min-height: 24px;
   width: 100%;
 }
+/* The user bubble's action row lives OUTSIDE the bubble (below, right-
+   aligned, shown on hover) — inside it read as a band of dead space. */
 .turn.user .turn-footer {
-  margin-top: 4px;
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  width: auto;
+  margin: 0;
   min-height: 0;
   justify-content: flex-end;
+}
+/* No timestamp on user messages — the copy action is all that row offers. */
+.turn.user .timestamp {
+  display: none;
 }
 .turn .timestamp,
 .turn-footer .usage {
@@ -1270,7 +1288,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
   opacity: 0;
   pointer-events: none;
 }
+/* User turns: the action row sits below the bubble, so the hover scope is the
+   whole turn — the button must stay visible while the cursor travels to it. */
 .turn .bubble:hover .btn-copy,
+.turn.user:hover .btn-copy,
+.turn.user:focus-within .btn-copy,
 .btn-copy:focus-visible {
   opacity: 1;
   pointer-events: auto;
@@ -1724,7 +1746,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   position: relative;
   z-index: 25;
   background: transparent;
-  padding: 6px 24px calc(14px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 24px calc(22px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
 }
 /* soft fade so scrolling content dissolves behind the pill */
@@ -1733,8 +1755,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
   position: absolute;
   left: 0;
   right: 0;
-  top: -34px;
-  height: 34px;
+  top: -40px;
+  height: 40px;
   pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--bg));
 }
@@ -1746,8 +1768,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
   margin: 0 auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  padding: 7px 8px 7px 18px;
+  border-radius: 28px;
+  padding: 10px 10px 10px 22px;
   box-shadow: var(--shadow-md);
   transition:
     border-color var(--t-med) var(--ease),
@@ -1771,7 +1793,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
   line-height: 1.6;
   resize: none;
   outline: none;
-  padding: 6px 0;
+  padding: 7px 0;
+  min-height: 38px;
   max-height: 30vh;
   overflow-y: auto;
   scrollbar-width: none;
@@ -1787,9 +1810,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  margin-bottom: 1px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
@@ -1864,9 +1886,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
 
 /* Stop: a quiet danger outline that harmonizes with the send circle. */
 #stop {
-  padding: 7px 16px;
+  padding: 8px 16px;
   border-radius: 999px;
-  margin-bottom: 1px;
+  margin-bottom: 2px;
 }
 .btn-danger {
   background: transparent;
@@ -2498,13 +2520,17 @@ dialog.custom-dialog::backdrop {
     padding: calc(var(--topbar-h) + 20px) 16px 16px;
   }
   .composer {
-    padding: 4px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 12px calc(14px + env(safe-area-inset-bottom, 0px));
   }
   .composer-inner {
     padding-left: 15px;
   }
   .turn {
     margin-bottom: 26px;
+  }
+  .turn.user {
+    /* the always-visible copy action below the bubble needs its lane */
+    margin-bottom: 34px;
   }
   .turn.user .bubble {
     max-width: 92%;

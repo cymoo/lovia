@@ -208,7 +208,7 @@ table { border-collapse:collapse; margin:0 0 14px; font-size:14px; display:block
 th,td { border:1px solid var(--border); padding:6px 11px; text-align:left; }
 th { background:var(--surface-2); font-weight:600; }
 code {
-  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:0.88em;
 }
 :not(pre) > code {

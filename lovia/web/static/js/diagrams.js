@@ -10,7 +10,7 @@
 import { icon } from './icons.js';
 
 const FONT =
-  '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 const EXPAND_ICON = icon('maximize-2', { size: 14 });
 const CLOSE_ICON = icon('x', { size: 16 });
 

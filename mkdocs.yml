@@ -1,0 +1,122 @@
+site_name: lovia
+site_description: A lightweight and elegant Agent framework
+site_url: https://cymoo.github.io/lovia/
+site_author: wakenee
+copyright: Copyright &copy; wakenee — MIT License
+
+repo_name: cymoo/lovia
+repo_url: https://github.com/cymoo/lovia
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+hooks:
+  - mkdocs_hooks.py
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 中文
+          build: true
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      # GitHub-style, Unicode-preserving slugs so the hand-written CJK anchors
+      # in the zh docs (e.g. `#记忆如何写入`) resolve on the built site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+# Locale-agnostic paths: mkdocs-static-i18n (folder mode) resolves each entry
+# against the active language folder — docs/en/… for the default build,
+# docs/zh/… for the zh build (falling back to en if a translation is missing).
+nav:
+  - Home: README.md
+  - Getting started:
+      - Quickstart: quickstart.md
+      - Core concepts: concepts.md
+  - Core:
+      - Agents: agents.md
+      - Running agents: running.md
+      - Streaming: streaming.md
+      - Tools: tools.md
+      - Built-in tools: built-in-tools.md
+      - Structured output: structured-output.md
+      - Providers & models: providers.md
+  - Composition:
+      - Multi-agent: multi-agent.md
+      - Plugins: plugins.md
+      - Skills: skills.md
+      - MCP: mcp.md
+      - Memory: memory.md
+  - Production:
+      - Sessions & checkpoints: sessions-and-checkpoints.md
+      - Context management: context.md
+      - Human in the loop: human-in-the-loop.md
+      - Guardrails: guardrails.md
+      - Reliability: reliability.md
+      - Observability: observability.md
+      - Workspace: workspace.md
+  - Serving & quality:
+      - Web UI & server: web.md
+      - HTTP API: http-api.md
+      - Evals: eval.md
+      - Testing: testing.md
+  - Internals:
+      - Architecture: architecture.md

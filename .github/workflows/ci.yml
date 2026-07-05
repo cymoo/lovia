@@ -35,3 +35,57 @@ jobs:
         run: uv sync --extra dev --extra mcp --extra web --extra ddg
       - name: Pytest
         run: uv run pytest
+
+  # Validate the docs build on pull requests so broken links and anchors are
+  # caught before merge. No deployment here (that is the `docs` job below), so
+  # this stays off the github-pages environment and its branch policy.
+  docs-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: uv sync --extra docs
+      - name: Build site (strict)
+        run: uv run mkdocs build --strict
+
+  # Build the MkDocs site and publish it to GitHub Pages. Only runs when
+  # commits land on main; the `github-pages` environment's branch policy
+  # rejects deployments from any other ref, so this job is gated accordingly.
+  docs:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: uv sync --extra docs
+      - name: Build site (strict)
+        run: uv run mkdocs build --strict
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

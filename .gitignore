@@ -41,6 +41,9 @@ tmp/
 .mypy_cache/
 .ruff_cache/
 
+# MkDocs build output
+site/
+
 # IDE
 .vscode/
 .idea/

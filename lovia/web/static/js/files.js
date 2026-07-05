@@ -14,13 +14,7 @@ import { api } from './api.js';
 import { copyToClipboard } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import {
-  escapeHtml,
-  formatBytes,
-  formatTimeSmart,
-  highlightIn,
-  renderMarkdown,
-} from './util.js';
+import { formatBytes, formatTimeSmart, highlightIn, renderMarkdown } from './util.js';
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'ico']);
 const MD_EXT = new Set(['md', 'markdown']);
@@ -53,11 +47,13 @@ function isTouched(entryPath) {
 }
 
 // ---- Panel open/close -----------------------------------------------------
-function setOpen(open) {
+// `persist: false` is for forced closes (agent without a workspace) — they
+// must not overwrite the user's remembered open/closed preference.
+function setOpen(open, { persist = true } = {}) {
   state.open = open && state.available;
   els.panel.classList.toggle('open', state.open);
   els.btn?.setAttribute('aria-expanded', String(state.open));
-  localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
+  if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   if (state.open) refresh();
 }
 
@@ -67,7 +63,7 @@ function updateVisibility() {
   els.btn?.classList.toggle('hidden', !state.available);
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
-    setOpen(false);
+    setOpen(false, { persist: false });
   } else if (
     !phone && // on phones the panel is a transient drawer — never auto-open
     localStorage.getItem('lovia-files-open') === '1' &&

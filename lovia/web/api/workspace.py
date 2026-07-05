@@ -219,7 +219,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         resolved = resolve_path(_root_of(cfg), path)
         if not resolved.abs.is_file():
             raise HTTPException(status_code=404, detail="no such file")
-        size = resolved.abs.stat().st_size
+        try:
+            size = resolved.abs.stat().st_size
+        except OSError as exc:  # vanished between the is_file check and here
+            raise HTTPException(status_code=404, detail="no such file") from exc
         if size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
         media_type = mimetypes.guess_type(resolved.abs.name)[0]

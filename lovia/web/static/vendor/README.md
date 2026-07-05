@@ -12,8 +12,8 @@ escaped plain text and skips highlighting/diagrams.
 | `highlight.min.js` | highlight.js | 11.9.0 | BSD-3-Clause | <https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js> |
 | `mermaid.min.js` | mermaid | 11.6.0 | MIT | <https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js> |
 
-Integrity (sha384, matches the SRI hashes previously pinned in
-`templates/index.html`):
+Integrity (sha384 — the same values pinned as `integrity=` attributes on
+the script tags in `templates/index.html`):
 
 ```
 purify.min.js     sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3
@@ -22,7 +22,9 @@ highlight.min.js  sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo
 mermaid.min.js    sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV
 ```
 
-To upgrade one: download the new pinned file, verify its hash
-(`openssl dgst -sha384 -binary <file> | openssl base64 -A`), update this
-table, and re-test a chat with markdown, code blocks, and a mermaid
-diagram.
+To upgrade one: download the new pinned file, compute its hash
+(`openssl dgst -sha384 -binary <file> | openssl base64 -A`), update **both**
+this file and the `integrity=` attribute in `templates/index.html`, then
+re-test a chat with markdown, code blocks, and a mermaid diagram.
+`tests/web/test_vendor_integrity.py` fails with the correct hash in its
+message if any of the three drift apart.

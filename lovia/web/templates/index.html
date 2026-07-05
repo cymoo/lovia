@@ -19,14 +19,17 @@
   <!-- Renderers (markdown / sanitizer / syntax highlight / diagrams),
        vendored under static/vendor (exact versions + licenses in its
        README). Self-hosted so the UI needs no CDN or font origin — it works
-       on intranets and behind firewalls. `defer` keeps the 2.6 MB mermaid
-       bundle off the first paint; all four stay optional — if one fails to
-       load, chat.js falls back to escaped plain text and skips
-       highlighting/diagrams instead of dying. -->
-  <script defer src="{{ url_for('static', path='vendor/purify.min.js') }}"></script>
-  <script defer src="{{ url_for('static', path='vendor/marked.min.js') }}"></script>
-  <script defer src="{{ url_for('static', path='vendor/highlight.min.js') }}"></script>
-  <script defer src="{{ url_for('static', path='vendor/mermaid.min.js') }}"></script>
+       on intranets and behind firewalls. `integrity` guards against
+       corrupted/tampered vendor files; tests/web/test_vendor_integrity.py
+       keeps these hashes, the files, and the README manifest in sync.
+       `defer` keeps the 2.6 MB mermaid bundle off the first paint; all four
+       stay optional — if one fails to load (or fails its hash), chat.js
+       falls back to escaped plain text and skips highlighting/diagrams
+       instead of dying. -->
+  <script defer src="{{ url_for('static', path='vendor/purify.min.js') }}" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"></script>
+  <script defer src="{{ url_for('static', path='vendor/marked.min.js') }}" integrity="sha384-QsSpx6a0USazT7nK7w8qXDgpSAPhFsb2XtpoLFQ5+X2yFN6hvCKnwEzN8M5FWaJb"></script>
+  <script defer src="{{ url_for('static', path='vendor/highlight.min.js') }}" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"></script>
+  <script defer src="{{ url_for('static', path='vendor/mermaid.min.js') }}" integrity="sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV"></script>
 </head>
 <body>
 <script id="app-config" type="application/json">{{ app_config | tojson }}</script>

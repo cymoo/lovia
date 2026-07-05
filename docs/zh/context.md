@@ -1,0 +1,165 @@
+# 上下文管理
+
+长对话会超过上下文窗口。很多框架的做法是改写历史；这样一来，记录里就看不出模型当时到底
+看到了什么。lovia 的上下文策略是**只改 view**：transcript（以及 session）保留全部内容；
+只有发给 provider 的**每次调用 view**会缩小。“模型忘了”和“记录丢了”仍然是两个不同问题。
+
+```python
+from lovia import Agent, Compaction
+
+agent = Agent(
+    name="companion",
+    model="openai:gpt-5.5",
+    context_policy=Compaction(
+        context_window=200_000,
+        compact_at=0.75,
+        compact_to=0.50,
+    ),
+)
+```
+
+context policy 是 agent 的**姿态**：设置一次，每次运行继承；也可以用
+`Runner.run(..., context_policy=...)` 覆盖某次调用。默认已经是 `Compaction()`；只有默认不合适时
+才需要配置。用 `NoopContextPolicy` 可以关闭：
+
+```python
+from lovia.context import NoopContextPolicy
+
+agent = Agent(..., context_policy=NoopContextPolicy())
+```
+
+## Compaction 做什么
+
+每轮模型调用前，策略会按窗口估算 transcript 大小。在有压力时，它按**便宜优先**的三阶段渲染
+一个更小的 view：
+
+1. **转存巨大工具结果**（`OffloadToolResults`，≥4,000 字符）：在 view 中替换为 400 字符
+   preview marker；如果配置了[结果存储](#结果存储)，完整输出会归档进去。
+2. **清理较旧工具结果**（`ClearToolResults`）：替换成短 marker，同时保留最新几个原文。
+3. **总结旧历史**（`SummarizeHistory`）：用增量 LLM summary 替换最早的一段历史。summary
+   使用结构化章节（session intent、current state、key facts、artifacts、constraints、
+   next steps），而不是随意散文。
+
+marker 会保留配对关系（`call_id`、错误标记），并告诉模型如何取回内容：
+
+```text
+[Earlier tool result cleared to save context.
+ Call recall_tool_result("call_42") to retrieve the full output.]
+```
+
+`recall_tool_result` 由策略**自动提供**，不需要手动接线。它先读结果存储，再回退到 transcript，
+所以恢复内容永远不会重新执行有副作用的工具。
+
+三个保证塑造了这个设计：
+
+- **sticky 决策，稳定前缀。** 各阶段记录决策（已清理 id、offload records、运行中的 summary）；
+  每轮 view 都从这些决策重新渲染。决策是单调的，所以渲染出的 prompt 前缀在各轮之间保持字节稳定，
+  这正是 [provider prompt cache](providers.md#提示词缓存) 能持续命中的原因。压缩和缓存是盟友，
+  不是敌人。
+- **受保护的尾部。** 最近一段内容不会压缩（默认：可用窗口的 20%，至少包含最新用户消息，并且
+  始终保持完整 call/result 对）。模型始终能原样看到紧邻上下文。
+- **reactive 后备。** 如果 provider 仍然拒绝 prompt（`ContextOverflowError`），策略有一次机会
+  渲染更激进的 view（尾部收紧到 10%，阈值降低，目标约为可用窗口 25%）并重试本 turn。只有重建的
+  view 明显更小时才重试，否则错误会向外暴露。
+
+每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带
+`CompactionNotice`（原因、压缩前后 token、人类可读 detail）。Web UI 会实时渲染它，并在重新加载时
+回放最后一个 notice。
+
+## 配置
+
+```python
+Compaction(
+    context_window=None,        # token；None = 向 provider 询问
+    compact_at=0.75,            # 触发水位
+    compact_to=0.50,            # 压缩后的目标
+    keep_recent_tokens=None,    # 受保护尾部；None = usable // 5
+    reserve_output_tokens=16_384,
+    stages=None,                # 你自己的 pipeline；None = 上面三阶段
+    summarizer=None,            # 你自己的 Summarizer；None = LLMSummarizer()
+    image_tokens=1_600,         # 每个 image part 的固定估算
+    store=None,                 # 转存输出用的 ResultStore
+)
+```
+
+- **水位**可以是可用窗口比例（`0.75`），也可以是绝对 token 数（`150_000`）。“可用” =
+  window − `reserve_output_tokens`。低于 `compact_at` 时不做事；越界后会把 view 缩到
+  `compact_to`（有滞后，避免策略在边界抖动）。
+- **`context_window=None`** 会询问 provider（适配器会按模型[报告窗口](providers.md#上下文窗口)）。
+  窗口未知时，主动压缩跳过，只剩 reactive overflow 路径。对适配器不认识的模型，请显式设置窗口。
+- **token 计数**是校准过的估算：chars/4 启发式（图片/文件有固定成本），并用 provider 返回的
+  **真实** input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
+
+## 结果存储
+
+如果转存输出需要在 view 之外长期存在，就要给它一个存放位置：
+
+```python
+from lovia.context import Compaction, FileResultStore
+
+policy = Compaction(context_window=200_000, store=FileResultStore(".cache/results"))
+```
+
+`ResultStore` 只有两个方法：`put(key, content)` / `get(key)`，以 `call_id` 为 key。
+`FileResultStore(dir)` 每个结果写一个文件（不做驱逐，保留策略由你负责）；
+`InMemoryResultStore(max_entries=1024)` 是有界 LRU。没有 store 时，offload marker 仍然可用，
+recall 会回退到 transcript；但如果之后做
+[session `trim_tool_results`](sessions-and-checkpoints.md#维护)，没有归档过的内容会被永久截断。
+
+## 状态：决策存在哪里
+
+sticky 决策（已清理 id、offload preview、summary + 覆盖范围、校准比例）会序列化进运行的
+checkpoint，并在运行结束时写入 session segment 的 `meta`。所以下一次同一 session 的运行会沿用
+之前的决策，而不是重新推导；[恢复运行](sessions-and-checkpoints.md)也会从压缩过的位置精确继续。
+被总结前缀的结构指纹可以检测被离线改写的历史（比如 trim），并重置 summary，同时保留 id-keyed
+决策。
+
+## 自定义策略和阶段
+
+两层扩展深度。**自定义阶段**保留 Compaction 的机制（水位、尾部、状态、marker），只替换“压缩什么”：
+
+```python
+class DropOldImages:                      # implements Stage
+    name = "drop_images"
+    async def plan(self, body, ctx) -> bool:
+        ...   # 把决策记录到 ctx.state；如果有新决策则返回 True
+```
+
+```python
+policy = Compaction(stages=[DropOldImages(), ClearToolResults()])
+```
+
+stage 只做 *plan*（记录 sticky 决策）；渲染是 transcript + state 的纯函数。stage 不要撤销已有决策：
+单调性是保持 prefix cache 稳定的关键。stage 的 `ctx` 是 `StageContext`
+（request、sticky `CompactionState`、`TokenCounter`、`TokenBudget`、受保护尾部边界、aggressive flag）。
+Compaction 自己用到的部件也导出了，方便复用：`render_view`、`clear_marker` /
+`offload_marker` / `summary_entry` builder、`transcript_to_text`、`OffloadRecord` /
+`SummaryState`，以及 summarizer 的 `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /
+`SUMMARY_WRAPPER` 模板。要定制 summary，请配置 `LLMSummarizer(prompt=...,
+required_sections=...)`，不要 fork 它。
+
+**自定义 `ContextPolicy`** 则替换全部机制：一个方法
+`async compact(req: CompactionRequest) -> ContextResult`。request 携带只读 entries、provider、
+`last_input_tokens`、`overflow` flag，以及 runner 会帮你在 checkpoint 中往返保存的 `scratch` dict。
+返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
+`lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
+任何会丢内容的策略都可以复用。`lovia/context/policy.py` 一屏就能读完。
+
+## 容易踩的点
+
+- **Compaction 不是内存上限。** **transcript** 保留完整输出；只有 view 缩小。失控 payload 要在源头由
+  [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
+- **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
+  触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
+  但预算敏感部署要知道：第 N 轮里可能藏着一次 LLM 调用。
+- **未知窗口意味着没有主动压缩。** OpenAI 兼容端点上的自定义模型通常不报告窗口；不设置
+  `context_window=...` 就只能依赖 reactive 路径。
+- **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于
+  policy 实例。clone agent 会共享 policy 实例；变体请各给各的。
+
+## 延伸阅读
+
+- [核心概念：transcript vs view](concepts.md#transcript-vs-view)
+- [Provider](providers.md#上下文窗口)：窗口报告与缓存
+- [Session 与 Checkpoint](sessions-and-checkpoints.md)：携带状态
+- 示例：[`17_context_compaction.py`](../../examples/17_context_compaction.py)

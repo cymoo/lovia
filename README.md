@@ -5,7 +5,7 @@
 lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
 It covers the recurring hard parts of agent applications — tools, sessions,
-approvals, context, serving — without turning into a platform.
+events, context compaction, serving — without turning into a platform.
 
 ```bash
 pip install lovia
@@ -60,16 +60,21 @@ one feature per page — start with the
 
 Composable primitives, ordinary Python — no new universe of abstractions:
 
+- **Minimum dependencies.** The core depends only on `httpx` and `pydantic`;
+  everything else is an extra, which keeps installs small,
+  version conflicts rarer, and the supply-chain attack surface narrower.
 - **Few abstractions.** An `Agent` is immutable configuration, a `Runner`
   executes one run, a `@tool` is a typed function; handoff and agent-as-tool
   compose agents; plugins package the rest.
-- **Readable.** The run loop lives in one file; when something surprises
-  you, the path through the code is short.
-- **Provider-neutral, no adapter tax.** OpenAI and Anthropic built in over
-  `httpx`, any OpenAI-compatible endpoint works, and a custom provider is a
-  `Protocol` — not a subclassing project.
-- **Context management that keeps history.** Compaction reshapes only what
-  the model sees next call; the transcript is never rewritten.
+- **Readable.** The critical path is concentrated and explicit: model
+  calls, tool execution, retries, and persistence happen in a clear order.
+  When something surprises you, there is one chain to follow.
+- **Lightweight model integration.** OpenAI and Anthropic are built in, and
+  OpenAI-compatible endpoints work directly. There is no adapter stack to
+  fight; a new provider is just a small `Protocol`.
+- **Cache-friendly context management.** Compaction only changes what the
+  model sees on the next call, keeping prompt prefixes stable while the
+  complete record stays intact.
 - **Production seams, not a production costume.** Approvals, budgets,
   cancellation, mid-run steering, retries, checkpoint/resume — explicit
   knobs you wire into your own app.
@@ -91,12 +96,12 @@ share, cheap to `clone()`. Prompt fragments can be dynamic per run:
 ```python
 from lovia import Agent
 
-agent = Agent(name="writer", instructions="Write concrete, concise answers.",
-              model="deepseek-v4-pro")
-
-@agent.instruction
-async def user_tier(ctx) -> str:
-    return f"User tier: {ctx.deps['tier']}"
+agent = Agent(
+    name="writer",
+    instructions="Write concrete, concise answers.",
+    model="deepseek-v4-pro",
+    workspace=Workspace.local(".")
+)
 ```
 
 → [Agents](./docs/en/agents.md)
@@ -167,7 +172,7 @@ class Brief(BaseModel):
 
 
 agent = Agent(name="summarizer", model="deepseek-v4-pro", output_type=Brief)
-result = await Runner.run(agent, "Summarize lovia for a Python developer.")
+result = await Runner.run(agent, "Summarize Transformer for a Python developer.")
 print(result.output.title)
 ```
 
@@ -180,15 +185,13 @@ endpoints ride `OPENAI_BASE_URL`, prompt caching and reasoning models are
 handled per host, and a custom provider is a small `Protocol`:
 
 ```python
-from lovia import Agent, ModelSettings, model_from_env
+from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
     model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"],  # fallback chain
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
-
-scripted = Agent(name="ci", model=model_from_env())  # LOVIA_MODEL, fail-loudly
 ```
 
 → [Providers & models](./docs/en/providers.md)
@@ -204,12 +207,12 @@ only the prompt and its answer comes back as a tool result:
 from lovia import Agent, Runner
 
 billing = Agent(name="billing", instructions="Handle billing issues.", model="deepseek-v4-pro")
-support = Agent(name="support", instructions="Handle technical issues.", model="deepseek-v4-pro")
+support = Agent(name="support", instructions="Handle technical issues.", model="glm-5.2")
 
 triage = Agent(
     name="triage",
     instructions="Route the user to the right specialist.",
-    model="deepseek-v4-pro",
+    model="deepseek-v4-flash",
     handoffs=[billing, support],       # handoff: the specialist takes over
 )
 result = await Runner.run(triage, "I was charged twice.")
@@ -222,7 +225,7 @@ summarizer = Agent(name="summarizer", instructions="Summarize text in five bulle
 manager = Agent(
     name="manager",
     instructions="Delegate summarization when useful.",
-    model="deepseek-v4-pro",
+    model="deepseek-v4-flash",
     tools=[summarizer.as_tool(description="Summarize a passage.")],  # delegate a subtask
 )
 ```
@@ -276,9 +279,7 @@ result = await Runner.run(
 ### Context compaction
 
 Long conversations survive the window without rewriting history: compaction
-is view-only, keeps the prompt prefix stable for provider caches, and
-auto-provides `recall_tool_result` so the model can retrieve what the view
-dropped:
+is view-only, keeps the prompt prefix stable for provider caches:
 
 ```python
 from lovia import Agent, Compaction
@@ -307,12 +308,18 @@ async def must_cite(output, ctx):
         return "Missing source citation."
 
 
-agent = Agent(name="researcher", model="deepseek-v4-pro",
-              output_guardrails=[must_cite],
-              retry=RetryPolicy(max_attempts=2))            # posture
+agent = Agent(
+    name="researcher",
+    model="deepseek-v4-pro",
+    output_guardrails=[must_cite],
+    retry=RetryPolicy(max_attempts=2)
+)
 
-result = await Runner.run(agent, "Analyze these logs.",
-                          budget=RunBudget(max_tool_calls=20, max_seconds=60))  # limits
+result = await Runner.run(
+    agent,
+    "Analyze these logs.",
+    budget=RunBudget(max_tool_calls=20, max_seconds=60)
+)
 ```
 
 → [Guardrails](./docs/en/guardrails.md) · [Reliability](./docs/en/reliability.md)
@@ -421,7 +428,7 @@ Memory("./memory", index=None)                 # notes only, no archive
 
 ### Web UI
 
-A small FastAPI app — SSE streaming, sessions with titles, approvals,
+A lightweight FastAPI app — SSE streaming, sessions with titles, approvals,
 schedules, a memory editor — whose runs survive browser disconnects:
 
 ```python

@@ -24,8 +24,7 @@ def get_order(order_id: str) -> str:
 # OpenAI 兼容服务还需要设置 OPENAI_BASE_URL。
 agent = Agent(
     name="support",
-    instructions="你是一名客服 agent。回答前先查询订单，"
-    "然后用一两句具体的话回复。",
+    instructions="你是一名客服 agent。回答前先查询订单，然后用一两句具体的话回复。",
     model="deepseek-v4-pro",
     tools=[get_order],
 )

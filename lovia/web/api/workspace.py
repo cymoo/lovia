@@ -34,6 +34,7 @@ from ...workspace import (
     LocalWorkspace,
     LocalWorkspaceSession,
     PermissionDeniedError,
+    WorkspaceError,
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
@@ -70,6 +71,11 @@ def _view_session(cfg: LocalWorkspace) -> LocalWorkspaceSession:
 def _root_of(cfg: LocalWorkspace) -> Path:
     # Same normalization LocalWorkspaceSession applies to its root.
     return Path(cfg.root).expanduser().resolve()
+
+
+# Lines per /api/workspace/file page — small enough that the session's char
+# cap (50k) rarely clips within one page, so `truncated` ≈ "more lines exist".
+_PAGE_LINES = 500
 
 
 async def _sniff_binary(abs_path: Path) -> bool:
@@ -123,7 +129,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (FileNotFoundError, NotADirectoryError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except UserError as exc:  # workspace root itself is gone
+        # "Not a directory: …" / a vanished workspace root both land here.
+        except (WorkspaceError, UserError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [entry_out(e) for e in entries]
 
@@ -144,7 +151,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                 entries = await session.list_files(".", pattern="**/*")
         except PermissionDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except UserError as exc:
+        except (WorkspaceError, UserError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         files = [e for e in entries if not e.is_dir]
         files.sort(key=lambda e: e.mtime or 0.0, reverse=True)
@@ -156,7 +163,13 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         path: str = Query(..., max_length=4096),
         start: int = Query(1, ge=1),
     ) -> WorkspaceFile:
-        """Paginated text content; flags binaries instead of decoding them."""
+        """Text content in fixed line pages; flags binaries instead of decoding.
+
+        The endpoint owns the page size: ``read_text`` treats ``end`` as the
+        *requested* range (its char clipping doesn't move ``end``), so an
+        explicit window keeps ``end``/``truncated`` an honest has-more signal
+        for the viewer's Load-more.
+        """
         cfg = require_cfg(agent)
         try:
             async with _view_session(cfg) as session:
@@ -169,12 +182,14 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                     return WorkspaceFile(
                         path=resolved.display(), content="", binary=True
                     )
-                content = await session.read_text(path, start=start)
+                content = await session.read_text(
+                    path, start=start, end=start + _PAGE_LINES - 1
+                )
         except PermissionDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except (IsADirectoryError, UserError) as exc:
+        except (IsADirectoryError, WorkspaceError, UserError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return WorkspaceFile(
             path=content.path,

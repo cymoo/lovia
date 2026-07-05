@@ -1,6 +1,6 @@
 # lovia
 
-[中文文档](./README-zh.md) · [Documentation](./docs/en/README.md) · [Examples](./examples/README.md)
+[中文文档](./README-zh.md) · [Documentation](https://cymoo.github.io/lovia/) · [Examples](./examples/README.md)
 
 lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
@@ -46,14 +46,14 @@ pip install "lovia[web]" && python -m lovia.web
 
 Anthropic is built in too — set `ANTHROPIC_API_KEY` and use
 `model="anthropic:claude-4-8-opus"`; everything else about models lives in
-[Providers & models](./docs/en/providers.md).
+[Providers & models](https://cymoo.github.io/lovia/providers/).
 
 ## Documentation
 
-This README is the tour. The [documentation](./docs/en/README.md) goes deep,
+This README is the tour. The [documentation](https://cymoo.github.io/lovia/) goes deep,
 one feature per page — start with the
-[quickstart](./docs/en/quickstart.md) and
-[core concepts](./docs/en/concepts.md) — and the
+[quickstart](https://cymoo.github.io/lovia/quickstart/) and
+[core concepts](https://cymoo.github.io/lovia/concepts/) — and the
 [examples](./examples/README.md) are a numbered, runnable learning path.
 
 ## Why lovia
@@ -104,7 +104,7 @@ agent = Agent(
 )
 ```
 
-→ [Agents](./docs/en/agents.md)
+→ [Agents](https://cymoo.github.io/lovia/agents/)
 
 ### Running and streaming
 
@@ -124,7 +124,7 @@ async for ev in handle:
 result = await handle.result()
 ```
 
-→ [Running](./docs/en/running.md) · [Streaming](./docs/en/streaming.md)
+→ [Running](https://cymoo.github.io/lovia/running/) · [Streaming](https://cymoo.github.io/lovia/streaming/)
 
 ### Tools
 
@@ -154,7 +154,7 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
-→ [Tools](./docs/en/tools.md) · [Built-in tools](./docs/en/built-in-tools.md)
+→ [Tools](https://cymoo.github.io/lovia/tools/) · [Built-in tools](https://cymoo.github.io/lovia/built-in-tools/)
 
 ### Structured output
 
@@ -176,7 +176,7 @@ result = await Runner.run(agent, "Summarize Transformer for a Python developer."
 print(result.output.title)
 ```
 
-→ [Structured output](./docs/en/structured-output.md)
+→ [Structured output](https://cymoo.github.io/lovia/structured-output/)
 
 ### Providers
 
@@ -194,7 +194,7 @@ agent = Agent(
 )
 ```
 
-→ [Providers & models](./docs/en/providers.md)
+→ [Providers & models](https://cymoo.github.io/lovia/providers/)
 
 ### Multi-agent
 
@@ -230,7 +230,7 @@ manager = Agent(
 )
 ```
 
-→ [Multi-agent](./docs/en/multi-agent.md)
+→ [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)
 
 ### Human in the loop
 
@@ -252,7 +252,7 @@ async for ev in Runner.stream(agent, "Refund order A123."):
         ev.approve()          # or ev.reject()
 ```
 
-→ [Human in the loop](./docs/en/human-in-the-loop.md)
+→ [Human in the loop](https://cymoo.github.io/lovia/human-in-the-loop/)
 
 ### Sessions and checkpoints
 
@@ -274,7 +274,7 @@ result = await Runner.run(
 )
 ```
 
-→ [Sessions & checkpoints](./docs/en/sessions-and-checkpoints.md)
+→ [Sessions & checkpoints](https://cymoo.github.io/lovia/sessions-and-checkpoints/)
 
 ### Context compaction
 
@@ -291,7 +291,7 @@ agent = Agent(
 )
 ```
 
-→ [Context management](./docs/en/context.md)
+→ [Context management](https://cymoo.github.io/lovia/context/)
 
 ### Guardrails and reliability
 
@@ -322,7 +322,7 @@ result = await Runner.run(
 )
 ```
 
-→ [Guardrails](./docs/en/guardrails.md) · [Reliability](./docs/en/reliability.md)
+→ [Guardrails](https://cymoo.github.io/lovia/guardrails/) · [Reliability](https://cymoo.github.io/lovia/reliability/)
 
 ### Hooks and steering
 
@@ -348,7 +348,7 @@ handle = Runner.stream(agent.clone(hooks=hooks), "Analyze these logs.", mailbox=
 mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 ```
 
-→ [Observability](./docs/en/observability.md) · [Reliability](./docs/en/reliability.md#steering-a-live-run)
+→ [Observability](https://cymoo.github.io/lovia/observability/) · [Reliability](https://cymoo.github.io/lovia/reliability/#steering-a-live-run)
 
 ### Workspace
 
@@ -373,7 +373,7 @@ agent = Agent(
 )
 ```
 
-→ [Workspace](./docs/en/workspace.md)
+→ [Workspace](https://cymoo.github.io/lovia/workspace/)
 
 ### Plugins
 
@@ -405,7 +405,7 @@ agent = Agent(
 Writing your own is a `name` plus one async `setup()` returning the
 contributions.
 
-→ [Plugins](./docs/en/plugins.md) · [Skills](./docs/en/skills.md) · [MCP](./docs/en/mcp.md)
+→ [Plugins](https://cymoo.github.io/lovia/plugins/) · [Skills](https://cymoo.github.io/lovia/skills/) · [MCP](https://cymoo.github.io/lovia/mcp/)
 
 ### Memory
 
@@ -424,7 +424,7 @@ Memory("./memory", embedder=OpenAIEmbedder())  # + semantic arm -> hybrid recall
 Memory("./memory", index=None)                 # notes only, no archive
 ```
 
-→ [Memory](./docs/en/memory.md)
+→ [Memory](https://cymoo.github.io/lovia/memory/)
 
 ### Web UI
 
@@ -446,7 +446,7 @@ API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
 mounting the router into your own FastAPI app — lets you build a custom
 front-end on the same endpoints.
 
-→ [Web UI & server](./docs/en/web.md) · [HTTP API](./docs/en/http-api.md)
+→ [Web UI & server](https://cymoo.github.io/lovia/web/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 
 ### Evals
 
@@ -468,7 +468,7 @@ print(report)
 assert report.passed
 ```
 
-→ [Evals](./docs/en/eval.md)
+→ [Evals](https://cymoo.github.io/lovia/eval/)
 
 ### Testing
 
@@ -484,7 +484,7 @@ provider = ScriptedProvider([
 ])
 ```
 
-→ [Testing](./docs/en/testing.md)
+→ [Testing](https://cymoo.github.io/lovia/testing/)
 
 ## Examples
 
@@ -517,4 +517,4 @@ pip install -e ".[dev]"
 
 Live provider tests are marked `live_provider` and stay skipped unless
 enabled explicitly. Contributor-facing internals are documented in
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](https://cymoo.github.io/lovia/architecture/).

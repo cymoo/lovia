@@ -14,7 +14,7 @@
   模型调用能看到的内容。长对话之所以能活下去，是因为只缩小 view。
 - **Session vs checkpoint**：session 是跨运行的对话记忆；checkpoint 是单次运行
   内的崩溃恢复。
-- **姿态 vs 限制**：基础设施出问题时 agent 怎么应对，是 agent 配置；某个请求最多
+- **应对策略 vs 限制**：基础设施出问题时 agent 怎么应对，是 agent 配置；某个请求最多
   花多少，是单次运行参数。
 
 ## 角色表
@@ -120,19 +120,19 @@ lovia 把两个角色拆开：
 也让崩溃的 worker 可以简单地重试整个 job。见
 [Session 与 Checkpoint](sessions-and-checkpoints.md)。
 
-## 姿态 vs 限制
+## 应对策略 vs 限制
 
 问题是：可靠性开关很容易散落到每个调用点，最后每次调用都要传十几个参数。lovia 的
 放置规则是：
 
-- **姿态**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，并被每次运行继承：
+- **应对策略**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，并被每次运行继承：
   provider `retry`、`model=[...]` fallback 链、`default_tool_retries` /
   `default_tool_timeout`、`context_policy`。
 - **限制**：某个请求最多能花多少，是 `Runner.run` 的参数，没有 agent 侧对应项：
   `max_turns`、`budget`、`cancel_token`。
 
-一个重要结果：**初始** agent 的姿态贯穿整个运行，包括 handoff 之后。转交只改变谁在
-说话，不改变运行的骨架。当某个请求确实特殊时，也可以按调用覆盖姿态：
+一个重要结果：**初始** agent 的应对策略贯穿整个运行，包括 handoff 之后。转交只改变谁在
+说话，不改变运行的骨架。当某个请求确实特殊时，也可以按调用覆盖应对策略：
 `Runner.run(..., retry=..., context_policy=...)`。见[可靠性](reliability.md)。
 
 ## RunContext：唯一的运行句柄

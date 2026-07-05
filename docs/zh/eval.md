@@ -38,7 +38,7 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 | `input` | 必填 | 字符串，或 `list[Message]` |
 | `checks` | `()` | 通过标准（一个 sample 必须全部通过） |
 | `name` | 从 input 派生 | 报告标签，也是 `compare()` 的匹配键 |
-| `samples` | `1` | 同一个 case 运行 N 次；非确定性会变成数字 |
+| `samples` | `1` | 同一个 case 运行 N 次；不确定性会被量化 |
 | `pass_threshold` | `1.0` | case 通过所需的 sample 通过比例 |
 | `context` | `None` | 作为运行 deps 转发 |
 | `output_type` / `max_turns` | agent 的配置 / `50` | 每个 case 的运行设置 |
@@ -91,7 +91,7 @@ llm_judge("礼貌、可执行，并提出一个具体下一步。")
 ```
 
 底层它只是另一个 check，运行另一个 agent（`output_type=Verdict{score, reasoning}`，
-temperature 0）。裁判模型来自 `model=` 或 `$LOVIA_EVAL_JUDGE_MODEL`，**不会**静默使用被测 agent。
+temperature 0）。裁判模型来自 `model=` 或 `$LOVIA_EVAL_JUDGE_MODEL`，**不会**自动使用被测 agent。
 `passed = score >= threshold`。把 `ScriptedProvider` 作为 `model` 传入，裁判也可以离线运行；
 这样整套评测就能在 CI 中免费跑。
 

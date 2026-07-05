@@ -86,7 +86,7 @@ OpenAI 兼容 `/embeddings` 端点：
 OpenAIEmbedder(model="text-embedding-3-small", dimensions=None, batch_size=32)
 ```
 
-Chat 和 embeddings 常常在不同 host 上，所以 embedder 会优先读取
+Chat 和 embeddings 常常在不同端点上，所以 embedder 会优先读取
 `OPENAI_EMBEDDING_BASE_URL` / `OPENAI_EMBEDDING_API_KEY`，再退回聊天端点的
 `OPENAI_BASE_URL` / `OPENAI_API_KEY`。更换 embedder 是安全的：向量只是按 embedder id
 分区的召回缓存；id 不匹配会清空并重新积累，而不是混用向量空间。

@@ -71,7 +71,7 @@ provider 的缓存 prompt 前缀，恢复运行时也不会回放它们。inject
 
 ## 示例：跨会话术语表
 
-一个有状态插件的完整形状：共享后端、一个工具、提示词文本，一屏代码：
+一个有状态插件的完整形状：共享后端、一个工具、提示词文本，一小段代码：
 
 ```python
 from dataclasses import dataclass

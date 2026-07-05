@@ -97,7 +97,7 @@ enable_logging("DEBUG", color=False)  # 更多细节，无 ANSI
 
 ## 用量统计
 
-每次运行都会累计一个 `Usage`：在 `result.usage` 上，运行中可从 `ctx.usage` 看到，子运行会向上折叠：
+每次运行都会累计一个 `Usage`：在 `result.usage` 上，运行中可从 `ctx.usage` 看到，子运行会向上汇总：
 
 | 字段 | 含义 |
 | --- | --- |

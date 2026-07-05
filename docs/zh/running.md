@@ -56,14 +56,14 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 | `budget` | `None` | 限制本次运行可消耗资源的 `RunBudget`（见[可靠性](reliability.md)） |
 | `cancel_token` | `None` | 预先接入的协作式取消（见[可靠性](reliability.md#取消)） |
 | `mailbox` | `None` | 运行中追加指令的通道（见[可靠性](reliability.md#运行中追加指令)） |
-| `retry` | agent 的配置 | 本次调用覆盖 provider 重试姿态 |
+| `retry` | agent 的配置 | 本次调用覆盖 provider 重试策略 |
 | `context_policy` | agent 的配置 | 本次调用覆盖[上下文策略](context.md) |
 | `session` + `session_id` | `None` | 对话持久化（见 [Session 与 Checkpoint](sessions-and-checkpoints.md)） |
 | `checkpoint` | `None` | 崩溃恢复和幂等运行（见 [Session 与 Checkpoint](sessions-and-checkpoints.md#checkpoint)） |
 | `tracer` | `None` | 本次运行的 tracing（见[可观测性](observability.md#tracing)） |
 
-`retry` 和 `context_policy` 是两个**姿态**覆盖项。它们默认使用 agent 配置，而且
-**初始** agent 的姿态会支配整个运行，handoff 后也一样。其余选项是**限制和接线**，
+`retry` 和 `context_policy` 是两个**应对策略**覆盖项。它们默认使用 agent 配置，而且
+**初始** agent 的应对策略会贯穿整个运行，handoff 后也一样。其余选项是**限制和接线**，
 刻意没有 agent 侧对应项。
 
 ## 输入
@@ -131,7 +131,7 @@ result = await Runner.run(
 ## 容易踩的点
 
 - **`RunResult.entries` 不是完整 transcript**：它只是本次运行的增量。用它渲染
-  “整段对话”的代码会悄悄丢掉之前的历史；请用 session。
+  “整段对话”的代码会不小心丢掉之前的历史；请用 session。
 - **`finish_reason` 可能是 `None`**：provider 没报时如此；从已完成 checkpoint
   重放结果时也如此，因为 snapshot 不持久化它。
 - **模型回复既没有内容也没有工具调用时，运行会完成**，输出为空字符串（会记录 warning）。

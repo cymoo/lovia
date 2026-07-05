@@ -45,17 +45,17 @@ trust_env=None, replay_reasoning=None, official_api=None)`
 （默认 `https://api.openai.com/v1`）。
 
 **OpenAI 兼容端点**（DeepSeek、Ollama、vLLM、LM Studio 等）：把
-`OPENAI_BASE_URL` 指向服务，模型写裸名即可。适配器会按 host 调整方言：官方 API 使用
+`OPENAI_BASE_URL` 指向服务，模型写裸名即可。适配器会按端点调整方言：官方 API 使用
 `max_completion_tokens` 和原生 `response_format` JSON schema；兼容端点使用旧的
 `max_tokens`，结构化输出默认走[prompt 路径](structured-output.md#schema-如何到达模型)，
-除非你传 `supports_json_schema=True`。只有官方 host 缺 API key 才算错误；无 key 的本地
-端点可以直接工作。如果 host 推断错了（比如官方 API 前面有代理），用 `official_api=`
+除非你传 `supports_json_schema=True`。只有官方 API 端点缺 API key 才算错误；无 key 的本地
+端点可以直接工作。如果端点类型判断错了（比如官方 API 前面有代理），用 `official_api=`
 覆盖。
 
 **Reasoning 模型**（DeepSeek 风格的 `reasoning_content`）：thinking 会作为
 [`ReasoningDelta`](streaming.md#模型输出) 事件流出，并保存成 reasoning entry。下一次请求时，
-有些 host 要求把这些 entry 回放回去（DeepSeek thinking 模型否则会返回 400），而官方 API
-拒绝这个字段。所以回放默认按 host 决定：`api.deepseek.com` 开，官方 API 关，其他兼容端点开。
+有些端点要求把这些 entry 回放回去（DeepSeek thinking 模型否则会返回 400），而官方 API
+拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开，官方 API 关，其他兼容端点开。
 `replay_reasoning=` 可以强制任一方向。只会回放由这个 provider 产出的 entry。
 
 ## Anthropic provider
@@ -80,20 +80,20 @@ settings = ModelSettings(
 ```
 
 thinking 会作为 `ReasoningDelta` 流出；signature 和 `redacted_thinking` block 会完整
-往返。回放也按 host 处理：官方 API 会拒绝没有开启 thinking 的请求里携带 thinking
-block，所以那里会剥掉陈旧 block；而默认会思考的兼容 host（如 DeepSeek 的
+往返。回放也按端点处理：官方 API 会拒绝没有开启 thinking 的请求里携带 thinking
+block，所以那里会剥掉陈旧 block；而默认会思考的兼容端点（如 DeepSeek 的
 `/anthropic` 方言）会始终收到回放。
 
 **Anthropic 方言端点**：DeepSeek 和其他服务可能暴露 Anthropic Messages 方言；把
-`ANTHROPIC_BASE_URL` 指过去，上面的宽容处理会自动生效。
+`ANTHROPIC_BASE_URL` 指过去，上面的兼容处理会自动生效。
 
 ## Fallback 链
 
 `model=[...]` 按偏好顺序列出 provider。runner 遇到 provider 错误时沿链尝试：
 可重试失败会先耗尽当前 provider 的[重试策略](reliability.md#provider-重试)，再换到下一个
-provider。一个能力细节：混合链里，[结构化输出](structured-output.md) 只有在**链上每个**
+provider。这里有个细节：混合链里，[结构化输出](structured-output.md) 只有在**链上每个**
 provider 都支持原生接口时才使用原生 schema；否则中途 fallback 可能拒绝 schema 请求体。
-因此能力混合的链会安静地全部走 prompt 路径。
+因此能力混合的链会统一走 prompt 路径。
 
 ```python
 agent = Agent(name="assistant", model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"])
@@ -173,7 +173,7 @@ class Provider(Protocol):
 `stream` 接收 transcript view，类型是 `TranscriptEntry`（比 chat message 丰富，保留
 reasoning 和元数据），并产出 `ModelDelta`：`TextDelta`、`ReasoningDelta`、
 `ToolCallDelta`、`UsageDelta`、`FinishDelta`、`EntryCompletedDelta`。两个可选
-protocol 能让自定义 provider 在压缩中更像一等公民：`ContextWindowProvider`
+protocol 能让自定义 provider 在压缩中更接近内置 provider 的体验：`ContextWindowProvider`
 （报告窗口）和 `TokenEstimator`（提供比启发式更准的 token 计数）。
 `lovia.testing` 里的 [`ScriptedProvider`](testing.md) 是完整、易读的参考实现。
 
@@ -187,7 +187,7 @@ agent = Agent(name="x", model="mistral:large-3")
 ```
 
 也可以通过包里的 `lovia.providers` entry-point group 发布；前缀会在首次使用时懒加载。
-entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不应静默改路由）；
+entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不应在无提示时改变路由）；
 显式调用 `register_provider` 则可以。
 
 ## 网络：超时、代理、TLS
@@ -212,14 +212,14 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 
 ## 容易踩的点
 
-- **Anthropic prompt caching 需要 opt in**（`cache_system: True`）。官方 API 上的长循环
+- **Anthropic prompt caching 需要显式开启**（`cache_system: True`）。官方 API 上的长循环
   如果不开，每轮都会重新支付完整 prompt。
-- **`trust_env` 默认关闭**。这是刻意的，避免环境里的代理设置静默改路由。在需要代理的
+- **`trust_env` 默认关闭**。这是刻意的，避免环境里的代理设置在无提示时改变路由。在需要代理的
   环境里设置 `LOVIA_PROVIDER_TRUST_ENV=1`，否则不会使用代理。
 - **由字符串构造的 provider 归运行管理；你传入的实例归你管理。** 你手动构造并传入的
   `Provider` 不会被 runner 关闭；可以跨运行复用，也请自己关闭。
-- **`supports_json_schema` 推断跟着 host 走。** 兼容端点如果确实支持原生 JSON schema，
-  需要显式构造器 flag，才会走原生接口。
+- **`supports_json_schema` 推断跟着端点走。** 兼容端点如果确实支持原生 JSON schema，
+  需要显式传构造器参数，才会走原生接口。
 
 ## 延伸阅读
 

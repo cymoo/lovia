@@ -47,7 +47,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 工具包含 `now` + `http_fetch`（安装了 `ddg` 后端时再加 `web_search`）；当前目录上启用
 **trusted 工作区**；把今天日期作为 instruction 片段；如果存在 `AGENTS.md`，就用它作为 instructions。
 
-每个选项按 flag → env var → default 的顺序读取。安装了 `python-dotenv` 时，会自动加载
+每个选项按命令行参数 → 环境变量 → 默认值的顺序读取。安装了 `python-dotenv` 时，会自动加载
 `./.env`（也可以传 `--env-file`）。模型凭证使用 provider 自己的变量（见[Provider](providers.md)）。
 
 | Flag | Env | 默认 |
@@ -61,22 +61,22 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 | `--instructions` / `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`，否则通用 instructions |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 构建默认 agent |
 | `--title` / `--log-level` | `LOVIA_TITLE` / `LOVIA_LOG_LEVEL` | `lovia` / `info` |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | agent 姿态（3 次重试）；`0` 关闭 |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | agent 应对策略（3 次重试）；`0` 关闭 |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
 | `--max-tokens` / `--context-window` | `LOVIA_MAX_TOKENS` / `LOVIA_CONTEXT_WINDOW` | provider 默认 / 向 provider 询问 |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | 关闭（开启后遵守 `HTTP(S)_PROXY`） |
 | `--env-file`（可重复）/ `--version` | — | 存在时加载 `./.env` / 打印版本 |
 
-`--app mymodule:assistant` 会服务你自己的 agent（此时默认 agent 相关 flags 会被忽略，并给出 warning）。
+`--app mymodule:assistant` 会服务你自己的 agent（此时默认 agent 相关选项会被忽略，并给出 warning）。
 `--provider-timeout` 和 `--trust-env` 作用于 provider 本身，所以对 `--app` agent 也生效；
 `--max-retries` / `--max-turns` 应用于每个被服务的运行；`--max-tokens` /
 `--context-window` 只配置默认 agent。
 
-如果要访问使用内网 TLS 的模型 host，`web` extra 会带上 `truststore`，因此自动信任 OS 证书库；
+如果要访问使用内网 TLS 的模型端点，`web` extra 会带上 `truststore`，因此自动信任 OS 证书库；
 `LOVIA_HTTP_CA_BUNDLE` / `LOVIA_HTTP_INSECURE` 仍是[手动覆盖](providers.md#网络超时代理tls)。
 
-## 运行比浏览器活得更久
+## 运行不会随浏览器关闭而停止
 
 被服务的运行是 **supervised** 的：运行是服务端拥有的 task，SSE 连接只是订阅者。笔记本中途合盖，
 运行仍会继续；重新打开聊天会重新 attach。客户端先收到已完成 turn 的权威 snapshot，再收到当前
@@ -106,7 +106,7 @@ turn 在途事件的回放（包括仍在等待的 approval），然后接上实
 ## 容易踩的点
 
 - **没有认证。** 服务端信任每个请求。请绑定 loopback（默认），或在暴露前加自己的认证代理。CLI 在你把
-  非 loopback host 和可写工作区组合时会大声警告，因为这相当于“以你的用户身份远程执行代码”。
+  非 loopback 地址和可写工作区组合时会明确警告，因为这相当于“以你的用户身份远程执行代码”。
 - **默认工作区模式是在 cwd 上 `trusted`**。这适合项目目录里的个人助手，不适合共享环境。先用
   `--workspace-mode readonly` 或 `--no-workspace`，之后再逐步放开。
 - **supervised 状态是进程内的。** 正在运行的任务、approvals、SSE hubs 都在内存里：请运行一个进程

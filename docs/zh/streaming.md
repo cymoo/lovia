@@ -116,7 +116,7 @@ async for ev in handle:
 ```
 
 **服务端分发**：把事件转发给自己的消息总线或 SSE 编码器。内置
-[HTTP API](http-api.md) 正是这样做的；`lovia/web/sse.py` 是一个可用的翻译参考。
+[HTTP API](http-api.md) 正是这样做的；`lovia/web/sse.py` 是一个可用的转换参考。
 
 **没有 UI 的可观测性**：即使没人消费 stream，同一套事件也会到达
 [hooks](observability.md)。做指标时更推荐 hooks，这样观测逻辑不依赖谁在迭代。

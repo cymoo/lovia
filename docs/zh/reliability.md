@@ -3,7 +3,7 @@
 Agent 运行的失败大致分两类：基础设施抖动（429、流断开）和行为失控（工具调用循环、预算爆炸）。
 lovia 把对应控制项分开，并遵循一条放置规则：
 
-- **姿态**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，每次运行继承它：
+- **应对策略**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，每次运行继承它：
   `retry`、`model=[...]` fallback 链、`default_tool_retries` / `default_tool_timeout`、
   `context_policy`。
 - **限制**：一个请求最多能花多少，是 `Runner.run` 的参数，没有 agent 侧对应项：
@@ -13,7 +13,7 @@ lovia 把对应控制项分开，并遵循一条放置规则：
 from lovia import Agent, RetryPolicy, RunBudget, Runner
 
 agent = Agent(name="analyst", model="openai:gpt-5.5",
-              retry=RetryPolicy(max_attempts=2))          # 姿态
+              retry=RetryPolicy(max_attempts=2))          # 应对策略
 
 result = await Runner.run(
     agent,
@@ -22,8 +22,8 @@ result = await Runner.run(
 )
 ```
 
-某个请求确实特殊时，可以按调用覆盖姿态（`Runner.run(..., retry=...,
-context_policy=...)`）。**初始** agent 的姿态贯穿整个运行，包括 handoff 之后。
+某个请求确实特殊时，可以按调用覆盖应对策略（`Runner.run(..., retry=...,
+context_policy=...)`）。**初始** agent 的应对策略贯穿整个运行，包括 handoff 之后。
 
 ## Provider 重试
 
@@ -42,7 +42,7 @@ jitter 的指数退避大约是 1s / 2s / 4s，每次等待上限 30s。`retry=N
 中途断连可重试；4xx 配置错误不重试；`ContextOverflowError` 永不重试，而是进入
 [reactive compaction](context.md)，修正真正的问题。
 
-**`restart_on_partial`** 是值得知道的 flag：长运行里 provider 发了半段话后中途断开很常见。开启时
+**`restart_on_partial`** 是需要注意的开关：长运行里 provider 发了半段话后中途断开很常见。开启时
 （默认），runner 会丢弃这个不完整 turn，并发出 [`OutputDiscarded`](streaming.md#模型输出)，让 UI
 清掉已渲染内容，然后从头重新流式执行。transcript 只由完成的 turn 组装，所以不会被污染。关闭时，
 中途流式错误会立刻传播。
@@ -134,8 +134,8 @@ def deadline(ev, ctx: RunContext):
 
 ## 容易踩的点
 
-- **重试会在错误浮出前放大延迟。** 4 次尝试加退避，可能让一个 turn 失败前等 ~10s。交互式 UI
-  通常想用 `max_attempts=2` 的姿态，然后让用户自己重试。
+- **重试会在错误显现前放大延迟。** 4 次尝试加退避，可能让一个 turn 失败前等 ~10s。交互式 UI
+  通常会把应对策略设成 `max_attempts=2`，再让用户自己重试。
 - **`max_seconds` 不是 deadline。** 它在下一次**检查**时触发；60s 预算遇到 5 分钟工具调用，会在
   大约 5 分钟后才结束。真正 deadline 请结合每工具 `timeout=` 和你自己计时器触发的 cancel token。
 - **预算不会跨你的手动重试自动重置。** 用同一个 `RunBudget` 实例重跑失败请求，会带着已经花掉的

@@ -52,7 +52,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 **按运行（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在
 运行结束时关闭。这种方式无状态、稳健，代价是每次运行都要付出子进程/握手成本。
 
-**持久连接。** 如果很多运行都打到同一服务器，可以自己打开 session，再把已打开的连接
+**持久连接。** 如果很多运行都会访问同一服务器，可以自己打开 session，再把已打开的连接
 传进去。`MCPServerLike` 同时支持配置和连接：
 
 ```python

@@ -28,7 +28,7 @@ agent = Agent(
 | `output_repair` | `True` | 输出解析失败时修复一次；`False` 表示快速失败；也可以用 `OutputRepairStrategy` 自定义 |
 | `handoffs` | `[]` | 模型可以[移交控制权](multi-agent.md)的 agent（或 `Handoff` 包装器） |
 | `settings` | `ModelSettings()` | 传给 provider 的采样参数 |
-| `retry` | `RetryPolicy()` | provider 重试姿态（3 次重试、带 jitter 的退避）；`None` 表示关闭 |
+| `retry` | `RetryPolicy()` | provider 重试策略（3 次重试、带 jitter 的退避）；`None` 表示关闭 |
 | `context_policy` | `Compaction()` | 每次调用的 view 如何生成；见[上下文管理](context.md) |
 | `workspace` | `None` | 受策略限制的文件/shell 工具；见[工作区](workspace.md) |
 | `plugins` | `[]` | 能力包；见[插件](plugins.md) |
@@ -40,7 +40,7 @@ agent = Agent(
 | `max_tool_output_chars` | `200_000` | 防止工具输出失控撑大 transcript 的保险线（见[工具](tools.md#输出截断)） |
 | `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有渲染器时使用 |
 
-和可靠性相关的字段遵循一个值得记住的规则：**姿态放在 agent 上，限制放在运行上**。
+和可靠性相关的字段遵循一个值得记住的规则：**应对策略放在 agent 上，限制放在运行上**。
 见[可靠性](reliability.md)。
 
 ## Instructions

@@ -135,6 +135,22 @@ export const api = {
     fetch(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
       _jsonOrDetail,
     ),
+
+  // ---- workspace (Files panel; read-only) ----
+  workspaceInfo: ({ agent } = {}) =>
+    fetch(`/api/workspace${qs({ agent })}`).then(_jsonOrDetail),
+  // One directory level, dirs first. `path` is workspace-relative.
+  workspaceFiles: ({ agent, path } = {}) =>
+    fetch(`/api/workspace/files${qs({ agent, path })}`).then(_jsonOrDetail),
+  // Whole-workspace flat list, newest first.
+  workspaceRecent: ({ agent, limit } = {}) =>
+    fetch(`/api/workspace/recent${qs({ agent, limit })}`).then(_jsonOrDetail),
+  // Paginated text content; `binary: true` means "don't render me".
+  workspaceFile: ({ agent, path, start } = {}) =>
+    fetch(`/api/workspace/file${qs({ agent, path, start })}`).then(_jsonOrDetail),
+  // Raw bytes URL — inline image preview, or any file with download=true.
+  workspaceRawUrl: ({ agent, path, download } = {}) =>
+    `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
 };
 
 // Like `_json`, but raises the server's `{detail}` message (422/404) so the

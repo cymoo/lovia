@@ -483,16 +483,24 @@ body.sidebar-collapsed .sidebar {
 }
 
 /* ---- Main page ---------------------------------------------------------- */
+/* A row: the chat column plus the (optional) Files panel on the right. */
 .page {
   grid-area: main;
-  position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   min-width: 0;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
   background: var(--bg);
+}
+.chat-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 /* ---- Topbar — glass over the scrolling transcript ----------------------- */
@@ -613,11 +621,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
    The reservation applies to the transcript AND the composer (and the jump-
    to-latest button) so the whole content column shifts as one. */
 @media (min-width: 1200px) {
-  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript,
-  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .composer {
+  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript,
+  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .composer {
     padding-right: 356px;
   }
-  .page:has(.todo-panel:not(.hidden):not(.collapsed)) .scroll-bottom-btn {
+  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .scroll-bottom-btn {
     left: calc(50% - 166px);
   }
 }
@@ -2212,6 +2220,303 @@ dialog.custom-dialog::backdrop {
   .sched-item:hover .sched-item-actions,
   .sched-item:focus-within .sched-item-actions {
     opacity: 1;
+  }
+}
+
+/* ---- Files panel ---------------------------------------------------------
+   Read-only window into the agent's workspace: Recent list first (what did
+   the assistant just make), breadcrumb browsing second, viewer below. */
+.files-panel {
+  display: none;
+  width: clamp(340px, 28vw, 440px);
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  flex-direction: column;
+  min-height: 0;
+}
+.files-panel.open {
+  display: flex;
+}
+[data-theme="dark"] .files-panel {
+  background: var(--bg);
+}
+
+.files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 10px 10px 14px;
+  flex-shrink: 0;
+}
+.files-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: 999px;
+}
+.files-tab {
+  padding: 4px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+.files-tab:hover {
+  color: var(--ink-2);
+}
+.files-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-xs);
+}
+[data-theme="dark"] .files-tab.active {
+  background: var(--surface-3);
+}
+.files-head-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+/* the refresh button grows a dot when a shell run may have changed files */
+#files-refresh.stale::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+#files-refresh {
+  position: relative;
+}
+
+.files-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+  padding: 0 14px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--muted-2);
+  flex-shrink: 0;
+}
+.files-crumb {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.files-crumb:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.files-crumb[disabled] {
+  color: var(--ink-2);
+  pointer-events: none;
+  font-weight: 600;
+}
+.files-crumb-sep {
+  opacity: 0.55;
+}
+
+.files-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 10px;
+}
+.files-empty {
+  padding: 26px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted-2);
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.file-row:hover {
+  background: var(--surface-2);
+}
+.file-row.active {
+  background: var(--accent-soft);
+}
+.file-row-icon {
+  flex-shrink: 0;
+  color: var(--muted-2);
+  display: flex;
+}
+.file-row.active .file-row-icon {
+  color: var(--accent-text);
+}
+.file-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.file-row-name {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-row:hover .file-row-name {
+  color: var(--ink);
+}
+.file-row.active .file-row-name {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+/* the assistant wrote this file in this chat */
+.file-row.touched .file-row-name::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.file-row-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Viewer ---- */
+.files-viewer {
+  flex-shrink: 0;
+  height: 58%;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+[data-theme="dark"] .files-viewer {
+  background: var(--surface);
+}
+.files-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.files-viewer-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--mono);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* ellipsis on the LEFT so the filename tail stays visible */
+  text-align: left;
+}
+.files-viewer-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+.files-viewer-actions .btn-icon {
+  width: 28px;
+  height: 28px;
+}
+.files-viewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+/* reuse the transcript's markdown/table/code styles via a .turn>.body wrapper */
+.files-viewer-body .turn {
+  max-width: none;
+  margin: 0;
+  animation: none;
+  display: block;
+}
+.files-viewer-body .turn .body {
+  font-size: 13.5px;
+}
+.files-viewer-body > pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.files-viewer-body .files-img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--diagram-paper);
+}
+.files-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  margin-bottom: 10px;
+}
+.files-note .btn {
+  margin-left: auto;
+}
+
+/* Mobile: a full-height drawer sliding in from the right. */
+@media (max-width: 720px) {
+  .files-panel {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100%);
+    z-index: 70;
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(102%);
+    transition: transform var(--t-slow) var(--ease);
+  }
+  .files-panel.open {
+    transform: none;
+  }
+  .files-viewer {
+    height: 55%;
   }
 }
 

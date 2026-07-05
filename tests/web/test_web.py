@@ -100,7 +100,14 @@ def test_list_agents_single() -> None:
     )
     c = TestClient(_app(agent))
     data = c.get("/api/agents").json()
-    assert data == [{"name": "writer", "instructions": "be helpful", "tools": []}]
+    assert data == [
+        {
+            "name": "writer",
+            "instructions": "be helpful",
+            "tools": [],
+            "workspace": False,
+        }
+    ]
 
 
 def test_list_agents_multi_and_pick() -> None:
@@ -649,6 +656,7 @@ def test_get_agent_by_name() -> None:
         "name": "writer",
         "instructions": "be helpful",
         "tools": [],
+        "workspace": False,
     }
     assert c.get("/api/agents/nope").status_code == 404
 
@@ -766,7 +774,7 @@ def test_build_api_router_is_embeddable() -> None:
     c = TestClient(app)
     assert c.get("/healthz").json() == {"status": "ok"}
     assert c.get("/api/agents").json() == [
-        {"name": "bot", "instructions": "", "tools": []}
+        {"name": "bot", "instructions": "", "tools": [], "workspace": False}
     ]
 
 

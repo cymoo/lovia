@@ -1,10 +1,63 @@
 // util.js — tiny dependency-free helpers shared across modules.
+// (marked / DOMPurify / hljs are optional CDN globals — everything degrades.)
 
 export function escapeHtml(s) {
   return String(s).replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
+}
+
+// ---- Markdown ------------------------------------------------------------
+export function renderMarkdown(text) {
+  if (!text.trim()) return '';
+  // Never emit unsanitized HTML: without either library, escaped plain text
+  // beats both a dead UI and an XSS hole.
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+  }
+  return DOMPurify.sanitize(marked.parse(text));
+}
+
+// ---- Syntax highlighting ---------------------------------------------------
+// Highlighted-HTML cache. Streaming re-renders replace whole DOM subtrees,
+// which would re-run hljs over every block each flush — O(blocks) of real
+// parsing work per tick. Keyed by class+source, each unique block is parsed
+// once; repeat renders are an innerHTML assignment.
+const _hljsCache = new Map();
+
+// Pure highlight pass over every <pre><code> in `container` (no chrome —
+// callers add their own copy buttons etc.).
+export function highlightIn(container) {
+  if (typeof hljs === 'undefined') return;
+  container.querySelectorAll('pre code').forEach((el) => {
+    if (el.classList.contains('language-mermaid')) return; // rendered as a diagram instead
+    if (el.dataset.highlighted) return;
+    const key = `${el.className}\u0000${el.textContent}`;
+    const hit = _hljsCache.get(key);
+    if (hit) {
+      el.innerHTML = hit.html;
+      el.className = hit.className; // hljs adds its own classes; restore them too
+    } else {
+      hljs.highlightElement(el);
+      if (_hljsCache.size > 500) _hljsCache.clear(); // cheap bound, rarely hit
+      _hljsCache.set(key, { html: el.innerHTML, className: el.className });
+    }
+    el.dataset.highlighted = '1';
+  });
+}
+
+// ---- Sizes -----------------------------------------------------------------
+export function formatBytes(n) {
+  if (n == null || !Number.isFinite(n)) return '';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = n;
+  for (const u of units) {
+    v /= 1024;
+    if (v < 1024 || u === 'GB') return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${u}`;
+  }
+  return '';
 }
 
 // Timestamps arrive as epoch seconds (floats from the backend) or millis.

@@ -258,6 +258,51 @@ body.sidebar-collapsed .sidebar {
   gap: 2px;
 }
 .sidebar-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.011em;
+  color: var(--ink);
+}
+
+/* Top nav — app-level destinations (New chat, Memory, Scheduled runs):
+   icon + label rows above the chats section. */
+.sidebar-nav {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 10px 6px;
+}
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  text-align: left;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.sidebar-nav-item:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.sidebar-nav-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: color var(--t-fast);
+}
+.sidebar-nav-item:hover svg {
+  color: var(--ink-2);
+}
+
+.sidebar-section-label {
+  flex-shrink: 0;
+  padding: 12px 22px 6px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -317,43 +362,6 @@ body.sidebar-collapsed .sidebar {
   padding: 24px 12px;
   font-size: 13px;
   text-align: center;
-}
-
-/* Footer — app-level destinations (Memory, Scheduled runs): icon + label
-   rows anchored under the chats list. */
-.sidebar-foot {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border);
-}
-.sidebar-foot-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink-2);
-  text-align: left;
-  transition:
-    background var(--t-fast),
-    color var(--t-fast);
-}
-.sidebar-foot-item:hover {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-.sidebar-foot-item svg {
-  flex-shrink: 0;
-  color: var(--muted);
-  transition: color var(--t-fast);
-}
-.sidebar-foot-item:hover svg {
-  color: var(--ink-2);
 }
 
 .session-item {
@@ -652,20 +660,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   overflow: hidden;
 }
 
-/* When the plan panel is open on a wide screen, reserve a right rail for it so
-   it never sits on top of the conversation; below this width it floats as
-   glass over the content (a short-lived overlap while scrolled to the top).
-   The reservation applies to the transcript AND the composer (and the jump-
-   to-latest button) so the whole content column shifts as one. */
-@media (min-width: 1200px) {
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .transcript,
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .composer {
-    padding-right: 356px;
-  }
-  .chat-main:has(.todo-panel:not(.hidden):not(.collapsed)) .scroll-bottom-btn {
-    left: calc(50% - 166px);
-  }
-}
+/* The plan (todo) panel floats as frosted glass OVER the transcript at every
+   width — the content column never shifts or shrinks for it. Readability
+   comes from the card's blur + tint (see .todo-card). */
 
 /* Floating "jump to latest" affordance, shown only when scrolled up. */
 .scroll-bottom-btn {
@@ -1185,6 +1182,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   animation: fade-in var(--t-med) var(--ease);
+  /* a pan viewer, not a text surface: dragging must never start a selection */
+  user-select: none;
+  -webkit-user-select: none;
 }
 @keyframes fade-in {
   from {

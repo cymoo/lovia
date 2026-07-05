@@ -348,7 +348,8 @@ def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
     if path.exists() and not path.is_dir():
         raise CliError(f"memory path is not a directory: {path}")
     log.info("memory enabled at %s", path)
-    return Memory(root)
+    # Long-lived server: curation must not hold back each run's final event.
+    return Memory(root, curate_in_background=True)
 
 
 def resolve_tools() -> list[Tool]:

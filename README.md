@@ -4,44 +4,36 @@
 
 lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
-It gives you the pieces most agent apps eventually need — tools, streaming,
-structured output, sessions, handoff, approvals, guardrails, workspaces,
-skills, MCP, context compaction, checkpoint/resume, and a tiny web UI — and
-handles those recurring hard parts without turning into a platform.
+It covers the recurring hard parts of agent applications — tools, sessions,
+approvals, context, serving — without turning into a platform.
 
 ```bash
 pip install lovia
 ```
 
 ```python
-from lovia import Agent, Skills, Todo, tool
-from lovia.workspace import Workspace
+from lovia import Agent, tool
 
 
 @tool
-def lookup_ticket(ticket_id: str) -> str:
-    """Look up an internal support ticket."""
-    return f"{ticket_id}: waiting for customer reply"
+def get_order(order_id: str) -> str:
+    """Look up an order's status by id."""
+    return f"Order {order_id}: shipped 2 days ago, arriving Thursday."
 
 
+# Set OPENAI_API_KEY in your environment first; for OpenAI-compatible
+# services (DeepSeek, Ollama, vLLM, ...) also set OPENAI_BASE_URL.
 agent = Agent(
-    name="operator",
-    instructions=(
-        "You are a customer-support operator. "
-        "Before replying, confirm the ticket state, then use team policy "
-        "to give a clear, restrained, actionable response."
-    ),
+    name="support",
+    instructions="You are a customer-support agent. Look the order up before "
+    "answering, and reply in one or two concrete sentences.",
     model="deepseek-v4-pro",
-    tools=[lookup_ticket],
-    plugins=[Todo(), Skills("./skills")],
-    workspace=Workspace.local(".", mode="trusted"),
+    tools=[get_order],
 )
 
-# run_sync() drops the asyncio boilerplate for scripts and notebooks; from
-# async code use `await Runner.run(agent, ...)` instead.
-result = agent.run_sync(
-    "Check ticket T-1001 and draft a reply using our team guidelines.",
-)
+# run_sync() suits scripts and notebooks; from async code,
+# use `await Runner.run(agent, ...)` instead.
+result = agent.run_sync("Where is my order A-1042?")
 print(result.output)
 ```
 
@@ -52,11 +44,9 @@ the current directory included — in one line:
 pip install "lovia[web]" && python -m lovia.web
 ```
 
-In the code above, `./skills` points at your team's skill directory; remove
-`Skills("./skills")` until you have one. Set `OPENAI_API_KEY` for the
-official OpenAI endpoint, or set `OPENAI_BASE_URL` for OpenAI-compatible
-services such as DeepSeek, Ollama, or vLLM. Anthropic is built in too:
-`model="anthropic:claude-4-8-opus"`.
+Anthropic is built in too — set `ANTHROPIC_API_KEY` and use
+`model="anthropic:claude-4-8-opus"`; everything else about models lives in
+[Providers & models](./docs/en/providers.md).
 
 ## Documentation
 
@@ -68,33 +58,26 @@ one feature per page — start with the
 
 ## Why lovia
 
-Composable primitives instead of a new universe of abstractions, staying
-close to ordinary Python — dataclasses, protocols, async functions, explicit
-composition:
+Composable primitives, ordinary Python — no new universe of abstractions:
 
-- **Few abstractions.** An `Agent` is immutable configuration; a `Runner`
-  executes one run; a `@tool` is a typed Python function; `Handoff` and
-  `agent.as_tool()` compose agents; plugins package everything reusable.
-- **Readable.** `lovia/runner.py` is a facade; the mutable run state lives in
-  `lovia/runtime/loop.py`. When something surprises you, the path through the
-  code is short.
-- **Provider-neutral without an adapter tax.** Built-in providers speak OpenAI
-  Chat Completions and Anthropic Messages directly over `httpx`; a custom
-  provider is a `Protocol`, not a subclassing project.
-- **Replaceable context management.** The default `Compaction` changes only
-  what the model sees on the next call — the full transcript survives — and
-  your own `ContextPolicy` can take over.
-- **Atomic multi-agent.** Handoff transfers control; agent-as-tool delegates a
-  subtask. Primitives, not an orchestration DSL you adopt wholesale.
+- **Few abstractions.** An `Agent` is immutable configuration, a `Runner`
+  executes one run, a `@tool` is a typed function; handoff and agent-as-tool
+  compose agents; plugins package the rest.
+- **Readable.** The run loop lives in one file; when something surprises
+  you, the path through the code is short.
+- **Provider-neutral, no adapter tax.** OpenAI and Anthropic built in over
+  `httpx`, any OpenAI-compatible endpoint works, and a custom provider is a
+  `Protocol` — not a subclassing project.
+- **Context management that keeps history.** Compaction reshapes only what
+  the model sees next call; the transcript is never rewritten.
 - **Production seams, not a production costume.** Approvals, budgets,
-  cancellation, mid-run steering, retries, hooks, scoped workspace tools, and
-  checkpoint/resume are explicit knobs.
-- **One extension axis.** Plugins bundle tools, prompt additions, per-turn
-  view injectors, hooks, guardrails, and cleanup — Skills, MCP, Todo, and
-  Memory all use the same mechanism.
-- **Restraint as policy.** Concise over clever, lightweight over bundled,
-  seams over lock-in; if a feature can be a short user-side recipe, it does
-  not become framework surface area.
+  cancellation, mid-run steering, retries, checkpoint/resume — explicit
+  knobs you wire into your own app.
+- **One extension axis.** Skills, MCP, Todo, and Memory are all plugins on
+  the same seam you get for your own capabilities.
+
+The design pressure throughout is restraint: if a feature can be a short
+user-side recipe, it stays out of the framework.
 
 ## The tour
 
@@ -498,21 +481,11 @@ provider = ScriptedProvider([
 
 ## Examples
 
-The `examples/` directory is a numbered learning path of self-contained,
-runnable scripts — `cp .env.example .env`, set `LOVIA_MODEL`, and start with
-`01_hello.py`. See [examples/README.md](examples/README.md) for the full
-index and setup notes.
-
-| Section | Files | Covers |
-| --- | --- | --- |
-| Fundamentals | `01`–`06` | hello, tools, streaming, structured output, sessions, multimodal |
-| Multi-agent | `07`–`08` | handoff, agent-as-tool |
-| Models & providers | `09`–`10` | `ModelSettings`, compatible endpoints, custom `Provider` (offline) |
-| Control & production | `11`–`18` | hooks, approval, guardrails, reliability, resume, steering, compaction, dependency injection |
-| Workspace & plugins | `19`–`25` | workspace, coding agent, todos, skills, memory, MCP, writing a plugin |
-| Serving & apps | `26`–`30` | web UI, JSON/SSE API, evals, data analysis, terminal support bot |
-| `examples/tools/` | | one script per built-in tool family |
-| `examples/workflows/` | | prompt chaining, routing, parallelization, orchestrator-workers, evaluator loops, autonomous agents |
+The `examples/` directory is a numbered learning path of thirty
+self-contained, runnable scripts — from `01_hello.py` to a terminal support
+bot — plus one script per built-in tool family (`tools/`) and the classic
+agentic patterns in plain Python (`workflows/`). Setup and the full index:
+[examples/README.md](examples/README.md).
 
 ## Install extras
 

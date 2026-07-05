@@ -3,44 +3,36 @@
 [English](./README.md) · [文档](./docs/zh/README.md) · [示例](./examples/README-zh.md)
 
 lovia 是一个优雅、克制的 Python agent 框架，写给想要**自己掌控 agent 循环**、
-又不愿从零重造每个配套原语的开发者。它提供 agent 应用迟早需要的那些部件——
-工具、流式输出、结构化输出、会话、handoff、审批、护栏、工作区、技能、MCP、
-上下文压缩、检查点/恢复，以及一个小巧的 web UI——解决这些反复出现的难点，
-但不让自己变成平台。
+又不愿从零重造每个配套原语的开发者。它解决 agent 应用反复出现的难点——
+工具、会话、审批、上下文、服务——但不让自己变成平台。
 
 ```bash
 pip install lovia
 ```
 
 ```python
-from lovia import Agent, Skills, Todo, tool
-from lovia.workspace import Workspace
+from lovia import Agent, tool
 
 
 @tool
-def lookup_ticket(ticket_id: str) -> str:
-    """Look up an internal support ticket."""
-    return f"{ticket_id}: waiting for customer reply"
+def get_order(order_id: str) -> str:
+    """Look up an order's status by id."""
+    return f"Order {order_id}: shipped 2 days ago, arriving Thursday."
 
 
+# 先在环境变量里设置 OPENAI_API_KEY；DeepSeek、Ollama、vLLM 等
+# OpenAI 兼容服务还需设置 OPENAI_BASE_URL。
 agent = Agent(
-    name="operator",
-    instructions=(
-        "You are a customer-support operator. "
-        "Before replying, confirm the ticket state, then use team policy "
-        "to give a clear, restrained, actionable response."
-    ),
+    name="support",
+    instructions="You are a customer-support agent. Look the order up before "
+    "answering, and reply in one or two concrete sentences.",
     model="deepseek-v4-pro",
-    tools=[lookup_ticket],
-    plugins=[Todo(), Skills("./skills")],
-    workspace=Workspace.local(".", mode="trusted"),
+    tools=[get_order],
 )
 
-# run_sync() 免去脚本和 notebook 里的 asyncio 样板；
-# 异步代码中请使用 `await Runner.run(agent, ...)`。
-result = agent.run_sync(
-    "Check ticket T-1001 and draft a reply using our team guidelines.",
-)
+# run_sync() 适合脚本和 notebook；异步代码中
+# 请使用 `await Runner.run(agent, ...)`。
+result = agent.run_sync("Where is my order A-1042?")
 print(result.output)
 ```
 
@@ -51,10 +43,9 @@ print(result.output)
 pip install "lovia[web]" && python -m lovia.web
 ```
 
-上面代码中的 `./skills` 指向你团队的技能目录；还没有的话，先去掉
-`Skills("./skills")`。使用 OpenAI 官方端点时设置 `OPENAI_API_KEY`；
-DeepSeek、Ollama、vLLM 等 OpenAI 兼容服务则设置 `OPENAI_BASE_URL`。
-Anthropic 也是内置的：`model="anthropic:claude-4-8-opus"`。
+Anthropic 也是内置的——设置 `ANTHROPIC_API_KEY` 并使用
+`model="anthropic:claude-4-8-opus"`；模型相关的其余内容见
+[Providers & models](./docs/en/providers.md)。
 
 ## 文档
 
@@ -65,27 +56,23 @@ Anthropic 也是内置的：`model="anthropic:claude-4-8-opus"`。
 
 ## 为什么是 lovia
 
-用可组合的原语，而不是再造一套抽象宇宙；贴近普通的 Python——dataclass、
-protocol、async 函数、显式组合：
+可组合的原语、普通的 Python——不再造一套抽象宇宙：
 
-- **抽象极少。** `Agent` 是不可变配置；`Runner` 执行一次运行；`@tool`
-  就是带类型的 Python 函数；`Handoff` 与 `agent.as_tool()` 负责组合；
-  插件打包一切可复用的能力。
-- **可读。** `lovia/runner.py` 是一层门面；可变的运行状态都在
-  `lovia/runtime/loop.py`。当行为让你意外时，穿过代码的路径很短。
-- **供应商中立，且没有适配器税。** 内置 provider 直接通过 `httpx` 说
-  OpenAI Chat Completions 和 Anthropic Messages；自定义 provider 是一个
-  `Protocol`，不是一场子类化工程。
-- **上下文管理可替换。** 默认的 `Compaction` 只改变模型下一次调用看到的
-  内容——完整转录始终保留——也可以换成你自己的 `ContextPolicy`。
-- **多 agent 组合保持原子。** Handoff 移交控制权；agent-as-tool 委派
-  子任务。是原语，不是必须整体采纳的编排 DSL。
+- **抽象极少。** `Agent` 是不可变配置，`Runner` 执行一次运行，`@tool`
+  就是带类型的函数；handoff 与 agent-as-tool 负责组合；插件打包其余一切。
+- **可读。** 运行循环就在一个文件里；当行为让你意外时，穿过代码的路径
+  很短。
+- **供应商中立，没有适配器税。** OpenAI 与 Anthropic 内置（直接走
+  `httpx`），任何 OpenAI 兼容端点都能用，自定义 provider 是一个
+  `Protocol`——不是子类化工程。
+- **保留历史的上下文管理。** 压缩只重塑模型下一次调用看到的内容，
+  转录永不被改写。
 - **有生产接缝，而不是生产戏服。** 审批、预算、取消、运行中转向、重试、
-  钩子、受限的工作区工具、检查点/恢复，都是显式旋钮。
-- **只有一条扩展轴。** 插件把工具、提示词补充、每轮视图注入、钩子、护栏
-  和清理打包在一起——技能、MCP、待办、记忆用的都是同一套机制。
-- **克制即准则。** 简明胜过巧妙、轻量胜过捆绑、接缝胜过锁定；能用一段
-  用户侧配方解决的功能，就不进框架的表面积。
+  检查点/恢复——都是可以接进你应用的显式旋钮。
+- **只有一条扩展轴。** 技能、MCP、待办、记忆都是插件，用的正是留给你
+  自己能力的同一条接缝。
+
+贯穿始终的设计压力是克制：能用一段用户侧配方解决的功能，就不进框架。
 
 ## 巡礼
 
@@ -479,20 +466,10 @@ provider = ScriptedProvider([
 
 ## 示例
 
-`examples/` 目录是一条编号排列、自包含、可直接运行的学习路径——
-`cp .env.example .env`、设置 `LOVIA_MODEL`，从 `01_hello.py` 开始。完整索引
-与环境说明见 [examples/README-zh.md](examples/README-zh.md)。
-
-| 分区 | 文件 | 覆盖内容 |
-| --- | --- | --- |
-| 基础 | `01`–`06` | hello、工具、流式、结构化输出、会话、多模态 |
-| 多 agent | `07`–`08` | handoff、agent-as-tool |
-| 模型与 provider | `09`–`10` | `ModelSettings`、兼容端点、自定义 `Provider`（离线） |
-| 控制与生产 | `11`–`18` | 钩子、审批、护栏、可靠性、恢复、转向、压缩、依赖注入 |
-| 工作区与插件 | `19`–`25` | 工作区、编码 agent、待办、技能、记忆、MCP、自写插件 |
-| 服务与应用 | `26`–`30` | web UI、JSON/SSE API、评测、数据分析、终端客服 bot |
-| `examples/tools/` | | 每个内置工具族一个脚本 |
-| `examples/workflows/` | | 提示链、路由、并行化、编排者-工作者、评估循环、自主 agent |
+`examples/` 目录是一条编号排列、自包含、可直接运行的学习路径——从
+`01_hello.py` 一路到终端客服 bot 共三十个脚本，另有每个内置工具族一个
+脚本（`tools/`）和纯 Python 实现的经典 agent 模式（`workflows/`）。
+环境准备与完整索引见 [examples/README-zh.md](examples/README-zh.md)。
 
 ## 安装选项
 

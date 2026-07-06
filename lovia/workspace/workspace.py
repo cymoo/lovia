@@ -164,6 +164,14 @@ class LocalWorkspace:
                 "so the shell is not a way around them; a command that needs "
                 "broader access will ask for approval instead."
             )
+            lines.append(
+                "Python work stays in the workspace's own virtualenv: when "
+                "'.venv' (or 'venv') exists at the root it is automatically "
+                "on PATH for shell commands — python/pip already resolve to "
+                "it, no activation needed. To install packages when no venv "
+                "exists, create it first (e.g. 'python -m venv .venv'); "
+                "never install into the global environment."
+            )
         return "\n".join(lines)
 
 

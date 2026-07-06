@@ -115,6 +115,16 @@ are not passed through; `inherit_env=True` opts into the full environment,
 `env=` adds specific variables), in a fresh process group; a timeout kills
 the whole group and reports `timed_out=True`.
 
+A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
+**auto-activated** for every command: its bin dir is prepended to `PATH`
+and `VIRTUAL_ENV` is set, so `python`/`pip` resolve to the workspace's own
+environment rather than the one lovia runs in. Detection is per command —
+a venv the agent just created takes effect immediately — and only bites
+when a real interpreter is inside (a directory merely *named* `venv`
+doesn't). An explicit `env={"PATH": ...}` still wins. The workspace's
+system-prompt fragment tells the model to create `.venv` before installing
+Python packages rather than installing globally.
+
 ## The command guard
 
 Static command rules can't see paths, so the session also **lexically**

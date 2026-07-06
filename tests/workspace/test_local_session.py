@@ -542,6 +542,90 @@ async def test_shell_env_explicit_passthrough(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Virtualenv auto-activation
+# ---------------------------------------------------------------------------
+
+
+def _make_venv(root, name: str = ".venv") -> None:
+    """A minimal directory that passes the is-a-venv check (bin/python)."""
+    (root / name / "bin").mkdir(parents=True)
+    (root / name / "bin" / "python").touch()
+
+
+async def test_shell_activates_root_venv(tmp_path) -> None:
+    _make_venv(tmp_path)
+    session = await _session(tmp_path)
+    result = await session.run('echo "$PATH|$VIRTUAL_ENV"')
+    path, _, venv = result.stdout.strip().partition("|")
+    root = tmp_path.resolve()
+    assert path.startswith(str(root / ".venv" / "bin") + os.pathsep)
+    assert venv == str(root / ".venv")
+
+
+async def test_venv_dot_form_preferred_over_plain(tmp_path) -> None:
+    _make_venv(tmp_path, ".venv")
+    _make_venv(tmp_path, "venv")
+    session = await _session(tmp_path)
+    result = await session.run('echo "$VIRTUAL_ENV"')
+    assert result.stdout.strip().endswith("/.venv")
+
+
+async def test_venv_plain_name_recognized(tmp_path) -> None:
+    _make_venv(tmp_path, "venv")
+    session = await _session(tmp_path)
+    result = await session.run('echo "$VIRTUAL_ENV"')
+    assert result.stdout.strip().endswith("/venv")
+
+
+async def test_venv_windows_layout_recognized(tmp_path) -> None:
+    (tmp_path / ".venv" / "Scripts").mkdir(parents=True)
+    (tmp_path / ".venv" / "Scripts" / "python.exe").touch()
+    session = await _session(tmp_path)
+    result = await session.run('echo "$VIRTUAL_ENV"')
+    assert result.stdout.strip().endswith("/.venv")
+
+
+async def test_directory_merely_named_venv_is_not_activated(tmp_path) -> None:
+    (tmp_path / ".venv").mkdir()  # no interpreter inside
+    (tmp_path / "venv" / "bin").mkdir(parents=True)  # bin/ but no python
+    session = await _session(tmp_path)
+    result = await session.run('echo "[$VIRTUAL_ENV]"')
+    assert result.stdout.strip() == "[]"
+
+
+async def test_venv_created_mid_session_takes_effect(tmp_path) -> None:
+    # The model's own flow: create the venv, then install into it — the very
+    # next command must already resolve python/pip there (fresh process per
+    # run; nothing to "keep activated").
+    session = await _session(tmp_path)
+    assert (await session.run('echo "[$VIRTUAL_ENV]"')).stdout.strip() == "[]"
+    _make_venv(tmp_path)
+    result = await session.run('echo "[$VIRTUAL_ENV]"')
+    assert result.stdout.strip() == f"[{tmp_path.resolve() / '.venv'}]"
+
+
+async def test_venv_yields_to_explicit_env_overrides(tmp_path) -> None:
+    # env= merges after activation: an explicit PATH/VIRTUAL_ENV stays the
+    # user's escape hatch (echo is a shell builtin, so the bogus PATH is fine).
+    _make_venv(tmp_path)
+    session = await _session(
+        tmp_path, env={"PATH": "/custom-bin", "VIRTUAL_ENV": "/elsewhere"}
+    )
+    result = await session.run('echo "$PATH|$VIRTUAL_ENV"')
+    assert result.stdout.strip() == "/custom-bin|/elsewhere"
+
+
+async def test_venv_drops_inherited_pythonhome(tmp_path, monkeypatch) -> None:
+    # activate's behavior: a lingering host PYTHONHOME would override the
+    # venv's interpreter paths.
+    monkeypatch.setenv("PYTHONHOME", "/somewhere")
+    _make_venv(tmp_path)
+    session = await _session(tmp_path, inherit_env=True)
+    result = await session.run('echo "[$PYTHONHOME]"')
+    assert result.stdout.strip() == "[]"
+
+
+# ---------------------------------------------------------------------------
 # Workspace config
 # ---------------------------------------------------------------------------
 
@@ -580,6 +664,13 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
 
     trusted = Workspace.local(str(tmp_path), mode="trusted")
     assert "without approval" in trusted.instructions()
+
+
+async def test_workspace_instructions_venv_guidance_follows_shell(tmp_path) -> None:
+    # The venv convention only matters where commands can run: present with a
+    # shell, absent for readonly (which has none — nothing to install with).
+    assert ".venv" in Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert ".venv" not in Workspace.local(str(tmp_path), mode="readonly").instructions()
 
 
 async def test_workspace_inherit_env_defaults_off(tmp_path) -> None:

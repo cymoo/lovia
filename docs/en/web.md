@@ -22,8 +22,12 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 Or skip code entirely:
 
 ```bash
-python -m lovia.web
+lovia web
 ```
+
+Anything required but missing — the model, or an API key for the
+official endpoints — is asked interactively on the first run, verified
+against the endpoint, and can be saved to `~/.config/lovia/config.env`.
 
 ## `serve()` and `create_app()`
 
@@ -46,7 +50,8 @@ process manager. The options that matter:
 
 ## The zero-config CLI
 
-`python -m lovia.web` builds a default agent and serves it. The
+`lovia web` (equivalently `python -m lovia.web`) builds a default agent
+and serves it. The
 composition, exactly: model from the environment; `Skills("./skills")`
 when that directory exists; a `Todo()` checklist; `Scheduling` (the agent
 can propose its own future runs — approval-gated); `Memory` under
@@ -57,16 +62,18 @@ workspace on the current directory** (a root-level `.venv`/`venv` is
 installs stay out of the global environment); today's date as an
 instruction fragment; instructions from `AGENTS.md` when present.
 
-Every option reads flag → env var → default, and a `./.env` loads
-automatically when `python-dotenv` is installed (or pass `--env-file`).
+Every option reads flag → env var → `./.env` (or `--env-file`) →
+`~/.config/lovia/config.env` (written by the first-run setup) → default.
 Model credentials use the provider's own variables
-([Providers](providers.md)).
+([Providers](providers.md)); every launch prints a summary of the
+effective configuration and where each value came from.
 
 | Flag | Env | Default |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--db` | `LOVIA_DB` | `<agent>.db` in cwd |
-| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | required |
+| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | asked on first run |
+| `--base-url` / `--api-key` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` (or `ANTHROPIC_*`, by model prefix) | official endpoint / asked when required |
 | `--skills-dir` (repeatable) | `LOVIA_SKILLS_DIR` | `./skills` if present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` (on) |
 | `--workspace` / `--workspace-mode` / `--no-workspace` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` (on) |

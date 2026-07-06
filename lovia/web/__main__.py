@@ -1,4 +1,4 @@
-"""``python -m lovia.web`` — launch the lovia chat UI from the command line.
+"""``lovia web`` (or ``python -m lovia.web``) — launch the lovia chat UI.
 
 Builds a sensible default agent (a model, skills, long-term memory, a todo
 checklist, current-date awareness, model-driven scheduled runs, built-in tools
@@ -8,17 +8,24 @@ module:attribute`` at your own ``Agent`` to serve that instead.
 
 Examples::
 
-    python -m lovia.web                           # default agent, ./skills, cwd workspace
-    python -m lovia.web --port 9000 --model openai:gpt-5.5
-    python -m lovia.web --skills-dir ./skills --skills-dir ./team-skills
-    python -m lovia.web --memory-dir ./mem        # persist memory under ./mem
-    python -m lovia.web --no-memory               # disable long-term memory
-    python -m lovia.web --app myagents:assistant  # serve your own agent
+    lovia web                                # default agent, ./skills, cwd workspace
+    lovia web --port 9000 --model openai:gpt-5.5
+    lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
+    lovia web --skills-dir ./skills --skills-dir ./team-skills
+    lovia web --memory-dir ./mem             # persist memory under ./mem
+    lovia web --no-memory                    # disable long-term memory
+    lovia web --app myagents:assistant       # serve your own agent
 
-Common options also read ``LOVIA_*`` env vars. If ``python-dotenv`` is
-installed, a ``.env`` file in the current directory (or ``--env-file``) is
-loaded first; without it, ``.env`` files are skipped (no hard dependency).
-Precedence is: command-line flag > environment variable > built-in default.
+First run: whatever required configuration is missing (the model; an API key
+when the endpoint is the official OpenAI/Anthropic API) is asked
+interactively, validated against the endpoint, and can be saved to
+``~/.config/lovia/config.env`` so it is never retyped.
+
+Configuration precedence: command-line flag > environment variable >
+``./.env`` (or ``--env-file``) > ``~/.config/lovia/config.env``. The model
+endpoint uses the provider's standard variables — ``OPENAI_BASE_URL`` /
+``OPENAI_API_KEY`` or ``ANTHROPIC_*``, chosen by the model's vendor prefix —
+while everything else uses ``LOVIA_*``.
 """
 
 from __future__ import annotations
@@ -38,10 +45,11 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
-from ..providers import ModelSettings, model_from_env
+from ..providers import ModelSettings, Provider, provider_from_string
 from ..reliability import RetryPolicy
 from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
+from . import setup
 from .app import serve
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -93,9 +101,9 @@ def _env_int_optional(name: str) -> int | None:
         raise CliError(f"invalid integer for {name}: {raw!r}") from exc
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="python -m lovia.web",
+        prog=prog or "python -m lovia.web",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -114,6 +122,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         help="model id, e.g. openai:gpt-5.5 (env LOVIA_MODEL, then "
         "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL)",
+    )
+    p.add_argument(
+        "--base-url",
+        metavar="URL",
+        help="model API base URL for the provider chosen by the model's "
+        "vendor prefix (env OPENAI_BASE_URL / ANTHROPIC_BASE_URL)",
+    )
+    p.add_argument(
+        "--api-key",
+        metavar="KEY",
+        help="model API key for the provider chosen by the model's vendor "
+        "prefix (env OPENAI_API_KEY / ANTHROPIC_API_KEY; prefer the env or "
+        "the first-run prompt — flags are visible in the process list)",
     )
     p.add_argument(
         "--skills-dir",
@@ -226,13 +247,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def load_env_files(env_files: list[str] | None) -> None:
-    """Load ``.env`` files into ``os.environ`` if python-dotenv is available.
+def load_env_files(env_files: list[str] | None) -> dict[str, str]:
+    """Load the env-file layers; report which layer introduced each new key.
 
-    Existing environment variables win over file values (``override=False``).
+    Order — earlier wins, and the process environment always wins because
+    files never override existing variables (``override=False``): the
+    ``--env-file`` files (or ``./.env``), then the global
+    ``~/.config/lovia/config.env`` saved by the first-run setup. Returns
+    ``{key: ".env" | "config"}`` for keys the files introduced.
+
     A missing python-dotenv is fatal only when ``--env-file`` was given
     explicitly; otherwise auto-loading is silently skipped.
     """
+    sources: dict[str, str] = {}
     try:
         from dotenv import load_dotenv
     except ImportError:
@@ -242,31 +269,29 @@ def load_env_files(env_files: list[str] | None) -> None:
                 hint="Install it with: pip install python-dotenv",
             )
         log.debug("python-dotenv not installed; skipping .env autoload")
-        return
+        return sources
+
+    def load(path: Path, label: str) -> None:
+        before = set(os.environ)
+        load_dotenv(path, override=False)
+        for key in os.environ.keys() - before:
+            sources[key] = label
+        log.debug("loaded env file %s", path)
 
     if env_files:
         for raw in env_files:
             path = Path(raw)
             if not path.is_file():
                 raise CliError(f"env file not found: {path}")
-            load_dotenv(path, override=False)
-            log.debug("loaded env file %s", path)
+            load(path, ".env")
     else:
         default = Path(".env")
         if default.is_file():
-            load_dotenv(default, override=False)
-            log.debug("loaded env file %s", default)
-
-
-def resolve_model(cli_model: str | None) -> str:
-    model = cli_model or model_from_env(required=False)
-    if not model:
-        raise CliError(
-            "no model configured.",
-            hint="pass --model (e.g. openai:gpt-5.5) or set LOVIA_MODEL / "
-            "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL.",
-        )
-    return model
+            load(default, ".env")
+    config = setup.global_config_path()
+    if config.is_file():
+        load(config, "config")
+    return sources
 
 
 def resolve_max_retries(cli: int | None) -> int | None:
@@ -296,25 +321,6 @@ def resolve_max_tokens(cli: int | None) -> int | None:
     if value is not None and value <= 0:
         raise CliError(f"--max-tokens must be > 0, got {value}")
     return value
-
-
-def resolve_context_window(cli: int | None) -> int | None:
-    """Explicit compaction window in tokens, or ``None`` for auto.
-
-    Precedence: ``--context-window`` flag, then ``LOVIA_CONTEXT_WINDOW``.
-    ``None`` means no explicit override — ``Compaction`` asks the provider for
-    the model's advertised window at call time and falls back to reactive
-    overflow handling when it is unknown.
-    """
-    value = cli if cli is not None else _env_int_optional("LOVIA_CONTEXT_WINDOW")
-    if value is not None and value < 1:
-        raise CliError(f"--context-window must be >= 1, got {value}")
-    return value
-
-
-def resolve_context_policy(args: argparse.Namespace) -> ContextPolicy:
-    """Compaction policy for the default agent (honors --context-window)."""
-    return Compaction(context_window=resolve_context_window(args.context_window))
 
 
 def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
@@ -439,8 +445,9 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
     return cast("Agent[Any] | Mapping[str, Agent[Any]]", obj)
 
 
-def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any]:
-    model = resolve_model(args.model)
+def build_default_agent(
+    args: argparse.Namespace, store: ChatStore, provider: Provider
+) -> Agent[Any]:
     instructions = resolve_instructions(args.instructions, args.instructions_file)
     skills_dirs = resolve_skills_dirs(args.skills_dir)
     plugins: list[Plugin] = []
@@ -460,7 +467,7 @@ def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
-        model=model,
+        model=provider,
         settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
         plugins=plugins,
         tools=resolve_tools(),
@@ -476,6 +483,8 @@ def build_default_agent(args: argparse.Namespace, store: ChatStore) -> Agent[Any
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     flags = [
         ("--model", args.model is not None),
+        ("--base-url", args.base_url is not None),
+        ("--api-key", args.api_key is not None),
         ("--skills-dir", bool(args.skills_dir)),
         ("--memory-dir", args.memory_dir is not None),
         ("--no-memory", args.no_memory),
@@ -520,10 +529,19 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
         )
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
+    """Human line for the startup summary, e.g. ``/path/to/dir (trusted)``."""
+    if workspace is None:
+        return "(none)"
+    mode = _first(args.workspace_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or "trusted"
+    root = getattr(workspace, "root", ".")
+    return f"{Path(root).resolve()} ({mode})"
+
+
+def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
+    args = build_parser(prog).parse_args(argv)
     try:
-        load_env_files(args.env_file)
+        env_sources = load_env_files(args.env_file)
         level = (_first(args.log_level, os.getenv("LOVIA_LOG_LEVEL")) or "info").upper()
         if level not in LOG_LEVELS:
             raise CliError(
@@ -566,14 +584,65 @@ def main(argv: list[str] | None = None) -> int:
         if app_target:
             _warn_ignored_agent_flags(args)
             agent_or_agents = load_app_target(app_target)
+            custom_agents = (
+                agent_or_agents.values()
+                if isinstance(agent_or_agents, Mapping)
+                else [agent_or_agents]
+            )
+            for custom_agent in custom_agents:
+                _warn_if_exposed(host, custom_agent.workspace)
+            summary = setup.format_app_summary(
+                version=__version__,
+                app_target=app_target,
+                # Without --db, create_app derives the file from the agent name.
+                db_desc=db_path or "(derived from the agent's name)",
+                host=host,
+                port=port,
+            )
         else:
-            store = ChatStore.sqlite(db_path or f"{DEFAULT_AGENT_NAME}.db")
-            agent = build_default_agent(args, store)
-            context_policy = resolve_context_policy(args)
+            db_desc = db_path or f"{DEFAULT_AGENT_NAME}.db"
+            conn = setup.resolve_connection(
+                model_flag=args.model,
+                base_url_flag=args.base_url,
+                api_key_flag=args.api_key,
+                context_window_flag=args.context_window,
+                env_sources=env_sources,
+            )
+            if conn.missing():
+                if not sys.stdin.isatty():
+                    raise CliError(
+                        f"no {' or '.join(conn.missing())} configured",
+                        hint=setup.CONFIG_HINT,
+                    )
+                conn = setup.interactive_setup(conn, env_sources=env_sources)
+            assert conn.model is not None
+            try:
+                provider = provider_from_string(
+                    conn.model, api_key=conn.api_key, base_url=conn.base_url
+                )
+            except ValueError as exc:
+                # Eager construction also surfaces vendor-prefix typos at
+                # startup instead of on the first chat message.
+                raise CliError(str(exc)) from exc
+            # The store is created only after setup succeeds so an aborted
+            # first-run wizard leaves no stray database behind.
+            store = ChatStore.sqlite(db_desc)
+            agent = build_default_agent(args, store, provider)
+            context_policy = Compaction(context_window=conn.context_window)
             _warn_if_exposed(host, agent.workspace)
+            summary = setup.format_summary(
+                conn,
+                version=__version__,
+                host=host,
+                port=port,
+                workspace_desc=_workspace_desc(args, agent.workspace),
+                db_desc=db_desc,
+            )
             agent_or_agents = agent
 
-        log.info("serving lovia on http://%s:%d", host, port)
+        # stdout, not the logger: the summary must be visible at every log
+        # level, while log lines keep flowing to stderr.
+        print(summary, flush=True)
         serve(
             agent_or_agents,
             host=host,

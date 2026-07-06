@@ -37,8 +37,10 @@ print(result.output)
 也可以一行命令启动完整聊天 UI：自带长期记忆、支持 skills 和定时任务，以及把当前目录作为工作区（提供文件读写和执行命令的能力）。
 
 ```bash
-pip install "lovia[web]" && python -m lovia.web
+pip install "lovia[web]" && lovia web
 ```
+
+还没配置？首次运行会在终端里询问模型、端点和 API key，当场验证，并提供保存到 `~/.config/lovia/config.env` 的选项，之后无需重复输入。
 
 Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点时再配置
 `ANTHROPIC_BASE_URL`。模型名使用 `anthropic:` 前缀即可。模型相关的更多内容见
@@ -423,8 +425,11 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-python -m lovia.web --port 9000 --model glm-5.2   # 或零配置启动
+lovia web --port 9000 --model glm-5.2      # python -m lovia.web 亦可
+lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
+
+缺失的必需配置（模型；官方端点的 API key）首次运行时会交互式询问，并可保存到 `~/.config/lovia/config.env`。配置优先级：命令行 flag > 环境变量 > `./.env` > `~/.config/lovia/config.env`。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

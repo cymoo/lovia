@@ -41,15 +41,18 @@ __all__ = [
 
 
 # Built-in vendor → factory map. Factories take the model string (the part
-# after the ``vendor:`` prefix) and return a Provider instance.
-ProviderFactory = Callable[[str], Provider]
+# after the ``vendor:`` prefix) and return a Provider instance. They should
+# also accept optional ``api_key``/``base_url`` keyword overrides
+# (``(model, *, api_key=None, base_url=None) -> Provider``); factories that
+# don't are still usable as long as no overrides are requested.
+ProviderFactory = Callable[..., Provider]
 
 _BUILTIN: dict[str, ProviderFactory] = {
-    "anthropic": lambda model: AnthropicProvider(model=model),
-    "claude": lambda model: AnthropicProvider(model=model),
-    "openai": lambda model: OpenAIChatProvider(model=model),
-    "openai-chat": lambda model: OpenAIChatProvider(model=model),
-    "oai": lambda model: OpenAIChatProvider(model=model),
+    "anthropic": lambda model, **kw: AnthropicProvider(model=model, **kw),
+    "claude": lambda model, **kw: AnthropicProvider(model=model, **kw),
+    "openai": lambda model, **kw: OpenAIChatProvider(model=model, **kw),
+    "openai-chat": lambda model, **kw: OpenAIChatProvider(model=model, **kw),
+    "oai": lambda model, **kw: OpenAIChatProvider(model=model, **kw),
 }
 
 
@@ -66,9 +69,10 @@ def register_provider(prefix: str, factory: ProviderFactory) -> None:
     """Register a vendor prefix → provider factory mapping.
 
     The factory receives the model string (everything after the colon) and
-    must return a :class:`Provider`. Later registrations override earlier
-    ones for the same prefix, including the built-in ``openai``/``anthropic``
-    prefixes.
+    must return a :class:`Provider`. It should also accept optional
+    ``api_key``/``base_url`` keyword overrides (see :data:`ProviderFactory`).
+    Later registrations override earlier ones for the same prefix, including
+    the built-in ``openai``/``anthropic`` prefixes.
     """
     _REGISTRY[prefix.lower()] = factory
 
@@ -103,18 +107,20 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
         ) from exc
     if isinstance(obj, type):
 
-        def _factory(model: str, _cls: type = obj) -> Provider:
-            return _cls(model=model)  # type: ignore[no-any-return]
+        def _factory(model: str, _cls: type = obj, **kw: object) -> Provider:
+            return _cls(model=model, **kw)  # type: ignore[no-any-return]
 
         return _factory
     if callable(obj):
-        return cast("Callable[[str], Provider]", obj)
+        return cast(ProviderFactory, obj)
     raise ValueError(
         f"Provider plugin {vendor!r} must be a provider class or callable factory"
     )
 
 
-def provider_from_string(spec: str) -> Provider:
+def provider_from_string(
+    spec: str, *, api_key: str | None = None, base_url: str | None = None
+) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
     Built-in prefixes: ``openai`` (aliases ``openai-chat``, ``oai``) and
@@ -125,7 +131,16 @@ def provider_from_string(spec: str) -> Provider:
     such as DeepSeek/Ollama/vLLM via ``OPENAI_BASE_URL``). A bare name that
     looks like an Anthropic model is almost certainly a missing ``anthropic:``
     prefix, so we log a warning rather than silently misroute it.
+
+    ``api_key``/``base_url`` override the provider's environment-derived
+    defaults; a third-party factory that doesn't accept them raises
+    :class:`ValueError` (only when an override is actually given).
     """
+    kwargs: dict[str, str] = {}
+    if api_key is not None:
+        kwargs["api_key"] = api_key
+    if base_url is not None:
+        kwargs["base_url"] = base_url
     if ":" not in spec:
         if spec.lower().startswith("claude"):
             logger.warning(
@@ -134,19 +149,28 @@ def provider_from_string(spec: str) -> Provider:
                 spec,
                 spec,
             )
-        return OpenAIChatProvider(model=spec)
+        # Passing None is identical to omitting: the constructor falls back
+        # to the OPENAI_* environment variables.
+        return OpenAIChatProvider(model=spec, api_key=api_key, base_url=base_url)
     vendor, model = spec.split(":", 1)
     vendor = vendor.lower()
     # Explicit registrations win over builtins so applications can swap in
     # their own adapter for a built-in prefix.
-    if vendor in _REGISTRY:
-        return _REGISTRY[vendor](model)
-    if vendor in _BUILTIN:
-        return _BUILTIN[vendor](model)
-    factory = _factory_from_entry_point(vendor)
+    factory = _REGISTRY.get(vendor) or _BUILTIN.get(vendor)
+    if factory is None:
+        factory = _factory_from_entry_point(vendor)
+        if factory is not None:
+            _REGISTRY[vendor] = factory
     if factory is not None:
-        _REGISTRY[vendor] = factory
-        return factory(model)
+        if not kwargs:
+            return factory(model)
+        try:
+            return factory(model, **kwargs)
+        except TypeError as exc:
+            raise ValueError(
+                f"provider plugin {vendor!r} does not accept "
+                f"api_key/base_url overrides: {exc}"
+            ) from exc
     raise ValueError(
         f"Unknown model spec: {spec!r}. Built-in prefixes: openai, "
         f"anthropic. Register additional vendors via "

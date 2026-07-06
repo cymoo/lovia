@@ -960,7 +960,7 @@ wheels = [
 
 [[package]]
 name = "lovia"
-version = "0.8.9"
+version = "0.8.10"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -981,6 +981,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "python-dotenv" },
     { name = "ruff" },
     { name = "sse-starlette" },
     { name = "twine" },
@@ -1003,6 +1004,7 @@ web = [
     { name = "ddgs" },
     { name = "fastapi" },
     { name = "jinja2" },
+    { name = "python-dotenv" },
     { name = "sse-starlette" },
     { name = "truststore" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
@@ -1030,7 +1032,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
+    { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "python-dotenv", marker = "extra == 'examples'", specifier = ">=1.0.0" },
+    { name = "python-dotenv", marker = "extra == 'web'", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", marker = "extra == 'examples'", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },

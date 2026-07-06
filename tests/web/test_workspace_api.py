@@ -37,12 +37,31 @@ def _seed(root: Path) -> None:
     (root / "blob.bin").write_bytes(b"\x00\x01\x02 junk")
     (root / "pic.png").write_bytes(PNG_BYTES)
     (root / "big.txt").write_text("line\n" * 60_000)  # > max_file_read_chars
-    # Deterministic recency order: report.csv is the newest file.
+    # Environment junk the panel must hide (see _PANEL_IGNORES).
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00pyc")
+    (root / "orphan.pyc").write_bytes(b"\x00pyc")
+    (root / "venv" / "bin").mkdir(parents=True)
+    (root / "venv" / "bin" / "site.py").write_text("# fake venv content\n")
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    (root / "node_modules" / "pkg" / "index.js").write_text("module.exports = 1\n")
+    # Deterministic recency order: report.csv is the newest file. The junk is
+    # made newer still, so if the panel filter broke it would visibly take
+    # over the top of Recent.
     now = time.time()
     for i, name in enumerate(
-        ["notes/plan.md", "big.txt", "pic.png", "blob.bin", "report.csv"]
+        [
+            "notes/plan.md",
+            "big.txt",
+            "pic.png",
+            "blob.bin",
+            "report.csv",
+            "__pycache__/app.cpython-312.pyc",
+            "orphan.pyc",
+            "venv/bin/site.py",
+            "node_modules/pkg/index.js",
+        ]
     ):
-        (root / name).touch()
         import os
 
         os.utime(root / name, (now + i, now + i))
@@ -134,6 +153,36 @@ def test_recent_is_files_only_newest_first(client: TestClient) -> None:
         "/api/workspace/recent", params={"agent": "bot", "limit": 2}
     ).json()
     assert [e["path"] for e in limited] == ["report.csv", "blob.bin"]
+
+
+# The seeded junk (all newer than report.csv — it would top Recent if the
+# filter broke) must be invisible in every panel view: Recent, browsing,
+# preview, and download alike.
+
+
+def test_recent_hides_environment_junk(client: TestClient) -> None:
+    entries = client.get("/api/workspace/recent", params={"agent": "bot"}).json()
+    paths = [e["path"] for e in entries]
+    assert "report.csv" in paths  # real files still there
+    for path in paths:
+        assert not path.endswith(".pyc")
+        assert not path.startswith(("venv/", "node_modules/", "__pycache__/"))
+
+
+def test_browse_hides_junk_dirs(client: TestClient) -> None:
+    entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
+    paths = {e["path"] for e in entries}
+    assert paths.isdisjoint({"__pycache__", "venv", "node_modules", "orphan.pyc"})
+
+
+def test_junk_paths_refused_like_denied_ones(client: TestClient) -> None:
+    for ep, params in (
+        ("/api/workspace/files", {"path": "__pycache__"}),
+        ("/api/workspace/file", {"path": "__pycache__/app.cpython-312.pyc"}),
+        ("/api/workspace/raw", {"path": "orphan.pyc", "download": 1}),
+    ):
+        r = client.get(ep, params={"agent": "bot", **params})
+        assert r.status_code == 403, (ep, params, r.status_code)
 
 
 # --------------------------------------------------------------- reading -

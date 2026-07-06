@@ -11,7 +11,7 @@ from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
@@ -95,7 +95,7 @@ construction time, not mid-run.
   the system prompt:
 
   ```python
-  agent = Agent(name="researcher", model="openai:gpt-5.5", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -114,7 +114,7 @@ input mid-run (the inverse of approval, where the *runner* asks):
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model="openai:gpt-5.5", tools=[ask_human(channel)])
+agent = Agent(name="assistant", model="glm-5.2", tools=[ask_human(channel)])
 
 # elsewhere, the operator side:
 async for q in channel.questions():   # ends when channel.close() is called

@@ -34,7 +34,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 | `max_turns` / `budget` / `retry` / `context_policy` / `tracer` | — | 应用于每个被服务运行的设置 |
 | `generate_titles` / `title_model` | `True` / 服务 agent 的模型 | 后台 LLM 聊天标题；标题生成前显示第一条用户消息，手动重命名始终优先 |
 | `approval_timeout` | `None` | N 秒后自动拒绝未处理审批 |
-| `max_background_runs` | `8`（`create_app`） | 并发 supervised runs；超额启动返回 HTTP 429 |
+| `max_background_runs` | `8`（`create_app`） | 并发托管运行；超额启动返回 HTTP 429 |
 | `ui` | `True` | `False` = 只提供 API（没有 `GET /` 或 `/static`） |
 | `cors_origins` | `None` | 不设置 = 不发 CORS header（跨域浏览器请求会被拒） |
 | `title` / `empty_title` / `empty_description` | `"lovia"` / `"Wake up, Neo."` / … | 品牌文案 |
@@ -80,16 +80,16 @@ Python 安装不会落进全局环境）；把今天日期作为 instruction 片
 
 ## 运行不会随浏览器关闭而停止
 
-被服务的运行是 **supervised** 的：运行是服务端拥有的 task，SSE 连接只是订阅者。笔记本中途合盖，
-运行仍会继续；重新打开聊天会重新 attach。客户端先收到已完成 turn 的权威 snapshot，再收到当前
-turn 在途事件的回放（包括仍在等待的 approval），然后接上实时流。
+被服务的运行由服务端托管：运行是服务端拥有的 task，SSE 连接只是订阅者。笔记本中途合盖，
+运行仍会继续；重新打开聊天会重新连接。客户端先收到已完成轮次的权威 snapshot，再收到当前
+轮次在途事件的回放（包括仍在等待的 approval），然后接上实时流。
 
 相关生命周期：
 
-- **停止**（`POST /api/chat/cancel`，UI 的 stop 按钮）会取消运行，并把已完成 turn finalize 进 session，
+- **停止**（`POST /api/chat/cancel`，UI 的 stop 按钮）会取消运行，并把已完成轮次写入 session，
   作为[调用方决定的 partial](sessions-and-checkpoints.md#契约)（悬空工具调用会丢掉，checkpoint 清理）。
   对话保留用户看到的内容，且不会重复计数。
-- **服务端关闭**会协作式取消 supervised runs，但**保留 checkpoint**，所以重新部署后可以在 reconnect
+- **服务端关闭**会协作式取消托管运行，但**保留 checkpoint**，所以重新部署后可以在 reconnect
   时恢复中断运行（`POST /api/chat/reconnect`）；后台[记忆整理](memory.md)会在有界等待内 drain。
 - **容量**：达到 `max_background_runs` 时，新启动返回 429，scheduler 会推迟触发。
 
@@ -111,10 +111,10 @@ turn 在途事件的回放（包括仍在等待的 approval），然后接上实
   非 loopback 地址和可写工作区组合时会明确警告，因为这相当于“以你的用户身份远程执行代码”。
 - **默认工作区模式是在 cwd 上 `trusted`**。这适合项目目录里的个人助手，不适合共享环境。先用
   `--workspace-mode readonly` 或 `--no-workspace`，之后再逐步放开。
-- **supervised 状态是进程内的。** 正在运行的任务、approvals、SSE hubs 都在内存里：请运行一个进程
+- **托管运行状态是进程内的。** 正在运行的任务、approvals、SSE hubs 都在内存里：请运行一个进程
   （`workers=1`）。SQLite stores 使用 `wal`，所以**数据**能存活；多 worker 部署需要粘性路由，
   通常不值得做。
-- **`/api/chat`（阻塞）不是 supervised**：不能 reconnect，也不能 attach。UI 应该使用
+- **`/api/chat`（阻塞）不走服务端托管**：不能重新连接，也不能接入已有运行。UI 应该使用
   `/api/chat/stream`；阻塞路由是给脚本用的。
 
 ## 延伸阅读

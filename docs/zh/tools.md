@@ -92,12 +92,12 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
-`parallel=False` 会让这个调用成为**执行屏障**：本 turn 中已经在跑的调用先完成，
-这个工具单独运行，然后剩下的调用继续。一个只包含屏障工具的 turn 会完全复现串行循环。
+`parallel=False` 会让这个调用成为**执行屏障**：本轮已经在跑的调用先完成，
+这个工具单独运行，然后剩下的调用继续。一轮里如果全是屏障工具，就会退化成完全串行执行。
 
 实践中重要的细节：
 
-- [Handoff](multi-agent.md) 工具永远是屏障，不管 `parallel` 怎么设。这保证“同一 turn 中
+- [Handoff](multi-agent.md) 工具永远是屏障，不管 `parallel` 怎么设。这保证“同一轮里
   第一个 handoff 胜出”没有竞态。内置工作区 mutator（`write_file`、`edit_file`、
   `shell`）默认 `parallel=False`；只读工具保持并发。
 - Preflight（预算检查、审批、参数校验）总是按请求顺序串行执行，所以审批提示
@@ -106,7 +106,7 @@ async def apply_migration(name: str) -> str:
   结果，所以顺序只是展示问题。
 - 不同调用的流式事件会交错；用 `ev.call.id` 关联
   （见[流式输出](streaming.md#工具与审批)）。
-- `parallel=` 控制的是**执行**。请求侧的对应项，也就是模型是否可以在同一 turn 发出
+- `parallel=` 控制的是**执行**。请求侧的对应项，也就是模型是否可以在同一轮发出
   多个工具调用，是 `ModelSettings.parallel_tool_calls`
   （见 [Provider](providers.md#modelsettings)）。
 

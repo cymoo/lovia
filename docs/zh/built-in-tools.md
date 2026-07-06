@@ -11,7 +11,7 @@ from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
@@ -78,7 +78,7 @@ class WebSearch(Protocol):
 
 `lovia.tools.time`：三个小工具。
 
-- **`now`**（工具）：当前 wall-clock 时间，ISO-8601 格式；可选 `tz` 接收 IANA
+- **`now`**（工具）：当前系统时钟时间，ISO-8601 格式；可选 `tz` 接收 IANA
   名称（如 `"Asia/Shanghai"`）。默认使用服务器本地时区。（Windows 上 IANA 名称需要
   `pip install tzdata`。）
 - **`sleep`**（工具）：最多 sleep 60 秒，适合简单的“等一下再检查”流程。
@@ -86,7 +86,7 @@ class WebSearch(Protocol):
   [instruction 片段](agents.md#instructions)的工厂，把今天日期写进 system prompt：
 
   ```python
-  agent = Agent(name="researcher", model="openai:gpt-5.5", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -103,7 +103,7 @@ class WebSearch(Protocol):
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model="openai:gpt-5.5", tools=[ask_human(channel)])
+agent = Agent(name="assistant", model="glm-5.2", tools=[ask_human(channel)])
 
 # 另一侧：操作员循环
 async for q in channel.questions():   # channel.close() 后结束

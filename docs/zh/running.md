@@ -52,7 +52,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 | `context` | `None` | 你的依赖对象，会作为 `ctx.deps` 暴露（见 [Agent](agents.md#每次运行的依赖)） |
 | `output_type` | `None` | 本次运行覆盖 agent 的[输出类型](structured-output.md) |
 | `extra_instructions` | `None` | 本次运行追加到 system prompt 的内容，渲染在 agent 自身 instructions 后；handoff 到的每个 agent 都会重新应用 |
-| `max_turns` | `50` | 模型 turn 的硬上限；超过会抛 `MaxTurnsExceeded` |
+| `max_turns` | `50` | 模型轮次的硬上限；超过会抛 `MaxTurnsExceeded` |
 | `budget` | `None` | 限制本次运行可消耗资源的 `RunBudget`（见[可靠性](reliability.md)） |
 | `cancel_token` | `None` | 预先接入的协作式取消（见[可靠性](reliability.md#取消)） |
 | `mailbox` | `None` | 运行中追加指令的通道（见[可靠性](reliability.md#运行中追加指令)） |
@@ -121,7 +121,7 @@ result = await Runner.run(
 | `messages` | 从 `entries` 派生出的 chat 格式视图（有损） |
 | `final_agent` | 产出最终答案的 agent；handoff 后可能和初始 agent 不同 |
 | `usage` | 累计 token：`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`、`total_tokens`；agent-as-tool 子运行也计入 |
-| `turns` | 本次运行用了多少个模型 turn |
+| `turns` | 本次运行用了多少个模型轮次 |
 | `finish_reason` | 最后一轮 provider 报告的结束原因；检查 `"stop"` 和 `"length"` 可发现被 `max_tokens` 截断的答案 |
 
 `entries` 刻意不包含 system prompt 和之前的 session 历史，因此无论运行是刚刚完成，

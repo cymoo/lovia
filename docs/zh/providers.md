@@ -9,7 +9,7 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:claude-4-8-opus", "openai:gpt-5.5"],  # fallback 链
+    model=["anthropic:<model>", "glm-5.2"],  # fallback 链
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
@@ -25,7 +25,7 @@ agent = Agent(
 | `anthropic:` | Anthropic Messages | `claude:` |
 | （无） | OpenAI Chat Completions | — |
 
-**裸名**（如 `"deepseek-v4-pro"`）会走 OpenAI 兼容 provider。这是
+**裸名**（如 `"glm-5.2"`）会走 OpenAI 兼容 provider。这是
 `OPENAI_BASE_URL` 服务的推荐写法。有一个保护：裸名如果以 `claude` 开头会打 warning，
 因为这几乎总是漏了 `anthropic:` 前缀。lovia 故意没有默认模型；没有模型就运行 agent
 会抛 `UserError`。
@@ -64,9 +64,10 @@ trust_env=None, replay_reasoning=None, official_api=None)`
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
 default_headers=None, trust_env=None, official_api=None)`
 
-环境变量：`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`。Messages API 每次请求都需要
-`max_tokens`，所以当 `settings.max_tokens` 未设置时，适配器会发送
-`default_max_tokens`（16,384，对齐默认上下文策略的输出预留）。
+未显式传入时，凭证和端点来自环境变量：`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`
+（默认 `https://api.anthropic.com/v1`）。Messages API 每次请求都需要 `max_tokens`，
+所以当 `settings.max_tokens` 未设置时，适配器会发送 `default_max_tokens`
+（16,384，对齐默认上下文策略的输出预留）。
 
 **Extended thinking**：按 Anthropic API 的方式通过 provider options 开启：
 
@@ -96,7 +97,7 @@ provider 都支持原生接口时才使用原生 schema；否则中途 fallback 
 因此能力混合的链会统一走 prompt 路径。
 
 ```python
-agent = Agent(name="assistant", model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"])
+agent = Agent(name="assistant", model=["anthropic:<model>", "glm-5.2"])
 ```
 
 ## ModelSettings

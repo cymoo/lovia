@@ -62,7 +62,7 @@ async def main() -> None:
     api_key = os.environ.get("OPENAI_API_KEY")
     if base_url and api_key:
         provider = OpenAIChatProvider(
-            model=os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-5.5"),
+            model=os.environ.get("OPENAI_DEFAULT_MODEL", "glm-5.2"),
             api_key=api_key,
             base_url=base_url,
         )

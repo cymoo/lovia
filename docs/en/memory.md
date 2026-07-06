@@ -16,7 +16,7 @@ from lovia import Agent, Memory
 
 agent = Agent(
     name="assistant",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     plugins=[Memory("./.lovia/memory")],
 )
 ```

@@ -16,7 +16,7 @@ class Brief(BaseModel):
     bullets: list[str]
 
 
-agent = Agent(name="summarizer", model="openai:gpt-5.5", output_type=Brief)
+agent = Agent(name="summarizer", model="glm-5.2", output_type=Brief)
 
 result = await Runner.run(agent, "Summarize lovia for a Python developer.")
 print(result.output.title)          # typed access — result.output is a Brief

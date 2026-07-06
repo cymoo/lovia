@@ -1,7 +1,7 @@
 # Quickstart
 
-From zero to a streaming, tool-using agent in about ten minutes. Every
-snippet on this page runs as-is once your model is configured.
+Three steps: install lovia, configure a model, and build an agent that can
+call a tool. Every snippet below runs once your model is configured.
 
 ## Install
 
@@ -9,32 +9,31 @@ snippet on this page runs as-is once your model is configured.
 pip install lovia
 ```
 
-Python 3.10+. The core install is deliberately small (`httpx`, `pydantic`,
-`pyyaml`); everything else — web UI, MCP, search — is an
-[optional extra](#next-steps).
+Python 3.10+. The core depends only on `httpx`, `pydantic`, and `pyyaml`;
+install extras such as the web UI, MCP, or search only when you need them.
 
 ## Configure a model
 
-lovia has no default vendor: you say which model to use, and the provider
-reads its own environment variables for credentials. The shortest path:
+For the official OpenAI API and OpenAI-compatible endpoints such as
+DeepSeek, Ollama, and vLLM, set `OPENAI_BASE_URL` and `OPENAI_API_KEY`,
+then use the endpoint's bare model name, such as `model="glm-5.2"`.
 
 ```bash
+export OPENAI_BASE_URL="https://..."
 export OPENAI_API_KEY="sk-..."
 ```
 
-That covers `model="openai:gpt-5.5"` against the official OpenAI API. Two
-common variations:
+For Anthropic, set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, then use
+the `anthropic:` prefix, for example `model="anthropic:<model>"`.
 
-- **OpenAI-compatible services** (DeepSeek, Ollama, vLLM, ...): also set
-  `OPENAI_BASE_URL` and name the model bare — `model="deepseek-v4-pro"`
-  routes to the OpenAI-compatible provider.
-- **Anthropic**: set `ANTHROPIC_API_KEY` and use
-  `model="anthropic:claude-4-8-opus"`.
+```bash
+export ANTHROPIC_BASE_URL="https://..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
 
-Everything else about providers — fallback chains, sampling settings, custom
-adapters — lives in [Providers & models](providers.md).
+More model forms are covered in [Providers & models](providers.md).
 
-## Hello, agent
+## Your first agent
 
 ```python
 from lovia import Agent
@@ -42,27 +41,19 @@ from lovia import Agent
 agent = Agent(
     name="assistant",
     instructions="Answer concretely and concisely.",
-    model="openai:gpt-5.5",  # or "deepseek-v4-pro", "anthropic:claude-4-8-opus", ...
+    model="glm-5.2",
 )
 
-result = agent.run_sync("Say hello in one sentence.")
+result = agent.run_sync("Tell a joke only Python developers would enjoy.")
 print(result.output)
 ```
 
-`run_sync()` is for scripts and REPLs — it owns the event loop. From async
-code, `await agent.run(...)` instead (calling `run_sync` inside a running
-event loop raises a `UserError` telling you exactly that).
+Use `run_sync()` in scripts; use `await agent.run(...)` from async code.
 
-An `Agent` is just configuration — it holds no conversation state, so one
-instance is safe to share across requests. To avoid hard-coding the model
-string, `lovia.model_from_env()` reads `LOVIA_MODEL` from the environment and
-fails with a setup hint when nothing is configured; the examples all use it.
+## Add a tool
 
-## Give it a tool
-
-Any typed Python function becomes a tool. The schema the model sees is
-derived from the signature and docstring — no separate definition to keep in
-sync.
+Add `@tool` to an ordinary Python function and the model can call it. The
+schema comes from type hints and the docstring.
 
 ```python
 from lovia import Agent, tool
@@ -77,22 +68,19 @@ def check_inventory(sku: str) -> str:
 agent = Agent(
     name="shop-assistant",
     instructions="Help customers with product questions.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[check_inventory],
 )
 
-result = agent.run_sync("Do you have SKU-1401 in stock?")
+result = agent.run_sync("Do you have SKU-1401 in stock? Add one buying tip.")
 print(result.output)
 ```
 
-Tools can be sync (run in a worker thread) or `async def` (awaited
-directly). When the model requests several calls in one turn they run
-concurrently by default — see [Tools](tools.md) for opting out, retries,
-timeouts, and approval gates.
+For concurrency, retries, timeouts, and approvals, see [Tools](tools.md).
 
-## Stream it
+## Stream output
 
-For a UI you want events as they happen, not a result at the end:
+For a UI, render events as they arrive:
 
 ```python
 import asyncio
@@ -116,15 +104,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The handle is async-iterable (typed events) *and* awaitable (the final
-`RunResult`). Iteration never raises — every stream ends with exactly one
-terminal event — while `handle.result()` returns the result or raises the
-run's error. The full event catalog is in [Streaming](streaming.md).
+The full event catalog is in [Streaming](streaming.md).
 
 ## Get typed output
 
-Pass a Pydantic model (or dataclass, `TypedDict`, plain type) and the final
-answer is parsed and validated for you:
+Pass `output_type` when you want an object instead of a string:
 
 ```python
 from pydantic import BaseModel
@@ -140,55 +124,35 @@ class Availability(BaseModel):
 
 agent = Agent(
     name="inventory",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[check_inventory],
     output_type=Availability,
 )
 
 result = agent.run_sync("Is SKU-1401 available?")
-print(result.output.units)  # a validated int, not a string to parse
+print(result.output.units)
 ```
 
-If the model's answer doesn't validate, lovia asks it once to repair the
-response before giving up. Details in
-[Structured output](structured-output.md).
+Details are in [Structured output](structured-output.md).
 
-## Instant playground
-
-You don't need to write serving code to chat with an agent:
+## Open a chat UI
 
 ```bash
 pip install "lovia[web]"
 python -m lovia.web
 ```
 
-That builds a default agent — model from the environment, skills from
-`./skills` if present, long-term memory, a todo list, and a workspace on the
-current directory — and serves a chat UI at `http://127.0.0.1:8000`. Point it
-at your own agent with `python -m lovia.web --app mymodule:agent`. See
-[Web UI & server](web.md).
+The default UI starts at `http://127.0.0.1:8000`. Point it at your own
+agent with `python -m lovia.web --app mymodule:agent`.
 
 ## Next steps
 
-- **[Core concepts](concepts.md)** — ten minutes that make every other page
-  shorter: what a run actually does, and where state lives.
-- **[Examples](../../examples/README.md)** — a numbered learning path
-  (`01_hello.py` ... `30_support_bot.py`). Setup:
-
-  ```bash
-  pip install -e ".[examples,web]"   # from a repo checkout
-  cp .env.example .env               # set LOVIA_MODEL + your API key
-  python examples/01_hello.py
-  ```
-
-- **Install extras** as you need them:
-
-  | Need | Install |
-  | --- | --- |
-  | Web UI + HTTP API | `pip install "lovia[web]"` |
-  | MCP servers | `pip install "lovia[mcp]"` |
-  | DuckDuckGo search | `pip install "lovia[ddg]"` |
-
-- Then dip into the [guides](README.md#guides) as features come up: sessions
-  for multi-turn chat, approvals for sensitive tools, compaction for long
-  conversations, evals for CI.
+| Goal | Read |
+| --- | --- |
+| Browse runnable scripts | [Examples](../../examples/README.md) |
+| Understand what a run does | [Core concepts](concepts.md) |
+| Persist multi-turn chats | [Sessions & checkpoints](sessions-and-checkpoints.md) |
+| Add files and shell access | [Workspace](workspace.md) |
+| Build a Web UI or HTTP API | [Web UI & server](web.md), [HTTP API](http-api.md) |
+| Add approvals, budgets, and retries | [Human in the loop](human-in-the-loop.md), [Reliability](reliability.md) |
+| Test and evaluate behavior | [Testing](testing.md), [Evals](eval.md) |

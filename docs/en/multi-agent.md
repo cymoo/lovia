@@ -11,13 +11,13 @@ parent carries on. Everything larger is composed from these in plain Python.
 ```python
 from lovia import Agent, Runner
 
-billing = Agent(name="billing", instructions="Handle billing issues.", model="openai:gpt-5.5")
-support = Agent(name="support", instructions="Handle technical issues.", model="openai:gpt-5.5")
+billing = Agent(name="billing", instructions="Handle billing issues.", model="glm-5.2")
+support = Agent(name="support", instructions="Handle technical issues.", model="glm-5.2")
 
 triage = Agent(
     name="triage",
     instructions="Route the user to the right specialist.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     handoffs=[billing, support],
 )
 
@@ -53,7 +53,7 @@ from lovia import Agent, Handoff
 
 triage = Agent(
     name="triage",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     handoffs=[
         Handoff(
             target=billing,
@@ -99,13 +99,13 @@ output comes back as the tool result:
 summarizer = Agent(
     name="summarizer",
     instructions="Summarize text in five bullets.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
 )
 
 manager = Agent(
     name="manager",
     instructions="Delegate summarization when useful.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[summarizer.as_tool(description="Summarize a passage.")],
 )
 ```

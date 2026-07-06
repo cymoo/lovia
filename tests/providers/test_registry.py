@@ -74,6 +74,110 @@ def test_register_provider_prefix_is_case_insensitive() -> None:
         _REGISTRY.pop("fakeco", None)
 
 
+@pytest.mark.parametrize(
+    ("spec", "provider_name"),
+    [
+        ("openai:m1", "openai-chat"),
+        ("oai:m1", "openai-chat"),
+        ("openai-chat:m1", "openai-chat"),
+        ("anthropic:m1", "anthropic"),
+        ("claude:m1", "anthropic"),
+        ("bare-model", "openai-chat"),
+    ],
+)
+def test_api_key_and_base_url_overrides_reach_the_provider(
+    spec: str, provider_name: str
+) -> None:
+    p = provider_from_string(spec, api_key="sk-test", base_url="http://gw:9/v1")
+
+    assert p.name == provider_name
+    assert p.base_url == "http://gw:9/v1"
+    assert p._api_key == "sk-test"
+
+
+def test_overrides_default_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitted overrides keep today's env-derived behavior."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://from-env/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    p = provider_from_string("openai:m1")
+
+    assert p.base_url == "http://from-env/v1"
+    assert p._api_key == "sk-env"
+
+
+def test_partial_override_keeps_env_for_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    p = provider_from_string("openai:m1", base_url="http://gw/v1")
+
+    assert p.base_url == "http://gw/v1"
+    assert p._api_key == "sk-env"
+
+
+def test_registered_factory_without_kwargs_still_works_without_overrides() -> None:
+    from lovia.providers import _REGISTRY
+
+    try:
+        register_provider("plainco", lambda model: _FakeProvider(model))
+        p = provider_from_string("plainco:m1")
+        assert isinstance(p, _FakeProvider)
+    finally:
+        _REGISTRY.pop("plainco", None)
+
+
+def test_registered_factory_without_kwargs_rejects_overrides() -> None:
+    from lovia.providers import _REGISTRY
+
+    try:
+        register_provider("plainco", lambda model: _FakeProvider(model))
+        with pytest.raises(ValueError, match="does not accept api_key/base_url"):
+            provider_from_string("plainco:m1", api_key="sk-x")
+    finally:
+        _REGISTRY.pop("plainco", None)
+
+
+def test_entry_point_provider_class_receives_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata
+    import lovia.providers as providers
+
+    class _KwProvider:
+        def __init__(
+            self,
+            model: str,
+            *,
+            api_key: str | None = None,
+            base_url: str | None = None,
+        ) -> None:
+            self.model = model
+            self.api_key = api_key
+            self.base_url = base_url
+
+    class _ClassEntryPoint:
+        name = "kwclassy"
+        value = "pkg:cls"
+
+        def load(self) -> object:
+            return _KwProvider
+
+    monkeypatch.setattr(
+        importlib.metadata, "entry_points", lambda group: [_ClassEntryPoint()]
+    )
+    monkeypatch.setattr(providers, "_ENTRY_POINTS", None)
+
+    try:
+        p = provider_from_string("kwclassy:m1", api_key="k", base_url="http://x")
+    finally:
+        providers._REGISTRY.pop("kwclassy", None)
+
+    assert isinstance(p, _KwProvider)
+    assert (p.api_key, p.base_url) == ("k", "http://x")
+
+
 def test_bare_claude_model_warns_about_missing_prefix(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

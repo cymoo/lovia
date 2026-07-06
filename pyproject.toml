@@ -67,6 +67,9 @@ dev = [
     "uvicorn[standard]>=0.27",
 ]
 
+[project.scripts]
+lovia = "lovia.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/cymoo/lovia"
 Repository = "https://github.com/cymoo/lovia"

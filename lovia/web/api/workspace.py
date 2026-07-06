@@ -10,7 +10,9 @@ approval-gated operations, but a web GET has no approval flow — under the
 readonly preset everything outside the root (and everything the agent's
 ``denied_paths`` hide, e.g. ``.env*``) is a plain ``deny``, which the session
 raises as :class:`PermissionDeniedError`. The panel can never see more than
-the agent itself could read without asking.
+the agent itself could read without asking — and strictly less: regenerable
+environment junk (:data:`_PANEL_IGNORES`) is hidden panel-wide so recency
+stays about the user's actual files.
 """
 
 from __future__ import annotations
@@ -54,16 +56,30 @@ def workspace_cfg(agent: Agent[Any]) -> LocalWorkspace | None:
     return cfg if isinstance(cfg, LocalWorkspace) else None
 
 
+# Junk the panel hides everywhere (Recent, browsing, preview): regenerable
+# environment/cache noise whose ever-fresh mtimes would otherwise dominate
+# the recency sort — and eat the walk's result cap before real files do.
+# Dot-prefixed junk (.git, .venv) is already hidden by the dotfile rule, and
+# build *outputs* (dist/ etc.) stay visible: "take the file the assistant
+# made" is the panel's job. Same pattern language as ``denied_paths``: a bare
+# name matches the file or directory (and everything beneath it) at any depth.
+_PANEL_IGNORES: tuple[str, ...] = ("__pycache__", "*.pyc", "venv", "node_modules")
+
+
 def _view_session(cfg: LocalWorkspace) -> LocalWorkspaceSession:
     """A per-request session locked to readonly.
 
     Carries over only ``denied_paths`` from the agent's policy — never its
     ``path_rules``, which could *widen* access (e.g. allow reads outside the
-    root that plain readonly denies).
+    root that plain readonly denies) — and adds the panel's own junk filter
+    (``_PANEL_IGNORES``). Denied entries are skipped before the walk's result
+    cap, so junk cannot crowd real files out of the Recent list either.
     """
     return LocalWorkspaceSession(
         root=cfg.root,
-        policy=WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths),
+        policy=WorkspacePolicy.readonly(
+            denied_paths=cfg.policy.denied_paths + _PANEL_IGNORES
+        ),
         limits=cfg.limits,
     )
 

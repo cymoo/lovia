@@ -58,7 +58,8 @@ app.include_router(build_api_router(deps))
 
 需要知道的语义：当某个 stream 拥有 session 时，`/api/chat` 返回 409；在正在运行的 session 上启动第二个
 stream 会 attach，而不是报错；workspace 路由不管 agent 自己是什么模式，都会使用强制 readonly session
-（并 deny `.env*`）。
+（继承 agent 的 `denied_paths`），并隐藏可再生的环境垃圾（`__pycache__`、`*.pyc`、`venv`、
+`node_modules`——点文件本来就隐藏），让 `/recent` 始终围绕用户的真实文件。
 
 ## SSE 流
 

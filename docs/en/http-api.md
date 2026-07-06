@@ -62,8 +62,11 @@ the same defaults `create_app` uses.
 
 Semantics worth knowing: `/api/chat` returns 409 while a stream owns the
 session; starting a second stream on a live session *attaches* instead of
-erroring; workspace routes run through a forced-readonly session (with
-`.env*` denied) regardless of the agent's own mode.
+erroring; workspace routes run through a forced-readonly session (the
+agent's `denied_paths` carried over) regardless of the agent's own mode,
+and hide regenerable environment junk (`__pycache__`, `*.pyc`, `venv`,
+`node_modules` — dotfiles were already hidden) so `/recent` stays about
+the user's actual files.
 
 ## The SSE stream
 

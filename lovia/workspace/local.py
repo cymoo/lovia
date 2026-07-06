@@ -64,6 +64,25 @@ def _has_hidden_segment(rel: str) -> bool:
     return any(seg.startswith(".") for seg in rel.split("/") if seg)
 
 
+def _venv_bin_dir(root: Path) -> tuple[Path, Path] | None:
+    """Locate a root-level virtualenv: ``(venv dir, its bin dir)``, or None.
+
+    Checks the conventional names most-specific-first, accepting a directory
+    only when *this host's* interpreter lives at the expected spot. So a
+    directory that merely shares the name never hijacks PATH — and neither
+    does a stale cross-OS venv (a Windows layout on POSIX, or vice versa),
+    whose interpreter this host can't run: recognizing it would set
+    VIRTUAL_ENV and prepend a bin dir that ``python`` never resolves into,
+    leaving a misleading half-activation.
+    """
+    bin_name, exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+    for name in (".venv", "venv"):
+        venv = root / name
+        if (venv / bin_name / exe).exists():
+            return venv, venv / bin_name
+    return None
+
+
 @dataclass
 class LocalWorkspaceSession:
     """A workspace session rooted at a local directory."""
@@ -240,14 +259,33 @@ class LocalWorkspaceSession:
         By default a minimal allowlist so commands get a working PATH/locale
         without inheriting the parent process's secrets (API keys, tokens).
         ``inherit_env=True`` passes the full host environment instead.
+
+        Either way, a virtualenv at the workspace root (``.venv``/``venv``)
+        is auto-activated: its bin dir is prepended to PATH so python/pip
+        resolve there rather than in the host environment (which may well be
+        the venv lovia itself runs in). Re-detected on every command — each
+        run is a fresh process, so the model cannot keep a venv activated
+        itself, and one it just created must take effect immediately.
+        ``env=`` overrides merge after this and still win.
         """
         if self.inherit_env:
-            return dict(os.environ)
-        return {
-            key: value
-            for key, value in os.environ.items()
-            if key in _ENV_PASSTHROUGH or key.startswith("LC_")
-        }
+            env = dict(os.environ)
+        else:
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key in _ENV_PASSTHROUGH or key.startswith("LC_")
+            }
+        found = _venv_bin_dir(self._root)
+        if found is not None:
+            venv_dir, bin_dir = found
+            path = env.get("PATH")
+            env["PATH"] = f"{bin_dir}{os.pathsep}{path}" if path else str(bin_dir)
+            env["VIRTUAL_ENV"] = str(venv_dir)
+            # As `activate` does — a lingering PYTHONHOME would override the
+            # venv's interpreter paths.
+            env.pop("PYTHONHOME", None)
+        return env
 
     # ------------------------------------------------------------------ #
     # Files

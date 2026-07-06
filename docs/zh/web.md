@@ -45,7 +45,9 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 存在 `./skills` 时加载 `Skills("./skills")`；启用 `Todo()` checklist；启用 `Scheduling`
 （agent 可以提出未来运行，审批门禁）；在 `./.lovia/memory` 下启用后台整理的 `Memory`；
 工具包含 `now` + `http_fetch`（安装了 `ddg` 后端时再加 `web_search`）；当前目录上启用
-**trusted 工作区**；把今天日期作为 instruction 片段；如果存在 `AGENTS.md`，就用它作为 instructions。
+**trusted 工作区**（根目录的 `.venv`/`venv` 会对 shell 命令[自动激活](workspace.md#工具)，
+Python 安装不会落进全局环境）；把今天日期作为 instruction 片段；如果存在 `AGENTS.md`，
+就用它作为 instructions。
 
 每个选项按命令行参数 → 环境变量 → 默认值的顺序读取。安装了 `python-dotenv` 时，会自动加载
 `./.env`（也可以传 `--env-file`）。模型凭证使用 provider 自己的变量（见[Provider](providers.md)）。

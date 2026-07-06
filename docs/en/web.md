@@ -52,8 +52,10 @@ when that directory exists; a `Todo()` checklist; `Scheduling` (the agent
 can propose its own future runs — approval-gated); `Memory` under
 `./.lovia/memory` with background curation; tools `now` + `http_fetch`
 (plus `web_search` when the `ddg` backend is installed); a **trusted
-workspace on the current directory**; today's date as an instruction
-fragment; instructions from `AGENTS.md` when present.
+workspace on the current directory** (a root-level `.venv`/`venv` is
+[auto-activated](workspace.md#the-tools) for shell commands, so Python
+installs stay out of the global environment); today's date as an
+instruction fragment; instructions from `AGENTS.md` when present.
 
 Every option reads flag → env var → default, and a `./.env` loads
 automatically when `python-dotenv` is installed (or pass `--env-file`).

@@ -132,6 +132,11 @@ def test_context_window_env_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
         _resolve(model_flag="openai:m")
 
 
+def test_context_window_flag_rejects_non_positive() -> None:
+    with pytest.raises(UserError, match="must be >= 1"):
+        _resolve(model_flag="openai:m", context_window_flag=0)
+
+
 def test_missing_model() -> None:
     assert _resolve().missing() == ["model"]
 

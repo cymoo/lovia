@@ -184,6 +184,10 @@ def resolve_connection(
     if api_key_flag:
         conn.api_key, conn.api_key_source = api_key_flag, "flag"
     if context_window_flag is not None:
+        if context_window_flag < 1:
+            raise UserError(
+                f"--context-window must be >= 1, got {context_window_flag}"
+            )
         conn.context_window, conn.context_window_source = context_window_flag, "flag"
     else:
         raw, source = _env_value("LOVIA_CONTEXT_WINDOW", env_sources)

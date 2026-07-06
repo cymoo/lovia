@@ -97,9 +97,12 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
+    # Only the latest docs build matters, so cancel any queued/in-flight deploy
+    # rather than letting back-to-back pushes race in the Pages backend (which
+    # surfaces as a flaky "Deployment failed, try again later").
     concurrency:
       group: pages
-      cancel-in-progress: false
+      cancel-in-progress: true
     steps:
       - name: Deploy to GitHub Pages
         id: deploy

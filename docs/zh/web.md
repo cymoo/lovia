@@ -18,8 +18,10 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 也可以完全不写代码：
 
 ```bash
-python -m lovia.web
+lovia web
 ```
+
+缺失的必需配置——模型，或官方端点所需的 API key——首次运行会在终端交互式询问、当场验证，并可保存到 `~/.config/lovia/config.env`。
 
 ## `serve()` 和 `create_app()`
 
@@ -41,7 +43,7 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 
 ## 零配置 CLI
 
-`python -m lovia.web` 会创建一个默认 agent 并启动服务。具体组合是：模型来自环境变量；
+`lovia web`（等价于 `python -m lovia.web`）会创建一个默认 agent 并启动服务。具体组合是：模型来自环境变量；
 存在 `./skills` 时加载 `Skills("./skills")`；启用 `Todo()` checklist；启用 `Scheduling`
 （agent 可以提出未来运行，审批门禁）；在 `./.lovia/memory` 下启用后台整理的 `Memory`；
 工具包含 `now` + `http_fetch`（安装了 `ddg` 后端时再加 `web_search`）；当前目录上启用
@@ -49,14 +51,17 @@ ASGI app，供你自己的进程管理器使用。重要选项：
 Python 安装不会落进全局环境）；把今天日期作为 instruction 片段；如果存在 `AGENTS.md`，
 就用它作为 instructions。
 
-每个选项按命令行参数 → 环境变量 → 默认值的顺序读取。安装了 `python-dotenv` 时，会自动加载
-`./.env`（也可以传 `--env-file`）。模型凭证使用 provider 自己的变量（见[Provider](providers.md)）。
+每个选项按命令行参数 → 环境变量 → `./.env`（或 `--env-file`）→
+`~/.config/lovia/config.env`（由首次运行的配置向导写入）→ 默认值的顺序读取。
+模型凭证使用 provider 自己的变量（见[Provider](providers.md)）；每次启动都会打印
+生效配置及其来源的摘要。
 
 | Flag | Env | 默认 |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--db` | `LOVIA_DB` | cwd 下的 `<agent>.db` |
-| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | 必填 |
+| `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | 首次运行时询问 |
+| `--base-url` / `--api-key` | `OPENAI_BASE_URL` / `OPENAI_API_KEY`（或 `ANTHROPIC_*`，按模型前缀） | 官方端点 / 需要时询问 |
 | `--skills-dir`（可重复） | `LOVIA_SKILLS_DIR` | `./skills`（存在时） |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory`（开启） |
 | `--workspace` / `--workspace-mode` / `--no-workspace` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted`（开启） |

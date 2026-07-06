@@ -139,11 +139,13 @@ Details are in [Structured output](structured-output.md).
 
 ```bash
 pip install "lovia[web]"
-python -m lovia.web
+lovia web
 ```
 
-The default UI starts at `http://127.0.0.1:8000`. Point it at your own
-agent with `python -m lovia.web --app mymodule:agent`.
+Anything required but missing (the model; an API key for the official
+endpoints) is asked interactively on the first run and can be saved to
+`~/.config/lovia/config.env`. The UI starts at `http://127.0.0.1:8000`.
+Point it at your own agent with `lovia web --app mymodule:agent`.
 
 ## Next steps
 

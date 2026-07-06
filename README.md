@@ -40,8 +40,12 @@ Or serve a full chat UI — memory, skills, scheduling, and a workspace on
 the current directory included — in one line:
 
 ```bash
-pip install "lovia[web]" && python -m lovia.web
+pip install "lovia[web]" && lovia web
 ```
+
+No configuration yet? The first run asks for the model, endpoint, and API
+key right in the terminal, verifies them, and offers to save the answers to
+`~/.config/lovia/config.env` so you never retype them.
 
 Anthropic is built in too: configure `ANTHROPIC_API_KEY`, set
 `ANTHROPIC_BASE_URL` for non-default endpoints, and use the `anthropic:`
@@ -440,8 +444,14 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-python -m lovia.web --port 9000 --model glm-5.2   # or zero-config
+lovia web --port 9000 --model glm-5.2      # python -m lovia.web works too
+lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
+
+Anything required but missing (model; API key for the official endpoints)
+is asked interactively on first run and can be saved to
+`~/.config/lovia/config.env`. Configuration precedence: flag > environment >
+`./.env` > `~/.config/lovia/config.env`.
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST
 API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or

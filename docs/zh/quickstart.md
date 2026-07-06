@@ -136,11 +136,12 @@ print(result.output.units)
 
 ```bash
 pip install "lovia[web]"
-python -m lovia.web
+lovia web
 ```
 
-默认会在 `http://127.0.0.1:8000` 启动聊天 UI。要换成你自己的 agent：
-`python -m lovia.web --app mymodule:agent`。
+缺失的必需配置（模型；官方端点的 API key）首次运行会交互式询问，并可保存到
+`~/.config/lovia/config.env`。UI 默认在 `http://127.0.0.1:8000` 启动。
+要换成你自己的 agent：`lovia web --app mymodule:agent`。
 
 ## 下一步
 

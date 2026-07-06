@@ -67,17 +67,19 @@ def _has_hidden_segment(rel: str) -> bool:
 def _venv_bin_dir(root: Path) -> tuple[Path, Path] | None:
     """Locate a root-level virtualenv: ``(venv dir, its bin dir)``, or None.
 
-    Checks the conventional names most-specific-first; a directory counts
-    only when the interpreter exists at the expected spot, so a directory
-    that merely *shares* the name never hijacks PATH. Both the POSIX and
-    Windows layouts are recognized regardless of host OS — a stale cross-OS
-    venv resolves no usable interpreter and is harmless.
+    Checks the conventional names most-specific-first, accepting a directory
+    only when *this host's* interpreter lives at the expected spot. So a
+    directory that merely shares the name never hijacks PATH — and neither
+    does a stale cross-OS venv (a Windows layout on POSIX, or vice versa),
+    whose interpreter this host can't run: recognizing it would set
+    VIRTUAL_ENV and prepend a bin dir that ``python`` never resolves into,
+    leaving a misleading half-activation.
     """
+    bin_name, exe = ("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")
     for name in (".venv", "venv"):
         venv = root / name
-        for bin_name, exe in (("bin", "python"), ("Scripts", "python.exe")):
-            if (venv / bin_name / exe).exists():
-                return venv, venv / bin_name
+        if (venv / bin_name / exe).exists():
+            return venv, venv / bin_name
     return None
 
 

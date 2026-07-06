@@ -9,6 +9,7 @@ import os
 import pytest
 
 from lovia.exceptions import UserError
+from lovia.workspace import local as local_module
 from lovia.workspace import (
     CommandRule,
     LocalWorkspaceSession,
@@ -577,12 +578,28 @@ async def test_venv_plain_name_recognized(tmp_path) -> None:
     assert result.stdout.strip().endswith("/venv")
 
 
-async def test_venv_windows_layout_recognized(tmp_path) -> None:
+def test_venv_bin_dir_selects_windows_layout_on_windows(tmp_path, monkeypatch) -> None:
+    # A unit test for the host-OS branch: on Windows the Scripts/python.exe
+    # layout is the one that counts. (Faking os.name through a real session is
+    # impossible — pathlib would switch Path to an uninstantiable WindowsPath —
+    # but _venv_bin_dir never calls the Path factory, so it can be poked here.)
     (tmp_path / ".venv" / "Scripts").mkdir(parents=True)
     (tmp_path / ".venv" / "Scripts" / "python.exe").touch()
+    monkeypatch.setattr(local_module.os, "name", "nt")
+    found = local_module._venv_bin_dir(tmp_path)
+    assert found is not None
+    assert found[1] == tmp_path / ".venv" / "Scripts"
+
+
+async def test_foreign_os_venv_layout_not_activated(tmp_path) -> None:
+    # A venv carrying only the *other* OS's layout can't run here, so it must
+    # not half-activate — VIRTUAL_ENV set around a bin dir python never enters.
+    other = ("bin", "python") if os.name == "nt" else ("Scripts", "python.exe")
+    (tmp_path / ".venv" / other[0]).mkdir(parents=True)
+    (tmp_path / ".venv" / other[0] / other[1]).touch()
     session = await _session(tmp_path)
-    result = await session.run('echo "$VIRTUAL_ENV"')
-    assert result.stdout.strip().endswith("/.venv")
+    result = await session.run('echo "[$VIRTUAL_ENV]"')
+    assert result.stdout.strip() == "[]"
 
 
 async def test_directory_merely_named_venv_is_not_activated(tmp_path) -> None:

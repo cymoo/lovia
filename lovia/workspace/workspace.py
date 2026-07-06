@@ -165,12 +165,14 @@ class LocalWorkspace:
                 "broader access will ask for approval instead."
             )
             lines.append(
-                "Python work stays in the workspace's own virtualenv: when "
-                "'.venv' (or 'venv') exists at the root it is automatically "
-                "on PATH for shell commands — python/pip already resolve to "
-                "it, no activation needed. To install packages when no venv "
-                "exists, create it first (e.g. 'python -m venv .venv'); "
-                "never install into the global environment."
+                "Python work stays in the workspace's own virtualenv: when a "
+                "real '.venv' (or 'venv') virtualenv exists at the root — one "
+                "with an interpreter inside, as 'python -m venv' creates, not "
+                "just a directory by that name — it is automatically on PATH "
+                "for shell commands, so python/pip already resolve to it, no "
+                "activation needed. To install packages when none exists, "
+                "create it first (e.g. 'python -m venv .venv'); never install "
+                "into the global environment."
             )
         return "\n".join(lines)
 

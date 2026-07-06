@@ -14,7 +14,7 @@ lovia separates the knobs accordingly, with one placement rule:
 ```python
 from lovia import Agent, RetryPolicy, RunBudget, Runner
 
-agent = Agent(name="analyst", model="openai:gpt-5.5",
+agent = Agent(name="analyst", model="glm-5.2",
               retry=RetryPolicy(max_attempts=2))          # posture
 
 result = await Runner.run(

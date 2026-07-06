@@ -1,12 +1,12 @@
 # 可观测性
 
-看不见就修不了。agent 的失败模式往往发生在运行中：某个工具跑了 40 秒，某个 turn 烧了
-30k tokens。lovia 提供三种仪表，从轻到重：**hooks**（响应事件）、**tracing**（带时间的
+看不见就修不了。agent 的失败模式往往发生在运行中：某个工具跑了 40 秒，某一轮烧了
+30k tokens。lovia 提供三类观测手段，从轻到重：**hooks**（响应事件）、**tracing**（带时间的
 span）、**logging**（内置过程日志）。
 
 ## Hooks
 
-`AgentHooks` 是一个订阅器：按事件类型挂 handler，runner 会把每个事件都派发给它们。事件和
+`AgentHooks` 是一个订阅器：按事件类型挂处理函数，runner 会把每个事件都派发给它们。事件和
 [流式输出](streaming.md)产出的类型完全相同，所以即使没人消费 stream，观测逻辑仍然工作。
 
 ```python
@@ -36,14 +36,14 @@ agent = Agent(..., hooks=hooks)
 
 契约：
 
-- 每个 handler 都以 `handler(event, ctx)` 调用，即事件加本次运行的实时
+- 每个处理函数都以 `handler(event, ctx)` 调用，即事件加本次运行的实时
   [`RunContext`](concepts.md#runcontext唯一的运行句柄)（`session_id`、活跃 agent、累计 usage、
-  transcript、cancel token、mailbox）。handler 可以同步或异步。
+  transcript、cancel token、mailbox）。处理函数可以同步或异步。
 - 按具体类型注册，但用 `isinstance` 匹配；订阅基类（如 `events.ToolEvent`）会捕获整个家族。
   同一类型可有多个 handler，按注册顺序执行；catch-all 最先执行。
-- **失败时放行**：handler 抛异常会被记录（warning，带 traceback）并跳过。坏掉的指标不应中止被观察的运行。
+- **失败时放行**：处理函数抛异常会被记录（warning，带 traceback）并跳过。坏掉的指标不应中止被观察的运行。
 - 顺序保证：事件在循环的单一派发点按发出顺序到达 hooks，和 stream 消费者看到的顺序一致。
-- hooks 不只是观察者：`ctx` 是实时句柄，所以 handler 可以向 `ctx.mailbox` push（[运行中追加指令](reliability.md#运行中追加指令)），
+- hooks 不只是观察者：`ctx` 是实时句柄，所以处理函数可以向 `ctx.mailbox` push（[运行中追加指令](reliability.md#运行中追加指令)），
   或触发 `ctx.cancel_token`。
 
 [插件](plugins.md)也可以贡献自己的 `AgentHooks`，和 agent 自己的 hooks 一起派发。[Memory](memory.md)
@@ -71,7 +71,7 @@ result = await Runner.run(agent, "...", tracer=ConsoleTracer(min_duration_ms=5))
 
 内置三个实现：`NoopTracer`（默认，让观测没有成本）、`ConsoleTracer`
 （通过 `logging` 输出缩进树，适合本地调试）、`InMemoryTracer`（记录 `RecordedSpan`，供测试断言）。
-生产中请接你的后端，如 OpenTelemetry、Logfire：实现两方法 protocol 即可
+生产中请接入自己的后端，如 OpenTelemetry、Logfire：实现两方法 protocol 即可
 （`span()` 返回有 `set_attribute` / `record_exception` 的对象）。
 
 tracer 是**运行级**开关，不是 agent 字段：它会跨 handoff 作用到当前活跃 agent；
@@ -108,11 +108,11 @@ enable_logging("DEBUG", color=False)  # 更多细节，无 ANSI
 
 cache 字段是对 `input_tokens` 的**细分**，不额外相加。成本公式应类似
 `(input - cache_read) * rate_in + cache_read * rate_cached + …`。要看每轮增量，可以在
-`RunCompleted`/`TurnEnded` hook 里做 diff，或从 `model.done` 日志行读取每个模型 turn 自己的 usage。
+`RunCompleted`/`TurnEnded` hook 里做 diff，或从 `model.done` 日志行读取每轮模型调用自己的 usage。
 
 ## 容易踩的点
 
-- **hooks 在线运行循环里执行。** 慢 handler 会拖慢运行；事件之间会 await 派发。指标请异步发送
+- **hooks 在运行循环里同步派发。** 慢处理函数会拖慢运行；事件之间会 await 派发。指标请异步发送
   （队列 + worker），不要每个事件都阻塞 HTTP 调用。
 - **hook mutation 是真实的。** `ctx.entries` 是实时 transcript，请按只读处理。安全 mutation 是设计好的：
   mailbox 和 cancel。

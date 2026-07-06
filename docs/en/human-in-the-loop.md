@@ -105,7 +105,7 @@ channel = HumanChannel()
 
 agent = Agent(
     name="assistant",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[ask_human(channel)],
 )
 ```

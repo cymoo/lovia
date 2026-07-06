@@ -12,7 +12,7 @@ from lovia import Agent, Compaction
 
 agent = Agent(
     name="companion",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     context_policy=Compaction(
         context_window=200_000,
         compact_at=0.75,

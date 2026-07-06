@@ -11,7 +11,7 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="Write concrete, concise answers.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
 )
 ```
 
@@ -59,7 +59,7 @@ run's `RunContext` (the same handle tools get) and may be sync or async:
 async def instructions(ctx) -> str:
     return f"You support the {ctx.deps.plan} plan. Be brief."
 
-agent = Agent(name="support", instructions=instructions, model="openai:gpt-5.5")
+agent = Agent(name="support", instructions=instructions, model="glm-5.2")
 ```
 
 **Registered fragments** — keep the base static and append dynamic pieces
@@ -68,7 +68,7 @@ order after `instructions`, separated by blank lines; returning `""` skips a
 fragment conditionally:
 
 ```python
-agent = Agent(name="support", instructions="You are a support agent.", model="openai:gpt-5.5")
+agent = Agent(name="support", instructions="You are a support agent.", model="glm-5.2")
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -98,7 +98,7 @@ derive per-request or per-experiment variants:
 
 ```python
 strict = agent.clone(instructions="Answer with citations only.")
-cheap = agent.clone(model="openai:gpt-5.5-mini")
+variant = agent.clone(model="glm-5.2")
 ```
 
 The boundary between `@agent.instruction` and `clone()` is
@@ -133,7 +133,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "No open tickets."
 
 
-agent: Agent[Deps] = Agent(name="support", model="openai:gpt-5.5", tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model="glm-5.2", tools=[open_tickets])
 
 result = await Runner.run(agent, "Any open tickets?", context=Deps("u1", db))
 ```

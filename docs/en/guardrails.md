@@ -22,7 +22,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -63,11 +63,11 @@ owns the abort.
 
 ## Recipes
 
-**Screen with a cheap model** — a guardrail is async, so it can run its own
+**Screen with a separate model** — a guardrail is async, so it can run its own
 scripted classifier:
 
 ```python
-screen = Agent(name="screen", model="openai:gpt-5.5-mini", output_type=bool,
+screen = Agent(name="screen", model="glm-5.2", output_type=bool,
                instructions="Answer true if the request asks for legal advice.")
 
 async def no_legal_advice(messages, ctx):

@@ -10,7 +10,7 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:claude-4-8-opus", "openai:gpt-5.5"],  # fallback chain
+    model=["anthropic:<model>", "glm-5.2"],  # fallback chain
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
@@ -26,7 +26,7 @@ or a list of either (a [fallback chain](#fallback-chains)).
 | `anthropic:` | Anthropic Messages | `claude:` |
 | *(none)* | OpenAI Chat Completions | — |
 
-A **bare name** (`"deepseek-v4-pro"`) routes to the OpenAI-compatible
+A **bare name** (`"glm-5.2"`) routes to the OpenAI-compatible
 provider — the intended spelling for `OPENAI_BASE_URL` services. One guard:
 a bare name starting with `claude` logs a warning, since it is almost always
 a missing `anthropic:` prefix. There is deliberately no default model:
@@ -74,10 +74,12 @@ provider are replayed.
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
 default_headers=None, trust_env=None, official_api=None)`
 
-Environment: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. The Messages API
-requires `max_tokens` on every request, so when `settings.max_tokens` is
-unset the adapter sends `default_max_tokens` (16,384 — matching the
-default context policy's output reservation).
+Credentials and endpoint resolve from the environment when not passed:
+`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default
+`https://api.anthropic.com/v1`). The Messages API requires `max_tokens` on
+every request, so when `settings.max_tokens` is unset the adapter sends
+`default_max_tokens` (16,384 — matching the default context policy's output
+reservation).
 
 **Extended thinking**: enable it per Anthropic's API via provider options —
 
@@ -112,7 +114,7 @@ would reject the schema payload — so a chain mixing capabilities quietly
 uses the prompt path for all.
 
 ```python
-agent = Agent(name="assistant", model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"])
+agent = Agent(name="assistant", model=["anthropic:<model>", "glm-5.2"])
 ```
 
 ## ModelSettings

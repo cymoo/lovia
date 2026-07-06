@@ -14,7 +14,7 @@ from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="assistant",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     plugins=[
         MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
@@ -59,7 +59,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:      # 只打开一次
-    agent = Agent(name="assistant", model="openai:gpt-5.5", plugins=[MCP(conn)])
+    agent = Agent(name="assistant", model="glm-5.2", plugins=[MCP(conn)])
     await Runner.run(agent, "抓取 https://example.com 并总结。")
     await Runner.run(agent, "现在抓取 RFC 索引。")   # 同一连接
 ```

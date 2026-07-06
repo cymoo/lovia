@@ -11,7 +11,7 @@ from lovia import Agent, Skills
 agent = Agent(
     name="support",
     instructions="Help customers using the right policy.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     plugins=[Skills("./skills")],
 )
 ```

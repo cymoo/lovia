@@ -13,7 +13,7 @@ from lovia.workspace import CommandRule, Workspace
 agent = Agent(
     name="coder",
     instructions="Make small, targeted code changes.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     workspace=Workspace.local(
         ".",
         mode="coding",

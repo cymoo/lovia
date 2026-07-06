@@ -40,13 +40,13 @@ result = await handle.result()
 
 ## 事件清单
 
-### 运行与 turn 生命周期
+### 运行与轮次生命周期
 
 | 事件 | 字段 | 何时出现 |
 | --- | --- | --- |
-| `RunStarted` | `agent` | 第一个 turn 之前，出现一次 |
-| `TurnStarted` | `agent`, `turn` | 每个 turn，在模型调用前 |
-| `TurnEnded` | `agent`, `turn` | 每个 turn，在工具完成后 |
+| `RunStarted` | `agent` | 第一轮之前，出现一次 |
+| `TurnStarted` | `agent`, `turn` | 每轮，在模型调用前 |
+| `TurnEnded` | `agent`, `turn` | 每轮，在工具完成后 |
 | `RunCompleted` | `result` | 终止事件：运行成功 |
 | `RunFailed` | `error` | 终止事件：运行失败 |
 
@@ -56,14 +56,14 @@ result = await handle.result()
 | --- | --- | --- |
 | `TextDelta` | `delta` | assistant 文本片段 |
 | `ReasoningDelta` | `delta` | reasoning/思考片段，仅限会暴露它的 provider；适合折叠显示或弱化显示，不要依赖它做行为判断 |
-| `OutputDiscarded` | — | 本 turn 已流出的 delta 作废；清掉你渲染的内容，之后会有一条新的流 |
-| `MessageCompleted` | `entries` | 一个 assistant turn 已完整组装：包含它产生的新 `TranscriptEntry` |
-| `UserMessageInjected` | `content`, `turn` | [mailbox](reliability.md#运行中追加指令) 消息被折入为用户 turn |
+| `OutputDiscarded` | — | 本轮已流出的 delta 作废；清掉你渲染的内容，之后会有一条新的流 |
+| `MessageCompleted` | `entries` | 一轮 assistant 回复已完整组装：包含它产生的新 `TranscriptEntry` |
+| `UserMessageInjected` | `content`, `turn` | [mailbox](reliability.md#运行中追加指令) 消息被折入为用户消息 |
 
 当 runner 通过重试或 fallback 从 provider 的中途流式错误中恢复时，会触发
 `OutputDiscarded`
 （见 [`RetryPolicy.restart_on_partial`](reliability.md#provider-重试)）。持久化
-transcript 不受影响；它只由已完成 turn 组装出来。
+transcript 不受影响；它只由已完成轮次组装出来。
 
 ### 工具与审批
 
@@ -86,15 +86,15 @@ UI 最容易写错的细节：
   `ToolCallFailed`。
 - 处理 `ApprovalRequired` 时，可以在循环继续交还控制权给 runner 前调用
   `ev.approve()` 或 `ev.reject()`；也可以稍后通过 `handle.approvals` 处理。
-  当 turn 需要答案而请求仍未处理时，默认**拒绝**，所以没处理审批的 UI 不会挂住运行。
-  同一 turn 里其他调用会在流停在审批事件上时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
+  当本轮需要答案而请求仍未处理时，默认**拒绝**，所以没处理审批的 UI 不会挂住运行。
+  同一轮里其他调用会在流停在审批事件上时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
 
 ### 转移与上下文
 
 | 事件 | 字段 | 何时出现 |
 | --- | --- | --- |
 | `HandoffOccurred` | `from_agent`, `to_agent` | 控制权[移交](multi-agent.md)到另一个 agent |
-| `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | [上下文策略](context.md)为本 turn 生成了压缩后的 view |
+| `ContextCompacted` | `session_id`, `entries_before`, `entries_after`, `notice` | [上下文策略](context.md)为本轮生成了压缩后的 view |
 
 `ContextCompacted.notice` 是 JSON-safe 的 `CompactionNotice`（原因、是否 reactive、
 压缩前后 token、策略生成的 `detail` 行、可选 summary）。Web UI 重新加载已完成

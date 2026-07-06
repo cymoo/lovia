@@ -15,9 +15,9 @@ cp .env.example .env                 # then set LOVIA_MODEL + your API key
 python examples/01_hello.py
 ```
 
-`LOVIA_MODEL` picks the model for every example, e.g. `openai:gpt-5.5` or
-`anthropic:claude-4-8-opus`. Point `OPENAI_BASE_URL` at any OpenAI-compatible
-service (DeepSeek, Ollama, vLLM, …) to use it with `openai:<model>` strings.
+`LOVIA_MODEL` picks the model for every example, e.g. `glm-5.2` or
+`anthropic:<model>`. Point `OPENAI_BASE_URL` at any OpenAI-compatible
+service (DeepSeek, Ollama, vLLM, ...) and use the bare model name it provides.
 Scripts that write anything write into `tmp/` (gitignored).
 
 Two examples run fully offline, no key needed: `10_custom_provider.py` and

@@ -10,7 +10,7 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="回答要具体、简洁。",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
 )
 ```
 
@@ -56,14 +56,14 @@ agent = Agent(
 async def instructions(ctx) -> str:
     return f"你正在支持 {ctx.deps.plan} 套餐用户。回复要简短。"
 
-agent = Agent(name="support", instructions=instructions, model="openai:gpt-5.5")
+agent = Agent(name="support", instructions=instructions, model="glm-5.2")
 ```
 
 **注册片段**：基础 prompt 保持静态，通过 `@agent.instruction` 装饰器追加动态片段。
 片段会按注册顺序渲染在 `instructions` 之后，以空行分隔；返回 `""` 可以按条件跳过：
 
 ```python
-agent = Agent(name="support", instructions="你是一名客服 agent。", model="openai:gpt-5.5")
+agent = Agent(name="support", instructions="你是一名客服 agent。", model="glm-5.2")
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -88,7 +88,7 @@ runner 追加在它后面。
 
 ```python
 strict = agent.clone(instructions="只回答带引用的内容。")
-cheap = agent.clone(model="openai:gpt-5.5-mini")
+variant = agent.clone(model="glm-5.2")
 ```
 
 `@agent.instruction` 和 `clone()` 的边界是 **copy-on-register**：clone 之前注册的
@@ -120,7 +120,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "没有未关闭工单。"
 
 
-agent: Agent[Deps] = Agent(name="support", model="openai:gpt-5.5", tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model="glm-5.2", tools=[open_tickets])
 
 result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps("u1", db))
 ```

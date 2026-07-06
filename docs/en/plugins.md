@@ -12,7 +12,7 @@ from lovia import Agent, Memory, Skills, Todo
 
 agent = Agent(
     name="builder",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
@@ -129,7 +129,7 @@ class GlossaryPlugin:
         )
 
 
-agent = Agent(name="assistant", model="openai:gpt-5.5", plugins=[GlossaryPlugin(MyGlossary())])
+agent = Agent(name="assistant", model="glm-5.2", plugins=[GlossaryPlugin(MyGlossary())])
 ```
 
 A plugin that opens a resource in `setup()` (an MCP connection, an HTTP
@@ -158,7 +158,7 @@ from lovia import Agent, Runner, Todo
 agent = Agent(
     name="builder",
     instructions="Complete multi-step work carefully.",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     plugins=[Todo()],
 )
 

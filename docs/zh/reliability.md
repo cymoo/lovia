@@ -12,7 +12,7 @@ lovia 把对应控制项分开，并遵循一条放置规则：
 ```python
 from lovia import Agent, RetryPolicy, RunBudget, Runner
 
-agent = Agent(name="analyst", model="openai:gpt-5.5",
+agent = Agent(name="analyst", model="glm-5.2",
               retry=RetryPolicy(max_attempts=2))          # 应对策略
 
 result = await Runner.run(
@@ -34,7 +34,7 @@ jitter 的指数退避大约是 1s / 2s / 4s，每次等待上限 30s。`retry=N
 | `RetryPolicy` 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `max_attempts` | `4` | 每个 provider 的总调用次数（第一次算 1） |
-| `restart_on_partial` | `True` | 从中途流式失败中恢复时，丢弃部分输出并重新流式执行本 turn |
+| `restart_on_partial` | `True` | 从中途流式失败中恢复时，丢弃部分输出并重新执行本轮流式调用 |
 | `backoff_base` / `backoff_max` | `1.0` / `30.0` | 指数退避，±50% jitter |
 | `retry_on` | 可重试 `ProviderError` | 判定什么算临时错误的谓词 |
 
@@ -43,8 +43,8 @@ jitter 的指数退避大约是 1s / 2s / 4s，每次等待上限 30s。`retry=N
 [reactive compaction](context.md)，修正真正的问题。
 
 **`restart_on_partial`** 是需要注意的开关：长运行里 provider 发了半段话后中途断开很常见。开启时
-（默认），runner 会丢弃这个不完整 turn，并发出 [`OutputDiscarded`](streaming.md#模型输出)，让 UI
-清掉已渲染内容，然后从头重新流式执行。transcript 只由完成的 turn 组装，所以不会被污染。关闭时，
+（默认），runner 会丢弃这个不完整轮次，并发出 [`OutputDiscarded`](streaming.md#模型输出)，让 UI
+清掉已渲染内容，然后从头重新流式执行。transcript 只由已完成轮次组装，所以不会被污染。关闭时，
 中途流式错误会立刻传播。
 
 **Fallback 链**会和每个 provider 的重试组合：`model=[a, b]` 先耗尽 `a` 的尝试，再带着新的尝试计数
@@ -55,14 +55,14 @@ jitter 的指数退避大约是 1s / 2s / 4s，每次等待上限 30s。`retry=N
 
 ## 预算
 
-`RunBudget` 给一次运行设置硬上限。runner 会在 turn 之间、每次模型回复后，以及每个工具调用的
+`RunBudget` 给一次运行设置硬上限。runner 会在轮次之间、每次模型回复后，以及每个工具调用的
 preflight 时检查它：
 
 | 字段 | 限制 |
 | --- | --- |
 | `max_input_tokens` / `max_output_tokens` / `max_total_tokens` | 累计 token |
 | `max_tool_calls` | **请求的**工具调用数；被拒绝的也算，所以模型反复请求错误工具名也会撞上限 |
-| `max_seconds` | wall clock，从第一次检查开始 |
+| `max_seconds` | 真实耗时，从第一次检查开始 |
 
 语义：触发预算会在下一个安全点抛 `BudgetExceeded`。已经在跑的工具调用可以**完成并持久化**
 （触发预算会停止**分发**新工作，不会杀掉已经运行的工作）。一个预算实例带有单次运行状态
@@ -74,7 +74,7 @@ preflight 时检查它：
 
 ## 取消
 
-取消是协作式的，通过 token。runner 在 turn 之间、每次 preflight，以及每个工具结果完成后检查：
+取消是协作式的，通过 token。runner 在轮次之间、每次 preflight，以及每个工具结果完成后检查：
 
 ```python
 from lovia import CancelToken, Runner
@@ -95,7 +95,7 @@ token.cancel("用户点击停止")        # 或：handle.cancel("...")
 
 ## 运行中追加指令
 
-取消的另一面：`Mailbox` 把消息送**进**正在运行的 agent。runner 会在每个 turn 开始时取出其中的消息，
+取消的另一面：`Mailbox` 把消息送**进**正在运行的 agent。runner 会在每轮开始时取出其中的消息，
 并把每条消息作为普通用户消息追加进去：
 
 ```python
@@ -123,8 +123,8 @@ def deadline(ev, ctx: RunContext):
 
 精确语义：
 
-- 取消息只发生在 **turn 开始**，不会在 turn 中途发生。`TurnStarted` hook 会在本 turn 取消息前一点触发，
-  所以从这个 hook push 的消息会落到当前 turn；其他地方 push 的消息会落到下一 turn。
+- 取消息只发生在**每轮开始**，不会在中途发生。`TurnStarted` hook 会在本轮取消息前触发，
+  所以从这个 hook push 的消息会落到当前轮；其他地方 push 的消息会落到下一轮。
 - 每条被取出的消息都会发出 [`UserMessageInjected`](streaming.md#模型输出)，并立即持久化
   （崩溃不会丢掉已消费消息）。
 - `push()` 返回 token；`remove(token)` 可以撤回尚未被取出的消息。
@@ -134,13 +134,13 @@ def deadline(ev, ctx: RunContext):
 
 ## 容易踩的点
 
-- **重试会在错误显现前放大延迟。** 4 次尝试加退避，可能让一个 turn 失败前等 ~10s。交互式 UI
+- **重试会在错误显现前放大延迟。** 4 次尝试加退避，可能让一轮模型调用在失败前等 ~10s。交互式 UI
   通常会把应对策略设成 `max_attempts=2`，再让用户自己重试。
 - **`max_seconds` 不是 deadline。** 它在下一次**检查**时触发；60s 预算遇到 5 分钟工具调用，会在
   大约 5 分钟后才结束。真正 deadline 请结合每工具 `timeout=` 和你自己计时器触发的 cancel token。
 - **预算不会跨你的手动重试自动重置。** 用同一个 `RunBudget` 实例重跑失败请求，会带着已经花掉的
   时钟和计数。请新建预算（这也是 agent-as-tool 每次调用复制预算的原因）。
-- **追加的指令是*用户*消息。** 模型会像看待普通用户 turn 一样看待它。它不会抢占已经请求的工具调用，
+- **追加的指令是*用户*消息。** 模型会像看待普通用户消息一样看待它。它不会抢占已经请求的工具调用，
   也会像其他内容一样持久化进 session。
 
 ## 延伸阅读

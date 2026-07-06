@@ -21,13 +21,12 @@ def get_order(order_id: str) -> str:
     return f"Order {order_id}: shipped 2 days ago, arriving Thursday."
 
 
-# Set OPENAI_API_KEY in your environment first; for OpenAI-compatible
-# services (DeepSeek, Ollama, vLLM, ...) also set OPENAI_BASE_URL.
+# Configure OPENAI_BASE_URL and OPENAI_API_KEY in your environment.
 agent = Agent(
     name="support",
     instructions="You are a customer-support agent. Look the order up before "
     "answering, and reply in one or two concrete sentences.",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     tools=[get_order],
 )
 
@@ -44,25 +43,25 @@ the current directory included — in one line:
 pip install "lovia[web]" && python -m lovia.web
 ```
 
-Anthropic is built in too — set `ANTHROPIC_API_KEY` and use
-`model="anthropic:claude-4-8-opus"`; everything else about models lives in
+Anthropic is built in too: configure `ANTHROPIC_API_KEY`, set
+`ANTHROPIC_BASE_URL` for non-default endpoints, and use the `anthropic:`
+model prefix. Everything else about models lives in
 [Providers & models](https://cymoo.github.io/lovia/providers/).
 
 ## Documentation
 
-This README is the tour. The [documentation](https://cymoo.github.io/lovia/) goes deep,
-one feature per page — start with the
+This README is a quick tour. For the full guide, start with the
 [quickstart](https://cymoo.github.io/lovia/quickstart/) and
-[core concepts](https://cymoo.github.io/lovia/concepts/) — and the
+[core concepts](https://cymoo.github.io/lovia/concepts/) in the
+[documentation](https://cymoo.github.io/lovia/). The
 [examples](./examples/README.md) are a numbered, runnable learning path.
 
 ## Why lovia
 
 Composable primitives, ordinary Python — no new universe of abstractions:
 
-- **Minimum dependencies.** The core depends only on `httpx` and `pydantic`;
-  everything else is an extra, which keeps installs small,
-  version conflicts rarer, and the supply-chain attack surface narrower.
+- **Minimum dependencies.** The core depends only on `httpx`, `pydantic`,
+  and `pyyaml`; install everything else only when needed.
 - **Few abstractions.** An `Agent` is immutable configuration, a `Runner`
   executes one run, a `@tool` is a typed function; handoff and agent-as-tool
   compose agents; plugins package the rest.
@@ -99,7 +98,7 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="Write concrete, concise answers.",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     workspace=Workspace.local(".")
 )
 ```
@@ -171,7 +170,7 @@ class Brief(BaseModel):
     bullets: list[str]
 
 
-agent = Agent(name="summarizer", model="deepseek-v4-pro", output_type=Brief)
+agent = Agent(name="summarizer", model="glm-5.2", output_type=Brief)
 result = await Runner.run(agent, "Summarize Transformer for a Python developer.")
 print(result.output.title)
 ```
@@ -180,16 +179,19 @@ print(result.output.title)
 
 ### Providers
 
-Model strings, provider instances, or a fallback chain; OpenAI-compatible
-endpoints ride `OPENAI_BASE_URL`, prompt caching and reasoning models are
-handled per host, and a custom provider is a small `Protocol`:
+Use model strings, provider instances, or a fallback chain. OpenAI-compatible
+endpoints read `OPENAI_BASE_URL` / `OPENAI_API_KEY`; Anthropic defaults to
+the official endpoint, reads `ANTHROPIC_API_KEY`, and uses
+`ANTHROPIC_BASE_URL` for non-default endpoints. Prompt caching and reasoning
+models are handled per endpoint, and a custom provider is a small
+`Protocol`:
 
 ```python
 from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"],  # fallback chain
+    model=["anthropic:<model>", "glm-5.2"],  # fallback chain
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
@@ -206,7 +208,7 @@ only the prompt and its answer comes back as a tool result:
 ```python
 from lovia import Agent, Runner
 
-billing = Agent(name="billing", instructions="Handle billing issues.", model="deepseek-v4-pro")
+billing = Agent(name="billing", instructions="Handle billing issues.", model="glm-5.2")
 support = Agent(name="support", instructions="Handle technical issues.", model="glm-5.2")
 
 triage = Agent(
@@ -220,7 +222,7 @@ result = await Runner.run(triage, "I was charged twice.")
 
 ```python
 summarizer = Agent(name="summarizer", instructions="Summarize text in five bullets.",
-                   model="deepseek-v4-pro")
+                   model="glm-5.2")
 
 manager = Agent(
     name="manager",
@@ -286,7 +288,7 @@ from lovia import Agent, Compaction
 
 agent = Agent(
     name="companion",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     context_policy=Compaction(context_window=200_000, compact_at=0.75, compact_to=0.50),
 )
 ```
@@ -310,7 +312,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     output_guardrails=[must_cite],
     retry=RetryPolicy(max_attempts=2)
 )
@@ -363,7 +365,7 @@ from lovia.workspace import CommandRule, Workspace
 agent = Agent(
     name="coder",
     instructions="Make small, targeted code changes.",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     workspace=Workspace.local(
         ".",
         mode="coding",
@@ -386,7 +388,7 @@ from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="builder",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     plugins=[
         Todo(),
         Skills("./skills"),
@@ -416,7 +418,7 @@ searchable **Archive**, zero-config, upgradeable one argument at a time:
 from lovia import Agent, Memory
 from lovia.plugins import OpenAIEmbedder
 
-agent = Agent(name="assistant", model="deepseek-v4-pro",
+agent = Agent(name="assistant", model="glm-5.2",
               plugins=[Memory("./.lovia/memory")])
 
 Memory("./memory")                             # stdlib keyword search (FTS5 bm25)
@@ -438,7 +440,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-python -m lovia.web --port 9000 --model deepseek-v4-pro   # or zero-config
+python -m lovia.web --port 9000 --model glm-5.2   # or zero-config
 ```
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST

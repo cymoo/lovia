@@ -20,12 +20,11 @@ def get_order(order_id: str) -> str:
     return f"订单 {order_id}：两天前已发货，预计周四送达。"
 
 
-# 先在环境变量里设置 OPENAI_API_KEY；DeepSeek、Ollama、vLLM 等
-# OpenAI 兼容服务还需要设置 OPENAI_BASE_URL。
+# 在环境变量里配置 OPENAI_BASE_URL 和 OPENAI_API_KEY。
 agent = Agent(
     name="support",
     instructions="你是一名客服 agent。回答前先查询订单，然后用一两句具体的话回复。",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     tools=[get_order],
 )
 
@@ -41,21 +40,21 @@ print(result.output)
 pip install "lovia[web]" && python -m lovia.web
 ```
 
-Anthropic 也内置支持：设置 `ANTHROPIC_API_KEY`，然后使用
-`model="anthropic:claude-4-8-opus"`。模型相关的更多内容见
+Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点时再配置
+`ANTHROPIC_BASE_URL`。模型名使用 `anthropic:` 前缀即可。模型相关的更多内容见
 [Provider 与模型](https://cymoo.github.io/lovia/zh/providers/)。
 
 ## 文档
 
-这份 README 是一次快速巡礼。[完整文档](https://cymoo.github.io/lovia/zh/)按功能逐页展开，
-建议从[快速上手](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)
-开始；[示例](./examples/README-zh.md)则是一条按编号排列、可以直接运行的学习路径。
+这份 README 只做快速介绍。更完整的内容见[文档](https://cymoo.github.io/lovia/zh/)；
+建议先读[快速上手](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)。
+[示例](./examples/README-zh.md)按编号组织，可以作为一条直接运行的学习路径。
 
 ## 为什么是 lovia
 
 可组合的原语，普通的 Python，不另造一套抽象宇宙：
 
-- **极简依赖。** 核心依赖只有 `httpx` 和 `pydantic`，其余按需通过 extra 安装。
+- **极简依赖。** 核心依赖只有 `httpx`、`pydantic` 和 `pyyaml`，其余按需安装即可。
 - **抽象很少。** `Agent` 是不可变配置，`Runner` 执行一次运行，`@tool`
   就是带类型的函数；handoff 和 agent-as-tool 组合多个 agent；插件负责打包
   其余能力。
@@ -88,7 +87,7 @@ from lovia import Agent
 agent = Agent(
     name="writer",
     instructions="回答要具体、简洁。",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     workspace=Workspace.local(".")
 )
 ```
@@ -158,7 +157,7 @@ class Brief(BaseModel):
     bullets: list[str]
 
 
-agent = Agent(name="summarizer", model="deepseek-v4-pro", output_type=Brief)
+agent = Agent(name="summarizer", model="glm-5.2", output_type=Brief)
 result = await Runner.run(agent, "给 Python 开发者总结 Transformer。")
 print(result.output.title)
 ```
@@ -167,15 +166,16 @@ print(result.output.title)
 
 ### Provider
 
-可以传模型字符串、provider 实例，也可以传 fallback 链。OpenAI 兼容端点走
-`OPENAI_BASE_URL`；自定义 provider 只是一个小 `Protocol`：
+模型可以写字符串、传 provider 实例，也可以用 fallback 链。OpenAI 兼容端点读取
+`OPENAI_BASE_URL` / `OPENAI_API_KEY`；Anthropic 默认走官方端点，读取
+`ANTHROPIC_API_KEY`，非默认端点再设置 `ANTHROPIC_BASE_URL`。自定义 provider 只是一个小 `Protocol`：
 
 ```python
 from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:claude-4-8-opus", "deepseek-v4-pro"],  # fallback 链
+    model=["anthropic:<model>", "glm-5.2"],  # fallback 链
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
@@ -191,7 +191,7 @@ agent = Agent(
 ```python
 from lovia import Agent, Runner
 
-billing = Agent(name="billing", instructions="处理账单问题。", model="deepseek-v4-pro")
+billing = Agent(name="billing", instructions="处理账单问题。", model="glm-5.2")
 support = Agent(name="support", instructions="处理技术问题。", model="glm-5.2")
 
 triage = Agent(
@@ -207,7 +207,7 @@ result = await Runner.run(triage, "我被重复扣款了。")
 summarizer = Agent(
     name="summarizer",
     instructions="用五个要点总结文本。",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
 )
 
 manager = Agent(
@@ -272,7 +272,7 @@ from lovia import Agent, Compaction
 
 agent = Agent(
     name="companion",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     context_policy=Compaction(context_window=200_000, compact_at=0.75, compact_to=0.50),
 )
 ```
@@ -296,7 +296,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     output_guardrails=[must_cite],
     retry=RetryPolicy(max_attempts=2)
 )
@@ -348,7 +348,7 @@ from lovia.workspace import CommandRule, Workspace
 agent = Agent(
     name="coder",
     instructions="做小而明确的代码修改。",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     workspace=Workspace.local(
         ".",
         mode="coding",
@@ -371,7 +371,7 @@ from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="builder",
-    model="deepseek-v4-pro",
+    model="glm-5.2",
     plugins=[
         Todo(),
         Skills("./skills"),
@@ -401,7 +401,7 @@ agent = Agent(
 from lovia import Agent, Memory
 from lovia.plugins import OpenAIEmbedder
 
-agent = Agent(name="assistant", model="deepseek-v4-pro",
+agent = Agent(name="assistant", model="glm-5.2",
               plugins=[Memory("./.lovia/memory")])
 
 Memory("./memory")                             # 标准库关键词检索（FTS5 bm25）
@@ -423,7 +423,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-python -m lovia.web --port 9000 --model deepseek-v4-pro   # 或零配置启动
+python -m lovia.web --port 9000 --model glm-5.2   # 或零配置启动
 ```
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`

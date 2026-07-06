@@ -20,7 +20,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -52,10 +52,10 @@ tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）
 
 ## 配方
 
-**用便宜模型筛查**：guardrail 是 async，所以可以调用自己的分类器：
+**用专门模型筛查**：guardrail 是 async，所以可以调用自己的分类器：
 
 ```python
-screen = Agent(name="screen", model="openai:gpt-5.5-mini", output_type=bool,
+screen = Agent(name="screen", model="glm-5.2", output_type=bool,
                instructions="如果请求在寻求法律建议，回答 true。")
 
 async def no_legal_advice(messages, ctx):

@@ -1,9 +1,9 @@
 # 评测
 
-单元测试能确认代码有没有接好，但很难判断 agent **表现**如何：答得对不对、有没有调用正确工具、是否足够简洁。
-尤其当行为本身不确定时更是如此。`lovia.eval` 让你用 `Case` 写下输入和验收条件；
-验收条件可以是普通函数，也可以是 LLM judge。`evaluate()` 会跑完整套 case，并返回一个可以打印、
-断言、和基线对比的 `Report`。
+单元测试能确认代码有没有接好，却很难判断 agent **表现**如何：答得对不对、有没有调用正确工具、
+是否足够简洁。行为本身不稳定时，这个问题会更明显。`lovia.eval` 让你用 `Case` 写下输入和
+验收条件；验收条件可以是普通函数，也可以是 LLM judge。`evaluate()` 会跑完整套 case，
+并返回一个可以打印、断言、和基线对比的 `Report`。
 
 ```python
 from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
@@ -14,7 +14,7 @@ cases = [
     Case(
         "写一首关于春天的俳句",
         checks=[llm_judge("一首 5-7-5 音节、能唤起春天意象的俳句")],
-        samples=4,               # 把不确定性量出来，而不是靠重试掩盖：
+        samples=4,               # 把不确定性量出来，而不是靠重试掩盖
         pass_threshold=0.75,      # 4 个 sample 至少 3 个通过即通过
     ),
 ]
@@ -36,14 +36,14 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 | `Case` 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `input` | 必填 | 字符串，或 `list[Message]` |
-| `checks` | `()` | 通过标准（一个 sample 必须全部通过） |
+| `checks` | `()` | 通过标准（一个 sample 必须全部满足） |
 | `name` | 从 input 派生 | 报告标签，也是 `compare()` 的匹配键 |
 | `samples` | `1` | 同一个 case 运行 N 次；不确定性会被量化 |
-| `pass_threshold` | `1.0` | case 通过所需的 sample 通过比例 |
+| `pass_threshold` | `1.0` | case 判定通过所需的 sample 通过比例 |
 | `context` | `None` | 作为运行 deps 转发 |
 | `output_type` / `max_turns` | agent 的配置 / `50` | 每个 case 的运行设置 |
 | `model` | agent 的配置 | 把 agent clone 到另一个模型上运行这个 case |
-| `timeout` | `None` | 每个 sample 的 wall-clock 上限；timeout 是失败 sample，不会让整个套件崩掉 |
+| `timeout` | `None` | 每个 sample 的真实耗时上限；timeout 是失败 sample，不会让整个套件崩掉 |
 | `metadata` | `{}` | 原样携带到结果 |
 
 `Case(model=...)` 很常用：在线评测可以把某个 case 固定到不同模型；**离线评测给每个 case
@@ -59,8 +59,8 @@ Case(
 )
 ```
 
-设置 `model=` 时，agent 会按 sample clone，所以一次性 `ScriptedProvider` 要和 `samples > 1`
-搭配使用，只能通过工厂（见下）。
+设置 `model=` 时，agent 会按 sample clone。一次性 `ScriptedProvider` 如果要配合
+`samples > 1` 使用，就只能通过工厂传入（见下）。
 
 ## Checks
 
@@ -102,9 +102,9 @@ report = await evaluate(agent_or_factory, cases, concurrency=4, fail_fast=False,
                         price=lambda u: u.input_tokens * 3e-6 + u.output_tokens * 15e-6)
 ```
 
-- **Agent 或工厂**（`AgentSource` union）。零参工厂会按**sample**调用；当 agent 有状态时
+- **Agent 或工厂**（`AgentSource` union）。零参工厂会按**每个 sample**调用；当 agent 有状态时
   （scripted provider、有状态工具），请传工厂。
-- **并发发生在 case 之间**（默认 4）；一个 case 的 samples 串行运行；一个 sample 的 checks 并发运行。
+- **并发发生在 case 之间**（默认 4）；同一个 case 的 samples 串行运行；同一个 sample 的 checks 并发运行。
 - **错误是数据。** sample 抛异常或 timeout 会记录自己的 `error` 并失败；套件总会跑完。
   `fail_fast=True` 会串行运行 case，并在第一个失败 **case** 后停止。
 - **`price=`** 把 usage 转成成本；报告会显示 `· $0.0421`。
@@ -126,11 +126,11 @@ assert diff.ok                                # 为真 ⇔ 没有 regression
 ```
 
 `compare` 返回 `Diff`，按 case **name** 匹配（重复名称会报错；输入重复时请手动命名 case）。
-improvement 和新增/删除 case 会报告，但不会让 `diff.ok` 失败。
+improvement 和新增/删除 case 会出现在报告里，但不会让 `diff.ok` 失败。
 
 ## 容易踩的点
 
-- **裁判成本按 `samples × judge-checks × cases` 增长**，每个 judge evaluation 都是一次模型调用。
+- **裁判成本按 `samples × judge-checks × cases` 增长**，每次 judge evaluation 都是一次模型调用。
   只把 judge 用在真正需要语义判断的 case 上；匹配器是免费的。
 - **现成 `Agent` 实例会在 samples 间复用**，除非设置了 `model=` 或传入工厂。无状态 agent 没问题；
   scripted agent 不适合，第二个 sample 会发现脚本空了。

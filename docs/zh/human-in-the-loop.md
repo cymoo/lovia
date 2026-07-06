@@ -51,7 +51,7 @@ agent = Agent(
 它可以返回 `True`/`"allow"`、`False`/`"deny"`，或 `"ask"`（交回给消费者/channel）。同步或异步都可以。
 handler 抛异常按拒绝处理。
 
-**3. 默认：拒绝。** 如果 turn 需要答案时还没人决定，调用会被拒绝。运行永远不会因为忘了点对话框而挂住。
+**3. 默认：拒绝。** 如果本轮需要答案时还没人决定，调用会被拒绝。运行永远不会因为忘了点对话框而挂住。
 模型会看到 `"Tool {name} was not approved."`，然后自行调整。
 
 ### 通过审批通道处理
@@ -72,7 +72,7 @@ handle.approvals.release(decision=False)   # 收尾：处理所有未决请求
 
 ### 需要知道的语义
 
-- **审批属于 preflight，而 preflight 按请求顺序串行执行。** 一个调用等待审批时，本 turn 中已经通过
+- **审批属于 preflight，而 preflight 按请求顺序串行执行。** 一个调用等待审批时，本轮已经通过
   审批的并行调用会继续执行；排在它后面的调用会等到轮到自己。因此审批提示会按顺序一个个到达。
 - **`needs_approval` 谓词抛异常时默认拒绝**：调用会被拒绝（同时给观察者发出带异常的
   `ToolCallFailed`），绝不会未经检查就执行。
@@ -91,7 +91,7 @@ channel = HumanChannel()
 
 agent = Agent(
     name="assistant",
-    model="openai:gpt-5.5",
+    model="glm-5.2",
     tools=[ask_human(channel)],
 )
 ```

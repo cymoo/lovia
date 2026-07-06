@@ -24,7 +24,7 @@ The five, in sixty seconds:
 ```python
 from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="Be concrete.", model="openai:gpt-5.5")
+agent = Agent(name="writer", instructions="Be concrete.", model="glm-5.2")
 result = await Runner.run(agent, "Draft a release note.")
 ```
 

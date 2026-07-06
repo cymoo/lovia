@@ -426,6 +426,21 @@ def test_decline_save_writes_nothing() -> None:
 # ------------------------------------------------------------ persistence -
 
 
+def test_global_config_path_ignores_relative_xdg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Per the XDG spec — and to keep credentials out of project directories.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/dir")
+    assert setup.global_config_path() == (
+        tmp_path / "home" / ".config" / "lovia" / "config.env"
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    assert setup.global_config_path() == (
+        tmp_path / "home" / ".config" / "lovia" / "config.env"
+    )
+
+
 def test_save_global_config_creates_dirs_and_roundtrips() -> None:
     path = setup.save_global_config({"A_KEY": "value", "B_KEY": "x y"})
     assert path == setup.global_config_path()

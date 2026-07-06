@@ -584,6 +584,13 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         if app_target:
             _warn_ignored_agent_flags(args)
             agent_or_agents = load_app_target(app_target)
+            custom_agents = (
+                agent_or_agents.values()
+                if isinstance(agent_or_agents, Mapping)
+                else [agent_or_agents]
+            )
+            for custom_agent in custom_agents:
+                _warn_if_exposed(host, custom_agent.workspace)
             summary = setup.format_app_summary(
                 version=__version__,
                 app_target=app_target,

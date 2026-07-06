@@ -771,6 +771,26 @@ def test_main_configured_run_prints_summary_and_skips_wizard(
     assert "serving on http://127.0.0.1:8000" in out
 
 
+def test_main_app_warns_when_workspace_exposed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_exposed",
+        "from lovia import Agent\n"
+        "from lovia.workspace import Workspace\n"
+        "agent = Agent(name='x', model='m',"
+        " workspace=Workspace.local('.', mode='trusted'))\n",
+    )
+    warned: list[object] = []
+    monkeypatch.setattr(cli.log, "warning", lambda *a, **k: warned.append(a))
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main(["--app", "agentmod_exposed:agent", "--host", "0.0.0.0"])
+    assert rc == 0
+    assert any("non-loopback" in str(a[0]) for a in warned)
+
+
 def test_main_app_prints_reduced_summary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

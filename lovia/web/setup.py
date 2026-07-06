@@ -245,8 +245,11 @@ def validate_connection(
 
 
 def global_config_path() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "lovia" / "config.env"
+    # Per the XDG spec, a relative XDG_CONFIG_HOME must be ignored — and it
+    # would risk dropping credentials into the current project directory.
+    raw = os.environ.get("XDG_CONFIG_HOME", "")
+    base = Path(raw) if raw and os.path.isabs(raw) else Path.home() / ".config"
+    return base / "lovia" / "config.env"
 
 
 def _chmod_private(path: Path) -> None:

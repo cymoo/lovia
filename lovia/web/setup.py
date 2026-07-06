@@ -333,8 +333,8 @@ def _run_wizard(
     say("")
 
     if conn.model is None:
-        say("  examples: openai:gpt-5.5 · anthropic:claude-sonnet-4-5 · ")
-        say("            deepseek-v4-pro (a bare name targets any OpenAI-compatible endpoint)")
+        say("  examples: openai:gpt-5.5 · anthropic:claude-sonnet-4-5")
+        say("            deepseek-v4-pro (bare name = any OpenAI-compatible endpoint)")
         while not conn.model:
             conn.model = input_fn("  Model: ").strip() or None
         conn.model_source = "prompt"

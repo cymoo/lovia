@@ -101,6 +101,41 @@ def offload_marker(record: OffloadRecord, call_id: str) -> str:
     )
 
 
+def pair_safe_cuts(entries: list[TranscriptEntry]) -> list[bool]:
+    """``safe[i]``: splitting ``entries`` at ``i`` severs no tool call/result pair.
+
+    A cut with a call at ``a < i`` and its result at ``b >= i`` strands the
+    result without its call — exactly what providers reject ("Messages with
+    role 'tool' must be a response to a preceding message with 'tool_calls'").
+    One flag per cut position (``len(entries) + 1``); for a well-formed
+    transcript ``safe[0]`` and ``safe[len(entries)]`` are always ``True``.
+
+    A result whose call appears nowhere in ``entries`` constrains nothing:
+    that transcript was malformed before any cut, and refusing every split
+    would only pin the pathology in place.
+
+    Scanning backward, ``outstanding`` counts results already seen whose call
+    has not yet been reached; a cut is safe exactly where that count is zero.
+    Counting per id (not a set) keeps nested duplicates — ``call a, call a,
+    out a, out a`` from an id-reusing provider — from reading as balanced too
+    early.
+    """
+    call_ids = {e.call_id for e in entries if isinstance(e, ToolCallEntry)}
+    safe = [True] * (len(entries) + 1)
+    awaiting: dict[str, int] = {}
+    outstanding = 0
+    for i in range(len(entries) - 1, -1, -1):
+        entry = entries[i]
+        if isinstance(entry, ToolResultEntry) and entry.call_id in call_ids:
+            awaiting[entry.call_id] = awaiting.get(entry.call_id, 0) + 1
+            outstanding += 1
+        elif isinstance(entry, ToolCallEntry) and awaiting.get(entry.call_id):
+            awaiting[entry.call_id] -= 1
+            outstanding -= 1
+        safe[i] = outstanding == 0
+    return safe
+
+
 def protected_tail_start(
     body: list[TranscriptEntry],
     counter: TokenCounter,
@@ -148,36 +183,19 @@ def protected_tail_start(
         if anchored <= 2 * budget_raw:
             cut = last_user
 
-    # Expand leftward until no tool result in the tail is orphaned. Mirrors
-    # ``safe_window``'s fixed-point loop but returns a pure index.
-    while cut > 0:
-        tail_calls = {e.call_id for e in body[cut:] if isinstance(e, ToolCallEntry)}
-        orphans = {
-            e.call_id
-            for e in body[cut:]
-            if isinstance(e, ToolResultEntry) and e.call_id not in tail_calls
-        }
-        if not orphans:
-            break
-        new_cut = cut
-        for i in range(cut - 1, -1, -1):
-            entry = body[i]
-            if isinstance(entry, ToolCallEntry) and entry.call_id in orphans:
-                new_cut = i
-                orphans.discard(entry.call_id)
-                if not orphans:
-                    break
-        if new_cut == cut:
-            # Remaining orphans have no call anywhere earlier — the raw
-            # transcript was already malformed; nothing more to protect.
-            break
-        cut = new_cut
+    # Snap leftward to a pair-safe cut so the tail never holds a result whose
+    # call fell into the compacted prefix. ``safe[0]`` is the floor: a result
+    # with no call anywhere is left as-is (already malformed).
+    safe = pair_safe_cuts(body)
+    while cut > 0 and not safe[cut]:
+        cut -= 1
     return cut
 
 
 __all__ = [
     "clear_marker",
     "offload_marker",
+    "pair_safe_cuts",
     "protected_tail_start",
     "render_entries",
     "render_view",

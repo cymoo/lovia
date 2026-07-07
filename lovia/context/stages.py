@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from .policy import CompactionRequest
-from .render import clear_marker, offload_marker, render_entries
+from .render import clear_marker, offload_marker, pair_safe_cuts, render_entries
 from .state import (
     CompactionState,
     OffloadRecord,
@@ -395,20 +395,34 @@ class SummarizeHistory:
             # dwarf the real window; the fold chunks must fit the model.
             usable = min(usable, max(1, ctx.model_window - ctx.budget.reserve_output))
         cap = max(1, usable // 2)
+        # Each chunk end below is committed to ``covered`` and outlives this
+        # call whenever a later fold fails or the run is cancelled mid-burst.
+        # A boundary that split a tool call from its result would then render a
+        # view whose first post-summary entry is an orphaned tool result — a
+        # provider 400 — so a chunk may only *end* on a pair-safe cut.
+        safe = pair_safe_cuts(span)
         running = prior.text if prior is not None else None
         folded = False
         start = 0
         while start < len(span):
+            # Grow the chunk entry by entry, remembering the largest pair-safe
+            # cut that still fits ``cap``. Stop at the first pair-safe cut that
+            # overflows, falling back to that remembered fit — or, when even the
+            # first unsplittable pair exceeds ``cap``, letting it be its own
+            # oversized chunk (as a single oversized entry would).
             end = start
             acc = 0
+            fit = 0
             while end < len(span):
-                tokens = ctx.calibrated(ctx.counter.count_entry(span[end]))
-                # A single entry above the cap still gets its own chunk —
-                # the cap is conservative, so the fold may well fit anyway.
-                if end > start and acc + tokens > cap:
-                    break
-                acc += tokens
+                acc += ctx.calibrated(ctx.counter.count_entry(span[end]))
                 end += 1
+                if not safe[end]:
+                    continue
+                if acc <= cap:
+                    fit = end
+                else:
+                    break
+            end = fit or end
 
             try:
                 text = await self.summarizer.summarize(

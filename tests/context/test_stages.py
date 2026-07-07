@@ -15,6 +15,7 @@ from lovia.context import (
     TokenBudget,
     TokenCounter,
 )
+from lovia.context.render import pair_safe_cuts
 from lovia.context.state import fingerprint
 from lovia.transcript import ToolCallEntry
 
@@ -340,6 +341,49 @@ async def test_summarize_failure_mid_fold_keeps_partial_coverage():
     summary = ctx.state.summary
     assert summary is not None and summary.covered == 4
     assert ctx.state.summary_failures == 1
+
+
+async def test_summarize_fold_chunks_never_split_tool_pairs():
+    # Chunk boundaries are commit points: if a later fold fails, the last
+    # committed ``covered`` becomes the view's summary cut. A token-sized
+    # boundary can land between a call and its result — the view would then
+    # start with an orphaned tool result, which providers reject with 400.
+    class FailsOnSecondCall:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def summarize(self, entries, *, req, prior_summary=None):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("boom")
+            return "S1"
+
+    # Pairs sized so the raw token boundary falls between call c3 and its
+    # result (as in the original bug report).
+    body = _pairs(6, chars=500)
+    ctx = make_ctx(body, protected_from=10)
+    stage = SummarizeHistory(summarizer=FailsOnSecondCall())
+    assert await stage.plan(body, ctx) is True
+    assert ctx.state.summary_failures == 1  # the second chunk did fail
+    summary = ctx.state.summary
+    assert summary is not None
+    # The raw token boundary lands at 7 (between call c3 and its result);
+    # the commit must snap back to the pair-safe cut at 6.
+    assert summary.covered == 6
+    assert pair_safe_cuts(body)[summary.covered]
+
+
+async def test_summarize_pair_larger_than_cap_gets_its_own_chunk():
+    # A call/result pair bigger than the chunk cap cannot be split; it is
+    # folded as one oversized chunk so coverage still advances.
+    summarizer = FakeSummarizer("S1")
+    body = [user("q"), call("big"), out("big", "r" * 8_000), user("tail")]
+    ctx = make_ctx(body, protected_from=3)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    summary = ctx.state.summary
+    assert summary is not None and summary.covered == 3
+    # The pair travelled together in a single summarize call.
+    assert [len(chunk) for chunk in summarizer.calls] == [1, 2]
 
 
 async def test_summarize_folds_only_the_new_span():

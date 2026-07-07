@@ -9,7 +9,7 @@ from lovia.context import (
     TokenCounter,
     render_view,
 )
-from lovia.context.render import protected_tail_start
+from lovia.context.render import pair_safe_cuts, protected_tail_start
 from lovia.context.state import fingerprint
 from lovia.transcript import (
     AssistantTextEntry,
@@ -182,3 +182,85 @@ def test_render_duplicate_call_ids_clears_every_result():
         for e in view
         if isinstance(e, ToolResultEntry)
     )
+
+
+# ---------------------------------------------------------------------------
+# pair_safe_cuts
+# ---------------------------------------------------------------------------
+
+
+def test_pair_safe_cuts_marks_inside_of_each_pair():
+    body = [user("q"), call("c1"), out("c1"), call("c2"), out("c2")]
+    assert pair_safe_cuts(body) == [True, True, False, True, False, True]
+
+
+def test_pair_safe_cuts_parallel_calls_block_the_whole_group():
+    # [call A, call B, result A, result B]: any cut inside the group strands
+    # a result from one of the calls.
+    body = [call("a"), call("b"), out("a"), out("b")]
+    assert pair_safe_cuts(body) == [True, False, False, False, True]
+
+
+def test_pair_safe_cuts_duplicate_ids_pair_like_parentheses():
+    body = [call("a"), out("a"), call("a"), out("a")]
+    assert pair_safe_cuts(body) == [True, False, True, False, True]
+
+
+def test_pair_safe_cuts_orphan_result_constrains_nothing():
+    # A result with no earlier call was malformed before any cut.
+    body = [out("ghost"), user("q")]
+    assert pair_safe_cuts(body) == [True, True, True]
+
+
+def test_pair_safe_cuts_unresolved_call_constrains_nothing():
+    # A call with no result strands nothing when cut away.
+    body = [user("q"), call("pending")]
+    assert pair_safe_cuts(body) == [True, True, True]
+
+
+def test_pair_safe_cuts_nested_duplicate_ids():
+    # An id-reusing provider can nest same-id pairs: [call a, call a, out a,
+    # out a]. A set would read the group as balanced after one call and mark
+    # an interior cut safe; the per-id counter keeps the whole group closed.
+    body = [call("a"), call("a"), out("a"), out("a")]
+    assert pair_safe_cuts(body) == [True, False, False, False, True]
+
+
+def test_pair_safe_cuts_matches_provider_truth_by_brute_force():
+    # Cross-check against the ground truth a provider enforces: a cut is unsafe
+    # iff the tail holds a result whose matching call landed in the head.
+    from collections import Counter as _Counter
+    from itertools import product
+
+    from lovia.transcript import ToolCallEntry
+
+    def naive(entries: list) -> list[bool]:
+        call_ids = {e.call_id for e in entries if isinstance(e, ToolCallEntry)}
+        flags = []
+        for i in range(len(entries) + 1):
+            open_calls: _Counter = _Counter()
+            severed = False
+            for e in entries[i:]:
+                if isinstance(e, ToolCallEntry):
+                    open_calls[e.call_id] += 1
+                elif isinstance(e, ToolResultEntry):
+                    if open_calls[e.call_id] > 0:
+                        open_calls[e.call_id] -= 1
+                    elif e.call_id in call_ids:  # its call is in the head
+                        severed = True
+                        break
+            flags.append(not severed)
+        return flags
+
+    # Every sequence of up to 6 tokens drawn from a 2-id alphabet of
+    # calls/results/plain-user entries — covers nesting, interleaving,
+    # duplicates, orphans, and malformed orderings.
+    alphabet = [call("a"), call("b"), out("a"), out("b"), user("u")]
+    for length in range(5):
+        for combo in product(alphabet, repeat=length):
+            seq = list(combo)
+            assert pair_safe_cuts(seq) == naive(seq), seq
+
+
+def test_pair_safe_cuts_empty():
+    assert pair_safe_cuts([]) == [True]

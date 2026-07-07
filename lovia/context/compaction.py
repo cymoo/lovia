@@ -26,11 +26,12 @@ import logging
 from typing import TYPE_CHECKING, Sequence
 
 from .policy import CompactionRequest, ContextResult
-from .render import protected_tail_start, render_entries, render_view
+from .render import pair_safe_cuts, protected_tail_start, render_entries, render_view
 from .state import (
     RATIO_MAX,
     RATIO_MIN,
     CompactionState,
+    SummaryState,
     fingerprint,
     unique_result_ids,
 )
@@ -179,6 +180,36 @@ class Compaction:
                 "context: covered transcript prefix changed; resetting running summary"
             )
             state.summary = None
+            summary = None
+
+        # A coverage frontier inside a tool call/result pair (persisted by an
+        # interrupted fold, or scratch written by an older lovia) would render
+        # a view whose first post-summary entry is an orphaned tool result —
+        # providers hard-reject that, and the sticky state would replay it on
+        # every retry. Rewind to the nearest pair-safe cut: the re-exposed
+        # entries are already in the summary text, so duplication is the only
+        # cost.
+        if summary is not None:
+            safe = pair_safe_cuts(body)
+            if not safe[summary.covered]:
+                covered = summary.covered
+                while covered > 0 and not safe[covered]:
+                    covered -= 1
+                logger.info(
+                    "context: summary coverage split a tool call/result pair; "
+                    "rewinding %d -> %d",
+                    summary.covered,
+                    covered,
+                )
+                state.summary = (
+                    SummaryState(
+                        text=summary.text,
+                        covered=covered,
+                        fingerprint=fingerprint(body[:covered]),
+                    )
+                    if covered > 0
+                    else None
+                )
 
         # GC clear/offload records that no longer point at exactly one live
         # tool result — ids trimmed out of the session history, or ids a

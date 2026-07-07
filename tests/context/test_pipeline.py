@@ -22,6 +22,7 @@ from lovia.context import (
     OffloadRecord,
     SummaryState,
 )
+from lovia.context.state import fingerprint
 from lovia.events import ContextCompacted
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 
@@ -316,6 +317,54 @@ async def test_rewritten_prefix_resets_summary_but_keeps_clear_decisions():
     assert summarizer.priors[0] is None
     assert summarizer.priors[calls_after_burst] is None
     assert res.compacted is True
+
+
+async def test_pair_splitting_summary_coverage_is_rewound_on_load():
+    """A persisted ``covered`` inside a call/result pair (written by an
+    interrupted fold on an older lovia) must be rewound to the nearest
+    pair-safe cut — otherwise every retry replays a view whose first
+    post-summary entry is an orphaned tool result, which providers 400."""
+    entries = [system("sys"), user("q")]
+    for i in range(6):
+        entries.append(call(f"c{i}"))
+        entries.append(out(f"c{i}", f"result {i}"))
+    body = entries[1:]
+
+    broken = 8  # between call c3 and its result
+    assert isinstance(body[broken - 1], ToolCallEntry)
+    scratch: dict = {}
+    CompactionState(
+        summary=SummaryState(
+            text="OLD SUMMARY", covered=broken, fingerprint=fingerprint(body[:broken])
+        )
+    ).save(scratch)
+
+    pipeline = _pipeline(context_window=100_000)  # far below the watermark
+    res = await pipeline.compact(req(entries, scratch=scratch))
+
+    healed = CompactionState.load(scratch).summary
+    assert healed is not None and healed.covered == 7
+    assert healed.fingerprint == fingerprint(body[:7])
+    # The view keeps the pair intact right after the summary entry.
+    first_after_summary = res.entries[2]
+    assert isinstance(first_after_summary, ToolCallEntry)
+    assert first_after_summary.call_id == "c3"
+
+
+async def test_pair_splitting_coverage_with_no_safe_cut_resets_summary():
+    """When rewinding lands at 0 there is nothing left to cover: the summary
+    is dropped entirely rather than kept with covered=0."""
+    entries = [system("sys"), call("a"), out("a"), user("q")]
+    body = entries[1:]
+    scratch: dict = {}
+    CompactionState(
+        summary=SummaryState(text="OLD", covered=1, fingerprint=fingerprint(body[:1]))
+    ).save(scratch)
+
+    pipeline = _pipeline(context_window=100_000)
+    res = await pipeline.compact(req(entries, scratch=scratch))
+    assert CompactionState.load(scratch).summary is None
+    assert res.entries == entries
 
 
 async def test_protected_tail_measured_on_rendered_view():

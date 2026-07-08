@@ -405,7 +405,7 @@ class RunController:
                 self.completed_mirror = list(seed)
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
-                budget = deps.budget or deps.default_supervised_budget()
+                budget = deps.fresh_budget()
                 handle = Runner.stream(
                     self.agent,
                     next_input,

@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 try:
     from fastapi import FastAPI
@@ -62,7 +62,6 @@ def create_app(
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
-    default_budget_factory: Callable[[], RunBudget] | None = None,
     approval_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     ui: bool = True,
@@ -88,9 +87,11 @@ def create_app(
     to disable compaction server-wide.
 
     Run limits apply to every chat turn the server drives: ``max_turns`` caps
-    the agent loop per request and ``budget`` (a :class:`RunBudget`) bounds
-    token spend. ``retry`` (a :class:`RetryPolicy`) overrides the agent's own
-    provider-retry posture for server-driven turns; ``None`` inherits it.
+    the agent loop per request and ``budget`` (a :class:`RunBudget`) caps token
+    spend, wall-clock, and tool calls. ``budget`` is a template — copied per run
+    — so its clock and counters never carry across runs. ``retry`` (a
+    :class:`RetryPolicy`) overrides the agent's own provider-retry posture for
+    server-driven turns; ``None`` inherits it.
 
     ``approval_timeout`` auto-denies a pending tool approval after that many
     seconds (default ``None``: wait forever). Set it when using scheduled runs
@@ -136,7 +137,6 @@ def create_app(
         retry=retry,
         tracer=tracer,
         max_background_runs=max_background_runs,
-        default_budget_factory=default_budget_factory,
         approval_timeout=approval_timeout,
     )
 

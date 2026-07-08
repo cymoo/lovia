@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any
 
 try:
     from fastapi import HTTPException
@@ -57,16 +57,15 @@ class RouterDeps:
     title_model: str | Provider | list[str | Provider] | None = None
     generate_titles: bool = True
     max_turns: int = 50
+    # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a
+    # ``RunBudget``'s wall-clock/tool-call state never bleeds across runs.
+    # ``None`` (default) leaves runs unbounded, like the core ``Runner``.
     budget: RunBudget | None = None
     retry: RetryPolicy | None = None
     tracer: Tracer | None = None
     # Cap on concurrent supervised (background) runs; over-cap interactive
     # starts are rejected (the scheduler, later, will defer).
     max_background_runs: int = 8
-    # Optional factory for a per-run budget given to supervised runs when no
-    # explicit ``budget`` is set. ``None`` (default) leaves supervised runs
-    # unbounded, matching the core ``Runner``; ``max_turns`` stays the backstop.
-    default_budget_factory: Callable[[], RunBudget] | None = None
     # Auto-deny a pending tool approval after this many seconds (None = wait
     # forever). Without it a clientless (scheduled) run parked on an approval
     # holds one of the ``max_background_runs`` slots indefinitely.
@@ -101,13 +100,11 @@ class RouterDeps:
         """Read-through view of live runs' mailboxes (back-compat shim)."""
         return {sid: c.mailbox for sid, c in self.supervisor}
 
-    def default_supervised_budget(self) -> RunBudget | None:
-        """A fresh per-run budget from ``default_budget_factory`` (``RunBudget``
-        is mutable, so call this per run), or ``None`` when none is configured —
-        supervised runs are unbounded by default, like the core ``Runner``."""
-        if self.default_budget_factory is not None:
-            return self.default_budget_factory()
-        return None
+    def fresh_budget(self) -> RunBudget | None:
+        """A per-run copy of ``budget`` (``None`` when unset), so a ``RunBudget``'s
+        wall-clock/tool-call state never bleeds between runs — the same reason
+        :func:`~lovia.handoff.agent_as_tool` copies its budget per invocation."""
+        return replace(self.budget) if self.budget is not None else None
 
     @property
     def default_agent(self) -> str | None:

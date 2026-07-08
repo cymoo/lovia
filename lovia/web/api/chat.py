@@ -71,7 +71,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             session_id=sid,
             context_policy=deps.context_policy,
             max_turns=deps.max_turns,
-            budget=deps.budget,
+            budget=deps.fresh_budget(),
             retry=deps.retry,
             tracer=deps.tracer,
         )

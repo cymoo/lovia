@@ -63,8 +63,9 @@ class RouterDeps:
     # Cap on concurrent supervised (background) runs; over-cap interactive
     # starts are rejected (the scheduler, later, will defer).
     max_background_runs: int = 8
-    # Factory for the default budget given to a supervised run when no explicit
-    # ``budget`` is set — bounds an abandoned, clientless run.
+    # Optional factory for a per-run budget given to supervised runs when no
+    # explicit ``budget`` is set. ``None`` (default) leaves supervised runs
+    # unbounded, matching the core ``Runner``; ``max_turns`` stays the backstop.
     default_budget_factory: Callable[[], RunBudget] | None = None
     # Auto-deny a pending tool approval after this many seconds (None = wait
     # forever). Without it a clientless (scheduled) run parked on an approval
@@ -100,12 +101,13 @@ class RouterDeps:
         """Read-through view of live runs' mailboxes (back-compat shim)."""
         return {sid: c.mailbox for sid, c in self.supervisor}
 
-    def default_supervised_budget(self) -> RunBudget:
-        """A fresh budget for a supervised run (``RunBudget`` is mutable, so call
-        this per run). Bounds an abandoned, clientless run."""
+    def default_supervised_budget(self) -> RunBudget | None:
+        """A fresh per-run budget from ``default_budget_factory`` (``RunBudget``
+        is mutable, so call this per run), or ``None`` when none is configured —
+        supervised runs are unbounded by default, like the core ``Runner``."""
         if self.default_budget_factory is not None:
             return self.default_budget_factory()
-        return RunBudget(max_total_tokens=1_000_000, max_seconds=1800.0)
+        return None
 
     @property
     def default_agent(self) -> str | None:

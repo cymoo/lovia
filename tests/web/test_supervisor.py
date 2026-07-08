@@ -235,7 +235,7 @@ async def test_concurrency_cap_rejects_new_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_budget_trips_an_abandoned_run() -> None:
+async def test_configured_supervised_budget_trips_a_run() -> None:
     @tool
     async def noop() -> str:
         """noop."""

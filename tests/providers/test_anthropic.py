@@ -152,14 +152,6 @@ def test_message_translation_keeps_non_text_parts_of_empty_text_message() -> Non
     assert [block["type"] for block in out[0]["content"]] == ["image"]
 
 
-def test_message_translation_wraps_invalid_tool_arguments() -> None:
-    _, out = _to_anthropic_messages(
-        [ToolCallEntry(call_id="c1", name="broken", arguments="{bad")]
-    )
-
-    assert out[0]["content"][0]["input"] == {"_raw": "{bad"}
-
-
 def test_message_translation_drops_orphan_thinking() -> None:
     _, out = _to_anthropic_messages(
         [
@@ -804,6 +796,43 @@ async def test_stream_without_usage_or_stop_reason_reports_defaults() -> None:
     usage = next(_deltas(deltas, UsageDelta)).usage
     assert (usage.input_tokens, usage.output_tokens) == (0, 0)
     assert next(_deltas(deltas, FinishDelta)).reason is None
+
+
+@pytest.mark.asyncio
+async def test_stream_truncated_without_stop_reason_or_message_stop_is_retryable() -> (
+    None
+):
+    """A stream cut mid-tool-call (no stop_reason, no message_stop) raises retryably.
+
+    Symmetric with the OpenAI adapter: the transport closes cleanly at a frame
+    boundary, so nothing else fires; the guard turns the truncation into a
+    retryable error rather than letting a half-formed tool call be assembled.
+    """
+    body = _sse(
+        [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "c1", "name": "write_file"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                # cut off mid-arguments — no content_block_stop, message_delta,
+                # or message_stop follows
+                "delta": {"type": "input_json_delta", "partial_json": '{"path":'},
+            },
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+    assert exc_info.value.retryable is True
+    assert "truncated" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

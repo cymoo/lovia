@@ -49,6 +49,16 @@ def _sse(events: list[dict[str, Any]]) -> bytes:
     return "\n".join(lines).encode()
 
 
+def _sse_truncated(events: list[dict[str, Any]]) -> bytes:
+    """Like :func:`_sse` but with no ``[DONE]`` terminator — a cut-off stream."""
+    lines: list[str] = []
+    for evt in events:
+        lines.append("event: chat.completion.chunk")
+        lines.append(f"data: {json.dumps(evt)}")
+        lines.append("")
+    return "\n".join(lines).encode()
+
+
 async def _collect(stream: Any) -> list[ModelDelta]:
     out: list[ModelDelta] = []
     async for delta in stream:
@@ -749,6 +759,76 @@ async def test_chat_stream_without_usage_or_finish_reports_defaults() -> None:
     usage = next(_deltas(deltas, UsageDelta)).usage
     assert (usage.input_tokens, usage.output_tokens) == (0, 0)
     assert next(_deltas(deltas, FinishDelta)).reason is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_truncated_without_finish_or_done_is_retryable() -> None:
+    """A stream cut mid-tool-call (no finish_reason, no [DONE]) raises retryably.
+
+    The transport closes cleanly at a frame boundary, so nothing else fires;
+    without this guard the half-formed ``write_file`` call would be assembled
+    and later 400 the next request when echoed back in history. Retryable so
+    the run's RetryPolicy re-streams the turn.
+    """
+    body = _sse_truncated(
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "function": {
+                                        "name": "write_file",
+                                        # cut off mid-arguments, as in the incident
+                                        "arguments": '{"path": "report.md"',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+    assert exc_info.value.retryable is True
+    assert "truncated" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_with_done_but_no_finish_is_not_truncated() -> None:
+    """[DONE] alone (finish_reason omitted) is a complete stream, not a cut one."""
+    body = _sse([{"choices": [{"delta": {"content": "hi"}}]}])
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+    assert "".join(d.text for d in _deltas(deltas, TextDelta)) == "hi"
+    assert next(_deltas(deltas, FinishDelta)).reason is None
+
+
+def test_tool_call_arguments_pass_through_byte_for_byte() -> None:
+    # The serializer trusts the transcript invariant (args are valid JSON,
+    # normalized at detection time) and forwards them unchanged.
+    msg = Message(
+        role="assistant",
+        tool_calls=[ToolCall(id="c1", name="lookup", arguments='{"q":"x"}')],
+    )
+
+    out = message_to_openai(msg)
+
+    assert out["tool_calls"][0]["function"]["arguments"] == '{"q":"x"}'
 
 
 def test_supports_json_schema_defaults_to_official_openai_only() -> None:

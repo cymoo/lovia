@@ -60,6 +60,10 @@ _OFFICIAL_HOSTS = ("api.openai.com",)
 
 
 def _tool_call_to_openai(tc: ToolCall) -> JsonObject:
+    # ``arguments`` is trusted to be valid JSON: the runner normalizes a
+    # malformed tool call at detection time (see
+    # ``lovia.runtime.tool_calls._normalize_call_args``), so the transcript this
+    # serializes never carries unparseable arguments.
     return {
         "id": tc.id,
         "type": "function",
@@ -365,6 +369,11 @@ class OpenAIChatProvider:
         usage = Usage()
         finish_reason: str | None = None
         reasoning_parts: list[str] = []
+        stream_done = False
+
+        def _mark_done() -> None:
+            nonlocal stream_done
+            stream_done = True
 
         try:
             async with self._http().stream(
@@ -380,7 +389,7 @@ class OpenAIChatProvider:
                     label="OpenAI Chat",
                     is_context_overflow=_is_context_overflow,
                 )
-                async for event in iter_sse_json(response):
+                async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
                         u = event["usage"]
                         usage.input_tokens = u.get("prompt_tokens", 0)
@@ -432,6 +441,24 @@ class OpenAIChatProvider:
                 vendor="openai",
                 model=self.model,
                 label="OpenAI Chat",
+            )
+
+        # A stream that ends with neither a finish_reason nor the ``[DONE]``
+        # marker was truncated mid-flight: the transport closed cleanly at a
+        # frame boundary, so nothing raised, yet the turn is incomplete — a tool
+        # call may be cut mid-arguments. Surface it as retryable so the run's
+        # RetryPolicy re-streams, instead of assembling a half-formed tool call
+        # that, once echoed back in history, 400s every provider on the next
+        # turn. Endpoints that omit finish_reason but do send ``[DONE]`` are a
+        # supported dialect (``stream_done`` covers them), as are ones that send
+        # finish_reason but drop ``[DONE]`` — either marker means "not cut".
+        if finish_reason is None and not stream_done:
+            raise ProviderError(
+                "OpenAI Chat stream ended without a finish_reason or [DONE] "
+                "marker (truncated response)",
+                vendor="openai",
+                model=self.model,
+                retryable=True,
             )
 
         if reasoning_parts:

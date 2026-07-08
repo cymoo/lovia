@@ -82,8 +82,12 @@ class ReasoningEntry:
 class ToolCallEntry:
     """A function-tool call the model wants to invoke.
 
-    ``arguments`` is the raw JSON string as emitted by the model — we keep
-    it unparsed so error messages can quote the exact payload.
+    ``arguments`` is the raw JSON string the model emitted, kept unparsed so
+    errors can quote the exact payload. Malformed arguments (e.g. a stream
+    truncated mid-call) are normalized to valid JSON — the original preserved
+    under ``_raw`` — when the call is rejected, so the stored transcript always
+    re-serializes cleanly (see
+    ``lovia.runtime.tool_calls._normalize_call_args``).
     """
 
     call_id: str

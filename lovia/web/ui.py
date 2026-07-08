@@ -25,7 +25,7 @@ _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 def build_ui_router(
     *,
     title: str = "lovia",
-    empty_title: str = "Wake up, Neo.",
+    empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
 ) -> APIRouter:
     """Router that serves the bundled single-page chat UI."""
@@ -35,7 +35,7 @@ def build_ui_router(
     async def index(request: Request) -> Any:
         description = empty_description
         if description is None:
-            description = "The Matrix has you."
+            description = "A good question is already half the answer."
         return _TEMPLATES.TemplateResponse(
             request,
             "index.html",

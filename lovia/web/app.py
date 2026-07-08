@@ -67,7 +67,7 @@ def create_app(
     scheduler_poll: float = 1.0,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
-    empty_title: str = "Wake up, Neo.",
+    empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
@@ -221,7 +221,7 @@ def serve(
     approval_timeout: float | None = None,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
-    empty_title: str = "Wake up, Neo.",
+    empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:

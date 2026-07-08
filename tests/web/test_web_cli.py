@@ -177,11 +177,15 @@ def test_resolve_workspace_disabled() -> None:
     assert cli.resolve_workspace(".", "trusted", no_workspace=True) is None
 
 
-def test_resolve_workspace_default_mode_is_trusted(tmp_path: Path) -> None:
+def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
     ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
     assert ws is not None
-    # 'trusted' is the only mode whose shell defaults to allow.
-    assert ws.policy.shell_default == "allow"
+    # Matches the core ``Workspace.local`` default: writes allowed inside the
+    # root, but shell and out-of-root reads go through approval — no unprompted
+    # shell (that posture is ``trusted``, now opt-in).
+    assert ws.policy.shell_default == "ask"
+    assert ws.policy.read_outside == "ask"
+    assert ws.policy.write == "allow"
 
 
 def test_resolve_workspace_mode_from_env(

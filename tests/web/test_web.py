@@ -75,8 +75,8 @@ def test_healthz_and_index() -> None:
     res = c.get("/")
     assert res.status_code == 200
     assert "<html" in res.text.lower()
-    assert "Wake up, Neo." in res.text
-    assert "The Matrix has you." in res.text
+    assert "Where shall we begin?" in res.text
+    assert "A good question is already half the answer." in res.text
 
 
 def test_index_accepts_custom_empty_state() -> None:

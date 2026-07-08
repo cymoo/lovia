@@ -235,7 +235,7 @@ async def test_concurrency_cap_rejects_new_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_budget_trips_an_abandoned_run() -> None:
+async def test_configured_supervised_budget_trips_a_run() -> None:
     @tool
     async def noop() -> str:
         """noop."""
@@ -243,7 +243,7 @@ async def test_default_budget_trips_an_abandoned_run() -> None:
 
     provider = ScriptedProvider([call("noop", {}, call_id=f"c{i}") for i in range(6)])
     agent = Agent(name="bot", model=provider, tools=[noop])
-    app = _app(agent, default_budget_factory=lambda: RunBudget(max_total_tokens=1))
+    app = _app(agent, budget=RunBudget(max_total_tokens=1))
     async with _client(app) as ac:
         lines: list[str] = []
         async with ac.stream(
@@ -254,6 +254,18 @@ async def test_default_budget_trips_an_abandoned_run() -> None:
     kinds = [e for e, _ in _parse_sse("\n".join(lines))]
     assert "error" in kinds  # budget exceeded surfaced as a clean error
     assert len(provider.calls) <= 2
+
+
+def test_configured_budget_is_copied_per_run() -> None:
+    # A configured ``budget`` is a template: ``fresh_budget`` hands each run its
+    # own copy, so a RunBudget's wall-clock/tool-call state never bleeds across
+    # runs (the failure mode when one instance was passed to every run).
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    deps = _app(agent, budget=RunBudget(max_tool_calls=3)).state.deps
+    a, b = deps.fresh_budget(), deps.fresh_budget()
+    assert a is not b and a is not deps.budget  # a fresh copy per run...
+    assert a.max_tool_calls == 3  # ...with the configured limits preserved
+    assert _app(agent).state.deps.fresh_budget() is None  # unset -> unbounded
 
 
 @pytest.mark.asyncio

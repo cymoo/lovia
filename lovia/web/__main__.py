@@ -63,6 +63,10 @@ DEFAULT_SKILLS_DIR = "skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
 DEFAULT_MAX_TURNS = 50
+# Match the core library's ``Workspace.local`` default: shell and out-of-root
+# reads go through human approval. ``trusted`` (unprompted shell, read
+# anywhere) stays available via --workspace-mode / LOVIA_WORKSPACE_MODE.
+DEFAULT_WORKSPACE_MODE = "coding"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
@@ -164,7 +168,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--workspace-mode",
         choices=WORKSPACE_MODES,
         help=f"workspace permissions: {', '.join(WORKSPACE_MODES)} "
-        "(env LOVIA_WORKSPACE_MODE, default trusted)",
+        f"(env LOVIA_WORKSPACE_MODE, default {DEFAULT_WORKSPACE_MODE})",
     )
     p.add_argument(
         "--no-workspace",
@@ -400,7 +404,7 @@ def resolve_workspace(
     if no_workspace:
         return None
     root = _first(cli_dir, os.getenv("LOVIA_WORKSPACE")) or "."
-    mode = _first(cli_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or "trusted"
+    mode = _first(cli_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or DEFAULT_WORKSPACE_MODE
     if mode not in WORKSPACE_MODES:
         raise CliError(
             f"invalid workspace mode: {mode!r}",
@@ -509,8 +513,9 @@ def _is_loopback(host: str) -> bool:
 def _warn_if_exposed(host: str, workspace: object) -> None:
     """Warn when a write/shell-capable workspace is reachable off-host.
 
-    Binding to a non-loopback address with the default trusted workspace lets
-    anyone who can reach the port make the agent run shell or edit files.
+    Binding to a non-loopback address with a write- or shell-capable workspace
+    (the default ``coding`` mode included) lets anyone who can reach the port
+    make the agent edit files or run shell commands.
     """
     policy = getattr(workspace, "policy", None)
     if policy is None or _is_loopback(host):
@@ -530,10 +535,13 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
 
 
 def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
-    """Human line for the startup summary, e.g. ``/path/to/dir (trusted)``."""
+    """Human line for the startup summary, e.g. ``/path/to/dir (coding)``."""
     if workspace is None:
         return "(none)"
-    mode = _first(args.workspace_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or "trusted"
+    mode = (
+        _first(args.workspace_mode, os.getenv("LOVIA_WORKSPACE_MODE"))
+        or DEFAULT_WORKSPACE_MODE
+    )
     root = getattr(workspace, "root", ".")
     return f"{Path(root).resolve()} ({mode})"
 

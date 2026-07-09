@@ -14,15 +14,25 @@ Providers MAY additionally implement three optional methods used by
 * ``estimate_tokens(entries) -> int`` — approximate prompt size; without it
   the context layer's :class:`~lovia.context.TokenCounter` falls back to its
   chars/4 heuristic.
-* ``context_window(model) -> int | None`` — the maximum prompt+output tokens
-  the named model accepts; ``None`` (or absent method) means "unknown". Purely
+* ``context_window() -> int | None`` — the maximum prompt+output tokens this
+  provider's model accepts; ``None`` (or absent method) means "unknown". Purely
   local: no I/O, safe to call per turn.
 * ``async discover_context_window() -> int | None`` — ask the *endpoint* what
-  the window is. The runner calls this once, before the first model call, and
-  only when nothing else knows; the adapter caches the answer.
+  the window is. The runner calls this once, before the first model call; the
+  adapter decides whether that costs a request, and caches the answer.
 
-None of them is required by the Protocol so existing adapters keep working;
-the dispatch helpers below fall back when a method is absent.
+None is required, and a provider that implements none simply gets the
+heuristics. But the Protocols are ``runtime_checkable``, which only checks that
+a method *exists* — so an adapter that implements one with the wrong signature
+fails at call time, not at registration.
+
+.. versionchanged:: 0.8.14
+   ``context_window`` no longer takes a ``model`` argument. A provider knows
+   which model it speaks to (``stream`` takes none either), and the argument had
+   become actively misleading: once a window was learned from the endpoint, it
+   was returned whatever model you asked about. Adapters implementing the old
+   ``context_window(self, model)`` raise ``TypeError`` and must drop the
+   parameter.
 """
 
 from __future__ import annotations

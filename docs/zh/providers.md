@@ -202,9 +202,22 @@ class Provider(Protocol):
 `stream` 接收 transcript view，类型是 `TranscriptEntry`（比 chat message 丰富，保留
 reasoning 和元数据），并产出 `ModelDelta`：`TextDelta`、`ReasoningDelta`、
 `ToolCallDelta`、`UsageDelta`、`FinishDelta`、`EntryCompletedDelta`。三个可选
-protocol 能让自定义 provider 在压缩中更接近内置 provider 的体验：`ContextWindowProvider`
-（本地报告窗口，不发请求）、`ContextWindowDiscovery`（异步、一次性地向端点查询，
-只在其它层都不知道时才会被调用）和 `TokenEstimator`（提供比启发式更准的 token 计数）。
+protocol 能让自定义 provider 在压缩中更接近内置 provider 的体验：
+
+```python
+class ContextWindowProvider(Protocol):     # 本地报告窗口，不发请求
+    def context_window(self) -> int | None: ...
+
+class ContextWindowDiscovery(Protocol):    # 异步、一次性地向端点查询
+    async def discover_context_window(self) -> int | None: ...
+
+class TokenEstimator(Protocol):            # 比启发式更准的 token 计数
+    def estimate_tokens(self, entries) -> int: ...
+```
+
+它们是 `runtime_checkable` 的，只检查方法**存在**——签名写错要到调用时才报错。
+从 0.8.14 起 `context_window` 不再接受 `model` 参数：provider 知道自己面对的是哪个模型，
+`stream` 也同样不接受。
 `lovia.testing` 里的 [`ScriptedProvider`](testing.md) 是完整、易读的参考实现。
 
 注册一个字符串前缀：

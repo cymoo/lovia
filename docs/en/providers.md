@@ -237,10 +237,23 @@ class Provider(Protocol):
 than chat messages — reasoning and metadata intact) and yields `ModelDelta`
 values: `TextDelta`, `ReasoningDelta`, `ToolCallDelta`, `UsageDelta`,
 `FinishDelta`, `EntryCompletedDelta`. Three optional protocols make a custom
-provider a first-class citizen of compaction: `ContextWindowProvider`
-(report the window locally, no I/O), `ContextWindowDiscovery` (an async
-one-shot lookup against the endpoint, called only when nothing else knows),
-and `TokenEstimator` (better-than-heuristic counting).
+provider a first-class citizen of compaction:
+
+```python
+class ContextWindowProvider(Protocol):     # report the window locally, no I/O
+    def context_window(self) -> int | None: ...
+
+class ContextWindowDiscovery(Protocol):    # one async lookup against the endpoint
+    async def discover_context_window(self) -> int | None: ...
+
+class TokenEstimator(Protocol):            # better-than-heuristic counting
+    def estimate_tokens(self, entries) -> int: ...
+```
+
+These are `runtime_checkable`, which only checks that the method *exists* — a
+wrong signature fails at call time. Since 0.8.14 `context_window` takes no
+`model`: a provider knows the model it speaks to, and `stream` takes none
+either.
 [`ScriptedProvider`](testing.md) in `lovia.testing` is a complete, readable
 reference implementation.
 

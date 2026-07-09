@@ -17,49 +17,51 @@
   /* Native form controls / scrollbars follow the active theme. */
   color-scheme: light;
 
-  /* surfaces — warm paper */
-  --bg: #faf9f7;
+  /* surfaces — cool slate: a crisp neutral off-white canvas, white cards.
+     Mirrors the dark theme's hue family so both themes read as one system. */
+  --bg: #f7f8fa;
   --surface: #ffffff;
-  --surface-2: #f4f3f0;
-  --surface-3: #ecebe6;
+  --surface-2: #f0f2f5;
+  --surface-3: #e6e9ee;
   /* Diagrams always render on a light "paper" (mermaid's light theme), even in
      dark mode — defined once here and intentionally NOT overridden for dark. */
-  --diagram-paper: #fbfaf8;
-  --border: #e9e6e0;
-  --border-strong: #d7d3cb;
+  --diagram-paper: #fcfcfd;
+  --border: #e4e7ec;
+  --border-strong: #d2d7df;
 
-  /* ink ramp */
-  --ink: #1c1a17;
-  --ink-2: #454138;
-  --muted: #6f6a62;
-  --muted-2: #a29d94;
+  /* ink ramp — cool near-black slate */
+  --ink: #16181d;
+  --ink-2: #3d424c;
+  --muted: #6b7280;
+  --muted-2: #9aa1ad;
 
   /* brand accent — restrained green, used for meaning, not decoration */
   --accent: #2d8a6e;
-  --accent-hover: #256f59;
-  --accent-soft: #ebf5f0;
-  --accent-text: #1d6b54;
+  --accent-hover: #246f59;
+  --accent-soft: #e7f3ee;
+  --accent-text: #1c6b54;
 
-  /* the user's voice — a cool tint against the warm paper */
-  --user-surface: #edf3f9;
-  --user-border: #dbe5ef;
-  --user-shadow: 0 1px 2px rgba(47, 78, 108, 0.05);
+  /* the user's voice — a cool blue tint, a step more saturated than the
+     neutral slate surfaces so it still reads as its own color */
+  --user-surface: #eaf1f9;
+  --user-border: #d3e0ef;
+  --user-shadow: 0 1px 2px rgba(38, 74, 110, 0.06);
 
   /* status */
   --warn: #b06413;
-  --warn-soft: #fdf6ec;
-  --warn-border: #eed3a4;
+  --warn-soft: #fbf3e6;
+  --warn-border: #ecd3a6;
   --danger: #c2483a;
   --danger-hover: #ad3d30;
-  --danger-soft: #fcf1ef;
+  --danger-soft: #fbeeec;
   --danger-border: #f0cfc9;
   --ok: #2d8a6e;
 
-  /* elevation — two-layer, warm-tinted */
-  --shadow-xs: 0 1px 2px rgba(28, 24, 18, 0.04);
-  --shadow-sm: 0 1px 2px rgba(28, 24, 18, 0.05), 0 2px 8px -2px rgba(28, 24, 18, 0.06);
-  --shadow-md: 0 2px 4px rgba(28, 24, 18, 0.04), 0 10px 28px -8px rgba(28, 24, 18, 0.12);
-  --shadow-lg: 0 4px 12px -2px rgba(28, 24, 18, 0.07), 0 20px 56px -12px rgba(28, 24, 18, 0.18);
+  /* elevation — two-layer, cool slate-tinted */
+  --shadow-xs: 0 1px 2px rgba(20, 24, 33, 0.04);
+  --shadow-sm: 0 1px 2px rgba(20, 24, 33, 0.05), 0 2px 8px -2px rgba(20, 24, 33, 0.06);
+  --shadow-md: 0 2px 4px rgba(20, 24, 33, 0.04), 0 10px 28px -8px rgba(20, 24, 33, 0.11);
+  --shadow-lg: 0 4px 12px -2px rgba(20, 24, 33, 0.07), 0 20px 56px -12px rgba(20, 24, 33, 0.16);
 
   /* type — system stacks only: no webfont request, native CJK rendering */
   --sans:
@@ -90,40 +92,46 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #100f0e;
-  --surface: #1a1917;
-  --surface-2: #232220;
-  --surface-3: #2d2b28;
-  --border: #34322e;
-  --border-strong: #494640;
+  /* surfaces — cool slate: neutral blue-gray, crisp elevation ramp.
+     bg (canvas) < surface (panels) < surface-2 (cards) < surface-3 (hover). */
+  --bg: #0d0e12;
+  --surface: #16181e;
+  --surface-2: #1d2027;
+  --surface-3: #272b35;
+  --border: #262a33;
+  --border-strong: #363b47;
 
-  --ink: #eeebe4;
-  --ink-2: #c9c5bc;
-  --muted: #948f87;
-  --muted-2: #6e6962;
+  /* ink ramp — cool near-white down to slate */
+  --ink: #e6e8ec;
+  --ink-2: #bfc3cd;
+  --muted: #8b909b;
+  --muted-2: #656b78;
 
-  --accent: #3dba8e;
-  --accent-hover: #4dca9e;
-  --accent-soft: #16281f;
-  --accent-text: #5ccaa0;
+  /* brand accent — restrained emerald, legible on slate */
+  --accent: #3ecb8f;
+  --accent-hover: #54d9a0;
+  --accent-soft: #13271e;
+  --accent-text: #53d19c;
 
-  --user-surface: #1b2630;
-  --user-border: #2e4254;
-  --user-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+  /* the user's voice — a saturated blue that stays distinct from the
+     neutral slate surfaces (which are only faintly blue-tinted) */
+  --user-surface: #1b2942;
+  --user-border: #2d4166;
+  --user-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 
-  --warn: #e0a44e;
-  --warn-soft: #251e12;
-  --warn-border: #5d4517;
-  --danger: #e07263;
-  --danger-hover: #d06052;
-  --danger-soft: #2a1917;
-  --danger-border: #57302b;
-  --ok: #3dba8e;
+  --warn: #e2a54e;
+  --warn-soft: #241c0f;
+  --warn-border: #574118;
+  --danger: #ec6f5f;
+  --danger-hover: #dc5e4f;
+  --danger-soft: #291614;
+  --danger-border: #58302b;
+  --ok: #3ecb8f;
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px -2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3), 0 10px 28px -8px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 4px 12px -2px rgba(0, 0, 0, 0.4), 0 20px 56px -12px rgba(0, 0, 0, 0.6);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px -2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.35), 0 10px 28px -8px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 4px 12px -2px rgba(0, 0, 0, 0.45), 0 20px 56px -12px rgba(0, 0, 0, 0.65);
 }
 
 /* ---- Reset & Base ------------------------------------------------------ */
@@ -1178,7 +1186,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(12, 10, 8, 0.66); /* fixed dark scrim — the light paper pops in both themes */
+  background: rgba(8, 9, 12, 0.66); /* fixed dark scrim — the light paper pops in both themes */
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
   animation: fade-in var(--t-med) var(--ease);
@@ -2055,7 +2063,7 @@ dialog.custom-dialog {
   }
 }
 dialog.custom-dialog::backdrop {
-  background: rgba(20, 16, 12, 0.32);
+  background: rgba(15, 18, 24, 0.32);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
@@ -2938,7 +2946,7 @@ body.files-resizing {
   .sidebar-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 16, 12, 0.2);
+    background: rgba(15, 18, 24, 0.2);
     z-index: 40;
     opacity: 0;
     pointer-events: none;
@@ -3062,11 +3070,11 @@ body.files-resizing {
 [data-theme="dark"] .hljs-keyword,
 [data-theme="dark"] .hljs-selector-tag,
 [data-theme="dark"] .hljs-type {
-  color: #c8a0e0;
+  color: #b7a4f0;
 }
 [data-theme="dark"] .hljs-string,
 [data-theme="dark"] .hljs-addition {
-  color: #6dcb80;
+  color: #83d69b;
 }
 [data-theme="dark"] .hljs-comment,
 [data-theme="dark"] .hljs-quote {
@@ -3075,19 +3083,19 @@ body.files-resizing {
 }
 [data-theme="dark"] .hljs-number,
 [data-theme="dark"] .hljs-literal {
-  color: #e0a060;
+  color: #e0a56a;
 }
 [data-theme="dark"] .hljs-title,
 [data-theme="dark"] .hljs-name,
 [data-theme="dark"] .hljs-function {
-  color: #80a0d0;
+  color: #79b0f2;
 }
 [data-theme="dark"] .hljs-attr,
 [data-theme="dark"] .hljs-attribute {
-  color: #d0b040;
+  color: #d8b45f;
 }
 [data-theme="dark"] .hljs-built_in {
-  color: #5ccaa0;
+  color: #53d19c;
 }
 [data-theme="dark"] .hljs-meta {
   color: var(--muted);

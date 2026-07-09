@@ -1,4 +1,8 @@
-"""Shared HTTP helpers for provider adapters."""
+"""Shared HTTP helpers for provider adapters.
+
+Deliberately free of domain knowledge: :mod:`._windows` builds on these, not
+the other way round, so what an error body *means* stays in one place.
+"""
 
 from __future__ import annotations
 
@@ -34,8 +38,14 @@ async def raise_for_provider_status(
     model: str | None,
     label: str,
     is_context_overflow: Callable[[int, str], bool],
+    window_from_body: Callable[[str], int | None] | None = None,
 ) -> None:
-    """Raise a structured lovia exception for failed provider responses."""
+    """Raise a structured lovia exception for failed provider responses.
+
+    ``window_from_body`` reads the context window an overflow names, when it
+    names one; the adapters pass
+    :func:`~lovia.providers._windows.window_from_error`.
+    """
     if response.status_code < 400:
         return
 
@@ -43,7 +53,8 @@ async def raise_for_provider_status(
     text = body.decode(errors="replace")
     if is_context_overflow(response.status_code, text):
         raise ContextOverflowError(
-            f"{label}: prompt exceeds the model's context window: {text}"
+            f"{label}: prompt exceeds the model's context window: {text}",
+            reported_window=window_from_body(text) if window_from_body else None,
         )
     raise ProviderError(
         f"{label} stream returned HTTP {response.status_code}: {text}",

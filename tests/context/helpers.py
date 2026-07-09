@@ -58,7 +58,7 @@ class FakeProviderWithWindow:
         self.model = "fake-model"
         self._window = window
 
-    def context_window(self, model: str) -> int | None:
+    def context_window(self) -> int | None:
         return self._window
 
 

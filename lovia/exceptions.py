@@ -122,7 +122,16 @@ class ContextOverflowError(LoviaError):
     framework-level error so the :class:`~lovia.Runner` can react with a
     single ``except`` clause. The original exception is preserved via
     ``raise ... from exc`` so users keep full debugging context.
+
+    Extra field populated when available:
+
+    * ``reported_window`` — the context window the endpoint named in its own
+      rejection ("maximum context length is 65536 tokens"). The context policy
+      remembers it, so a model whose window was unknown (or overstated) costs
+      at most one overflow before compaction sizes itself correctly.
     """
+
+    reported_window: int | None = None
 
 
 class MCPError(LoviaError):

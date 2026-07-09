@@ -9,14 +9,13 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 from __future__ import annotations
 
 import os
-import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ProviderError, UserError
+from ..exceptions import ContextOverflowError, ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     TranscriptEntry,
@@ -39,6 +38,12 @@ from ._content import (
     merge_openai_chat_content as _merge_openai_content,
 )
 from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._windows import (
+    WindowResolver,
+    WindowTable,
+    fetch_reported_window,
+    window_from_error,
+)
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -225,12 +230,26 @@ class OpenAIChatProvider:
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
         official_api: bool | None = None,
+        # The endpoint's real context window, when you know it and the bundled
+        # table cannot — a vLLM host started with ``--max-model-len``, an
+        # Ollama ``num_ctx``, a gateway capping a shared model. Overrides the
+        # table; a ContextPolicy's own window still wins.
+        context_window: int | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._host = urlparse(self.base_url).hostname or ""
+        self._windows = WindowResolver(
+            base_url=self.base_url,
+            model=model,
+            host=self._host,
+            explicit=context_window,
+            table=_OPENAI_CONTEXT_WINDOWS,
+            # The official API publishes no window on /models; don't ask it.
+            probe=not self._on_official_host(),
+        )
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
         self._owns_client = client is None
@@ -382,13 +401,18 @@ class OpenAIChatProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                await raise_for_provider_status(
-                    response,
-                    vendor="openai",
-                    model=self.model,
-                    label="OpenAI Chat",
-                    is_context_overflow=_is_context_overflow,
-                )
+                try:
+                    await raise_for_provider_status(
+                        response,
+                        vendor="openai",
+                        model=self.model,
+                        label="OpenAI Chat",
+                        is_context_overflow=_is_context_overflow,
+                        window_from_body=window_from_error,
+                    )
+                except ContextOverflowError as exc:
+                    self._windows.remember(exc.reported_window)
+                    raise
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
                         u = event["usage"]
@@ -473,15 +497,26 @@ class OpenAIChatProvider:
 
     # ----- ContextPolicy hooks ------------------------------------------------
 
-    def context_window(self, model: str) -> int | None:
-        window = _OPENAI_CONTEXT_WINDOWS.get(model)
-        if window is None:
-            # Date-pinned snapshots ("gpt-4.1-2025-04-14") share their
-            # alias's window.
-            window = _OPENAI_CONTEXT_WINDOWS.get(
-                re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
-            )
-        return window
+    def context_window(self) -> int | None:
+        return self._windows.window()
+
+    async def discover_context_window(self) -> int | None:
+        """Read this deployment's window off ``GET {base_url}/models``.
+
+        vLLM and SGLang publish ``max_model_len`` there — the window *after*
+        ``--max-model-len`` — and Groq, Together and OpenRouter publish theirs
+        too. That covers exactly the endpoints a name→window table can never
+        serve. The official API publishes nothing, so we don't ask it.
+        """
+        return await self._windows.discover(self._fetch_window)
+
+    async def _fetch_window(self) -> int | None:
+        return await fetch_reported_window(
+            self._http(),
+            base_url=self.base_url,
+            headers=self._headers(),
+            model=self.model,
+        )
 
 
 # Default for replaying ``reasoning_content`` on assistant input messages,
@@ -540,17 +575,33 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return False
 
 
-# Context-window table for recent, commonly used OpenAI GPT model aliases
-# (their date-pinned snapshots resolve via suffix stripping). Keep this
-# intentionally small: o-series, retired models, and niche aliases can fall
-# back to reactive overflow handling.
-_OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
-    "gpt-4.1": 1_047_576,
-    "gpt-5": 400_000,
-    "gpt-5.5": 1_050_000,
-    "gpt-5.5-pro": 1_050_000,
-    "gpt-5.4": 1_050_000,
-    "gpt-5.4-mini": 400_000,
-    "gpt-5.2": 400_000,
-    "gpt-5.2-pro": 400_000,
+# Bundled windows, keyed by the host that serves them. "gpt-4.1" means
+# 1,047,576 tokens *on api.openai.com*; it says nothing about the "gpt-4.1" a
+# vLLM box re-exposes at --max-model-len 8192, and this adapter serves both.
+# An unlisted host gets no rules and relies on what the endpoint reports.
+#
+# The table is only ever an optimization — it spares the first long conversation
+# one overflow — so staleness is harmless and it stays small. Date-pinned
+# snapshots resolve via suffix stripping.
+#
+# Exact entries, except where a whole naming family provably agrees: GPT-5
+# releases disagree (400K vs 1.05M), so a prefix rule would be guessing. And a
+# guess that is too *small* never self-corrects — it cannot provoke the overflow
+# that would teach the real number.
+_OPENAI_CONTEXT_WINDOWS: WindowTable = {
+    "api.openai.com": (
+        ("gpt-4.1", 1_047_576),
+        ("gpt-5", 400_000),
+        ("gpt-5.5", 1_050_000),
+        ("gpt-5.5-pro", 1_050_000),
+        ("gpt-5.4", 1_050_000),
+        ("gpt-5.4-mini", 400_000),
+        ("gpt-5.2", 400_000),
+        ("gpt-5.2-pro", 400_000),
+    ),
+    # DeepSeek publishes no window on /models, so without this every new session
+    # spends an overflow learning it. The number is the one the endpoint itself
+    # named, read off a real rejection (2026-07):
+    #   "This model's maximum context length is 1048565 tokens."
+    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
 }

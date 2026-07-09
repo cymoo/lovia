@@ -25,14 +25,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ProviderError, UserError
+from ..exceptions import ContextOverflowError, ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     InputEntry,
@@ -57,6 +56,12 @@ from ._content import (
     text_only as _text_only,
 )
 from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._windows import (
+    WindowResolver,
+    WindowTable,
+    fetch_reported_window,
+    window_from_error,
+)
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -98,6 +103,10 @@ class AnthropicProvider:
         # for gateways forwarding to the official API. Does not affect the
         # API-key requirement, which follows the real host.
         official_api: bool | None = None,
+        # The endpoint's real context window, when you know it and the
+        # bundled table cannot (a gateway capping the model, the 1M beta).
+        # Overrides the table; a ContextPolicy's own window still wins.
+        context_window: int | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -106,6 +115,15 @@ class AnthropicProvider:
         self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._official_api = official_api
+        self._windows = WindowResolver(
+            base_url=self.base_url,
+            model=model,
+            host=self._host,
+            explicit=context_window,
+            table=_ANTHROPIC_CONTEXT_WINDOWS,
+            # The official API publishes no window on /models; don't ask it.
+            probe=not self._on_official_host(),
+        )
         self._client = client
         self._owns_client = client is None
         self._timeout = resolve_timeout(timeout)
@@ -128,13 +146,25 @@ class AnthropicProvider:
             )
         return self._client
 
-    def context_window(self, model: str) -> int | None:
-        window = _ANTHROPIC_CONTEXT_WINDOWS.get(model)
-        if window is None:
-            # Date-pinned snapshots ("claude-sonnet-4-5-20250929") share
-            # their alias's window.
-            window = _ANTHROPIC_CONTEXT_WINDOWS.get(re.sub(r"-\d{8}$", "", model))
-        return window
+    def context_window(self) -> int | None:
+        return self._windows.window()
+
+    async def discover_context_window(self) -> int | None:
+        """Read this deployment's window off ``GET {base_url}/models``.
+
+        The official API publishes no window there, so it is never asked; this
+        exists for the Anthropic-dialect gateways (DeepSeek's ``/anthropic``,
+        Kimi, GLM) that may.
+        """
+        return await self._windows.discover(self._fetch_window)
+
+    async def _fetch_window(self) -> int | None:
+        return await fetch_reported_window(
+            self._http(),
+            base_url=self.base_url,
+            headers=self._headers(),
+            model=self.model,
+        )
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
@@ -284,13 +314,18 @@ class AnthropicProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                await raise_for_provider_status(
-                    response,
-                    vendor="anthropic",
-                    model=self.model,
-                    label="Anthropic",
-                    is_context_overflow=_is_context_overflow,
-                )
+                try:
+                    await raise_for_provider_status(
+                        response,
+                        vendor="anthropic",
+                        model=self.model,
+                        label="Anthropic",
+                        is_context_overflow=_is_context_overflow,
+                        window_from_body=window_from_error,
+                    )
+                except ContextOverflowError as exc:
+                    self._windows.remember(exc.reported_window)
+                    raise
                 async for event in iter_sse_json(response):
                     etype = event.get("type")
 
@@ -630,6 +665,14 @@ _OVERFLOW_NEEDLES = (
     "context window",
     "context limit",  # "input length and `max_tokens` exceed context limit"
     "too many total text bytes",  # Bedrock-hosted Claude behind gateways
+    # This adapter also serves Anthropic-*dialect* compatible endpoints
+    # (DeepSeek's ``/anthropic``, Kimi, GLM), and they answer with OpenAI's
+    # phrasing rather than Anthropic's. Verified live: DeepSeek returns "This
+    # model's maximum context length is 1048565 tokens" on ``/anthropic``
+    # exactly as it does on ``/v1``. Without these the overflow surfaces as a
+    # plain ProviderError and the run dies instead of compacting.
+    "context length",
+    "context_length_exceeded",
 )
 
 
@@ -642,18 +685,26 @@ def _is_context_overflow(status: int, body: str) -> bool:
     )
 
 
-# Context-window table for recent, commonly used Anthropic aliases (their
-# date-pinned snapshots resolve via suffix stripping). Retired Claude
-# 3.x/older 4.x aliases fall back to reactive overflow handling.
+# Bundled windows, keyed by the host that serves them: a gateway re-exposing
+# "claude-sonnet-4-5" may cap it, and only api.anthropic.com can vouch for the
+# vendor's own number. An unlisted host relies on what the endpoint reports.
+#
+# Every Claude shipped since Claude 3 defaults to a 200K window, so family
+# prefixes cover the whole line — including models released after this file was
+# written. Date-pinned snapshots resolve via suffix stripping.
 #
 # Values are the *default* windows. The 1M-token variants are gated behind the
 # ``context-1m`` beta header, which this adapter does not send by default;
 # advertising 1M here would make proactive compaction trigger far too late.
 # Users who enable the beta can size their ContextPolicy explicitly.
-_ANTHROPIC_CONTEXT_WINDOWS: dict[str, int] = {
-    "claude-opus-4-8": 200_000,
-    "claude-opus-4-7": 200_000,
-    "claude-sonnet-4-6": 200_000,
-    "claude-sonnet-4-5": 200_000,
-    "claude-haiku-4-5": 200_000,
+_ANTHROPIC_CONTEXT_WINDOWS: WindowTable = {
+    "api.anthropic.com": (
+        ("claude-opus-", 200_000),
+        ("claude-sonnet-", 200_000),
+        ("claude-haiku-", 200_000),
+        ("claude-3-", 200_000),
+    ),
+    # DeepSeek's Anthropic-dialect endpoint, verified the same way as its /v1
+    # one: it names 1048565 when it refuses, and publishes nothing on /models.
+    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
 }

@@ -8,6 +8,7 @@ import pytest
 
 from lovia.parts import ImagePart, TextPart
 from lovia.context import TokenBudget, TokenCounter
+from lovia.context.tokens import usable_tokens
 from lovia.transcript import (
     AssistantTextEntry,
     InputEntry,
@@ -133,6 +134,13 @@ def test_budget_reserve_subtracted():
 def test_budget_reserve_larger_than_window_falls_back_to_half():
     budget = TokenBudget(window=2_000)  # default reserve 16_384 >= window
     assert budget.usable == 1_000
+
+
+def test_usable_tokens_matches_the_budget_property():
+    assert usable_tokens(200_000, 16_384) == 200_000 - 16_384
+    assert usable_tokens(2_000, 16_384) == 1_000  # reserve doesn't fit
+    assert usable_tokens(1, 16_384) == 1  # never zero or negative
+    assert usable_tokens(4_096, 4_096) == 2_048  # equal counts as "doesn't fit"
 
 
 def test_budget_validation():

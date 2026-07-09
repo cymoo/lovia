@@ -34,6 +34,7 @@ from .state import (
     SummaryState,
     fingerprint,
     unique_result_ids,
+    window_key,
 )
 from .stages import (
     ClearToolResults,
@@ -44,6 +45,7 @@ from .stages import (
 )
 from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
+from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry, split_system
 
@@ -239,7 +241,14 @@ class Compaction:
         aggressive = req.overflow
         window = self.context_window
         if window is None:
-            window = _provider_context_window(req.provider, req.model)
+            window = _provider_context_window(req.provider)
+        # The endpoint's own rejection outranks every other source: a
+        # configured or tabled window is a *claim*, the number in a 400 is the
+        # limit being enforced. It only ever caps — a user who deliberately
+        # budgets below the real window keeps their smaller number.
+        learned = self._learn_window(req, state)
+        if learned is not None:
+            window = learned if window is None else min(window, learned)
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
@@ -398,6 +407,31 @@ class Compaction:
             tokens_after=tokens,
             detail=detail,
         )
+
+    def _learn_window(
+        self, req: CompactionRequest, state: CompactionState
+    ) -> int | None:
+        """Record and return the window this endpoint reported for the model.
+
+        A fresh ``reported_window`` replaces any earlier one: both are direct
+        statements from the endpoint, and the newest describes the deployment
+        as it is now. Implausible numbers are dropped here as well as on load —
+        the value is persisted, and a wrongly *small* one would never overflow
+        again to correct itself.
+        """
+        key = window_key(req.provider, req.model)
+        reported = req.reported_window
+        if not plausible_window(reported):
+            reported = None
+        if reported is not None and state.learned_windows.get(key) != reported:
+            logger.info(
+                "context.window: learned %d tokens for %r from the provider's "
+                "overflow response",
+                reported,
+                req.model,
+            )
+            state.learned_windows[key] = reported
+        return state.learned_windows.get(key)
 
     def _save(self, req: CompactionRequest, state: CompactionState) -> None:
         """Persist ``state`` into the per-run scratch."""

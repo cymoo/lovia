@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from lovia.context import CompactionState, OffloadRecord, SummaryState
-from lovia.context.state import fingerprint, unique_result_ids
+from lovia.context.state import fingerprint, unique_result_ids, window_key
 from .helpers import call, out, user
 
 
@@ -17,6 +17,7 @@ def _full_state() -> CompactionState:
         ratio=1.5,
         last_view_estimate=1234,
         summary_failures=1,
+        learned_windows={"https://api.deepseek.com/v1\x00deepseek-chat": 65_536},
     )
 
 
@@ -49,6 +50,57 @@ def test_load_tolerates_missing_and_garbage():
 def test_load_clamps_ratio():
     state = CompactionState.load({"context": {"version": 2, "ratio": 100.0}})
     assert state.ratio == 4.0
+
+
+def test_load_drops_malformed_learned_windows():
+    raw = {
+        "version": 2,
+        "learned_windows": {
+            "ok\x00m": 65_536,
+            "negative\x00m": -1,
+            "not-an-int\x00m": "65536",
+            "bool\x00m": True,
+            7: 4096,
+        },
+    }
+    state = CompactionState.load({"context": raw})
+    assert state.learned_windows == {"ok\x00m": 65_536}
+
+
+def test_scratch_without_learned_windows_keeps_its_other_decisions():
+    """Adding the key must not have bumped ``_VERSION``.
+
+    A version bump silently discards every sticky decision a user's session
+    already carries; scratch written before this field must still load.
+    """
+    old = {
+        "context": {
+            "version": 2,
+            "cleared": ["c1"],
+            "offloaded": {"c3": {"preview": "pre", "chars": 9000}},
+            "summary": {"text": "S", "covered": 4, "fingerprint": "ab" * 8},
+            "ratio": 1.5,
+            "last_view_estimate": 1234,
+            "summary_failures": 1,
+        }
+    }
+    state = CompactionState.load(old)
+    assert state.cleared == {"c1"}
+    assert state.offloaded == {"c3": OffloadRecord(preview="pre", chars=9000)}
+    assert state.summary == SummaryState(text="S", covered=4, fingerprint="ab" * 8)
+    assert state.learned_windows == {}
+
+
+def test_window_key_separates_endpoints_and_tolerates_a_missing_base_url():
+    class _Provider:
+        base_url = "https://a.test/v1"
+
+    class _Bare:
+        pass
+
+    assert window_key(_Provider(), "m") != window_key(_Bare(), "m")
+    assert window_key(_Bare(), "m") == "\x00m"
+    assert window_key(_Provider(), None) == "https://a.test/v1\x00"
 
 
 def test_decided_covers_both_kinds():

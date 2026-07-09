@@ -85,8 +85,10 @@ Compaction(
 - **水位**可以是可用窗口比例（`0.75`），也可以是绝对 token 数（`150_000`）。“可用” =
   window − `reserve_output_tokens`。低于 `compact_at` 时不处理；越界后会把 view 缩到
   `compact_to`（有滞后，避免策略在边界抖动）。
-- **`context_window=None`** 会询问 provider（适配器会按模型[报告窗口](providers.md#上下文窗口)）。
-  窗口未知时，主动压缩跳过，只剩 reactive overflow 路径。对适配器不认识的模型，请显式设置窗口。
+- **`context_window=None`** 会从端点解析窗口——它的 `/models` 列表，或者它第一次拒绝 prompt 时
+  点名的上限——最后才回落到适配器的表。完整链路见[上下文窗口](providers.md#上下文窗口)。
+  端点点名的上限总会压住你配置的值，所以表里没有的模型代价是撞墙一次，之后整个 session 都按
+  真实值计算。只有当**谁都报不出来**时，才会跳过主动压缩、只留 reactive overflow 兜底。
 - **token 计数**是校准过的估算：chars/4 启发式（图片/文件有固定成本），并用 provider 返回的
   **实际** input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
 
@@ -152,8 +154,12 @@ required_sections=...)`，不要 fork 这段实现。
 - **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
   触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
   预算敏感的部署需要注意：第 N 轮里可能包含一次额外的 LLM 调用。
-- **未知窗口意味着没有主动压缩。** OpenAI 兼容端点上的自定义模型通常不报告窗口；不设置
-  `context_window=...` 就只能依赖 reactive 路径。
+- **未知模型的第一次撞墙是一次真实的失败请求。** 正是端点的这次拒绝教会了 lovia 窗口大小；
+  紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 50%——它下手重一倍。
+  知道窗口就请提前设置 `context_window=...`。Ollama 压根不会撞墙
+  （它[静默截断](providers.md#容易踩的点)），所以对它来说这不是可选项。
+- **fallback 链按 primary 计算窗口。** `Agent(model=[a, b])` 的每个 prompt 都按 `a` 的窗口
+  计算，即使这一轮是 `b` 在服务。如果 `b` 更小，它的第一个长 prompt 会落到 reactive overflow 路径。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于
   policy 实例。clone agent 会共享 policy 实例；变体请各自配置一个。
 

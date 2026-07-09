@@ -497,6 +497,127 @@ async def test_reactive_ignores_refuted_window_claim():
     assert len(res.entries) < len(entries)
 
 
+def _scratch_with_learned(window: int, key: str = "\x00m") -> dict:
+    scratch: dict = {}
+    CompactionState(learned_windows={key: window}).save(scratch)
+    return scratch
+
+
+async def test_overflow_teaches_the_window_and_it_enables_proactive_compaction():
+    """One overflow is the whole price of an unknown model."""
+    pipeline = Compaction(summarizer=FakeSummarizer())
+    provider = FakeProviderWithWindow(window=None)  # adapter has no idea
+    entries = [user("x" * 100) for _ in range(30)]  # ~990 tokens
+    scratch: dict = {}
+
+    # Nothing known: no budget at all, so the policy stays out of the way.
+    before = await pipeline.compact(
+        req(entries, provider=provider, model="m", scratch=scratch)
+    )
+    assert before.compacted is False
+    assert not any("context was" in d for d in before.detail)
+
+    # The endpoint rejects the prompt and names its limit.
+    await pipeline.compact(
+        req(
+            entries,
+            provider=provider,
+            model="m",
+            scratch=scratch,
+            overflow=True,
+            reported_window=2_048,
+        )
+    )
+    assert CompactionState.load(scratch).learned_windows == {"\x00m": 2_048}
+
+    # From now on the policy budgets against the real window.
+    after = await pipeline.compact(
+        req(entries, provider=provider, model="m", scratch=_scratch_with_learned(2_048))
+    )
+    assert after.compacted is True  # usable = 1024, trigger 768 < 990
+    assert any("context was" in d for d in after.detail)
+
+
+async def test_learned_window_caps_an_overstated_claim():
+    pipeline = Compaction(summarizer=FakeSummarizer())
+    provider = FakeProviderWithWindow(window=10_000_000)  # wildly overstated
+    entries = [user("x" * 100) for _ in range(30)]
+
+    # Untouched, the 10M claim keeps the trigger far out of reach.
+    unclamped = await pipeline.compact(
+        req(entries, provider=provider, model="m", scratch={})
+    )
+    assert unclamped.compacted is False
+
+    clamped = await pipeline.compact(
+        req(
+            entries,
+            provider=provider,
+            model="m",
+            scratch=_scratch_with_learned(2_048),
+        )
+    )
+    assert clamped.compacted is True
+
+
+async def test_learned_window_never_raises_a_deliberately_smaller_budget():
+    """``min`` respects a user who budgets below the real window."""
+    pipeline = Compaction(context_window=1_000, summarizer=FakeSummarizer())
+    entries = [user("x" * 100) for _ in range(30)]
+    res = await pipeline.compact(
+        req(entries, model="m", scratch=_scratch_with_learned(1_000_000))
+    )
+    assert res.compacted is True  # still sized to the configured 1_000
+
+
+async def test_learned_window_is_scoped_to_its_own_endpoint_and_model():
+    """A window learned for one model must not size another."""
+    pipeline = Compaction(summarizer=FakeSummarizer())
+    entries = [user("x" * 100) for _ in range(30)]
+    res = await pipeline.compact(
+        req(entries, model="other", scratch=_scratch_with_learned(2_048, "\x00m"))
+    )
+    assert res.compacted is False
+
+
+async def test_learned_window_is_keyed_by_endpoint_and_model():
+    pipeline = Compaction(summarizer=FakeSummarizer())
+    entries = [user("x") for _ in range(3)]
+    scratch: dict = {}
+    for model in ("a", "b"):
+        await pipeline.compact(
+            req(
+                entries,
+                model=model,
+                scratch=scratch,
+                overflow=True,
+                reported_window=4_096 if model == "a" else 8_192,
+            )
+        )
+    assert CompactionState.load(scratch).learned_windows == {
+        "\x00a": 4_096,
+        "\x00b": 8_192,
+    }
+
+
+async def test_latest_reported_window_replaces_the_previous_one():
+    """A resized deployment restates its limit; the newest wins."""
+    pipeline = Compaction(summarizer=FakeSummarizer())
+    entries = [user("x") for _ in range(3)]
+    scratch: dict = {}
+    for reported in (4_096, 8_192):
+        await pipeline.compact(
+            req(
+                entries,
+                model="m",
+                scratch=scratch,
+                overflow=True,
+                reported_window=reported,
+            )
+        )
+    assert CompactionState.load(scratch).learned_windows == {"\x00m": 8_192}
+
+
 async def test_reactive_summarizer_failure_is_contained_and_persists_counter():
     # The summarizer's own error stays inside the pipeline (the runner must
     # get to surface the original ContextOverflowError); the failure counter
@@ -562,7 +683,7 @@ class _OverflowOnceProvider:
         self.stream_count = 0
         self.last_input_lengths: list[int] = []
 
-    def context_window(self, model: str) -> int | None:
+    def context_window(self) -> int | None:
         return 10_000_000  # never trigger the proactive path
 
     async def stream(self, entries, *, tools=None, response_format=None, settings=None):

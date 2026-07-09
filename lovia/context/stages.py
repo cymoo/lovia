@@ -33,7 +33,7 @@ from .state import (
     unique_result_ids,
 )
 from .summarizer import LLMSummarizer, Summarizer
-from .tokens import TokenBudget, TokenCounter
+from .tokens import TokenBudget, TokenCounter, usable_tokens
 from ..transcript import ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
@@ -392,8 +392,13 @@ class SummarizeHistory:
         usable = ctx.budget.usable
         if ctx.model_window is not None:
             # The aggressive budget is sized to the failed prompt, which can
-            # dwarf the real window; the fold chunks must fit the model.
-            usable = min(usable, max(1, ctx.model_window - ctx.budget.reserve_output))
+            # dwarf the real window; the fold chunks must fit the model. Reuse
+            # the budget's own headroom rule: a learned window can be smaller
+            # than ``reserve_output`` (a 4K local model), and subtracting then
+            # would collapse the cap to a single token per chunk.
+            usable = min(
+                usable, usable_tokens(ctx.model_window, ctx.budget.reserve_output)
+            )
         cap = max(1, usable // 2)
         # Each chunk end below is committed to ``covered`` and outlives this
         # call whenever a later fold fails or the run is cancelled mid-burst.

@@ -80,7 +80,11 @@ from ..output import (
     parse_structured_output,
     resolve_structured_output,
 )
-from ..providers.base import Provider
+from ..providers.base import (
+    Provider,
+    context_window,
+    discover_context_window,
+)
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -93,6 +97,11 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
+
+# Sentinel distinguishing a policy that declares ``context_window`` and left it
+# unset (ask the endpoint) from one that has no such field at all (never needs
+# a window — don't spend a request on it).
+_NO_WINDOW_FIELD: object = object()
 
 # After a context overflow, retry the model call only if reactive compaction
 # shrank the estimated prompt below this fraction of the size that failed.
@@ -613,6 +622,7 @@ class RunLoop:
         gain).
         """
         providers = self._resolve_providers(agent, resources)
+        await self._ensure_context_window(providers)
         structured_output = resolve_structured_output(
             self._resolve_output_type(agent),
             supports_json_schema(providers),
@@ -770,6 +780,7 @@ class RunLoop:
             failed_tokens = ctx_result.tokens_after
             request.last_input_tokens = None
             request.overflow = True
+            request.reported_window = overflow.reported_window
             ctx_result = await self.context_policy.compact(request)
             # Retry only when the rebuilt view is meaningfully smaller than
             # the one that just failed (both numbers come from the same
@@ -1357,6 +1368,37 @@ class RunLoop:
                 continue
             tools[t.name] = t
         return tools
+
+    async def _ensure_context_window(self, providers: list[Provider]) -> None:
+        """Give the endpoint a chance to report its own context window.
+
+        The adapter decides whether that costs anything: it declines when the
+        window was configured, when the endpoint is known to publish none, and
+        when it already asked (memoized per endpoint, for the process). What we
+        must *not* do here is skip the question because the bundled table has an
+        answer — the endpoint outranks the table, and a deployment that caps a
+        familiar model would otherwise be budgeted at the table's number.
+
+        The sentinel matters: a policy that does not *declare* ``context_window``
+        (:class:`~lovia.context.NoopContextPolicy`, custom policies) never needs
+        a window, and must not pay for one.
+
+        Only ``providers[0]`` is asked, because only its window is used: the
+        context policy sizes every prompt against the primary even after a
+        fallback takes over. A smaller fallback relies on the reactive overflow
+        path. See https://github.com/cymoo/lovia/issues/88.
+        """
+        declared = getattr(self.context_policy, "context_window", _NO_WINDOW_FIELD)
+        if declared is not None or not providers:
+            return
+        primary = providers[0]
+        await discover_context_window(primary)
+        if context_window(primary) is None:
+            logger.info(
+                "context.window: unknown for %r; proactive compaction is off — "
+                "set Compaction(context_window=...) if the endpoint cannot report it",
+                getattr(primary, "model", None),
+            )
 
     def _resolve_providers(
         self, agent: Agent[Any], resources: AsyncExitStack

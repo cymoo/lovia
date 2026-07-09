@@ -8,18 +8,31 @@ Providers yield a stream of :class:`ModelDelta` values. Display deltas keep UI
 latency low, and :class:`EntryCompletedDelta` lets adapters hand the runner a
 final provider-native transcript entry when ids or metadata must be preserved.
 
-Providers MAY additionally implement two optional methods used by
+Providers MAY additionally implement three optional methods used by
 :class:`~lovia.ContextPolicy`:
 
 * ``estimate_tokens(entries) -> int`` — approximate prompt size; without it
   the context layer's :class:`~lovia.context.TokenCounter` falls back to its
   chars/4 heuristic.
-* ``context_window(model) -> int | None`` — the maximum prompt+output tokens
-  the named model accepts; ``None`` (or absent method) means "unknown".
+* ``context_window() -> int | None`` — the maximum prompt+output tokens this
+  provider's model accepts; ``None`` (or absent method) means "unknown". Purely
+  local: no I/O, safe to call per turn.
+* ``async discover_context_window() -> int | None`` — ask the *endpoint* what
+  the window is. The runner calls this once, before the first model call; the
+  adapter decides whether that costs a request, and caches the answer.
 
-Neither method is required by the Protocol so existing adapters keep working;
-:func:`context_window` below dispatches to the adapter when available and
-falls back otherwise.
+None is required, and a provider that implements none simply gets the
+heuristics. But the Protocols are ``runtime_checkable``, which only checks that
+a method *exists* — so an adapter that implements one with the wrong signature
+fails at call time, not at registration.
+
+.. versionchanged:: 0.8.14
+   ``context_window`` no longer takes a ``model`` argument. A provider knows
+   which model it speaks to (``stream`` takes none either), and the argument had
+   become actively misleading: once a window was learned from the endpoint, it
+   was returned whatever model you asked about. Adapters implementing the old
+   ``context_window(self, model)`` raise ``TypeError`` and must drop the
+   parameter.
 """
 
 from __future__ import annotations
@@ -117,20 +130,39 @@ class TokenEstimator(Protocol):
 
 @runtime_checkable
 class ContextWindowProvider(Protocol):
-    def context_window(self, model: str) -> int | None: ...
+    def context_window(self) -> int | None: ...
 
 
-def context_window(provider: object, model: str | None) -> int | None:
-    """Return the prompt+output token cap for ``model`` on ``provider``.
+@runtime_checkable
+class ContextWindowDiscovery(Protocol):
+    async def discover_context_window(self) -> int | None: ...
 
-    Returns ``None`` when the provider doesn't expose the information (no
-    ``context_window`` method, or the method returns ``None``). Callers
-    treat ``None`` as "skip proactive compaction; rely on the reactive
-    overflow path instead".
+
+def context_window(provider: object) -> int | None:
+    """Return the prompt+output token cap ``provider`` will accept.
+
+    A provider already knows which model it speaks to — ``stream`` takes no
+    model either — so this asks about *that* model. Returns ``None`` when the
+    provider doesn't expose the information (no ``context_window`` method, or
+    the method returns ``None``). Callers treat ``None`` as "skip proactive
+    compaction; rely on the reactive overflow path instead".
     """
-    if model is None:
-        return None
     if isinstance(provider, ContextWindowProvider):
-        result = provider.context_window(model)
+        result = provider.context_window()
+        return int(result) if result is not None else None
+    return None
+
+
+async def discover_context_window(provider: object) -> int | None:
+    """Ask ``provider`` to look its context window up at the endpoint.
+
+    Separate from :func:`context_window` — and deliberately ``async`` — because
+    this one can make a network request. It is a one-shot warm-up the runner
+    performs before the first model call, never something a policy triggers
+    from inside a hot path. Adapters cache the answer (a miss included) and
+    never raise, so calling this is always safe and at most costs one request.
+    """
+    if isinstance(provider, ContextWindowDiscovery):
+        result = await provider.discover_context_window()
         return int(result) if result is not None else None
     return None

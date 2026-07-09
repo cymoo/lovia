@@ -219,7 +219,7 @@ a one-line "what to try next" appended to the message.
 | --- | --- |
 | `UserError` | the framework is misconfigured (no model, bad option) — fix the call site |
 | `ProviderError` | the model API failed; carries `vendor`, `status_code`, `retryable` |
-| `ContextOverflowError` | the prompt exceeds the context window and compaction couldn't save it |
+| `ContextOverflowError` | the prompt exceeds the context window and compaction couldn't save it; carries `reported_window` when the endpoint named its limit |
 | `ToolError` | a tool failed in a way worth structuring (yours to raise) |
 | `InvalidToolArguments` | tool arguments failed schema validation (surfaced to the model to fix) |
 | `OutputValidationError` | the final answer doesn't parse as `output_type` (after any repair) |

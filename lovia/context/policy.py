@@ -42,6 +42,12 @@ class CompactionRequest:
     """``True`` when the provider already raised
     :class:`~lovia.ContextOverflowError`; compact more aggressively."""
 
+    reported_window: int | None = None
+    """The context window the endpoint named while rejecting the last prompt
+    (:attr:`~lovia.ContextOverflowError.reported_window`). Set only on the
+    reactive path. The endpoint refusing outranks every other source, so the
+    default pipeline remembers it and caps the window with it from then on."""
+
     scratch: dict[str, Any] = field(default_factory=dict)
     """Mutable state owned by the runner, seeded fresh at run start. A policy
     keeps its derived state here (the default pipeline stores its sticky

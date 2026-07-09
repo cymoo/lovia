@@ -82,7 +82,7 @@ effective configuration and where each value came from.
 | `--title` / `--log-level` | `LOVIA_TITLE` / `LOVIA_LOG_LEVEL` | `lovia` / `info` |
 | `--max-retries` | `LOVIA_MAX_RETRIES` | agent posture (3 retries); `0` disables |
 | `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
-| `--max-tokens` / `--context-window` | `LOVIA_MAX_TOKENS` / `LOVIA_CONTEXT_WINDOW` | provider default / ask the provider |
+| `--max-tokens` / `--context-window` | `LOVIA_MAX_TOKENS` / `LOVIA_CONTEXT_WINDOW` | provider default / ask the endpoint |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
 | `--env-file` (repeatable) / `--version` | — | `./.env` if present / print version |

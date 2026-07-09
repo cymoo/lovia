@@ -224,6 +224,90 @@ def test_validate_unreachable() -> None:
     assert "dns boom" in detail
 
 
+# ------------------------------------- context window reported by /models -
+
+
+def _models_transport(*entries: dict) -> httpx.MockTransport:
+    payload = {"object": "list", "data": list(entries)}
+    return httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"id": "deepseek-v4-pro", "max_model_len": 32_768}, 32_768),  # vLLM/SGLang
+        ({"id": "deepseek-v4-pro", "context_window": 131_072}, 131_072),  # Groq
+        ({"id": "deepseek-v4-pro", "context_length": 8_192}, 8_192),  # Together
+        (
+            {  # OpenRouter: the routed provider's limit beats the model-level one
+                "id": "deepseek-v4-pro",
+                "context_length": 1_000_000,
+                "top_provider": {"context_length": 64_000},
+            },
+            64_000,
+        ),
+    ],
+)
+def test_validate_adopts_the_window_the_endpoint_reports(
+    entry: dict, expected: int
+) -> None:
+    conn = _conn(base_url="http://gw/v1", api_key="sk-1")
+    outcome, _ = setup.validate_connection(conn, transport=_models_transport(entry))
+    assert outcome is setup.ValidationOutcome.OK
+    assert (conn.context_window, conn.context_window_source) == (expected, "endpoint")
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        # The official OpenAI/Anthropic/DeepSeek shape publishes no window.
+        _models_transport({"id": "deepseek-v4-pro", "owned_by": "deepseek"}),
+        _models_transport({"id": "some-other-model", "max_model_len": 4096}),
+        httpx.MockTransport(lambda request: httpx.Response(200, content=b"not json")),
+        httpx.MockTransport(lambda request: httpx.Response(200, json={"data": "nope"})),
+    ],
+)
+def test_validate_leaves_the_window_unset_when_unreported(
+    transport: httpx.MockTransport,
+) -> None:
+    conn = _conn(base_url="http://gw/v1", api_key="sk-1")
+    outcome, _ = setup.validate_connection(conn, transport=transport)
+    assert outcome is setup.ValidationOutcome.OK
+    assert conn.context_window is None
+
+
+def test_validate_never_overrides_a_configured_window() -> None:
+    conn = _conn(base_url="http://gw/v1", api_key="sk-1")
+    conn.context_window, conn.context_window_source = 111_111, "flag"
+    setup.validate_connection(
+        conn, transport=_models_transport({"id": "deepseek-v4-pro", "max_model_len": 4096})
+    )
+    assert (conn.context_window, conn.context_window_source) == (111_111, "flag")
+
+
+def test_reported_window_skips_the_prompt_and_is_not_persisted() -> None:
+    """A deployment fact belongs in the run, not frozen into config.env."""
+    conn = _conn(base_url="http://gw/v1", api_key="sk-1")
+    setup.validate_connection(
+        conn,
+        transport=_models_transport({"id": "deepseek-v4-pro", "max_model_len": 32_768}),
+    )
+
+    def refuse(prompt: str) -> str:  # pragma: no cover - must never be called
+        raise AssertionError(f"asked for a window it already knows: {prompt!r}")
+
+    setup._maybe_prompt_context_window(conn, input_fn=refuse, out=io.StringIO())
+    assert conn.context_window == 32_768
+    assert "32,768 (endpoint)" in setup._context_window_cell(conn)
+
+    # Nothing was entered by hand, so there is nothing to persist: an
+    # "endpoint" window must never reach config.env, where it would go on
+    # lying after the deployment is resized. With an empty save set
+    # ``_offer_to_save`` returns before it can prompt.
+    conn.model_source = conn.base_url_source = conn.api_key_source = "flag"
+    setup._offer_to_save(conn, input_fn=refuse, out=io.StringIO())
+
+
 # ------------------------------------------------------------- the wizard -
 
 

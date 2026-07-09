@@ -29,6 +29,7 @@ from ..providers._http import host_matches
 from ..providers.anthropic import _DEFAULT_BASE_URL as _ANTHROPIC_BASE_URL
 from ..providers.anthropic import _DEFAULT_VERSION as _ANTHROPIC_VERSION
 from ..providers.anthropic import _OFFICIAL_HOSTS as _ANTHROPIC_HOSTS
+from ..providers._windows import window_from_models_payload
 from ..providers.base import context_window as provider_context_window
 from ..providers.openai_chat import _DEFAULT_BASE_URL as _OPENAI_BASE_URL
 from ..providers.openai_chat import _OFFICIAL_HOSTS as _OPENAI_HOSTS
@@ -217,7 +218,9 @@ def validate_connection(
     """Probe ``GET {base_url}/models`` and classify the response.
 
     Only called for interactively entered values — configured launches never
-    pay for this request.
+    pay for this request. A successful body doubles as a context-window
+    source: vLLM, SGLang, OpenRouter, Groq and Together publish the model's
+    window there, so the wizard need not ask for a number the endpoint knows.
     """
     assert conn.base_url is not None and conn.flavor is not None
     try:
@@ -237,8 +240,22 @@ def validate_connection(
     if response.status_code in (401, 403):
         return ValidationOutcome.AUTH_FAILED, f"HTTP {response.status_code}"
     if response.is_success:
+        _adopt_reported_window(conn, response)
         return ValidationOutcome.OK, f"HTTP {response.status_code}"
     return ValidationOutcome.UNVERIFIABLE, f"HTTP {response.status_code}"
+
+
+def _adopt_reported_window(conn: Connection, response: httpx.Response) -> None:
+    """Take the window from a ``/models`` body, unless the user set one."""
+    if conn.context_window is not None or conn.model is None:
+        return
+    try:
+        payload = response.json()
+    except ValueError:
+        return  # not every /models endpoint answers with JSON
+    window = window_from_models_payload(payload, conn.model)
+    if window is not None:
+        conn.context_window, conn.context_window_source = window, "endpoint"
 
 
 # ------------------------------------------------------------ persistence -

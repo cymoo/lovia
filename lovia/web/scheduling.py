@@ -43,6 +43,7 @@ _DESCRIPTION = (
 )
 
 _INSTRUCTIONS = (
+    "## Scheduling\n"
     "You can schedule work for later with the `schedule_run` tool. Use it when "
     "the user wants something to happen at a future time, after a delay, or "
     'repeatedly — e.g. "remind me in 10 minutes", "every morning…", "tomorrow '

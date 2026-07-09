@@ -153,6 +153,7 @@ _TOOL_DESCRIPTION = (
 )
 
 _INSTRUCTIONS = (
+    "## Todo\n"
     "Use the `todo_write` tool to externalize your plan when a task genuinely "
     "benefits from it — multi-step or complex work, or when the user asked for "
     "several things. Use your judgment: skip it for simple, single-step, or "

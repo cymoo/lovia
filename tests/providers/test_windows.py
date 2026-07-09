@@ -11,6 +11,8 @@ import asyncio
 import pytest
 
 from lovia.providers._windows import (
+    clear_endpoint_cache,
+    rules_for_host,
     WindowResolver,
     strip_snapshot,
     table_window,
@@ -276,9 +278,10 @@ def test_table_window_prefers_the_longest_prefix() -> None:
 def _resolver(**kw) -> WindowResolver:
     defaults = dict(
         base_url="http://gw/v1",
+        host="gw",
         model="m",
         explicit=None,
-        rules=(("m", 200_000),),
+        table={"gw": (("m", 200_000),)},
         probe=True,
     )
     return WindowResolver(**{**defaults, **kw})
@@ -292,15 +295,38 @@ def test_resolver_rejects_a_nonsense_explicit_window(bad: int) -> None:
         _resolver(explicit=bad)
 
 
-def test_resolver_precedence_explicit_beats_remembered_beats_table() -> None:
-    table_only = _resolver()
-    assert table_only.window("m") == 200_000
+def test_resolver_precedence() -> None:
+    assert _resolver().window() == 200_000  # the table, when nothing else knows
 
-    table_only.remember(65_536)  # the endpoint named its limit
-    assert table_only.window("m") == 65_536
+    _resolver().remember(65_536)  # the endpoint refused and named its limit
+    assert _resolver().window() == 65_536
 
-    explicit = _resolver(explicit=1_234)
-    assert explicit.window("m") == 1_234  # even though 65_536 is remembered
+    # A configured window is a budget; it may be smaller, never larger than
+    # what the endpoint enforces.
+    assert _resolver(explicit=1_234).window() == 1_234
+    assert _resolver(explicit=1_000_000).window() == 65_536
+
+
+async def test_an_advertised_window_beats_the_table_but_not_the_caller() -> None:
+    """A listing is a claim; a configured window is a decision."""
+
+    async def fetch() -> int | None:
+        return 8_192
+
+    assert await _resolver().discover(fetch) == 8_192  # beats the table's 200_000
+    clear_endpoint_cache()
+    assert await _resolver(explicit=1_000_000).discover(fetch) == 1_000_000
+
+
+async def test_an_advertised_window_never_overwrites_an_enforced_one() -> None:
+    """Whichever lands last, a refusal outranks a listing."""
+
+    async def fetch() -> int | None:
+        return 32_768
+
+    r = _resolver()
+    r.remember(8_192)  # the endpoint refused at 8192
+    assert await r.discover(fetch) == 8_192
 
 
 def test_remembered_window_outlives_the_provider_that_learned_it() -> None:
@@ -309,16 +335,16 @@ def test_remembered_window_outlives_the_provider_that_learned_it() -> None:
     Without a per-endpoint memo the same overflow would be re-provoked forever.
     """
     _resolver().remember(65_536)
-    assert _resolver().window("m") == 65_536
+    assert _resolver().window() == 65_536
     # ...but only for that endpoint.
-    assert _resolver(base_url="http://other/v1").window("m") == 200_000
+    assert _resolver(base_url="http://other/v1").window() == 200_000
 
 
 def test_the_newest_statement_from_an_endpoint_wins() -> None:
     r = _resolver()
     r.remember(4_096)
     r.remember(8_192)  # deployment resized underneath us
-    assert r.window("m") == 8_192
+    assert r.window() == 8_192
 
 
 async def test_discover_asks_once_and_caches_the_miss() -> None:
@@ -329,16 +355,23 @@ async def test_discover_asks_once_and_caches_the_miss() -> None:
         calls += 1
         return None
 
-    assert await _resolver().discover(fetch) is None
-    assert await _resolver().discover(fetch) is None  # a *fresh* resolver
+    assert await _resolver(table={}).discover(fetch) is None
+    assert await _resolver(table={}).discover(fetch) is None  # a *fresh* resolver
     assert calls == 1
 
 
-async def test_discover_skips_endpoints_that_publish_nothing() -> None:
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"probe": False},  # the endpoint is known to publish nothing
+        {"explicit": 4_096},  # the caller already decided
+    ],
+)
+async def test_discover_declines_to_spend_a_request(kw: dict) -> None:
     async def fetch() -> int | None:  # pragma: no cover - must never run
-        raise AssertionError("probed an endpoint we know publishes no window")
+        raise AssertionError("probed an endpoint that could not help")
 
-    assert await _resolver(probe=False).discover(fetch) is None
+    assert await _resolver(**kw).discover(fetch) == kw.get("explicit", 200_000)
 
 
 async def test_a_probe_miss_never_clobbers_a_learned_window() -> None:
@@ -355,7 +388,7 @@ async def test_a_probe_miss_never_clobbers_a_learned_window() -> None:
         return None
 
     assert await r.discover(slow_miss) == 65_536
-    assert r.window("m") == 65_536
+    assert r.window() == 65_536
 
 
 async def test_concurrent_probes_all_see_the_window() -> None:
@@ -373,3 +406,50 @@ def test_models_payload_matches_an_id_that_contains_a_colon() -> None:
     """A colon is lovia's vendor separator, but Ollama puts one in its names."""
     payload = _payload({"id": "llama3:8b", "max_model_len": 8192})
     assert window_from_models_payload(payload, "llama3:8b") == 8192
+
+
+# ---------------------------------------------------------------------------
+# The table is keyed by host: a name means nothing without the endpoint
+# ---------------------------------------------------------------------------
+
+_TABLE = {
+    "api.openai.com": (("gpt-4.1", 1_047_576),),
+    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
+}
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("api.openai.com", (("gpt-4.1", 1_047_576),)),
+        ("eu.api.openai.com", (("gpt-4.1", 1_047_576),)),  # regional subdomain
+        ("api.deepseek.com", (("deepseek-v4-pro", 1_048_565),)),
+        ("vllm", ()),  # a box merely re-exposing the name
+        ("evilapi.openai.com", ()),  # lookalike, not a subdomain
+        ("", ()),
+    ],
+)
+def test_rules_for_host(host: str, expected: tuple) -> None:
+    assert rules_for_host(host, _TABLE) == expected
+
+
+def test_a_foreign_host_gets_no_window_from_the_table() -> None:
+    """``gpt-4.1`` on vLLM is whatever vLLM was started with — not 1M."""
+    official = WindowResolver(
+        base_url="https://api.openai.com/v1",
+        host="api.openai.com",
+        model="gpt-4.1",
+        explicit=None,
+        table=_TABLE,
+        probe=False,
+    )
+    foreign = WindowResolver(
+        base_url="http://vllm:8000/v1",
+        host="vllm",
+        model="gpt-4.1",
+        explicit=None,
+        table=_TABLE,
+        probe=True,
+    )
+    assert official.window() == 1_047_576
+    assert foreign.window() is None

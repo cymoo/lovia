@@ -1370,30 +1370,34 @@ class RunLoop:
         return tools
 
     async def _ensure_context_window(self, providers: list[Provider]) -> None:
-        """Ask the endpoint for its context window, but only if nobody knows it.
+        """Give the endpoint a chance to report its own context window.
 
-        A configured policy, the adapter's table, or a ``context_window=``
-        argument all answer for free; only when every local source draws a
-        blank is a network round-trip worth it — and in exactly that case the
-        alternative is running with proactive compaction switched off. The
-        adapter caches the result, so this costs at most one request per run.
+        The adapter decides whether that costs anything: it declines when the
+        window was configured, when the endpoint is known to publish none, and
+        when it already asked (memoized per endpoint, for the process). What we
+        must *not* do here is skip the question because the bundled table has an
+        answer — the endpoint outranks the table, and a deployment that caps a
+        familiar model would otherwise be budgeted at the table's number.
 
         The sentinel matters: a policy that does not *declare* ``context_window``
         (:class:`~lovia.context.NoopContextPolicy`, custom policies) never needs
         a window, and must not pay for one.
+
+        Only ``providers[0]`` is asked, because only its window is used: the
+        context policy sizes every prompt against the primary even after a
+        fallback takes over. A smaller fallback relies on the reactive overflow
+        path. See https://github.com/cymoo/lovia/issues/88.
         """
         declared = getattr(self.context_policy, "context_window", _NO_WINDOW_FIELD)
         if declared is not None or not providers:
             return
         primary = providers[0]
-        model = getattr(primary, "model", None)
-        if context_window(primary, model) is not None:
-            return
-        if await discover_context_window(primary) is None:
+        await discover_context_window(primary)
+        if context_window(primary) is None:
             logger.info(
                 "context.window: unknown for %r; proactive compaction is off — "
                 "set Compaction(context_window=...) if the endpoint cannot report it",
-                model,
+                getattr(primary, "model", None),
             )
 
     def _resolve_providers(

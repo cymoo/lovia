@@ -1,4 +1,8 @@
-"""Shared HTTP helpers for provider adapters."""
+"""Shared HTTP helpers for provider adapters.
+
+Deliberately free of domain knowledge: :mod:`._windows` builds on these, not
+the other way round, so what an error body *means* stays in one place.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,6 @@ from typing import NoReturn
 import httpx
 
 from ..exceptions import ContextOverflowError, ProviderError
-from ._windows import window_from_error, window_from_models_payload
 
 
 def is_retryable_status(status_code: int) -> bool:
@@ -35,8 +38,14 @@ async def raise_for_provider_status(
     model: str | None,
     label: str,
     is_context_overflow: Callable[[int, str], bool],
+    window_from_body: Callable[[str], int | None] | None = None,
 ) -> None:
-    """Raise a structured lovia exception for failed provider responses."""
+    """Raise a structured lovia exception for failed provider responses.
+
+    ``window_from_body`` reads the context window an overflow names, when it
+    names one; the adapters pass
+    :func:`~lovia.providers._windows.window_from_error`.
+    """
     if response.status_code < 400:
         return
 
@@ -45,7 +54,7 @@ async def raise_for_provider_status(
     if is_context_overflow(response.status_code, text):
         raise ContextOverflowError(
             f"{label}: prompt exceeds the model's context window: {text}",
-            reported_window=window_from_error(text),
+            reported_window=window_from_body(text) if window_from_body else None,
         )
     raise ProviderError(
         f"{label} stream returned HTTP {response.status_code}: {text}",
@@ -55,40 +64,6 @@ async def raise_for_provider_status(
         retryable=is_retryable_status(response.status_code),
         body=text,
     )
-
-
-# The probe runs before the first model call, so its latency is charged to run
-# start. The provider timeout (60s by default) is sized for generation, not for
-# a metadata lookup that is pure upside: a slow endpoint should cost us a moment
-# and then be forgotten, never stall the run.
-_PROBE_TIMEOUT = 10.0
-
-
-async def fetch_reported_window(
-    client: httpx.AsyncClient,
-    *,
-    base_url: str,
-    headers: dict[str, str],
-    model: str,
-) -> int | None:
-    """Ask ``GET {base_url}/models`` what ``model``'s context window is.
-
-    Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
-    body or a listing without window metadata all yield ``None``. The caller is
-    trying to do better than "unknown", so nothing here is worth raising over.
-    """
-    try:
-        response = await client.get(
-            f"{base_url}/models",
-            headers=headers,
-            follow_redirects=True,
-            timeout=_PROBE_TIMEOUT,
-        )
-        if not response.is_success:
-            return None
-        return window_from_models_payload(response.json(), model)
-    except (httpx.HTTPError, ValueError):
-        return None
 
 
 def raise_for_transport_error(

@@ -525,16 +525,16 @@ async def test_overflow_teaches_the_window_and_it_enables_proactive_compaction()
             model="m",
             scratch=scratch,
             overflow=True,
-            reported_window=1_000,
+            reported_window=2_048,
         )
     )
-    assert CompactionState.load(scratch).learned_windows == {"\x00m": 1_000}
+    assert CompactionState.load(scratch).learned_windows == {"\x00m": 2_048}
 
     # From now on the policy budgets against the real window.
     after = await pipeline.compact(
-        req(entries, provider=provider, model="m", scratch=_scratch_with_learned(1_000))
+        req(entries, provider=provider, model="m", scratch=_scratch_with_learned(2_048))
     )
-    assert after.compacted is True  # usable = 500, trigger 375 < 990
+    assert after.compacted is True  # usable = 1024, trigger 768 < 990
     assert any("context was" in d for d in after.detail)
 
 
@@ -554,7 +554,7 @@ async def test_learned_window_caps_an_overstated_claim():
             entries,
             provider=provider,
             model="m",
-            scratch=_scratch_with_learned(1_000),
+            scratch=_scratch_with_learned(2_048),
         )
     )
     assert clamped.compacted is True
@@ -575,7 +575,7 @@ async def test_learned_window_is_scoped_to_its_own_endpoint_and_model():
     pipeline = Compaction(summarizer=FakeSummarizer())
     entries = [user("x" * 100) for _ in range(30)]
     res = await pipeline.compact(
-        req(entries, model="other", scratch=_scratch_with_learned(1_000, "\x00m"))
+        req(entries, model="other", scratch=_scratch_with_learned(2_048, "\x00m"))
     )
     assert res.compacted is False
 
@@ -683,7 +683,7 @@ class _OverflowOnceProvider:
         self.stream_count = 0
         self.last_input_lengths: list[int] = []
 
-    def context_window(self, model: str) -> int | None:
+    def context_window(self) -> int | None:
         return 10_000_000  # never trigger the proactive path
 
     async def stream(self, entries, *, tools=None, response_format=None, settings=None):

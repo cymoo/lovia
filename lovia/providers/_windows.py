@@ -2,9 +2,10 @@
 
 A context window is a fact about an *(endpoint, model, deployment)* triple, not
 about a model name: the same ``qwen2.5`` is 32K on one vLLM host and 4K on
-another, depending on ``--max-model-len``. A static name→int table can never be
-authoritative, so the adapters treat theirs as the lowest-trust layer and let
-two better sources overrule it:
+another, depending on ``--max-model-len``. So the bundled tables are keyed by
+*host* — ``gpt-4.1`` means 1M on ``api.openai.com`` and nothing at all on a box
+that merely re-exposes the name — and even then they are the lowest-trust layer,
+which two better sources overrule:
 
 * :func:`window_from_error` — the number the endpoint *itself* named when it
   rejected an oversized prompt. This is the endpoint refusing, so it outranks
@@ -15,13 +16,25 @@ two better sources overrule it:
 Both return ``None`` rather than a guess: a wrong window is worse than an
 unknown one, because the unknown case already has a working fallback (reactive
 overflow handling) while a wrong one silently mis-sizes every prompt.
+
+:class:`WindowResolver` ties the four sources together and memoizes what an
+endpoint said, per process — a ``"vendor:model"`` string is resolved into a
+fresh provider on every run and every handoff.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, TypeGuard
+
+import httpx
+
+from ._http import host_matches
+
+# A bundled table: endpoint host → its models' windows. Values are exact model
+# aliases or, when a whole naming family agrees, a prefix ending in ``-``.
+WindowTable = Mapping[str, tuple[tuple[str, int], ...]]
 
 # Plausible bounds for a real context window. The floor rejects a parse that
 # grabbed a rate-limit quota or a stray small integer; the ceiling rejects one
@@ -109,10 +122,21 @@ _WINDOW_FIELDS = (
 )
 
 
-def _coerce_window(value: Any) -> int | None:
+def plausible_window(value: Any) -> TypeGuard[int]:
+    """Whether ``value`` could be a real context window.
+
+    The bounds are the same wherever a window arrives from outside the process
+    — a parsed error, a ``/models`` listing, a hand-edited scratch file. A wrong
+    window is worse than an unknown one, and a *small* wrong one is worst of
+    all: it never overflows, so nothing ever corrects it.
+    """
     if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value if _MIN_WINDOW <= value <= _MAX_WINDOW else None
+        return False
+    return _MIN_WINDOW <= value <= _MAX_WINDOW
+
+
+def _coerce_window(value: Any) -> int | None:
+    return value if plausible_window(value) else None
 
 
 def _window_from_entry(entry: dict[str, Any]) -> int | None:
@@ -153,6 +177,40 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
     return None
 
 
+# The probe runs before the first model call, so its latency is charged to run
+# start. The provider timeout (60s by default) is sized for generation, not for
+# a metadata lookup that is pure upside: a slow endpoint should cost a moment
+# and then be forgotten, never stall the run.
+_PROBE_TIMEOUT = 10.0
+
+
+async def fetch_reported_window(
+    client: httpx.AsyncClient,
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    model: str,
+) -> int | None:
+    """Ask ``GET {base_url}/models`` what ``model``'s context window is.
+
+    Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
+    body or a listing without window metadata all yield ``None``. The caller is
+    trying to do better than "unknown", so nothing here is worth raising over.
+    """
+    try:
+        response = await client.get(
+            f"{base_url}/models",
+            headers=headers,
+            follow_redirects=True,
+            timeout=_PROBE_TIMEOUT,
+        )
+        if not response.is_success:
+            return None
+        return window_from_models_payload(response.json(), model)
+    except (httpx.HTTPError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # The bundled table: a hint, not an authority
 # ---------------------------------------------------------------------------
@@ -165,6 +223,20 @@ _SNAPSHOT_SUFFIX = re.compile(r"-(?:\d{4}-\d{2}-\d{2}|\d{8})$")
 def strip_snapshot(model: str) -> str:
     """Drop a trailing date-pinned snapshot suffix from a model name."""
     return _SNAPSHOT_SUFFIX.sub("", model)
+
+
+def rules_for_host(host: str, table: WindowTable) -> tuple[tuple[str, int], ...]:
+    """The window rules that apply to ``host``, or none at all.
+
+    The table is keyed by *host* because ``gpt-4.1`` on ``api.openai.com`` is a
+    fact about OpenAI's deployment, and says nothing about the ``gpt-4.1`` a
+    vLLM box re-exposes at ``--max-model-len 8192``. An unknown host gets no
+    rules and falls through to what the endpoint reports about itself.
+    """
+    for domain, rules in table.items():
+        if host_matches(host, (domain,)):
+            return rules
+    return ()
 
 
 def table_window(model: str, rules: tuple[tuple[str, int], ...]) -> int | None:
@@ -197,68 +269,90 @@ def table_window(model: str, rules: tuple[tuple[str, int], ...]) -> int | None:
 # would re-probe ``/models`` — and re-provoke the same overflow — forever. These
 # facts are stable for the life of the process; a deployment resized underneath
 # us restates its limit on the next overflow, and the newest statement wins.
-_KNOWN: dict[tuple[str, str], int] = {}
+#
+# The two stores are not interchangeable. ``_ENFORCED`` is what an endpoint said
+# while *refusing* a prompt: the limit it actually applies, so it caps even a
+# configured window. ``_ADVERTISED`` is what a listing claims; it outranks the
+# bundled table but must never override what the caller asked for.
+_ENFORCED: dict[tuple[str, str], int] = {}
+_ADVERTISED: dict[tuple[str, str], int] = {}
 _PROBED: set[tuple[str, str]] = set()
 
 
 def clear_endpoint_cache() -> None:
     """Forget every remembered endpoint window. For tests."""
-    _KNOWN.clear()
+    _ENFORCED.clear()
+    _ADVERTISED.clear()
     _PROBED.clear()
 
 
 class WindowResolver:
-    """One ``(endpoint, model)``'s context window: explicit, remembered, tabled.
+    """One ``(endpoint, model)``'s context window, and the memo behind it.
 
-    Owns the precedence — an explicit setting beats what the endpoint said,
-    which beats the bundled table — and the process-level memo above. The
-    policy keeps its *own* record of a window an endpoint named, persisted per
-    session; this one only has to outlive a provider instance.
+    Owns the precedence:
+
+    1. what the endpoint *enforced* — a rejection names the limit it applies
+    2. an explicit setting, which (1) may cap but nothing else may
+    3. what the endpoint *advertised* on ``/models``
+    4. the bundled table
+
+    The context policy keeps its own record of an enforced window, persisted per
+    session so it survives a restart. This memo only has to outlive a provider
+    instance — but it must, because a ``"vendor:model"`` string is resolved into
+    a fresh provider on every run and every handoff.
     """
 
     def __init__(
         self,
         *,
         base_url: str,
+        host: str,
         model: str,
         explicit: int | None,
-        rules: tuple[tuple[str, int], ...],
+        table: WindowTable,
         probe: bool,
     ) -> None:
         if explicit is not None and explicit < 1:
             raise ValueError(f"context_window must be >= 1, got {explicit}")
         self._key = (base_url, model)
         self._explicit = explicit
-        self._rules = rules
+        self._rules = rules_for_host(host, table)
         self._probe = probe
 
-    def window(self, model: str) -> int | None:
-        """The window for ``model``, without any I/O."""
+    def window(self) -> int | None:
+        """This endpoint's window for this model, without any I/O."""
+        enforced = _ENFORCED.get(self._key)
         if self._explicit is not None:
+            # A configured window is a budget, not a fact. Once the endpoint has
+            # refused a prompt it has stated the fact, and no budget may exceed
+            # it — otherwise a too-large setting overflows in every new session.
+            if enforced is not None:
+                return min(self._explicit, enforced)
             return self._explicit
-        known = _KNOWN.get(self._key)
-        if known is not None:
-            return known
+        if enforced is not None:
+            return enforced
+        advertised = _ADVERTISED.get(self._key)
+        if advertised is not None:
+            return advertised
+        _, model = self._key
         return table_window(model, self._rules)
 
     def remember(self, window: int | None) -> None:
         """Record a window the endpoint named while rejecting a prompt."""
-        if window is not None:
-            _KNOWN[self._key] = window
+        if plausible_window(window):
+            _ENFORCED[self._key] = window  # the newest refusal is the truth
             _PROBED.add(self._key)
 
     async def discover(self, fetch: Callable[[], Awaitable[int | None]]) -> int | None:
-        """Ask the endpoint once, ever, and remember the answer — miss included."""
-        if self._key in _PROBED:
-            return _KNOWN.get(self._key)
-        if not self._probe:
+        """Ask what the endpoint publishes — at most once per process.
+
+        A no-op when the caller configured a window, when this endpoint is known
+        to publish none, or when it was already asked. Returns whatever
+        :meth:`window` would, so callers never special-case a miss.
+        """
+        if self._explicit is None and self._probe and self._key not in _PROBED:
+            window = await fetch()
             _PROBED.add(self._key)
-            return None
-        window = await fetch()
-        _PROBED.add(self._key)
-        if window is not None:
-            # Never overwrite a window the endpoint *named*: a concurrent stream
-            # may have learned the enforced limit while this probe was in flight,
-            # and a rejection outranks a listing.
-            _KNOWN[self._key] = window
-        return _KNOWN.get(self._key)
+            if window is not None:
+                _ADVERTISED.setdefault(self._key, window)
+        return self.window()

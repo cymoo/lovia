@@ -185,26 +185,33 @@ chain, most trustworthy first:
 | Explicit config | `Compaction(context_window=…)`, `--context-window`, `LOVIA_CONTEXT_WINDOW`, or the adapter's `context_window=` argument |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
 | **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; Groq, Together and OpenRouter publish theirs |
-| The bundled table | recent OpenAI aliases; the whole Claude line via family prefixes |
+| The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |
 | — | otherwise unknown: no proactive compaction, reactive overflow handling only |
 
 Only the second source may *override* an explicit setting, and only downward —
 it is the endpoint enforcing a limit, not a guess. Configure `100_000` on a 200K
 model and you keep 100K.
 
+The table is keyed by host because `gpt-4.1` is a fact about *OpenAI's*
+deployment. The `gpt-4.1` a vLLM box re-exposes at `--max-model-len 8192` is a
+different thing entirely, and this adapter serves both — so an unlisted host
+gets nothing from the table and relies on what the endpoint reports.
+
 The practical upshot: an unlisted model costs **one** overflow, once. The window
-learned from it is remembered on the provider and persisted in the session, so
-every later turn (and every later run on that session) sizes itself correctly.
+learned from it is memoized per `(endpoint, model)` for the life of the process
+*and* persisted in the session, so every later turn — and every later run —
+sizes itself correctly.
 
 Two consequences worth knowing:
 
-- **The `/models` probe fires only when nothing else knows the window**, and
-  never against `api.openai.com` or `api.anthropic.com`, which publish nothing
-  there. Answers — misses included — are memoized per `(endpoint, model)` for
-  the life of the process, so an endpoint is asked at most once even though a
-  `"vendor:model"` string is resolved into a fresh provider on every run. The
-  probe runs before the first model call with its own short timeout; a slow
-  endpoint costs a moment, never the run.
+- **The `/models` probe is skipped whenever it cannot help**: when you
+  configured a window, when the endpoint is known to publish none
+  (`api.openai.com`, `api.anthropic.com`), and when it was already asked.
+  Answers — misses included — are memoized per `(endpoint, model)` for the life
+  of the process, so an endpoint is asked at most once even though a
+  `"vendor:model"` string is resolved into a fresh provider on every run and
+  every handoff. The probe runs before the first model call with its own short
+  timeout; a slow endpoint costs a moment, never the run.
 - **Anthropic models report 200K.** The 1M variants sit behind a beta header
   lovia doesn't send by default, and advertising 1M would delay proactive
   compaction. Enable the beta and set the window explicitly.

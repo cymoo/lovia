@@ -678,18 +678,25 @@ def test_build_payload_none_valued_option_removes_adapter_default() -> None:
     assert "stream_options" not in payload
 
 
-def test_context_window_resolves_date_pinned_snapshots() -> None:
-    provider = OpenAIChatProvider(model="gpt-4.1", api_key="sk-test")
-
-    assert provider.context_window("gpt-4.1") == 1_047_576
-    assert provider.context_window("gpt-4.1-2025-04-14") == 1_047_576
-    assert provider.context_window("o3-2025-04-16") is None
-    # GPT-5 releases disagree on their window, so the table stays exact:
-    # "gpt-5.5" must never resolve through a "gpt-5" prefix.
-    assert provider.context_window("gpt-5") == 400_000
-    assert provider.context_window("gpt-5.5") == 1_050_000
-    assert provider.context_window("gpt-5.5-pro") == 1_050_000
-    assert provider.context_window("gpt-5-mini") is None
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gpt-4.1", 1_047_576),
+        ("gpt-4.1-2025-04-14", 1_047_576),  # date-pinned snapshot
+        ("o3-2025-04-16", None),
+        # GPT-5 releases disagree on their window, so the table stays exact:
+        # "gpt-5.5" must never resolve through a "gpt-5" prefix.
+        ("gpt-5", 400_000),
+        ("gpt-5.5", 1_050_000),
+        ("gpt-5.5-pro", 1_050_000),
+        ("gpt-5-mini", None),
+    ],
+)
+def test_table_window_per_model(model: str, expected: int | None) -> None:
+    provider = OpenAIChatProvider(
+        model=model, api_key="sk-test", base_url="https://api.openai.com/v1"
+    )
+    assert provider.context_window() == expected
 
 
 def test_context_window_constructor_argument_overrides_the_table() -> None:
@@ -700,11 +707,15 @@ def test_context_window_constructor_argument_overrides_the_table() -> None:
         base_url="http://localhost:8000/v1",
         context_window=32_768,
     )
-    assert provider.context_window("qwen2.5") == 32_768
+    assert provider.context_window() == 32_768
 
     # A vLLM host serving a familiar alias at a smaller --max-model-len.
-    capped = OpenAIChatProvider(model="gpt-4.1", api_key="x", context_window=8_192)
-    assert capped.context_window("gpt-4.1") == 8_192
+    capped = OpenAIChatProvider(
+        model="gpt-4.1",
+        base_url="http://vllm:8000/v1",
+        context_window=8_192,
+    )
+    assert capped.context_window() == 8_192  # not the table's 1_047_576
 
 
 @pytest.mark.asyncio
@@ -1043,9 +1054,9 @@ async def test_discover_reads_max_model_len_and_asks_only_once() -> None:
         model="qwen2.5", base_url="http://localhost:8000/v1", client=client
     )
 
-    assert provider.context_window("qwen2.5") is None  # table knows nothing
+    assert provider.context_window() is None  # table knows nothing
     assert await provider.discover_context_window() == 32_768
-    assert provider.context_window("qwen2.5") == 32_768  # cached, no I/O
+    assert provider.context_window() == 32_768  # cached, no I/O
     assert await provider.discover_context_window() == 32_768
 
     assert len(seen) == 1
@@ -1055,12 +1066,12 @@ async def test_discover_reads_max_model_len_and_asks_only_once() -> None:
 @pytest.mark.asyncio
 async def test_discover_caches_a_miss_and_never_retries() -> None:
     seen: list[httpx.Request] = []
-    # The official DeepSeek shape: a listing with no window anywhere.
+    # A listing with no window anywhere, for a model no table knows.
     client = _models_client(
-        seen=seen, status_code=200, json={"data": [{"id": "deepseek-v4-pro"}]}
+        seen=seen, status_code=200, json={"data": [{"id": "qwen2.5"}]}
     )
     provider = OpenAIChatProvider(
-        model="deepseek-v4-pro", base_url="https://api.deepseek.com", client=client
+        model="qwen2.5", base_url="http://gw/v1", client=client
     )
 
     assert await provider.discover_context_window() is None
@@ -1110,9 +1121,8 @@ async def test_discover_never_asks_the_official_api() -> None:
         client=client,
     )
 
-    assert await provider.discover_context_window() is None
-    assert seen == []
-    assert provider.context_window("gpt-5.5") == 1_050_000  # the table still answers
+    assert await provider.discover_context_window() == 1_050_000  # from the table
+    assert seen == []  # api.openai.com publishes no window; asking is pure waste
 
 
 @pytest.mark.asyncio
@@ -1125,7 +1135,7 @@ async def test_discover_does_not_override_an_explicit_window() -> None:
         model="m", base_url="http://gw/v1", client=client, context_window=99_999
     )
     await provider.discover_context_window()
-    assert provider.context_window("m") == 99_999
+    assert provider.context_window() == 99_999
 
 
 @pytest.mark.asyncio
@@ -1145,12 +1155,12 @@ async def test_overflow_teaches_the_provider_its_window() -> None:
     provider = OpenAIChatProvider(
         model="deepseek-chat", base_url="https://api.deepseek.com", client=client
     )
-    assert provider.context_window("deepseek-chat") is None
+    assert provider.context_window() is None
 
     with pytest.raises(ContextOverflowError):
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
-    assert provider.context_window("deepseek-chat") == 65_536
+    assert provider.context_window() == 65_536
     # And it never probes /models afterwards — it already knows.
     assert await provider.discover_context_window() == 65_536
     assert all(r.url.path.endswith("/chat/completions") for r in seen)
@@ -1168,7 +1178,7 @@ async def test_overflow_without_a_stated_window_teaches_nothing() -> None:
     with pytest.raises(ContextOverflowError):
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
-    assert provider.context_window("m") is None
+    assert provider.context_window() is None
 
 
 @pytest.mark.asyncio
@@ -1188,7 +1198,7 @@ async def test_two_providers_for_one_endpoint_probe_it_once() -> None:
     assert await build().discover_context_window() == 32_768
     second = build()
     assert await second.discover_context_window() == 32_768
-    assert second.context_window("qwen2.5") == 32_768  # knows without asking
+    assert second.context_window() == 32_768  # knows without asking
     assert len(seen) == 1
 
 

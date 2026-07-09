@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ..parts import TextPart
+from ..providers._windows import plausible_window
 from ..transcript import (
     AssistantTextEntry,
     InputEntry,
@@ -183,10 +184,7 @@ class CompactionState:
             state.learned_windows = {
                 key: value
                 for key, value in learned.items()
-                if isinstance(key, str)
-                and isinstance(value, int)
-                and not isinstance(value, bool)
-                and value > 0
+                if isinstance(key, str) and plausible_window(value)
             }
 
         return state

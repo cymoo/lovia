@@ -37,13 +37,13 @@ from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
 )
-from ._http import (
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._windows import (
+    WindowResolver,
+    WindowTable,
     fetch_reported_window,
-    host_matches,
-    raise_for_provider_status,
-    raise_for_transport_error,
+    window_from_error,
 )
-from ._windows import WindowResolver
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -244,8 +244,9 @@ class OpenAIChatProvider:
         self._windows = WindowResolver(
             base_url=self.base_url,
             model=model,
+            host=self._host,
             explicit=context_window,
-            rules=_OPENAI_CONTEXT_WINDOWS,
+            table=_OPENAI_CONTEXT_WINDOWS,
             # The official API publishes no window on /models; don't ask it.
             probe=not self._on_official_host(),
         )
@@ -407,6 +408,7 @@ class OpenAIChatProvider:
                         model=self.model,
                         label="OpenAI Chat",
                         is_context_overflow=_is_context_overflow,
+                        window_from_body=window_from_error,
                     )
                 except ContextOverflowError as exc:
                     self._windows.remember(exc.reported_window)
@@ -495,8 +497,8 @@ class OpenAIChatProvider:
 
     # ----- ContextPolicy hooks ------------------------------------------------
 
-    def context_window(self, model: str) -> int | None:
-        return self._windows.window(model)
+    def context_window(self) -> int | None:
+        return self._windows.window()
 
     async def discover_context_window(self) -> int | None:
         """Read this deployment's window off ``GET {base_url}/models``.
@@ -573,22 +575,33 @@ def _is_context_overflow(status: int, body: str) -> bool:
     return False
 
 
-# Context-window table for recent, commonly used OpenAI GPT model aliases
-# (their date-pinned snapshots resolve via suffix stripping). Keep this
-# intentionally small: o-series, retired models, and niche aliases can fall
-# back to reactive overflow handling.
+# Bundled windows, keyed by the host that serves them. "gpt-4.1" means
+# 1,047,576 tokens *on api.openai.com*; it says nothing about the "gpt-4.1" a
+# vLLM box re-exposes at --max-model-len 8192, and this adapter serves both.
+# An unlisted host gets no rules and relies on what the endpoint reports.
 #
-# Exact entries only, unlike Anthropic's family prefixes: GPT-5 releases
-# disagree on their window (400K vs 1.05M), so a prefix rule would guess. And a
-# guess that is too *small* never self-corrects — it cannot provoke the
-# overflow that would teach the real number.
-_OPENAI_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
-    ("gpt-4.1", 1_047_576),
-    ("gpt-5", 400_000),
-    ("gpt-5.5", 1_050_000),
-    ("gpt-5.5-pro", 1_050_000),
-    ("gpt-5.4", 1_050_000),
-    ("gpt-5.4-mini", 400_000),
-    ("gpt-5.2", 400_000),
-    ("gpt-5.2-pro", 400_000),
-)
+# The table is only ever an optimization — it spares the first long conversation
+# one overflow — so staleness is harmless and it stays small. Date-pinned
+# snapshots resolve via suffix stripping.
+#
+# Exact entries, except where a whole naming family provably agrees: GPT-5
+# releases disagree (400K vs 1.05M), so a prefix rule would be guessing. And a
+# guess that is too *small* never self-corrects — it cannot provoke the overflow
+# that would teach the real number.
+_OPENAI_CONTEXT_WINDOWS: WindowTable = {
+    "api.openai.com": (
+        ("gpt-4.1", 1_047_576),
+        ("gpt-5", 400_000),
+        ("gpt-5.5", 1_050_000),
+        ("gpt-5.5-pro", 1_050_000),
+        ("gpt-5.4", 1_050_000),
+        ("gpt-5.4-mini", 400_000),
+        ("gpt-5.2", 400_000),
+        ("gpt-5.2-pro", 400_000),
+    ),
+    # DeepSeek publishes no window on /models, so without this every new session
+    # spends an overflow learning it. The number is the one the endpoint itself
+    # named, read off a real rejection (2026-07):
+    #   "This model's maximum context length is 1048565 tokens."
+    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
+}

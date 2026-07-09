@@ -55,13 +55,13 @@ from ._content import (
     openai_tool_to_anthropic as _openai_tool_to_anthropic,
     text_only as _text_only,
 )
-from ._http import (
+from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._windows import (
+    WindowResolver,
+    WindowTable,
     fetch_reported_window,
-    host_matches,
-    raise_for_provider_status,
-    raise_for_transport_error,
+    window_from_error,
 )
-from ._windows import WindowResolver
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -118,8 +118,9 @@ class AnthropicProvider:
         self._windows = WindowResolver(
             base_url=self.base_url,
             model=model,
+            host=self._host,
             explicit=context_window,
-            rules=_ANTHROPIC_CONTEXT_WINDOWS,
+            table=_ANTHROPIC_CONTEXT_WINDOWS,
             # The official API publishes no window on /models; don't ask it.
             probe=not self._on_official_host(),
         )
@@ -145,8 +146,8 @@ class AnthropicProvider:
             )
         return self._client
 
-    def context_window(self, model: str) -> int | None:
-        return self._windows.window(model)
+    def context_window(self) -> int | None:
+        return self._windows.window()
 
     async def discover_context_window(self) -> int | None:
         """Read this deployment's window off ``GET {base_url}/models``.
@@ -320,6 +321,7 @@ class AnthropicProvider:
                         model=self.model,
                         label="Anthropic",
                         is_context_overflow=_is_context_overflow,
+                        window_from_body=window_from_error,
                     )
                 except ContextOverflowError as exc:
                     self._windows.remember(exc.reported_window)
@@ -683,6 +685,10 @@ def _is_context_overflow(status: int, body: str) -> bool:
     )
 
 
+# Bundled windows, keyed by the host that serves them: a gateway re-exposing
+# "claude-sonnet-4-5" may cap it, and only api.anthropic.com can vouch for the
+# vendor's own number. An unlisted host relies on what the endpoint reports.
+#
 # Every Claude shipped since Claude 3 defaults to a 200K window, so family
 # prefixes cover the whole line — including models released after this file was
 # written. Date-pinned snapshots resolve via suffix stripping.
@@ -691,9 +697,14 @@ def _is_context_overflow(status: int, body: str) -> bool:
 # ``context-1m`` beta header, which this adapter does not send by default;
 # advertising 1M here would make proactive compaction trigger far too late.
 # Users who enable the beta can size their ContextPolicy explicitly.
-_ANTHROPIC_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
-    ("claude-opus-", 200_000),
-    ("claude-sonnet-", 200_000),
-    ("claude-haiku-", 200_000),
-    ("claude-3-", 200_000),
-)
+_ANTHROPIC_CONTEXT_WINDOWS: WindowTable = {
+    "api.anthropic.com": (
+        ("claude-opus-", 200_000),
+        ("claude-sonnet-", 200_000),
+        ("claude-haiku-", 200_000),
+        ("claude-3-", 200_000),
+    ),
+    # DeepSeek's Anthropic-dialect endpoint, verified the same way as its /v1
+    # one: it names 1048565 when it refuses, and publishes nothing on /models.
+    "api.deepseek.com": (("deepseek-v4-pro", 1_048_565),),
+}

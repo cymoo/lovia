@@ -120,7 +120,7 @@ class TokenEstimator(Protocol):
 
 @runtime_checkable
 class ContextWindowProvider(Protocol):
-    def context_window(self, model: str) -> int | None: ...
+    def context_window(self) -> int | None: ...
 
 
 @runtime_checkable
@@ -128,18 +128,17 @@ class ContextWindowDiscovery(Protocol):
     async def discover_context_window(self) -> int | None: ...
 
 
-def context_window(provider: object, model: str | None) -> int | None:
-    """Return the prompt+output token cap for ``model`` on ``provider``.
+def context_window(provider: object) -> int | None:
+    """Return the prompt+output token cap ``provider`` will accept.
 
-    Returns ``None`` when the provider doesn't expose the information (no
-    ``context_window`` method, or the method returns ``None``). Callers
-    treat ``None`` as "skip proactive compaction; rely on the reactive
-    overflow path instead".
+    A provider already knows which model it speaks to — ``stream`` takes no
+    model either — so this asks about *that* model. Returns ``None`` when the
+    provider doesn't expose the information (no ``context_window`` method, or
+    the method returns ``None``). Callers treat ``None`` as "skip proactive
+    compaction; rely on the reactive overflow path instead".
     """
-    if model is None:
-        return None
     if isinstance(provider, ContextWindowProvider):
-        result = provider.context_window(model)
+        result = provider.context_window()
         return int(result) if result is not None else None
     return None
 

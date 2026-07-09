@@ -45,6 +45,7 @@ from .stages import (
 )
 from .summarizer import Summarizer
 from .tokens import TokenBudget, TokenCounter, _validate_watermark
+from ..providers._windows import plausible_window
 from ..providers.base import context_window as _provider_context_window
 from ..transcript import TranscriptEntry, split_system
 
@@ -240,7 +241,7 @@ class Compaction:
         aggressive = req.overflow
         window = self.context_window
         if window is None:
-            window = _provider_context_window(req.provider, req.model)
+            window = _provider_context_window(req.provider)
         # The endpoint's own rejection outranks every other source: a
         # configured or tabled window is a *claim*, the number in a 400 is the
         # limit being enforced. It only ever caps — a user who deliberately
@@ -414,10 +415,14 @@ class Compaction:
 
         A fresh ``reported_window`` replaces any earlier one: both are direct
         statements from the endpoint, and the newest describes the deployment
-        as it is now.
+        as it is now. Implausible numbers are dropped here as well as on load —
+        the value is persisted, and a wrongly *small* one would never overflow
+        again to correct itself.
         """
         key = window_key(req.provider, req.model)
         reported = req.reported_window
+        if not plausible_window(reported):
+            reported = None
         if reported is not None and state.learned_windows.get(key) != reported:
             logger.info(
                 "context.window: learned %d tokens for %r from the provider's "

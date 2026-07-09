@@ -25,6 +25,7 @@ from lovia.transcript import (
     ToolResultEntry,
     UsageDelta,
 )
+from lovia.providers._windows import window_from_error
 from lovia.providers.anthropic import (
     AnthropicProvider,
     _is_context_overflow,
@@ -968,6 +969,22 @@ def test_stop_reason_and_context_overflow_helpers() -> None:
     assert _is_context_overflow(413, "context window exceeded")
     assert not _is_context_overflow(500, "prompt is too long")
     assert not _is_context_overflow(400, "invalid api key")
+
+
+def test_context_overflow_recognizes_openai_phrasing_from_compat_gateways() -> None:
+    """Anthropic-dialect gateways answer in OpenAI's words, not Anthropic's.
+
+    Verbatim from DeepSeek's ``/anthropic`` endpoint. Missing it meant the run
+    died on a plain ``ProviderError`` instead of compacting and retrying.
+    """
+    body = (
+        '{"error":{"message":"This model\'s maximum context length is 1048565 tokens. '
+        "However, you requested 2046802 tokens (1982802 in the messages, 64000 in the "
+        'completion). Please reduce the length of the messages or completion.",'
+        '"type":"invalid_request_error"}}'
+    )
+    assert _is_context_overflow(400, body)
+    assert window_from_error(body) == 1_048_565
 
 
 def test_context_window_covers_the_whole_claude_line() -> None:

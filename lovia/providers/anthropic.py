@@ -676,6 +676,14 @@ _OVERFLOW_NEEDLES = (
     "context window",
     "context limit",  # "input length and `max_tokens` exceed context limit"
     "too many total text bytes",  # Bedrock-hosted Claude behind gateways
+    # This adapter also serves Anthropic-*dialect* compatible endpoints
+    # (DeepSeek's ``/anthropic``, Kimi, GLM), and they answer with OpenAI's
+    # phrasing rather than Anthropic's. Verified live: DeepSeek returns "This
+    # model's maximum context length is 1048565 tokens" on ``/anthropic``
+    # exactly as it does on ``/v1``. Without these the overflow surfaces as a
+    # plain ProviderError and the run dies instead of compacting.
+    "context length",
+    "context_length_exceeded",
 )
 
 

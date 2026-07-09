@@ -393,7 +393,7 @@ async def test_live_real_overflow_raises_context_overflow_error():
         )
         await sess.append("s1", [_user(chunk)])
     agent = _agent(model, "Reply with OK.")
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc_info:
         await Runner.run(
             agent,
             "OK?",
@@ -401,3 +401,9 @@ async def test_live_real_overflow_raises_context_overflow_error():
             session=sess,
             session_id="s1",
         )
+
+    # The endpoint names its limit in the rejection; that number is what turns
+    # an unknown model into a correctly-sized one for the rest of the session.
+    window = exc_info.value.reported_window
+    assert window is not None, "provider stated no limit; window_from_error needs a new pattern"
+    assert 1024 <= window <= 20_000_000

@@ -435,6 +435,7 @@ _RECALL_DESCRIPTION = (
 
 def _build_instructions(has_index: bool) -> str:
     parts = [
+        "## Memory",
         "You have long-term memory that persists across sessions.",
         "- Your durable NOTES are shown below and are always in context — they "
         "hold the user's stable preferences, facts about them, and context "

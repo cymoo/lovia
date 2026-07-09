@@ -8,7 +8,7 @@ from typing import NoReturn
 import httpx
 
 from ..exceptions import ContextOverflowError, ProviderError
-from ._windows import window_from_error
+from ._windows import window_from_error, window_from_models_payload
 
 
 def is_retryable_status(status_code: int) -> bool:
@@ -55,6 +55,28 @@ async def raise_for_provider_status(
         retryable=is_retryable_status(response.status_code),
         body=text,
     )
+
+
+async def fetch_reported_window(
+    client: httpx.AsyncClient,
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    model: str,
+) -> int | None:
+    """Ask ``GET {base_url}/models`` what ``model``'s context window is.
+
+    Fails open: an unreachable endpoint, an error status, a non-JSON body or a
+    listing without window metadata all yield ``None``. The caller is trying to
+    do better than "unknown", so nothing here is worth raising over.
+    """
+    try:
+        response = await client.get(f"{base_url}/models", headers=headers)
+        if not response.is_success:
+            return None
+        return window_from_models_payload(response.json(), model)
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 def raise_for_transport_error(

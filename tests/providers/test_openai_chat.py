@@ -1016,3 +1016,154 @@ def test_is_context_overflow_ignores_other_errors() -> None:
 def test_is_context_overflow_string_too_long_only_with_context() -> None:
     assert _is_context_overflow(400, "string too long; max context exceeded")
     assert not _is_context_overflow(400, "string too long: tool argument")
+
+
+# --------------------------------------------------- endpoint self-report -
+
+
+def _models_client(*, seen: list[httpx.Request], **response: Any) -> httpx.AsyncClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(**response)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_discover_reads_max_model_len_and_asks_only_once() -> None:
+    seen: list[httpx.Request] = []
+    client = _models_client(
+        seen=seen,
+        status_code=200,
+        json={"data": [{"id": "qwen2.5", "max_model_len": 32_768}]},
+    )
+    provider = OpenAIChatProvider(
+        model="qwen2.5", base_url="http://localhost:8000/v1", client=client
+    )
+
+    assert provider.context_window("qwen2.5") is None  # table knows nothing
+    assert await provider.discover_context_window() == 32_768
+    assert provider.context_window("qwen2.5") == 32_768  # cached, no I/O
+    assert await provider.discover_context_window() == 32_768
+
+    assert len(seen) == 1
+    assert str(seen[0].url) == "http://localhost:8000/v1/models"
+
+
+@pytest.mark.asyncio
+async def test_discover_caches_a_miss_and_never_retries() -> None:
+    seen: list[httpx.Request] = []
+    # The official DeepSeek shape: a listing with no window anywhere.
+    client = _models_client(
+        seen=seen, status_code=200, json={"data": [{"id": "deepseek-v4-pro"}]}
+    )
+    provider = OpenAIChatProvider(
+        model="deepseek-v4-pro", base_url="https://api.deepseek.com", client=client
+    )
+
+    assert await provider.discover_context_window() is None
+    assert await provider.discover_context_window() is None
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status_code": 500},
+        {"status_code": 401},
+        {"status_code": 200, "content": b"<html>not json</html>"},
+    ],
+)
+async def test_discover_fails_open(response: dict) -> None:
+    seen: list[httpx.Request] = []
+    provider = OpenAIChatProvider(
+        model="m",
+        base_url="http://gw/v1",
+        client=_models_client(seen=seen, **response),
+    )
+    assert await provider.discover_context_window() is None
+
+
+@pytest.mark.asyncio
+async def test_discover_survives_an_unreachable_endpoint() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("dns boom")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAIChatProvider(model="m", base_url="http://gw/v1", client=client)
+    assert await provider.discover_context_window() is None
+
+
+@pytest.mark.asyncio
+async def test_discover_never_asks_the_official_api() -> None:
+    """api.openai.com publishes no window; asking would be a wasted request."""
+    seen: list[httpx.Request] = []
+    client = _models_client(seen=seen, status_code=200, json={"data": []})
+    # Pin the host: an ambient OPENAI_BASE_URL would otherwise decide this test.
+    provider = OpenAIChatProvider(
+        model="gpt-5.5",
+        api_key="sk-test",
+        base_url="https://api.openai.com/v1",
+        client=client,
+    )
+
+    assert await provider.discover_context_window() is None
+    assert seen == []
+    assert provider.context_window("gpt-5.5") == 1_050_000  # the table still answers
+
+
+@pytest.mark.asyncio
+async def test_discover_does_not_override_an_explicit_window() -> None:
+    seen: list[httpx.Request] = []
+    client = _models_client(
+        seen=seen, status_code=200, json={"data": [{"id": "m", "max_model_len": 4096}]}
+    )
+    provider = OpenAIChatProvider(
+        model="m", base_url="http://gw/v1", client=client, context_window=99_999
+    )
+    await provider.discover_context_window()
+    assert provider.context_window("m") == 99_999
+
+
+@pytest.mark.asyncio
+async def test_overflow_teaches_the_provider_its_window() -> None:
+    """A long-lived provider overflows once per process, not once per session."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            400,
+            content=b"This model's maximum context length is 65536 tokens. However, "
+            b"you requested 190402 tokens.",
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAIChatProvider(
+        model="deepseek-chat", base_url="https://api.deepseek.com", client=client
+    )
+    assert provider.context_window("deepseek-chat") is None
+
+    with pytest.raises(ContextOverflowError):
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert provider.context_window("deepseek-chat") == 65_536
+    # And it never probes /models afterwards — it already knows.
+    assert await provider.discover_context_window() == 65_536
+    assert all(r.url.path.endswith("/chat/completions") for r in seen)
+
+
+@pytest.mark.asyncio
+async def test_overflow_without_a_stated_window_teaches_nothing() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, content=b"context_length_exceeded")
+        )
+    )
+    provider = OpenAIChatProvider(model="m", base_url="http://gw/v1", client=client)
+
+    with pytest.raises(ContextOverflowError):
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert provider.context_window("m") is None

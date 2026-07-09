@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ProviderError, UserError
+from ..exceptions import ContextOverflowError, ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     TranscriptEntry,
@@ -37,7 +37,12 @@ from ._content import (
     content_to_openai_chat as _content_to_openai,
     merge_openai_chat_content as _merge_openai_content,
 )
-from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._http import (
+    fetch_reported_window,
+    host_matches,
+    raise_for_provider_status,
+    raise_for_transport_error,
+)
 from ._windows import table_window
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
@@ -233,6 +238,10 @@ class OpenAIChatProvider:
     ) -> None:
         self.model = model
         self._context_window = context_window
+        # Set once by ``discover_context_window``; ``_probed`` also caches a
+        # miss, so a silent endpoint is never asked twice.
+        self._discovered: int | None = None
+        self._probed = False
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
@@ -388,13 +397,17 @@ class OpenAIChatProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                await raise_for_provider_status(
-                    response,
-                    vendor="openai",
-                    model=self.model,
-                    label="OpenAI Chat",
-                    is_context_overflow=_is_context_overflow,
-                )
+                try:
+                    await raise_for_provider_status(
+                        response,
+                        vendor="openai",
+                        model=self.model,
+                        label="OpenAI Chat",
+                        is_context_overflow=_is_context_overflow,
+                    )
+                except ContextOverflowError as exc:
+                    self._remember_window(exc.reported_window)
+                    raise
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
                         u = event["usage"]
@@ -482,7 +495,42 @@ class OpenAIChatProvider:
     def context_window(self, model: str) -> int | None:
         if self._context_window is not None:
             return self._context_window
+        if self._discovered is not None:
+            return self._discovered
         return table_window(model, _OPENAI_CONTEXT_WINDOWS)
+
+    async def discover_context_window(self) -> int | None:
+        """Read this deployment's window off ``GET {base_url}/models``.
+
+        vLLM and SGLang publish ``max_model_len`` there — the window *after*
+        ``--max-model-len`` — and Groq, Together and OpenRouter publish theirs
+        too. That covers exactly the endpoints a name→window table can never
+        serve. The official API publishes nothing, so we don't ask it.
+
+        The answer is cached for the life of the provider, a miss included:
+        one request per deployment, ever.
+        """
+        if self._probed:
+            return self._discovered
+        self._probed = True
+        if not self._on_official_host():
+            self._discovered = await fetch_reported_window(
+                self._http(),
+                base_url=self.base_url,
+                headers=self._headers(),
+                model=self.model,
+            )
+        return self._discovered
+
+    def _remember_window(self, window: int | None) -> None:
+        """Keep a window the endpoint named while rejecting a prompt.
+
+        The context policy persists it per session; holding it here too means a
+        long-lived provider overflows once per *process*, not once per session.
+        """
+        if window is not None:
+            self._discovered = window
+            self._probed = True
 
 
 # Default for replaying ``reasoning_content`` on assistant input messages,

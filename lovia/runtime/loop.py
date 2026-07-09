@@ -80,7 +80,11 @@ from ..output import (
     parse_structured_output,
     resolve_structured_output,
 )
-from ..providers.base import Provider
+from ..providers.base import (
+    Provider,
+    context_window,
+    discover_context_window,
+)
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
 from .result import RunResult
@@ -93,6 +97,11 @@ logger = logging.getLogger(__name__)
 # Sentinel distinguishing "no final output yet" from a legitimate ``None``
 # output (e.g. an Optional output_type).
 _UNSET: object = object()
+
+# Sentinel distinguishing a policy that declares ``context_window`` and left it
+# unset (ask the endpoint) from one that has no such field at all (never needs
+# a window — don't spend a request on it).
+_NO_WINDOW_FIELD: object = object()
 
 # After a context overflow, retry the model call only if reactive compaction
 # shrank the estimated prompt below this fraction of the size that failed.
@@ -613,6 +622,7 @@ class RunLoop:
         gain).
         """
         providers = self._resolve_providers(agent, resources)
+        await self._ensure_context_window(providers)
         structured_output = resolve_structured_output(
             self._resolve_output_type(agent),
             supports_json_schema(providers),
@@ -1358,6 +1368,33 @@ class RunLoop:
                 continue
             tools[t.name] = t
         return tools
+
+    async def _ensure_context_window(self, providers: list[Provider]) -> None:
+        """Ask the endpoint for its context window, but only if nobody knows it.
+
+        A configured policy, the adapter's table, or a ``context_window=``
+        argument all answer for free; only when every local source draws a
+        blank is a network round-trip worth it — and in exactly that case the
+        alternative is running with proactive compaction switched off. The
+        adapter caches the result, so this costs at most one request per run.
+
+        The sentinel matters: a policy that does not *declare* ``context_window``
+        (:class:`~lovia.context.NoopContextPolicy`, custom policies) never needs
+        a window, and must not pay for one.
+        """
+        declared = getattr(self.context_policy, "context_window", _NO_WINDOW_FIELD)
+        if declared is not None or not providers:
+            return
+        primary = providers[0]
+        model = getattr(primary, "model", None)
+        if context_window(primary, model) is not None:
+            return
+        if await discover_context_window(primary) is None:
+            logger.info(
+                "context.window: unknown for %r; proactive compaction is off — "
+                "set Compaction(context_window=...) if the endpoint cannot report it",
+                model,
+            )
 
     def _resolve_providers(
         self, agent: Agent[Any], resources: AsyncExitStack

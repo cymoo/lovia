@@ -200,7 +200,11 @@ Two consequences worth knowing:
 
 - **The `/models` probe fires only when nothing else knows the window**, and
   never against `api.openai.com` or `api.anthropic.com`, which publish nothing
-  there. A miss is cached, so an endpoint is asked at most once.
+  there. Answers — misses included — are memoized per `(endpoint, model)` for
+  the life of the process, so an endpoint is asked at most once even though a
+  `"vendor:model"` string is resolved into a fresh provider on every run. The
+  probe runs before the first model call with its own short timeout; a slow
+  endpoint costs a moment, never the run.
 - **Anthropic models report 200K.** The 1M variants sit behind a beta header
   lovia doesn't send by default, and advertising 1M would delay proactive
   compaction. Enable the beta and set the window explicitly.

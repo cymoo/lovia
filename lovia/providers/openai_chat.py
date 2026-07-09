@@ -43,7 +43,7 @@ from ._http import (
     raise_for_provider_status,
     raise_for_transport_error,
 )
-from ._windows import table_window
+from ._windows import WindowResolver
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -237,15 +237,18 @@ class OpenAIChatProvider:
         context_window: int | None = None,
     ) -> None:
         self.model = model
-        self._context_window = context_window
-        # Set once by ``discover_context_window``; ``_probed`` also caches a
-        # miss, so a silent endpoint is never asked twice.
-        self._discovered: int | None = None
-        self._probed = False
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
         self._host = urlparse(self.base_url).hostname or ""
+        self._windows = WindowResolver(
+            base_url=self.base_url,
+            model=model,
+            explicit=context_window,
+            rules=_OPENAI_CONTEXT_WINDOWS,
+            # The official API publishes no window on /models; don't ask it.
+            probe=not self._on_official_host(),
+        )
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._client = client
         self._owns_client = client is None
@@ -406,7 +409,7 @@ class OpenAIChatProvider:
                         is_context_overflow=_is_context_overflow,
                     )
                 except ContextOverflowError as exc:
-                    self._remember_window(exc.reported_window)
+                    self._windows.remember(exc.reported_window)
                     raise
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
@@ -493,11 +496,7 @@ class OpenAIChatProvider:
     # ----- ContextPolicy hooks ------------------------------------------------
 
     def context_window(self, model: str) -> int | None:
-        if self._context_window is not None:
-            return self._context_window
-        if self._discovered is not None:
-            return self._discovered
-        return table_window(model, _OPENAI_CONTEXT_WINDOWS)
+        return self._windows.window(model)
 
     async def discover_context_window(self) -> int | None:
         """Read this deployment's window off ``GET {base_url}/models``.
@@ -506,31 +505,16 @@ class OpenAIChatProvider:
         ``--max-model-len`` — and Groq, Together and OpenRouter publish theirs
         too. That covers exactly the endpoints a name→window table can never
         serve. The official API publishes nothing, so we don't ask it.
-
-        The answer is cached for the life of the provider, a miss included:
-        one request per deployment, ever.
         """
-        if self._probed:
-            return self._discovered
-        self._probed = True
-        if not self._on_official_host():
-            self._discovered = await fetch_reported_window(
-                self._http(),
-                base_url=self.base_url,
-                headers=self._headers(),
-                model=self.model,
-            )
-        return self._discovered
+        return await self._windows.discover(self._fetch_window)
 
-    def _remember_window(self, window: int | None) -> None:
-        """Keep a window the endpoint named while rejecting a prompt.
-
-        The context policy persists it per session; holding it here too means a
-        long-lived provider overflows once per *process*, not once per session.
-        """
-        if window is not None:
-            self._discovered = window
-            self._probed = True
+    async def _fetch_window(self) -> int | None:
+        return await fetch_reported_window(
+            self._http(),
+            base_url=self.base_url,
+            headers=self._headers(),
+            model=self.model,
+        )
 
 
 # Default for replaying ``reasoning_content`` on assistant input messages,

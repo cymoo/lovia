@@ -57,6 +57,13 @@ async def raise_for_provider_status(
     )
 
 
+# The probe runs before the first model call, so its latency is charged to run
+# start. The provider timeout (60s by default) is sized for generation, not for
+# a metadata lookup that is pure upside: a slow endpoint should cost us a moment
+# and then be forgotten, never stall the run.
+_PROBE_TIMEOUT = 10.0
+
+
 async def fetch_reported_window(
     client: httpx.AsyncClient,
     *,
@@ -66,12 +73,17 @@ async def fetch_reported_window(
 ) -> int | None:
     """Ask ``GET {base_url}/models`` what ``model``'s context window is.
 
-    Fails open: an unreachable endpoint, an error status, a non-JSON body or a
-    listing without window metadata all yield ``None``. The caller is trying to
-    do better than "unknown", so nothing here is worth raising over.
+    Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
+    body or a listing without window metadata all yield ``None``. The caller is
+    trying to do better than "unknown", so nothing here is worth raising over.
     """
     try:
-        response = await client.get(f"{base_url}/models", headers=headers)
+        response = await client.get(
+            f"{base_url}/models",
+            headers=headers,
+            follow_redirects=True,
+            timeout=_PROBE_TIMEOUT,
+        )
         if not response.is_success:
             return None
         return window_from_models_payload(response.json(), model)

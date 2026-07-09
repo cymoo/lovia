@@ -6,9 +6,12 @@ anchored patterns is that they survive the wording each vendor actually ships.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from lovia.providers._windows import (
+    WindowResolver,
     strip_snapshot,
     table_window,
     window_from_error,
@@ -263,3 +266,110 @@ def test_table_window_prefers_the_longest_prefix() -> None:
     assert table_window("a-x", rules) == 1024
     assert table_window("a-b-x", rules) == 2048
     assert table_window("a-b-c-x", rules) == 4096
+
+
+# ---------------------------------------------------------------------------
+# WindowResolver — precedence, and the per-endpoint memo
+# ---------------------------------------------------------------------------
+
+
+def _resolver(**kw) -> WindowResolver:
+    defaults = dict(
+        base_url="http://gw/v1",
+        model="m",
+        explicit=None,
+        rules=(("m", 200_000),),
+        probe=True,
+    )
+    return WindowResolver(**{**defaults, **kw})
+
+
+@pytest.mark.parametrize("bad", [0, -1, -999])
+def test_resolver_rejects_a_nonsense_explicit_window(bad: int) -> None:
+    """Left unchecked this surfaces much later as `ValueError: window must be >= 1`
+    from deep inside TokenBudget, on the first compact() of the run."""
+    with pytest.raises(ValueError, match="context_window must be >= 1"):
+        _resolver(explicit=bad)
+
+
+def test_resolver_precedence_explicit_beats_remembered_beats_table() -> None:
+    table_only = _resolver()
+    assert table_only.window("m") == 200_000
+
+    table_only.remember(65_536)  # the endpoint named its limit
+    assert table_only.window("m") == 65_536
+
+    explicit = _resolver(explicit=1_234)
+    assert explicit.window("m") == 1_234  # even though 65_536 is remembered
+
+
+def test_remembered_window_outlives_the_provider_that_learned_it() -> None:
+    """A string model spec builds a fresh provider every run and every handoff.
+
+    Without a per-endpoint memo the same overflow would be re-provoked forever.
+    """
+    _resolver().remember(65_536)
+    assert _resolver().window("m") == 65_536
+    # ...but only for that endpoint.
+    assert _resolver(base_url="http://other/v1").window("m") == 200_000
+
+
+def test_the_newest_statement_from_an_endpoint_wins() -> None:
+    r = _resolver()
+    r.remember(4_096)
+    r.remember(8_192)  # deployment resized underneath us
+    assert r.window("m") == 8_192
+
+
+async def test_discover_asks_once_and_caches_the_miss() -> None:
+    calls = 0
+
+    async def fetch() -> int | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    assert await _resolver().discover(fetch) is None
+    assert await _resolver().discover(fetch) is None  # a *fresh* resolver
+    assert calls == 1
+
+
+async def test_discover_skips_endpoints_that_publish_nothing() -> None:
+    async def fetch() -> int | None:  # pragma: no cover - must never run
+        raise AssertionError("probed an endpoint we know publishes no window")
+
+    assert await _resolver(probe=False).discover(fetch) is None
+
+
+async def test_a_probe_miss_never_clobbers_a_learned_window() -> None:
+    """The rejection outranks the listing, whichever lands last.
+
+    Reachable in production: `lovia web` shares one provider across concurrent
+    chats, so a stream can overflow while a probe is still in flight.
+    """
+    r = _resolver()
+
+    async def slow_miss() -> int | None:
+        await asyncio.sleep(0)
+        r.remember(65_536)  # a concurrent stream overflows mid-probe
+        return None
+
+    assert await r.discover(slow_miss) == 65_536
+    assert r.window("m") == 65_536
+
+
+async def test_concurrent_probes_all_see_the_window() -> None:
+    async def slow_hit() -> int | None:
+        await asyncio.sleep(0.01)
+        return 32_768
+
+    results = await asyncio.gather(
+        _resolver().discover(slow_hit), _resolver().discover(slow_hit)
+    )
+    assert results == [32_768, 32_768]  # never a premature None
+
+
+def test_models_payload_matches_an_id_that_contains_a_colon() -> None:
+    """A colon is lovia's vendor separator, but Ollama puts one in its names."""
+    payload = _payload({"id": "llama3:8b", "max_model_len": 8192})
+    assert window_from_models_payload(payload, "llama3:8b") == 8192

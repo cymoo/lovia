@@ -1012,3 +1012,72 @@ def test_context_window_constructor_argument_overrides_the_table() -> None:
     assert provider.context_window("claude-opus-4-8") == 1_000_000
     # It is the endpoint's window, not the model's — it wins for any name.
     assert provider.context_window("anything") == 1_000_000
+
+
+# --------------------------------------------------- endpoint self-report -
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_provider_rejects_a_nonsense_context_window(bad: int) -> None:
+    with pytest.raises(ValueError, match="context_window must be >= 1"):
+        AnthropicProvider(model="claude-opus-4-8", api_key="x", context_window=bad)
+
+
+@pytest.mark.asyncio
+async def test_discover_never_asks_the_official_api() -> None:
+    """api.anthropic.com publishes no window on /models."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    provider = AnthropicProvider(
+        model="claude-opus-4-8",
+        api_key="x",
+        base_url="https://api.anthropic.com/v1",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    assert await provider.discover_context_window() is None
+    assert seen == []
+    assert provider.context_window("claude-opus-4-8") == 200_000  # table answers
+
+
+@pytest.mark.asyncio
+async def test_discover_reads_a_window_from_a_compatible_gateway() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200, json={"data": [{"id": "glm-4", "context_length": 128_000}]}
+        )
+
+    provider = AnthropicProvider(
+        model="glm-4",
+        api_key="x",
+        base_url="https://gw.test/anthropic",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    assert provider.context_window("glm-4") is None  # not a Claude name
+    assert await provider.discover_context_window() == 128_000
+    assert provider.context_window("glm-4") == 128_000
+    assert str(seen[0].url) == "https://gw.test/anthropic/models"
+    assert seen[0].headers["x-api-key"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_overflow_teaches_the_endpoint_its_window() -> None:
+    body = b"prompt is too long: 208310 tokens > 200000 maximum"
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, content=body))
+    )
+    provider = AnthropicProvider(
+        model="glm-4", api_key="x", base_url="https://gw.test/anthropic", client=client
+    )
+    assert provider.context_window("glm-4") is None
+
+    with pytest.raises(ContextOverflowError):
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert provider.context_window("glm-4") == 200_000

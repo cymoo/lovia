@@ -61,7 +61,7 @@ from ._http import (
     raise_for_provider_status,
     raise_for_transport_error,
 )
-from ._windows import table_window
+from ._windows import WindowResolver
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -115,11 +115,14 @@ class AnthropicProvider:
         self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._official_api = official_api
-        self._context_window = context_window
-        # Set once by ``discover_context_window``; ``_probed`` also caches a
-        # miss, so a silent endpoint is never asked twice.
-        self._discovered: int | None = None
-        self._probed = False
+        self._windows = WindowResolver(
+            base_url=self.base_url,
+            model=model,
+            explicit=context_window,
+            rules=_ANTHROPIC_CONTEXT_WINDOWS,
+            # The official API publishes no window on /models; don't ask it.
+            probe=not self._on_official_host(),
+        )
         self._client = client
         self._owns_client = client is None
         self._timeout = resolve_timeout(timeout)
@@ -143,40 +146,24 @@ class AnthropicProvider:
         return self._client
 
     def context_window(self, model: str) -> int | None:
-        if self._context_window is not None:
-            return self._context_window
-        if self._discovered is not None:
-            return self._discovered
-        return table_window(model, _ANTHROPIC_CONTEXT_WINDOWS)
+        return self._windows.window(model)
 
     async def discover_context_window(self) -> int | None:
         """Read this deployment's window off ``GET {base_url}/models``.
 
         The official API publishes no window there, so it is never asked; this
         exists for the Anthropic-dialect gateways (DeepSeek's ``/anthropic``,
-        Kimi, GLM) that may. Cached for the life of the provider, miss included.
+        Kimi, GLM) that may.
         """
-        if self._probed:
-            return self._discovered
-        self._probed = True
-        if not self._on_official_host():
-            self._discovered = await fetch_reported_window(
-                self._http(),
-                base_url=self.base_url,
-                headers=self._headers(),
-                model=self.model,
-            )
-        return self._discovered
+        return await self._windows.discover(self._fetch_window)
 
-    def _remember_window(self, window: int | None) -> None:
-        """Keep a window the endpoint named while rejecting a prompt.
-
-        The context policy persists it per session; holding it here too means a
-        long-lived provider overflows once per *process*, not once per session.
-        """
-        if window is not None:
-            self._discovered = window
-            self._probed = True
+    async def _fetch_window(self) -> int | None:
+        return await fetch_reported_window(
+            self._http(),
+            base_url=self.base_url,
+            headers=self._headers(),
+            model=self.model,
+        )
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
@@ -335,7 +322,7 @@ class AnthropicProvider:
                         is_context_overflow=_is_context_overflow,
                     )
                 except ContextOverflowError as exc:
-                    self._remember_window(exc.reported_window)
+                    self._windows.remember(exc.reported_window)
                     raise
                 async for event in iter_sse_json(response):
                     etype = event.get("type")

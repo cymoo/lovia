@@ -20,6 +20,7 @@ overflow handling) while a wrong one silently mis-sizes every prompt.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 # Plausible bounds for a real context window. The floor rejects a parse that
@@ -139,11 +140,16 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
     data = payload.get("data")
     if not isinstance(data, list):
         return None
-    # A vendor prefix is a lovia routing concept; the endpoint knows the bare id.
-    wanted = model.split(":", 1)[1] if ":" in model else model
-    for entry in data:
-        if isinstance(entry, dict) and entry.get("id") == wanted:
-            return _window_from_entry(entry)
+    # The literal id first: a colon is lovia's vendor separator, but it is also
+    # part of Ollama's own names (``llama3:8b``). Only if nothing matches do we
+    # retry with the vendor prefix stripped.
+    candidates = [model]
+    if ":" in model:
+        candidates.append(model.split(":", 1)[1])
+    for wanted in candidates:
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("id") == wanted:
+                return _window_from_entry(entry)
     return None
 
 
@@ -179,3 +185,80 @@ def table_window(model: str, rules: tuple[tuple[str, int], ...]) -> int | None:
             if best is None or len(key) > best[0]:
                 best = (len(key), window)
     return best[1] if best is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Remembering what an endpoint told us
+# ---------------------------------------------------------------------------
+
+# A window belongs to the endpoint, not to the provider object that happened to
+# ask. A string model spec ("deepseek-v4-pro") is resolved into a *fresh*
+# provider on every run and on every handoff, so a memo living on the instance
+# would re-probe ``/models`` — and re-provoke the same overflow — forever. These
+# facts are stable for the life of the process; a deployment resized underneath
+# us restates its limit on the next overflow, and the newest statement wins.
+_KNOWN: dict[tuple[str, str], int] = {}
+_PROBED: set[tuple[str, str]] = set()
+
+
+def clear_endpoint_cache() -> None:
+    """Forget every remembered endpoint window. For tests."""
+    _KNOWN.clear()
+    _PROBED.clear()
+
+
+class WindowResolver:
+    """One ``(endpoint, model)``'s context window: explicit, remembered, tabled.
+
+    Owns the precedence — an explicit setting beats what the endpoint said,
+    which beats the bundled table — and the process-level memo above. The
+    policy keeps its *own* record of a window an endpoint named, persisted per
+    session; this one only has to outlive a provider instance.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        explicit: int | None,
+        rules: tuple[tuple[str, int], ...],
+        probe: bool,
+    ) -> None:
+        if explicit is not None and explicit < 1:
+            raise ValueError(f"context_window must be >= 1, got {explicit}")
+        self._key = (base_url, model)
+        self._explicit = explicit
+        self._rules = rules
+        self._probe = probe
+
+    def window(self, model: str) -> int | None:
+        """The window for ``model``, without any I/O."""
+        if self._explicit is not None:
+            return self._explicit
+        known = _KNOWN.get(self._key)
+        if known is not None:
+            return known
+        return table_window(model, self._rules)
+
+    def remember(self, window: int | None) -> None:
+        """Record a window the endpoint named while rejecting a prompt."""
+        if window is not None:
+            _KNOWN[self._key] = window
+            _PROBED.add(self._key)
+
+    async def discover(self, fetch: Callable[[], Awaitable[int | None]]) -> int | None:
+        """Ask the endpoint once, ever, and remember the answer — miss included."""
+        if self._key in _PROBED:
+            return _KNOWN.get(self._key)
+        if not self._probe:
+            _PROBED.add(self._key)
+            return None
+        window = await fetch()
+        _PROBED.add(self._key)
+        if window is not None:
+            # Never overwrite a window the endpoint *named*: a concurrent stream
+            # may have learned the enforced limit while this probe was in flight,
+            # and a rejection outranks a listing.
+            _KNOWN[self._key] = window
+        return _KNOWN.get(self._key)

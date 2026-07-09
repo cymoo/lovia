@@ -627,13 +627,15 @@ async def test_chat_context_overflow_is_classified() -> None:
 async def test_chat_context_overflow_reports_the_stated_window() -> None:
     body = (
         b'{"error":{"code":"context_length_exceeded","message":"This model\'s '
-        b'maximum context length is 65536 tokens. However, you requested 190402 '
+        b"maximum context length is 65536 tokens. However, you requested 190402 "
         b'tokens (182402 in the messages, 8000 in the completion)."}}'
     )
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(400, content=body))
     )
-    provider = OpenAIChatProvider(model="deepseek-chat", api_key="sk-test", client=client)
+    provider = OpenAIChatProvider(
+        model="deepseek-chat", api_key="sk-test", client=client
+    )
 
     with pytest.raises(ContextOverflowError) as exc_info:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
@@ -1167,3 +1169,56 @@ async def test_overflow_without_a_stated_window_teaches_nothing() -> None:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
     assert provider.context_window("m") is None
+
+
+@pytest.mark.asyncio
+async def test_two_providers_for_one_endpoint_probe_it_once() -> None:
+    """A string model spec is rebuilt into a fresh provider on every run and
+    every handoff. Without a per-endpoint memo each one would re-probe."""
+    seen: list[httpx.Request] = []
+    payload = {"data": [{"id": "qwen2.5", "max_model_len": 32_768}]}
+
+    def build() -> OpenAIChatProvider:
+        return OpenAIChatProvider(
+            model="qwen2.5",
+            base_url="http://localhost:8000/v1",
+            client=_models_client(seen=seen, status_code=200, json=payload),
+        )
+
+    assert await build().discover_context_window() == 32_768
+    second = build()
+    assert await second.discover_context_window() == 32_768
+    assert second.context_window("qwen2.5") == 32_768  # knows without asking
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_follows_redirects_and_bounds_its_own_timeout() -> None:
+    """It runs before the first model call, so it must not inherit the 60s
+    generation timeout, and a gateway that redirects /models must still work."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.host == "gw":
+            return httpx.Response(301, headers={"location": "http://gw2/v1/models"})
+        return httpx.Response(200, json={"data": [{"id": "m", "max_model_len": 8192}]})
+
+    # A client configured the way the provider configures its own: 60s, for
+    # generation. The probe must override that, not inherit it.
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=60.0)
+    provider = OpenAIChatProvider(model="m", base_url="http://gw/v1", client=client)
+
+    assert await provider.discover_context_window() == 8192
+    assert seen[0].extensions["timeout"] == {
+        "connect": 10.0,
+        "read": 10.0,
+        "write": 10.0,
+        "pool": 10.0,
+    }
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_provider_rejects_a_nonsense_context_window(bad: int) -> None:
+    with pytest.raises(ValueError, match="context_window must be >= 1"):
+        OpenAIChatProvider(model="m", base_url="http://gw/v1", context_window=bad)

@@ -104,11 +104,14 @@ Compaction(
   `reserve_output_tokens`. Nothing happens below `compact_at`; a breach
   shrinks the view to `compact_to` (hysteresis, so the policy doesn't
   thrash at the boundary).
-- **`context_window=None`** asks the provider (the adapters
-  [report windows](providers.md#context-windows) per model). When the
-  window is unknown, proactive compaction is skipped and the reactive
-  overflow path is the only backstop — set the window explicitly for
-  models the adapter doesn't know.
+- **`context_window=None`** resolves the window from the endpoint — its
+  `/models` listing, or the limit it names the first time it rejects a
+  prompt — falling back to the adapter's table. See
+  [context windows](providers.md#context-windows) for the full chain. A
+  window it names always caps yours, so an unlisted model costs one
+  overflow and is then sized correctly for the rest of the session. Only
+  when *nothing* can report it is proactive compaction skipped and the
+  reactive overflow path left as the sole backstop.
 - **Token accounting** is a calibrated estimate: chars/4 heuristics
   (flat costs for images/files), corrected by an EMA against the
   provider's *real* input-token counts as turns complete. Providers can
@@ -191,9 +194,13 @@ content. `lovia/context/policy.py` is a one-screen read.
   aggressive path stays as the half-open probe), and a summary that
   wouldn't save ≥10% is skipped — but budget-sensitive deployments should
   know turn N can contain a hidden LLM call.
-- **An unknown window means no proactive compaction.** OpenAI-compatible
-  endpoints serving custom models report nothing; without
-  `context_window=...` you are running on the reactive path alone.
+- **The first overflow on an unknown model is a real, failed request.**
+  The endpoint's rejection is what teaches lovia the window, and the
+  compaction burst that follows targets ~25% of the usable window instead
+  of the proactive 50% — it compacts twice as hard. Set
+  `context_window=...` up front where you know it. Ollama never overflows
+  at all (it [truncates silently](providers.md#sharp-edges)), so there it
+  is not optional.
 - **Don't share one `Compaction` across agents with different windows** —
   state is per run/session, but the configured window is the instance's.
   Cloning agents shares the policy instance; give variants their own.

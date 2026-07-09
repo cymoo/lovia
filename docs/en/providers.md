@@ -175,13 +175,35 @@ bust the cache every turn.
 
 ## Context windows
 
-The default [`Compaction`](context.md) policy sizes itself by asking the
-provider for the model's context window (a lookup table per adapter, with
-date-pinned model names normalized). Unknown models return `None` and
-compaction falls back to reactive overflow handling — or you configure the
-window explicitly. Anthropic models report 200k: the 1M variants sit behind
-a beta header lovia doesn't send by default, and advertising 1M would delay
-proactive compaction.
+A context window is a fact about an *(endpoint, model, deployment)* triple, not
+about a model name: the same `qwen2.5` is 32K on one vLLM host and 4K on
+another. So the default [`Compaction`](context.md) policy resolves it through a
+chain, most trustworthy first:
+
+| Source | When it answers |
+| --- | --- |
+| Explicit config | `Compaction(context_window=…)`, `--context-window`, `LOVIA_CONTEXT_WINDOW`, or the adapter's `context_window=` argument |
+| **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
+| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; Groq, Together and OpenRouter publish theirs |
+| The bundled table | recent OpenAI aliases; the whole Claude line via family prefixes |
+| — | otherwise unknown: no proactive compaction, reactive overflow handling only |
+
+Only the second source may *override* an explicit setting, and only downward —
+it is the endpoint enforcing a limit, not a guess. Configure `100_000` on a 200K
+model and you keep 100K.
+
+The practical upshot: an unlisted model costs **one** overflow, once. The window
+learned from it is remembered on the provider and persisted in the session, so
+every later turn (and every later run on that session) sizes itself correctly.
+
+Two consequences worth knowing:
+
+- **The `/models` probe fires only when nothing else knows the window**, and
+  never against `api.openai.com` or `api.anthropic.com`, which publish nothing
+  there. A miss is cached, so an endpoint is asked at most once.
+- **Anthropic models report 200K.** The 1M variants sit behind a beta header
+  lovia doesn't send by default, and advertising 1M would delay proactive
+  compaction. Enable the beta and set the window explicitly.
 
 ## Custom providers
 
@@ -203,9 +225,11 @@ class Provider(Protocol):
 `stream` receives the transcript view as `TranscriptEntry` values (richer
 than chat messages — reasoning and metadata intact) and yields `ModelDelta`
 values: `TextDelta`, `ReasoningDelta`, `ToolCallDelta`, `UsageDelta`,
-`FinishDelta`, `EntryCompletedDelta`. Two optional protocols make a custom
+`FinishDelta`, `EntryCompletedDelta`. Three optional protocols make a custom
 provider a first-class citizen of compaction: `ContextWindowProvider`
-(report the window) and `TokenEstimator` (better-than-heuristic counting).
+(report the window locally, no I/O), `ContextWindowDiscovery` (an async
+one-shot lookup against the endpoint, called only when nothing else knows),
+and `TokenEstimator` (better-than-heuristic counting).
 [`ScriptedProvider`](testing.md) in `lovia.testing` is a complete, readable
 reference implementation.
 
@@ -245,10 +269,18 @@ setting fixes every outbound request.
 HTTP 408/429/5xx and transport-level timeouts/disconnects are retryable
 `ProviderError`s; context-length failures are detected per vendor
 (status + message needles) and raised as `ContextOverflowError`, which
-triggers reactive compaction instead of retries.
+triggers reactive compaction instead of retries. That error also carries
+`reported_window` — the limit the endpoint named, when it named one.
 
 ## Sharp edges
 
+- **Ollama needs an explicit `context_window`.** It does not report an
+  overflow at all: it silently truncates the prompt to `num_ctx` (default
+  4096), dropping the *oldest* tokens first — your system prompt and tool
+  definitions. Its OpenAI-compatible `/models` publishes no window either,
+  so nothing in the resolution chain can reach it, and no error will ever
+  tell you. Set `Compaction(context_window=…)` or
+  `OpenAIChatProvider(..., context_window=…)` to match your `num_ctx`.
 - **Anthropic prompt caching is opt-in** (`cache_system: True`). Long
   agent loops on the official API without it re-pay the full prompt every
   turn.

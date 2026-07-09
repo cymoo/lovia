@@ -275,6 +275,7 @@ class AnthropicProvider:
         redacted_data: dict[int, str] = {}
         usage = Usage()
         stop_reason: str | None = None
+        saw_message_stop = False
 
         try:
             async with self._http().stream(
@@ -415,6 +416,7 @@ class AnthropicProvider:
                                 "cache_read_input_tokens", 0
                             )
                     elif etype == "message_stop":
+                        saw_message_stop = True
                         break
                     elif etype == "error":
                         error = event.get("error") or {}
@@ -437,6 +439,21 @@ class AnthropicProvider:
                 vendor="anthropic",
                 model=self.model,
                 label="Anthropic",
+            )
+
+        # A stream that ends with neither a stop_reason nor a ``message_stop``
+        # event was truncated mid-flight — same rationale as the OpenAI adapter:
+        # surface it as retryable so the turn is re-streamed rather than
+        # assembled half-formed. A stream that terminated with ``message_stop``
+        # but omitted stop_reason is a tolerated (if degenerate) completion, not
+        # a truncation, so it stays supported.
+        if stop_reason is None and not saw_message_stop:
+            raise ProviderError(
+                "Anthropic stream ended without a stop_reason or message_stop "
+                "event (truncated response)",
+                vendor="anthropic",
+                model=self.model,
+                retryable=True,
             )
 
         # Anthropic's ``input_tokens`` counts only the uncached slice of the
@@ -571,10 +588,11 @@ def _to_anthropic_messages(
             continue
 
         if isinstance(entry, ToolCallEntry):
-            try:
-                parsed = json.loads(entry.arguments or "{}")
-            except json.JSONDecodeError:
-                parsed = {"_raw": entry.arguments}
+            # ``arguments`` is trusted to be valid JSON: the runner normalizes a
+            # malformed tool call at detection time (see
+            # ``lovia.runtime.tool_calls._normalize_call_args``), so a stored
+            # entry never carries unparseable arguments to re-serialize.
+            parsed = json.loads(entry.arguments or "{}")
             pending_blocks.append(
                 {
                     "type": "tool_use",

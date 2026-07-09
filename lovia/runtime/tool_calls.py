@@ -27,7 +27,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
 
 from .. import events
@@ -40,9 +40,45 @@ from .run_state import RunState
 from .utils import truncate_repr
 from ..tools import Tool, render_tool_result, run_tool, truncate_tool_output
 from ..tracing import Tracer, tool_call_span
-from ..transcript import ToolResultEntry
+from ..transcript import ToolCallEntry, ToolResultEntry
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_call_args(state: RunState, call_id: str) -> None:
+    """Rewrite a rejected call's transcript entry to wire-safe arguments.
+
+    A model can emit malformed ``arguments`` — most often a stream truncated
+    mid-call. Left raw in the transcript and echoed back next turn, they make
+    the request invalid JSON and 400 every provider (fallback included: it is
+    the same bytes). Detection is the one place we already know the payload is
+    bad, so we normalize the stored entry here — wrapping the offending text
+    under ``_raw`` (a JSON object, original preserved) — and every serializer
+    can then trust the transcript instead of re-validating it on each re-send.
+
+    Replaces the entry rather than mutating it: the copy already handed to
+    observers on ``MessageCompleted`` must keep the exact payload the model
+    emitted.
+    """
+    for i in range(len(state.transcript) - 1, -1, -1):
+        entry = state.transcript[i]
+        if isinstance(entry, ToolCallEntry) and entry.call_id == call_id:
+            try:
+                parsed = json.loads(entry.arguments or "{}")
+                # Wire-safe means a JSON *object*, not merely valid JSON: the
+                # Anthropic adapter unpacks ``arguments`` into ``tool_use.input``,
+                # which must be an object, so a bare array/scalar the model
+                # should never emit for tool args (``"[1,2]"``, ``"5"``, ``"null"``)
+                # still 400s it and must be wrapped too.
+                wire_safe = isinstance(parsed, dict)
+            except json.JSONDecodeError:
+                wire_safe = False
+            if not wire_safe:
+                state.transcript[i] = replace(
+                    entry, arguments=json.dumps({"_raw": entry.arguments})
+                )
+            return
+
 
 # Rendered-output size above which the tool's raw return value is not
 # retained on the transcript entry, even when nothing is truncated. ``raw``
@@ -144,8 +180,19 @@ class ToolCallProcessor:
             args: dict[str, Any] = json.loads(call.arguments or "{}")
         except json.JSONDecodeError as exc:
             # Feed the parse error back to the model instead of silently
-            # running the tool with empty arguments.
-            err = f"Invalid JSON in tool arguments: {exc}"
+            # running the tool with empty arguments. When the turn hit the
+            # output-token ceiling, say so: the generic "invalid JSON" would
+            # send the model looping on the same oversized call, never learning
+            # it was truncated rather than malformed.
+            if state.last_finish_reason == "length":
+                err = (
+                    f"Tool {call.name} arguments are incomplete: the response was "
+                    "cut off at the output token limit (finish_reason=length) "
+                    "mid-call. Emit a smaller call — e.g. write the file in "
+                    "chunks / use append mode."
+                )
+            else:
+                err = f"Invalid JSON in tool arguments: {exc}"
             logger.warning(
                 "tool.bad_arguments: %s call_id=%s args=%s",
                 call.name,
@@ -375,11 +422,15 @@ class ToolCallProcessor:
         The one place every rejected call (unknown tool, duplicate handoff,
         malformed arguments, failed approval check, denial) writes its error
         :class:`ToolResultEntry` and builds the matching ``ToolCallCompleted``
-        — so the transcript and event shape can't drift between outcomes.
+        — so the transcript and event shape can't drift between outcomes. Also
+        the one place a malformed call is normalized for re-serialization: any
+        rejection reason can pair with unparseable arguments, so we sanitize
+        here rather than in only the JSON-decode branch.
         """
         state.transcript.append(
             ToolResultEntry(call_id=call.id, output=err, is_error=True)
         )
+        _normalize_call_args(state, call.id)
         return events.ToolCallCompleted(
             call=call, result=err, is_error=True, output=err
         )

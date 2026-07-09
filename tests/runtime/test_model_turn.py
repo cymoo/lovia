@@ -218,3 +218,58 @@ async def test_cancel_token_stops_retry_backoff() -> None:
         ):
             pass
     assert attempts["n"] == 1  # cancelled during the first backoff
+
+
+async def test_retryable_truncation_resets_and_recovers() -> None:
+    # End-to-end proof of the fix: a provider that cuts off mid-tool-call on the
+    # first attempt (exactly what the adapters now raise on) is retried; its
+    # partial output is discarded via a single reset, and the clean re-stream
+    # survives — so the half-formed call never reaches the transcript.
+    from lovia.exceptions import ProviderError
+    from lovia.reliability import RetryPolicy
+    from lovia.runtime.model_turn import _StreamReset
+
+    attempts = {"n": 0}
+
+    class _TruncateOnce:
+        name = "flaky"
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                yield ToolCallDelta(
+                    index=0, call_id="c1", name="write_file", arguments='{"path":'
+                )
+                raise ProviderError("truncated response", retryable=True)
+            yield ToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="write_file",
+                arguments='{"path":"r.md","content":"ok"}',
+            )
+            yield FinishDelta(reason="tool_calls")
+
+    async def _no_sleep(_delay: float) -> None:
+        pass
+
+    retry = RetryPolicy(max_attempts=2, sleep=_no_sleep)
+    deltas = [
+        d
+        async for d in stream_with_fallback(
+            [_TruncateOnce()],
+            [],
+            tools=None,
+            response_format=None,
+            settings=None,
+            retry=retry,
+        )
+    ]
+
+    assert attempts["n"] == 2
+    # exactly one reset separates the discarded partial from the clean re-stream
+    assert sum(isinstance(d, _StreamReset) for d in deltas) == 1
+    tool_deltas = [d for d in deltas if isinstance(d, ToolCallDelta)]
+    assert tool_deltas[-1].arguments == '{"path":"r.md","content":"ok"}'
+    assert any(isinstance(d, FinishDelta) and d.reason == "tool_calls" for d in deltas)

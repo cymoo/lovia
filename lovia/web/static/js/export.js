@@ -151,14 +151,14 @@ export async function exportSessionHtml(sessionId, title) {
 // keeps the file dependency-free. hljs colors mirror static/styles.css.
 const EXPORT_CSS = `
 :root, [data-theme="light"] {
-  --bg:#faf9f7; --surface:#fff; --surface-2:#f5f4f1; --border:#e8e5e0;
-  --ink:#181716; --ink-2:#3d3a36; --muted:#6f6b65; --muted-2:#a8a49e;
-  --accent:#2d8a6e; --accent-text:#1d6b54; --user-surface:#eef3f8; --user-border:#d4e0ec;
+  --bg:#f7f8fa; --surface:#fff; --surface-2:#f0f2f5; --border:#e4e7ec;
+  --ink:#16181d; --ink-2:#3d424c; --muted:#6b7280; --muted-2:#9aa1ad;
+  --accent:#2d8a6e; --accent-text:#1c6b54; --user-surface:#eaf1f9; --user-border:#d3e0ef;
 }
 [data-theme="dark"] {
-  --bg:#0f0e0d; --surface:#1a1917; --surface-2:#232220; --border:#383632;
-  --ink:#eeebe4; --ink-2:#c8c4bb; --muted:#8b8680; --muted-2:#635f5a;
-  --accent:#3dba8e; --accent-text:#5ccaa0; --user-surface:#1c2630; --user-border:#334556;
+  --bg:#0d0e12; --surface:#16181e; --surface-2:#1d2027; --border:#262a33;
+  --ink:#e6e8ec; --ink-2:#bfc3cd; --muted:#8b909b; --muted-2:#656b78;
+  --accent:#3ecb8f; --accent-text:#53d19c; --user-surface:#1b2942; --user-border:#2d4166;
 }
 * { box-sizing:border-box; }
 body {
@@ -230,10 +230,10 @@ pre code { background:none; border:none; padding:0; font-size:13px; }
 .hljs-attr,.hljs-attribute { color:#b8860b; }
 .hljs-built_in { color:#2d8a6e; }
 .hljs-meta { color:var(--muted); }
-[data-theme="dark"] .hljs-keyword,[data-theme="dark"] .hljs-selector-tag,[data-theme="dark"] .hljs-type { color:#c8a0e0; }
-[data-theme="dark"] .hljs-string,[data-theme="dark"] .hljs-addition { color:#6dcb80; }
-[data-theme="dark"] .hljs-number,[data-theme="dark"] .hljs-literal { color:#e0a060; }
-[data-theme="dark"] .hljs-title,[data-theme="dark"] .hljs-name,[data-theme="dark"] .hljs-function { color:#80a0d0; }
-[data-theme="dark"] .hljs-attr,[data-theme="dark"] .hljs-attribute { color:#d0b040; }
-[data-theme="dark"] .hljs-built_in { color:#5ccaa0; }
+[data-theme="dark"] .hljs-keyword,[data-theme="dark"] .hljs-selector-tag,[data-theme="dark"] .hljs-type { color:#b7a4f0; }
+[data-theme="dark"] .hljs-string,[data-theme="dark"] .hljs-addition { color:#83d69b; }
+[data-theme="dark"] .hljs-number,[data-theme="dark"] .hljs-literal { color:#e0a56a; }
+[data-theme="dark"] .hljs-title,[data-theme="dark"] .hljs-name,[data-theme="dark"] .hljs-function { color:#79b0f2; }
+[data-theme="dark"] .hljs-attr,[data-theme="dark"] .hljs-attribute { color:#d8b45f; }
+[data-theme="dark"] .hljs-built_in { color:#53d19c; }
 `;

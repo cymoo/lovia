@@ -52,9 +52,9 @@ def _normalize_call_args(state: RunState, call_id: str) -> None:
     mid-call. Left raw in the transcript and echoed back next turn, they make
     the request invalid JSON and 400 every provider (fallback included: it is
     the same bytes). Detection is the one place we already know the payload is
-    bad, so we normalize the stored entry here — wrapping the unparseable text
-    under ``_raw`` (valid JSON, original preserved) — and every serializer can
-    then trust the transcript instead of re-validating it on each re-send.
+    bad, so we normalize the stored entry here — wrapping the offending text
+    under ``_raw`` (a JSON object, original preserved) — and every serializer
+    can then trust the transcript instead of re-validating it on each re-send.
 
     Replaces the entry rather than mutating it: the copy already handed to
     observers on ``MessageCompleted`` must keep the exact payload the model
@@ -64,8 +64,16 @@ def _normalize_call_args(state: RunState, call_id: str) -> None:
         entry = state.transcript[i]
         if isinstance(entry, ToolCallEntry) and entry.call_id == call_id:
             try:
-                json.loads(entry.arguments or "{}")
+                parsed = json.loads(entry.arguments or "{}")
+                # Wire-safe means a JSON *object*, not merely valid JSON: the
+                # Anthropic adapter unpacks ``arguments`` into ``tool_use.input``,
+                # which must be an object, so a bare array/scalar the model
+                # should never emit for tool args (``"[1,2]"``, ``"5"``, ``"null"``)
+                # still 400s it and must be wrapped too.
+                wire_safe = isinstance(parsed, dict)
             except json.JSONDecodeError:
+                wire_safe = False
+            if not wire_safe:
                 state.transcript[i] = replace(
                     entry, arguments=json.dumps({"_raw": entry.arguments})
                 )

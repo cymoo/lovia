@@ -169,6 +169,28 @@ async def test_malformed_tool_call_is_normalized_before_being_re_sent() -> None:
     assert json.loads(args) == {"_raw": '{"a": 1'}  # valid JSON, original kept
 
 
+async def test_valid_but_non_object_tool_args_are_normalized_before_re_send() -> None:
+    # Valid JSON that isn't an object (here a bare array) parses cleanly, so the
+    # bad-JSON gate never fires — but Anthropic unpacks arguments into
+    # tool_use.input, which must be an object, and 400s on a bare array/scalar.
+    # Normalization must wrap these too, not only unparseable text. Rejected as
+    # an unknown tool so the (unmodified) call reaches re-serialization.
+    bad = AssistantTurn(
+        content=None,
+        tool_calls=[ToolCall(id="c1", name="ghost", arguments="[1, 2]")],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    provider = ScriptedProvider([bad, text("ok")])
+    agent = Agent(name="t", model=provider, tools=[add])
+
+    await Runner.run(agent, "go")
+
+    resent = provider.calls[1]
+    assistant = next(m for m in resent if m.role == "assistant" and m.tool_calls)
+    args = assistant.tool_calls[0].arguments
+    assert json.loads(args) == {"_raw": "[1, 2]"}  # wrapped into a JSON object
+
+
 async def test_length_truncated_tool_call_tells_model_it_hit_the_token_limit() -> None:
     # finish_reason="length" cut the call off mid-arguments. The model must
     # learn it was truncated (and to chunk) — not that its JSON was merely

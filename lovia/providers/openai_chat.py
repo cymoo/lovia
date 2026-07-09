@@ -9,7 +9,6 @@ Kimi, Ollama, vLLM, LM Studio, ...) by setting ``base_url``.
 from __future__ import annotations
 
 import os
-import re
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
@@ -39,6 +38,7 @@ from ._content import (
     merge_openai_chat_content as _merge_openai_content,
 )
 from ._http import host_matches, raise_for_provider_status, raise_for_transport_error
+from ._windows import table_window
 from ._sse import iter_sse_json
 from .base import ModelSettings, provider_options
 
@@ -225,8 +225,14 @@ class OpenAIChatProvider:
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
         official_api: bool | None = None,
+        # The endpoint's real context window, when you know it and the bundled
+        # table cannot — a vLLM host started with ``--max-model-len``, an
+        # Ollama ``num_ctx``, a gateway capping a shared model. Overrides the
+        # table; a ContextPolicy's own window still wins.
+        context_window: int | None = None,
     ) -> None:
         self.model = model
+        self._context_window = context_window
         self.base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL
         ).rstrip("/")
@@ -474,14 +480,9 @@ class OpenAIChatProvider:
     # ----- ContextPolicy hooks ------------------------------------------------
 
     def context_window(self, model: str) -> int | None:
-        window = _OPENAI_CONTEXT_WINDOWS.get(model)
-        if window is None:
-            # Date-pinned snapshots ("gpt-4.1-2025-04-14") share their
-            # alias's window.
-            window = _OPENAI_CONTEXT_WINDOWS.get(
-                re.sub(r"-\d{4}-\d{2}-\d{2}$", "", model)
-            )
-        return window
+        if self._context_window is not None:
+            return self._context_window
+        return table_window(model, _OPENAI_CONTEXT_WINDOWS)
 
 
 # Default for replaying ``reasoning_content`` on assistant input messages,
@@ -544,13 +545,18 @@ def _is_context_overflow(status: int, body: str) -> bool:
 # (their date-pinned snapshots resolve via suffix stripping). Keep this
 # intentionally small: o-series, retired models, and niche aliases can fall
 # back to reactive overflow handling.
-_OPENAI_CONTEXT_WINDOWS: dict[str, int] = {
-    "gpt-4.1": 1_047_576,
-    "gpt-5": 400_000,
-    "gpt-5.5": 1_050_000,
-    "gpt-5.5-pro": 1_050_000,
-    "gpt-5.4": 1_050_000,
-    "gpt-5.4-mini": 400_000,
-    "gpt-5.2": 400_000,
-    "gpt-5.2-pro": 400_000,
-}
+#
+# Exact entries only, unlike Anthropic's family prefixes: GPT-5 releases
+# disagree on their window (400K vs 1.05M), so a prefix rule would guess. And a
+# guess that is too *small* never self-corrects — it cannot provoke the
+# overflow that would teach the real number.
+_OPENAI_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
+    ("gpt-4.1", 1_047_576),
+    ("gpt-5", 400_000),
+    ("gpt-5.5", 1_050_000),
+    ("gpt-5.5-pro", 1_050_000),
+    ("gpt-5.4", 1_050_000),
+    ("gpt-5.4-mini", 400_000),
+    ("gpt-5.2", 400_000),
+    ("gpt-5.2-pro", 400_000),
+)

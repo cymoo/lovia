@@ -770,6 +770,7 @@ class RunLoop:
             failed_tokens = ctx_result.tokens_after
             request.last_input_tokens = None
             request.overflow = True
+            request.reported_window = overflow.reported_window
             ctx_result = await self.context_policy.compact(request)
             # Retry only when the rebuilt view is meaningfully smaller than
             # the one that just failed (both numbers come from the same

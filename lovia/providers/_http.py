@@ -8,6 +8,7 @@ from typing import NoReturn
 import httpx
 
 from ..exceptions import ContextOverflowError, ProviderError
+from ._windows import window_from_error
 
 
 def is_retryable_status(status_code: int) -> bool:
@@ -43,7 +44,8 @@ async def raise_for_provider_status(
     text = body.decode(errors="replace")
     if is_context_overflow(response.status_code, text):
         raise ContextOverflowError(
-            f"{label}: prompt exceeds the model's context window: {text}"
+            f"{label}: prompt exceeds the model's context window: {text}",
+            reported_window=window_from_error(text),
         )
     raise ProviderError(
         f"{label} stream returned HTTP {response.status_code}: {text}",

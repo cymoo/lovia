@@ -89,6 +89,10 @@ class CompactionState:
             scratch like every other decision. Past the summarize stage's
             limit the proactive path stops trying (circuit breaker); the
             aggressive path still probes, and a success resets the count.
+        learned_windows: Context windows the endpoint named in its own overflow
+            rejections, keyed by :func:`window_key`. Persisting them is the
+            point: an unknown or overstated window costs one overflow, once,
+            and every later run on this session sizes itself correctly.
     """
 
     cleared: set[str] = field(default_factory=set)
@@ -97,6 +101,7 @@ class CompactionState:
     ratio: float = 1.0
     last_view_estimate: int | None = None
     summary_failures: int = 0
+    learned_windows: dict[str, int] = field(default_factory=dict)
 
     def decided(self, call_id: str) -> bool:
         """Whether a sticky decision already exists for this tool result."""
@@ -173,6 +178,17 @@ class CompactionState:
         if isinstance(failures, int) and not isinstance(failures, bool):
             state.summary_failures = failures
 
+        learned = raw.get("learned_windows")
+        if isinstance(learned, dict):
+            state.learned_windows = {
+                key: value
+                for key, value in learned.items()
+                if isinstance(key, str)
+                and isinstance(value, int)
+                and not isinstance(value, bool)
+                and value > 0
+            }
+
         return state
 
     def save(self, scratch: dict[str, Any]) -> None:
@@ -196,7 +212,21 @@ class CompactionState:
             "ratio": self.ratio,
             "last_view_estimate": self.last_view_estimate,
             "summary_failures": self.summary_failures,
+            "learned_windows": dict(self.learned_windows),
         }
+
+
+def window_key(provider: object, model: str | None) -> str:
+    """Identity of a learned context window: the endpoint *and* the model.
+
+    The same model name is served at different limits by different hosts (a
+    vLLM box started with ``--max-model-len``, a gateway capping a shared
+    model), so ``base_url`` is part of the key. Providers without one — test
+    doubles, custom adapters — collapse to an empty prefix, which is right:
+    they only ever speak to a single endpoint.
+    """
+    base_url = getattr(provider, "base_url", "") or ""
+    return f"{base_url}\x00{model or ''}"
 
 
 def unique_result_ids(entries: Sequence[TranscriptEntry]) -> set[str]:

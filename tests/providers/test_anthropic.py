@@ -936,6 +936,30 @@ async def test_http_context_overflow_is_classified() -> None:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Both Anthropic forms put the *requested* count before the limit.
+        "prompt is too long: 208310 tokens > 200000 maximum",
+        "input length and max_tokens exceed context limit: 188240 + 21333 > 200000,"
+        " decrease input length or max_tokens and try again",
+    ],
+)
+async def test_http_context_overflow_reports_the_stated_window(message: str) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, content=message.encode())
+        )
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+
+    with pytest.raises(ContextOverflowError) as exc_info:
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert exc_info.value.reported_window == 200_000
+
+
 def test_stop_reason_and_context_overflow_helpers() -> None:
     assert _normalize_stop_reason("end_turn") == "stop"
     assert _normalize_stop_reason("max_tokens") == "length"
@@ -946,7 +970,7 @@ def test_stop_reason_and_context_overflow_helpers() -> None:
     assert not _is_context_overflow(400, "invalid api key")
 
 
-def test_context_window_includes_current_claude_aliases() -> None:
+def test_context_window_covers_the_whole_claude_line() -> None:
     provider = AnthropicProvider(model="claude-opus-4-8", api_key="x")
 
     # Default (non-beta) windows: the 1M variants require the ``context-1m``
@@ -954,6 +978,20 @@ def test_context_window_includes_current_claude_aliases() -> None:
     assert provider.context_window("claude-opus-4-8") == 200_000
     assert provider.context_window("claude-sonnet-4-6") == 200_000
     assert provider.context_window("claude-haiku-4-5") == 200_000
-    # Date-pinned snapshots share the alias's window; retired aliases don't.
+    # Date-pinned snapshots share their family's window.
     assert provider.context_window("claude-sonnet-4-5-20250929") == 200_000
-    assert provider.context_window("claude-3-5-sonnet-20241022") is None
+    assert provider.context_window("claude-3-5-sonnet-20241022") == 200_000
+    # Family prefixes cover models released after this table was written.
+    assert provider.context_window("claude-sonnet-5") == 200_000
+    # Nothing is guessed for names outside the line.
+    assert provider.context_window("gpt-5.5") is None
+    assert provider.context_window("claude-instant-1.2") is None
+
+
+def test_context_window_constructor_argument_overrides_the_table() -> None:
+    provider = AnthropicProvider(
+        model="claude-opus-4-8", api_key="x", context_window=1_000_000
+    )
+    assert provider.context_window("claude-opus-4-8") == 1_000_000
+    # It is the endpoint's window, not the model's — it wins for any name.
+    assert provider.context_window("anything") == 1_000_000

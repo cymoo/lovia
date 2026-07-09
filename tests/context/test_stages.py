@@ -321,6 +321,24 @@ async def test_summarize_chunks_bounded_by_model_window_on_aggressive():
     assert summarizer.calls == [body[:4], body[4:8]]
 
 
+async def test_summarize_chunks_survive_a_window_smaller_than_the_reserve():
+    """A learned 4K window minus the 16K default reserve must not go negative.
+
+    Subtracting outright would cap every fold chunk at a single token, so the
+    summarizer would be handed one entry at a time.
+    """
+    summarizer = FakeSummarizer("S1")
+    body = _texts(10)
+    inflated = TokenBudget(window=100_000, reserve_output=16_384, trigger=0.75)
+    ctx = make_ctx(
+        body, protected_from=8, aggressive=True, budget=inflated, model_window=4_096
+    )
+    stage = SummarizeHistory(summarizer=summarizer)
+    assert await stage.plan(body, ctx) is True
+    # usable = 4096 // 2 = 2048, cap = 1024 — comfortably one chunk, not eight.
+    assert summarizer.calls == [body[:8]]
+
+
 async def test_summarize_failure_mid_fold_keeps_partial_coverage():
     # A failure on a later chunk keeps the coverage already committed, so
     # the next burst resumes from the frontier instead of starting over.

@@ -616,8 +616,45 @@ async def test_chat_context_overflow_is_classified() -> None:
     )
     provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
 
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc_info:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    # Nothing to learn: the body states no limit.
+    assert exc_info.value.reported_window is None
+
+
+@pytest.mark.asyncio
+async def test_chat_context_overflow_reports_the_stated_window() -> None:
+    body = (
+        b'{"error":{"code":"context_length_exceeded","message":"This model\'s '
+        b'maximum context length is 65536 tokens. However, you requested 190402 '
+        b'tokens (182402 in the messages, 8000 in the completion)."}}'
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, content=body))
+    )
+    provider = OpenAIChatProvider(model="deepseek-chat", api_key="sk-test", client=client)
+
+    with pytest.raises(ContextOverflowError) as exc_info:
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert exc_info.value.reported_window == 65_536
+
+
+@pytest.mark.asyncio
+async def test_non_overflow_error_leaves_reported_window_unset() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, content=b'{"error":"invalid api key"}')
+        )
+    )
+    provider = OpenAIChatProvider(model="gpt-5", api_key="sk-test", client=client)
+
+    with pytest.raises(ProviderError) as exc_info:
+        await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert not isinstance(exc_info.value, ContextOverflowError)
+    assert getattr(exc_info.value, "reported_window", None) is None
 
 
 def test_build_payload_none_valued_option_removes_adapter_default() -> None:
@@ -645,6 +682,27 @@ def test_context_window_resolves_date_pinned_snapshots() -> None:
     assert provider.context_window("gpt-4.1") == 1_047_576
     assert provider.context_window("gpt-4.1-2025-04-14") == 1_047_576
     assert provider.context_window("o3-2025-04-16") is None
+    # GPT-5 releases disagree on their window, so the table stays exact:
+    # "gpt-5.5" must never resolve through a "gpt-5" prefix.
+    assert provider.context_window("gpt-5") == 400_000
+    assert provider.context_window("gpt-5.5") == 1_050_000
+    assert provider.context_window("gpt-5.5-pro") == 1_050_000
+    assert provider.context_window("gpt-5-mini") is None
+
+
+def test_context_window_constructor_argument_overrides_the_table() -> None:
+    """The deployment's window, for endpoints the table cannot know."""
+    provider = OpenAIChatProvider(
+        model="qwen2.5",
+        api_key="sk-test",
+        base_url="http://localhost:8000/v1",
+        context_window=32_768,
+    )
+    assert provider.context_window("qwen2.5") == 32_768
+
+    # A vLLM host serving a familiar alias at a smaller --max-model-len.
+    capped = OpenAIChatProvider(model="gpt-4.1", api_key="x", context_window=8_192)
+    assert capped.context_window("gpt-4.1") == 8_192
 
 
 @pytest.mark.asyncio

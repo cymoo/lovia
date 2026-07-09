@@ -34,6 +34,7 @@ from .state import (
     SummaryState,
     fingerprint,
     unique_result_ids,
+    window_key,
 )
 from .stages import (
     ClearToolResults,
@@ -240,6 +241,13 @@ class Compaction:
         window = self.context_window
         if window is None:
             window = _provider_context_window(req.provider, req.model)
+        # The endpoint's own rejection outranks every other source: a
+        # configured or tabled window is a *claim*, the number in a 400 is the
+        # limit being enforced. It only ever caps — a user who deliberately
+        # budgets below the real window keeps their smaller number.
+        learned = self._learn_window(req, state)
+        if learned is not None:
+            window = learned if window is None else min(window, learned)
         # The real window (when known) survives the aggressive override below:
         # stages that make actual model calls (summarize) size against it.
         model_window = window
@@ -398,6 +406,27 @@ class Compaction:
             tokens_after=tokens,
             detail=detail,
         )
+
+    def _learn_window(
+        self, req: CompactionRequest, state: CompactionState
+    ) -> int | None:
+        """Record and return the window this endpoint reported for the model.
+
+        A fresh ``reported_window`` replaces any earlier one: both are direct
+        statements from the endpoint, and the newest describes the deployment
+        as it is now.
+        """
+        key = window_key(req.provider, req.model)
+        reported = req.reported_window
+        if reported is not None and state.learned_windows.get(key) != reported:
+            logger.info(
+                "context.window: learned %d tokens for %r from the provider's "
+                "overflow response",
+                reported,
+                req.model,
+            )
+            state.learned_windows[key] = reported
+        return state.learned_windows.get(key)
 
     def _save(self, req: CompactionRequest, state: CompactionState) -> None:
         """Persist ``state`` into the per-run scratch."""

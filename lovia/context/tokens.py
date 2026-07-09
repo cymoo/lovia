@@ -49,6 +49,18 @@ def _validate_watermark(value: int | float, name: str) -> None:
         raise ValueError(f"{name} as a token count must be >= 1")
 
 
+def usable_tokens(window: int, reserve_output: int) -> int:
+    """Prompt tokens left in ``window`` after reserving output headroom.
+
+    ``reserve_output`` defaults to a size tuned for 100K+ windows, so it can
+    exceed a small one outright (a 4K local model). Halving the window then
+    beats reserving nothing and beats going negative.
+    """
+    if reserve_output >= window:
+        return max(window // 2, 1)
+    return window - reserve_output
+
+
 @dataclass(frozen=True)
 class TokenBudget:
     """Watermark math over a model's context window.
@@ -82,9 +94,7 @@ class TokenBudget:
     @property
     def usable(self) -> int:
         """Prompt tokens available after reserving output headroom."""
-        if self.reserve_output >= self.window:
-            return max(self.window // 2, 1)
-        return self.window - self.reserve_output
+        return usable_tokens(self.window, self.reserve_output)
 
     def _resolve(self, value: int | float) -> int:
         if isinstance(value, float):
@@ -196,4 +206,4 @@ class TokenCounter:
         return chars // _CHARS_PER_TOKEN + self.entry_overhead
 
 
-__all__ = ["TokenBudget", "TokenCounter"]
+__all__ = ["TokenBudget", "TokenCounter", "usable_tokens"]

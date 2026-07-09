@@ -58,7 +58,7 @@ ANTHROPIC_CONTEXT_LIMIT = (
 MODAL = (
     '{"error":{"message":"You passed 131073 input tokens and requested 0 output '
     "tokens. However, the model's context length is only 131072 tokens, resulting "
-    'in a maximum input length of 131072 tokens. Please reduce the length of the '
+    "in a maximum input length of 131072 tokens. Please reduce the length of the "
     'input prompt."}}'
 )
 TOGETHER = (
@@ -134,7 +134,10 @@ def test_window_from_error_gates_the_comma_pattern() -> None:
 
 @pytest.mark.parametrize("value", [0, 1, 1023, 20_000_001, 10**12])
 def test_window_from_error_rejects_implausible_numbers(value: int) -> None:
-    assert window_from_error(f"This model's maximum context length is {value} tokens") is None
+    assert (
+        window_from_error(f"This model's maximum context length is {value} tokens")
+        is None
+    )
 
 
 def test_window_from_error_takes_the_smallest_anchor() -> None:
@@ -176,7 +179,10 @@ def test_models_payload_prefers_openrouter_top_provider() -> None:
         {
             "id": "anthropic/claude-sonnet-4-5",
             "context_length": 1_000_000,
-            "top_provider": {"context_length": 200_000, "max_completion_tokens": 64_000},
+            "top_provider": {
+                "context_length": 200_000,
+                "max_completion_tokens": 64_000,
+            },
         }
     )
     assert window_from_models_payload(payload, "anthropic/claude-sonnet-4-5") == 200_000

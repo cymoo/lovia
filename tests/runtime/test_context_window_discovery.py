@@ -17,7 +17,9 @@ from lovia.testing import ScriptedProvider, text
 class _Probeable(ScriptedProvider):
     """A scripted provider that records whether the runner probed it."""
 
-    def __init__(self, *args, window: int | None = None, discovered: int | None = None, **kw):
+    def __init__(
+        self, *args, window: int | None = None, discovered: int | None = None, **kw
+    ):
         super().__init__(*args, **kw)
         self.model = "scripted-model"
         self._window = window

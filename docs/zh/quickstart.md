@@ -1,6 +1,6 @@
 # 快速上手
 
-三步跑通：安装 lovia，配置模型，写一个会调用工具的 agent。本页代码片段在模型配置好后可以直接运行。
+三步跑通：安装 lovia、配置模型、写一个会调用工具的 agent。模型配置好后，本页代码片段都可以直接运行。
 
 ## 安装
 
@@ -8,12 +8,12 @@
 pip install lovia
 ```
 
-Python 3.10+。核心依赖只有 `httpx`、`pydantic`、`pyyaml`；Web UI、MCP、搜索等能力通过 extra 按需安装。
+lovia 需要 Python 3.10+。核心依赖只有 `httpx`、`pydantic`、`pyyaml`；Web UI、MCP、搜索等能力都通过 extra 按需安装。
 
 ## 配置模型
 
-OpenAI 官方 API 以及 DeepSeek、Ollama、vLLM 等 OpenAI 兼容端点：配置
-`OPENAI_BASE_URL` 和 `OPENAI_API_KEY`，模型名直接写服务提供的裸名，例如
+使用 OpenAI 官方 API，或 DeepSeek、Ollama、vLLM 等 OpenAI 兼容端点时，配置
+`OPENAI_BASE_URL` 和 `OPENAI_API_KEY`，模型名直接写服务提供的不带前缀的名称，例如
 `model="glm-5.2"`。
 
 ```bash
@@ -50,7 +50,7 @@ print(result.output)
 
 ## 加一个工具
 
-普通 Python 函数加上 `@tool`，就能被模型调用。schema 来自类型标注和 docstring。
+给普通 Python 函数加上 `@tool`，模型就能调用它。schema 会从类型标注和 docstring 推导出来。
 
 ```python
 from lovia import Agent, tool
@@ -73,11 +73,11 @@ result = agent.run_sync("SKU-1401 还有货吗？顺便给一句购买建议。"
 print(result.output)
 ```
 
-更多工具选项，如并发、重试、超时和审批，见[工具](tools.md)。
+并发、重试、超时、审批等更多工具选项见[工具](tools.md)。
 
 ## 流式输出
 
-做 UI 时，可以边生成边渲染：
+做 UI 时，可以一边生成一边渲染：
 
 ```python
 import asyncio
@@ -105,7 +105,7 @@ asyncio.run(main())
 
 ## 获取类型化输出
 
-需要对象而不是字符串时，传 `output_type`：
+如果需要对象而不是字符串，传入 `output_type`：
 
 ```python
 from pydantic import BaseModel
@@ -139,7 +139,7 @@ pip install "lovia[web]"
 lovia web
 ```
 
-缺失的必需配置（模型；官方端点的 API key）首次运行会交互式询问，并可保存到
+首次运行时，缺失的必要配置（模型；官方端点的 API key）会在终端交互式询问，并可保存到
 `~/.config/lovia/config.env`。UI 默认在 `http://127.0.0.1:8000` 启动。
 要换成你自己的 agent：`lovia web --app mymodule:agent`。
 

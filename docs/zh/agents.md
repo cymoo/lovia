@@ -1,8 +1,8 @@
 # Agent
 
-`Agent` 描述的是**要运行什么**：名称、instructions、模型、工具、策略。它不保存
+`Agent` 描述的是**要运行什么**：名称、instructions、模型、工具和策略。它不保存
 对话状态，所以一个实例可以服务任意数量的并发请求；每个请求需要的变体可以用
-`clone()` 派生，而不是复制一份带运行状态的对象。
+`clone()` 派生，不必复制一份带运行状态的对象。
 
 ```python
 from lovia import Agent
@@ -16,13 +16,13 @@ agent = Agent(
 
 ## 字段
 
-每个字段都有显式默认值。`None` 不会暗藏某个常量；它表示关闭、继承或自动创建。
+每个字段都有显式默认值。`None` 不会暗藏某个常量；它只表示关闭、继承或自动创建。
 
 | 字段 | 默认值 | 作用 |
 | --- | --- | --- |
-| `name` | 必填 | 面向人的名称；也用于生成 handoff 工具名（`transfer_to_<name>`） |
+| `name` | 必填 | 可读名称；也用于生成 handoff 工具名（`transfer_to_<name>`） |
 | `instructions` | `""` | 基础 system prompt；可以是字符串，也可以是接收本次运行 `RunContext` 的 callable |
-| `model` | `None` | `"vendor:model"` 字符串、`Provider` 实例，或用于 [fallback 链](providers.md#fallback-链)的列表；没有模型时运行会抛 `UserError` |
+| `model` | `None` | `"vendor:model"` 字符串、`Provider` 实例，或用于 [fallback 链](providers.md#fallback-链)的列表；没有模型时，运行会抛 `UserError` |
 | `tools` | `[]` | 模型可以调用的[工具](tools.md) |
 | `output_type` | `str` | 类型化最终输出；见[结构化输出](structured-output.md) |
 | `output_repair` | `True` | 输出解析失败时修复一次；`False` 表示快速失败；也可以用 `OutputRepairStrategy` 自定义 |
@@ -34,13 +34,13 @@ agent = Agent(
 | `plugins` | `[]` | 能力包；见[插件](plugins.md) |
 | `hooks` | `None` | 观察每个运行事件的 `AgentHooks`；见[可观测性](observability.md) |
 | `approval_handler` | `None` | 程序化审批策略；见[人工介入](human-in-the-loop.md) |
-| `input_guardrails` / `output_guardrails` | `[]` | 可以停止运行的检查；见[护栏](guardrails.md) |
+| `input_guardrails` / `output_guardrails` | `[]` | 有权停止运行的检查；见[护栏](guardrails.md) |
 | `default_tool_retries` | `0` | 没有自行设置重试的工具使用这个值 |
 | `default_tool_timeout` | `None` | 没有自行设置超时的工具每次尝试使用这个值 |
 | `max_tool_output_chars` | `200_000` | 防止工具输出失控撑大 transcript 的保险线（见[工具](tools.md#输出截断)） |
 | `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有渲染器时使用 |
 
-和可靠性相关的字段遵循一个值得记住的规则：**应对策略放在 agent 上，限制放在运行上**。
+可靠性相关字段遵循一条值得记住的规则：**应对策略放在 agent 上，限制放在运行上**。
 见[可靠性](reliability.md)。
 
 ## Instructions
@@ -49,7 +49,7 @@ agent = Agent(
 
 **字符串**：最常见。
 
-**callable**：整个基础 prompt 变成动态内容。它接收本次运行的 `RunContext`
+**callable**：把整个基础 prompt 变成动态内容。它接收本次运行的 `RunContext`
 （也就是工具拿到的同一个句柄），可以是同步或异步函数：
 
 ```python
@@ -72,19 +72,19 @@ async def user_tier(ctx) -> str:
 
 **`with_instructions`**：纯函数式变体。它返回一个多了一个片段的 clone，不改变原对象。
 
-最终渲染结果，即基础 prompt + 片段 + 每次运行的 `extra_instructions` 追加内容，就是
+最终渲染出的内容，也就是基础 prompt + 片段 + 每次运行追加的 `extra_instructions`，就是
 模型看到的 system prompt，之后可以通过 `ctx.system_prompt` 观察。工作区 instructions、
 插件 instructions，以及 provider 没有原生 JSON schema 支持时的结构化输出契约，会由
 runner 追加在它后面。
 
-> **动态 prompt 与 provider 缓存。** provider 会缓存 prompt 前缀；每次调用都会变化的
-> 片段（时间戳、请求 id）会让缓存每轮失效。尽量渲染稳定文本：日期而不是精确时间
+> **动态 prompt 与 provider 缓存。** provider 会缓存 prompt 前缀；每次调用都变化的
+> 片段（时间戳、请求 id）会让缓存每轮失效。尽量渲染稳定文本：写日期，不写精确时间
 > （见[内置工具](built-in-tools.md#时间)里的 `current_date`）、用户等级而不是
 > session id。易变细节更适合放在工具结果里。
 
 ## Clone 与变体
 
-`clone()` 返回一个替换了部分字段的副本，是派生每次请求或每个实验变体的推荐方式：
+`clone()` 会返回一个只替换部分字段的副本，是派生单次请求配置或实验变体的推荐方式：
 
 ```python
 strict = agent.clone(instructions="只回答带引用的内容。")
@@ -98,7 +98,7 @@ variant = agent.clone(model="glm-5.2")
 
 ## 每次运行的依赖
 
-instructions、工具、hooks 或护栏在运行时需要的东西，比如数据库连接池、当前用户，
+instructions、工具、hooks 或护栏在运行时需要的依赖，比如数据库连接池、当前用户，
 应该作为本次运行的 `context` 对象传入，而不是放在 agent 状态上：
 
 ```python
@@ -142,7 +142,7 @@ result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps(
 - **`@agent.instruction` 会修改 agent**：这是为了装饰器易用性而保留的唯一例外。
   如果涉及 clone，片段注册发生在 clone 前还是后，决定谁会得到这个片段。
 - **callable instructions 会在每一轮渲染 prompt 前执行，而不是只执行一次。**
-  它们应该快，并且尽量确定；在 instructions callable 里做慢 I/O 会拖慢每次模型调用。
+  它们应该足够快，并且尽量确定；在 instructions callable 里做慢 I/O 会拖慢每次模型调用。
 - **`Agent` 是普通 dataclass**：框架不会阻止你直接给字段赋值，但它假设 agent
   不会在运行中变化。把实例当成 frozen，用 `clone()` 改配置。
 

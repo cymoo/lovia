@@ -1,8 +1,8 @@
 # 多 Agent
 
-lovia 里的多 agent 组合刻意保持小而清楚：两个原语，底层都实现为普通工具，没有编排 DSL。
+lovia 里的多 agent 组合有意保持小而清楚：两个原语，底层都实现为普通工具，没有编排 DSL。
 **Handoff** 会移交控制权：专家继续同一段对话。**Agent-as-tool** 是委派：子 agent 回答
-一个有边界的问题，父 agent 接着往下走。更大的模式都用普通 Python 组合它们。
+一个边界清晰的问题，父 agent 接着往下走。更大的模式都用普通 Python 组合它们。
 
 ## Handoff
 
@@ -23,11 +23,11 @@ result = await Runner.run(triage, "我被重复扣款了。")
 print(result.final_agent.name)   # "billing"
 ```
 
-`handoffs` 里的每个条目都会变成一个 `transfer_to_<name>` 工具（名称会 slugify 以符合
-provider 语法：ASCII、64 字符，必要时加稳定 digest 后缀）。模型调用这个工具时，循环会
+`handoffs` 里的每个条目都会变成一个 `transfer_to_<name>` 工具（名称会 slugify，以符合
+provider 对工具名的要求：ASCII、64 字符，必要时加稳定 digest 后缀）。模型调用这个工具时，循环会
 切换活跃 agent 并继续。
 
-**目标 agent 会看到什么。** 对话会跟着 handoff 过去：新 agent 拿到完整的既有上下文，
+**目标 agent 会看到什么。** 对话会随 handoff 一起转过去：新 agent 拿到完整的既有上下文，
 包括历史、工具调用和结果。唯一变化是开头的 system prompt 会重新渲染成目标 agent 自己的
 内容（instructions、workspace、plugins、结构化输出契约）。运行级
 `extra_instructions` 会重新应用到 handoff 到达的每个 agent。
@@ -65,7 +65,7 @@ triage = Agent(
 | `description` | 通用转交文本 | **路由信号**。父 agent 需要在相似专家间选择时，请写清目标专长 |
 | `on_handoff` | `None` | handoff 触发时调用的同步或异步回调 `(args, ctx)`；`args` 携带模型可选的 `reason` |
 
-默认 description 故意很简略（只有 agent 名称），所以 `description` 是让路由可靠的关键设置。
+默认 description 有意保持简略（只有 agent 名称），所以 `description` 是让路由可靠的关键设置。
 
 ### Handoff 语义
 
@@ -79,7 +79,7 @@ triage = Agent(
 
 ## Agent-as-tool
 
-委派而不是转交：子 agent 在自己的循环里运行，只看到交给它的 prompt（绝不会看到父 agent
+这是委派，不是转交：子 agent 在自己的循环里运行，只看到交给它的 prompt（绝不会看到父 agent
 历史），最终输出作为工具结果返回：
 
 ```python
@@ -123,21 +123,21 @@ retry=None, context_policy=None)`：
 | 多个委派，甚至并发委派 | agent-as-tool |
 
 更大的模式，如链式调用、路由、并行化、orchestrator-worker、evaluator loop，都不需要框架
-支持：用 `Runner.run` 外面的普通 Python 写即可。
+支持：在 `Runner.run` 外层用普通 Python 写即可。
 [`examples/workflows/`](../../examples/workflows/) 目录用一页代码实现了 Anthropic
 *Building effective agents* 里的每个模式。
 
 ## 容易踩的点
 
 - **Handoff 目标需要可发现的 description。** 两个专家如果都用默认 description，
-  路由视角看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。
-- **被覆盖的 `output_type` 跟着运行，而不是跟着 agent。**
+  从路由角度看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。
+- **运行级 `output_type` 覆盖跟着运行，而不是跟着 agent。**
   `Runner.run(..., output_type=...)` 覆盖会绑定 handoff 到达的每个 agent；没有覆盖时，
   各 agent 使用自己的 `output_type`。triage → specialist 链如果输出类型不同，契约会在运行中变化。
 - **非 ASCII agent 名会生成 digest 工具名。** `transfer_to_agent_a1b2c3d4` 能正常路由，
   但日志不好读；需要可读名称时设置 `Handoff(name=...)` / `as_tool(name=...)`。
 - **很深的 agent-as-tool 层级会放大成本。** 用量向上汇总，所以 `result.usage` 是**整个调用层级**
-  的总量。根运行要按这个预算。
+  的总量。根运行要按这个总量设置预算。
 
 ## 延伸阅读
 

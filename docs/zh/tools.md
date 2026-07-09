@@ -1,7 +1,7 @@
 # 工具
 
 工具是模型可以调用的带类型 Python 函数。lovia 会从签名推导 JSON Schema，在你的代码
-运行前校验参数，并处理循环机制：并发、重试、超时、截断。这样工具本身仍然只是一个
+运行前校验参数，并处理并发、重试、超时、截断等循环机制。这样工具本身仍然只是一个
 普通函数。
 
 ```python
@@ -36,7 +36,7 @@ def search_docs(
 
 - **name**：默认是函数名，除非 `@tool(name=...)` 覆盖。
 - **description**：来自 docstring（或 `@tool(description=...)`）。这是模型判断
-  **什么时候**调用工具的唯一指导，请写给模型看，而不是写给同事看。
+  **什么时候**调用工具的唯一依据，请写给模型看，而不是写给同事看。
 - **parameters**：来自类型标注。默认值让参数变成可选；`Annotated[T, "text"]`
   添加纯字符串描述；`Annotated[T, Field(...)]` 携带完整 Pydantic 约束
   （边界、pattern、描述）。Pydantic model、dataclass、`TypedDict`、literal、
@@ -65,7 +65,7 @@ async def save_note(ctx: RunContext, text: str) -> str:
 ```
 
 这个 context 参数不会出现在模型看到的 schema 中。最多只能有一个参数带这个标注，
-否则会抛 `UserError`。完整字段目录见[核心概念](concepts.md#runcontext唯一的运行句柄)。
+否则会抛 `UserError`。完整字段列表见[核心概念](concepts.md#runcontext唯一的运行句柄)。
 
 ## 错误语义
 
@@ -77,13 +77,13 @@ async def save_note(ctx: RunContext, text: str) -> str:
 
 - `InvalidToolArguments`：确定性错误；不重试，直接变成错误结果。
 - `RunCancelled`：运行级信号；会重新抛出并结束运行。
-- `BudgetExceeded`：有作用域区别。由本次运行自己的预算抛出时，会在下一个安全点结束
+- `BudgetExceeded`：按来源不同有不同语义。由本次运行自己的预算抛出时，会在下一个安全点结束
   运行；如果发生在被委派的 [agent-as-tool](multi-agent.md#agent-as-tool) 子运行里，
   它是可恢复的委派失败，会变成工具错误结果。
 
 ## 并发执行与屏障
 
-模型在同一轮请求多个调用时，工具**默认并发执行**。顺序敏感的工具可以退出并发：
+模型在同一轮请求多个调用时，工具**默认并发执行**。顺序敏感的工具可以关闭并发：
 
 ```python
 @tool(parallel=False)
@@ -103,7 +103,7 @@ async def apply_migration(name: str) -> str:
 - Preflight（预算检查、审批、参数校验）总是按请求顺序串行执行，所以审批提示
   和预算计数在并发执行时仍然确定。
 - 结果按完成顺序 checkpoint 并追加进 transcript；下游都通过 `call_id` 配对调用和
-  结果，所以顺序只是展示问题。
+  结果，所以顺序只影响展示。
 - 不同调用的流式事件会交错；用 `ev.call.id` 关联
   （见[流式输出](streaming.md#工具与审批)）。
 - `parallel=` 控制的是**执行**。请求侧的对应项，也就是模型是否可以在同一轮发出
@@ -123,23 +123,23 @@ async def flaky_lookup(key: str) -> str:
   `None` 表示继承 agent 的 `default_tool_retries`。
 - `timeout`：每次尝试的秒数；`None` 表示继承 agent 的 `default_tool_timeout`
   （默认无超时）。
-- 取消、预算耗尽和参数无效永不重试，因为它们不会自己变好。
+- 取消、预算耗尽和参数无效永不重试，因为重试不会改变这些条件。
 
 ## 输出截断
 
-工具输出在进入 transcript 前会被限制长度：优先使用工具级
+工具输出写入 transcript 前会先限长：优先使用工具级
 `@tool(max_output_chars=...)`，否则使用 agent 的 `max_tool_output_chars`
 （默认 **200,000 字符**，是防止失控载荷撑爆上下文的保险线，不是策略）。更长的输出会保留
 头部和尾部，并加上说明剪掉了多少内容的标记；原始返回值会被丢弃。
 
-这是有意的有损处理：它从源头限制内存、checkpoint 和 session 成本。
+这是有意设计的有损处理：它从源头限制内存、checkpoint 和 session 成本。
 `recall_tool_result` 看到的也是截断版本。某个工具如果必须保留完整输出，应该把内容写到
 [工作区](workspace.md)，然后返回路径。（这和[上下文压缩](context.md)不同；压缩是
 无损、只作用于 view 的。）
 
 ## 结果渲染器
 
-模型收到的是字符串。默认规则：字符串原样通过，其他值 JSON 序列化（Pydantic model、
+模型收到的是字符串。默认规则是：字符串原样通过，其他值 JSON 序列化（Pydantic model、
 dataclass、enum、日期、path 都会处理）。可以按工具或按 agent 覆盖：
 
 ```python
@@ -153,7 +153,7 @@ async def top_customers(n: int = 10) -> list[dict]: ...
 
 ## 工具策略
 
-如果要围绕**单次尝试**组合横切行为，如缓存、脱敏、限流、自定义鉴权，可以组合
+如果要围绕**单次尝试**组合横切行为，如缓存、脱敏、限流、自定义鉴权，可以使用
 `ToolPolicy` callable，而不是手写包装函数：
 
 ```python

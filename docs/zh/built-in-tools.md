@@ -1,7 +1,7 @@
 # 内置工具
 
 没有任何内置工具会自动挂到 agent 上。每个内置能力都需要显式 import，所以一个 agent
-具备什么能力，在构造它的地方就能看清楚。
+具备哪些能力，在构造它的地方就能看清楚。
 
 ```python
 from lovia import Agent
@@ -16,12 +16,12 @@ agent = Agent(
 )
 ```
 
-文件和 shell 工具来自[工作区](workspace.md)。`ask_human` 会和其他[人工介入](human-in-the-loop.md#询问人工)
-内容一起讲，下面也有简要说明。
+文件和 shell 工具来自[工作区](workspace.md)。`ask_human` 会在[人工介入](human-in-the-loop.md#询问人工)
+中完整说明，下面只做简要介绍。
 
 ## HTTP fetch
 
-`lovia.tools.http.http_fetch`：有边界、能感知 content-type 的一次性请求工具。
+`lovia.tools.http.http_fetch`：有边界约束、能感知 content-type 的一次性请求工具。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ agent = Agent(
 响应会被处理成适合模型阅读的形式：JSON 会紧凑地重新序列化，HTML 会提取可见文本，
 其他文本原样通过，二进制只返回元数据。下载有 1 MB 硬上限；结果会按 `max_chars`
 剪裁，并带明确的截断说明。每个结果都以状态头开头，如
-`HTTP 200 · text/html · 3,214 chars`。会跟随重定向；TLS 遵守
+`HTTP 200 · text/html · 3,214 chars`。工具会跟随重定向；TLS 遵守
 [`LOVIA_HTTP_*` 设置](providers.md#网络超时代理tls)。
 
 > **没有 SSRF 过滤。** 这个工具会请求主机能访问到的任何地址，包括私有和内网地址；
@@ -60,7 +60,7 @@ tools = [web_search(MySearchBackend())]  # 或你自己的后端
 
 工具默认名为 `web_search`（可用 `name=` 覆盖），接收 `query`、`max_results`
 （1–20，默认 5）和可选的时间范围过滤 `time_range`（`"d"` / `"w"` / `"m"` /
-`"y"`）。结果会渲染成可读的标题/URL/snippet 块，而不是裸 JSON。
+`"y"`）。结果会渲染成可读的标题/URL/snippet 块，而不是未包装的 JSON。
 
 自定义后端只需要实现一个方法，也就是 `WebSearch` protocol：
 
@@ -83,7 +83,7 @@ class WebSearch(Protocol):
   `pip install tzdata`。）
 - **`sleep`**（工具）：最多 sleep 60 秒，适合简单的“等一下再检查”流程。
 - **`current_date(tz=None)`**：**不是工具**，而是返回
-  [instruction 片段](agents.md#instructions)的工厂，把今天日期写进 system prompt：
+  [instructions 片段](agents.md#instructions)的工厂，把今天日期写进 system prompt：
 
   ```python
   agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
@@ -91,7 +91,7 @@ class WebSearch(Protocol):
   ```
 
   日期在 prompt 里，模型搜索时就会带上当前年份，而不是先浪费一轮调用 `now`。它只写
-  日期是有意为之：日期在任意 prompt-cache 窗口内基本恒定，不会实质破坏
+  日期是有意为之：日期在任意 prompt cache 窗口内基本恒定，不会实质破坏
   [provider 缓存](providers.md#提示词缓存)。精确时间需要时交给 `now`。
 
 ## 询问人工

@@ -1,6 +1,6 @@
 # 技能
 
-团队知识，如政策、runbook、风格指南，不应该塞进每个请求都要付费的 system prompt。
+团队知识，比如政策、runbook、风格指南，不应该塞进每个请求都要付费的 system prompt。
 **skill** 是一种可复用的指令包，模型能以很低成本发现它，并且只在需要时加载它。
 lovia 遵循 Agent Skills 约定：`SKILL.md` 加附属文件。
 
@@ -21,13 +21,13 @@ skill 的上下文成本被拆成三步：
 
 1. **索引**：始终放在 system prompt 中。每个 skill 一行
    （`` `name` — description``，加额外 frontmatter），后面跟使用规则。在真正需要前，
-   一个 skill 只花这点上下文。
+   一个 skill 只占这点上下文。
 2. **`load_skill(name)`**：插件提供的工具。当模型判断某个 skill 适用时，返回完整
    `SKILL.md` 正文。
 3. **`read_skill_file(name, relpath)`**：原样读取被引用的文件，比如
    `references/refund-tiers.md`、脚本或模板。
 
-正文每次加载都会从磁盘懒读取，不缓存。因此修改 skill 后，下一次调用就会生效，不需要重启。
+正文每次加载都会从磁盘按需读取，不缓存。因此修改 skill 后，下一次调用就会生效，不必重启。
 
 ## skill 的结构
 
@@ -55,11 +55,11 @@ description: 如何按用户等级评估并处理退款请求。
 ```
 
 - `name`：由 `[a-zA-Z0-9]` 片段通过 `-` / `_` 连接，最长 64 字符；省略时用目录名。
-- `description`：必填，最长 1024 字符。它是模型的路由信号，所以要写**什么时候用这个
-  skill**，而不只是它是什么。
+- `description`：必填，最长 1024 字符。它是模型的路由信号，所以要写清**什么时候用这个
+  skill**，而不只是说明它是什么。
 - 其他 frontmatter key 会进入 `extra`，并展示在索引中；团队常用它放 tags、owner、version。
 
-如果某个 skill 的 `SKILL.md` 格式错误，扫描时会跳过并记录 warning；catalog 里其他 skill
+如果某个 skill 的 `SKILL.md` 格式错误，扫描时会跳过并记录 warning 日志；catalog 里其他 skill
 仍会加载。
 
 ## 配置
@@ -73,7 +73,7 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
 - **多个目录**会合并成一个 catalog；skill 名重复时，第一次出现的胜出，后面的会记录日志并跳过。
 - **`usage_rules`** 会替换索引后的默认使用规则；传 `""` 可以完全省略规则。
 - **`filter`**（任意 `SkillFilter` 谓词）接收每个 skill 的 `SkillMetadata`
-  （`name`、`description`、`extra`），返回 `True` 表示保留。它是真边界，不是装饰：
+  （`name`、`description`、`extra`），返回 `True` 表示保留。它是真正的边界，不是装饰：
   被过滤掉的 skill 不会出现在索引中，也无法通过工具加载。
 
 skill 层失败会在 setup 时抛 `SkillsError`（带 `skill_name`/`path`/`hint`）；工具内部的失败会
@@ -104,7 +104,7 @@ agent = Agent(..., plugins=[Skills(catalog)])
 
 - **阻止路径穿越**：`read_skill_file` 会解析目标路径，并要求它仍在 skill 目录内；
   skill 名也会直接拒绝 `/`、`\` 和 `..`。
-- **加载内容被框定为数据**：`load_skill` 会用 BEGIN/END reference-material marker 包住正文
+- **加载内容会被框定为数据**：`load_skill` 会用 BEGIN/END reference-material marker 包住正文
   （并中和正文内伪造的 marker），所以 skill 文件里的 instructions 弱于你的 system prompt；
   输出会在 100k 字符处截断。
 
@@ -116,7 +116,7 @@ agent = Agent(..., plugins=[Skills(catalog)])
 - **description 是路由信号。** 模糊 description 会让模型永远不加载（或总是加载）这个 skill。
   像写工具 description 一样写它：任务化、具体、带触发词。
 - **索引在一次运行中静态。** 目录中新加的 skill 会在下一次运行出现
-  （或长生命周期 source 调用 `rescan()` 后出现），不会在当前对话中途冒出来。
+  （或长生命周期 source 调用 `rescan()` 后出现），不会在当前对话中途出现。
 
 ## 延伸阅读
 

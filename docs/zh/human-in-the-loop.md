@@ -1,8 +1,8 @@
 # 人工介入
 
-人工参与有两个方向，对应两个机制。**Approval**：*runner* 在带门禁工具调用前暂停，等某个人
-或策略做决定。**`ask_human`**：*模型* 向操作员提问，并等待答案。两者都按安全优先处理：
-无人回答的审批默认拒绝；关闭的 channel 会让工具调用出错。
+人工介入有两个方向，对应两套机制。**Approval**：*runner* 在带门禁的工具调用前暂停，等待人工
+或策略作出决定。**`ask_human`**：*模型* 向操作员提问，并等待答案。两者都按安全优先处理：
+无人回答的审批默认拒绝；关闭 channel 会让工具调用出错。
 
 ## 工具审批
 
@@ -24,8 +24,8 @@ async def discount(order_id: str, amount_cents: int) -> str:
     return "applied"
 ```
 
-当带门禁调用出现时，runner 会发出
-[`ApprovalRequired`](streaming.md#工具与审批) 并等待。三条决策路径按顺序咨询：
+当带门禁的调用出现时，runner 会发出
+[`ApprovalRequired`](streaming.md#工具与审批) 并等待。它会按顺序尝试三条决策路径：
 
 **1. 流式消费者**：在事件循环中直接处理：
 
@@ -39,7 +39,7 @@ async for ev in handle:
         ev.approve()          # 或 ev.reject()
 ```
 
-**2. agent 的 `approval_handler`**：服务端策略，在消费者没做决定时咨询：
+**2. agent 的 `approval_handler`**：服务端策略；消费者没有作出决定时，会继续调用它：
 
 ```python
 agent = Agent(
@@ -48,15 +48,15 @@ agent = Agent(
 )
 ```
 
-它可以返回 `True`/`"allow"`、`False`/`"deny"`，或 `"ask"`（交回给消费者/channel）。同步或异步都可以。
-handler 抛异常按拒绝处理。
+它可以返回 `True`/`"allow"`、`False`/`"deny"`，或 `"ask"`（交回消费者/channel 处理）。同步或异步都可以。
+handler 抛异常时按拒绝处理。
 
-**3. 默认：拒绝。** 如果本轮需要答案时还没人决定，调用会被拒绝。运行永远不会因为忘了点对话框而挂住。
+**3. 默认：拒绝。** 如果运行需要继续而仍无人决策，调用会被拒绝。运行永远不会因为忘了点对话框而卡住。
 模型会看到 `"Tool {name} was not approved."`，然后自行调整。
 
 ### 通过审批通道处理
 
-如果决策者不是 stream 消费者，比如一个 web endpoint、Slack bot 或另一个 task，可以通过 handle
+如果决策者不是 stream 消费者，比如 web endpoint、Slack bot 或另一个 task，可以通过 handle
 的 channel 按 call id 处理：
 
 ```python
@@ -81,7 +81,7 @@ handle.approvals.release(decision=False)   # 收尾：处理所有未决请求
 
 ## 询问人工
 
-反方向：模型需要只有人知道的信息。
+另一个方向是：模型需要只有人知道的信息。
 
 ```python
 from lovia import Agent, Runner
@@ -96,7 +96,7 @@ agent = Agent(
 )
 ```
 
-模型调用 `ask_human(question)`；这个调用会阻塞，直到操作员侧回答。惯用消费者是一个循环：
+模型调用 `ask_human(question)`；这个调用会阻塞，直到操作员侧回答。常见消费者是一个循环：
 
 ```python
 async for q in channel.questions():        # channel.close() 后结束
@@ -113,19 +113,19 @@ channel API：
 | `cancel(id, reason=...)` | 让某个调用以模型可见的 `ToolError` 失败 |
 | `close(reason=...)` | 取消所有未决问题，结束 `questions()`，让未来提问失败；幂等 |
 
-取消和关闭都会以工具错误结果暴露给模型，所以它能在没有答案的情况下继续，而不是让运行崩掉。
+取消和关闭都会以工具错误结果暴露给模型，所以它能在没有答案的情况下继续，而不是让运行中断。
 如果操作员可能离开，请配合每工具 timeout（`ask_human` 由工厂生成，可以用
 `dataclasses.replace` 按 `@tool(timeout=...)` 语义包装或重建）。
 
 Approval 问的是“我能做这件事吗？”答案是 yes/no。`ask_human` 问的是“我需要知道什么？”
-答案是自由文本。如果你发现自己在 approval 里编码数据，其实需要 `ask_human`；如果
-`ask_human` 回复永远是 yes/no，其实需要审批门禁。
+答案是自由文本。如果你发现自己在 approval 里传递业务数据，真正需要的往往是 `ask_human`；如果
+`ask_human` 的回答永远只有 yes/no，真正需要的往往是审批门禁。
 
 ## 容易踩的点
 
-- **决策必须来自事件循环线程。** 两种 channel 都在 resolve `asyncio` future；从其他线程调用时，
+- **决策必须来自事件循环线程。** 两种 channel 都会 resolve `asyncio` future；从其他线程调用时，
   先跳回事件循环：`loop.call_soon_threadsafe(channel.answer, qid, text)`。
-- **turn 已经继续后再 `ev.approve()` 不会生效**：该调用已经被默认拒绝逻辑拒绝。
+- **turn 已经继续后再 `ev.approve()` 不会生效**：该调用已经被默认拒绝逻辑处理掉。
   请在迭代交回控制权前决定，或通过审批 channel 处理。
 - **审批决策不会持久化。** [恢复](sessions-and-checkpoints.md)时，未完成的带门禁调用会重新 preflight，
   并再次请求审批。

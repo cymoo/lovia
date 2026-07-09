@@ -1,7 +1,7 @@
 # Provider 与模型
 
-lovia 保持模型供应商中立，同时不把适配层做厚：两个内置 provider 直接通过 `httpx` 对接
-OpenAI Chat Completions 和 Anthropic Messages；任何 OpenAI 兼容端点都走前者；
+lovia 保持模型供应商中立，同时不会把适配层做得很重：两个内置 provider 直接通过 `httpx` 对接
+OpenAI Chat Completions 和 Anthropic Messages；任何 OpenAI 兼容端点都使用 OpenAI provider；
 自定义供应商只需要实现一个 `Protocol`，不用继承一套基类。
 
 ```python
@@ -25,14 +25,14 @@ agent = Agent(
 | `anthropic:` | Anthropic Messages | `claude:` |
 | （无） | OpenAI Chat Completions | — |
 
-**裸名**（如 `"glm-5.2"`）会走 OpenAI 兼容 provider。这是
-`OPENAI_BASE_URL` 服务的推荐写法。有一个保护：裸名如果以 `claude` 开头会打 warning，
-因为这几乎总是漏了 `anthropic:` 前缀。lovia 故意没有默认模型；没有模型就运行 agent
+**不带前缀的模型名**（如 `"glm-5.2"`）会走 OpenAI 兼容 provider。这是
+`OPENAI_BASE_URL` 服务的推荐写法。有一个保护：模型名如果不带前缀且以 `claude` 开头，会记录 warning 日志，
+因为这几乎总是漏了 `anthropic:` 前缀。lovia 不设默认模型；没有模型就运行 agent
 会抛 `UserError`。
 
 为了避免在脚本里写死模型，`model_from_env()` 会依次读取 `LOVIA_MODEL`、
-`OPENAI_DEFAULT_MODEL`、`ANTHROPIC_DEFAULT_MODEL`；都没有时带设置提示抛错
-（`required=False` 时返回 `None`）。裸的 `ANTHROPIC_DEFAULT_MODEL` 会自动加上
+`OPENAI_DEFAULT_MODEL`、`ANTHROPIC_DEFAULT_MODEL`；都没有时，会带设置提示抛错
+（`required=False` 时返回 `None`）。不带前缀的 `ANTHROPIC_DEFAULT_MODEL` 会自动加上
 `anthropic:` 前缀。
 
 ## OpenAI provider
@@ -45,7 +45,7 @@ trust_env=None, replay_reasoning=None, official_api=None)`
 （默认 `https://api.openai.com/v1`）。
 
 **OpenAI 兼容端点**（DeepSeek、Ollama、vLLM、LM Studio 等）：把
-`OPENAI_BASE_URL` 指向服务，模型写裸名即可。适配器会按端点调整方言：官方 API 使用
+`OPENAI_BASE_URL` 指向服务，模型名不加前缀即可。适配器会按端点调整方言：官方 API 使用
 `max_completion_tokens` 和原生 `response_format` JSON schema；兼容端点使用旧的
 `max_tokens`，结构化输出默认走[prompt 路径](structured-output.md#schema-如何到达模型)，
 除非你传 `supports_json_schema=True`。只有官方 API 端点缺 API key 才算错误；无 key 的本地
@@ -55,8 +55,8 @@ trust_env=None, replay_reasoning=None, official_api=None)`
 **Reasoning 模型**（DeepSeek 风格的 `reasoning_content`）：thinking 会作为
 [`ReasoningDelta`](streaming.md#模型输出) 事件流出，并保存成 reasoning entry。下一次请求时，
 有些端点要求把这些 entry 回放回去（DeepSeek thinking 模型否则会返回 400），而官方 API
-拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开，官方 API 关，其他兼容端点开。
-`replay_reasoning=` 可以强制任一方向。只会回放由这个 provider 产出的 entry。
+拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开启，官方 API 关闭，其他兼容端点开启。
+`replay_reasoning=` 可以强制指定行为。只会回放由这个 provider 产出的 entry。
 
 ## Anthropic provider
 
@@ -80,9 +80,9 @@ settings = ModelSettings(
 )
 ```
 
-thinking 会作为 `ReasoningDelta` 流出；signature 和 `redacted_thinking` block 会完整
+thinking 会作为 `ReasoningDelta` 流出；signature 和 `redacted_thinking` block 会原样
 往返。回放也按端点处理：官方 API 会拒绝没有开启 thinking 的请求里携带 thinking
-block，所以那里会剥掉陈旧 block；而默认会思考的兼容端点（如 DeepSeek 的
+block，所以官方 API 会剥掉陈旧 block；而默认会思考的兼容端点（如 DeepSeek 的
 `/anthropic` 方言）会始终收到回放。
 
 **Anthropic 方言端点**：DeepSeek 和其他服务可能暴露 Anthropic Messages 方言；把
@@ -90,9 +90,9 @@ block，所以那里会剥掉陈旧 block；而默认会思考的兼容端点（
 
 ## Fallback 链
 
-`model=[...]` 按偏好顺序列出 provider。runner 遇到 provider 错误时沿链尝试：
+`model=[...]` 按偏好顺序列出 provider。runner 遇到 provider 错误时会沿链尝试：
 可重试失败会先耗尽当前 provider 的[重试策略](reliability.md#provider-重试)，再换到下一个
-provider。这里有个细节：混合链里，[结构化输出](structured-output.md) 只有在**链上每个**
+provider。这里有个细节需要注意：混合链里，[结构化输出](structured-output.md) 只有在**链上每个**
 provider 都支持原生接口时才使用原生 schema；否则中途 fallback 可能拒绝 schema 请求体。
 因此能力混合的链会统一走 prompt 路径。
 
@@ -110,10 +110,10 @@ agent = Agent(name="assistant", model=["anthropic:<model>", "glm-5.2"])
 | `top_p` | 原样 |
 | `max_tokens` | 官方 OpenAI 用 `max_completion_tokens`，其他端点用 `max_tokens` |
 | `stop` | `stop`（OpenAI）/ `stop_sequences`（Anthropic） |
-| `parallel_tool_calls` | OpenAI 原样；Anthropic 使用 `disable_parallel_tool_use` tool-choice，是 [`Tool.parallel`](tools.md#并发执行与屏障) 在请求侧的对应项 |
+| `parallel_tool_calls` | OpenAI 按原样发送；Anthropic 使用 `disable_parallel_tool_use` tool-choice，是 [`Tool.parallel`](tools.md#并发执行与屏障) 在请求侧的对应项 |
 | `provider_options` | 供应商键控的额外参数，见下 |
 
-**`provider_options`** 是供应商特有参数的扩展口，不需要等框架发版：它是一个按 vendor
+**`provider_options`** 是供应商特有参数的扩展入口，不需要等框架发版：它是一个按 vendor
 分组的 dict，内容会原样合并进请求体。
 
 ```python
@@ -129,13 +129,13 @@ ModelSettings(provider_options={
 
 ## 提示词缓存
 
-Provider 缓存能让长 agent 循环变得可负担。system prompt 和工具 schema 每轮都会重新发送，
+Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和工具 schema 每轮都会重新发送，
 而 lovia 的[压缩会保持 prompt 前缀字节稳定](context.md)，正是为了让它们持续命中缓存。
 
 - **OpenAI**：服务端自动缓存；适配器把 `prompt_tokens_details.cached_tokens` 暴露为
   `usage.cache_read_tokens`。
 - **Anthropic**：需要显式开启。按 agent 手动开启后，适配器会在**最后一个 system block
-  和最后一个工具定义**上放置 `cache_control: {"type": "ephemeral"}` 断点，也就是稳定前缀：
+  和最后一个工具定义**上放置 `cache_control: {"type": "ephemeral"}`，作为稳定前缀的断点：
 
   ```python
   settings = ModelSettings(provider_options={"anthropic": {"cache_system": True}})
@@ -150,9 +150,9 @@ Provider 缓存能让长 agent 循环变得可负担。system prompt 和工具 s
 ## 上下文窗口
 
 默认 [`Compaction`](context.md) 策略会向 provider 询问模型上下文窗口大小
-（每个适配器有查询表，并会规范化带日期的模型名）。未知模型返回 `None`，压缩会退回到
-reactive overflow 处理；也可以显式配置窗口。Anthropic 模型报告 200k：1M 变体在 beta
-header 后面，lovia 默认不发送这个 header；如果宣称 1M，会推迟主动压缩。
+（每个适配器都有查询表，并会规范化带日期的模型名）。未知模型返回 `None`，压缩会退回到
+reactive overflow 处理；也可以显式配置窗口。Anthropic 模型报告 200k；1M 变体需要 beta
+header 才能启用，而 lovia 默认不发送这个 header。如果你声明 1M，会推迟主动压缩。
 
 ## 自定义 provider
 
@@ -187,7 +187,7 @@ register_provider("mistral", lambda model: MistralProvider(model=model))
 agent = Agent(name="x", model="mistral:large-3")
 ```
 
-也可以通过包里的 `lovia.providers` entry-point group 发布；前缀会在首次使用时懒加载。
+也可以通过包的 `lovia.providers` entry-point group 发布；前缀会在首次使用时懒加载。
 entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不应在无提示时改变路由）；
 显式调用 `register_provider` 则可以。
 
@@ -207,7 +207,7 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 （`lovia[web]` 会带上）→ `certifi`。同一套解析也覆盖 [`http_fetch` 工具](built-in-tools.md#http-fetch)，
 所以一个内网 CA 设置可以修复所有出站请求。
 
-**错误分类**会交给[重试机制](reliability.md)：HTTP 408/429/5xx 以及传输层超时/断连是
+**错误分类**会进入[重试机制](reliability.md)：HTTP 408/429/5xx 以及传输层超时/断连是
 可重试的 `ProviderError`；上下文长度错误会按供应商识别（状态 + 消息关键词），并抛
 `ContextOverflowError`，触发 reactive compaction，而不是重试。
 
@@ -215,7 +215,7 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 
 - **Anthropic prompt caching 需要显式开启**（`cache_system: True`）。官方 API 上的长循环
   如果不开，每轮都会重新支付完整 prompt。
-- **`trust_env` 默认关闭**。这是刻意的，避免环境里的代理设置在无提示时改变路由。在需要代理的
+- **`trust_env` 默认关闭**。这是有意为之，避免环境里的代理设置在无提示时改变路由。在需要代理的
   环境里设置 `LOVIA_PROVIDER_TRUST_ENV=1`，否则不会使用代理。
 - **由字符串构造的 provider 归运行管理；你传入的实例归你管理。** 你手动构造并传入的
   `Provider` 不会被 runner 关闭；可以跨运行复用，也请自己关闭。

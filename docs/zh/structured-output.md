@@ -1,7 +1,7 @@
 # 结构化输出
 
-“请返回 JSON”这种 prompt 很不稳定：模型会加解释文字、套代码块、改字段名。
-`output_type` 用契约取代期待：运行的最终答案会被解析并校验成你声明的类型；如果失败，
+“请返回 JSON”这种 prompt 并不可靠：模型可能会加解释文字、套代码块，甚至改字段名。
+`output_type` 用契约代替期望：运行的最终答案会被解析并校验成你声明的类型；如果失败，
 会在有边界的修复尝试后明确报错。
 
 ```python
@@ -23,7 +23,7 @@ print(result.output.title)          # 类型化访问：result.output 是 Brief
 
 ## 接受哪些类型
 
-任何 lovia 能构建 JSON Schema 并能转换进去的类型都可以：
+任何 lovia 能构建 JSON Schema、并能转换为目标值的类型都可以：
 
 - Pydantic model（能力最强：约束、自定义 validator）
 - dataclass 和 `TypedDict`
@@ -35,7 +35,7 @@ print(result.output.title)          # 类型化访问：result.output 是 Brief
 
 ## 每次运行覆盖
 
-agent 上的 `output_type` 是默认值；某次运行可以覆盖：
+agent 上的 `output_type` 是默认值；某次运行也可以覆盖：
 
 ```python
 result = await Runner.run(agent, "返回一份发布 checklist。", output_type=list[str])
@@ -46,7 +46,7 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
 
 ## Schema 如何到达模型
 
-按 provider 自动选择两种策略：
+lovia 会按 provider 自动选择两种策略：
 
 - **原生接口**：支持结构化输出的 provider（OpenAI `response_format`、Anthropic
   output format）会在请求里收到 JSON Schema，并由服务端约束。
@@ -59,7 +59,7 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
 
 ## 修复
 
-最终消息解析或校验失败时，agent 的 `output_repair` 策略决定接下来怎么做：
+最终消息解析或校验失败时，agent 的 `output_repair` 策略决定下一步怎么做：
 
 - **`True`（默认）**：runner 追加一条纠正用的用户 prompt（包含校验错误），让模型再试
   一次。第二次失败才抛异常。
@@ -79,15 +79,15 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
   `build_prompt` 接收 `OutputValidationError` 和 1-based 尝试次数；返回 `None`
   表示停止重试。每次修复都会消耗一个正常 turn（计入 `max_turns` 和预算）。
 
-`OutputValidationError` 携带 `raw`（模型真实输出的片段）和 `output_type_name`，
-足以只靠日志调试长期不匹配的问题。
+`OutputValidationError` 携带 `raw`（模型实际输出的片段）和 `output_type_name`，
+通常足够你只靠日志定位长期不匹配的问题。
 
 ## 容易踩的点
 
 - **`output_type=str` 表示“没有契约”**，不是“校验它是字符串”。此时一切都是字符串，
   修复永远不会触发。
 - **schema 越复杂，模型越容易不稳定。** 深层嵌套 union 和开放式
-  `dict[str, Any]` 字段会在 parser 出问题前就降低模型遵从度。扁平、明确、带字段描述的
+  `dict[str, Any]` 字段会在解析器出问题前就降低模型遵从度。扁平、明确、带字段描述的
   model 最容易通过校验。
 - **空回复也会进入修复流程**（因为没有内容可解析）。如果你看到修复循环最后以
   `OutputValidationError` 结束，且 `raw` 为空，请检查 `finish_reason`，通常是

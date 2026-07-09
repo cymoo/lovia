@@ -1,7 +1,7 @@
 # 流式输出
 
 UI 不能等到 `RunResult` 出来才响应：文本生成时要立刻显示，工具开始调用时要更新状态，
-审批请求一阻塞就要弹出来。`Runner.stream` 会在这些过程中产出类型化事件；同一套事件
+审批请求一出现就要弹出来。`Runner.stream` 会在这些过程中产出类型化事件；同一套事件
 也驱动 [hooks](observability.md)，所以事件清单只需要学一次。
 
 ```python
@@ -28,7 +28,7 @@ result = await handle.result()
 
 ## 契约
 
-三个保证决定了消费者应该怎么写：
+下面三个保证决定了消费者应该怎么写：
 
 1. **迭代不会因为运行失败而抛异常。** 每个流都会以且仅以一个终止事件结束：
    `RunCompleted` 或 `RunFailed`，然后停止。错误只会在 `await handle.result()`
@@ -70,11 +70,11 @@ transcript 不受影响；它只由已完成轮次组装出来。
 | 事件 | 字段 | 何时出现 |
 | --- | --- | --- |
 | `ToolCallStarted` | `call` | 工具真正执行前 |
-| `ToolCallCompleted` | `call`, `result`, `is_error`, `output` | 调用到达终态 |
+| `ToolCallCompleted` | `call`, `result`, `is_error`, `output` | 调用结束 |
 | `ToolCallFailed` | `error`, `call` | 某个调用范围内的非终止错误（运行继续） |
 | `ApprovalRequired` | `call`, `.approve()` / `.reject()` | 一个带门禁的工具正在等待决策 |
 
-UI 最容易写错的细节：
+UI 最容易写错的地方：
 
 - 调用可能在执行前被拒绝：未知工具、参数格式不对、审批被拒。这时会发出
   `ToolCallCompleted(is_error=True)`，但**不会**先发 `ToolCallStarted`。不要假设成对出现。
@@ -86,8 +86,8 @@ UI 最容易写错的细节：
   `ToolCallFailed`。
 - 处理 `ApprovalRequired` 时，可以在循环继续交还控制权给 runner 前调用
   `ev.approve()` 或 `ev.reject()`；也可以稍后通过 `handle.approvals` 处理。
-  当本轮需要答案而请求仍未处理时，默认**拒绝**，所以没处理审批的 UI 不会挂住运行。
-  同一轮里其他调用会在流停在审批事件上时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
+  当本轮需要答案而请求仍未处理时，默认会**拒绝**，所以没处理审批的 UI 不会卡住运行。
+  同一轮里其他调用会在事件流停在审批事件处时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
 
 ### 转移与上下文
 
@@ -124,12 +124,12 @@ async for ev in handle:
 ## 容易踩的点
 
 - **一个 handle 只能迭代一次。** 第二个 `async for` 会抛 `RuntimeError`；如果多个
-  消费者都需要事件，请在下游自己 fan out。
+  消费者都需要事件，请在下游自行分发。
 - **放弃的 stream 不是已完成运行。** 中途 `break` 会停止驱动运行；之后
   `handle.result()` 会报告被放弃，而不是返回结果。需要结果时，请迭代到终止事件，
   或直接 `await handle`。
 - **在 `MessageCompleted` 前把 delta 当临时内容渲染。** 一次 `OutputDiscarded`
-  就能让天真的 UI 把同一段话显示两遍。
+  就能让处理不严谨的 UI 把同一段话显示两遍。
 
 ## 延伸阅读
 

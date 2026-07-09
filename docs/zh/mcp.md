@@ -1,8 +1,8 @@
 # MCP
 
 [Model Context Protocol](https://modelcontextprotocol.io) 服务器可以暴露 agent 可调用的
-工具，比如文件系统、浏览器、数据库，而不需要你手写适配器。lovia 的 `MCP` 插件会连接到
-服务器，把它们的工具转换成普通 [`Tool`](tools.md)，并按运行管理连接生命周期。
+工具，比如文件系统、浏览器、数据库，而不需要你手写适配器。lovia 的 `MCP` 插件会连接服务器，
+把这些工具转换成普通 [`Tool`](tools.md)，并按运行边界管理连接生命周期。
 
 ```bash
 pip install "lovia[mcp]"
@@ -41,7 +41,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 | `include_tools` / `exclude_tools` | `None` | 原始工具名 allowlist / denylist |
 | `needs_approval` | `False` | bool 或谓词；让这个服务器的每个工具都走标准[审批流程](human-in-the-loop.md) |
 | `retries` / `timeout` / `max_output_chars` / `result_renderer` | `None` | 应用于每个转换工具的工具级策略（见[工具](tools.md)） |
-| `auto_reconnect` | `True` | 死连接自动重开，并重试调用一次 |
+| `auto_reconnect` | `True` | 连接失效后自动重开，并重试调用一次 |
 | `close_after_run` | `True` | 运行结束时关闭连接 |
 
 `MCP(a, b, ...)` 接受任意数量的服务器；前缀能避免工具名冲突（冲突会像其他重复工具名一样
@@ -49,7 +49,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 
 ## 连接生命周期
 
-**按运行（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在
+**按运行打开（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在
 运行结束时关闭。这种方式无状态、稳健，代价是每次运行都要付出子进程/握手成本。
 
 **持久连接。** 如果很多运行都会访问同一服务器，可以自己打开 session，再把已打开的连接
@@ -65,7 +65,7 @@ async with server.session() as conn:      # 只打开一次
 ```
 
 运行不会关闭你自己打开的连接（已打开的 `MCPConnection` 的 `close_after_run` 为 `False`）；
-它的生命周期就是 `async with` block。一个持久连接用于**顺序**运行；单个 MCP session 不支持
+它的生命周期就是 `async with` block。一个持久连接适合**顺序**运行；单个 MCP session 不支持
 并发运行。并发 worker 请各自拿自己的连接。
 
 ## MCP 工具如何表现
@@ -78,7 +78,7 @@ async with server.session() as conn:      # 只打开一次
   异常一样结束该调用。
 - 工具**结果**可以携带资源：文本内联；图片/音频变成带大小的 placeholder（不会放原始
   base64）；资源链接变成 `[resource link: uri]` 行。
-- **范围刻意只限工具。** MCP prompts、资源浏览、sampling、OAuth 和 subscriptions 都不是目标；
+- **范围有意只限工具。** MCP prompts、资源浏览、sampling、OAuth 和 subscriptions 都不是目标；
   这个插件只做一件事。
 
 ## 容易踩的点

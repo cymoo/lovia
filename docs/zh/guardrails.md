@@ -30,7 +30,7 @@ agent = Agent(
 
 guardrail 是任意 callable，同步或异步都可以：
 
-- **输入**：以 `fn(messages, ctx)` 调用，`messages` 是完整初始 transcript 的 chat 格式 view
+- **输入**：以 `fn(messages, ctx)` 调用，`messages` 是完整初始 transcript 的 chat 格式视图
   （system prompt、session 历史、本次输入）。只在第一次模型调用前运行一次。
 - **输出**：以 `fn(output, ctx)` 调用，`output` 是运行的最终输出。它在解析/校验后运行，所以如果
   使用类型化 [`output_type`](structured-output.md)，你检查的是校验后的对象，不是原始文本。
@@ -42,17 +42,17 @@ guardrail 是任意 callable，同步或异步都可以：
   `True` 产生通用原因。`None`、`False`、`""` 表示通过。
 
 触发护栏会**结束运行**：`Runner.run` 抛 `GuardrailTripped`；stream 以携带该错误的 `RunFailed`
-结束。没有自动重试。护栏是边界，不是提醒；如果想“再试一次”，请捕获异常后重跑，或者在开发期把规则
+结束。这里没有自动重试。护栏是边界，不是提醒；如果想“再试一次”，请捕获异常后重跑，或者在开发期把规则
 写成 [eval check](eval.md)。
 
 两种护栏都会收到实时 `ctx`（[`RunContext`](concepts.md#runcontext唯一的运行句柄)），所以检查可以感知
 tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）。护栏按列表顺序运行，
-第一个违规胜出。[插件](plugins.md)也可以贡献护栏；它们在同样的检查点运行，和 agent 自己的护栏合并，
+以第一个违规为准。[插件](plugins.md)也可以贡献护栏；它们在同样的检查点运行，和 agent 自己的护栏合并，
 中止仍由循环负责，而不是插件负责。
 
-## 配方
+## 常见写法
 
-**用专门模型筛查**：guardrail 是 async，所以可以调用自己的分类器：
+**用专门模型筛查**：guardrail 可以是 async，因此可以调用自己的分类器：
 
 ```python
 screen = Agent(name="screen", model="glm-5.2", output_type=bool,

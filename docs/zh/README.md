@@ -1,6 +1,6 @@
 # lovia 中文文档
 
-如果你刚开始看 lovia，不用先把整套文档读完。先跑通一个 agent，再按你要做的事查对应页面。
+刚接触 lovia 时，不必先读完整套文档。先跑通一个 agent，再按手头任务跳到对应章节即可。
 
 ## 从这里开始
 
@@ -12,13 +12,13 @@
 
 | 我想做什么 | 看这里 |
 | --- | --- |
-| 定义 agent、写 instructions、派生变体 | [Agent](agents.md) |
+| 定义 agent、编写 instructions、派生变体 | [Agent](agents.md) |
 | 运行 agent，处理输入、结果和错误 | [运行 agent](running.md) |
 | 做流式 UI 或消费运行事件 | [流式输出](streaming.md) |
 | 让模型调用 Python 函数 | [工具](tools.md) |
 | 使用 HTTP、搜索、时间等内置工具 | [内置工具](built-in-tools.md) |
 | 让最终答案变成 Pydantic 对象或 JSON | [结构化输出](structured-output.md) |
-| 配模型、OpenAI 兼容端点、fallback、自定义 provider | [Provider 与模型](providers.md) |
+| 配置模型、OpenAI 兼容端点、fallback、自定义 provider | [Provider 与模型](providers.md) |
 | 组合多个 agent，做 handoff 或 agent-as-tool | [多 Agent](multi-agent.md) |
 | 打包可复用能力 | [插件](plugins.md) |
 | 加载团队知识、runbook、风格指南 | [技能](skills.md) |
@@ -38,8 +38,8 @@
 
 ## 内部机制
 
-[架构笔记](../architecture.md)记录了框架本身的构造方式：模块地图、runner 内部、
-关键不变量。它主要写给贡献者；当你想理解某个设计为什么这样做时，也值得一读。
+[架构笔记](../architecture.md)记录了框架本身的构造方式：模块地图、runner 内部机制和
+关键不变量。它主要面向贡献者；如果你想理解某个设计为什么这样取舍，也值得一读。
 
 ---
 

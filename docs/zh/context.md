@@ -1,6 +1,6 @@
 # 上下文管理
 
-长对话会超过上下文窗口。很多框架的做法是改写历史；这样一来，记录里就看不出模型当时到底
+长对话会超过上下文窗口。很多框架会改写历史；这样一来，记录里就看不出模型当时到底
 看到了什么。lovia 的上下文策略是**只改 view**：transcript（以及 session）保留全部内容；
 只有每次发给 provider 的 view 会缩小。“模型忘了”和“记录丢了”仍然是两个不同问题。
 
@@ -18,8 +18,8 @@ agent = Agent(
 )
 ```
 
-上下文策略是 agent 的**应对策略**：设置一次，每次运行继承；也可以用
-`Runner.run(..., context_policy=...)` 覆盖某次调用。默认已经是 `Compaction()`；只有默认不合适时
+上下文策略是 agent 的**应对策略**：设置一次，每次运行都会继承；也可以用
+`Runner.run(..., context_policy=...)` 覆盖某次调用。默认就是 `Compaction()`；只有默认不合适时
 才需要配置。用 `NoopContextPolicy` 可以关闭：
 
 ```python
@@ -30,15 +30,15 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 
 ## Compaction 做什么
 
-每轮模型调用前，策略会按窗口估算 transcript 大小。在有压力时，它按**便宜优先**的三阶段渲染
-一个更小的 view：
+每轮模型调用前，策略会按窗口估算 transcript 大小。接近上限时，它会按**低成本优先**的三阶段渲染
+出一个更小的 view：
 
 1. **转存巨大工具结果**（`OffloadToolResults`，≥4,000 字符）：在 view 中替换为 400 字符
-   预览标记；如果配置了[结果存储](#结果存储)，完整输出会归档进去。
+   预览标记；如果配置了[结果存储](#结果存储)，完整输出会归档。
 2. **清理较旧工具结果**（`ClearToolResults`）：替换成短标记，同时保留最新几个原文。
 3. **总结旧历史**（`SummarizeHistory`）：用增量 LLM summary 替换最早的一段历史。summary
    使用结构化章节（session intent、current state、key facts、artifacts、constraints、
-   next steps），而不是随意散文。
+   next steps），不会写成随意散文。
 
 这些标记会保留配对关系（`call_id`、错误标记），并告诉模型如何取回内容：
 
@@ -47,10 +47,10 @@ agent = Agent(..., context_policy=NoopContextPolicy())
  Call recall_tool_result("call_42") to retrieve the full output.]
 ```
 
-`recall_tool_result` 由策略**自动提供**，不需要手动接线。它先读结果存储，再回退到 transcript，
+`recall_tool_result` 由策略**自动提供**，不需要手动接入。它先读结果存储，再回退到 transcript，
 所以恢复内容永远不会重新执行有副作用的工具。
 
-三个保证塑造了这个设计：
+这个设计建立在三个保证上：
 
 - **决策可延续，前缀稳定。** 各阶段会记录决策（已清理 id、转存记录、正在维护的 summary）；
   每轮 view 都从这些决策重新渲染。决策是单调的，所以渲染出的 prompt 前缀在各轮之间保持字节稳定，
@@ -62,8 +62,8 @@ agent = Agent(..., context_policy=NoopContextPolicy())
   渲染更激进的 view（尾部收紧到 10%，阈值降低，目标约为可用窗口 25%）并重试本轮。只有重建的
   view 明显更小时才重试，否则错误会向外暴露。
 
-每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带
-`CompactionNotice`（原因、压缩前后 token、人类可读 detail）。Web UI 会实时渲染它，并在重新加载时
+每次压缩都会发出 [`ContextCompacted` 事件](streaming.md#转移与上下文)，其中带有
+`CompactionNotice`（原因、压缩前后 token、便于阅读的 detail）。Web UI 会实时渲染它，并在重新加载时
 回放最后一个 notice。
 
 ## 配置
@@ -83,12 +83,12 @@ Compaction(
 ```
 
 - **水位**可以是可用窗口比例（`0.75`），也可以是绝对 token 数（`150_000`）。“可用” =
-  window − `reserve_output_tokens`。低于 `compact_at` 时不做事；越界后会把 view 缩到
+  window − `reserve_output_tokens`。低于 `compact_at` 时不处理；越界后会把 view 缩到
   `compact_to`（有滞后，避免策略在边界抖动）。
 - **`context_window=None`** 会询问 provider（适配器会按模型[报告窗口](providers.md#上下文窗口)）。
   窗口未知时，主动压缩跳过，只剩 reactive overflow 路径。对适配器不认识的模型，请显式设置窗口。
 - **token 计数**是校准过的估算：chars/4 启发式（图片/文件有固定成本），并用 provider 返回的
-  **真实** input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
+  **实际** input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
 
 ## 结果存储
 
@@ -111,12 +111,12 @@ recall 会回退到 transcript；但如果之后做
 可延续的决策（已清理 id、转存预览、summary + 覆盖范围、校准比例）会序列化进运行的
 checkpoint，并在运行结束时写入 session segment 的 `meta`。所以下一次同一 session 的运行会沿用
 之前的决策，而不是重新推导；[恢复运行](sessions-and-checkpoints.md)也会从压缩过的位置精确继续。
-被总结前缀的结构指纹可以检测被离线改写的历史（比如 trim），并重置 summary，同时保留 id-keyed
+已总结前缀的结构指纹可以检测被离线改写的历史（比如 trim），并重置 summary，同时保留 id-keyed
 决策。
 
 ## 自定义策略和阶段
 
-两层扩展深度。**自定义阶段**保留 Compaction 的机制（水位、尾部、状态、marker），只替换“压缩什么”：
+扩展有两层深度。**自定义阶段**保留 Compaction 的机制（水位、尾部、状态、marker），只替换“压缩什么”：
 
 ```python
 class DropOldImages:                      # implements Stage
@@ -136,14 +136,14 @@ Compaction 自己用到的部件也导出了，方便复用：`render_view`、`c
 `offload_marker` / `summary_entry` builder、`transcript_to_text`、`OffloadRecord` /
 `SummaryState`，以及 summarizer 的 `REQUIRED_SECTIONS` / `SUMMARY_SYSTEM_PROMPT` /
 `SUMMARY_WRAPPER` 模板。要定制 summary，请配置 `LLMSummarizer(prompt=...,
-required_sections=...)`，不要 fork 它。
+required_sections=...)`，不要 fork 这段实现。
 
 **自定义 `ContextPolicy`** 则替换全部机制：一个方法
 `async compact(req: CompactionRequest) -> ContextResult`。request 携带只读 entries、provider、
 `last_input_tokens`、`overflow` flag，以及 runner 会帮你在 checkpoint 中往返保存的 `scratch` dict。
 返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
 `lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
-任何会丢内容的策略都可以复用。`lovia/context/policy.py` 一屏就能读完。
+任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 
 ## 容易踩的点
 
@@ -151,7 +151,7 @@ required_sections=...)`，不要 fork 它。
   [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
 - **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
   触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
-  但预算敏感部署要知道：第 N 轮里可能藏着一次 LLM 调用。
+  预算敏感的部署需要注意：第 N 轮里可能包含一次额外的 LLM 调用。
 - **未知窗口意味着没有主动压缩。** OpenAI 兼容端点上的自定义模型通常不报告窗口；不设置
   `context_window=...` 就只能依赖 reactive 路径。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于

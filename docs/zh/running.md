@@ -1,18 +1,17 @@
 # 运行 agent
 
 `Runner` 把一个 `Agent` 和一份输入变成一次运行。它本身无状态；所有单次运行状态
-都存在它启动的循环里。它只暴露三个入口，区别仅在于你怎样消费这次运行。
+都存在它启动的循环里。它只暴露三个入口，区别只在于你如何消费这次运行。
 
 ```python
 from lovia import Runner
 
 result = await Runner.run(agent, "写一段发布说明。")      # 跑到完成
 result = Runner.run_sync(agent, "总结这个文件。")         # 脚本 / REPL
-handle = Runner.stream(agent, "解释上下文压缩。")         # 边发生边消费事件
+handle = Runner.stream(agent, "解释上下文压缩。")         # 边运行边消费事件
 ```
 
-`agent.run(...)` / `agent.run_sync(...)` / `agent.stream(...)` 是同一组调用，
-只是写成实例方法。
+`agent.run(...)` / `agent.run_sync(...)` / `agent.stream(...)` 是同一组调用的实例方法形式。
 
 ## 三个入口
 
@@ -20,7 +19,7 @@ handle = Runner.stream(agent, "解释上下文压缩。")         # 边发生边
 失败会抛异常（`GuardrailTripped`、`BudgetExceeded`、`ProviderError` 等，见
 [错误清单](concepts.md#出错时会看到什么)）。
 
-**`Runner.run_sync(...)`**：同样的事，但用 `asyncio.run()` 包起来，适合尚未使用
+**`Runner.run_sync(...)`**：做同样的事，但用 `asyncio.run()` 包起来，适合尚未使用
 async 的代码。如果在已经运行的事件循环里调用，会抛 `UserError`，hint 里会告诉你
 改用 `await Runner.run(...)`。
 
@@ -63,12 +62,12 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 | `tracer` | `None` | 本次运行的 tracing（见[可观测性](observability.md#tracing)） |
 
 `retry` 和 `context_policy` 是两个**应对策略**覆盖项。它们默认使用 agent 配置，而且
-**初始** agent 的应对策略会贯穿整个运行，handoff 后也一样。其余选项是**限制和接线**，
-刻意没有 agent 侧对应项。
+**初始** agent 的应对策略会贯穿整个运行，handoff 后也一样。其余选项是**限制和外部接入点**，
+agent 侧没有对应项。
 
 ## 输入
 
-`input` 可以是字符串（一条用户消息），也可以是 `Message` 列表，用于多消息开场：
+`input` 可以是字符串（一条用户消息），也可以是 `Message` 列表，用来以多条消息开始：
 
 ```python
 from lovia import Runner, system, user
@@ -104,7 +103,7 @@ result = await Runner.run(
 ```
 
 （`user(...)` 也接受普通字符串或单个 part；但 part **列表**必须包含类型化 part，
-列表里的裸 `str` 不会被自动转换。）
+列表里的普通 `str` 不会被自动转换。）
 
 - `ImagePart(url=...)` 或 `ImagePart(data=..., mime_type=...)`：`url` / `data`
   必须且只能选一个；base64 `data` 需要 `mime_type`。`ImagePart.from_path()`
@@ -117,14 +116,14 @@ result = await Runner.run(
 | `RunResult` 字段 | 含义 |
 | --- | --- |
 | `output` | 最终答案：`str`，或本次运行 `output_type` 校验后的实例 |
-| `entries` | **本次运行自己的** transcript：本次输入及其产生的所有内容，跨 handoff 也包含 |
+| `entries` | **本次运行自己的** transcript：本次输入及其产生的所有内容，跨 handoff 也会包含 |
 | `messages` | 从 `entries` 派生出的 chat 格式视图（有损） |
 | `final_agent` | 产出最终答案的 agent；handoff 后可能和初始 agent 不同 |
 | `usage` | 累计 token：`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_write_tokens`、`total_tokens`；agent-as-tool 子运行也计入 |
 | `turns` | 本次运行用了多少个模型轮次 |
 | `finish_reason` | 最后一轮 provider 报告的结束原因；检查 `"stop"` 和 `"length"` 可发现被 `max_tokens` 截断的答案 |
 
-`entries` 刻意不包含 system prompt 和之前的 session 历史，因此无论运行是刚刚完成，
+`entries` 有意不包含 system prompt 和之前的 session 历史，因此无论运行是刚刚完成，
 还是从 checkpoint 重建出来，它都一致。要看完整对话，可以在 hook 里读取
 `ctx.entries`，或运行结束后调用 `session.load()`。
 
@@ -134,10 +133,10 @@ result = await Runner.run(
   “整段对话”的代码会不小心丢掉之前的历史；请用 session。
 - **`finish_reason` 可能是 `None`**：provider 没报时如此；从已完成 checkpoint
   重放结果时也如此，因为 snapshot 不持久化它。
-- **模型回复既没有内容也没有工具调用时，运行会完成**，输出为空字符串（会记录 warning）。
-  这几乎总是 provider 抖动或 `max_tokens` 截断；相信空答案前先检查 `finish_reason`。
+- **模型回复既没有内容也没有工具调用时，运行会完成**，输出为空字符串（会记录 warning 日志）。
+  这几乎总是 provider 抖动或 `max_tokens` 截断；在相信空答案之前，先检查 `finish_reason`。
 - **`run_sync` 拥有事件循环**：它拒绝在现有事件循环里运行。notebook 里如果已经有
-  已有正在运行的事件循环，请用 `await Runner.run(...)`。
+  正在运行的事件循环，请用 `await Runner.run(...)`。
 
 ## 延伸阅读
 

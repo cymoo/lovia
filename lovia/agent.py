@@ -80,8 +80,8 @@ class Agent(Generic[TContext]):
 
     * **Posture vs limits.** Posture — how the agent behaves when
       infrastructure hiccups (``retry``, ``default_tool_retries`` /
-      ``default_tool_timeout``, the ``model`` fallback chain,
-      ``context_policy``) — lives here and is inherited by every run. Limits —
+      ``default_tool_timeout``, ``context_policy``) — lives here and is
+      inherited by every run. Limits —
       how much one request may spend (``max_turns``, ``budget``,
       cancellation) — are :meth:`Runner.run` arguments.
     * **Defaults are literal.** ``None`` never hides a constant: it means
@@ -98,12 +98,13 @@ class Agent(Generic[TContext]):
     one, sync or async. Additional dynamic fragments can be registered with
     the :meth:`instruction` decorator and are appended at render time."""
 
-    model: "str | Provider | list[str | Provider] | None" = None
-    """A ``"vendor:model"`` string (e.g. ``"openai:gpt-5.5"``), a pre-built
-    :class:`Provider` instance, or a list of either — the runner falls through
-    the list on repeated provider errors. Required before the agent can run:
-    there is deliberately no default vendor, so an unconfigured agent raises
-    :class:`UserError` instead of silently calling one. See also
+    model: "str | Provider | None" = None
+    """A ``"vendor:model"`` string (e.g. ``"openai:gpt-5.5"``) or a pre-built
+    :class:`Provider` instance. Required before the agent can run: there is
+    deliberately no default vendor, so an unconfigured agent raises
+    :class:`UserError` instead of silently calling one. For multi-vendor
+    failover point ``base_url`` at a routing gateway (LiteLLM, OpenRouter);
+    transient errors are handled by ``retry``. See also
     :func:`lovia.model_from_env`."""
 
     tools: list[Tool] = field(default_factory=list)
@@ -205,30 +206,24 @@ class Agent(Generic[TContext]):
         default_factory=tuple, repr=False, compare=False
     )
 
-    def resolve_providers(self) -> list[Provider]:
-        """Return the ordered fallback chain of providers for this agent.
-
-        When ``model`` is a single value the chain has length 1. When it is a
-        list, each entry is resolved and the runner tries them in order.
-        """
+    def resolve_provider(self) -> Provider:
+        """Resolve ``model`` into a :class:`Provider` instance."""
         if self.model is None:
             raise UserError(
                 f"Agent {self.name!r} has no model configured",
                 hint='pass model="vendor:model" (e.g. "openai:gpt-5.5") '
                 "or a Provider instance",
             )
-        models: list[str | Provider]
         if isinstance(self.model, list):
-            models = list(self.model)
-        else:
-            models = [self.model]
-        if not models:
-            raise UserError(f"Agent {self.name!r} model list must not be empty")
-        return [provider_from_string(m) if isinstance(m, str) else m for m in models]
-
-    def resolve_provider(self) -> Provider:
-        """Return the primary provider (first entry of the fallback chain)."""
-        return self.resolve_providers()[0]
+            raise UserError(
+                f"Agent {self.name!r}: model no longer accepts a list",
+                hint="pass a single model; for multi-vendor failover point "
+                "base_url at a routing gateway (LiteLLM, OpenRouter), and rely "
+                "on retry=RetryPolicy(...) for transient errors",
+            )
+        if isinstance(self.model, str):
+            return provider_from_string(self.model)
+        return self.model
 
     # ------------------------------------------------------------------ #
     # Dynamic system-prompt fragments

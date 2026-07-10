@@ -5,9 +5,8 @@ dropped stream) and runaway behavior (a tool-call loop, a budget blowout).
 lovia separates the knobs accordingly, with one placement rule:
 
 - **Posture** — how the agent behaves when infrastructure misbehaves —
-  lives on the `Agent` and every run inherits it: `retry`, the `model=[...]`
-  fallback chain, `default_tool_retries` / `default_tool_timeout`,
-  `context_policy`.
+  lives on the `Agent` and every run inherits it: `retry`,
+  `default_tool_retries` / `default_tool_timeout`, `context_policy`.
 - **Limits** — how much one request may spend — are `Runner.run` arguments
   with no agent-side counterpart: `max_turns`, `budget`, `cancel_token`.
 
@@ -58,8 +57,10 @@ rendered — and re-streams from scratch; the transcript is assembled only
 from completed turns, so nothing corrupts. With it off, mid-stream errors
 propagate immediately.
 
-**Fallback chains** compose with retries per provider: `model=[a, b]`
-exhausts `a`'s attempts, then moves to `b` with a fresh attempt count.
+**Vendor-level failover** is deliberately not an agent-loop feature: point
+`base_url` at a routing gateway (LiteLLM, OpenRouter, ...) and let it fail
+over server-side, or re-run the failed request against the same session
+with a different model.
 
 Tool-level retries are separate and off by default — per-tool
 `@tool(retries=..., timeout=...)` or agent-wide `default_tool_retries` /

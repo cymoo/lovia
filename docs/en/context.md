@@ -201,9 +201,6 @@ content. `lovia/context/policy.py` is a one-screen read.
   `context_window=...` up front where you know it. Ollama never overflows
   at all (it [truncates silently](providers.md#sharp-edges)), so there it
   is not optional.
-- **A fallback chain is sized against its primary.** `Agent(model=[a, b])`
-  budgets every prompt against `a`'s window, even on turns `b` served. If `b`
-  is smaller, its first long prompt falls to the reactive overflow path.
 - **Don't share one `Compaction` across agents with different windows** —
   state is per run/session, but the configured window is the instance's.
   Cloning agents shares the policy instance; give variants their own.

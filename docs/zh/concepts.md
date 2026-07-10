@@ -125,8 +125,7 @@ lovia 把这两个角色拆开：
 放置规则很简单：
 
 - **应对策略**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，每次运行都会继承：
-  provider `retry`、`model=[...]` fallback 链、`default_tool_retries` /
-  `default_tool_timeout`、`context_policy`。
+  provider `retry`、`default_tool_retries` / `default_tool_timeout`、`context_policy`。
 - **限制**：某个请求最多能花多少，是 `Runner.run` 的参数，没有 agent 侧对应项：
   `max_turns`、`budget`、`cancel_token`。
 

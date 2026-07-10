@@ -22,7 +22,7 @@ agent = Agent(
 | --- | --- | --- |
 | `name` | 必填 | 可读名称；也用于生成 handoff 工具名（`transfer_to_<name>`） |
 | `instructions` | `""` | 基础 system prompt；可以是字符串，也可以是接收本次运行 `RunContext` 的 callable |
-| `model` | `None` | `"vendor:model"` 字符串、`Provider` 实例，或用于 [fallback 链](providers.md#fallback-链)的列表；没有模型时，运行会抛 `UserError` |
+| `model` | `None` | `"vendor:model"` 字符串或 `Provider` 实例；没有模型时，运行会抛 `UserError` |
 | `tools` | `[]` | 模型可以调用的[工具](tools.md) |
 | `output_type` | `str` | 类型化最终输出；见[结构化输出](structured-output.md) |
 | `output_repair` | `True` | 输出解析失败时修复一次；`False` 表示快速失败；也可以用 `OutputRepairStrategy` 自定义 |

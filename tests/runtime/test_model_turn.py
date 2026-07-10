@@ -15,7 +15,7 @@ from lovia.messages import Usage
 from lovia.runtime.model_turn import (
     _ToolCallSlot,
     assemble_turn_entries,
-    stream_with_fallback,
+    stream_with_retries,
 )
 from lovia.transcript import (
     AssistantTextEntry,
@@ -151,7 +151,7 @@ async def test_fragmented_tool_call_deltas_reassemble() -> None:
     assert result.output == "done"
 
 
-# ----------------------------- stream_with_fallback -------------------------
+# ----------------------------- stream_with_retries --------------------------
 
 
 class _Boom:
@@ -163,23 +163,12 @@ class _Boom:
         yield  # pragma: no cover - unreachable, makes this an async generator
 
 
-async def test_fallback_exhausted_raises_last_error() -> None:
-    providers = [_Boom("p1"), _Boom("p2")]
+async def test_provider_error_propagates_without_retry_policy() -> None:
     with pytest.raises(ConnectionError):
-        async for _ in stream_with_fallback(
-            providers, [], tools=None, response_format=None, settings=None, retry=None
+        async for _ in stream_with_retries(
+            _Boom("p1"), [], tools=None, response_format=None, settings=None, retry=None
         ):
             pass
-
-
-async def test_fallback_with_no_providers_yields_nothing() -> None:
-    out = [
-        d
-        async for d in stream_with_fallback(
-            [], [], tools=None, response_format=None, settings=None, retry=None
-        )
-    ]
-    assert out == []
 
 
 async def test_cancel_token_stops_retry_backoff() -> None:
@@ -207,8 +196,8 @@ async def test_cancel_token_stops_retry_backoff() -> None:
 
     retry = RetryPolicy(max_attempts=5, sleep=cancelling_sleep)
     with pytest.raises(RunCancelled):
-        async for _ in stream_with_fallback(
-            [_Retryable()],
+        async for _ in stream_with_retries(
+            _Retryable(),
             [],
             tools=None,
             response_format=None,
@@ -257,8 +246,8 @@ async def test_retryable_truncation_resets_and_recovers() -> None:
     retry = RetryPolicy(max_attempts=2, sleep=_no_sleep)
     deltas = [
         d
-        async for d in stream_with_fallback(
-            [_TruncateOnce()],
+        async for d in stream_with_retries(
+            _TruncateOnce(),
             [],
             tools=None,
             response_format=None,

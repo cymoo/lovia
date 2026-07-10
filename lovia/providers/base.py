@@ -62,8 +62,9 @@ class ModelSettings:
     provider_options: dict[str, JsonObject] = field(default_factory=dict)
     """Vendor-only knobs, keyed by adapter name (``"openai"``,
     ``"anthropic"``, ...). Keys pass through to that adapter's wire payload —
-    a fallback chain never leaks one vendor's knobs into another's request.
-    A ``None`` value strips an adapter default the endpoint rejects."""
+    one settings object can serve agents on different vendors without leaking
+    one vendor's knobs into another's request. A ``None`` value strips an
+    adapter default the endpoint rejects."""
 
 
 def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:

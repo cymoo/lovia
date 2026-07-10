@@ -24,7 +24,7 @@ off, inherit, or auto-created.
 | --- | --- | --- |
 | `name` | required | human-readable name; also derives handoff tool names (`transfer_to_<name>`) |
 | `instructions` | `""` | base system prompt: a string, or a callable receiving the run's `RunContext` |
-| `model` | `None` | `"vendor:model"` string, a `Provider` instance, or a list for a [fallback chain](providers.md#fallback-chains); running without one raises `UserError` |
+| `model` | `None` | `"vendor:model"` string or a `Provider` instance; running without one raises `UserError` |
 | `tools` | `[]` | the [tools](tools.md) the model may call |
 | `output_type` | `str` | typed final output; see [Structured output](structured-output.md) |
 | `output_repair` | `True` | one repair prompt on a failed output parse; `False` fails fast; an `OutputRepairStrategy` customizes it |

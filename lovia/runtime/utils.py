@@ -32,25 +32,10 @@ def truncate_repr(value: object, max_len: int = _LOG_REPR_MAX) -> str:
 
 
 def agent_model_label(agent: Agent[Any]) -> str:
-    """Best-effort one-line description of the agent's model(s) for logging."""
+    """Best-effort one-line description of the agent's model for logging."""
     model = agent.model
     if isinstance(model, str):
         return model
-    if isinstance(model, list):
-        labels: list[str] = []
-        for model_ref in model:
-            if isinstance(model_ref, str):
-                # A spec string is already the label; the getattr chain below
-                # would fall through to repr() and quote it ("'openai:...'").
-                labels.append(model_ref)
-                continue
-            labels.append(
-                str(
-                    getattr(model_ref, "model", None)
-                    or getattr(model_ref, "name", repr(model_ref))
-                )
-            )
-        return ",".join(labels)
     return getattr(model, "model", None) or getattr(model, "name", None) or repr(model)
 
 
@@ -65,13 +50,6 @@ def input_preview(user_input: str | list[Message]) -> str:
     return ""
 
 
-def supports_json_schema(providers: list[Provider]) -> bool:
-    """Whether every provider in the fallback chain supports ``response_format``.
-
-    The native structured-output path is only safe when *all* providers in
-    the chain accept the schema payload — a fallback provider that doesn't
-    would reject the request mid-run.
-    """
-    return bool(providers) and all(
-        bool(getattr(p, "supports_json_schema", False)) for p in providers
-    )
+def supports_json_schema(provider: Provider) -> bool:
+    """Whether ``provider`` supports OpenAI-style ``response_format``."""
+    return bool(getattr(provider, "supports_json_schema", False))

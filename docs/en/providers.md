@@ -10,15 +10,15 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:<model>", "glm-5.2"],  # fallback chain
+    model="anthropic:<model>",
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
 
 ## Model strings
 
-`Agent(model=...)` accepts a `"vendor:model"` string, a `Provider` instance,
-or a list of either (a [fallback chain](#fallback-chains)).
+`Agent(model=...)` accepts a `"vendor:model"` string or a `Provider`
+instance.
 
 | Prefix | Provider | Aliases |
 | --- | --- | --- |
@@ -103,20 +103,16 @@ stripped there — while think-by-default compatible hosts (e.g. DeepSeek's
 Messages dialects; point `ANTHROPIC_BASE_URL` at them and the leniencies
 above apply automatically.
 
-## Fallback chains
+## Multi-vendor failover
 
-`model=[...]` lists providers in preference order. The runner works through
-the chain on provider errors — a retryable failure first exhausts the
-current provider's [retry policy](reliability.md#provider-retries), then the
-next provider takes over. One capability note: with a mixed chain,
-[structured output](structured-output.md) uses the native path only when
-**every** provider in the chain supports it — otherwise a mid-run fallback
-would reject the schema payload — so a chain mixing capabilities quietly
-uses the prompt path for all.
-
-```python
-agent = Agent(name="assistant", model=["anthropic:<model>", "glm-5.2"])
-```
+One agent speaks to one provider; lovia deliberately has no in-process
+fallback chain. Transient errors are the
+[retry policy](reliability.md#provider-retries)'s job. For vendor-level
+failover, point `base_url` at a routing gateway (LiteLLM, OpenRouter, ...)
+that fails over server-side — the run keeps a single endpoint, a single
+context window, and a single capability set. And because sessions persist
+across runs, an app can always re-run a failed request against the same
+session with a different model.
 
 ## ModelSettings
 
@@ -321,7 +317,7 @@ triggers reactive compaction instead of retries. That error also carries
 ## See also
 
 - [Structured output](structured-output.md) — native vs prompt-path schemas
-- [Reliability](reliability.md) — retries and fallback in depth
+- [Reliability](reliability.md) — retries, budgets, cancellation
 - [Context management](context.md) — how windows and caching interact
 - Examples: [`09_model_settings.py`](../../examples/09_model_settings.py),
   [`10_custom_provider.py`](../../examples/10_custom_provider.py)

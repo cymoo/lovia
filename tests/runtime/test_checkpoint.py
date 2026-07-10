@@ -25,13 +25,17 @@ from lovia.run_context import RunContext
 from lovia.runtime.checkpoint import CheckpointWriter, error_payload
 from lovia.runtime.run_state import ActiveAgent, RunState
 from lovia.stores import InMemoryCheckpointer
+from lovia.testing import ScriptedProvider, text
 
 
 def _state() -> RunState:
     agent = Agent(name="a")
     run_ctx = RunContext(context=None, entries=[], agent=agent, usage=Usage())
     active = ActiveAgent(
-        agent=agent, providers=[], structured_output=None, tools_by_name={}
+        agent=agent,
+        provider=ScriptedProvider([text("unused")]),
+        structured_output=None,
+        tools_by_name={},
     )
     return RunState(run_ctx=run_ctx, active=active, turns=2)
 

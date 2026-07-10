@@ -66,24 +66,6 @@ def test_agent_model_label_string_model() -> None:
     )
 
 
-def test_agent_model_label_list_of_providers() -> None:
-    class _WithModel:
-        model = "gpt-x"
-
-    class _WithName:
-        name = "scripted"
-
-    agent = Agent(name="a", model=[_WithModel(), _WithName()])  # type: ignore[list-item]
-    assert agent_model_label(agent) == "gpt-x,scripted"
-
-
-def test_agent_model_label_list_of_spec_strings_is_unquoted() -> None:
-    # String specs in a fallback list are labels already; they must not go
-    # through repr() and come out quoted ("'openai:gpt-5.5'").
-    agent = Agent(name="a", model=["openai:gpt-5.5", "anthropic:claude"])
-    assert agent_model_label(agent) == "openai:gpt-5.5,anthropic:claude"
-
-
 def test_agent_model_label_single_provider_prefers_model_then_name() -> None:
     class _WithModel:
         model = "claude"
@@ -117,16 +99,16 @@ def test_input_preview_all_system_returns_empty() -> None:
 # -------------------------------------------------------- supports_json_schema
 
 
-def test_supports_json_schema_requires_all_providers() -> None:
+def test_supports_json_schema_reads_provider_flag() -> None:
     class _Yes:
         supports_json_schema = True
 
     class _No:
         supports_json_schema = False
 
-    assert supports_json_schema([_Yes(), _Yes()]) is True  # type: ignore[list-item]
-    assert supports_json_schema([_Yes(), _No()]) is False  # type: ignore[list-item]
+    class _Silent:
+        pass
 
-
-def test_supports_json_schema_empty_chain_is_false() -> None:
-    assert supports_json_schema([]) is False
+    assert supports_json_schema(_Yes()) is True  # type: ignore[arg-type]
+    assert supports_json_schema(_No()) is False  # type: ignore[arg-type]
+    assert supports_json_schema(_Silent()) is False  # type: ignore[arg-type]

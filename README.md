@@ -183,7 +183,7 @@ print(result.output.title)
 
 ### Providers
 
-Use model strings, provider instances, or a fallback chain. OpenAI-compatible
+Use model strings or provider instances. OpenAI-compatible
 endpoints read `OPENAI_BASE_URL` / `OPENAI_API_KEY`; Anthropic defaults to
 the official endpoint, reads `ANTHROPIC_API_KEY`, and uses
 `ANTHROPIC_BASE_URL` for non-default endpoints. Prompt caching and reasoning
@@ -195,7 +195,7 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:<model>", "glm-5.2"],  # fallback chain
+    model="anthropic:<model>",
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```

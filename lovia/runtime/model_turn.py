@@ -51,10 +51,10 @@ class _ToolCallSlot:
 class _StreamReset:
     """Internal signal: discard partial output assembled so far and restart.
 
-    Yielded by :func:`stream_with_fallback` when it retries or falls back
-    after a provider already streamed part of a turn. Not a provider-emitted
-    delta and never leaves this module — :func:`stream_model_turn` clears its
-    accumulation buffers on receipt so the re-streamed turn is not duplicated.
+    Yielded by :func:`stream_with_retries` when it retries after the provider
+    already streamed part of a turn. Not a provider-emitted delta and never
+    leaves this module — :func:`stream_model_turn` clears its accumulation
+    buffers on receipt so the re-streamed turn is not duplicated.
 
     ``visible`` is ``True`` when the discarded attempt produced user-facing
     text or reasoning; only then does the runner surface an
@@ -68,7 +68,7 @@ class _StreamReset:
 async def stream_model_turn(
     *,
     agent: Agent[Any],
-    providers: list[Provider],
+    provider: Provider,
     input_entries: list[TranscriptEntry],
     tools_by_name: dict[str, Tool],
     structured_output: StructuredOutput | None,
@@ -84,7 +84,7 @@ async def stream_model_turn(
     cannot ``return`` a value, so the caller supplies the accumulator).
     """
 
-    model_label = getattr(providers[0], "model", None) if providers else None
+    model_label = getattr(provider, "model", None)
 
     text_buf: list[str] = []
     reasoning_buf: list[str] = []
@@ -94,8 +94,8 @@ async def stream_model_turn(
     finish_reason: str | None = None
 
     with model_call_span(tracer, model=model_label, turn=turn):
-        async for delta in stream_with_fallback(
-            providers,
+        async for delta in stream_with_retries(
+            provider,
             input_entries,
             tools=[t.openai_schema() for t in tools_by_name.values()] or None,
             response_format=(
@@ -222,8 +222,8 @@ def assemble_turn_entries(
     return out
 
 
-async def stream_with_fallback(
-    providers: list[Provider],
+async def stream_with_retries(
+    provider: Provider,
     input_entries: list[TranscriptEntry],
     *,
     tools: list[JsonObject] | None,
@@ -232,94 +232,81 @@ async def stream_with_fallback(
     retry: RetryPolicy | None,
     cancel_token: CancelToken | None = None,
 ) -> AsyncIterator[ModelDelta | _StreamReset]:
-    """Stream from the first provider that succeeds.
+    """Stream one model call, retrying transient failures per ``retry``.
 
-    Each provider is retried per ``retry`` (``max_attempts`` counts attempts,
-    so ``None`` means a single attempt), then the next provider in the chain
-    is tried. When ``retry.restart_on_partial`` is set (the default), a failure
-    *after* output has been forwarded is also recovered: a :class:`_StreamReset`
-    is yielded so the caller discards the partial output, and the turn is
+    ``max_attempts`` counts attempts, so ``retry=None`` means a single one.
+    When ``retry.restart_on_partial`` is set (the default), a failure *after*
+    output has been forwarded is also recovered: a :class:`_StreamReset` is
+    yielded so the caller discards the partial output, and the turn is
     re-streamed from scratch (replace semantics). With ``restart_on_partial``
-    off, a mid-stream error propagates immediately, as before. Cancellation and
+    off, a mid-stream error propagates immediately. Cancellation and
     :class:`ContextOverflowError` always propagate immediately.
 
     ``cancel_token``, when supplied, is checked around each retry backoff so a
     cooperatively cancelled run stops here instead of sleeping out the backoff
     and paying for another attempt before the loop's next safe point.
     """
-    last_exc: Exception | None = None
     max_attempts = retry.max_attempts if retry is not None else 1
     restart_on_partial = retry.restart_on_partial if retry is not None else False
     # Set when a failed attempt already streamed output and another attempt
-    # (retry or provider fallback) will follow; flushed once at the start of
-    # that next attempt so each real restart emits exactly one reset.
+    # will follow; flushed once at the start of that next attempt so each
+    # real restart emits exactly one reset.
     pending_reset: _StreamReset | None = None
-    for provider in providers:
-        attempt = 0
-        while True:
-            attempt += 1
-            if pending_reset is not None:
-                yield pending_reset
-                pending_reset = None
-            produced_any = False
-            produced_visible = False
-            try:
-                async for delta in provider.stream(
-                    input_entries,
-                    tools=tools,
-                    response_format=response_format,
-                    settings=settings,
-                ):
-                    produced_any = True
-                    if isinstance(delta, (TextDelta, ReasoningDelta)):
-                        produced_visible = True
-                    yield delta
-                return
-            except (asyncio.CancelledError, ContextOverflowError):
+    attempt = 0
+    while True:
+        attempt += 1
+        if pending_reset is not None:
+            yield pending_reset
+            pending_reset = None
+        produced_any = False
+        produced_visible = False
+        try:
+            async for delta in provider.stream(
+                input_entries,
+                tools=tools,
+                response_format=response_format,
+                settings=settings,
+            ):
+                produced_any = True
+                if isinstance(delta, (TextDelta, ReasoningDelta)):
+                    produced_visible = True
+                yield delta
+            return
+        except (asyncio.CancelledError, ContextOverflowError):
+            raise
+        except Exception as exc:
+            if produced_any and not restart_on_partial:
+                logger.warning(
+                    "run.retry_skipped: mid-stream error after partial output,"
+                    " not retrying provider=%s error=%s(%s)",
+                    getattr(provider, "name", repr(provider)),
+                    type(exc).__name__,
+                    truncate_repr(str(exc)),
+                )
                 raise
-            except Exception as exc:
-                last_exc = exc
-                if produced_any and not restart_on_partial:
-                    logger.warning(
-                        "run.retry_skipped: mid-stream error after partial output,"
-                        " not retrying provider=%s error=%s(%s)",
-                        getattr(provider, "name", repr(provider)),
-                        type(exc).__name__,
-                        truncate_repr(str(exc)),
-                    )
-                    raise
-                # We will retry this provider or fall back to the next one; if
-                # this attempt streamed anything, the next one must replace it.
-                # Armed here, emitted before that next attempt actually runs
-                # (so a final give-up never emits an orphan reset).
-                if produced_any:
-                    pending_reset = _StreamReset(visible=produced_visible)
-                if retry is not None and attempt < max_attempts and retry.retry_on(exc):
-                    delay = retry.backoff_delay(attempt)
-                    logger.warning(
-                        "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",
-                        getattr(provider, "name", repr(provider)),
-                        attempt,
-                        max_attempts,
-                        delay,
-                        type(exc).__name__,
-                        truncate_repr(str(exc)),
-                    )
-                    # Checked on both sides of the sleep: before, so an
-                    # already-cancelled run skips the backoff entirely; after,
-                    # so a cancel that lands mid-sleep stops the retry rather
-                    # than paying for one more full attempt.
-                    if cancel_token is not None:
-                        cancel_token.check()
-                    await retry.sleep(delay)
-                    if cancel_token is not None:
-                        cancel_token.check()
-                    continue
-                break
-    if last_exc is not None:
-        if len(providers) > 1:
-            logger.error(
-                "run.fallback_exhausted: all providers failed: %s",
-                ", ".join(getattr(p, "name", repr(p)) for p in providers),
+            # A retry will replace whatever this attempt streamed. Armed here,
+            # emitted at the start of that next attempt — so a final give-up
+            # never emits an orphan reset.
+            if produced_any:
+                pending_reset = _StreamReset(visible=produced_visible)
+            if retry is None or attempt >= max_attempts or not retry.retry_on(exc):
+                raise
+            delay = retry.backoff_delay(attempt)
+            logger.warning(
+                "run.retry: provider=%s attempt=%d/%d delay=%.2fs error=%s(%s)",
+                getattr(provider, "name", repr(provider)),
+                attempt,
+                max_attempts,
+                delay,
+                type(exc).__name__,
+                truncate_repr(str(exc)),
             )
-        raise last_exc
+            # Checked on both sides of the sleep: before, so an
+            # already-cancelled run skips the backoff entirely; after,
+            # so a cancel that lands mid-sleep stops the retry rather
+            # than paying for one more full attempt.
+            if cancel_token is not None:
+                cancel_token.check()
+            await retry.sleep(delay)
+            if cancel_token is not None:
+                cancel_token.check()

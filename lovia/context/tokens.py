@@ -7,6 +7,8 @@ Two small pieces:
   blob is not billed as text, an ``id()``-keyed memo so a long transcript is
   re-counted in O(new entries) per turn, and dispatch to a provider's own
   :class:`~lovia.providers.base.TokenEstimator` when it ships a tokenizer.
+  Tool schemas — the fixed additive payload every request carries alongside
+  the entries — are counted separately via :meth:`TokenCounter.count_tools`.
 * :class:`TokenBudget` — the window math: usable space after reserving output
   headroom, plus the *trigger* (start compacting) and *target* (stop
   compacting) watermarks. The gap between the two is the hysteresis that
@@ -19,6 +21,7 @@ input-token counts.
 
 from __future__ import annotations
 
+import json
 import weakref
 from dataclasses import dataclass
 from typing import Sequence
@@ -151,10 +154,54 @@ class TokenCounter:
         self.entry_overhead = entry_overhead
         self._memo_size = memo_size
         self._memo: dict[int, tuple[weakref.ref[TranscriptEntry], int]] = {}
+        self._tool_memo: dict[int, tuple[weakref.ref[object], int]] = {}
 
     def count(self, entries: Sequence[TranscriptEntry]) -> int:
         """Estimated prompt tokens for ``entries``."""
         return sum(self.count_entry(entry) for entry in entries)
+
+    def count_tools(self, tools: Sequence[object]) -> int:
+        """Estimated tokens for the tool schemas sent alongside the entries.
+
+        Measured on the *adapter-input* shape (``Tool.openai_schema()``,
+        compact JSON), memoized by tool identity. Adapters that transform
+        tool defs before sending (e.g. Anthropic's ``input_schema`` framing)
+        shift the size slightly — a roughly proportional residual the
+        calibration ratio absorbs, like the rest of the request framing. No
+        :class:`TokenEstimator` dispatch — schemas are framing, not entries.
+        """
+        return sum(self._count_tool(tool) for tool in tools)
+
+    def _count_tool(self, tool: object) -> int:
+        key = id(tool)
+        hit = self._tool_memo.get(key)
+        if hit is not None:
+            ref, tokens = hit
+            if ref() is tool:
+                return tokens
+        tokens = self._measure_tool(tool)
+        if len(self._tool_memo) >= self._memo_size:
+            self._tool_memo.pop(next(iter(self._tool_memo)))
+        try:
+            self._tool_memo[key] = (weakref.ref(tool), tokens)
+        except TypeError:
+            pass
+        return tokens
+
+    def _measure_tool(self, tool: object) -> int:
+        schema = getattr(tool, "openai_schema", None)
+        chars = 0
+        if callable(schema):
+            try:
+                # Compact separators to match request-body serialization;
+                # ensure_ascii=False so CJK descriptions count as the
+                # characters a tokenizer sees, not as 6-char \uXXXX escapes.
+                chars = len(
+                    json.dumps(schema(), ensure_ascii=False, separators=(",", ":"))
+                )
+            except Exception:
+                chars = 0  # unknown shape: charge the flat minimum below
+        return chars // _CHARS_PER_TOKEN + self.entry_overhead
 
     def count_entry(self, entry: TranscriptEntry) -> int:
         """Estimated tokens for one entry, memoized by identity."""

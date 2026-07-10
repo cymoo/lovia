@@ -82,10 +82,13 @@ class CompactionState:
             a preview marker (and archived to the store, when one is configured).
         summary: The running summary, or ``None`` before the first one.
         ratio: Calibration multiplier mapping heuristic token estimates to
-            the provider's real input-token counts (EMA, clamped).
+            the provider's real input-token counts (EMA, clamped). The
+            estimate it multiplies already includes the tool-schema overhead,
+            so the ratio only absorbs tokenizer error, not additive payload.
         last_view_estimate: Raw (uncalibrated) estimate of the view returned
-            by the previous ``compact()`` call; compared against the next
-            real ``last_input_tokens`` to update :attr:`ratio`.
+            by the previous ``compact()`` call, tool-schema overhead
+            included; compared against the next real ``last_input_tokens``
+            to update :attr:`ratio`.
         summary_failures: Consecutive summarizer failures, carried in the
             scratch like every other decision. Past the summarize stage's
             limit the proactive path stops trying (circuit breaker); the

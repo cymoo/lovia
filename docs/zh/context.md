@@ -89,8 +89,9 @@ Compaction(
   点名的上限——最后才回落到适配器的表。完整链路见[上下文窗口](providers.md#上下文窗口)。
   端点点名的上限总会压住你配置的值，所以表里没有的模型代价是撞墙一次，之后整个 session 都按
   真实值计算。只有当**谁都报不出来**时，才会跳过主动压缩、只留 reactive overflow 兜底。
-- **token 计数**是校准过的估算：chars/4 启发式（图片/文件有固定成本），并用 provider 返回的
-  **实际** input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
+- **token 计数**是校准过的估算：chars/4 启发式（图片/文件有固定成本），加上请求携带的工具
+  schema——这块固定的加性负载若混进乘性系数会把它带偏——再用 provider 返回的**实际**
+  input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
 
 ## 结果存储
 

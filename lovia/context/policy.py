@@ -13,10 +13,13 @@ The default implementation is :class:`~lovia.context.Compaction`; see
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, Sequence
 
 from ..providers.base import Provider
 from ..transcript import TranscriptEntry
+
+if TYPE_CHECKING:
+    from ..tools import Tool
 
 
 @dataclass
@@ -32,6 +35,12 @@ class CompactionRequest:
 
     model: str | None = None
     """Model name passed to the provider."""
+
+    tools: Sequence["Tool"] = ()
+    """Tools whose schemas ride alongside ``entries`` in the provider request.
+    A fixed per-call payload, not part of the transcript — the default
+    pipeline counts it into its token estimate, because an MCP-heavy tool set
+    can dwarf a small transcript."""
 
     last_input_tokens: int | None = None
     """Last observed provider input-token count. Lags the current transcript

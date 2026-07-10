@@ -113,9 +113,11 @@ Compaction(
   when *nothing* can report it is proactive compaction skipped and the
   reactive overflow path left as the sole backstop.
 - **Token accounting** is a calibrated estimate: chars/4 heuristics
-  (flat costs for images/files), corrected by an EMA against the
-  provider's *real* input-token counts as turns complete. Providers can
-  supply exact counting by implementing `TokenEstimator`.
+  (flat costs for images/files) plus the tool schemas the request
+  carries — a fixed additive payload that would otherwise poison the
+  multiplier — corrected by an EMA against the provider's *real*
+  input-token counts as turns complete. Providers can supply exact
+  counting by implementing `TokenEstimator`.
 
 ## Result stores
 

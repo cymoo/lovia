@@ -190,8 +190,13 @@ method handles both triggers:
   budget loses this immunity (`_oversized` in `stages.py`) — otherwise one
   giant tool output would make overflow recovery impossible.
 - **Token accounting.** `TokenCounter` estimates per entry (chars//4, flat
-  image/file costs, `id()`+weakref memo) and is *calibrated* against the
-  provider's real `last_input_tokens` via an EMA ratio stored in state.
+  image/file costs, `id()`+weakref memo) plus the tool-schema payload the
+  request carries (`count_tools`, measured on the wire shape), all
+  *calibrated* against the provider's real `last_input_tokens` via an EMA
+  ratio stored in state. Counting the schemas separately keeps that fixed
+  additive payload out of the multiplier, so the ratio only absorbs
+  tokenizer error and stays valid as the transcript grows and across
+  handoffs that swap the tool set.
 - **State location.** Sticky state serializes into the per-run
   `ResumeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
   `Compaction` additionally keeps a bounded in-process cache keyed by

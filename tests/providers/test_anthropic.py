@@ -1019,21 +1019,7 @@ def test_table_window_covers_the_whole_claude_line(
     assert provider.context_window() == expected
 
 
-def test_context_window_constructor_argument_overrides_the_table() -> None:
-    """The 1M beta, or a gateway that caps the model."""
-    provider = AnthropicProvider(
-        model="claude-opus-4-8", api_key="x", context_window=1_000_000
-    )
-    assert provider.context_window() == 1_000_000
-
-
 # --------------------------------------------------- endpoint self-report -
-
-
-@pytest.mark.parametrize("bad", [0, -1])
-def test_provider_rejects_a_nonsense_context_window(bad: int) -> None:
-    with pytest.raises(ValueError, match="context_window must be >= 1"):
-        AnthropicProvider(model="claude-opus-4-8", api_key="x", context_window=bad)
 
 
 @pytest.mark.asyncio
@@ -1104,7 +1090,10 @@ async def test_discover_reads_a_window_from_a_compatible_gateway() -> None:
 
 
 @pytest.mark.asyncio
-async def test_overflow_teaches_the_endpoint_its_window() -> None:
+async def test_overflow_does_not_mutate_the_providers_own_window() -> None:
+    """An enforced limit travels on the error; the policy learns and persists
+    it per session. The provider keeps reporting only what the endpoint
+    advertises (here: nothing)."""
     body = b"prompt is too long: 208310 tokens > 200000 maximum"
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(400, content=body))
@@ -1114,7 +1103,8 @@ async def test_overflow_teaches_the_endpoint_its_window() -> None:
     )
     assert provider.context_window() is None
 
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc_info:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
-    assert provider.context_window() == 200_000
+    assert exc_info.value.reported_window == 200_000
+    assert provider.context_window() is None

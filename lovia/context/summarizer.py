@@ -67,7 +67,10 @@ class LLMSummarizer:
 
         Args:
             provider: Provider used for summaries. When omitted, the active
-                run provider from :class:`CompactionRequest` is used.
+                run provider from :class:`CompactionRequest` is used. A
+                smaller model works well here — the summarize stage caps its
+                fold chunks to this provider's context window when the
+                provider can report one.
             prompt: System prompt that defines what the summary must preserve.
             settings: Provider settings for the summary call. Defaults to
                 deterministic generation with ``temperature=0``.

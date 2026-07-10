@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ContextOverflowError, ProviderError, UserError
+from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     InputEntry,
@@ -104,10 +104,6 @@ class AnthropicProvider:
         # dialect is request shape only — the API-key requirement and the
         # /models probe follow the real host.
         official_dialect: bool | None = None,
-        # The endpoint's real context window, when you know it and the
-        # bundled table cannot (a gateway capping the model, the 1M beta).
-        # Overrides the table; a ContextPolicy's own window still wins.
-        context_window: int | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -120,7 +116,6 @@ class AnthropicProvider:
             base_url=self.base_url,
             model=model,
             host=self._host,
-            explicit=context_window,
             table=_ANTHROPIC_CONTEXT_WINDOWS,
             # The official Models API publishes ``max_input_tokens`` (since
             # 2026-03), so the official host is worth asking too — it knows
@@ -323,18 +318,14 @@ class AnthropicProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                try:
-                    await raise_for_provider_status(
-                        response,
-                        vendor="anthropic",
-                        model=self.model,
-                        label="Anthropic",
-                        is_context_overflow=_is_context_overflow,
-                        window_from_body=window_from_error,
-                    )
-                except ContextOverflowError as exc:
-                    self._windows.remember(exc.reported_window)
-                    raise
+                await raise_for_provider_status(
+                    response,
+                    vendor="anthropic",
+                    model=self.model,
+                    label="Anthropic",
+                    is_context_overflow=_is_context_overflow,
+                    window_from_body=window_from_error,
+                )
                 async for event in iter_sse_json(response):
                     etype = event.get("type")
 

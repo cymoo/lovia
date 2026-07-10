@@ -34,6 +34,7 @@ from .state import (
 )
 from .summarizer import LLMSummarizer, Summarizer
 from .tokens import TokenBudget, TokenCounter, usable_tokens
+from ..providers.base import context_window as _provider_context_window
 from ..transcript import ToolResultEntry, TranscriptEntry
 
 if TYPE_CHECKING:
@@ -398,6 +399,17 @@ class SummarizeHistory:
             # would collapse the cap to a single token per chunk.
             usable = min(
                 usable, usable_tokens(ctx.model_window, ctx.budget.reserve_output)
+            )
+        # A summarizer with its own provider can run a smaller model than the
+        # run's; its window caps the fold chunks too, or every burst would
+        # overflow the very model doing the folding and trip the circuit
+        # breaker. Unknown windows (None) change nothing.
+        summarizer_window = _provider_context_window(
+            getattr(self.summarizer, "provider", None)
+        )
+        if summarizer_window is not None:
+            usable = min(
+                usable, usable_tokens(summarizer_window, ctx.budget.reserve_output)
             )
         cap = max(1, usable // 2)
         # Each chunk end below is committed to ``covered`` and outlives this

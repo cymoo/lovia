@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ContextOverflowError, ProviderError, UserError
+from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     TranscriptEntry,
@@ -231,11 +231,6 @@ class OpenAIChatProvider:
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
         official_dialect: bool | None = None,
-        # The endpoint's real context window, when you know it and the bundled
-        # table cannot — a vLLM host started with ``--max-model-len``, an
-        # Ollama ``num_ctx``, a gateway capping a shared model. Overrides the
-        # table; a ContextPolicy's own window still wins.
-        context_window: int | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -246,7 +241,6 @@ class OpenAIChatProvider:
             base_url=self.base_url,
             model=model,
             host=self._host,
-            explicit=context_window,
             table=_OPENAI_CONTEXT_WINDOWS,
             # The official API publishes no window on /models; don't ask it.
             probe=not self._on_official_host(),
@@ -402,18 +396,14 @@ class OpenAIChatProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                try:
-                    await raise_for_provider_status(
-                        response,
-                        vendor="openai",
-                        model=self.model,
-                        label="OpenAI Chat",
-                        is_context_overflow=_is_context_overflow,
-                        window_from_body=window_from_error,
-                    )
-                except ContextOverflowError as exc:
-                    self._windows.remember(exc.reported_window)
-                    raise
+                await raise_for_provider_status(
+                    response,
+                    vendor="openai",
+                    model=self.model,
+                    label="OpenAI Chat",
+                    is_context_overflow=_is_context_overflow,
+                    window_from_body=window_from_error,
+                )
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
                         u = event["usage"]

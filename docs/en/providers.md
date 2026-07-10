@@ -179,7 +179,7 @@ chain, most trustworthy first:
 
 | Source | When it answers |
 | --- | --- |
-| Explicit config | `Compaction(context_window=…)`, `--context-window`, `LOVIA_CONTEXT_WINDOW`, or the adapter's `context_window=` argument |
+| Explicit config | `Compaction(context_window=…)` — also settable via `--context-window` / `LOVIA_CONTEXT_WINDOW` in `lovia web`. The **one** user-facing knob; everything below is automatic |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
 | **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; Groq, Together and OpenRouter publish theirs |
 | The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |
@@ -194,15 +194,15 @@ deployment. The `gpt-4.1` a vLLM box re-exposes at `--max-model-len 8192` is a
 different thing entirely, and this adapter serves both — so an unlisted host
 gets nothing from the table and relies on what the endpoint reports.
 
-The practical upshot: an unlisted model costs **one** overflow, once. The window
-learned from it is memoized per `(endpoint, model)` for the life of the process
-*and* persisted in the session, so every later turn — and every later run —
-sizes itself correctly.
+The practical upshot: an unlisted model costs **one** overflow per session. The
+window the endpoint named travels on the error into the policy's state and is
+persisted with the session, so every later turn — and every later run on that
+session — sizes itself correctly.
 
 Two consequences worth knowing:
 
-- **The `/models` probe is skipped whenever it cannot help**: when you
-  configured a window, when the endpoint is known to publish none
+- **The `/models` probe is skipped whenever it cannot help**: when the policy
+  already has a configured window, when the endpoint is known to publish none
   (`api.openai.com`), and when it was already asked. Answers — misses included
   — are memoized per `(endpoint, model)` for the life of the process, so an
   endpoint is asked at most once even though a `"vendor:model"` string is
@@ -299,8 +299,7 @@ triggers reactive compaction instead of retries. That error also carries
   4096), dropping the *oldest* tokens first — your system prompt and tool
   definitions. Its OpenAI-compatible `/models` publishes no window either,
   so nothing in the resolution chain can reach it, and no error will ever
-  tell you. Set `Compaction(context_window=…)` or
-  `OpenAIChatProvider(..., context_window=…)` to match your `num_ctx`.
+  tell you. Set `Compaction(context_window=…)` to match your `num_ctx`.
 - **Anthropic prompt caching is opt-in** (`cache_system: True`). Long
   agent loops on the official API without it re-pay the full prompt every
   turn.

@@ -163,10 +163,12 @@ class TokenCounter:
     def count_tools(self, tools: Sequence[object]) -> int:
         """Estimated tokens for the tool schemas sent alongside the entries.
 
-        Measured on the same wire shape the provider receives
-        (``Tool.openai_schema()``), memoized by tool identity. No
-        :class:`TokenEstimator` dispatch — schemas are request framing, not
-        entries — so the calibration ratio absorbs the residual.
+        Measured on the *adapter-input* shape (``Tool.openai_schema()``,
+        compact JSON), memoized by tool identity. Adapters that transform
+        tool defs before sending (e.g. Anthropic's ``input_schema`` framing)
+        shift the size slightly — a roughly proportional residual the
+        calibration ratio absorbs, like the rest of the request framing. No
+        :class:`TokenEstimator` dispatch — schemas are framing, not entries.
         """
         return sum(self._count_tool(tool) for tool in tools)
 
@@ -191,9 +193,12 @@ class TokenCounter:
         chars = 0
         if callable(schema):
             try:
+                # Compact separators to match request-body serialization;
                 # ensure_ascii=False so CJK descriptions count as the
                 # characters a tokenizer sees, not as 6-char \uXXXX escapes.
-                chars = len(json.dumps(schema(), ensure_ascii=False))
+                chars = len(
+                    json.dumps(schema(), ensure_ascii=False, separators=(",", ":"))
+                )
             except Exception:
                 chars = 0  # unknown shape: charge the flat minimum below
         return chars // _CHARS_PER_TOKEN + self.entry_overhead

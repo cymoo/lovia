@@ -119,10 +119,17 @@ def test_broken_provider_estimator_falls_back_to_heuristic():
 # ---------------------------------------------------------------------------
 
 
+def _schema_chars(tool) -> int:
+    """The compact serialization ``count_tools`` prices, mirrored exactly."""
+    return len(
+        json.dumps(tool.openai_schema(), ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 def test_count_tools_measures_the_wire_schema():
     counter = TokenCounter()
     tool = FakeTool(schema_chars=4_000)
-    expected = len(json.dumps(tool.openai_schema(), ensure_ascii=False)) // 4 + 8
+    expected = _schema_chars(tool) // 4 + 8
     assert counter.count_tools([tool]) == expected
     assert counter.count_tools([tool, FakeTool()]) > expected
     assert counter.count_tools([]) == 0
@@ -137,10 +144,7 @@ def test_count_tools_counts_real_lovia_tools():
         return ""
 
     counter = TokenCounter()
-    estimate = counter.count_tools([search])
-    assert (
-        estimate == len(json.dumps(search.openai_schema(), ensure_ascii=False)) // 4 + 8
-    )
+    assert counter.count_tools([search]) == _schema_chars(search) // 4 + 8
 
 
 def test_count_tools_memoized_by_tool_identity():

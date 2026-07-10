@@ -26,12 +26,15 @@ from lovia.context.state import fingerprint
 from lovia.events import ContextCompacted
 from lovia.transcript import ToolCallEntry, ToolResultEntry, entry_to_dict
 
+from lovia.context import TokenCounter
+
 from ..scripted_provider import ScriptedProvider, text
 from .helpers import (
     FailingSummarizer,
     FakeProviderWithWindow,
     FakeResultStore,
     FakeSummarizer,
+    FakeTool,
     call,
     out,
     req,
@@ -292,6 +295,93 @@ async def test_ratio_calibrates_against_real_usage():
     )
     state = CompactionState.load(scratch)
     assert state.ratio == pytest.approx(0.8 * 1.0 + 0.2 * 2.0)
+
+
+async def test_tool_schema_overhead_enters_the_estimate():
+    """A big tool-schema payload triggers proactive compaction even though
+    the rendered view alone sits far below the watermark (the small-transcript
+    / large-schemas probe)."""
+    entries = [user("go")]
+    for i in range(8):
+        entries += [call(f"c{i}"), out(f"c{i}", "r" * 5_000)]
+    tools = [FakeTool(schema_chars=160_000)]  # ~40k tokens of schema
+
+    pipeline = _pipeline(context_window=20_000, summarizer=FakeSummarizer())
+    res = await pipeline.compact(req(entries))
+    assert res.compacted is False  # view alone ~10k tokens, trigger 15k
+
+    res = await pipeline.compact(req(entries, tools=tools))
+    assert res.compacted is True  # view + schemas ~50k tokens
+
+
+async def test_estimate_includes_schema_overhead_exactly():
+    pipeline = _pipeline(context_window=1_000_000)
+    entries = [user("x" * 4_000)]
+    tool = FakeTool(schema_chars=8_000)
+    bare = await pipeline.compact(req(entries))
+    with_tools = await pipeline.compact(req(entries, tools=[tool]))
+    assert with_tools.tokens_after - bare.tokens_after == TokenCounter().count_tools(
+        [tool]
+    )
+
+
+async def test_calibration_pairs_real_usage_with_schema_inclusive_estimate():
+    """Real input ≈ view + schemas. With the schemas counted, the observed
+    ratio is ~1.0; folding them into the multiplier instead would peg it at
+    RATIO_MAX while still under-counting."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 4_000)]  # ~1k tokens of view
+    tools = [FakeTool(schema_chars=120_000)]  # ~30k tokens of schema
+    first = await pipeline.compact(req(entries, scratch=scratch, tools=tools))
+    # The provider reports real usage: view + schemas, exactly as sent.
+    await pipeline.compact(
+        req(
+            entries,
+            scratch=scratch,
+            tools=tools,
+            last_input_tokens=first.tokens_after,
+        )
+    )
+    assert CompactionState.load(scratch).ratio == pytest.approx(1.0)
+
+
+async def test_ratio_learned_small_stays_valid_as_the_view_grows():
+    """The additive schema payload is measured per call, so a ratio calibrated
+    on a small transcript keeps estimating correctly once the view grows —
+    no over-aggressive compaction from a pegged multiplier."""
+    pipeline = _pipeline(context_window=200_000, summarizer=FakeSummarizer())
+    scratch: dict = {}
+    tools = [FakeTool(schema_chars=120_000)]  # ~30k tokens of schema
+    small = [user("x" * 4_000)]  # ~1k tokens of view
+    first = await pipeline.compact(req(small, scratch=scratch, tools=tools))
+    await pipeline.compact(
+        req(small, scratch=scratch, tools=tools, last_input_tokens=first.tokens_after)
+    )
+    assert CompactionState.load(scratch).ratio == pytest.approx(1.0)
+
+    grown = small + [user("y" * 4_000) for _ in range(99)]  # ~101k tokens of view
+    res = await pipeline.compact(req(grown, scratch=scratch, tools=tools))
+    # Real prompt ≈ 131k against a 150k trigger: nothing to do. A multiplier
+    # that had absorbed the schemas (pegged at 4.0) would estimate ~400k here
+    # and compact away most of a transcript that actually fits.
+    assert res.compacted is False
+    assert res.tokens_after < 150_000
+
+
+async def test_schema_overhead_recomputed_when_the_tool_set_changes():
+    """A handoff swaps the tool set; the overhead is measured per call, so
+    the estimate tracks the new set immediately instead of relearning."""
+    pipeline = _pipeline(context_window=1_000_000)
+    scratch: dict = {}
+    entries = [user("x" * 4_000)]
+    fat, lean = FakeTool(schema_chars=80_000), FakeTool(name="lean")
+    before = await pipeline.compact(req(entries, scratch=scratch, tools=[fat]))
+    after = await pipeline.compact(req(entries, scratch=scratch, tools=[lean]))
+    counter = TokenCounter()
+    assert before.tokens_after - after.tokens_after == counter.count_tools(
+        [fat]
+    ) - counter.count_tools([lean])
 
 
 # ---------------------------------------------------------------------------
@@ -841,6 +931,33 @@ async def test_reactive_compact_gets_no_stale_calibration_sample():
     assert seen[0] == (False, None)  # turn 1: nothing observed yet
     assert seen[1][0] is False and seen[1][1] is not None  # turn 2: calibrates
     assert seen[2] == (True, None)  # retry: stale sample withheld
+
+
+async def test_runner_hands_active_tools_to_the_context_policy():
+    """The policy must see the tool set the provider request will carry, so
+    its schema-overhead estimate prices the real payload."""
+    from lovia import tool
+
+    @tool
+    async def ping() -> str:
+        return "pong"
+
+    seen: list[list] = []
+
+    class SpyPolicy:
+        async def compact(self, request):
+            seen.append(list(request.tools))
+            return ContextResult(entries=list(request.entries))
+
+    agent = Agent(
+        name="t",
+        instructions="x",
+        model=ScriptedProvider([text("done")]),
+        tools=[ping],
+    )
+    result = await Runner.run(agent, "go", context_policy=SpyPolicy())
+    assert result.output == "done"
+    assert any(t.name == "ping" for t in seen[0])
 
 
 async def test_runner_skips_doomed_retry_when_view_barely_shrinks():

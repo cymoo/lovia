@@ -738,6 +738,9 @@ class RunLoop:
             entries=list(state.transcript),
             provider=provider,
             model=getattr(provider, "model", None),
+            # The same tool set _call_model serializes into the request, so
+            # the policy can count the schema payload it will actually pay for.
+            tools=list(state.active.tools_by_name.values()),
             last_input_tokens=state.last_input_tokens,
             overflow=False,
             scratch=state.context_state,

@@ -26,6 +26,29 @@ def req(entries, **kw) -> CompactionRequest:
     return CompactionRequest(entries=entries, **kw)
 
 
+class FakeTool:
+    """Duck-typed stand-in for a lovia Tool: just enough for ``count_tools``."""
+
+    def __init__(self, name: str = "fat_tool", schema_chars: int = 0) -> None:
+        self.name = name
+        self.parameters = {
+            "type": "object",
+            "properties": {
+                "blob": {"type": "string", "description": "x" * schema_chars}
+            },
+        }
+
+    def openai_schema(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": "a fake tool",
+                "parameters": self.parameters,
+            },
+        }
+
+
 class FakeSummarizer:
     """Records every summarize() call and returns a fixed text."""
 

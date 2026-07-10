@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import weakref
 
 import pytest
@@ -17,7 +18,7 @@ from lovia.transcript import (
     ToolResultEntry,
 )
 
-from .helpers import user
+from .helpers import FakeTool, user
 
 # ---------------------------------------------------------------------------
 # TokenCounter estimates
@@ -111,6 +112,65 @@ def test_broken_provider_estimator_falls_back_to_heuristic():
 
     counter = TokenCounter(_Broken())
     assert counter.count_entry(user("x" * 400)) == 108
+
+
+# ---------------------------------------------------------------------------
+# Tool-schema counting
+# ---------------------------------------------------------------------------
+
+
+def test_count_tools_measures_the_wire_schema():
+    counter = TokenCounter()
+    tool = FakeTool(schema_chars=4_000)
+    expected = len(json.dumps(tool.openai_schema(), ensure_ascii=False)) // 4 + 8
+    assert counter.count_tools([tool]) == expected
+    assert counter.count_tools([tool, FakeTool()]) > expected
+    assert counter.count_tools([]) == 0
+
+
+def test_count_tools_counts_real_lovia_tools():
+    from lovia import tool
+
+    @tool
+    def search(query: str, limit: int = 5) -> str:
+        """Search the web."""
+        return ""
+
+    counter = TokenCounter()
+    estimate = counter.count_tools([search])
+    assert (
+        estimate == len(json.dumps(search.openai_schema(), ensure_ascii=False)) // 4 + 8
+    )
+
+
+def test_count_tools_memoized_by_tool_identity():
+    counter = TokenCounter()
+
+    class _CountingTool(FakeTool):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def openai_schema(self) -> dict:
+            self.calls += 1
+            return super().openai_schema()
+
+    tool = _CountingTool()
+    first = counter.count_tools([tool])
+    assert counter.count_tools([tool]) == first
+    assert tool.calls == 1  # second hit served from the memo
+
+
+def test_count_tools_tolerates_non_tool_objects():
+    counter = TokenCounter()
+
+    class _Raising:
+        def openai_schema(self) -> dict:
+            raise RuntimeError("boom")
+
+    # No schema and a raising schema both charge the flat minimum, not a crash.
+    assert counter.count_tools([object()]) == counter.entry_overhead
+    assert counter.count_tools([_Raising()]) == counter.entry_overhead
 
 
 # ---------------------------------------------------------------------------

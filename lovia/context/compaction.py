@@ -10,14 +10,16 @@ How a call flows:
    offload, clear, summarize — each recording new sticky decisions until the
    view is under the *compact_to* watermark. The gap between the two is
    hysteresis: compaction happens in rare bursts, not every turn.
-3. Token thresholds use cheap per-entry estimates *calibrated* against the
-   provider's real input-token counts from previous calls (a clamped EMA
-   *multiplier*). This absorbs systematic estimator error well once the
-   transcript is large relative to fixed per-call overhead (tool schemas,
-   system framing). On a *small* transcript with *large* tool schemas the
-   multiplicative model under-counts that fixed overhead, so the proactive
-   threshold can fire late — leave headroom via ``compact_at`` /
-   ``reserve_output_tokens``; the reactive overflow path is the backstop.
+3. Token thresholds estimate the *whole* request: cheap per-entry estimates
+   plus the tool-schema payload the request carries
+   (:meth:`~lovia.context.tokens.TokenCounter.count_tools`), *calibrated*
+   against the provider's real input-token counts from previous calls (a
+   clamped EMA *multiplier*). Counting the schemas separately keeps that
+   fixed additive payload out of the multiplier: the ratio's only job is
+   tokenizer error — genuinely multiplicative — so it stays valid as the
+   transcript grows and across handoffs that swap the tool set. Per-turn
+   injected view entries stay unmodeled (small by contract; the ratio
+   absorbs them), as does provider request framing.
 """
 
 from __future__ import annotations
@@ -223,6 +225,7 @@ class Compaction:
         # Calibrate the estimator against the real usage of the previous call.
         if req.last_input_tokens and state.last_view_estimate:
             observed = req.last_input_tokens / max(1, state.last_view_estimate)
+            prev_ratio = state.ratio
             state.ratio = min(
                 RATIO_MAX,
                 max(
@@ -231,12 +234,34 @@ class Compaction:
                     + _CALIBRATION_ALPHA * observed,
                 ),
             )
+            logger.debug(
+                "context.calibrate: observed %.3f (real %d / est %d), "
+                "ratio %.3f -> %.3f",
+                observed,
+                req.last_input_tokens,
+                state.last_view_estimate,
+                prev_ratio,
+                state.ratio,
+            )
 
         counter = self._counter_for(req.provider)
+        # The tool schemas are a fixed additive payload on every request.
+        # Counting them here keeps them out of the multiplicative ratio, whose
+        # job narrows to tokenizer error — without this, a large tool set on a
+        # small transcript pegs the ratio at the clamp and still under-counts,
+        # and the pegged ratio then over-counts once the transcript grows.
+        overhead = counter.count_tools(req.tools)
         view = render_view(req.entries, state)
         raw = counter.count(view)
-        tokens = int(raw * state.ratio)
-        tokens_before = int(counter.count(req.entries) * state.ratio)
+        tokens = int((raw + overhead) * state.ratio)
+        tokens_before = int((counter.count(req.entries) + overhead) * state.ratio)
+        logger.debug(
+            "context.estimate: view %d + tools %d raw, ratio %.3f -> %d tokens",
+            raw,
+            overhead,
+            state.ratio,
+            tokens,
+        )
 
         aggressive = req.overflow
         window = self.context_window
@@ -255,7 +280,9 @@ class Compaction:
         if window is None and not aggressive:
             # No budget information: never compact proactively; the
             # reactive overflow path remains as the safety net.
-            return self._result(req, state, view, raw, tokens, tokens_before, [], None)
+            return self._result(
+                req, state, view, raw + overhead, tokens, tokens_before, [], None
+            )
         if aggressive:
             # An overflow proves the effective limit is at most the failed
             # prompt itself — any configured/claimed window is now refuted,
@@ -284,7 +311,7 @@ class Compaction:
             )
         if not aggressive and tokens < budget.trigger_tokens:
             return self._result(
-                req, state, view, raw, tokens, tokens_before, [], budget
+                req, state, view, raw + overhead, tokens, tokens_before, [], budget
             )
 
         tail_tokens = self.keep_recent_tokens or max(1, budget.usable // 5)
@@ -317,14 +344,14 @@ class Compaction:
                     reasons.append(stage.name)
                     view = render_view(req.entries, state)
                     raw = counter.count(view)
-                    tokens = int(raw * state.ratio)
+                    tokens = int((raw + overhead) * state.ratio)
                 if tokens <= budget.target_tokens:
                     break
         except BaseException:
             # Stages are expected to log-and-return-False on failure, but an
             # unexpected raise must still keep what was already decided (and
             # the failure counters).
-            state.last_view_estimate = raw
+            state.last_view_estimate = raw + overhead
             self._save(req, state)
             raise
 
@@ -337,7 +364,7 @@ class Compaction:
                 budget.pressure(tokens),
             )
         return self._result(
-            req, state, view, raw, tokens, tokens_before, reasons, budget
+            req, state, view, raw + overhead, tokens, tokens_before, reasons, budget
         )
 
     def tools(self) -> list["Tool"]:
@@ -359,13 +386,15 @@ class Compaction:
         req: CompactionRequest,
         state: CompactionState,
         view: list[TranscriptEntry],
-        raw: int,
+        estimate: int,
         tokens: int,
         tokens_before: int,
         reasons: list[str],
         budget: TokenBudget | None,
     ) -> ContextResult:
-        state.last_view_estimate = raw
+        # ``estimate`` includes the tool-schema overhead, so the next call's
+        # calibration pairs the provider's real count against the same total.
+        state.last_view_estimate = estimate
         self._save(req, state)
 
         changed = _differs(view, req.entries)

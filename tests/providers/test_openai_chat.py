@@ -935,11 +935,11 @@ def test_regional_official_host_follows_official_dialect() -> None:
     assert not provider._should_replay_reasoning()
 
 
-def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
+def test_official_dialect_flag_opts_gateway_into_official_dialect() -> None:
     provider = OpenAIChatProvider(
         model="gpt-5",
         base_url="https://gateway.example.test/openai",
-        official_api=True,
+        official_dialect=True,
     )
 
     payload = provider._build_payload(
@@ -957,12 +957,12 @@ def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
     provider._check_ready()
 
 
-def test_official_api_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
+def test_official_dialect_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIChatProvider(
         model="gpt-5",
         base_url="https://api.openai.com/v1",
-        official_api=False,
+        official_dialect=False,
     )
 
     payload = provider._build_payload(

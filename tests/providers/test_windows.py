@@ -173,6 +173,20 @@ def test_models_payload_reads_groq_context_window() -> None:
     assert window_from_models_payload(payload, "llama-3.3-70b") == 131_072
 
 
+def test_models_payload_reads_anthropic_max_input_tokens() -> None:
+    """The official Anthropic Models API shape, published since 2026-03."""
+    payload = _payload(
+        {
+            "type": "model",
+            "id": "claude-opus-4-8",
+            "display_name": "Claude Opus 4.8",
+            "max_input_tokens": 1_000_000,
+            "max_tokens": 128_000,  # the output cap — must not be read
+        }
+    )
+    assert window_from_models_payload(payload, "claude-opus-4-8") == 1_000_000
+
+
 def test_models_payload_reads_together_context_length() -> None:
     payload = _payload({"id": "mistral-7b", "context_length": 8192})
     assert window_from_models_payload(payload, "mistral-7b") == 8192
@@ -201,7 +215,7 @@ def test_models_payload_strips_the_vendor_prefix() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        # The official OpenAI/Anthropic/DeepSeek shape: no window anywhere.
+        # The official OpenAI/DeepSeek shape: no window anywhere.
         _payload({"id": "gpt-5.5", "object": "model", "owned_by": "openai"}),
         _payload({"id": "other-model", "max_model_len": 4096}),  # id mismatch
         _payload({"id": "m", "max_model_len": "lots"}),  # wrong type

@@ -116,6 +116,7 @@ def window_from_error(body: str) -> int | None:
 _WINDOW_FIELDS = (
     "max_model_len",  # vLLM, SGLang
     "context_window",  # Groq
+    "max_input_tokens",  # Anthropic Models API (since 2026-03), LiteLLM proxies
     "loaded_context_length",  # LM Studio (/api/v0 only; harmless to accept)
     "context_length",  # OpenRouter (model-level), Together
     "max_context_length",  # LM Studio (theoretical max)
@@ -156,8 +157,9 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
     """Read ``model``'s context window out of a ``GET /models`` response.
 
     ``None`` when the endpoint publishes no window for it — the official
-    OpenAI, Anthropic and DeepSeek APIs publish nothing at all, and Ollama's
-    and llama.cpp's OpenAI-compatible listings carry no window either.
+    OpenAI and DeepSeek APIs publish nothing at all, and Ollama's and
+    llama.cpp's OpenAI-compatible listings carry no window either. The
+    official Anthropic API *does*: ``max_input_tokens``, since 2026-03.
     """
     if not isinstance(payload, dict):
         return None
@@ -190,24 +192,32 @@ async def fetch_reported_window(
     base_url: str,
     headers: dict[str, str],
     model: str,
+    params: Mapping[str, str | int] | None = None,
 ) -> int | None:
     """Ask ``GET {base_url}/models`` what ``model``'s context window is.
 
     Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
     body or a listing without window metadata all yield ``None``. The caller is
     trying to do better than "unknown", so nothing here is worth raising over.
+
+    ``params`` lets an adapter shape the listing for its dialect — Anthropic's
+    paginates at 20 entries by default, so its adapter asks for a page large
+    enough to hold the whole catalog.
     """
     try:
         response = await client.get(
             f"{base_url}/models",
             headers=headers,
+            params=params,
             follow_redirects=True,
             timeout=_PROBE_TIMEOUT,
         )
         if not response.is_success:
             return None
         return window_from_models_payload(response.json(), model)
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+        # InvalidURL is not an HTTPError: a malformed base_url must degrade to
+        # "unknown" here and fail loudly on the model call itself.
         return None
 
 

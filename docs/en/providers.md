@@ -42,7 +42,7 @@ automatically).
 
 `OpenAIChatProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, default_headers=None, supports_json_schema=None,
-trust_env=None, replay_reasoning=None, official_api=None)`
+trust_env=None, replay_reasoning=None, official_dialect=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `OPENAI_API_KEY`, `OPENAI_BASE_URL` (default
@@ -57,7 +57,8 @@ back to the [prompt path](structured-output.md#how-the-schema-reaches-the-model)
 unless you pass `supports_json_schema=True`. A missing API key is an error
 only on the official host — keyless local endpoints just work. When host
 inference guesses wrong (a proxy in front of the official API, say),
-`official_api=` overrides it.
+`official_dialect=` overrides it; auth stays with the real host, so a
+keyless gateway keeps working.
 
 **Reasoning models** (DeepSeek-style `reasoning_content`): thinking streams
 as [`ReasoningDelta`](streaming.md#model-output) events and is stored as
@@ -72,7 +73,7 @@ provider are replayed.
 
 `AnthropicProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
-default_headers=None, trust_env=None, official_api=None)`
+default_headers=None, trust_env=None, official_dialect=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default
@@ -184,7 +185,7 @@ chain, most trustworthy first:
 | --- | --- |
 | Explicit config | `Compaction(context_window=…)`, `--context-window`, `LOVIA_CONTEXT_WINDOW`, or the adapter's `context_window=` argument |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
-| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; Groq, Together and OpenRouter publish theirs |
+| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; Groq, Together and OpenRouter publish theirs |
 | The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |
 | — | otherwise unknown: no proactive compaction, reactive overflow handling only |
 
@@ -206,15 +207,16 @@ Two consequences worth knowing:
 
 - **The `/models` probe is skipped whenever it cannot help**: when you
   configured a window, when the endpoint is known to publish none
-  (`api.openai.com`, `api.anthropic.com`), and when it was already asked.
-  Answers — misses included — are memoized per `(endpoint, model)` for the life
-  of the process, so an endpoint is asked at most once even though a
-  `"vendor:model"` string is resolved into a fresh provider on every run and
-  every handoff. The probe runs before the first model call with its own short
-  timeout; a slow endpoint costs a moment, never the run.
-- **Anthropic models report 200K.** The 1M variants sit behind a beta header
-  lovia doesn't send by default, and advertising 1M would delay proactive
-  compaction. Enable the beta and set the window explicitly.
+  (`api.openai.com`), and when it was already asked. Answers — misses included
+  — are memoized per `(endpoint, model)` for the life of the process, so an
+  endpoint is asked at most once even though a `"vendor:model"` string is
+  resolved into a fresh provider on every run and every handoff. The probe runs
+  before the first model call with its own short timeout; a slow endpoint costs
+  a moment, never the run.
+- **Anthropic windows come from the endpoint.** The official Models API
+  publishes `max_input_tokens` per model, so the probe reads the window as
+  served to *your* org — 1M on the current generation, 200K on older models.
+  The bundled table only bridges the gap when the probe cannot answer.
 
 ## Custom providers
 
@@ -251,9 +253,7 @@ class TokenEstimator(Protocol):            # better-than-heuristic counting
 ```
 
 These are `runtime_checkable`, which only checks that the method *exists* — a
-wrong signature fails at call time. Since 0.8.14 `context_window` takes no
-`model`: a provider knows the model it speaks to, and `stream` takes none
-either.
+wrong signature fails at call time. 
 [`ScriptedProvider`](testing.md) in `lovia.testing` is a complete, readable
 reference implementation.
 

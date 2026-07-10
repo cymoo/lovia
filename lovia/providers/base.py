@@ -25,14 +25,6 @@ None is required, and a provider that implements none simply gets the
 heuristics. But the Protocols are ``runtime_checkable``, which only checks that
 a method *exists* — so an adapter that implements one with the wrong signature
 fails at call time, not at registration.
-
-.. versionchanged:: 0.8.14
-   ``context_window`` no longer takes a ``model`` argument. A provider knows
-   which model it speaks to (``stream`` takes none either), and the argument had
-   become actively misleading: once a window was learned from the endpoint, it
-   was returned whatever model you asked about. Adapters implementing the old
-   ``context_window(self, model)`` raise ``TypeError`` and must drop the
-   parameter.
 """
 
 from __future__ import annotations

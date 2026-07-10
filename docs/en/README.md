@@ -19,7 +19,7 @@ first, then jump to the page for the job in front of you.
 | Let the model call Python functions | [Tools](tools.md) |
 | Use built-in HTTP, search, and time tools | [Built-in tools](built-in-tools.md) |
 | Return Pydantic objects or JSON | [Structured output](structured-output.md) |
-| Configure models, compatible endpoints, fallback, or custom providers | [Providers & models](providers.md) |
+| Configure models, compatible endpoints, or custom providers | [Providers & models](providers.md) |
 | Compose agents with handoff or agent-as-tool | [Multi-agent](multi-agent.md) |
 | Package reusable capabilities | [Plugins](plugins.md) |
 | Load team knowledge, runbooks, or style guides | [Skills](skills.md) |
@@ -29,7 +29,7 @@ first, then jump to the page for the job in front of you.
 | Manage long context and compaction | [Context management](context.md) |
 | Add human approval for risky tools | [Human in the loop](human-in-the-loop.md) |
 | Add input/output safety checks | [Guardrails](guardrails.md) |
-| Configure retries, fallback, budgets, and cancellation | [Reliability](reliability.md) |
+| Configure retries, budgets, and cancellation | [Reliability](reliability.md) |
 | Give an agent files and shell access | [Workspace](workspace.md) |
 | Serve a chat UI or backend | [Web UI & server](web.md) |
 | Bring my own frontend or service | [HTTP API](http-api.md) |

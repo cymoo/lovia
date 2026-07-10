@@ -76,12 +76,6 @@ async def main() -> None:
     result = await Runner.run(agent, "hello custom providers")
     print(result.output)  # -> echo: HELLO CUSTOM PROVIDERS
 
-    # A fallback chain works too: try a flaky provider first, fall back to echo.
-    agent = agent.clone(
-        model=[EchoProvider("echo-primary"), EchoProvider("echo-backup")]
-    )
-    print((await Runner.run(agent, "fallbacks compose")).output)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

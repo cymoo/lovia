@@ -72,16 +72,16 @@ class ActiveAgent:
     ``workspace`` here so user code sees the same active agent and workspace;
     :meth:`RunState.activate` keeps the two in step.
 
-    ``providers`` is the active agent's resolved fallback chain (resolved once
-    per agent so HTTP clients are reused across turns; providers built from
-    string specs are closed when the run ends, user-supplied instances are left
-    to their owner). ``plugins`` bundles every plugin contribution for this
+    ``provider`` is the active agent's resolved provider (resolved once per
+    agent so its HTTP client is reused across turns; a provider built from a
+    string spec is closed when the run ends, a user-supplied instance is left
+    to its owner). ``plugins`` bundles every plugin contribution for this
     agent — see :class:`PluginActivation`; ``plugins.tools`` have already been
     merged into ``tools_by_name``.
     """
 
     agent: Agent[Any]
-    providers: list[Provider]
+    provider: Provider
     structured_output: StructuredOutput | None
     tools_by_name: dict[str, Tool]
     workspace: "WorkspaceSession | None" = None

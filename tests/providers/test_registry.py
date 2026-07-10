@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from lovia.exceptions import UserError
 from lovia.providers import provider_from_string, register_provider
 
 
@@ -15,7 +16,7 @@ class _FakeProvider:
 
 
 def test_unknown_prefix_raises_with_actionable_message() -> None:
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(UserError) as excinfo:
         provider_from_string("does-not-exist:foo")
     msg = str(excinfo.value)
     assert "register_provider" in msg or "entry-point" in msg
@@ -133,7 +134,7 @@ def test_registered_factory_without_kwargs_rejects_overrides() -> None:
 
     try:
         register_provider("plainco", lambda model: _FakeProvider(model))
-        with pytest.raises(ValueError, match="does not accept api_key/base_url"):
+        with pytest.raises(UserError, match="does not accept api_key/base_url"):
             provider_from_string("plainco:m1", api_key="sk-x")
     finally:
         _REGISTRY.pop("plainco", None)
@@ -232,7 +233,7 @@ def test_entry_point_loading_is_targeted_and_reports_target_failure(
     assert other.loaded is True
     assert broken.loaded is False
 
-    with pytest.raises(ValueError, match="failed to load"):
+    with pytest.raises(UserError, match="failed to load"):
         provider_from_string("broken:model")
 
 
@@ -282,5 +283,5 @@ def test_entry_point_rejects_non_callable_export(
     )
     monkeypatch.setattr(providers, "_ENTRY_POINTS", None)
 
-    with pytest.raises(ValueError, match="provider class or callable factory"):
+    with pytest.raises(UserError, match="provider class or callable factory"):
         provider_from_string("bad:model")

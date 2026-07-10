@@ -60,7 +60,7 @@ result = await handle.result()
 | `MessageCompleted` | `entries` | 一轮 assistant 回复已完整组装：包含它产生的新 `TranscriptEntry` |
 | `UserMessageInjected` | `content`, `turn` | [mailbox](reliability.md#运行中追加指令) 消息被折入为用户消息 |
 
-当 runner 通过重试或 fallback 从 provider 的中途流式错误中恢复时，会触发
+当 runner 通过重试从 provider 的中途流式错误中恢复时，会触发
 `OutputDiscarded`
 （见 [`RetryPolicy.restart_on_partial`](reliability.md#provider-重试)）。持久化
 transcript 不受影响；它只由已完成轮次组装出来。

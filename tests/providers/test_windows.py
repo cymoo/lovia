@@ -11,7 +11,6 @@ import asyncio
 import pytest
 
 from lovia.providers._windows import (
-    clear_endpoint_cache,
     rules_for_host,
     WindowResolver,
     strip_snapshot,
@@ -173,6 +172,20 @@ def test_models_payload_reads_groq_context_window() -> None:
     assert window_from_models_payload(payload, "llama-3.3-70b") == 131_072
 
 
+def test_models_payload_reads_anthropic_max_input_tokens() -> None:
+    """The official Anthropic Models API shape, published since 2026-03."""
+    payload = _payload(
+        {
+            "type": "model",
+            "id": "claude-opus-4-8",
+            "display_name": "Claude Opus 4.8",
+            "max_input_tokens": 1_000_000,
+            "max_tokens": 128_000,  # the output cap — must not be read
+        }
+    )
+    assert window_from_models_payload(payload, "claude-opus-4-8") == 1_000_000
+
+
 def test_models_payload_reads_together_context_length() -> None:
     payload = _payload({"id": "mistral-7b", "context_length": 8192})
     assert window_from_models_payload(payload, "mistral-7b") == 8192
@@ -201,7 +214,7 @@ def test_models_payload_strips_the_vendor_prefix() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        # The official OpenAI/Anthropic/DeepSeek shape: no window anywhere.
+        # The official OpenAI/DeepSeek shape: no window anywhere.
         _payload({"id": "gpt-5.5", "object": "model", "owned_by": "openai"}),
         _payload({"id": "other-model", "max_model_len": 4096}),  # id mismatch
         _payload({"id": "m", "max_model_len": "lots"}),  # wrong type
@@ -280,71 +293,38 @@ def _resolver(**kw) -> WindowResolver:
         base_url="http://gw/v1",
         host="gw",
         model="m",
-        explicit=None,
         table={"gw": (("m", 200_000),)},
         probe=True,
     )
     return WindowResolver(**{**defaults, **kw})
 
 
-@pytest.mark.parametrize("bad", [0, -1, -999])
-def test_resolver_rejects_a_nonsense_explicit_window(bad: int) -> None:
-    """Left unchecked this surfaces much later as `ValueError: window must be >= 1`
-    from deep inside TokenBudget, on the first compact() of the run."""
-    with pytest.raises(ValueError, match="context_window must be >= 1"):
-        _resolver(explicit=bad)
+def test_resolver_falls_back_to_the_table() -> None:
+    assert _resolver().window() == 200_000
 
 
-def test_resolver_precedence() -> None:
-    assert _resolver().window() == 200_000  # the table, when nothing else knows
-
-    _resolver().remember(65_536)  # the endpoint refused and named its limit
-    assert _resolver().window() == 65_536
-
-    # A configured window is a budget; it may be smaller, never larger than
-    # what the endpoint enforces.
-    assert _resolver(explicit=1_234).window() == 1_234
-    assert _resolver(explicit=1_000_000).window() == 65_536
-
-
-async def test_an_advertised_window_beats_the_table_but_not_the_caller() -> None:
-    """A listing is a claim; a configured window is a decision."""
+async def test_an_advertised_window_beats_the_table() -> None:
+    """A listing reflects the deployment as served; the table only guesses."""
 
     async def fetch() -> int | None:
         return 8_192
 
     assert await _resolver().discover(fetch) == 8_192  # beats the table's 200_000
-    clear_endpoint_cache()
-    assert await _resolver(explicit=1_000_000).discover(fetch) == 1_000_000
 
 
-async def test_an_advertised_window_never_overwrites_an_enforced_one() -> None:
-    """Whichever lands last, a refusal outranks a listing."""
-
-    async def fetch() -> int | None:
-        return 32_768
-
-    r = _resolver()
-    r.remember(8_192)  # the endpoint refused at 8192
-    assert await r.discover(fetch) == 8_192
-
-
-def test_remembered_window_outlives_the_provider_that_learned_it() -> None:
+async def test_the_advertised_memo_outlives_the_provider_that_probed() -> None:
     """A string model spec builds a fresh provider every run and every handoff.
 
-    Without a per-endpoint memo the same overflow would be re-provoked forever.
+    Without a per-endpoint memo every run would re-probe ``/models``.
     """
-    _resolver().remember(65_536)
-    assert _resolver().window() == 65_536
+
+    async def fetch() -> int | None:
+        return 8_192
+
+    await _resolver().discover(fetch)
+    assert _resolver().window() == 8_192  # a fresh resolver, no I/O
     # ...but only for that endpoint.
     assert _resolver(base_url="http://other/v1").window() == 200_000
-
-
-def test_the_newest_statement_from_an_endpoint_wins() -> None:
-    r = _resolver()
-    r.remember(4_096)
-    r.remember(8_192)  # deployment resized underneath us
-    assert r.window() == 8_192
 
 
 async def test_discover_asks_once_and_caches_the_miss() -> None:
@@ -360,35 +340,13 @@ async def test_discover_asks_once_and_caches_the_miss() -> None:
     assert calls == 1
 
 
-@pytest.mark.parametrize(
-    "kw",
-    [
-        {"probe": False},  # the endpoint is known to publish nothing
-        {"explicit": 4_096},  # the caller already decided
-    ],
-)
-async def test_discover_declines_to_spend_a_request(kw: dict) -> None:
+async def test_discover_declines_to_spend_a_request() -> None:
+    """``probe=False`` marks an endpoint known to publish nothing."""
+
     async def fetch() -> int | None:  # pragma: no cover - must never run
         raise AssertionError("probed an endpoint that could not help")
 
-    assert await _resolver(**kw).discover(fetch) == kw.get("explicit", 200_000)
-
-
-async def test_a_probe_miss_never_clobbers_a_learned_window() -> None:
-    """The rejection outranks the listing, whichever lands last.
-
-    Reachable in production: `lovia web` shares one provider across concurrent
-    chats, so a stream can overflow while a probe is still in flight.
-    """
-    r = _resolver()
-
-    async def slow_miss() -> int | None:
-        await asyncio.sleep(0)
-        r.remember(65_536)  # a concurrent stream overflows mid-probe
-        return None
-
-    assert await r.discover(slow_miss) == 65_536
-    assert r.window() == 65_536
+    assert await _resolver(probe=False).discover(fetch) == 200_000
 
 
 async def test_concurrent_probes_all_see_the_window() -> None:
@@ -439,7 +397,6 @@ def test_a_foreign_host_gets_no_window_from_the_table() -> None:
         base_url="https://api.openai.com/v1",
         host="api.openai.com",
         model="gpt-4.1",
-        explicit=None,
         table=_TABLE,
         probe=False,
     )
@@ -447,7 +404,6 @@ def test_a_foreign_host_gets_no_window_from_the_table() -> None:
         base_url="http://vllm:8000/v1",
         host="vllm",
         model="gpt-4.1",
-        explicit=None,
         table=_TABLE,
         probe=True,
     )

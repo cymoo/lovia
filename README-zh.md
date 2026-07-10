@@ -168,7 +168,7 @@ print(result.output.title)
 
 ### Provider
 
-模型可以写字符串、传 provider 实例，也可以用 fallback 链。OpenAI 兼容端点读取
+模型可以写字符串，也可以传 provider 实例。OpenAI 兼容端点读取
 `OPENAI_BASE_URL` / `OPENAI_API_KEY`；Anthropic 默认走官方端点，读取
 `ANTHROPIC_API_KEY`，非默认端点再设置 `ANTHROPIC_BASE_URL`。自定义 provider 只是一个小 `Protocol`：
 
@@ -177,7 +177,7 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:<model>", "glm-5.2"],  # fallback 链
+    model="anthropic:<model>",
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```

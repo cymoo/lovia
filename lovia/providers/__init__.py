@@ -101,9 +101,10 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
     try:
         obj = ep.load()
     except Exception as exc:
-        raise ValueError(
+        raise UserError(
             f"Provider plugin {vendor!r} failed to load from entry point "
-            f"{ep.value!r}: {exc}"
+            f"{ep.value!r}: {exc}",
+            hint="The plugin package is installed but broken — check its import path and dependencies.",
         ) from exc
     if isinstance(obj, type):
 
@@ -113,7 +114,7 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
         return _factory
     if callable(obj):
         return cast(ProviderFactory, obj)
-    raise ValueError(
+    raise UserError(
         f"Provider plugin {vendor!r} must be a provider class or callable factory"
     )
 
@@ -134,7 +135,7 @@ def provider_from_string(
 
     ``api_key``/``base_url`` override the provider's environment-derived
     defaults; a third-party factory that doesn't accept them raises
-    :class:`ValueError` (only when an override is actually given).
+    :class:`~lovia.UserError` (only when an override is actually given).
     """
     kwargs: dict[str, str] = {}
     if api_key is not None:
@@ -167,15 +168,16 @@ def provider_from_string(
         try:
             return factory(model, **kwargs)
         except TypeError as exc:
-            raise ValueError(
+            raise UserError(
                 f"provider plugin {vendor!r} does not accept "
                 f"api_key/base_url overrides: {exc}"
             ) from exc
-    raise ValueError(
-        f"Unknown model spec: {spec!r}. Built-in prefixes: openai, "
-        f"anthropic. Register additional vendors via "
-        f"lovia.providers.register_provider or the 'lovia.providers' "
-        f"entry-point group."
+    raise UserError(
+        f"Unknown model spec: {spec!r}",
+        hint="Built-in prefixes: openai (aliases openai-chat, oai) and "
+        "anthropic (alias claude). Register other vendors via "
+        "lovia.providers.register_provider or the 'lovia.providers' "
+        "entry-point group.",
     )
 
 
@@ -206,7 +208,7 @@ def model_from_env(*, required: bool = True) -> str | None:
         raise UserError(
             "no model configured in the environment",
             hint='set LOVIA_MODEL (e.g. "openai:gpt-5.5" or '
-            '"anthropic:claude-4-8-opus"), or OPENAI_DEFAULT_MODEL / '
+            '"anthropic:claude-opus-4-8"), or OPENAI_DEFAULT_MODEL / '
             "ANTHROPIC_DEFAULT_MODEL",
         )
     return None

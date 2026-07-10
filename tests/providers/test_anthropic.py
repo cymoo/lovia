@@ -520,20 +520,20 @@ def test_build_payload_gates_thinking_replay_by_endpoint_and_option() -> None:
     # Default-on endpoints replay regardless of the option.
     assert block_types(build(compatible, None)) == ["thinking", "tool_use"]
 
-    # official_api overrides the host inference in both directions: gateways
-    # forwarding to the official API get the strict gate, and the official
-    # host can be forced lenient.
+    # official_dialect overrides the host inference in both directions:
+    # gateways forwarding to the official API get the strict gate, and the
+    # official host can be forced lenient.
     strict_gateway = AnthropicProvider(
         model="claude-haiku-4-5",
         api_key="x",
         base_url="https://gateway.example.test/anthropic",
-        official_api=True,
+        official_dialect=True,
     )
     lenient_official = AnthropicProvider(
         model="claude-haiku-4-5",
         api_key="x",
         base_url="https://api.anthropic.com/v1",
-        official_api=False,
+        official_dialect=False,
     )
     assert block_types(build(strict_gateway, None)) == ["tool_use"]
     assert block_types(build(lenient_official, None)) == ["thinking", "tool_use"]
@@ -990,14 +990,21 @@ def test_context_overflow_recognizes_openai_phrasing_from_compat_gateways() -> N
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
-        # Default (non-beta) windows: the 1M variants require the ``context-1m``
-        # beta header, which the adapter does not send.
-        ("claude-opus-4-8", 200_000),
-        ("claude-sonnet-4-6", 200_000),
+        # The 4.6 generation onward defaults to 1M with no beta header;
+        # exact entries carry those. Everything older sits on the 200K
+        # family-prefix floor.
+        ("claude-fable-5", 1_000_000),
+        ("claude-opus-4-8", 1_000_000),
+        ("claude-sonnet-4-6", 1_000_000),
+        ("claude-sonnet-5", 1_000_000),
         ("claude-haiku-4-5", 200_000),
+        ("claude-opus-4-5", 200_000),
         ("claude-sonnet-4-5-20250929", 200_000),  # date-pinned snapshot
         ("claude-3-5-sonnet-20241022", 200_000),
-        ("claude-sonnet-5", 200_000),  # released after this table was written
+        # A family member newer than this table lands on the safe floor: an
+        # under-claim over-compacts but can never fail a request, and the
+        # /models probe corrects it before the first call.
+        ("claude-sonnet-6", 200_000),
         # Nothing is guessed for names outside the line.
         ("gpt-5.5", None),
         ("claude-instant-1.2", None),
@@ -1012,31 +1019,35 @@ def test_table_window_covers_the_whole_claude_line(
     assert provider.context_window() == expected
 
 
-def test_context_window_constructor_argument_overrides_the_table() -> None:
-    """The 1M beta, or a gateway that caps the model."""
-    provider = AnthropicProvider(
-        model="claude-opus-4-8", api_key="x", context_window=1_000_000
-    )
-    assert provider.context_window() == 1_000_000
-
-
 # --------------------------------------------------- endpoint self-report -
 
 
-@pytest.mark.parametrize("bad", [0, -1])
-def test_provider_rejects_a_nonsense_context_window(bad: int) -> None:
-    with pytest.raises(ValueError, match="context_window must be >= 1"):
-        AnthropicProvider(model="claude-opus-4-8", api_key="x", context_window=bad)
-
-
 @pytest.mark.asyncio
-async def test_discover_never_asks_the_official_api() -> None:
-    """api.anthropic.com publishes no window on /models."""
+async def test_discover_reads_the_official_models_api() -> None:
+    """api.anthropic.com publishes ``max_input_tokens`` per model (2026-03+).
+
+    The listing describes the deployment as served to *this* org, so it beats
+    the bundled table — here a 500K cap on a model the table lists at 1M.
+    """
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"data": []})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "type": "model",
+                        "id": "claude-opus-4-8",
+                        "display_name": "Claude Opus 4.8",
+                        "max_input_tokens": 500_000,
+                        "max_tokens": 128_000,
+                    }
+                ],
+                "has_more": False,
+            },
+        )
 
     provider = AnthropicProvider(
         model="claude-opus-4-8",
@@ -1044,8 +1055,14 @@ async def test_discover_never_asks_the_official_api() -> None:
         base_url="https://api.anthropic.com/v1",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    assert await provider.discover_context_window() == 200_000  # from the table
-    assert seen == []  # api.anthropic.com publishes no window
+    assert provider.context_window() == 1_000_000  # the table, before the probe
+    assert await provider.discover_context_window() == 500_000
+    assert provider.context_window() == 500_000
+    assert seen[0].url.path == "/v1/models"
+    # The official listing paginates at 20 entries by default; the probe asks
+    # for a page large enough to hold the whole catalog.
+    assert seen[0].url.params["limit"] == "100"
+    assert seen[0].headers["x-api-key"] == "x"
 
 
 @pytest.mark.asyncio
@@ -1067,12 +1084,19 @@ async def test_discover_reads_a_window_from_a_compatible_gateway() -> None:
     assert provider.context_window() is None  # not a Claude name
     assert await provider.discover_context_window() == 128_000
     assert provider.context_window() == 128_000
-    assert str(seen[0].url) == "https://gw.test/anthropic/models"
+    assert seen[0].url.host == "gw.test"
+    assert seen[0].url.path == "/anthropic/models"
     assert seen[0].headers["x-api-key"] == "x"
+    # The pagination param is official-API dialect; a strict gateway would
+    # 400 on it and the probe would memoize the miss for the whole process.
+    assert "limit" not in seen[0].url.params
 
 
 @pytest.mark.asyncio
-async def test_overflow_teaches_the_endpoint_its_window() -> None:
+async def test_overflow_does_not_mutate_the_providers_own_window() -> None:
+    """An enforced limit travels on the error; the policy learns and persists
+    it per session. The provider keeps reporting only what the endpoint
+    advertises (here: nothing)."""
     body = b"prompt is too long: 208310 tokens > 200000 maximum"
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(400, content=body))
@@ -1082,7 +1106,8 @@ async def test_overflow_teaches_the_endpoint_its_window() -> None:
     )
     assert provider.context_window() is None
 
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc_info:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
-    assert provider.context_window() == 200_000
+    assert exc_info.value.reported_window == 200_000
+    assert provider.context_window() is None

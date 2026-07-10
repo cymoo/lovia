@@ -142,7 +142,9 @@ required_sections=...)`，不要 fork 这段实现。
 
 **自定义 `ContextPolicy`** 则替换全部机制：一个方法
 `async compact(req: CompactionRequest) -> ContextResult`。request 携带只读 entries、provider、
-`last_input_tokens`、`overflow` flag，以及 runner 会帮你在 checkpoint 中往返保存的 `scratch` dict。
+`last_input_tokens`、`overflow` flag、`reported_window`（端点拒绝上一个 prompt 时点名的上限——
+请记住它，它的优先级压过所有其他窗口来源），以及 runner 会帮你在 checkpoint 中往返保存的
+`scratch` dict。
 返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
 `lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
@@ -158,8 +160,6 @@ required_sections=...)`，不要 fork 这段实现。
   紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 50%——它下手重一倍。
   知道窗口就请提前设置 `context_window=...`。Ollama 压根不会撞墙
   （它[静默截断](providers.md#容易踩的点)），所以对它来说这不是可选项。
-- **fallback 链按 primary 计算窗口。** `Agent(model=[a, b])` 的每个 prompt 都按 `a` 的窗口
-  计算，即使这一轮是 `b` 在服务。如果 `b` 更小，它的第一个长 prompt 会落到 reactive overflow 路径。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于
   policy 实例。clone agent 会共享 policy 实例；变体请各自配置一个。
 

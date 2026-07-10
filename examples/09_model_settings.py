@@ -1,10 +1,9 @@
 """Model choice and sampling settings.
 
-``model=`` accepts a ``"vendor:model"`` string, a constructed provider
-instance, or a list of either for fallback (see 14_reliability.py).
-:class:`ModelSettings` carries the portable sampling knobs; vendor-only
-options ride in ``provider_options`` under the adapter's key, so a fallback
-chain never leaks one vendor's knobs into another's payload.
+``model=`` accepts a ``"vendor:model"`` string or a constructed provider
+instance. :class:`ModelSettings` carries the portable sampling knobs;
+vendor-only options ride in ``provider_options`` under the adapter's key,
+so one settings object never leaks a vendor's knobs into another's payload.
 
 Any OpenAI-compatible service (DeepSeek, Ollama, vLLM, an internal
 gateway) works through ``OpenAIChatProvider(base_url=...)`` — or simply set

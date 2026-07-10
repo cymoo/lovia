@@ -176,8 +176,10 @@ required_sections=...)` rather than forking it).
 **A custom `ContextPolicy`** replaces everything: one method,
 `async compact(req: CompactionRequest) -> ContextResult`. The request
 carries the entries (read-only), the provider, `last_input_tokens`, the
-`overflow` flag, and a `scratch` dict the runner round-trips through
-checkpoints for you. Return the view plus `changed`/`compacted` flags and
+`overflow` flag, `reported_window` (the limit the endpoint named while
+rejecting the last prompt — remember it, it outranks every other window
+source), and a `scratch` dict the runner round-trips through checkpoints
+for you. Return the view plus `changed`/`compacted` flags and
 optional token counts. An optional `tools()` method contributes tools —
 `make_recall_tool(store)` from `lovia.tools.recall` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
@@ -201,9 +203,6 @@ content. `lovia/context/policy.py` is a one-screen read.
   `context_window=...` up front where you know it. Ollama never overflows
   at all (it [truncates silently](providers.md#sharp-edges)), so there it
   is not optional.
-- **A fallback chain is sized against its primary.** `Agent(model=[a, b])`
-  budgets every prompt against `a`'s window, even on turns `b` served. If `b`
-  is smaller, its first long prompt falls to the reactive overflow path.
 - **Don't share one `Compaction` across agents with different windows** —
   state is per run/session, but the configured window is the instance's.
   Cloning agents shares the policy instance; give variants their own.

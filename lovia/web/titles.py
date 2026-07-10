@@ -40,7 +40,7 @@ async def generate_title(
     user_message: str,
     assistant_reply: Any,
     *,
-    model: str | Provider | list[str | Provider],
+    model: str | Provider,
 ) -> str:
     """Return a short, human-friendly title for the chat.
 

@@ -615,24 +615,24 @@ class RunLoop:
     ) -> ActiveAgent:
         """Resolve everything derived from ``agent`` into one swappable bundle.
 
-        Called at bootstrap and on every handoff. Providers, workspace, and
+        Called at bootstrap and on every handoff. Provider, workspace, and
         plugin connections are run-scoped: they are opened here and torn down
         when the run ends (a handoff leaves the previous agent's connections
         open until then — closing them eagerly would add failure modes for no
         gain).
         """
-        providers = self._resolve_providers(agent, resources)
-        await self._ensure_context_window(providers)
+        provider = self._resolve_provider(agent, resources)
+        await self._ensure_context_window(provider)
         structured_output = resolve_structured_output(
             self._resolve_output_type(agent),
-            supports_json_schema(providers),
+            supports_json_schema(provider),
         )
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
         plugins = await self._activate_plugins(agent, resources)
         tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
         return ActiveAgent(
             agent=agent,
-            providers=providers,
+            provider=provider,
             structured_output=structured_output,
             tools_by_name=tools_by_name,
             workspace=workspace,
@@ -726,8 +726,7 @@ class RunLoop:
         chance to produce a more aggressive view and the call is retried; a
         second overflow — or one after partial output — propagates.
         """
-        providers = state.active.providers
-        primary = providers[0]
+        provider = state.active.provider
         request = CompactionRequest(
             # A shallow snapshot, not the live list: the policy contract says
             # read-only, but handing out the real transcript would let one
@@ -737,8 +736,8 @@ class RunLoop:
             # here and the overflow re-compact below (both happen before this
             # turn's entries are appended), so the snapshot stays current.
             entries=list(state.transcript),
-            provider=primary,
-            model=getattr(primary, "model", None),
+            provider=provider,
+            model=getattr(provider, "model", None),
             last_input_tokens=state.last_input_tokens,
             overflow=False,
             scratch=state.context_state,
@@ -753,7 +752,7 @@ class RunLoop:
 
         forwarded = False
         try:
-            async for ev in self._call_model(state, providers, view, turn, tracer):
+            async for ev in self._call_model(state, provider, view, turn, tracer):
                 forwarded = True
                 yield ev
             return
@@ -809,7 +808,7 @@ class RunLoop:
         view = await self._augment_view(state, view)
         turn.assistant = None
         turn.turn_entries = []
-        async for ev in self._call_model(state, providers, view, turn, tracer):
+        async for ev in self._call_model(state, provider, view, turn, tracer):
             yield ev
 
     async def _augment_view(
@@ -852,14 +851,14 @@ class RunLoop:
     async def _call_model(
         self,
         state: RunState,
-        providers: list[Provider],
+        provider: Provider,
         view: list[TranscriptEntry],
         turn: ModelTurnResult,
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
         async for ev in stream_model_turn(
             agent=state.agent,
-            providers=providers,
+            provider=provider,
             input_entries=view,
             tools_by_name=state.active.tools_by_name,
             structured_output=state.active.structured_output,
@@ -1369,63 +1368,47 @@ class RunLoop:
             tools[t.name] = t
         return tools
 
-    async def _ensure_context_window(self, providers: list[Provider]) -> None:
+    async def _ensure_context_window(self, provider: Provider) -> None:
         """Give the endpoint a chance to report its own context window.
 
         The adapter decides whether that costs anything: it declines when the
-        window was configured, when the endpoint is known to publish none, and
-        when it already asked (memoized per endpoint, for the process). What we
-        must *not* do here is skip the question because the bundled table has an
-        answer — the endpoint outranks the table, and a deployment that caps a
-        familiar model would otherwise be budgeted at the table's number.
+        endpoint is known to publish none and when it already asked (memoized
+        per endpoint, for the process). What we must *not* do here is skip the
+        question because the bundled table has an answer — the endpoint
+        outranks the table, and a deployment that caps a familiar model would
+        otherwise be budgeted at the table's number.
 
         The sentinel matters: a policy that does not *declare* ``context_window``
         (:class:`~lovia.context.NoopContextPolicy`, custom policies) never needs
         a window, and must not pay for one.
-
-        Only ``providers[0]`` is asked, because only its window is used: the
-        context policy sizes every prompt against the primary even after a
-        fallback takes over. A smaller fallback relies on the reactive overflow
-        path. See https://github.com/cymoo/lovia/issues/88.
         """
         declared = getattr(self.context_policy, "context_window", _NO_WINDOW_FIELD)
-        if declared is not None or not providers:
+        if declared is not None:
             return
-        primary = providers[0]
-        await discover_context_window(primary)
-        if context_window(primary) is None:
+        await discover_context_window(provider)
+        if context_window(provider) is None:
             logger.info(
                 "context.window: unknown for %r; proactive compaction is off — "
                 "set Compaction(context_window=...) if the endpoint cannot report it",
-                getattr(primary, "model", None),
+                getattr(provider, "model", None),
             )
 
-    def _resolve_providers(
+    def _resolve_provider(
         self, agent: Agent[Any], resources: AsyncExitStack
-    ) -> list[Provider]:
-        """Resolve ``agent``'s provider chain once for the rest of the run.
+    ) -> Provider:
+        """Resolve ``agent``'s provider once for the rest of the run.
 
-        Providers built here from string specs are owned by the run: their
-        lazily-created HTTP clients are reused across turns and closed when
-        the run ends. User-supplied :class:`Provider` instances are never
-        closed — their lifecycle belongs to the caller.
+        A provider built here from a string spec is owned by the run: its
+        lazily-created HTTP client is reused across turns and closed when
+        the run ends. A user-supplied :class:`Provider` instance is never
+        closed — its lifecycle belongs to the caller.
         """
-        specs = agent.model if isinstance(agent.model, list) else [agent.model]
-        providers = agent.resolve_providers()
-        # NOTE: this pairs each provider with its spec positionally, which is
-        # correct only while Agent.resolve_providers() returns providers 1:1 in
-        # agent.model order. If it ever dedups or reorders, the run-owned (built
-        # from a string spec) vs caller-owned distinction below would be wrong;
-        # the assert fails loudly if that invariant is ever broken.
-        assert len(providers) == len(specs), (
-            "resolve_providers() must return one provider per model spec"
-        )
-        for spec, provider in zip(specs, providers):
-            if isinstance(spec, str):
-                aclose = getattr(provider, "aclose", None)
-                if callable(aclose):
-                    _push_cleanup(resources, aclose)
-        return providers
+        provider = agent.resolve_provider()
+        if isinstance(agent.model, str):
+            aclose = getattr(provider, "aclose", None)
+            if callable(aclose):
+                _push_cleanup(resources, aclose)
+        return provider
 
     async def _connect_workspace(
         self, agent: Agent[Any], resources: AsyncExitStack

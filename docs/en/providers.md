@@ -10,15 +10,15 @@ from lovia import Agent, ModelSettings
 
 agent = Agent(
     name="assistant",
-    model=["anthropic:<model>", "glm-5.2"],  # fallback chain
+    model="anthropic:<model>",
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
 
 ## Model strings
 
-`Agent(model=...)` accepts a `"vendor:model"` string, a `Provider` instance,
-or a list of either (a [fallback chain](#fallback-chains)).
+`Agent(model=...)` accepts a `"vendor:model"` string or a `Provider`
+instance.
 
 | Prefix | Provider | Aliases |
 | --- | --- | --- |
@@ -42,7 +42,7 @@ automatically).
 
 `OpenAIChatProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, default_headers=None, supports_json_schema=None,
-trust_env=None, replay_reasoning=None, official_api=None)`
+trust_env=None, replay_reasoning=None, official_dialect=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `OPENAI_API_KEY`, `OPENAI_BASE_URL` (default
@@ -57,7 +57,8 @@ back to the [prompt path](structured-output.md#how-the-schema-reaches-the-model)
 unless you pass `supports_json_schema=True`. A missing API key is an error
 only on the official host — keyless local endpoints just work. When host
 inference guesses wrong (a proxy in front of the official API, say),
-`official_api=` overrides it.
+`official_dialect=` overrides it; auth stays with the real host, so a
+keyless gateway keeps working.
 
 **Reasoning models** (DeepSeek-style `reasoning_content`): thinking streams
 as [`ReasoningDelta`](streaming.md#model-output) events and is stored as
@@ -72,7 +73,7 @@ provider are replayed.
 
 `AnthropicProvider(model, *, api_key=None, base_url=None, client=None,
 timeout=None, anthropic_version="2023-06-01", default_max_tokens=16_384,
-default_headers=None, trust_env=None, official_api=None)`
+default_headers=None, trust_env=None, official_dialect=None)`
 
 Credentials and endpoint resolve from the environment when not passed:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default
@@ -102,20 +103,16 @@ stripped there — while think-by-default compatible hosts (e.g. DeepSeek's
 Messages dialects; point `ANTHROPIC_BASE_URL` at them and the leniencies
 above apply automatically.
 
-## Fallback chains
+## Multi-vendor failover
 
-`model=[...]` lists providers in preference order. The runner works through
-the chain on provider errors — a retryable failure first exhausts the
-current provider's [retry policy](reliability.md#provider-retries), then the
-next provider takes over. One capability note: with a mixed chain,
-[structured output](structured-output.md) uses the native path only when
-**every** provider in the chain supports it — otherwise a mid-run fallback
-would reject the schema payload — so a chain mixing capabilities quietly
-uses the prompt path for all.
-
-```python
-agent = Agent(name="assistant", model=["anthropic:<model>", "glm-5.2"])
-```
+One agent speaks to one provider; lovia deliberately has no in-process
+fallback chain. Transient errors are the
+[retry policy](reliability.md#provider-retries)'s job. For vendor-level
+failover, point `base_url` at a routing gateway (LiteLLM, OpenRouter, ...)
+that fails over server-side — the run keeps a single endpoint, a single
+context window, and a single capability set. And because sessions persist
+across runs, an app can always re-run a failed request against the same
+session with a different model.
 
 ## ModelSettings
 
@@ -182,9 +179,9 @@ chain, most trustworthy first:
 
 | Source | When it answers |
 | --- | --- |
-| Explicit config | `Compaction(context_window=…)`, `--context-window`, `LOVIA_CONTEXT_WINDOW`, or the adapter's `context_window=` argument |
+| Explicit config | `Compaction(context_window=…)` — also settable via `--context-window` / `LOVIA_CONTEXT_WINDOW` in `lovia web`. The **one** user-facing knob; everything below is automatic |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
-| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; Groq, Together and OpenRouter publish theirs |
+| **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; Groq, Together and OpenRouter publish theirs |
 | The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |
 | — | otherwise unknown: no proactive compaction, reactive overflow handling only |
 
@@ -197,24 +194,25 @@ deployment. The `gpt-4.1` a vLLM box re-exposes at `--max-model-len 8192` is a
 different thing entirely, and this adapter serves both — so an unlisted host
 gets nothing from the table and relies on what the endpoint reports.
 
-The practical upshot: an unlisted model costs **one** overflow, once. The window
-learned from it is memoized per `(endpoint, model)` for the life of the process
-*and* persisted in the session, so every later turn — and every later run —
-sizes itself correctly.
+The practical upshot: an unlisted model costs **one** overflow per session. The
+window the endpoint named travels on the error into the policy's state and is
+persisted with the session, so every later turn — and every later run on that
+session — sizes itself correctly.
 
 Two consequences worth knowing:
 
-- **The `/models` probe is skipped whenever it cannot help**: when you
-  configured a window, when the endpoint is known to publish none
-  (`api.openai.com`, `api.anthropic.com`), and when it was already asked.
-  Answers — misses included — are memoized per `(endpoint, model)` for the life
-  of the process, so an endpoint is asked at most once even though a
-  `"vendor:model"` string is resolved into a fresh provider on every run and
-  every handoff. The probe runs before the first model call with its own short
-  timeout; a slow endpoint costs a moment, never the run.
-- **Anthropic models report 200K.** The 1M variants sit behind a beta header
-  lovia doesn't send by default, and advertising 1M would delay proactive
-  compaction. Enable the beta and set the window explicitly.
+- **The `/models` probe is skipped whenever it cannot help**: when the policy
+  already has a configured window, when the endpoint is known to publish none
+  (`api.openai.com`), and when it was already asked. Answers — misses included
+  — are memoized per `(endpoint, model)` for the life of the process, so an
+  endpoint is asked at most once even though a `"vendor:model"` string is
+  resolved into a fresh provider on every run and every handoff. The probe runs
+  before the first model call with its own short timeout; a slow endpoint costs
+  a moment, never the run.
+- **Anthropic windows come from the endpoint.** The official Models API
+  publishes `max_input_tokens` per model, so the probe reads the window as
+  served to *your* org — 1M on the current generation, 200K on older models.
+  The bundled table only bridges the gap when the probe cannot answer.
 
 ## Custom providers
 
@@ -251,9 +249,7 @@ class TokenEstimator(Protocol):            # better-than-heuristic counting
 ```
 
 These are `runtime_checkable`, which only checks that the method *exists* — a
-wrong signature fails at call time. Since 0.8.14 `context_window` takes no
-`model`: a provider knows the model it speaks to, and `stream` takes none
-either.
+wrong signature fails at call time. 
 [`ScriptedProvider`](testing.md) in `lovia.testing` is a complete, readable
 reference implementation.
 
@@ -303,8 +299,7 @@ triggers reactive compaction instead of retries. That error also carries
   4096), dropping the *oldest* tokens first — your system prompt and tool
   definitions. Its OpenAI-compatible `/models` publishes no window either,
   so nothing in the resolution chain can reach it, and no error will ever
-  tell you. Set `Compaction(context_window=…)` or
-  `OpenAIChatProvider(..., context_window=…)` to match your `num_ctx`.
+  tell you. Set `Compaction(context_window=…)` to match your `num_ctx`.
 - **Anthropic prompt caching is opt-in** (`cache_system: True`). Long
   agent loops on the official API without it re-pay the full prompt every
   turn.
@@ -321,7 +316,7 @@ triggers reactive compaction instead of retries. That error also carries
 ## See also
 
 - [Structured output](structured-output.md) — native vs prompt-path schemas
-- [Reliability](reliability.md) — retries and fallback in depth
+- [Reliability](reliability.md) — retries, budgets, cancellation
 - [Context management](context.md) — how windows and caching interact
 - Examples: [`09_model_settings.py`](../../examples/09_model_settings.py),
   [`10_custom_provider.py`](../../examples/10_custom_provider.py)

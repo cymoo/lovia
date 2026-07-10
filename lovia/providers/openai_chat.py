@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ContextOverflowError, ProviderError, UserError
+from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     TranscriptEntry,
@@ -53,7 +53,7 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 # (``max_completion_tokens``), native ``json_schema`` response_format, no
 # ``reasoning_content``. Subdomains match too, which covers the regional
 # data-residency hosts (``eu.api.openai.com``). Gateways that merely forward
-# to the official API can opt in via the ``official_api`` constructor flag.
+# to the official API can opt in via the ``official_dialect`` constructor flag.
 _OFFICIAL_HOSTS = ("api.openai.com",)
 
 
@@ -205,14 +205,15 @@ class OpenAIChatProvider:
             per endpoint host: DeepSeek requires the replay, the official
             OpenAI API rejects the field, and unlisted hosts replay. Pass
             ``True``/``False`` to override for endpoints we guess wrong.
-        official_api: Whether the endpoint speaks the official OpenAI API
+        official_dialect: Whether the endpoint speaks the official OpenAI API
             dialect (``max_completion_tokens`` instead of ``max_tokens``,
             native ``json_schema``, no ``reasoning_content``). ``None``
             (default) infers from the host. Set ``True`` for gateways that
             forward to the official API; the narrower ``supports_json_schema``
             and ``replay_reasoning`` flags still win where both are given.
-            Does not affect the API-key requirement, which follows the real
-            host — a keyless gateway keeps working with ``official_api=True``.
+            A dialect is about request shape only: the API-key requirement
+            and the ``/models`` probe follow the real host, so a keyless
+            gateway keeps working with ``official_dialect=True``.
     """
 
     name = "openai-chat"
@@ -229,12 +230,7 @@ class OpenAIChatProvider:
         supports_json_schema: bool | None = None,
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
-        official_api: bool | None = None,
-        # The endpoint's real context window, when you know it and the bundled
-        # table cannot — a vLLM host started with ``--max-model-len``, an
-        # Ollama ``num_ctx``, a gateway capping a shared model. Overrides the
-        # table; a ContextPolicy's own window still wins.
-        context_window: int | None = None,
+        official_dialect: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -245,7 +241,6 @@ class OpenAIChatProvider:
             base_url=self.base_url,
             model=model,
             host=self._host,
-            explicit=context_window,
             table=_OPENAI_CONTEXT_WINDOWS,
             # The official API publishes no window on /models; don't ask it.
             probe=not self._on_official_host(),
@@ -258,28 +253,28 @@ class OpenAIChatProvider:
         self._supports_json_schema = supports_json_schema
         self._trust_env = resolve_trust_env(trust_env)
         self._replay_reasoning = replay_reasoning
-        self._official_api = official_api
+        self._official_dialect = official_dialect
 
     @property
     def supports_json_schema(self) -> bool:
         """True when the endpoint supports OpenAI-style ``json_schema`` response_format.
 
         Defaults to True only for the official API dialect (see
-        ``official_api``); other compatible endpoints vary in support.
+        ``official_dialect``); other compatible endpoints vary in support.
         Override via the constructor parameter.
         """
         if self._supports_json_schema is not None:
             return self._supports_json_schema
-        return self._speaks_official_api()
+        return self._speaks_official_dialect()
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
         return host_matches(self._host, _OFFICIAL_HOSTS)
 
-    def _speaks_official_api(self) -> bool:
+    def _speaks_official_dialect(self) -> bool:
         """The endpoint follows the official API dialect (request shape)."""
-        if self._official_api is not None:
-            return self._official_api
+        if self._official_dialect is not None:
+            return self._official_dialect
         return self._on_official_host()
 
     def _should_replay_reasoning(self) -> bool:
@@ -288,7 +283,7 @@ class OpenAIChatProvider:
         default = _REASONING_REPLAY_DEFAULTS.get(self._host)
         if default is not None:
             return default
-        return not self._speaks_official_api()
+        return not self._speaks_official_dialect()
 
     def _check_ready(self) -> None:
         if self._on_official_host() and not self._api_key:
@@ -351,7 +346,7 @@ class OpenAIChatProvider:
                 # Current official models reject the legacy ``max_tokens``
                 # ("use 'max_completion_tokens'"), while compatible endpoints
                 # mostly accept only the legacy spelling.
-                if self._speaks_official_api():
+                if self._speaks_official_dialect():
                     payload["max_completion_tokens"] = settings.max_tokens
                 else:
                     payload["max_tokens"] = settings.max_tokens
@@ -401,18 +396,14 @@ class OpenAIChatProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                try:
-                    await raise_for_provider_status(
-                        response,
-                        vendor="openai",
-                        model=self.model,
-                        label="OpenAI Chat",
-                        is_context_overflow=_is_context_overflow,
-                        window_from_body=window_from_error,
-                    )
-                except ContextOverflowError as exc:
-                    self._windows.remember(exc.reported_window)
-                    raise
+                await raise_for_provider_status(
+                    response,
+                    vendor="openai",
+                    model=self.model,
+                    label="OpenAI Chat",
+                    is_context_overflow=_is_context_overflow,
+                    window_from_body=window_from_error,
+                )
                 async for event in iter_sse_json(response, on_done=_mark_done):
                     if "usage" in event and event["usage"]:
                         u = event["usage"]
@@ -528,7 +519,7 @@ class OpenAIChatProvider:
 #   thinking documents the same requirement.
 # * The official OpenAI API neither emits nor accepts the field; that case is
 #   handled by the official-dialect check, not this table, so gateways
-#   forwarding to the official API inherit it via ``official_api=True``.
+#   forwarding to the official API inherit it via ``official_dialect=True``.
 #
 # Unlisted compatible hosts replay: every known reasoning_content-emitting
 # endpoint tolerates or requires the echo. The ``replay_reasoning``

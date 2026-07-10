@@ -1,4 +1,4 @@
-"""Tests for reliability primitives: budgets, retries, fallback, cancellation."""
+"""Tests for reliability primitives: budgets, retries, cancellation."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from lovia import (
     RunBudget,
     RunCancelled,
     Runner,
+    UserError,
     events,
     tool,
 )
@@ -127,7 +128,7 @@ async def test_tool_raising_run_cancelled_propagates() -> None:
         await Runner.run(agent, "go")
 
 
-# ---------- RetryPolicy + fallback chain ----------
+# ---------- RetryPolicy ----------
 
 
 class _FailingProvider:
@@ -194,20 +195,6 @@ async def test_retry_does_not_retry_explicit_non_retryable_error() -> None:
     with pytest.raises(ProviderError):
         await Runner.run(agent, "hi", retry=retry)
     assert provider.attempts == 1
-
-
-@pytest.mark.asyncio
-async def test_provider_fallback_chain_uses_backup() -> None:
-    primary = _FailingProvider(fail_times=99, answer=text("never"))
-    backup = ScriptedProvider([text("recovered")])
-    agent = Agent(name="a", model=[primary, backup])
-    retry = RetryPolicy(
-        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
-    )
-
-    result = await Runner.run(agent, "hi", retry=retry)
-    assert result.output == "recovered"
-    assert primary.attempts == 2  # exhausted retries on primary then fell over
 
 
 # ---------- restart-on-partial (mid-stream) recovery ----------
@@ -363,24 +350,7 @@ async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
     assert discarded == 2
 
 
-@pytest.mark.asyncio
-async def test_partial_then_provider_fallback_emits_discard() -> None:
-    primary = _PartialThenSucceedProvider(retryable=False)
-    backup = ScriptedProvider([text("recovered")])
-    agent = Agent(name="a", model=[primary, backup])
-    retry = RetryPolicy(
-        max_attempts=2, backoff_base=0.0, sleep=lambda _d: asyncio.sleep(0)
-    )
-
-    discarded = 0
-    handle = Runner.stream(agent, "hi", retry=retry)
-    async for ev in handle:
-        if isinstance(ev, events.OutputDiscarded):
-            discarded += 1
-    result = await handle.result()
-
-    # Non-retryable: one shot on primary, then the partial is discarded and the
-    # backup replaces it.
-    assert primary.attempts == 1
-    assert discarded == 1
-    assert result.output == "recovered"
+def test_model_list_is_rejected_with_migration_hint() -> None:
+    agent = Agent(name="a", model=[ScriptedProvider([text("x")])])  # type: ignore[arg-type]
+    with pytest.raises(UserError, match="no longer accepts a list"):
+        agent.resolve_provider()

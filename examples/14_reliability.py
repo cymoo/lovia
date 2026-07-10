@@ -1,19 +1,20 @@
-"""Production reliability: budgets, retries, timeouts, cancellation, fallback.
+"""Production reliability: budgets, retries, timeouts, cancellation.
 
-Five orthogonal safety nets, each one line to adopt. Note the placement
-rule: *posture* (provider retries, per-tool retries/timeouts, fallback
-models) is Agent config; *limits* (budget, wall-clock, cancellation) are
-per-run arguments.
+Four orthogonal safety nets, each one line to adopt. Note the placement
+rule: *posture* (provider retries, per-tool retries/timeouts) is Agent
+config; *limits* (budget, wall-clock, cancellation) are per-run arguments.
 
 * ``Agent(retry=RetryPolicy(...))`` retries transient provider errors with
   backoff — for every run of this agent. A run can still override it.
 * ``@tool(retries=..., timeout=...)`` does the same for a flaky tool.
-* ``model=[primary, fallback]`` fails over to the next provider when the
-  first keeps erroring.
 * :class:`RunBudget` caps tokens, tool calls, and wall-clock per run.
 * :class:`CancelToken` cooperatively cancels a run from outside. (When you
   hold the stream handle, ``handle.cancel()`` does this without wiring —
   see 15_resume.py.)
+
+Vendor-level failover is deliberately not in this list: point ``base_url``
+at a routing gateway (LiteLLM, OpenRouter, ...) that fails over server-side,
+or re-run a failed request against the same session with another model.
 
 Run::
 
@@ -23,7 +24,6 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import os
 
 from dotenv import load_dotenv
 
@@ -42,9 +42,6 @@ from lovia import (
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 
-# Optional second model demonstrating the provider fallback chain.
-FALLBACK_MODEL = os.environ.get("LOVIA_FALLBACK_MODEL")
-
 _attempts = {"count": 0}
 
 
@@ -60,10 +57,7 @@ async def stock_quote(symbol: str) -> str:
 agent = Agent(
     name="resilient",
     instructions="Answer concisely using the stock_quote tool.",
-    # ``model`` accepts a list; the runner falls through on repeated
-    # provider errors. Set LOVIA_FALLBACK_MODEL to arm the chain — without
-    # it the agent runs on the primary model alone.
-    model=[MODEL, FALLBACK_MODEL] if FALLBACK_MODEL else MODEL,
+    model=MODEL,
     tools=[stock_quote],
     # Provider-retry posture rides on the agent (default: RetryPolicy()).
     retry=RetryPolicy(max_attempts=3),

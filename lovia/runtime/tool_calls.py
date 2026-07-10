@@ -50,8 +50,8 @@ def _normalize_call_args(state: RunState, call_id: str) -> None:
 
     A model can emit malformed ``arguments`` — most often a stream truncated
     mid-call. Left raw in the transcript and echoed back next turn, they make
-    the request invalid JSON and 400 every provider (fallback included: it is
-    the same bytes). Detection is the one place we already know the payload is
+    the request invalid JSON and 400 the provider on every retry (it is the
+    same bytes). Detection is the one place we already know the payload is
     bad, so we normalize the stored entry here — wrapping the offending text
     under ``_raw`` (a JSON object, original preserved) — and every serializer
     can then trust the transcript instead of re-validating it on each re-send.

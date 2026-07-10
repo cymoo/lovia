@@ -9,7 +9,8 @@ which two better sources overrule:
 
 * :func:`window_from_error` — the number the endpoint *itself* named when it
   rejected an oversized prompt. This is the endpoint refusing, so it outranks
-  everything, including a user-configured window.
+  everything; adapters ship it on ``ContextOverflowError.reported_window`` and
+  the context policy learns and persists it per session.
 * :func:`window_from_models_payload` — the window an endpoint advertises up
   front on ``GET /models`` (vLLM, SGLang, OpenRouter, Groq, Together).
 
@@ -17,9 +18,10 @@ Both return ``None`` rather than a guess: a wrong window is worse than an
 unknown one, because the unknown case already has a working fallback (reactive
 overflow handling) while a wrong one silently mis-sizes every prompt.
 
-:class:`WindowResolver` ties the four sources together and memoizes what an
-endpoint said, per process — a ``"vendor:model"`` string is resolved into a
-fresh provider on every run and every handoff.
+:class:`WindowResolver` combines the advertised listing with the table and
+memoizes the probe per process — a ``"vendor:model"`` string is resolved into
+a fresh provider on every run and every handoff. Budgets live elsewhere: the
+one user-facing window knob is ``Compaction(context_window=...)``.
 """
 
 from __future__ import annotations
@@ -116,6 +118,7 @@ def window_from_error(body: str) -> int | None:
 _WINDOW_FIELDS = (
     "max_model_len",  # vLLM, SGLang
     "context_window",  # Groq
+    "max_input_tokens",  # Anthropic Models API (since 2026-03), LiteLLM proxies
     "loaded_context_length",  # LM Studio (/api/v0 only; harmless to accept)
     "context_length",  # OpenRouter (model-level), Together
     "max_context_length",  # LM Studio (theoretical max)
@@ -156,8 +159,9 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
     """Read ``model``'s context window out of a ``GET /models`` response.
 
     ``None`` when the endpoint publishes no window for it — the official
-    OpenAI, Anthropic and DeepSeek APIs publish nothing at all, and Ollama's
-    and llama.cpp's OpenAI-compatible listings carry no window either.
+    OpenAI and DeepSeek APIs publish nothing at all, and Ollama's and
+    llama.cpp's OpenAI-compatible listings carry no window either. The
+    official Anthropic API *does*: ``max_input_tokens``, since 2026-03.
     """
     if not isinstance(payload, dict):
         return None
@@ -190,24 +194,32 @@ async def fetch_reported_window(
     base_url: str,
     headers: dict[str, str],
     model: str,
+    params: Mapping[str, str | int] | None = None,
 ) -> int | None:
     """Ask ``GET {base_url}/models`` what ``model``'s context window is.
 
     Fails open: an unreachable endpoint, a slow one, an error status, a non-JSON
     body or a listing without window metadata all yield ``None``. The caller is
     trying to do better than "unknown", so nothing here is worth raising over.
+
+    ``params`` lets an adapter shape the listing for its dialect — Anthropic's
+    paginates at 20 entries by default, so its adapter asks for a page large
+    enough to hold the whole catalog.
     """
     try:
         response = await client.get(
             f"{base_url}/models",
             headers=headers,
+            params=params,
             follow_redirects=True,
             timeout=_PROBE_TIMEOUT,
         )
         if not response.is_success:
             return None
         return window_from_models_payload(response.json(), model)
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+        # InvalidURL is not an HTTPError: a malformed base_url must degrade to
+        # "unknown" here and fail loudly on the model call itself.
         return None
 
 
@@ -266,22 +278,16 @@ def table_window(model: str, rules: tuple[tuple[str, int], ...]) -> int | None:
 # A window belongs to the endpoint, not to the provider object that happened to
 # ask. A string model spec ("deepseek-v4-pro") is resolved into a *fresh*
 # provider on every run and on every handoff, so a memo living on the instance
-# would re-probe ``/models`` — and re-provoke the same overflow — forever. These
-# facts are stable for the life of the process; a deployment resized underneath
-# us restates its limit on the next overflow, and the newest statement wins.
-#
-# The two stores are not interchangeable. ``_ENFORCED`` is what an endpoint said
-# while *refusing* a prompt: the limit it actually applies, so it caps even a
-# configured window. ``_ADVERTISED`` is what a listing claims; it outranks the
-# bundled table but must never override what the caller asked for.
-_ENFORCED: dict[tuple[str, str], int] = {}
+# would re-probe ``/models`` forever. ``_ADVERTISED`` is what a listing claims;
+# it outranks the bundled table. The window an endpoint names while *refusing*
+# a prompt is not recorded here at all — the context policy learns it from
+# ``ContextOverflowError.reported_window`` and persists it per session.
 _ADVERTISED: dict[tuple[str, str], int] = {}
 _PROBED: set[tuple[str, str]] = set()
 
 
 def clear_endpoint_cache() -> None:
     """Forget every remembered endpoint window. For tests."""
-    _ENFORCED.clear()
     _ADVERTISED.clear()
     _PROBED.clear()
 
@@ -289,17 +295,12 @@ def clear_endpoint_cache() -> None:
 class WindowResolver:
     """One ``(endpoint, model)``'s context window, and the memo behind it.
 
-    Owns the precedence:
-
-    1. what the endpoint *enforced* — a rejection names the limit it applies
-    2. an explicit setting, which (1) may cap but nothing else may
-    3. what the endpoint *advertised* on ``/models``
-    4. the bundled table
-
-    The context policy keeps its own record of an enforced window, persisted per
-    session so it survives a restart. This memo only has to outlive a provider
-    instance — but it must, because a ``"vendor:model"`` string is resolved into
-    a fresh provider on every run and every handoff.
+    Owns what the *endpoint* says about itself: what it advertised on
+    ``/models`` (probed at most once per process), then the bundled table.
+    Budgets are not its business — the one user-facing window knob is
+    ``Compaction(context_window=...)``, and the limit an endpoint names while
+    rejecting a prompt travels via ``ContextOverflowError.reported_window``
+    into the context policy's per-session state.
     """
 
     def __init__(
@@ -308,49 +309,29 @@ class WindowResolver:
         base_url: str,
         host: str,
         model: str,
-        explicit: int | None,
         table: WindowTable,
         probe: bool,
     ) -> None:
-        if explicit is not None and explicit < 1:
-            raise ValueError(f"context_window must be >= 1, got {explicit}")
         self._key = (base_url, model)
-        self._explicit = explicit
         self._rules = rules_for_host(host, table)
         self._probe = probe
 
     def window(self) -> int | None:
         """This endpoint's window for this model, without any I/O."""
-        enforced = _ENFORCED.get(self._key)
-        if self._explicit is not None:
-            # A configured window is a budget, not a fact. Once the endpoint has
-            # refused a prompt it has stated the fact, and no budget may exceed
-            # it — otherwise a too-large setting overflows in every new session.
-            if enforced is not None:
-                return min(self._explicit, enforced)
-            return self._explicit
-        if enforced is not None:
-            return enforced
         advertised = _ADVERTISED.get(self._key)
         if advertised is not None:
             return advertised
         _, model = self._key
         return table_window(model, self._rules)
 
-    def remember(self, window: int | None) -> None:
-        """Record a window the endpoint named while rejecting a prompt."""
-        if plausible_window(window):
-            _ENFORCED[self._key] = window  # the newest refusal is the truth
-            _PROBED.add(self._key)
-
     async def discover(self, fetch: Callable[[], Awaitable[int | None]]) -> int | None:
         """Ask what the endpoint publishes — at most once per process.
 
-        A no-op when the caller configured a window, when this endpoint is known
-        to publish none, or when it was already asked. Returns whatever
-        :meth:`window` would, so callers never special-case a miss.
+        A no-op when this endpoint is known to publish none or when it was
+        already asked. Returns whatever :meth:`window` would, so callers never
+        special-case a miss.
         """
-        if self._explicit is None and self._probe and self._key not in _PROBED:
+        if self._probe and self._key not in _PROBED:
             window = await fetch()
             _PROBED.add(self._key)
             if window is not None:

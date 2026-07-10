@@ -699,25 +699,6 @@ def test_table_window_per_model(model: str, expected: int | None) -> None:
     assert provider.context_window() == expected
 
 
-def test_context_window_constructor_argument_overrides_the_table() -> None:
-    """The deployment's window, for endpoints the table cannot know."""
-    provider = OpenAIChatProvider(
-        model="qwen2.5",
-        api_key="sk-test",
-        base_url="http://localhost:8000/v1",
-        context_window=32_768,
-    )
-    assert provider.context_window() == 32_768
-
-    # A vLLM host serving a familiar alias at a smaller --max-model-len.
-    capped = OpenAIChatProvider(
-        model="gpt-4.1",
-        base_url="http://vllm:8000/v1",
-        context_window=8_192,
-    )
-    assert capped.context_window() == 8_192  # not the table's 1_047_576
-
-
 @pytest.mark.asyncio
 async def test_chat_stream_handles_null_arguments_and_missing_index() -> None:
     body = _sse(
@@ -935,11 +916,11 @@ def test_regional_official_host_follows_official_dialect() -> None:
     assert not provider._should_replay_reasoning()
 
 
-def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
+def test_official_dialect_flag_opts_gateway_into_official_dialect() -> None:
     provider = OpenAIChatProvider(
         model="gpt-5",
         base_url="https://gateway.example.test/openai",
-        official_api=True,
+        official_dialect=True,
     )
 
     payload = provider._build_payload(
@@ -957,12 +938,12 @@ def test_official_api_flag_opts_gateway_into_official_dialect() -> None:
     provider._check_ready()
 
 
-def test_official_api_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
+def test_official_dialect_flag_can_force_compatible_dialect(monkeypatch: Any) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIChatProvider(
         model="gpt-5",
         base_url="https://api.openai.com/v1",
-        official_api=False,
+        official_dialect=False,
     )
 
     payload = provider._build_payload(
@@ -1126,44 +1107,29 @@ async def test_discover_never_asks_the_official_api() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discover_does_not_override_an_explicit_window() -> None:
-    seen: list[httpx.Request] = []
-    client = _models_client(
-        seen=seen, status_code=200, json={"data": [{"id": "m", "max_model_len": 4096}]}
-    )
-    provider = OpenAIChatProvider(
-        model="m", base_url="http://gw/v1", client=client, context_window=99_999
-    )
-    await provider.discover_context_window()
-    assert provider.context_window() == 99_999
-
-
-@pytest.mark.asyncio
-async def test_overflow_teaches_the_provider_its_window() -> None:
-    """A long-lived provider overflows once per process, not once per session."""
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(
-            400,
-            content=b"This model's maximum context length is 65536 tokens. However, "
-            b"you requested 190402 tokens.",
+async def test_overflow_carries_the_window_without_mutating_the_provider() -> None:
+    """An enforced limit travels on the error for the context policy to learn
+    and persist per session; the provider keeps reporting only what the
+    endpoint advertises (here: nothing)."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                content=b"This model's maximum context length is 65536 tokens. "
+                b"However, you requested 190402 tokens.",
+            )
         )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
     provider = OpenAIChatProvider(
         model="deepseek-chat", base_url="https://api.deepseek.com", client=client
     )
     assert provider.context_window() is None
 
-    with pytest.raises(ContextOverflowError):
+    with pytest.raises(ContextOverflowError) as exc_info:
         await _collect(provider.stream([InputEntry(role="user", content="hi")]))
 
-    assert provider.context_window() == 65_536
-    # And it never probes /models afterwards — it already knows.
-    assert await provider.discover_context_window() == 65_536
-    assert all(r.url.path.endswith("/chat/completions") for r in seen)
+    assert exc_info.value.reported_window == 65_536
+    assert provider.context_window() is None
 
 
 @pytest.mark.asyncio
@@ -1226,9 +1192,3 @@ async def test_probe_follows_redirects_and_bounds_its_own_timeout() -> None:
         "write": 10.0,
         "pool": 10.0,
     }
-
-
-@pytest.mark.parametrize("bad", [0, -1])
-def test_provider_rejects_a_nonsense_context_window(bad: int) -> None:
-    with pytest.raises(ValueError, match="context_window must be >= 1"):
-        OpenAIChatProvider(model="m", base_url="http://gw/v1", context_window=bad)

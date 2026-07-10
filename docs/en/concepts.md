@@ -144,9 +144,8 @@ The problem: reliability knobs sprawl until every call site sets twelve
 parameters. lovia's placement rule:
 
 - **Posture** — how the agent behaves when infrastructure hiccups — lives on
-  the `Agent` and is inherited by every run: provider `retry`, the
-  `model=[...]` fallback chain, `default_tool_retries` /
-  `default_tool_timeout`, `context_policy`.
+  the `Agent` and is inherited by every run: provider `retry`,
+  `default_tool_retries` / `default_tool_timeout`, `context_policy`.
 - **Limits** — how much one request may spend — are `Runner.run` arguments
   with no agent-side counterpart: `max_turns`, `budget`, `cancel_token`.
 

@@ -15,7 +15,7 @@ from lovia.messages import Usage
 from lovia.runtime.model_turn import (
     _ToolCallSlot,
     assemble_turn_entries,
-    stream_with_fallback,
+    stream_with_retries,
 )
 from lovia.transcript import (
     AssistantTextEntry,
@@ -151,7 +151,7 @@ async def test_fragmented_tool_call_deltas_reassemble() -> None:
     assert result.output == "done"
 
 
-# ----------------------------- stream_with_fallback -------------------------
+# ----------------------------- stream_with_retries --------------------------
 
 
 class _Boom:
@@ -163,23 +163,12 @@ class _Boom:
         yield  # pragma: no cover - unreachable, makes this an async generator
 
 
-async def test_fallback_exhausted_raises_last_error() -> None:
-    providers = [_Boom("p1"), _Boom("p2")]
+async def test_provider_error_propagates_without_retry_policy() -> None:
     with pytest.raises(ConnectionError):
-        async for _ in stream_with_fallback(
-            providers, [], tools=None, response_format=None, settings=None, retry=None
+        async for _ in stream_with_retries(
+            _Boom("p1"), [], tools=None, response_format=None, settings=None, retry=None
         ):
             pass
-
-
-async def test_fallback_with_no_providers_yields_nothing() -> None:
-    out = [
-        d
-        async for d in stream_with_fallback(
-            [], [], tools=None, response_format=None, settings=None, retry=None
-        )
-    ]
-    assert out == []
 
 
 async def test_cancel_token_stops_retry_backoff() -> None:
@@ -207,8 +196,8 @@ async def test_cancel_token_stops_retry_backoff() -> None:
 
     retry = RetryPolicy(max_attempts=5, sleep=cancelling_sleep)
     with pytest.raises(RunCancelled):
-        async for _ in stream_with_fallback(
-            [_Retryable()],
+        async for _ in stream_with_retries(
+            _Retryable(),
             [],
             tools=None,
             response_format=None,
@@ -218,6 +207,42 @@ async def test_cancel_token_stops_retry_backoff() -> None:
         ):
             pass
     assert attempts["n"] == 1  # cancelled during the first backoff
+
+
+async def test_non_retryable_after_partial_raises_without_orphan_reset() -> None:
+    # restart_on_partial arms a reset when a failed attempt already streamed
+    # output — but a non-retryable error means no replacing attempt follows,
+    # so the armed reset must die with the raise. Leaking it would tell the
+    # consumer to clear its UI for a re-stream that never comes.
+    from lovia.exceptions import ProviderError
+    from lovia.reliability import RetryPolicy
+    from lovia.runtime.model_turn import _StreamReset
+
+    class _PartialThenFatal:
+        name = "fatal"
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            yield TextDelta(text="half an answer")
+            raise ProviderError("bad request", retryable=False)
+
+    async def _no_sleep(_delay: float) -> None:
+        pass
+
+    retry = RetryPolicy(max_attempts=5, sleep=_no_sleep)  # restart_on_partial on
+    seen = []
+    with pytest.raises(ProviderError):
+        async for d in stream_with_retries(
+            _PartialThenFatal(),
+            [],
+            tools=None,
+            response_format=None,
+            settings=None,
+            retry=retry,
+        ):
+            seen.append(d)
+    assert not any(isinstance(d, _StreamReset) for d in seen)
 
 
 async def test_retryable_truncation_resets_and_recovers() -> None:
@@ -257,8 +282,8 @@ async def test_retryable_truncation_resets_and_recovers() -> None:
     retry = RetryPolicy(max_attempts=2, sleep=_no_sleep)
     deltas = [
         d
-        async for d in stream_with_fallback(
-            [_TruncateOnce()],
+        async for d in stream_with_retries(
+            _TruncateOnce(),
             [],
             tools=None,
             response_format=None,

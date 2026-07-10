@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ..types import JsonObject
-from ..exceptions import ContextOverflowError, ProviderError, UserError
+from ..exceptions import ProviderError, UserError
 from ..transcript import (
     FinishDelta,
     InputEntry,
@@ -71,7 +71,7 @@ _DEFAULT_VERSION = "2023-06-01"
 # Hosts that enforce the official Messages API strictness (e.g. thinking
 # blocks rejected unless the request enables thinking). Subdomains match too.
 # Gateways that merely forward to the official API can opt in via the
-# ``official_api`` constructor flag.
+# ``official_dialect`` constructor flag.
 _OFFICIAL_HOSTS = ("api.anthropic.com",)
 
 
@@ -98,15 +98,12 @@ class AnthropicProvider:
         default_max_tokens: int = 16_384,
         default_headers: dict[str, str] | None = None,
         trust_env: bool | None = None,
-        # Whether the endpoint enforces official Messages API strictness
-        # (thinking-block replay rules). None infers from the host; set True
-        # for gateways forwarding to the official API. Does not affect the
-        # API-key requirement, which follows the real host.
-        official_api: bool | None = None,
-        # The endpoint's real context window, when you know it and the
-        # bundled table cannot (a gateway capping the model, the 1M beta).
-        # Overrides the table; a ContextPolicy's own window still wins.
-        context_window: int | None = None,
+        # Whether the endpoint enforces the official Messages API dialect's
+        # strictness (thinking-block replay rules). None infers from the
+        # host; set True for gateways forwarding to the official API. A
+        # dialect is request shape only — the API-key requirement and the
+        # /models probe follow the real host.
+        official_dialect: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -114,15 +111,16 @@ class AnthropicProvider:
         ).rstrip("/")
         self._host = urlparse(self.base_url).hostname or ""
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self._official_api = official_api
+        self._official_dialect = official_dialect
         self._windows = WindowResolver(
             base_url=self.base_url,
             model=model,
             host=self._host,
-            explicit=context_window,
             table=_ANTHROPIC_CONTEXT_WINDOWS,
-            # The official API publishes no window on /models; don't ask it.
-            probe=not self._on_official_host(),
+            # The official Models API publishes ``max_input_tokens`` (since
+            # 2026-03), so the official host is worth asking too — it knows
+            # the deployment's real window where the table can only guess.
+            probe=True,
         )
         self._client = client
         self._owns_client = client is None
@@ -152,9 +150,10 @@ class AnthropicProvider:
     async def discover_context_window(self) -> int | None:
         """Read this deployment's window off ``GET {base_url}/models``.
 
-        The official API publishes no window there, so it is never asked; this
-        exists for the Anthropic-dialect gateways (DeepSeek's ``/anthropic``,
-        Kimi, GLM) that may.
+        The official Models API publishes ``max_input_tokens`` per model
+        (since 2026-03) — the window as served to *this* org, which outranks
+        the bundled table. Anthropic-dialect gateways (DeepSeek's
+        ``/anthropic``, Kimi, GLM) may publish a window there too.
         """
         return await self._windows.discover(self._fetch_window)
 
@@ -164,16 +163,22 @@ class AnthropicProvider:
             base_url=self.base_url,
             headers=self._headers(),
             model=self.model,
+            # The official listing paginates at 20 entries; the catalog is
+            # near that already, and the wanted model must be on the page.
+            # Gateways don't get the parameter at all: most ignore unknown
+            # params, but a strict one would 400 — and the probe memoizes
+            # that miss for the whole process.
+            params={"limit": 100} if self._on_official_host() else None,
         )
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""
         return host_matches(self._host, _OFFICIAL_HOSTS)
 
-    def _speaks_official_api(self) -> bool:
+    def _speaks_official_dialect(self) -> bool:
         """The endpoint follows the official API strictness (request shape)."""
-        if self._official_api is not None:
-            return self._official_api
+        if self._official_dialect is not None:
+            return self._official_dialect
         return self._on_official_host()
 
     def _check_ready(self) -> None:
@@ -218,7 +223,7 @@ class AnthropicProvider:
         # thinking, so strip stale replay state (e.g. the option was turned
         # off mid-session). Compatible endpoints may think by default without
         # the option being set, so only the official dialect gets the gate.
-        replay_thinking = not (self._speaks_official_api() and thinking_off)
+        replay_thinking = not (self._speaks_official_dialect() and thinking_off)
         system_blocks, anthropic_messages = _to_anthropic_messages(
             entries, reasoning_provider=self.name, replay_thinking=replay_thinking
         )
@@ -314,18 +319,14 @@ class AnthropicProvider:
                 headers=self._headers(),
                 json=payload,
             ) as response:
-                try:
-                    await raise_for_provider_status(
-                        response,
-                        vendor="anthropic",
-                        model=self.model,
-                        label="Anthropic",
-                        is_context_overflow=_is_context_overflow,
-                        window_from_body=window_from_error,
-                    )
-                except ContextOverflowError as exc:
-                    self._windows.remember(exc.reported_window)
-                    raise
+                await raise_for_provider_status(
+                    response,
+                    vendor="anthropic",
+                    model=self.model,
+                    label="Anthropic",
+                    is_context_overflow=_is_context_overflow,
+                    window_from_body=window_from_error,
+                )
                 async for event in iter_sse_json(response):
                     etype = event.get("type")
 
@@ -689,16 +690,28 @@ def _is_context_overflow(status: int, body: str) -> bool:
 # "claude-sonnet-4-5" may cap it, and only api.anthropic.com can vouch for the
 # vendor's own number. An unlisted host relies on what the endpoint reports.
 #
-# Every Claude shipped since Claude 3 defaults to a 200K window, so family
-# prefixes cover the whole line — including models released after this file was
-# written. Date-pinned snapshots resolve via suffix stripping.
+# The table is only ever the pre-probe answer: the official Models API
+# publishes ``max_input_tokens`` per model (since 2026-03), and what the
+# endpoint advertises outranks anything written here. It still matters for
+# the first call of a process, and when the probe cannot answer (no API key,
+# endpoint unreachable).
 #
-# Values are the *default* windows. The 1M-token variants are gated behind the
-# ``context-1m`` beta header, which this adapter does not send by default;
-# advertising 1M here would make proactive compaction trigger far too late.
-# Users who enable the beta can size their ContextPolicy explicitly.
+# Since the 4.6 generation the default window is 1M with no beta header, so
+# those models carry exact entries — a deployment served less corrects itself
+# on the first overflow, because Anthropic's rejections name the limit. The
+# 200K family prefixes remain the floor for everything older (the ``context-1m``
+# beta era and before) and for family members newer than this file: a floor
+# that is too low only makes proactive compaction trigger early, it can never
+# fail a request. Date-pinned snapshots resolve via suffix stripping.
 _ANTHROPIC_CONTEXT_WINDOWS: WindowTable = {
     "api.anthropic.com": (
+        ("claude-fable-5", 1_000_000),
+        ("claude-mythos-5", 1_000_000),
+        ("claude-opus-4-8", 1_000_000),
+        ("claude-opus-4-7", 1_000_000),
+        ("claude-opus-4-6", 1_000_000),
+        ("claude-sonnet-5", 1_000_000),
+        ("claude-sonnet-4-6", 1_000_000),
         ("claude-opus-", 200_000),
         ("claude-sonnet-", 200_000),
         ("claude-haiku-", 200_000),

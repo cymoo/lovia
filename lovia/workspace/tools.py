@@ -220,6 +220,9 @@ async def read_file(
         "- Writes the full content; parent directories are created automatically.\n"
         "- Prefer edit_file for targeted changes to an existing file — write_file "
         "replaces the whole file and loses anything you did not include.\n"
+        "- Generating very large content in one call is slow and may be cut off "
+        "mid-stream; split large output into multiple files, or write the file's "
+        "skeleton first and extend it with edit_file.\n"
         "- Set create_only=true to fail instead of overwriting an existing file."
     ),
     needs_approval=_path_needs_approval("write"),

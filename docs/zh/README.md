@@ -18,7 +18,7 @@
 | 让模型调用 Python 函数 | [工具](tools.md) |
 | 使用 HTTP、搜索、时间等内置工具 | [内置工具](built-in-tools.md) |
 | 让最终答案变成 Pydantic 对象或 JSON | [结构化输出](structured-output.md) |
-| 配置模型、OpenAI 兼容端点、fallback、自定义 provider | [Provider 与模型](providers.md) |
+| 配置模型、OpenAI 兼容端点、自定义 provider | [Provider 与模型](providers.md) |
 | 组合多个 agent，做 handoff 或 agent-as-tool | [多 Agent](multi-agent.md) |
 | 打包可复用能力 | [插件](plugins.md) |
 | 加载团队知识、runbook、风格指南 | [技能](skills.md) |
@@ -28,7 +28,7 @@
 | 控制长上下文和压缩策略 | [上下文管理](context.md) |
 | 给危险工具加人工审批 | [人工介入](human-in-the-loop.md) |
 | 在运行前后加安全检查 | [护栏](guardrails.md) |
-| 设置重试、fallback、预算、取消 | [可靠性](reliability.md) |
+| 设置重试、预算、取消 | [可靠性](reliability.md) |
 | 让 agent 访问文件和 shell | [工作区](workspace.md) |
 | 启动聊天 UI 或服务端 | [Web UI 与服务端](web.md) |
 | 接自己的前端或服务 | [HTTP API](http-api.md) |

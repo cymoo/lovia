@@ -65,7 +65,7 @@ Three guarantees shape every consumer:
 | `UserMessageInjected` | `content`, `turn` | a [mailbox](reliability.md#steering-a-live-run) message was folded in as a user turn |
 
 `OutputDiscarded` fires when the runner recovers from a mid-stream provider
-error by retrying or falling back
+error by retrying
 ([`RetryPolicy.restart_on_partial`](reliability.md#provider-retries)). The
 persistent transcript is unaffected — it is assembled only from completed
 turns.

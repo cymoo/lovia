@@ -350,8 +350,7 @@ async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
     assert discarded == 2
 
 
-@pytest.mark.asyncio
-async def test_model_list_is_rejected_with_migration_hint() -> None:
+def test_model_list_is_rejected_with_migration_hint() -> None:
     agent = Agent(name="a", model=[ScriptedProvider([text("x")])])  # type: ignore[arg-type]
     with pytest.raises(UserError, match="no longer accepts a list"):
         agent.resolve_provider()

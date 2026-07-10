@@ -316,7 +316,7 @@ _SUMMARIZE_INSTRUCTIONS = (
 async def _digest(
     entries: list[TranscriptEntry],
     current_notes: str,
-    model: "str | Provider | list[str | Provider]",
+    model: "str | Provider",
 ) -> _RunDigest:
     from ...agent import Agent
     from ...providers import ModelSettings
@@ -346,7 +346,7 @@ async def _digest(
 async def _consolidate(
     body: str,
     max_chars: int,
-    model: "str | Provider | list[str | Provider]",
+    model: "str | Provider",
 ) -> list[str]:
     from ...agent import Agent
     from ...providers import ModelSettings
@@ -370,7 +370,7 @@ async def _consolidate(
 
 async def _expand(
     query: str,
-    model: "str | Provider | list[str | Provider]",
+    model: "str | Provider",
 ) -> list[str]:
     from ...agent import Agent
     from ...providers import ModelSettings
@@ -391,7 +391,7 @@ async def _expand(
 async def _summarize(
     hits: list[Hit],
     query: str,
-    model: "str | Provider | list[str | Provider]",
+    model: "str | Provider",
 ) -> str:
     from ...agent import Agent
     from ...providers import ModelSettings
@@ -524,7 +524,7 @@ class Memory:
     """Char budget for Notes; exceeding it triggers consolidation and is
     what the meter in the prompt reports."""
 
-    model: "str | Provider | list[str | Provider] | None" = None
+    model: "str | Provider | None" = None
     """Model for the curation side-queries. ``None`` (default) reuses the
     host agent's model."""
 
@@ -562,9 +562,7 @@ class Memory:
         # without them the event loop may garbage-collect a task mid-flight.
         self._curation_tasks: set[asyncio.Task[None]] = set()
 
-    def _resolve_model(
-        self, ctx: RunContext[Any]
-    ) -> "str | Provider | list[str | Provider]":
+    def _resolve_model(self, ctx: RunContext[Any]) -> "str | Provider":
         # ``self.model`` overrides; otherwise reuse the host agent's model. A
         # mid-run host always has one (its providers resolved at run start),
         # but a hand-built RunContext in a unit test may not — raise a clear

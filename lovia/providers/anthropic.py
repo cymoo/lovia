@@ -165,9 +165,10 @@ class AnthropicProvider:
             model=self.model,
             # The official listing paginates at 20 entries; the catalog is
             # near that already, and the wanted model must be on the page.
-            # Gateways ignore the unknown parameter; a picky one that 400s
-            # merely turns the probe into a cached miss.
-            params={"limit": 100},
+            # Gateways don't get the parameter at all: most ignore unknown
+            # params, but a strict one would 400 — and the probe memoizes
+            # that miss for the whole process.
+            params={"limit": 100} if self._on_official_host() else None,
         )
 
     def _on_official_host(self) -> bool:

@@ -54,7 +54,7 @@ class RouterDeps:
     approvals: ApprovalRegistry
     title: str = "lovia"
     context_policy: ContextPolicy | None = None
-    title_model: str | Provider | list[str | Provider] | None = None
+    title_model: str | Provider | None = None
     generate_titles: bool = True
     max_turns: int = 50
     # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a

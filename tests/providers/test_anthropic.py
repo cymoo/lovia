@@ -1087,6 +1087,9 @@ async def test_discover_reads_a_window_from_a_compatible_gateway() -> None:
     assert seen[0].url.host == "gw.test"
     assert seen[0].url.path == "/anthropic/models"
     assert seen[0].headers["x-api-key"] == "x"
+    # The pagination param is official-API dialect; a strict gateway would
+    # 400 on it and the probe would memoize the miss for the whole process.
+    assert "limit" not in seen[0].url.params
 
 
 @pytest.mark.asyncio

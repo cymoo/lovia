@@ -353,7 +353,9 @@ class _RecoveringOverflowProvider:
             yield ToolCallDelta(index=0, call_id="c1", name="dump", arguments="{}")
             yield FinishDelta(reason="tool_calls")
         elif self.stream_count == 2:
-            err = ContextOverflowError("prompt is too long: 12000 tokens > 8192 maximum")
+            err = ContextOverflowError(
+                "prompt is too long: 12000 tokens > 8192 maximum"
+            )
             err.reported_window = 8_192
             raise err
         else:

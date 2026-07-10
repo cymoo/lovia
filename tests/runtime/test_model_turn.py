@@ -209,6 +209,42 @@ async def test_cancel_token_stops_retry_backoff() -> None:
     assert attempts["n"] == 1  # cancelled during the first backoff
 
 
+async def test_non_retryable_after_partial_raises_without_orphan_reset() -> None:
+    # restart_on_partial arms a reset when a failed attempt already streamed
+    # output — but a non-retryable error means no replacing attempt follows,
+    # so the armed reset must die with the raise. Leaking it would tell the
+    # consumer to clear its UI for a re-stream that never comes.
+    from lovia.exceptions import ProviderError
+    from lovia.reliability import RetryPolicy
+    from lovia.runtime.model_turn import _StreamReset
+
+    class _PartialThenFatal:
+        name = "fatal"
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            yield TextDelta(text="half an answer")
+            raise ProviderError("bad request", retryable=False)
+
+    async def _no_sleep(_delay: float) -> None:
+        pass
+
+    retry = RetryPolicy(max_attempts=5, sleep=_no_sleep)  # restart_on_partial on
+    seen = []
+    with pytest.raises(ProviderError):
+        async for d in stream_with_retries(
+            _PartialThenFatal(),
+            [],
+            tools=None,
+            response_format=None,
+            settings=None,
+            retry=retry,
+        ):
+            seen.append(d)
+    assert not any(isinstance(d, _StreamReset) for d in seen)
+
+
 async def test_retryable_truncation_resets_and_recovers() -> None:
     # End-to-end proof of the fix: a provider that cuts off mid-tool-call on the
     # first attempt (exactly what the adapters now raise on) is retried; its

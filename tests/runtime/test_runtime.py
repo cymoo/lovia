@@ -18,8 +18,10 @@ from lovia.stores import InMemoryCheckpointer, InMemorySession
 from lovia.context import CompactionRequest, ContextResult
 from lovia.transcript import (
     AssistantTextEntry,
+    FinishDelta,
     InputEntry,
     TextDelta,
+    ToolCallDelta,
     entries_to_messages,
 )
 
@@ -326,6 +328,61 @@ async def test_overflow_after_forwarded_output_is_not_retried() -> None:
 
     # No silent re-stream: the provider was called exactly once.
     assert provider.stream_count == 1
+
+
+# ---------------------------------------------------------------------------
+# A pre-output overflow is retried reactively, and the runner forwards the
+# endpoint's reported window into the policy — the only learning path since
+# providers no longer memoize enforced windows themselves.
+# ---------------------------------------------------------------------------
+
+
+class _RecoveringOverflowProvider:
+    """Call 1: request a huge tool result. Call 2: reject the prompt naming
+    the window. Call 3 (the reactive retry): answer."""
+
+    name = "overflow-recovers"
+    model = "fake-model"
+
+    def __init__(self) -> None:
+        self.stream_count = 0
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        self.stream_count += 1
+        if self.stream_count == 1:
+            yield ToolCallDelta(index=0, call_id="c1", name="dump", arguments="{}")
+            yield FinishDelta(reason="tool_calls")
+        elif self.stream_count == 2:
+            err = ContextOverflowError("prompt is too long: 12000 tokens > 8192 maximum")
+            err.reported_window = 8_192
+            raise err
+        else:
+            yield TextDelta(text="recovered")
+            yield FinishDelta(reason="stop")
+
+
+async def test_reactive_overflow_forwards_the_reported_window(caplog) -> None:
+    import logging
+
+    @tool
+    async def dump() -> str:
+        """Return a huge payload."""
+        return "x" * 40_000
+
+    provider = _RecoveringOverflowProvider()
+    agent = Agent(name="t", instructions="x", model=provider, tools=[dump])
+
+    with caplog.at_level(logging.INFO, logger="lovia.context.compaction"):
+        result = await Runner.run(agent, "go")
+
+    # The reactive compact shrank the view (the oversized tool result gave it
+    # something to cut) and the retry succeeded.
+    assert result.output == "recovered"
+    assert provider.stream_count == 3
+    # The window the endpoint named in its rejection reached the policy via
+    # request.reported_window — pipeline tests inject the field directly, so
+    # this is the one place the runner-side forwarding is exercised.
+    assert any("learned 8192 tokens" in rec.getMessage() for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------

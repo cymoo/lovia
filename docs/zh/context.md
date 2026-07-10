@@ -142,7 +142,9 @@ required_sections=...)`，不要 fork 这段实现。
 
 **自定义 `ContextPolicy`** 则替换全部机制：一个方法
 `async compact(req: CompactionRequest) -> ContextResult`。request 携带只读 entries、provider、
-`last_input_tokens`、`overflow` flag，以及 runner 会帮你在 checkpoint 中往返保存的 `scratch` dict。
+`last_input_tokens`、`overflow` flag、`reported_window`（端点拒绝上一个 prompt 时点名的上限——
+请记住它，它的优先级压过所有其他窗口来源），以及 runner 会帮你在 checkpoint 中往返保存的
+`scratch` dict。
 返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
 `lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。

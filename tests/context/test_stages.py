@@ -340,6 +340,27 @@ async def test_summarize_chunks_bounded_by_the_summarizers_own_window():
     assert summarizer.calls == [body[:4], body[4:8]]
 
 
+async def test_summarize_summarizer_window_binds_on_aggressive_with_model_window():
+    # min-of-both, on the aggressive path: the run model's window (50k) does
+    # not save a smaller summarizer model — its own 1k window must bind, or a
+    # reactive burst would overflow the model doing the folding.
+    class SmallWindowProvider:
+        def context_window(self) -> int:
+            return 1_000
+
+    summarizer = FakeSummarizer("S1")
+    summarizer.provider = SmallWindowProvider()
+    body = _texts(10)
+    inflated = TokenBudget(window=100_000, reserve_output=0, trigger=0.75, target=0.5)
+    ctx = make_ctx(
+        body, protected_from=8, aggressive=True, budget=inflated, model_window=50_000
+    )
+    stage = SummarizeHistory(summarizer=summarizer)
+    assert await stage.plan(body, ctx) is True
+    # cap = min(usable, 50_000, 1_000) // 2 = 500 → two chunks, not one.
+    assert summarizer.calls == [body[:4], body[4:8]]
+
+
 async def test_summarize_chunks_survive_a_window_smaller_than_the_reserve():
     """A learned 4K window minus the 16K default reserve must not go negative.
 

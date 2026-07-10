@@ -176,8 +176,10 @@ required_sections=...)` rather than forking it).
 **A custom `ContextPolicy`** replaces everything: one method,
 `async compact(req: CompactionRequest) -> ContextResult`. The request
 carries the entries (read-only), the provider, `last_input_tokens`, the
-`overflow` flag, and a `scratch` dict the runner round-trips through
-checkpoints for you. Return the view plus `changed`/`compacted` flags and
+`overflow` flag, `reported_window` (the limit the endpoint named while
+rejecting the last prompt — remember it, it outranks every other window
+source), and a `scratch` dict the runner round-trips through checkpoints
+for you. Return the view plus `changed`/`compacted` flags and
 optional token counts. An optional `tools()` method contributes tools —
 `make_recall_tool(store)` from `lovia.tools.recall` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops

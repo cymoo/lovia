@@ -390,27 +390,24 @@ class SummarizeHistory:
         # reset — would overflow the very window this stage exists to protect.
         # Each successful fold is committed to the sticky state immediately,
         # so a failure mid-way keeps the coverage already gained.
+        # The chunks must fit every model involved in the fold, not just the
+        # budget: the aggressive budget is sized to the failed prompt, which
+        # can dwarf the run model's real window (``ctx.model_window``), and a
+        # summarizer wired to its own provider can run a *smaller* model than
+        # the run's — hand it run-sized chunks and every burst overflows the
+        # very model doing the folding, tripping the circuit breaker. The
+        # ``.provider`` attribute is the participation hook (LLMSummarizer has
+        # it; custom backends may expose one); unknown windows change nothing.
+        # Reuse the budget's own headroom rule: a learned window can be
+        # smaller than ``reserve_output`` (a 4K local model), and subtracting
+        # outright would collapse the cap to a single token per chunk.
         usable = ctx.budget.usable
-        if ctx.model_window is not None:
-            # The aggressive budget is sized to the failed prompt, which can
-            # dwarf the real window; the fold chunks must fit the model. Reuse
-            # the budget's own headroom rule: a learned window can be smaller
-            # than ``reserve_output`` (a 4K local model), and subtracting then
-            # would collapse the cap to a single token per chunk.
-            usable = min(
-                usable, usable_tokens(ctx.model_window, ctx.budget.reserve_output)
-            )
-        # A summarizer with its own provider can run a smaller model than the
-        # run's; its window caps the fold chunks too, or every burst would
-        # overflow the very model doing the folding and trip the circuit
-        # breaker. Unknown windows (None) change nothing.
         summarizer_window = _provider_context_window(
             getattr(self.summarizer, "provider", None)
         )
-        if summarizer_window is not None:
-            usable = min(
-                usable, usable_tokens(summarizer_window, ctx.budget.reserve_output)
-            )
+        for window in (ctx.model_window, summarizer_window):
+            if window is not None:
+                usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
         cap = max(1, usable // 2)
         # Each chunk end below is committed to ``covered`` and outlives this
         # call whenever a later fold fails or the run is cancelled mid-burst.

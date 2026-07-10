@@ -96,14 +96,21 @@ class ContextResult:
 class ContextPolicy(Protocol):
     """Strategy that produces the per-call view of the transcript.
 
-    The only required method is :meth:`compact`. A policy may also define an
-    **optional hook** the runner invokes when present (kept off the protocol so
+    The only required method is :meth:`compact`. A policy may also define
+    **optional hooks** the runner reads when present (kept off the protocol so
     a minimal policy needs nothing but ``compact``):
 
     * ``tools(self) -> list[Tool]`` — extra tools the runner injects whenever
       this policy is active (e.g. the default :class:`Compaction` provides a
       ``recall_tool_result`` bound to its store). A user tool of the same name
       wins; the policy tool is skipped.
+    * ``context_window: int | None`` — declaring this attribute tells the
+      runner the policy budgets against a window: when its value is ``None``,
+      the runner asks the endpoint to report one (a one-shot ``/models``
+      probe, memoized per process) before the first model call, so
+      ``context_window(req.provider)`` has an answer by the time ``compact``
+      runs. A policy *without* the attribute (like :class:`NoopContextPolicy`)
+      never needs a window, and the probe is skipped entirely.
 
     The runner persists ``req.scratch`` verbatim — to the checkpoint for resume,
     and to the finished segment's ``meta`` for the next run on the same session —

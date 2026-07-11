@@ -2,10 +2,13 @@
 
 Two small pieces:
 
-* :class:`TokenCounter` — fast per-entry token *estimates*. Field-length
-  arithmetic (no serialization), flat per-image/per-file costs so a base64
-  blob is not billed as text, an ``id()``-keyed memo so a long transcript is
-  re-counted in O(new entries) per turn, and dispatch to a provider's own
+* :class:`TokenCounter` — fast per-entry token *estimates*. UTF-8
+  byte-length arithmetic (one C-speed ``encode`` per entry, memoized), so
+  multi-byte scripts weigh in proportionally — CJK prices at ~0.75
+  tokens/char instead of the 4× under-count a naive chars/4 charges. Flat
+  per-image/per-file costs so a base64 blob is not billed as text, an
+  ``id()``-keyed memo so a long transcript is re-counted in O(new entries)
+  per turn, and dispatch to a provider's own
   :class:`~lovia.providers.base.TokenEstimator` when it ships a tokenizer.
   Tool schemas — the fixed additive payload every request carries alongside
   the entries — are counted separately via :meth:`TokenCounter.count_tools`.
@@ -37,7 +40,17 @@ from ..transcript import (
     TranscriptEntry,
 )
 
-_CHARS_PER_TOKEN = 4  # the textbook heuristic; calibration absorbs the error
+# The textbook ~4 chars/token, measured in UTF-8 *bytes*: ASCII costs 1 byte,
+# CJK 3 — so 中文 prices at ~0.75 tokens/char (in line with CJK-optimized
+# tokenizers) without a per-character scan. Calibration absorbs the residual.
+_BYTES_PER_TOKEN = 4
+
+
+def _utf8_len(s: str) -> int:
+    """UTF-8 byte length. ``surrogatepass`` so a lone surrogate — malformed
+    model output can survive a JSON round-trip — counts 3 bytes instead of
+    raising inside the estimator."""
+    return len(s.encode("utf-8", "surrogatepass"))
 
 
 def _validate_watermark(value: int | float, name: str) -> None:
@@ -127,9 +140,12 @@ class TokenBudget:
 class TokenCounter:
     """Memoized per-entry token estimation.
 
-    Estimates are O(1) per entry (string lengths only). Multimodal parts get
-    flat costs — a base64-embedded image is counted as ``image_tokens``, not
-    as megabytes of text. When ``provider`` implements
+    Estimates cost one C-speed UTF-8 ``encode`` per entry — the byte length
+    weighs multi-byte scripts proportionally (CJK ≈ 0.75 tokens/char) where
+    a plain character count would under-price them 4×. The memo makes that
+    a once-per-entry cost, so a turn still re-counts in O(new entries).
+    Multimodal parts get flat costs — a base64-embedded image is counted as
+    ``image_tokens``, not as megabytes of text. When ``provider`` implements
     :class:`~lovia.providers.base.TokenEstimator` it is consulted per entry
     instead (and still memoized, since real tokenizers are not free).
 
@@ -190,18 +206,18 @@ class TokenCounter:
 
     def _measure_tool(self, tool: object) -> int:
         schema = getattr(tool, "openai_schema", None)
-        chars = 0
+        size = 0
         if callable(schema):
             try:
                 # Compact separators to match request-body serialization;
-                # ensure_ascii=False so CJK descriptions count as the
-                # characters a tokenizer sees, not as 6-char \uXXXX escapes.
-                chars = len(
+                # ensure_ascii=False so CJK descriptions weigh as the UTF-8
+                # bytes on the wire, not as 6-char \uXXXX escapes.
+                size = _utf8_len(
                     json.dumps(schema(), ensure_ascii=False, separators=(",", ":"))
                 )
             except Exception:
-                chars = 0  # unknown shape: charge the flat minimum below
-        return chars // _CHARS_PER_TOKEN + self.entry_overhead
+                size = 0  # unknown shape: charge the flat minimum below
+        return size // _BYTES_PER_TOKEN + self.entry_overhead
 
     def count_entry(self, entry: TranscriptEntry) -> int:
         """Estimated tokens for one entry, memoized by identity."""
@@ -231,26 +247,26 @@ class TokenCounter:
                 pass
         if isinstance(entry, InputEntry):
             if isinstance(entry.content, str):
-                chars = len(entry.content)
+                size = _utf8_len(entry.content)
             else:
                 tokens = self.entry_overhead
                 for part in entry.content:
                     if isinstance(part, TextPart):
-                        tokens += len(part.text) // _CHARS_PER_TOKEN
+                        tokens += _utf8_len(part.text) // _BYTES_PER_TOKEN
                     elif isinstance(part, ImagePart):
                         tokens += self.image_tokens
                     elif isinstance(part, FilePart):
                         tokens += self.file_tokens
                 return tokens
         elif isinstance(entry, (AssistantTextEntry, ReasoningEntry)):
-            chars = len(entry.content)
+            size = _utf8_len(entry.content)
         elif isinstance(entry, ToolCallEntry):
-            chars = len(entry.name) + len(entry.arguments)
+            size = _utf8_len(entry.name) + _utf8_len(entry.arguments)
         elif isinstance(entry, ToolResultEntry):
-            chars = len(entry.output)
+            size = _utf8_len(entry.output)
         else:  # pragma: no cover - exhaustive over TranscriptEntry
-            chars = 0
-        return chars // _CHARS_PER_TOKEN + self.entry_overhead
+            size = 0
+        return size // _BYTES_PER_TOKEN + self.entry_overhead
 
 
 __all__ = ["TokenBudget", "TokenCounter", "usable_tokens"]

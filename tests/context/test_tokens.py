@@ -62,6 +62,29 @@ def test_count_sums_entries():
     assert counter.count(entries) == 2 * (10 + 8)
 
 
+def test_cjk_weighs_utf8_bytes_not_characters():
+    """A Chinese char is 3 UTF-8 bytes → ~0.75 tokens, matching real
+    tokenizers within the calibration clamp; a plain character count would
+    charge 0.25 and under-count 2.4–6×."""
+    counter = TokenCounter()
+    assert counter.count_entry(user("中" * 400)) == (400 * 3) // 4 + 8
+    mixed = InputEntry(role="user", content=[TextPart(text="hello " + "文" * 100)])
+    assert counter.count_entry(mixed) == 8 + (6 + 300) // 4
+
+
+def test_lone_surrogate_counts_instead_of_raising():
+    # Malformed model output can carry lone surrogates through a JSON
+    # round-trip; the estimator must price it, not crash compaction.
+    assert TokenCounter().count_entry(user("ok\ud800")) > 0
+
+
+def test_count_tools_weighs_cjk_descriptions_as_bytes():
+    counter = TokenCounter()
+    ascii_tool, cjk_tool = FakeTool(schema_chars=300), FakeTool(schema_chars=0)
+    cjk_tool.parameters["properties"]["blob"]["description"] = "查" * 300
+    assert counter.count_tools([cjk_tool]) > counter.count_tools([ascii_tool])
+
+
 # ---------------------------------------------------------------------------
 # Memoization
 # ---------------------------------------------------------------------------
@@ -119,17 +142,19 @@ def test_broken_provider_estimator_falls_back_to_heuristic():
 # ---------------------------------------------------------------------------
 
 
-def _schema_chars(tool) -> int:
+def _schema_bytes(tool) -> int:
     """The compact serialization ``count_tools`` prices, mirrored exactly."""
     return len(
-        json.dumps(tool.openai_schema(), ensure_ascii=False, separators=(",", ":"))
+        json.dumps(
+            tool.openai_schema(), ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
     )
 
 
 def test_count_tools_measures_the_wire_schema():
     counter = TokenCounter()
     tool = FakeTool(schema_chars=4_000)
-    expected = _schema_chars(tool) // 4 + 8
+    expected = _schema_bytes(tool) // 4 + 8
     assert counter.count_tools([tool]) == expected
     assert counter.count_tools([tool, FakeTool()]) > expected
     assert counter.count_tools([]) == 0
@@ -144,7 +169,7 @@ def test_count_tools_counts_real_lovia_tools():
         return ""
 
     counter = TokenCounter()
-    assert counter.count_tools([search]) == _schema_chars(search) // 4 + 8
+    assert counter.count_tools([search]) == _schema_bytes(search) // 4 + 8
 
 
 def test_count_tools_memoized_by_tool_identity():

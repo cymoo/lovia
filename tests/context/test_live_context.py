@@ -405,5 +405,77 @@ async def test_live_real_overflow_raises_context_overflow_error():
     # The endpoint names its limit in the rejection; that number is what turns
     # an unknown model into a correctly-sized one for the rest of the session.
     window = exc_info.value.reported_window
-    assert window is not None, "provider stated no limit; window_from_error needs a new pattern"
+    assert window is not None, (
+        "provider stated no limit; window_from_error needs a new pattern"
+    )
     assert 1024 <= window <= 20_000_000
+
+
+# ---------------------------------------------------------------------------
+# 8. Heuristic accuracy against the endpoint's real token accounting
+# ---------------------------------------------------------------------------
+
+
+async def test_live_estimator_accuracy_across_content_types():
+    """The UTF-8-byte heuristic must land within the calibration clamp for
+    every representative content type — English, code, Chinese, mixed — so
+    the ratio's job stays residual error, not systematic mis-weighting."""
+    model = _live_model()
+    import httpx
+
+    from lovia.context import TokenCounter
+
+    samples = {
+        "en": (
+            "The compaction pipeline treats the transcript as immutable and "
+            "renders a per-call view instead. Sticky decisions are monotonic: "
+            "a cleared tool result never reverts, and summary coverage only "
+            "grows, which keeps the rendered prefix byte-stable so provider "
+            "prompt caches stay warm across turns. Between bursts nothing is "
+            "touched, which is the hysteresis that prevents thrashing."
+        ),
+        "code": (
+            "def pressure(self, tokens):\n    return tokens / self.usable\n\n"
+            "candidates = [w for w in (learned, advertised) if w is not None]\n"
+            "return min(candidates) if candidates else None\n"
+            'logger.info("window: endpoint reported %d for %r", reported, model)'
+        ),
+        "zh": (
+            "上下文压缩的核心矛盾在于：模型看到的提示必须装进有限的窗口，而对话"
+            "本身却在无限增长。粘性决策一旦做出就不再回退，摘要的覆盖范围只会向前"
+            "推进，渲染出的前缀因此在字节层面保持稳定，供应商的提示缓存才能持续"
+            "命中。水位线之间的滞后带避免了策略每一轮都抖动。"
+        ),
+        "mixed": (
+            "在 lovia 的运行时里，preflight 负责串行门控：cancel check、budget、"
+            "tool lookup 和审批流。Every rejection appends exactly one "
+            "ToolResultEntry so calls never dangle, 运行不会挂起。"
+        ),
+    }
+    counter = TokenCounter()
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        base = os.environ["OPENAI_BASE_URL"].rstrip("/")
+
+        async def prompt_tokens(text: str) -> int:
+            r = await client.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": text}],
+                    "max_tokens": 16,
+                    "temperature": 0,
+                },
+            )
+            r.raise_for_status()
+            return r.json()["usage"]["prompt_tokens"]
+
+        framing = await prompt_tokens("hi") - 1
+        for name, text in samples.items():
+            real = await prompt_tokens(text) - framing
+            est = counter.count_entry(_user(text))
+            assert 0.5 <= real / est <= 1.6, (
+                f"{name}: real {real} / est {est} = {real / est:.2f} outside "
+                "the calibration clamp's comfortable range"
+            )

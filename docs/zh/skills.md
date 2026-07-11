@@ -1,8 +1,8 @@
 # 技能
 
-团队知识，比如政策、runbook、风格指南，不应该塞进每个请求都要付费的 system prompt。
-**skill** 是一种可复用的指令包，模型能以很低成本发现它，并且只在需要时加载它。
-lovia 遵循 Agent Skills 约定：`SKILL.md` 加附属文件。
+政策、运维手册（runbook）、风格指南等团队知识，不应全部塞进每次请求都要付费传输的系统提示词。
+**技能（skill）**是一种可复用的指令包：模型可以用很低的成本发现它，并且只在需要时加载。
+lovia 遵循 Agent Skills 约定，以 `SKILL.md` 搭配附属文件组织技能。
 
 ```python
 from lovia import Agent, Skills
@@ -17,7 +17,7 @@ agent = Agent(
 
 ## 渐进披露
 
-skill 的上下文成本被拆成三步：
+技能占用的上下文分为三个阶段：
 
 1. **索引**：始终放在 system prompt 中。每个 skill 一行
    （`` `name` — description``，加额外 frontmatter），后面跟使用规则。在真正需要前，
@@ -29,7 +29,7 @@ skill 的上下文成本被拆成三步：
 
 正文每次加载都会从磁盘按需读取，不缓存。因此修改 skill 后，下一次调用就会生效，不必重启。
 
-## skill 的结构
+## 技能的目录结构
 
 一个 skill 是一个目录，里面有带 YAML frontmatter 的 `SKILL.md`，以及可选支持文件：
 
@@ -73,7 +73,7 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
 - **多个目录**会合并成一个 catalog；skill 名重复时，第一次出现的胜出，后面的会记录日志并跳过。
 - **`usage_rules`** 会替换索引后的默认使用规则；传 `""` 可以完全省略规则。
 - **`filter`**（任意 `SkillFilter` 谓词）接收每个 skill 的 `SkillMetadata`
-  （`name`、`description`、`extra`），返回 `True` 表示保留。它是真正的边界，不是装饰：
+  （`name`、`description`、`extra`），返回 `True` 表示保留。它会切实限制可见范围，而非仅作展示：
   被过滤掉的 skill 不会出现在索引中，也无法通过工具加载。
 
 skill 层失败会在 setup 时抛 `SkillsError`（带 `skill_name`/`path`/`hint`）；工具内部的失败会
@@ -108,7 +108,7 @@ agent = Agent(..., plugins=[Skills(catalog)])
   （并中和正文内伪造的 marker），所以 skill 文件里的 instructions 弱于你的 system prompt；
   输出会在 100k 字符处截断。
 
-## 容易踩的点
+## 注意事项
 
 - **skill 文件 IO 绕过工作区 ACL。** `load_skill` 和 `read_skill_file` 做自己的读取；
   即使 skill 目录在[工作区](workspace.md)根目录之外，或匹配 `denied_paths`，也仍能加载。

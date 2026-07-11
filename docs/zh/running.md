@@ -1,23 +1,23 @@
-# 运行 agent
+# 运行 Agent
 
-`Runner` 把一个 `Agent` 和一份输入变成一次运行。它本身无状态；所有单次运行状态
-都存在它启动的循环里。它只暴露三个入口，区别只在于你如何消费这次运行。
+`Runner` 接收一个 `Agent` 和一份输入，并执行一次运行。它本身不保存状态；单次运行的全部状态
+都由其启动的运行循环管理。`Runner` 只提供三个入口，区别仅在于调用方如何获取运行结果。
 
 ```python
 from lovia import Runner
 
-result = await Runner.run(agent, "写一段发布说明。")      # 跑到完成
+result = await Runner.run(agent, "写一段发布说明。")      # 等待运行完成
 result = Runner.run_sync(agent, "总结这个文件。")         # 脚本 / REPL
 handle = Runner.stream(agent, "解释上下文压缩。")         # 边运行边消费事件
 ```
 
-`agent.run(...)` / `agent.run_sync(...)` / `agent.stream(...)` 是同一组调用的实例方法形式。
+`agent.run(...)`、`agent.run_sync(...)` 和 `agent.stream(...)` 是对应的实例方法写法。
 
 ## 三个入口
 
 **`Runner.run(agent, input, **options) -> RunResult`**：等待运行完成并返回最终结果。
 失败会抛异常（`GuardrailTripped`、`BudgetExceeded`、`ProviderError` 等，见
-[错误清单](concepts.md#出错时会看到什么)）。
+[错误清单](concepts.md#错误处理)）。
 
 **`Runner.run_sync(...)`**：做同样的事，但用 `asyncio.run()` 包起来，适合尚未使用
 async 的代码。如果在已经运行的事件循环里调用，会抛 `UserError`，hint 里会告诉你
@@ -37,7 +37,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 
 迭代是一次性的；第二次 `async for` 会抛 `RuntimeError`。每个流都会以且仅以一个
 终止事件结束：`RunCompleted` 或 `RunFailed`。`await handle` 是
-`await handle.result()` 的简写；如果还没人迭代这个流，`result()` 会自己驱动它跑到
+`await handle.result()` 的简写；如果尚未开始遍历事件流，`result()` 会自行驱动运行直至
 完成。`handle.cancel()` 可以在没有预先传 `CancelToken` 的情况下请求协作式取消；
 `handle.approvals` 是[审批通道](human-in-the-loop.md#通过审批通道处理)。
 事件本身见[流式输出](streaming.md)。
@@ -59,7 +59,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 | `context_policy` | agent 的配置 | 本次调用覆盖[上下文策略](context.md) |
 | `session` + `session_id` | `None` | 对话持久化（见 [Session 与 Checkpoint](sessions-and-checkpoints.md)） |
 | `checkpoint` | `None` | 崩溃恢复和幂等运行（见 [Session 与 Checkpoint](sessions-and-checkpoints.md#checkpoint)） |
-| `tracer` | `None` | 本次运行的 tracing（见[可观测性](observability.md#tracing)） |
+| `tracer` | `None` | 本次运行的链路追踪（见[可观测性](observability.md#链路追踪)） |
 
 `retry` 和 `context_policy` 是两个**应对策略**覆盖项。它们默认使用 agent 配置，而且
 **初始** agent 的应对策略会贯穿整个运行，handoff 后也一样。其余选项是**限制和外部接入点**，
@@ -127,7 +127,7 @@ result = await Runner.run(
 还是从 checkpoint 重建出来，它都一致。要看完整对话，可以在 hook 里读取
 `ctx.entries`，或运行结束后调用 `session.load()`。
 
-## 容易踩的点
+## 注意事项
 
 - **`RunResult.entries` 不是完整 transcript**：它只是本次运行的增量。用它渲染
   “整段对话”的代码会不小心丢掉之前的历史；请用 session。

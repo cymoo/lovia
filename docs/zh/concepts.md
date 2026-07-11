@@ -1,22 +1,22 @@
 # 核心概念
 
-整个框架可以用五个概念串起来。每个概念都对应一个实际容易出问题的地方；本页先讲它要解决
-什么，再把一次运行从头到尾走一遍。读完之后，后面的文档就可以直接沿用这些词。
+理解五个概念，就能把整个框架串联起来。每个概念都对应一类实践中常见的问题。本页会先说明
+它们各自解决什么，再完整梳理一次运行流程。掌握这些概念后，后续文档中的术语便不再赘述。
 
-一分钟版本：
+先用一分钟了解这五个概念：
 
-- **Agent vs Runner**：`Agent` 是不可变配置；`Runner` 负责执行一次运行。对话状态
-  不存在 agent 上。
+- **Agent 与 Runner**：`Agent` 是不可变配置；`Runner` 负责执行一次运行。对话状态
+  不保存在 Agent 上。
 - **轮次（turn）**：一次运行由多个轮次组成。每轮先调用模型，再执行
   它请求的工具。模型在不再请求工具时给出最终答案，循环结束。
-- **Transcript vs view**：transcript 是追加式记录，说明发生过什么；view 是某次
-  模型调用能看到的内容。长对话之所以能活下去，是因为只缩小 view。
-- **Session vs checkpoint**：session 是跨运行的对话记忆；checkpoint 处理单次运行
+- **运行记录与模型视图**：运行记录（transcript）完整保存已经发生的事件；模型视图（view）
+  则是某次调用实际发送给模型的内容。对话变长时，只压缩模型视图，不改写运行记录。
+- **Session 与 Checkpoint**：Session 保存跨运行的对话历史；Checkpoint 负责单次运行
   内的崩溃恢复。
-- **应对策略 vs 限制**：基础设施出问题时 agent 如何应对，属于 agent 配置；某个请求最多
-  能花多少，属于单次运行参数。
+- **故障处理与资源限制**：基础设施出现问题时如何处理，属于 Agent 配置；单个请求最多
+  可以消耗多少资源，则由本次运行的参数决定。
 
-## 角色表
+## 主要对象
 
 ```python
 from lovia import Agent, Runner
@@ -25,85 +25,84 @@ agent = Agent(name="writer", instructions="回答要具体。", model="glm-5.2")
 result = await Runner.run(agent, "写一段发布说明。")
 ```
 
-**`Agent`** 是一个声明式 dataclass：名称、instructions、模型、工具、插件和策略。
-它不保存对话状态，所以一个实例可以服务任意数量的并发运行；
-`agent.clone(model="...")` 可以派生变体，而不会复制任何可变状态。唯一允许的
-原地变更，是用 `@agent.instruction` 注册动态 instruction 片段，见
+**`Agent`** 是一个声明式数据类，用来定义名称、指令、模型、工具、插件和策略。
+它不保存对话状态，因此同一个实例可以同时用于任意数量的运行。
+需要调整配置时，可以用 `agent.clone(model="...")` 派生新实例，不会复制任何可变状态。
+唯一允许直接修改 Agent 的操作，是用 `@agent.instruction` 注册动态指令片段，详见
 [Agent](agents.md)。
 
-**`Runner`** 是无状态的。它只有三个静态方法：`run`、`run_sync`、`stream`，
-负责把参数变成一次运行。一次运行的所有可变状态都存在运行循环内部，开始时创建，
-结束时消失。
+**`Runner`** 本身不保存状态。它提供 `run`、`run_sync` 和 `stream` 三个静态方法，
+负责根据传入参数启动一次运行。运行期间的可变状态全部由内部循环管理，运行开始时创建，
+结束后随即释放。
 
-**`RunResult`** 是运行返回的结果：`output`（文本，或你声明的 `output_type`
-校验后的对象）、`usage`、`turns`、`finish_reason`、`final_agent`（运行结束时的
-活跃 agent，handoff 后有用），以及 `entries`，也就是**本次运行自己**贡献的
-transcript 片段，而不是整段对话。
+**`RunResult`** 是一次运行的返回结果，包含 `output`（文本，或经过 `output_type`
+校验的对象）、`usage`、`turns`、`finish_reason`、`final_agent`（运行结束时处于活跃状态的
+Agent，在发生 Handoff 时尤其有用）以及 `entries`。其中，`entries` 只包含**本次运行新增的**
+记录，而不是整段对话历史。
 
-## 一次运行，逐轮看
+## 一次运行的完整流程
 
-这个设计要解决的问题是：agent 循环很容易长出许多特例，审批在这里，重试在那里，
-持久化又在另一个角落，最后没人说得清执行顺序。lovia 把它收束成一条阶段固定的循环。
-下面就是实际顺序；后续每篇指南都对应其中某一步。
+Agent 循环通常会逐渐堆积各种特殊逻辑：审批、重试和持久化各自散落在不同位置，
+最终很难判断它们的执行顺序。lovia 将这些操作统一纳入一个阶段明确的循环。
+下面按照实际发生的顺序，完整说明一次运行；后续各篇指南会分别展开其中的某个环节。
 
-**每次运行只做一次的准备：**
+### 运行前的准备
 
-1. 解析活跃 agent：provider、结构化输出、工作区 session、插件 `setup()`
-   （每个插件一次）和合并后的工具集。工具来源包括 agent 工具、插件工具、工作区
-   工具、handoff 工具，最后是上下文策略工具，如 `recall_tool_result`
-   （最后添加；如果你显式定义了同名工具，则以你的工具为准）。
-2. 构建 transcript：`[system prompt] + 之前的 session 历史 + 本次输入`。
-   system prompt 会拼接 agent 的 instructions（含动态片段和每次运行的
-   `extra_instructions`）、工作区 instructions、插件 instructions，以及在
-   provider 不支持原生 JSON schema 时追加的结构化输出契约。
-3. 对构建好的 transcript 运行一次**输入护栏**。
+1. 解析当前活跃的 Agent，包括 Provider、结构化输出配置、工作区 Session、每个插件的
+   `setup()`，以及合并后的工具集。工具可能来自 Agent、插件、工作区和 Handoff，最后还会
+   加入 `recall_tool_result` 等上下文策略工具。如果你显式定义了同名工具，则优先使用你的定义。
+2. 按照“系统提示词 + 既有 Session 历史 + 本次输入”的顺序构建运行记录。系统提示词由
+   Agent 指令（包括动态片段和本次运行的 `extra_instructions`）、工作区指令和插件指令组成；
+   如果 Provider 不支持原生 JSON Schema，还会追加结构化输出契约。
+3. 对构建完成的运行记录执行一次**输入护栏**检查。
 
-**然后进入循环。每次迭代是一轮 turn：**
+### 每一轮的处理步骤
 
-1. 检查限制：`max_turns`、取消、预算。
-2. 触发 `TurnStarted`；队列里的 **mailbox** 消息被取出，作为用户消息追加进
-   transcript。运行中追加指令就是在这里生效。
-3. **上下文策略**渲染本次模型调用的 transcript view；插件的**视图注入器**
-   追加临时条目（todo 提醒之类，不持久化）。
-4. provider 以流式方式返回模型回复：文本 delta、reasoning delta、工具调用 delta。
-   如果还没流出内容就发生上下文溢出，策略有一次机会缩小 view 并重试调用。
-5. 回复对应的 entries 追加进 transcript；如果配置了 checkpoint，则保存。
-6. 如果模型请求了工具：按请求顺序逐个做 **preflight**（预算、审批、参数校验），
-   然后执行。允许并发的工具并发执行；不允许并发的工具串行执行。结果完成即追加，
-   每个结果都会 checkpoint。
-7. 如果模型没有请求工具而是给出答案：解析最终输出。结构化输出解析失败时，会开启
-   一轮**修复**，而不是立刻失败（可配置）。
-8. 触发 `TurnEnded`。如果有待处理的 **handoff**，切换活跃 agent（新的 system
-   prompt，同一段对话主体），然后继续循环。
+1. 检查 `max_turns`、取消状态和预算等运行限制。
+2. 触发 `TurnStarted`，取出 **mailbox** 中排队的消息，并以用户消息的形式追加到运行记录。
+   运行过程中插入的新指令会在此时生效。
+3. **上下文策略**生成本次模型调用所需的视图；插件的**视图注入器**可以继续添加临时内容，
+   例如待办事项提醒。这些临时内容不会持久化。
+4. Provider 以流式方式返回模型回复，包括文本增量、推理增量和工具调用增量。如果尚未返回
+   任何内容就发生上下文溢出，上下文策略可以再压缩一次视图，并重试本次调用。
+5. 将模型回复追加到运行记录；如果配置了 Checkpoint，同时保存当前进度。
+6. 如果模型请求调用工具，先按请求顺序逐一完成执行前检查（预算、审批和参数校验），再开始执行。
+   允许并发的工具会并行运行，其余工具则依次运行。每个工具完成后立即追加结果并保存 Checkpoint。
+7. 如果模型没有请求工具，而是直接给出答案，则解析最终输出。如果结构化输出解析失败，
+   可以再执行一轮**修复**，而不是立即结束运行。此行为可以配置。
+8. 触发 `TurnEnded`。如果存在待处理的 **Handoff**，则切换当前活跃的 Agent，使用新的
+   系统提示词继续处理同一段对话。
 
-**完成时：**先运行**输出护栏**，再完成 checkpoint，然后才把本次运行的片段追加进
-session。这个顺序是固定的，所以崩溃时不会出现“既已经持久化为完成、又仍然可恢复”的
-状态。上面的每个事件都会同时派发给 [hooks](observability.md)。
+### 运行结束
 
-流式还有一个值得记住的保证：**迭代运行事件流不会因为运行错误而抛异常。**每个流都
-以且仅以一个终止事件结束：`RunCompleted` 或 `RunFailed`。真正把错误变成异常的是
-`await handle.result()`。
+模型给出最终答案后，系统先执行**输出护栏**，再完成 Checkpoint，最后才将本次运行新增的记录
+写入 Session。这个顺序固定不变，因此即使发生崩溃，也不会出现同一次运行既被标记为完成、
+又仍可恢复的矛盾状态。上述每个事件还会同步分派给[钩子](observability.md)。
 
-## Transcript vs view
+流式运行还有一项重要保证：**遍历事件流时，不会因为运行失败而抛出异常。**每个事件流
+只会以一个终止事件结束，即 `RunCompleted` 或 `RunFailed`。只有调用
+`await handle.result()` 获取结果时，运行错误才会作为异常抛出。
 
-问题是：对话会超过上下文窗口，而很多框架会通过“改写历史”来解决。这样一来，你就
-很难审计模型到底看到了什么，恢复运行也容易产生分叉。
+## 运行记录与模型视图
 
-lovia 把这两个角色拆开：
+随着对话不断变长，内容终会超出模型的上下文窗口。许多框架通过改写历史记录来解决这个问题，
+但这样既难以追溯模型当时实际接收的内容，也可能使恢复后的运行偏离原有路径。
 
-- **transcript** 是权威、追加式记录：由类型化的 `TranscriptEntry` 组成
-  （输入、assistant 文本、reasoning、工具调用、工具结果），保留 provider 发出的
-  全部内容。session 和 checkpoint 持久化的是 transcript。它只会增长。
-- **view** 是某一次模型调用实际接收到的内容。上下文策略（默认是 `Compaction`）可以
-  在 view 里挪走巨大的工具结果、清理旧结果，或总结很早的历史。注意：只改 view，
-  不改 transcript。`recall_tool_result` 工具可以让模型取回 view 里被移走的内容。
+lovia 将完整记录与模型实际接收的内容分开处理：
 
-这样，“模型忘了”和“记录丢了”就是两个不同问题，也会有不同答案。细节见
+- **运行记录（transcript）**是权威且只追加的记录，由不同类型的 `TranscriptEntry` 组成，
+  包括用户输入、模型文本、推理内容、工具调用和工具结果。Provider 返回的内容会完整保留，
+  Session 和 Checkpoint 持久化的也是这份记录。它只会增加，不会被改写。
+- **模型视图（view）**是单次模型调用实际接收到的内容。上下文策略（默认为 `Compaction`）
+  可以从视图中移出过大的工具结果、清理较早的结果，或汇总早期对话，但不会修改运行记录。
+  模型仍可通过 `recall_tool_result` 工具取回从视图中移出的内容。
+
+这样便能明确区分“模型当前看不到某段内容”和“系统没有保存这段内容”。详见
 [上下文管理](context.md)。
 
-## Session vs checkpoint
+## Session 与 Checkpoint
 
-这两个持久化存储很容易混在一起，但它们回答的问题不同：
+这两种持久化存储容易混淆，但用途截然不同：
 
 | | Session | Checkpoint |
 | --- | --- | --- |
@@ -113,30 +112,30 @@ lovia 把这两个角色拆开：
 | 写入时机 | 运行完成时写一次 | 模型轮次后、每个工具结果后 |
 | 生命周期 | 对话的生命周期 | 运行的生命周期（成功后可选删除） |
 
-两者都是**追加式**的：已经保存的运行不会被重写。任意时刻的完整对话是
-`session.load()` 加上正在运行的 snapshot entries。重新提交一个已经完成的
-`run_id` 会直接重放保存的结果，不再调用模型；因此 `run_id` 能作为幂等键，
-也让崩溃的 worker 可以简单地重试整个 job。见
+两者都采用**追加写入**，已经保存的运行不会被改写。任意时刻的完整对话，都由
+`session.load()` 返回的历史加上当前运行快照中的记录组成。如果再次提交一个已经完成的
+`run_id`，系统会直接重放已保存的结果，不再调用模型。因此，`run_id` 可以作为幂等键；
+Worker 崩溃后，也可以安全地重新执行整个任务。详见
 [Session 与 Checkpoint](sessions-and-checkpoints.md)。
 
-## 应对策略 vs 限制
+## 故障处理与资源限制
 
-问题是：可靠性开关很容易散落到每个调用点，最后每次调用都要传十几个参数。lovia 的
-放置规则很简单：
+如果没有清晰的配置边界，可靠性选项很容易散落在各个调用点，导致每次调用都要重复传入大量参数。
+lovia 按照以下原则划分配置：
 
-- **应对策略**：基础设施出问题时 agent 如何应对，放在 `Agent` 上，每次运行都会继承：
+- **故障处理策略**：定义基础设施出现问题时 Agent 如何处理，配置在 `Agent` 上，并由每次运行继承：
   provider `retry`、`default_tool_retries` / `default_tool_timeout`、`context_policy`。
-- **限制**：某个请求最多能花多少，是 `Runner.run` 的参数，没有 agent 侧对应项：
+- **资源限制**：规定单个请求最多可以消耗多少资源，通过 `Runner.run` 的参数设置，Agent 上没有对应字段：
   `max_turns`、`budget`、`cancel_token`。
 
-一个重要结果是：**初始** agent 的应对策略贯穿整个运行，包括 handoff 之后。转交只改变谁在
-说话，不改变运行的骨架。当某个请求确实特殊时，也可以按调用覆盖应对策略：
+需要特别注意：**初始** Agent 的故障处理策略会贯穿整次运行，即使发生 Handoff 也不会改变。
+Handoff 只会更换处理对话的 Agent，不会改变运行流程。如果某个请求需要特殊配置，也可以在调用时覆盖这些策略：
 `Runner.run(..., retry=..., context_policy=...)`。见[可靠性](reliability.md)。
 
-## RunContext：唯一的运行句柄
+## RunContext：访问运行状态
 
-工具、hooks、护栏和动态 instruction 片段都会收到同一个实时 `RunContext`。工具通过
-给某个参数添加**类型标注**来接收它；参数名不重要，类型标注才重要：
+工具、钩子、护栏和动态指令片段都会收到同一个实时 `RunContext`，并通过它访问当前运行状态。
+工具只需为某个参数添加相应的**类型标注**即可接收它；参数名称没有限制：
 
 ```python
 from dataclasses import dataclass
@@ -170,60 +169,60 @@ async def lookup(ctx: RunContext[Deps], user_id: int) -> str:
 | `mailbox` | 始终存在；推入消息后，模型下一轮可见 |
 | `system_prompt` | 本次运行完整渲染后的 system prompt |
 
-## 插件：唯一扩展轴
+## 插件：统一的扩展机制
 
-问题是：框架很容易把扩展点拆散：工具一个注册表、提示词片段另一个注册表、
-middleware 一套、生命周期回调又一套。每个可复用能力都得分散接入多个地方。
+框架的扩展点很容易变得零散：工具和提示词片段使用不同的注册表，中间件和生命周期回调
+又各有一套机制。这样一来，每项可复用能力都必须分别接入多个位置。
 
-lovia 的 **plugin** 是一个对象，可以贡献任意组合：工具、system prompt 文本、
-每轮 view injector、hooks 和护栏。runner 会在每次运行中激活一次插件
-（`await plugin.setup()`），运行结束后清理，并把贡献内容合并到上面固定循环的槽位。
-插件不驱动控制流；中止、重试和 handoff 仍由循环掌控。
+lovia 用一个**插件（plugin）**对象统一提供工具、系统提示词、每轮视图注入器、钩子和护栏。
+Runner 会在每次运行中激活一次插件（`await plugin.setup()`），并在运行结束后清理；
+插件提供的各项能力会合并到前述运行流程的对应阶段。插件不会控制运行流程，中止、重试和
+Handoff 仍由运行循环统一管理。
 
-Skills、MCP、todo list 和长期记忆都基于这一机制实现，也说明这条扩展轴已经足够。见[插件](plugins.md)。
+Skills、MCP、待办事项和长期记忆都基于这套机制实现。详见[插件](plugins.md)。
 
-## 出错时会看到什么
+## 错误处理
 
-所有框架异常都继承 `LoviaError`，所以 `except LoviaError` 会捕获 lovia 的错误，
-不会误吞你自己的 bug。错误可以带可选的 `hint`，也就是追加在消息后的
-“下一步该试什么”。
+框架抛出的所有异常都继承自 `LoviaError`。因此，使用 `except LoviaError` 可以只捕获 lovia
+自身的错误，而不会意外掩盖业务代码中的缺陷。异常还可以携带可选的 `hint`，在错误消息后给出
+下一步处理建议。
 
 | 异常 | 何时抛出 |
 | --- | --- |
-| `UserError` | 框架配置错误（没有模型、选项不合法）——修调用点 |
+| `UserError` | 框架配置有误，例如未设置模型或选项不合法；应修改调用代码 |
 | `ProviderError` | 模型 API 失败；包含 `vendor`、`status_code`、`retryable` |
-| `ContextOverflowError` | prompt 超过上下文窗口，压缩也救不回来；端点点名上限时带 `reported_window` |
+| `ContextOverflowError` | 提示词超过上下文窗口且无法通过压缩解决；若端点返回窗口上限，则包含 `reported_window` |
 | `ToolError` | 工具以适合结构化呈现的方式失败（通常由你抛出） |
 | `InvalidToolArguments` | 工具参数没有通过 schema 校验（会反馈给模型修正） |
-| `OutputValidationError` | 最终答案没有解析成 `output_type`（包括修复失败后） |
+| `OutputValidationError` | 最终答案无法解析为 `output_type`，包括修复尝试失败的情况 |
 | `MaxTurnsExceeded` | 循环达到 `max_turns` 仍没有最终答案 |
 | `BudgetExceeded` | `RunBudget` 的某项限制在运行中触发 |
 | `RunCancelled` | `CancelToken` 被触发 |
 | `GuardrailTripped` | 输入/输出护栏拒绝了某个值 |
 | `MCPError` | MCP 服务器连接或调用失败 |
 
-两个细节：工具抛出普通异常**不会**结束运行，错误会作为工具结果返回给模型，让它调整
-策略（见[工具](tools.md)）；流式模式下，这些异常通过 `handle.result()` 暴露，
-不会从迭代本身抛出。
+还需注意两点。第一，工具抛出普通异常时，运行**不会**立即结束；该错误会作为工具结果返回给模型，
+让模型有机会调整策略，详见[工具](tools.md)。第二，在流式模式下，这些异常通过
+`handle.result()` 抛出，遍历事件流本身不会抛出运行异常。
 
 ## 可以依赖的设计约束
 
-“简洁、轻量、可扩展、通用”的哲学，落到代码里就是这些不变量：
+“简洁、轻量、可扩展、通用”不仅是设计理念，也落实为以下可以依赖的约束：
 
-- **Agent 是配置。** `Agent` 上没有对话状态；可以共享，也可以轻松派生变体。
-- **Transcript 永不重写。** 压缩只改变 view；session 和 checkpoint 只追加；
+- **Agent 只保存配置。** `Agent` 不包含对话状态，可以安全共享，也可以轻松派生不同配置。
+- **运行记录永不重写。** 压缩只改变模型视图；Session 和 Checkpoint 只追加；
   完成后的运行不可变。
-- **插件贡献能力，循环掌控流程。** 插件不能重试、中止或重新路由一次运行。
-- **所有关联都靠 id，而不是位置。** 工具事件通过 `call.id` 配对；segment 和
-  snapshot 通过 `run_id` 配对。并发不会打乱重要关系。
-- **Provider 是 protocol。** 两个内置适配器通过 `httpx` 调 OpenAI 和 Anthropic；
-  新接 provider 只需要实现 `Protocol`，不用继承一套基类。
-- **核心保持很小。** `lovia` 导入时不带 web 栈，也不带工作区机制；这些层依赖核心，
+- **插件提供能力，循环控制流程。** 插件不能自行重试、中止运行或更改路由。
+- **所有关联都通过 ID 建立，而不依赖位置。** 工具事件通过 `call.id` 配对；Segment 和
+  Snapshot 通过 `run_id` 配对。即使并发执行，关键关系也不会被打乱。
+- **Provider 采用协议接口。** 两个内置适配器通过 `httpx` 调用 OpenAI 和 Anthropic；
+  接入新的 Provider 只需实现 `Protocol`，无须继承基类。
+- **核心保持精简。** 导入 `lovia` 时不会同时加载 Web 技术栈或工作区机制；这些层依赖核心，
   核心不反向依赖它们。
 
 ## 延伸阅读
 
-- [快速上手](quickstart.md)：先跑通一个最小 agent
-- [运行 agent](running.md)：`Runner` 的完整用法
-- [架构笔记](../architecture.md)：贡献者版本的本页，包含模块名和修改 lovia 本身时
+- [快速上手](quickstart.md)：运行一个最小 Agent
+- [运行 Agent](running.md)：`Runner` 的完整用法
+- [架构说明](../architecture.md)：面向贡献者的详细版本，包含模块名称和修改 lovia 本身时
   需要遵守的不变量

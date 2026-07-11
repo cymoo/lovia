@@ -1,8 +1,9 @@
 # 多 Agent
 
-lovia 里的多 agent 组合有意保持小而清楚：两个原语，底层都实现为普通工具，没有编排 DSL。
-**Handoff** 会移交控制权：专家继续同一段对话。**Agent-as-tool** 是委派：子 agent 回答
-一个边界清晰的问题，父 agent 接着往下走。更大的模式都用普通 Python 组合它们。
+lovia 刻意将多 Agent 协作保持得简单清晰：只提供两个原语，底层均以普通工具实现，
+不引入编排 DSL。**Handoff** 用于移交控制权，由专家 Agent 接手当前对话；
+**Agent-as-tool** 用于委派任务，由子 Agent 回答一个边界明确的问题，再交还给父 Agent 继续处理。
+更复杂的模式可以直接用普通 Python 组合这两个原语。
 
 ## Handoff
 
@@ -27,17 +28,17 @@ print(result.final_agent.name)   # "billing"
 provider 对工具名的要求：ASCII、64 字符，必要时加稳定 digest 后缀）。模型调用这个工具时，循环会
 切换活跃 agent 并继续。
 
-**目标 agent 会看到什么。** 对话会随 handoff 一起转过去：新 agent 拿到完整的既有上下文，
+**目标 Agent 可以看到哪些内容。** Handoff 会连同对话历史一起移交：新的 Agent 会收到完整的既有上下文，
 包括历史、工具调用和结果。唯一变化是开头的 system prompt 会重新渲染成目标 agent 自己的
 内容（instructions、workspace、plugins、结构化输出契约）。运行级
 `extra_instructions` 会重新应用到 handoff 到达的每个 agent。
 
 **还会改变什么。** 目标 agent 的 provider、工具、插件和工作区会重新解析（插件会运行
 自己的 `setup()`）；会触发一个 `HandoffOccurred` 事件（派发给两个 agent 的 hooks）。
-不变的是运行骨架：`max_turns`、预算、cancel token、mailbox、session、checkpoint，以及
+保持不变的是整体运行状态：`max_turns`、预算、取消令牌、Mailbox、Session、Checkpoint，以及
 **初始** agent 的 retry/context 应对策略都会延续。
 
-### 自定义 handoff
+### 自定义 Handoff
 
 用 `Handoff` 包装目标 agent，可以控制工具：
 
@@ -105,13 +106,13 @@ retry=None, context_policy=None)`：
   因为它有自己的循环。
 - `budget` 每次调用都会复制一份，所以限制作用于每个子运行，而不是跨调用累计。
 - 子运行会**继承**父运行的 `context`（deps）、`cancel_token`（一次取消停止整棵树）和
-  tracer（span 接到同一条 trace）；token 用量会折入父运行的 `usage`。
+  Tracer（子 Span 会加入同一条 Trace）；Token 用量会计入父运行的 `usage`。
 - 子运行拥有**自己的 mailbox**。这不是父运行的 mailbox，因为从 mailbox 取消息会消费它，
   注入消息也只应发给一段对话。
 - 子运行耗尽自己的预算时，会作为工具错误结果反馈给父 agent，让父 agent 处理。这是可恢复
   的委派失败，不是结束父运行的失败（见[错误语义](tools.md#错误语义)）。
 
-## 怎么选择
+## 如何选择协作方式
 
 | 你想要 | 使用 |
 | --- | --- |
@@ -127,7 +128,7 @@ retry=None, context_policy=None)`：
 [`examples/workflows/`](../../examples/workflows/) 目录用一页代码实现了 Anthropic
 *Building effective agents* 里的每个模式。
 
-## 容易踩的点
+## 注意事项
 
 - **Handoff 目标需要可发现的 description。** 两个专家如果都用默认 description，
   从路由角度看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。

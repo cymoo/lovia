@@ -1,8 +1,8 @@
 # 工作区
 
-给 agent 接上文件系统和 shell，它就能做代码修改，也会立刻带来安全问题。`Workspace` 会添加文件和 shell
-工具，并把作用域限制在根目录内，再用**同一套** `allow` / `ask` / `deny` 策略管理路径和命令。这样你只需要
-在一个地方判断 agent 能碰什么。
+让 Agent 访问文件系统和 Shell 后，它便可以修改代码，但也随之带来安全风险。`Workspace` 会添加文件和 Shell
+工具，将操作范围限制在根目录内，并用**同一套** `allow` / `ask` / `deny` 策略管理路径和命令。
+这样只需在一个地方配置 Agent 可以访问哪些资源。
 
 ```python
 from lovia import Agent
@@ -25,8 +25,8 @@ agent = Agent(
 )
 ```
 
-工作区会在运行时贡献工具包，向 system prompt 注入生成的 `## Workspace` 章节（根据策略生成，所以
-prompt 不会承诺 session 做不到的事），并把实时 session 通过 `ctx.workspace` 暴露给自定义工具。
+工作区会在运行时提供一组工具，并向系统提示词注入自动生成的 `## Workspace` 章节。该章节根据策略生成，
+因此不会向模型承诺当前 Session 无法完成的操作。自定义工具还可以通过 `ctx.workspace` 访问当前的工作区会话。
 `mode` 接受 `WorkspaceMode`（`"readonly"` / `"coding"` / `"trusted"`）；拒绝操作会抛
 `PermissionDeniedError`，关闭 session 后使用会抛 `WorkspaceClosedError`（两者都是
 `WorkspaceError`，而它本身是 `ToolError`，所以模型会看到并调整）。
@@ -46,7 +46,7 @@ prompt 不会承诺 session 做不到的事），并把实时 session 通过 `ct
 
 ## ACL
 
-ACL 有三个取值，落在两个执行点上：
+ACL 有三个决策值，分别作用于两个执行环节：
 
 - **`deny` 在 session 层执行**：这是每个文件操作和命令都会经过的唯一关口，不管调用者是内置工具、
   你的自定义工具，还是你自己的代码。拒绝会抛 `PermissionDeniedError`（一种 `ToolError`，模型会看到并调整）。
@@ -62,9 +62,9 @@ ACL 有三个取值，落在两个执行点上：
 `git push origin`，不会匹配 `git pushx`。复合命令会按 `&&`、`||`、`;`、`|`、`&` 拆段；
 每段分别判断，取**最严格**决策。
 
-**symlink 没有特例**：每个路径都会先解析（跟随 symlink、展开 `~`、相对路径锚到 root），然后按它
-**落到哪里**判断。所以 `.venv/bin/python` 指向系统解释器时，只要策略允许目标就能用；逃出根目录的
-symlink 会按根外路径处理。
+**符号链接不作特殊处理**：每个路径都会先完成解析（跟随符号链接、展开 `~`，并将相对路径定位到根目录），
+再根据最终指向的位置应用策略。因此，当 `.venv/bin/python` 指向系统解释器时，只要策略允许访问目标
+即可执行；指向根目录之外的符号链接会按工作区外路径处理。
 
 ## 工具
 
@@ -97,7 +97,7 @@ process group，并报告 `timed_out=True`。
 的目录不会）。显式传入的 `env={"PATH": ...}` 仍然优先。工作区的 system prompt 片段会告诉模型：安装
 Python 包之前先创建 `.venv`，永远不要装进全局环境。
 
-## 命令门禁
+## 命令执行控制
 
 静态命令规则看不到路径，所以 session 还会从每条命令里**词法**提取路径声明：重定向目标算写入，
 看起来像路径的参数算读取。它会把这些路径 ACL 判断和静态命令判断合并，取最严格结果。命令只要提到
@@ -112,13 +112,13 @@ class ShellExecutor(Protocol):
     async def run(self, command, *, cwd, env, timeout, policy, root) -> CommandResult: ...
 ```
 
-executor 在策略和审批门禁**之后**运行（它决定**怎么**执行，不决定**能不能**执行），可以根据收到的
+Executor 在策略检查和审批完成**之后**运行。它只负责决定命令**如何执行**，无权决定命令**是否允许执行**。它可以根据收到的
 policy 派生 Seatbelt/bubblewrap/Landlock 范围。用法：
 `Workspace.local(..., executor=my_sandbox)`。
 
-## 作为库，以及在自定义工具里使用
+## 在代码和自定义工具中使用
 
-工作区也可以脱离 agent 使用，拿到的就是工具使用的同一套 session：
+工作区也可以脱离 Agent 单独使用，所得 Session 与内置工具使用的完全相同：
 
 ```python
 async with Workspace.local("./project", mode="trusted").session() as ws:
@@ -128,7 +128,7 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
     result = await session.run("pytest -q")
 ```
 
-自定义工具通过 `ctx.workspace` 拿到当前运行的 session，并经过同一套门禁：
+自定义工具可以通过 `ctx.workspace` 访问当前运行的工作区 Session，所有操作仍会经过同一套权限检查：
 `read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。deny 会抛异常；
 `ask` 会作为决策返回，让你自己的 `needs_approval` 谓词处理。
@@ -139,14 +139,14 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 默认每次运行都会打开一个新 session，并在运行结束时关闭；上面的 `.session()` context manager 可以把一个
 session 跨运行保持打开（`close_after_run=False`），适合启动成本重要的场景。
 
-## 容易踩的点
+## 注意事项
 
 - **命令门禁不是 sandbox。** 它是尽力而为的词法门禁；解释器和命令替换可以绕过它。任何安全关键场景
   都需要 `ShellExecutor` 或隔离主机。文档和生成的 system prompt 都会明确说明这一点。
 - **`denied_paths` 胜过一切，包括你自己的 `readable=` 授权。** 调试“为什么读不了”前，先看优先级。
 - **被取消的 `shell` 调用可能留下半完成状态。** 超时时会杀掉 process group，但运行级取消如果发生在审批后、
-  完成前，就和任何[同步工具取消](tools.md#容易踩的点)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
-- **[Skills](skills.md#容易踩的点) 文件 IO 绕过这个 ACL**：skill 目录由插件自己的 IO 读取，不走工作区。
+  完成前，就和任何[同步工具取消](tools.md#注意事项)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
+- **[Skills](skills.md#注意事项) 文件 IO 不受此 ACL 管理**：技能目录由插件自行读取，不经过工作区。
 
 ## 延伸阅读
 

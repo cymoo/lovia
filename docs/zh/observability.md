@@ -1,13 +1,14 @@
 # 可观测性
 
-看不见，就修不了。agent 的失败往往发生在运行中：某个工具运行了 40 秒，某一轮消耗了
-30k tokens。lovia 提供三类观测手段，从轻到重分别是：**hooks**（响应事件）、**tracing**（带时间的
-span）、**logging**（内置过程日志）。
+无法观察，就无从排查。Agent 的问题往往出现在运行途中：某个工具耗时 40 秒，某一轮消耗了
+3 万个 token。lovia 提供三类由轻到重的观测手段：**钩子（hooks）**用于响应事件，
+**追踪（tracing）**用于记录带时间信息的 span，**日志（logging）**用于记录内置流程。
 
-## Hooks
+## 事件钩子
 
-`AgentHooks` 是一个订阅器：按事件类型挂处理函数，runner 会把每个事件都派发给它们。事件和
-[流式输出](streaming.md)产出的类型完全相同，所以即使没人消费 stream，观测逻辑仍然工作。
+`AgentHooks` 是事件订阅器：按事件类型注册处理函数后，Runner 会将每个事件分派给对应函数。
+这些事件与[流式输出](streaming.md)产生的类型完全相同，因此即使没有消费者读取事件流，
+观测逻辑仍会正常工作。
 
 ```python
 from lovia import Agent, RunContext, events
@@ -37,7 +38,7 @@ agent = Agent(..., hooks=hooks)
 契约：
 
 - 每个处理函数都以 `handler(event, ctx)` 调用，也就是事件加本次运行的实时
-  [`RunContext`](concepts.md#runcontext唯一的运行句柄)（`session_id`、活跃 agent、累计 usage、
+  [`RunContext`](concepts.md#runcontext访问运行状态)（`session_id`、活跃 Agent、累计用量、
   transcript、cancel token、mailbox）。处理函数可以同步或异步。
 - 按具体类型注册，但用 `isinstance` 匹配；订阅基类（如 `events.ToolEvent`）会捕获整个家族。
   同一类型可有多个 handler，按注册顺序执行；catch-all 最先执行。
@@ -49,7 +50,7 @@ agent = Agent(..., hooks=hooks)
 [插件](plugins.md)也可以贡献自己的 `AgentHooks`，和 agent 自己的 hooks 一起派发。[Memory](memory.md)
 就是这样在运行结束时触发整理。
 
-## Tracing
+## 链路追踪
 
 hooks 告诉你**发生了什么**；span 告诉你**什么花了多久，处在哪个嵌套范围里**。`Tracer` protocol
 只有一个方法：`span(name, **attributes)`，返回 context manager。向运行传入 tracer 时，runner
@@ -77,7 +78,7 @@ result = await Runner.run(agent, "...", tracer=ConsoleTracer(min_duration_ms=5))
 tracer 是**运行级**开关，不是 agent 字段：它会跨 handoff 作用到当前活跃 agent；
 [agent-as-tool](multi-agent.md#agent-as-tool) 子运行会继承它，所以子 span 会接入父 trace。
 
-## Logging
+## 运行日志
 
 lovia 在 `lovia` logger 下记录结构化过程日志：`run.start`、
 `model.done: turn=2 tokens=1841(in=1520 out=321) …`、`tool.start`/`tool.error`、
@@ -110,7 +111,7 @@ cache 字段是对 `input_tokens` 的**细分**，不额外相加。成本公式
 `(input - cache_read) * rate_in + cache_read * rate_cached + …`。要看每轮增量，可以在
 `RunCompleted`/`TurnEnded` hook 里做 diff，或从 `model.done` 日志行读取每轮模型调用自己的 usage。
 
-## 容易踩的点
+## 注意事项
 
 - **hooks 在运行循环里同步派发。** 慢处理函数会拖慢运行；事件之间会 await 派发。指标请异步发送
   （队列 + worker），不要每个事件都阻塞 HTTP 调用。
@@ -118,7 +119,7 @@ cache 字段是对 `input_tokens` 的**细分**，不额外相加。成本公式
   mailbox 和 cancel。
 - **`ConsoleTracer` 给人看，不给程序解析。** 格式不保证版本。需要结构化数据时，请实现自己的 `Tracer`。
 - **重放很安静。** 已完成运行的 [checkpoint 重放](sessions-and-checkpoints.md)只会重新发终止事件；
-  每轮 hooks 和 spans 不会再触发；usage 仍会折入调用方。
+  每轮的钩子和 span 不会再次触发；用量仍会计入调用方。
 
 ## 延伸阅读
 

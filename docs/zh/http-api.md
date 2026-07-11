@@ -1,7 +1,7 @@
 # HTTP API
 
-JSON + SSE API 和内置聊天页面是解耦的：保留端点、去掉 UI，就可以接入自己的前端（或另一个服务）。
-内置 UI 做的所有事都通过这些路由；任意运行中的服务都可以在 `/api/docs` 查看完整的交互式 schema。
+JSON + SSE API 与内置聊天页面彼此独立：只保留接口、不启用 UI，即可接入自己的前端或其他服务。
+内置 UI 的所有功能都通过这些路由实现；服务启动后，可在 `/api/docs` 查看完整的交互式接口文档。
 
 ## 只提供 API
 
@@ -110,7 +110,7 @@ for await (const { event, data } of readSSE(res)) {
 `ChatStore.sqlite(path, wal=False)` 把一切放进一个文件；`ChatStore.in_memory()` 用于测试和 demo；
 `ChatStore(session=..., meta_path=...)` 可以包住自定义 `Session` 后端，同时保留 metadata 功能。
 
-## 容易踩的点
+## 注意事项
 
 - **没有 auth，没有 rate limit**：这是组件，不是产品边界。请挂在自己的 gateway 后面；`cors_origins`
   默认不设置（无 CORS），直到你明确开启。

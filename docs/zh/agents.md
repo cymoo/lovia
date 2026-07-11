@@ -1,8 +1,8 @@
 # Agent
 
-`Agent` 描述的是**要运行什么**：名称、instructions、模型、工具和策略。它不保存
-对话状态，所以一个实例可以服务任意数量的并发请求；每个请求需要的变体可以用
-`clone()` 派生，不必复制一份带运行状态的对象。
+`Agent` 定义的是**运行内容**：名称、指令、模型、工具和策略。它本身不保存
+对话状态，因此同一个实例可以同时处理任意数量的请求。需要为某次请求调整配置时，
+用 `clone()` 派生一个变体即可，无须复制带有运行状态的对象。
 
 ```python
 from lovia import Agent
@@ -16,7 +16,7 @@ agent = Agent(
 
 ## 字段
 
-每个字段都有显式默认值。`None` 不会暗藏某个常量；它只表示关闭、继承或自动创建。
+每个字段都有明确的默认值。`None` 不代表某个隐藏常量，只表示关闭、继承或自动创建。
 
 | 字段 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -37,13 +37,13 @@ agent = Agent(
 | `input_guardrails` / `output_guardrails` | `[]` | 有权停止运行的检查；见[护栏](guardrails.md) |
 | `default_tool_retries` | `0` | 没有自行设置重试的工具使用这个值 |
 | `default_tool_timeout` | `None` | 没有自行设置超时的工具每次尝试使用这个值 |
-| `max_tool_output_chars` | `200_000` | 防止工具输出失控撑大 transcript 的保险线（见[工具](tools.md#输出截断)） |
+| `max_tool_output_chars` | `200_000` | 防止工具输出过大、导致运行记录无限膨胀的安全上限（见[工具](tools.md#输出截断)） |
 | `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有渲染器时使用 |
 
-可靠性相关字段遵循一条值得记住的规则：**应对策略放在 agent 上，限制放在运行上**。
+可靠性相关字段遵循一条明确的配置原则：**故障处理策略属于 Agent，资源限制属于单次运行**。
 见[可靠性](reliability.md)。
 
-## Instructions
+## 指令
 
 四种形式，从静态到完全动态：
 
@@ -82,7 +82,7 @@ runner 追加在它后面。
 > （见[内置工具](built-in-tools.md#时间)里的 `current_date`）、用户等级而不是
 > session id。易变细节更适合放在工具结果里。
 
-## Clone 与变体
+## 派生不同配置
 
 `clone()` 会返回一个只替换部分字段的副本，是派生单次请求配置或实验变体的推荐方式：
 
@@ -91,9 +91,9 @@ strict = agent.clone(instructions="只回答带引用的内容。")
 variant = agent.clone(model="glm-5.2")
 ```
 
-`@agent.instruction` 和 `clone()` 的边界是 **copy-on-register**：clone 之前注册的
-片段会被带过去（作为不可变 tuple，没有共享可变状态）；clone 之后注册的片段只影响
-注册所在的 agent。建议构造 agent 后马上注册片段；如果你完全不想变更原对象，就用
+`@agent.instruction` 和 `clone()` 采用“注册时复制”的规则：派生前已注册的片段会复制到新实例中
+（以不可变元组保存，不会共享可变状态）；派生后注册的片段只影响当前 Agent。建议在创建 Agent 后
+立即注册所需片段；如果不希望修改原对象，可以使用
 `with_instructions`。
 
 ## 每次运行的依赖
@@ -129,15 +129,15 @@ result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps(
 `ctx.deps` 就是你传入的对象（或 `None`）。工具通过把某个参数标注为 `RunContext`
 来选择接收上下文；参数名无所谓，但最多只能有一个这样的参数。context 句柄上的其余
 内容，包括 transcript、usage、mailbox、cancel token，见
-[核心概念](concepts.md#runcontext唯一的运行句柄)。
+[核心概念](concepts.md#runcontext访问运行状态)。
 
-## 运行 agent
+## 运行 Agent
 
-`agent.run(...)`、`agent.run_sync(...)`、`agent.stream(...)` 都只是对应
-`Runner` 方法的薄封装。完整参数，包括 session、预算、checkpoint、运行中追加指令等，
-见[运行 agent](running.md)。
+`agent.run(...)`、`agent.run_sync(...)` 和 `agent.stream(...)` 只是对应
+`Runner` 方法的便捷写法。Session、预算、Checkpoint 和运行中追加指令等完整参数，
+见[运行 Agent](running.md)。
 
-## 容易踩的点
+## 注意事项
 
 - **`@agent.instruction` 会修改 agent**：这是为了装饰器易用性而保留的唯一例外。
   如果涉及 clone，片段注册发生在 clone 前还是后，决定谁会得到这个片段。

@@ -1,8 +1,8 @@
 # 结构化输出
 
-“请返回 JSON”这种 prompt 并不可靠：模型可能会加解释文字、套代码块，甚至改字段名。
-`output_type` 用契约代替期望：运行的最终答案会被解析并校验成你声明的类型；如果失败，
-会在有边界的修复尝试后明确报错。
+仅在提示词中要求“请返回 JSON”并不可靠：模型可能附加解释文字、套上代码块，甚至擅自修改字段名。
+`output_type` 用明确的契约取代模糊的期望：运行的最终答案会被解析并校验为声明的类型；若校验失败，
+系统会在有限次数的修复尝试后明确报错。
 
 ```python
 from pydantic import BaseModel
@@ -44,7 +44,7 @@ result = await Runner.run(agent, "返回一份发布 checklist。", output_type=
 覆盖项作用于整次运行。经过 [handoff](multi-agent.md) 后，目标 agent 也继承这个覆盖；
 如果没有覆盖，每个 agent 使用自己声明的 `output_type`。
 
-## Schema 如何到达模型
+## 如何向模型提供 Schema
 
 lovia 会按 provider 自动选择两种策略：
 
@@ -57,11 +57,11 @@ lovia 会按 provider 自动选择两种策略：
 无论哪种方式，解析都会先宽松、再严格：先尝试原始文本，再剥掉 markdown code fence，
 再从周围说明文字中提取第一个平衡的 JSON object/array。之后才按你的类型校验。
 
-## 修复
+## 自动修复
 
-最终消息解析或校验失败时，agent 的 `output_repair` 策略决定下一步怎么做：
+最终消息解析或校验失败时，由 Agent 的 `output_repair` 策略决定后续处理方式：
 
-- **`True`（默认）**：runner 追加一条纠正用的用户 prompt（包含校验错误），让模型再试
+- **`True`（默认）**：Runner 追加一条包含校验错误的用户提示词，让模型重新生成
   一次。第二次失败才抛异常。
 - **`False`**：快速失败，立即抛 `OutputValidationError`。
 - **一个 `OutputRepairStrategy`**：你自己的策略：
@@ -82,7 +82,7 @@ lovia 会按 provider 自动选择两种策略：
 `OutputValidationError` 携带 `raw`（模型实际输出的片段）和 `output_type_name`，
 通常足够你只靠日志定位长期不匹配的问题。
 
-## 容易踩的点
+## 注意事项
 
 - **`output_type=str` 表示“没有契约”**，不是“校验它是字符串”。此时一切都是字符串，
   修复永远不会触发。

@@ -1,6 +1,6 @@
 # 护栏
 
-有些规则不应该被模型提示词绕过。guardrail 是带否决权的程序化检查：
+有些规则不能仅靠提示词约束。护栏（guardrail）是一种拥有否决权的程序化检查：
 **输入护栏**在第一次模型调用前检查对话；**输出护栏**在最终答案返回前检查答案。
 
 ```python
@@ -26,9 +26,9 @@ agent = Agent(
 )
 ```
 
-## 契约
+## 护栏接口
 
-guardrail 是任意 callable，同步或异步都可以：
+护栏可以是任意可调用对象，同步和异步均可：
 
 - **输入**：以 `fn(messages, ctx)` 调用，`messages` 是完整初始 transcript 的 chat 格式视图
   （system prompt、session 历史、本次输入）。只在第一次模型调用前运行一次。
@@ -45,7 +45,7 @@ guardrail 是任意 callable，同步或异步都可以：
 结束。这里没有自动重试。护栏是边界，不是提醒；如果想“再试一次”，请捕获异常后重跑，或者在开发期把规则
 写成 [eval check](eval.md)。
 
-两种护栏都会收到实时 `ctx`（[`RunContext`](concepts.md#runcontext唯一的运行句柄)），所以检查可以感知
+两种护栏都会收到实时 `ctx`（[`RunContext`](concepts.md#runcontext访问运行状态)），所以检查可以感知
 tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）。护栏按列表顺序运行，
 以第一个违规为准。[插件](plugins.md)也可以贡献护栏；它们在同样的检查点运行，和 agent 自己的护栏合并，
 中止仍由循环负责，而不是插件负责。
@@ -75,7 +75,7 @@ async def short_enough(output, ctx):
 **想脱敏而不是拒绝？** 护栏只有通过/失败，不能改写值。脱敏应该放在数据流经的位置：
 工具参数/结果用[工具策略](tools.md#工具策略)，输入用你自己的预处理。
 
-## 容易踩的点
+## 注意事项
 
 - **输入护栏看到历史，而不只是新消息。** “拒绝任何 @ 符号”这种规则会因为三轮前的消息触发，
   即使当时是合法的。只想检查新输入时，请看 `messages[-1]`。

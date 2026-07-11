@@ -1,6 +1,7 @@
 # 快速上手
 
-三步跑通：安装 lovia、配置模型、写一个会调用工具的 agent。模型配置好后，本页代码片段都可以直接运行。
+只需三步：安装 lovia、配置模型，再编写一个能够调用工具的 Agent。模型配置完成后，
+本页所有代码片段都可以直接运行。
 
 ## 安装
 
@@ -8,7 +9,8 @@
 pip install lovia
 ```
 
-lovia 需要 Python 3.10+。核心依赖只有 `httpx`、`pydantic`、`pyyaml`；Web UI、MCP、搜索等能力都通过 extra 按需安装。
+lovia 需要 Python 3.10 或更高版本。核心依赖只有 `httpx`、`pydantic` 和 `pyyaml`；
+Web UI、MCP、搜索等功能均以可选依赖的形式按需安装。
 
 ## 配置模型
 
@@ -31,7 +33,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 更多模型写法见 [Provider 与模型](providers.md)。
 
-## 第一个 agent
+## 创建第一个 Agent
 
 ```python
 from lovia import Agent
@@ -46,11 +48,11 @@ result = agent.run_sync("讲一个只有 Python 开发者会懂的冷笑话。")
 print(result.output)
 ```
 
-脚本里用 `run_sync()`；异步代码里用 `await agent.run(...)`。
+在普通脚本中使用 `run_sync()`；在异步代码中使用 `await agent.run(...)`。
 
 ## 加一个工具
 
-给普通 Python 函数加上 `@tool`，模型就能调用它。schema 会从类型标注和 docstring 推导出来。
+用 `@tool` 装饰普通 Python 函数，模型便可以调用它。参数结构会根据类型标注和文档字符串自动推导。
 
 ```python
 from lovia import Agent, tool

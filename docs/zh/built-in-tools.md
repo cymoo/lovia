@@ -1,7 +1,7 @@
 # 内置工具
 
-没有任何内置工具会自动挂到 agent 上。每个内置能力都需要显式 import，所以一个 agent
-具备哪些能力，在构造它的地方就能看清楚。
+内置工具不会自动挂载到 Agent 上。每项内置能力都必须显式导入，因此只需查看 Agent 的
+构造代码，就能清楚知道它具备哪些能力。
 
 ```python
 from lovia import Agent
@@ -19,9 +19,9 @@ agent = Agent(
 文件和 shell 工具来自[工作区](workspace.md)。`ask_human` 会在[人工介入](human-in-the-loop.md#询问人工)
 中完整说明，下面只做简要介绍。
 
-## HTTP fetch
+## HTTP 请求
 
-`lovia.tools.http.http_fetch`：有边界约束、能感知 content-type 的一次性请求工具。
+`lovia.tools.http.http_fetch`：带边界限制、可识别内容类型（content type）的一次性请求工具。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ class WebSearch(Protocol):
   `pip install tzdata`。）
 - **`sleep`**（工具）：最多 sleep 60 秒，适合简单的“等一下再检查”流程。
 - **`current_date(tz=None)`**：**不是工具**，而是返回
-  [instructions 片段](agents.md#instructions)的工厂，把今天日期写进 system prompt：
+  [指令片段](agents.md#指令)的工厂，将当天日期写入系统提示词：
 
   ```python
   agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
@@ -105,7 +105,7 @@ from lovia.tools.human import HumanChannel, ask_human
 channel = HumanChannel()
 agent = Agent(name="assistant", model="glm-5.2", tools=[ask_human(channel)])
 
-# 另一侧：操作员循环
+# 在操作员侧处理问题
 async for q in channel.questions():   # channel.close() 后结束
     channel.answer(q.id, "使用选项 A。")
 ```
@@ -113,7 +113,7 @@ async for q in channel.questions():   # channel.close() 后结束
 工具调用会阻塞，直到答案到达、问题被取消，或 channel 关闭。完整语义，包括轮询、取消、
 线程安全，见[人工介入](human-in-the-loop.md#询问人工)。
 
-## 容易踩的点
+## 注意事项
 
 - **`http_fetch` 是最锋利的内置工具。** 和不可信输入组合时，它就是 SSRF 原语。
   公开暴露前请加门禁或沙箱网络。

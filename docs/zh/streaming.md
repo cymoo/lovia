@@ -1,8 +1,8 @@
 # 流式输出
 
-UI 不能等到 `RunResult` 出来才响应：文本生成时要立刻显示，工具开始调用时要更新状态，
-审批请求一出现就要弹出来。`Runner.stream` 会在这些过程中产出类型化事件；同一套事件
-也驱动 [hooks](observability.md)，所以事件清单只需要学一次。
+UI 不能等到 `RunResult` 返回后才响应：文本生成时应立即显示，工具开始调用时应更新状态，
+审批请求出现时也应马上提示用户。`Runner.stream` 会在整个过程中产生类型化事件；
+[钩子](observability.md)同样由这些事件驱动，因此只需掌握一套事件类型。
 
 ```python
 from lovia import Runner, events
@@ -21,12 +21,12 @@ async for ev in handle:
 result = await handle.result()
 ```
 
-事件是 `lovia.events` 里的普通 dataclass。可以用 `isinstance` 或 `match` 过滤。
+事件是 `lovia.events` 中的普通数据类，可以使用 `isinstance` 或 `match` 进行筛选。
 如果你想订阅一整个类别，每个事件都派生自一组小的基类：
 `RunEvent`、`TurnEvent`、`DeltaEvent`、`MessageEvent`、`ToolEvent`、
 `TransitionEvent`、`ErrorEvent`、`ContextEvent`。
 
-## 契约
+## 事件流约定
 
 下面三个保证决定了消费者应该怎么写：
 
@@ -62,7 +62,7 @@ result = await handle.result()
 
 当 runner 通过重试从 provider 的中途流式错误中恢复时，会触发
 `OutputDiscarded`
-（见 [`RetryPolicy.restart_on_partial`](reliability.md#provider-重试)）。持久化
+（见 [`RetryPolicy.restart_on_partial`](reliability.md#provider-调用重试)）。持久化
 transcript 不受影响；它只由已完成轮次组装出来。
 
 ### 工具与审批
@@ -118,10 +118,10 @@ async for ev in handle:
 **服务端分发**：把事件转发给自己的消息总线或 SSE 编码器。内置
 [HTTP API](http-api.md) 正是这样做的；`lovia/web/sse.py` 是一个可用的转换参考。
 
-**没有 UI 的可观测性**：即使没人消费 stream，同一套事件也会到达
-[hooks](observability.md)。做指标时更推荐 hooks，这样观测逻辑不依赖谁在迭代。
+**没有 UI 时的可观测性**：即使无人读取事件流，同一套事件也会传递给
+[钩子](observability.md)。采集指标时更推荐使用钩子，让观测逻辑不依赖事件流的消费者。
 
-## 容易踩的点
+## 注意事项
 
 - **一个 handle 只能迭代一次。** 第二个 `async for` 会抛 `RuntimeError`；如果多个
   消费者都需要事件，请在下游自行分发。

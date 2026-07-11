@@ -1,8 +1,8 @@
 # MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) 服务器可以暴露 agent 可调用的
-工具，比如文件系统、浏览器、数据库，而不需要你手写适配器。lovia 的 `MCP` 插件会连接服务器，
-把这些工具转换成普通 [`Tool`](tools.md)，并按运行边界管理连接生命周期。
+[Model Context Protocol](https://modelcontextprotocol.io) 服务器可以向 Agent 提供文件系统、
+浏览器、数据库等工具，无须手写适配器。lovia 的 `MCP` 插件负责连接服务器，将这些工具转换为
+普通的 [`Tool`](tools.md)，并以单次运行为边界管理连接的生命周期。
 
 ```bash
 pip install "lovia[mcp]"
@@ -21,8 +21,8 @@ agent = Agent(
 )
 ```
 
-只有真正打开连接时才会 import `mcp` 依赖，所以 `lovia.plugins.mcp` 始终可以安全导入；
-缺包会在打开连接时抛带安装提示的 `UserError`。
+只有真正建立连接时才会导入 `mcp` 依赖，因此始终可以安全导入 `lovia.plugins.mcp`；
+若依赖尚未安装，建立连接时会抛出带安装提示的 `UserError`。
 
 ## 服务器
 
@@ -68,7 +68,7 @@ async with server.session() as conn:      # 只打开一次
 它的生命周期就是 `async with` block。一个持久连接适合**顺序**运行；单个 MCP session 不支持
 并发运行。并发 worker 请各自拿自己的连接。
 
-## MCP 工具如何表现
+## MCP 工具的运行方式
 
 - 工具 schema 会规范化成普通 lovia `Tool`（`normalize_schema` 会修补松散 schema）；
   它们会像原生工具一样校验、渲染、截断，并出现在[流式事件](streaming.md)中。服务器上的
@@ -78,10 +78,10 @@ async with server.session() as conn:      # 只打开一次
   异常一样结束该调用。
 - 工具**结果**可以携带资源：文本内联；图片/音频变成带大小的 placeholder（不会放原始
   base64）；资源链接变成 `[resource link: uri]` 行。
-- **范围有意只限工具。** MCP prompts、资源浏览、sampling、OAuth 和 subscriptions 都不是目标；
+- **支持范围仅限工具。** MCP 提示词、资源浏览、采样、OAuth 和订阅不在支持范围内；
   这个插件只做一件事。
 
-## 容易踩的点
+## 注意事项
 
 - **`auto_reconnect` 意味着至少执行一次。** 调用中途断开后，会在新连接上重试一次；
   非幂等副作用（如 `create_ticket`）可能发生两次。对会修改状态的服务器，设置

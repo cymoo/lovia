@@ -138,7 +138,7 @@ class AnthropicProvider:
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=self._timeout,
+                timeout=httpx.Timeout(self._timeout, connect=10),
                 trust_env=self._trust_env,
                 verify=resolve_verify(),
             )

@@ -9,7 +9,6 @@ import pytest
 
 from lovia.http_config import resolve_timeout, resolve_trust_env, resolve_verify
 
-
 # --------------------------------------------------------------- verify -
 
 
@@ -78,7 +77,7 @@ def test_resolve_verify_insecure_accepts_truthy_spellings(
 
 def test_resolve_timeout_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_PROVIDER_TIMEOUT", raising=False)
-    assert resolve_timeout(None) == 60.0
+    assert resolve_timeout(None) == 300.0
 
 
 def test_resolve_timeout_explicit_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,14 +92,14 @@ def test_resolve_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_timeout_ignores_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "not-a-number")
-    assert resolve_timeout(None) == 60.0
+    assert resolve_timeout(None) == 300.0
 
 
 def test_resolve_timeout_ignores_non_positive_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "0")
-    assert resolve_timeout(None) == 60.0
+    assert resolve_timeout(None) == 300.0
 
 
 # ------------------------------------------------------------ trust_env -

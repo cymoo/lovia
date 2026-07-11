@@ -122,7 +122,7 @@ def test_retry_policy_defaults_are_patient() -> None:
     # Network blips and 429s are routine for long-running agents; the
     # defaults are the contract, so pin them.
     policy = RetryPolicy()
-    assert policy.max_attempts == 4
+    assert policy.max_attempts == 5
     assert policy.backoff_base == 1.0
     assert policy.backoff_max == 30.0
     assert policy.restart_on_partial is True

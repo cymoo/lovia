@@ -273,7 +273,7 @@ Both adapters share one HTTP configuration layer:
 
 | Env var | Effect | Default |
 | --- | --- | --- |
-| `LOVIA_PROVIDER_TIMEOUT` | request timeout, seconds | `60` |
+| `LOVIA_PROVIDER_TIMEOUT` | request timeout, seconds | `300` |
 | `LOVIA_PROVIDER_TRUST_ENV` | honor `HTTP(S)_PROXY` / `NO_PROXY` | off |
 | `LOVIA_HTTP_CA_BUNDLE` | custom PEM bundle for outbound TLS | — |
 | `LOVIA_HTTP_INSECURE` | disable certificate verification | off |

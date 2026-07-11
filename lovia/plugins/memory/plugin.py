@@ -85,7 +85,7 @@ _DEFAULT_ROOT = "./.lovia/memory"
 _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
 _VECTORS_FILENAME = "vectors.db"
-_DEFAULT_NOTES_BUDGET = 2000
+_DEFAULT_NOTES_BUDGET = 5000
 
 
 # ---------------------------------------------------------------------------

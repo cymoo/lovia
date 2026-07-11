@@ -175,9 +175,9 @@ class RetryPolicy:
     current one are exhausted.
     """
 
-    max_attempts: int = 4
+    max_attempts: int = 5
     """Total calls to ``Provider.stream`` (the first counts as attempt 1):
-    ``4`` means at most three retries; ``1`` disables retrying."""
+    ``5`` means at most four retries; ``1`` disables retrying."""
 
     restart_on_partial: bool = True
     """Also recover from errors after streaming began, discarding the partial

@@ -68,7 +68,7 @@ Three paths, from automatic to manual:
    The web UI's sidebar Memory editor (`GET`/`PUT /api/memory`) is built on
    that last pair.
 
-Notes stay within `notes_budget` (default 2000 chars — a meter is shown to
+Notes stay within `notes_budget` (default 5000 chars — a meter is shown to
 the model): when the budget overflows after a digest, one consolidation
 call merges and rewrites the list to fit.
 
@@ -144,7 +144,7 @@ a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
 | `expand_query` | `"auto"` | LLM query expansion; auto = only for the lexical-only default index |
 | `summarize_recall` | `True` | `recall` returns a model-written summary of the hits |
 | `recall_k` | `5` | hits retrieved per recall |
-| `notes_budget` | `2000` | char budget for Notes — the prompt meter and consolidation trigger |
+| `notes_budget` | `5000` | char budget for Notes — the prompt meter and consolidation trigger |
 | `model` | host agent's model | model for the curation/recall side-queries |
 
 The side-queries (digest, consolidation, expansion, summarization) dogfood

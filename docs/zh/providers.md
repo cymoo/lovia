@@ -233,7 +233,7 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 
 | 环境变量 | 作用 | 默认 |
 | --- | --- | --- |
-| `LOVIA_PROVIDER_TIMEOUT` | 请求超时，秒 | `60` |
+| `LOVIA_PROVIDER_TIMEOUT` | 请求超时，秒 | `300` |
 | `LOVIA_PROVIDER_TRUST_ENV` | 是否遵守 `HTTP(S)_PROXY` / `NO_PROXY` | 关闭 |
 | `LOVIA_HTTP_CA_BUNDLE` | 出站 TLS 自定义 PEM bundle | — |
 | `LOVIA_HTTP_INSECURE` | 关闭证书校验 | 关闭 |

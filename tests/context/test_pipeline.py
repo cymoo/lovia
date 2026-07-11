@@ -126,7 +126,7 @@ async def test_window_falls_back_to_provider():
     res = await pipeline.compact(
         req(entries, provider=FakeProviderWithWindow(window=1_000), model="fake-model")
     )
-    # usable = 500 (reserve >= window fallback), trigger 375 < 990.
+    # usable = 500 (reserve >= window fallback), trigger 425 < 990.
     assert res.compacted is True
     assert summarizer.calls
 
@@ -308,7 +308,7 @@ async def test_tool_schema_overhead_enters_the_estimate():
 
     pipeline = _pipeline(context_window=20_000, summarizer=FakeSummarizer())
     res = await pipeline.compact(req(entries))
-    assert res.compacted is False  # view alone ~10k tokens, trigger 15k
+    assert res.compacted is False  # view alone ~10k tokens, trigger 17k
 
     res = await pipeline.compact(req(entries, tools=tools))
     assert res.compacted is True  # view + schemas ~50k tokens
@@ -362,8 +362,8 @@ async def test_ratio_learned_small_stays_valid_as_the_view_grows():
 
     grown = small + [user("y" * 4_000) for _ in range(99)]  # ~101k tokens of view
     res = await pipeline.compact(req(grown, scratch=scratch, tools=tools))
-    # Real prompt ≈ 131k against a 150k trigger: nothing to do. A multiplier
-    # that had absorbed the schemas (pegged at 4.0) would estimate ~400k here
+    # Real prompt ≈ 131k against a 170k trigger: nothing to do. A multiplier
+    # that had absorbed the schemas (pegged at RATIO_MAX) would over-count it here
     # and compact away most of a transcript that actually fits.
     assert res.compacted is False
     assert res.tokens_after < 150_000

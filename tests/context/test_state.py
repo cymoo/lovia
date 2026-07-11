@@ -49,7 +49,12 @@ def test_load_tolerates_missing_and_garbage():
 
 def test_load_clamps_ratio():
     state = CompactionState.load({"context": {"version": 2, "ratio": 100.0}})
-    assert state.ratio == 4.0
+    assert state.ratio == 2.5
+    # Pre-byte-weighting sessions persisted ratios up to the old 4.0 clamp;
+    # they clamp down on load because they were learned against different
+    # estimator semantics.
+    legacy = CompactionState.load({"context": {"version": 2, "ratio": 4.0}})
+    assert legacy.ratio == 2.5
 
 
 def test_load_drops_malformed_learned_windows():

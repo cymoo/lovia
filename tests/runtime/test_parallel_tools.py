@@ -508,3 +508,34 @@ async def test_duplicate_call_ids_in_one_batch_pair_by_occurrence() -> None:
     assert len(result_entries) == 2
     assert all(e.call_id == "dup" for e in result_entries)
     assert pending_tool_calls(result.entries) == []
+
+
+async def test_both_parallel_tool_failures_become_error_results() -> None:
+    """Two parallel tools failing is not a run failure: each exception becomes
+    an error tool-result fed back to the model, and the turn continues.
+    (The teardown sibling-failure log guards runner bugs — tool exceptions
+    never reach it, by design.)"""
+    first_failed = asyncio.Event()
+
+    @tool(parallel=True)
+    async def fail_fast() -> str:
+        try:
+            raise RuntimeError("first boom")
+        finally:
+            first_failed.set()
+
+    @tool(parallel=True)
+    async def fail_after() -> str:
+        await first_failed.wait()
+        raise RuntimeError("sibling boom")
+
+    provider = ScriptedProvider(
+        [batch(("fail_fast", {}), ("fail_after", {})), text("model saw both")]
+    )
+    agent = Agent(name="t", model=provider, tools=[fail_fast, fail_after])
+    result = await Runner.run(agent, "go", max_turns=2)
+    assert result.output == "model saw both"
+    results = _tool_results(result.entries)
+    assert all(r.is_error for r in results.values()) and len(results) == 2
+    assert any("first boom" in r.output for r in results.values())
+    assert any("sibling boom" in r.output for r in results.values())

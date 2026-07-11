@@ -144,3 +144,15 @@ async def test_cancel_delegates_to_token() -> None:
     handle = RunHandle(_stream_completes(), ApprovalChannel(), token)
     handle.cancel("user clicked stop")
     assert token.is_cancelled
+
+
+def test_repr_truncates_long_output() -> None:
+    result = RunResult(
+        output="x" * 200,
+        entries=[],
+        final_agent=Agent(name="a", instructions="i", model="openai:m"),
+        usage=Usage(),
+        turns=1,
+    )
+    shown = repr(result)
+    assert "..." in shown and len(shown) < 200

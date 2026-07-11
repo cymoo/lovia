@@ -32,7 +32,11 @@ if TYPE_CHECKING:
 
 from .. import events
 from .checkpoint import CheckpointWriter
-from .resume import resolve_resume_agent, result_from_completed_snapshot
+from .resume import (
+    normalize_replayed_entries,
+    resolve_resume_agent,
+    result_from_completed_snapshot,
+)
 from .model_turn import stream_model_turn
 from .run_state import ActiveAgent, ModelTurnResult, PluginActivation, RunState
 from .utils import (
@@ -189,6 +193,13 @@ class RunLoop:
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
         self.extra_instructions = extra_instructions
+        # Activated agents, keyed by agent identity. A handoff that returns to
+        # an agent seen earlier in the run reuses its bundle instead of
+        # re-opening provider clients, workspace sessions, and plugin
+        # connections — activation is once per agent per run (see
+        # ``_resolve_active``); the agent objects live on the caller's handoff
+        # graph for the whole run, so identity keys cannot be reused.
+        self._activated: dict[int, ActiveAgent] = {}
         # ``output_type=None`` means "use the active agent's output_type";
         # any other value is a run-wide final-output contract.
         self.output_type_override = output_type_override
@@ -445,6 +456,13 @@ class RunLoop:
                     # snapshot. Without the shield, awaiting here could itself
                     # be cancelled and drop the checkpoint.
                     await asyncio.shield(self.checkpoints.save_terminal(state, exc))
+                    # A failed sub-run's spend is still real spend: fold what
+                    # accumulated up to the failure into the parent's books
+                    # (``_finalize_run`` only does this on success), so an
+                    # agent-as-tool sub-run that trips its own budget doesn't
+                    # vanish from the parent's usage and budget enforcement.
+                    if self.parent_usage is not None:
+                        self.parent_usage.add(state.run_ctx.usage)
                 if isinstance(exc, Exception):
                     yield await self._emit(state, events.RunFailed(error=exc))
                 raise
@@ -579,7 +597,11 @@ class RunLoop:
         system_head_len = len(prefix) - len(history)
         run_ctx.entries.extend(prefix)
         if snapshot is not None:
-            run_ctx.entries.extend(snapshot.entries)
+            # Normalized at the load boundary: the checkpoint may hold a
+            # rejected call's original non-wire-safe arguments (persisted
+            # with its model turn, before the in-memory normalization ran).
+            # Pending calls stay raw for the resume drain to re-reject.
+            run_ctx.entries.extend(normalize_replayed_entries(snapshot.entries))
             run_ctx.usage.add(snapshot.usage)
             # These entries are already in the checkpoint; only persist new ones.
             self.checkpoints.resume_at(len(snapshot.entries))
@@ -615,12 +637,20 @@ class RunLoop:
     ) -> ActiveAgent:
         """Resolve everything derived from ``agent`` into one swappable bundle.
 
-        Called at bootstrap and on every handoff. Provider, workspace, and
-        plugin connections are run-scoped: they are opened here and torn down
-        when the run ends (a handoff leaves the previous agent's connections
-        open until then — closing them eagerly would add failure modes for no
+        Called at bootstrap and on every handoff, but each agent is activated
+        **once per run**: a handoff returning to an already-activated agent
+        reuses its bundle. Without the memo, an A→B→A ping-pong would open a
+        fresh provider client, workspace session, and plugin connections per
+        transfer — all held until run end — and re-run plugin ``setup``,
+        losing run-scoped plugin state each time. Provider, workspace, and
+        plugin connections are run-scoped: opened here, torn down when the
+        run ends (a handoff leaves the previous agent's connections open
+        until then — closing them eagerly would add failure modes for no
         gain).
         """
+        cached = self._activated.get(id(agent))
+        if cached is not None:
+            return cached
         provider = self._resolve_provider(agent, resources)
         await self._ensure_context_window(provider)
         structured_output = resolve_structured_output(
@@ -630,7 +660,7 @@ class RunLoop:
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
         plugins = await self._activate_plugins(agent, resources)
         tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
-        return ActiveAgent(
+        active = ActiveAgent(
             agent=agent,
             provider=provider,
             structured_output=structured_output,
@@ -638,15 +668,19 @@ class RunLoop:
             workspace=workspace,
             plugins=plugins,
         )
+        self._activated[id(agent)] = active
+        return active
 
     async def _activate_plugins(
         self, agent: Agent[Any], resources: AsyncExitStack
     ) -> PluginActivation:
         """Activate ``agent.plugins`` for one run, collecting their contributions.
 
-        ``setup`` is awaited once per plugin so any run-scoped state (and async
-        resources like MCP connections) is fresh and all of a plugin's
-        contributions (tool, injector, ...) share it. Each instance's ``aclose``
+        ``setup`` is awaited once per plugin **per run** — the activation memo
+        in ``_resolve_active`` holds even across repeated handoffs — so any
+        run-scoped state (and async resources like MCP connections) is opened
+        once and all of a plugin's contributions (tool, injector, ...) share
+        it. Each instance's ``aclose``
         is registered for best-effort teardown when the run ends (LIFO).
 
         A plugin's ``name`` is its identity: it must be unique within an agent.

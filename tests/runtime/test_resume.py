@@ -4,6 +4,8 @@ rebuild of a completed snapshot's :class:`RunResult`.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from lovia import Agent
@@ -104,3 +106,43 @@ def test_rebuild_rejects_non_serializable_completed_output() -> None:
     snap = _snapshot("a", output=None, error={"type": "OutputNotSerializable"})
     with pytest.raises(UserError, match="not JSON-safe"):
         result_from_completed_snapshot(a, snap, output_type=str)
+
+
+# ------------------------------------------------ normalize_replayed_entries
+
+
+def test_normalize_replayed_entries_wraps_resulted_calls_only() -> None:
+    from lovia.runtime.resume import normalize_replayed_entries
+    from lovia.transcript import ToolCallEntry, ToolResultEntry
+
+    entries = [
+        ToolCallEntry(call_id="done", name="f", arguments='{"a": 1, '),  # has result
+        ToolResultEntry(call_id="done", output="rejected", is_error=True),
+        ToolCallEntry(call_id="ok", name="f", arguments='{"a": 1}'),  # wire-safe
+        ToolResultEntry(call_id="ok", output="fine"),
+        ToolCallEntry(call_id="pending", name="f", arguments="[1,2]"),  # no result
+    ]
+    out = normalize_replayed_entries(entries)
+    assert json.loads(out[0].arguments) == {"_raw": '{"a": 1, '}  # healed
+    assert out[2].arguments == '{"a": 1}'  # untouched
+    # Pending stays raw: the resume drain re-rejects it with the real payload.
+    assert out[4].arguments == "[1,2]"
+    # Idempotent: a second pass changes nothing.
+    assert normalize_replayed_entries(out) == out
+
+
+def test_rebuild_normalizes_entries_for_the_session_heal_path() -> None:
+    from lovia.transcript import ToolCallEntry, ToolResultEntry
+
+    agent = Agent(name="a", instructions="x", model="openai:m")
+    snapshot = _snapshot(
+        "a",
+        status="completed",
+        output="done",
+        entries=[
+            ToolCallEntry(call_id="c", name="f", arguments='{"broken": '),
+            ToolResultEntry(call_id="c", output="err", is_error=True),
+        ],
+    )
+    result = result_from_completed_snapshot(agent, snapshot)
+    assert json.loads(result.entries[0].arguments) == {"_raw": '{"broken": '}

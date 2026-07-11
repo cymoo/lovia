@@ -1111,3 +1111,105 @@ async def test_overflow_does_not_mutate_the_providers_own_window() -> None:
 
     assert exc_info.value.reported_window == 200_000
     assert provider.context_window() is None
+
+
+def test_message_translation_wraps_non_object_tool_arguments() -> None:
+    """The wire requires ``input`` to be an object. Entries that never passed
+    this run's preflight (pre-fix sessions, hand-seeded history) may carry
+    valid-JSON non-objects; they wrap exactly like _normalize_call_args."""
+    entries = [
+        InputEntry(role="user", content="go"),
+        ToolCallEntry(call_id="c1", name="f", arguments="[1,2]"),
+        ToolResultEntry(call_id="c1", output="err", is_error=True),
+        ToolCallEntry(call_id="c2", name="f", arguments='{"a": 1}'),
+        ToolResultEntry(call_id="c2", output="ok"),
+    ]
+    _, msgs = _to_anthropic_messages(entries)
+    tool_uses = [
+        block
+        for msg in msgs
+        for block in msg["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    assert tool_uses[0]["input"] == {"_raw": "[1,2]"}  # non-object: wrapped
+    assert tool_uses[1]["input"] == {"a": 1}  # object: untouched
+
+
+async def test_stream_accepts_gateway_style_complete_blocks() -> None:
+    """Some gateways put complete content in ``content_block_start`` (full
+    text / thinking+signature / tool input) instead of streaming deltas."""
+    body = _sse(
+        [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "thinking",
+                    "thinking": "hmm",
+                    "signature": "sig0",
+                },
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "redacted_thinking", "data": "opaque"},
+            },
+            {"type": "content_block_stop", "index": 1},
+            {
+                "type": "content_block_start",
+                "index": 2,
+                "content_block": {"type": "text", "text": "full answer"},
+            },
+            {"type": "content_block_stop", "index": 2},
+            {
+                "type": "content_block_start",
+                "index": 3,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "c9",
+                    "name": "lookup",
+                    "input": {"q": "x"},
+                },
+            },
+            {"type": "content_block_stop", "index": 3},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+            {"type": "message_stop"},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+    )
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x", client=client)
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="hi")]))
+
+    assert "".join(d.text for d in _deltas(deltas, TextDelta)) == "full answer"
+    assert "".join(d.text for d in _deltas(deltas, ReasoningDelta)) == "hmm"
+    tool = next(_deltas(deltas, ToolCallDelta))
+    assert tool.call_id == "c9" and tool.arguments == '{"q": "x"}'
+    completed = [d.entry for d in _deltas(deltas, EntryCompletedDelta)]
+    assert completed[0] == ReasoningEntry(
+        content="hmm", provider="anthropic", metadata={"signature": "sig0"}
+    )
+    assert completed[1] == ReasoningEntry(
+        content="", provider="anthropic", metadata={"redacted": "opaque"}
+    )
+    assert completed[2] == AssistantTextEntry(content="full answer")
+    assert completed[3] == ToolCallEntry(
+        call_id="c9", name="lookup", arguments='{"q": "x"}'
+    )
+
+
+def test_headers_merge_is_case_insensitive() -> None:
+    provider = AnthropicProvider(
+        model="m",
+        api_key="secret",
+        default_headers={"X-Api-Key": "spoof", "Anthropic-Version": "2099-01-01"},
+    )
+    headers = provider._headers()
+    # No duplicate keys under different casings; the api key stays ours and
+    # the version override lands on the one canonical key.
+    assert headers["x-api-key"] == "secret"
+    assert headers["anthropic-version"] == "2099-01-01"
+    assert len([k for k in headers if k.lower() == "anthropic-version"]) == 1

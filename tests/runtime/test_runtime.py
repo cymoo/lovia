@@ -22,6 +22,7 @@ from lovia.transcript import (
     InputEntry,
     TextDelta,
     ToolCallDelta,
+    ToolCallEntry,
     entries_to_messages,
 )
 
@@ -638,3 +639,27 @@ async def test_completed_multi_hop_handoff_replays_as_deepest_agent() -> None:
     )
     assert replay.output == "done by third"
     assert replay.final_agent.name == "Third"
+
+
+async def test_non_object_tool_arguments_rejected_and_normalized() -> None:
+    """Valid JSON that is not an object ("[1,2]") must be rejected before
+    execution and its stored entry normalized — replayed verbatim it 400s
+    providers whose wire unpacks arguments into an object (Anthropic's
+    ``tool_use.input``), poisoning every later turn."""
+    array_call = AssistantTurn(
+        content=None,
+        tool_calls=[ToolCall(id="c1", name="add", arguments="[1,2]")],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    provider = ScriptedProvider([array_call, text("let me retry")])
+    agent = Agent(name="t", model=provider, tools=[add])
+
+    result = await Runner.run(agent, "go")
+
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "expected a JSON object" in tool_msg.content
+    assert result.output == "let me retry"
+    # The stored call entry was normalized to a wire-safe object, so the
+    # retry request (and any later Anthropic replay) carries an object.
+    entry = next(e for e in result.entries if isinstance(e, ToolCallEntry))
+    assert json.loads(entry.arguments) == {"_raw": "[1,2]"}

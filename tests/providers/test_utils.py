@@ -176,3 +176,80 @@ async def test_iter_sse_json_joins_multiline_data_and_flushes_eof() -> None:
     events = [event async for event in iter_sse_json(response)]
 
     assert events == [{"type": "one"}, {"type": "tail"}]
+
+
+# ---------------------------------------------------------------------------
+# base.py context-window helper functions
+# ---------------------------------------------------------------------------
+
+
+async def test_context_window_helpers_duck_type() -> None:
+    from lovia.providers.base import context_window, discover_context_window
+
+    class _Knows:
+        def context_window(self) -> int | None:
+            return 4096
+
+        async def discover_context_window(self) -> int | None:
+            return 8192
+
+    class _KnowsNot:
+        def context_window(self) -> int | None:
+            return None
+
+    assert context_window(_Knows()) == 4096
+    assert context_window(_KnowsNot()) is None
+    assert context_window(object()) is None  # no method at all
+    assert await discover_context_window(_Knows()) == 8192
+    assert await discover_context_window(object()) is None
+
+
+async def test_iter_sse_json_ignores_empty_data_events() -> None:
+    # A keep-alive "data:" with no payload flushes an empty buffer: no yield,
+    # no crash, and following events still parse.
+    response = httpx.Response(
+        200,
+        content=b'data:\n\ndata: {"ok": 1}\n\n',
+        request=httpx.Request("POST", "https://provider.test/v1"),
+    )
+    events = [e async for e in iter_sse_json(response)]
+    assert events == [{"ok": 1}]
+
+
+# ---------------------------------------------------------------------------
+# _content conversion branches
+# ---------------------------------------------------------------------------
+
+
+def test_content_conversion_edge_branches() -> None:
+    from lovia.parts import ImagePart, TextPart
+    from lovia.providers._content import (
+        _join_text,
+        content_to_openai_chat,
+        merge_anthropic_blocks,
+        merge_openai_chat_content,
+        text_only,
+    )
+
+    # ImagePart with a URL keeps the URL (no data-URI rebuild).
+    parts = content_to_openai_chat([ImagePart(url="https://x.test/i.png")])
+    assert parts[0]["image_url"]["url"] == "https://x.test/i.png"
+
+    # Merging with one empty side returns the other side's parts.
+    assert merge_openai_chat_content(None, "right") == [
+        {"type": "text", "text": "right"}
+    ]
+    assert merge_openai_chat_content(123, "s")[0] == {"type": "text", "text": "123"}
+
+    # Anthropic merge without adjacent text blocks: plain concatenation.
+    left = [{"type": "tool_result", "tool_use_id": "c", "content": "x"}]
+    right = [{"type": "text", "text": "hi"}]
+    assert merge_anthropic_blocks(left, right) == [*left, *right]
+
+    # text_only flattens parts and tolerates None / non-text parts.
+    assert text_only(None) == ""
+    assert text_only([TextPart(text="a"), ImagePart(url="https://x.test")]) == "a"
+
+    # _join_text with an empty side returns the other verbatim.
+    assert _join_text("", "b") == "b"
+    assert _join_text("a", "") == "a"

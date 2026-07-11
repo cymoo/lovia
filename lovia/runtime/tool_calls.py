@@ -201,6 +201,25 @@ class ToolCallProcessor:
             )
             yield self._rejected(state, call, err)
             return
+        if not isinstance(args, dict):
+            # Valid JSON but not an object ("[1,2]", "5"): it cannot bind to
+            # tool parameters, and — worse — a stored entry replayed verbatim
+            # 400s providers whose wire unpacks arguments into an object
+            # (Anthropic's ``tool_use.input``), poisoning every later turn.
+            # Rejecting here routes through ``_rejected``'s normalization,
+            # which wraps the stored entry wire-safe like the unparseable case.
+            err = (
+                f"Invalid tool arguments: expected a JSON object, "
+                f"got {type(args).__name__}."
+            )
+            logger.warning(
+                "tool.bad_arguments: %s call_id=%s non-object args=%s",
+                call.name,
+                call.id,
+                truncate_repr(call.arguments),
+            )
+            yield self._rejected(state, call, err)
+            return
 
         try:
             needs_approval = tool.requires_approval(args, state.run_ctx)

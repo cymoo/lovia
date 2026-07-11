@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from lovia.exceptions import UserError
-from lovia.providers import provider_from_string, register_provider
+from lovia.providers import model_from_env, provider_from_string, register_provider
 
 
 class _FakeProvider:
@@ -285,3 +285,42 @@ def test_entry_point_rejects_non_callable_export(
 
     with pytest.raises(UserError, match="provider class or callable factory"):
         provider_from_string("bad:model")
+
+
+# ---------------------------------------------------------------------------
+# model_from_env
+# ---------------------------------------------------------------------------
+
+
+def _clear_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("LOVIA_MODEL", "OPENAI_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_model_from_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_model_env(monkeypatch)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:a")
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "b")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "c")
+    assert model_from_env() == "openai:a"  # LOVIA_MODEL wins
+
+    monkeypatch.delenv("LOVIA_MODEL")
+    assert model_from_env() == "b"  # then OPENAI_DEFAULT_MODEL, bare = openai path
+
+
+def test_model_from_env_prefixes_bare_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_model_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-opus-4-8")
+    assert model_from_env() == "anthropic:claude-opus-4-8"
+    # An explicit vendor prefix is kept as-is.
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude:claude-opus-4-8")
+    assert model_from_env() == "claude:claude-opus-4-8"
+
+
+def test_model_from_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_model_env(monkeypatch)
+    assert model_from_env(required=False) is None
+    with pytest.raises(UserError, match="no model configured"):
+        model_from_env()

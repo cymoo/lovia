@@ -162,6 +162,10 @@ def entries_to_openai_messages(
             if include_reasoning and entry.provider == reasoning_provider:
                 pending_reasoning = (pending_reasoning or "") + entry.content
         elif isinstance(entry, AssistantTextEntry):
+            # Plain concatenation, no separator: adjacent text entries are one
+            # turn's multiple text blocks (Anthropic-style providers complete
+            # one entry per block), so joining them verbatim reproduces
+            # exactly what the model streamed.
             pending_content = (pending_content or "") + entry.content
         elif isinstance(entry, ToolCallEntry):
             pending_calls.append(
@@ -307,13 +311,17 @@ class OpenAIChatProvider:
         return self._client
 
     def _headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+        # Keys are lower-cased on merge: HTTP headers are case-insensitive,
+        # and a user override spelled "Authorization" must replace the
+        # built-in entry, not ride alongside it as a duplicate header.
+        headers = {"content-type": "application/json"}
         if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+            headers["authorization"] = f"Bearer {self._api_key}"
         for key, value in self._extra_headers.items():
-            if key.lower() == "authorization" and self._api_key:
+            lower = key.lower()
+            if lower == "authorization" and self._api_key:
                 continue
-            headers[key] = value
+            headers[lower] = value
         return headers
 
     def _build_payload(

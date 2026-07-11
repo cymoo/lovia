@@ -59,7 +59,7 @@ def render_entries(
                 out.append(
                     ToolResultEntry(
                         call_id=entry.call_id,
-                        output=offload_marker(record, entry.call_id),
+                        output=offload_marker(record),
                         raw=None,
                         is_error=entry.is_error,
                     )
@@ -92,12 +92,19 @@ def clear_marker(call_id: str) -> str:
     )
 
 
-def offload_marker(record: OffloadRecord, call_id: str) -> str:
-    """Inline placeholder for a large tool result trimmed to a preview."""
+def offload_marker(record: OffloadRecord) -> str:
+    """Inline placeholder for a large tool result trimmed to a preview.
+
+    The recall reference is the record's content digest, not the call_id:
+    the store is shared across sessions while call_ids are session-local
+    (see :class:`~lovia.context.state.OffloadRecord.digest`). The model just
+    echoes the reference back; the paired tool call right above the marker
+    still tells it *which* call this was.
+    """
     return (
         f"[Tool result ({record.chars:,} chars) trimmed to a preview to save context.\n"
         f"Preview:\n{record.preview}\n"
-        f'Call recall_tool_result("{call_id}") for the full output.]'
+        f'Call recall_tool_result("{record.digest}") for the full output.]'
     )
 
 

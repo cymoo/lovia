@@ -1015,7 +1015,7 @@ def test_state_round_trips_full_including_calibration():
     the checkpoint and the session-meta both use."""
     state = CompactionState(
         cleared={"a", "b"},
-        offloaded={"c": OffloadRecord(preview="p", chars=99)},
+        offloaded={"c": OffloadRecord(preview="p", chars=99, digest="aa" * 8)},
         summary=SummaryState(text="S", covered=3, fingerprint="fp"),
         ratio=2.5,
         last_view_estimate=999,
@@ -1084,7 +1084,7 @@ async def test_stale_and_ambiguous_records_are_pruned_from_scratch():
     scratch: dict = {}
     CompactionState(
         cleared={"ghost", "call_0"},
-        offloaded={"ghost2": OffloadRecord(preview="p", chars=9)},
+        offloaded={"ghost2": OffloadRecord(preview="p", chars=9, digest="bb" * 8)},
     ).save(scratch)
     pipeline = _pipeline(context_window=1_000_000)
     res = await pipeline.compact(req(entries, scratch=scratch))
@@ -1101,8 +1101,8 @@ async def test_detail_bullets_describe_what_changed():
     CompactionState(
         cleared={"a"},
         offloaded={
-            "c": OffloadRecord(preview="p", chars=9),
-            "d": OffloadRecord(preview="q", chars=9),
+            "c": OffloadRecord(preview="p", chars=9, digest="bb" * 8),
+            "d": OffloadRecord(preview="q", chars=9, digest="cc" * 8),
         },
     ).save(scratch)
     entries = [
@@ -1221,3 +1221,55 @@ async def test_absolute_watermarks_accepted():
     small = [user("x" * 100) for _ in range(20)]  # ~660 < 900
     res2 = await pipeline.compact(req(small))
     assert res2.compacted is False
+
+
+# ---------------------------------------------------------------------------
+# Review round: crash persistence, protected-tail-covers-everything warning
+# ---------------------------------------------------------------------------
+
+
+async def test_decisions_persist_when_a_stage_raises_unexpectedly():
+    """Stages are expected to log-and-return-False, but an unexpected raise
+    must still persist what was already decided — otherwise a crash forgets
+    sticky decisions the next render depends on (and the store already has
+    side effects for)."""
+
+    class DecideThenBoom:
+        name = "boom"
+
+        async def plan(self, body, ctx) -> bool:
+            for entry in body:
+                if isinstance(entry, ToolResultEntry):
+                    ctx.state.cleared.add(entry.call_id)
+                    break
+            raise RuntimeError("stage exploded")
+
+    pipeline = _pipeline(context_window=1_000, stages=[DecideThenBoom()])
+    scratch: dict = {}
+    entries = [user("go")]
+    for i in range(8):
+        entries += [call(f"c{i}"), out(f"c{i}", "r" * 2_000)]
+    with pytest.raises(RuntimeError, match="stage exploded"):
+        await pipeline.compact(req(entries, scratch=scratch))
+
+    state = CompactionState.load(scratch)
+    assert state.cleared == {"c0"}  # the decision survived the crash
+    assert state.last_view_estimate is not None  # calibration input too
+
+
+async def test_warns_when_protected_tail_covers_the_entire_view(caplog):
+    """keep_recent_tokens at or above the usable window fences off every
+    stage; the burst makes no progress and must say so loudly instead of
+    silently spinning until the provider overflows."""
+    import logging
+
+    pipeline = _pipeline(
+        context_window=1_000, keep_recent_tokens=100_000, summarizer=FakeSummarizer()
+    )
+    entries = [user("x" * 400) for _ in range(20)]  # ~2.1k tokens > trigger 850
+    with caplog.at_level(logging.WARNING, logger="lovia.context.compaction"):
+        res = await pipeline.compact(req(entries))
+    assert res.compacted is False
+    assert any(
+        "protected tail covers the entire view" in r.message for r in caplog.records
+    )

@@ -2,7 +2,10 @@
 
 When a context policy offloads a large tool result it keeps only a short marker
 in the per-call view and, when a store is configured, writes the full output to
-a :class:`ResultStore` that the policy's recall tool reads back by ``call_id``.
+a :class:`ResultStore` that the policy's recall tool reads back by the marker's
+reference — a **content digest**, because the store is shared across sessions
+while call_ids are session-local (see
+:class:`~lovia.context.state.OffloadRecord.digest`).
 The store is owned by the *policy*, not the runner, so the context layer never
 depends on the workspace (or any runner-provided capability) just to archive a
 result.
@@ -23,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import tempfile
 from collections import OrderedDict
 from pathlib import Path
 from typing import Protocol
@@ -95,7 +100,20 @@ class FileResultStore:
     async def put(self, key: str, content: str) -> None:
         def _write() -> None:
             self._dir.mkdir(parents=True, exist_ok=True)
-            self._path(key).write_text(content, encoding="utf-8")
+            # Write-then-rename so a crash mid-write (or a concurrent get)
+            # never observes a truncated file — recall would return the
+            # partial content as if it were complete, with no error signal.
+            fd, tmp = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp, self._path(key))
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
 
         await asyncio.to_thread(_write)
 

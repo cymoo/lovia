@@ -30,6 +30,7 @@ from .state import (
     OffloadRecord,
     SummaryState,
     fingerprint,
+    result_digest,
     unique_result_ids,
 )
 from .summarizer import LLMSummarizer, Summarizer
@@ -195,9 +196,10 @@ class OffloadToolResults:
             # keep — the transcript holds every output today but isn't required
             # to forever (a clearing policy may evict them), and a durable store
             # is what survives that — so a failed put() is logged, not silent.
+            digest = result_digest(entry.output)
             if store is not None:
                 try:
-                    await store.put(entry.call_id, entry.output)
+                    await store.put(digest, entry.output)
                 except Exception as exc:
                     logger.warning(
                         "context.offload: store put for %s failed (%s: %s); "
@@ -209,12 +211,10 @@ class OffloadToolResults:
             record = OffloadRecord(
                 preview=entry.output[: self.preview_chars],
                 chars=len(entry.output),
+                digest=digest,
             )
             ctx.state.offloaded[entry.call_id] = record
-            marker_tokens = (
-                len(offload_marker(record, entry.call_id)) // 4
-                + ctx.counter.entry_overhead
-            )
+            marker_tokens = ctx.counter.count_text(offload_marker(record))
             saving = max(0, ctx.counter.count_entry(entry) - marker_tokens)
             tokens -= ctx.calibrated(saving)
             decided = True
@@ -281,9 +281,7 @@ class ClearToolResults:
             if len(entry.output) <= min_chars or ctx.state.decided(entry.call_id):
                 continue
             ctx.state.cleared.add(entry.call_id)
-            marker_tokens = (
-                len(clear_marker(entry.call_id)) // 4 + ctx.counter.entry_overhead
-            )
+            marker_tokens = ctx.counter.count_text(clear_marker(entry.call_id))
             saving = ctx.calibrated(
                 max(0, ctx.counter.count_entry(entry) - marker_tokens)
             )
@@ -376,7 +374,9 @@ class SummarizeHistory:
         # section instead of megabytes of content.
         span = render_entries(body[prior_covered:new_covered], state)
         span_tokens = ctx.calibrated(ctx.counter.count(span))
-        growth = max(256, len(prior.text) // 4 if prior is not None else 512)
+        growth = max(
+            256, ctx.counter.count_text(prior.text) if prior is not None else 512
+        )
         projected_savings = span_tokens - growth
         if (
             not ctx.aggressive

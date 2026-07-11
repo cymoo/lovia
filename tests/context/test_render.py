@@ -88,12 +88,15 @@ def test_cleared_marker_preserves_call_id_and_error_flag():
 
 
 def test_offload_marker_mentions_preview_and_recall():
-    record = OffloadRecord(preview="first lines", chars=9000)
+    record = OffloadRecord(preview="first lines", chars=9000, digest="ab12" * 4)
     entries = [call("c1"), out("c1", "x" * 9000)]
     view = render_view(entries, CompactionState(offloaded={"c1": record}))
     marker = view[1]
     assert "first lines" in marker.output
-    assert 'recall_tool_result("c1")' in marker.output
+    # The recall reference is the content digest, not the session-local
+    # call_id — the store is shared across sessions.
+    assert f'recall_tool_result("{"ab12" * 4}")' in marker.output
+    assert 'recall_tool_result("c1")' not in marker.output
     assert "9,000" in marker.output
 
 
@@ -264,3 +267,16 @@ def test_pair_safe_cuts_matches_provider_truth_by_brute_force():
 
 def test_pair_safe_cuts_empty():
     assert pair_safe_cuts([]) == [True]
+
+
+# ---------------------------------------------------------------------------
+# Review round: the protected-tail anchoring rule (negative side)
+# ---------------------------------------------------------------------------
+
+
+def test_tail_anchor_is_skipped_when_too_expensive():
+    """The anchor rule only reaches back to the last user message while the
+    whole stretch stays under 2x the tail budget; an ancient/huge user
+    message is left to the summary's "Session intent" section instead."""
+    body = [user("u" * 6_000), call("a"), out("a", "x" * 400), out("b", "x" * 400)]
+    assert protected_tail_start(body, TokenCounter(), 1.0, 150) > 0

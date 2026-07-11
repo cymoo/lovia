@@ -34,7 +34,15 @@ logger = logging.getLogger(__name__)
 
 
 class Summarizer(Protocol):
-    """Summarization backend used by the summarize stage."""
+    """Summarization backend used by the summarize stage.
+
+    Optional participation hook: a backend may expose a ``provider``
+    attribute (as :class:`LLMSummarizer` does). When present and that
+    provider reports a context window, the summarize stage caps its fold
+    chunks to it — a summarizer running a *smaller* model than the run's
+    would otherwise be handed run-sized chunks and overflow on every fold.
+    Backends without the attribute simply get run-sized chunks.
+    """
 
     async def summarize(
         self,

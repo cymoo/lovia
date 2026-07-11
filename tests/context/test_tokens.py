@@ -278,3 +278,17 @@ def test_budget_mixed_watermarks_resolve_at_runtime():
 def test_budget_same_type_ordering_validated():
     with pytest.raises(ValueError, match="below trigger"):
         TokenBudget(window=100, trigger=50, target=60)
+
+
+def test_tool_memo_is_bounded():
+    counter = TokenCounter(memo_size=2)
+    tools = [FakeTool(name=f"t{i}") for i in range(5)]
+    counter.count_tools(tools)
+    assert len(counter._tool_memo) <= 2
+
+
+def test_watermark_validation_rejects_bools_and_bad_counts():
+    with pytest.raises(ValueError, match="fraction or a token count"):
+        TokenBudget(window=100, trigger=True)
+    with pytest.raises(ValueError, match=">= 1"):
+        TokenBudget(window=100, trigger=100, target=0)

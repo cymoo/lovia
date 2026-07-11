@@ -189,14 +189,17 @@ method handles both triggers:
   results. On the aggressive path, a single result bigger than the target
   budget loses this immunity (`_oversized` in `stages.py`) — otherwise one
   giant tool output would make overflow recovery impossible.
-- **Token accounting.** `TokenCounter` estimates per entry (chars//4, flat
-  image/file costs, `id()`+weakref memo) plus the tool-schema payload the
-  request carries (`count_tools`, measured on the wire shape), all
-  *calibrated* against the provider's real `last_input_tokens` via an EMA
-  ratio stored in state. Counting the schemas separately keeps that fixed
-  additive payload out of the multiplier, so the ratio only absorbs
-  tokenizer error and stays valid as the transcript grows and across
-  handoffs that swap the tool set.
+- **Token accounting.** `TokenCounter` estimates per entry (UTF-8 bytes//4
+  — one C-speed encode, memoized, so CJK weighs ~0.75 tokens/char instead
+  of a 4× under-count; flat image/file costs; `id()`+weakref memo) plus the
+  tool-schema payload the request carries (`count_tools`, measured on the
+  wire shape), all *calibrated* against the provider's real
+  `last_input_tokens` via an EMA ratio stored in state. Counting the
+  schemas separately keeps that fixed additive payload out of the
+  multiplier, and byte-weighting keeps the multiplier's legitimate range
+  narrow (~0.8–1.6 measured across content types), so the ratio only
+  absorbs residual tokenizer error and stays valid as the transcript grows
+  and across handoffs that swap the tool set.
 - **State location.** Sticky state serializes into the per-run
   `ResumeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
   `Compaction` additionally keeps a bounded in-process cache keyed by

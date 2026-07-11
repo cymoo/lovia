@@ -112,12 +112,13 @@ Compaction(
   overflow and is then sized correctly for the rest of the session. Only
   when *nothing* can report it is proactive compaction skipped and the
   reactive overflow path left as the sole backstop.
-- **Token accounting** is a calibrated estimate: chars/4 heuristics
-  (flat costs for images/files) plus the tool schemas the request
-  carries — a fixed additive payload that would otherwise poison the
-  multiplier — corrected by an EMA against the provider's *real*
-  input-token counts as turns complete. Providers can supply exact
-  counting by implementing `TokenEstimator`.
+- **Token accounting** is a calibrated estimate: UTF-8 bytes/4
+  heuristics — so CJK text weighs in proportionally instead of being
+  under-counted 4× — with flat costs for images/files, plus the tool
+  schemas the request carries (a fixed additive payload that would
+  otherwise poison the multiplier), corrected by an EMA against the
+  provider's *real* input-token counts as turns complete. Providers can
+  supply exact counting by implementing `TokenEstimator`.
 
 ## Result stores
 

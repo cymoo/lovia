@@ -215,6 +215,14 @@ def test_budget_watermarks():
     assert budget.pressure(500) == 0.5
 
 
+def test_budget_default_watermarks():
+    # The defaults are sized to the byte-weighted estimator: 15% headroom
+    # holds its residual error, and the reactive path bounds the rare miss.
+    budget = TokenBudget(window=1_000, reserve_output=0)
+    assert budget.trigger_tokens == 850
+    assert budget.target_tokens == 600
+
+
 def test_budget_reserve_subtracted():
     budget = TokenBudget(window=200_000, reserve_output=16_384)
     assert budget.usable == 200_000 - 16_384

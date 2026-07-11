@@ -38,10 +38,17 @@ SCRATCH_KEY = "context"
 """Key under which compaction state lives inside the per-run scratch dict."""
 _VERSION = 2
 
-RATIO_MIN, RATIO_MAX = 0.5, 4.0
+RATIO_MIN, RATIO_MAX = 0.5, 2.5
 """Clamp bounds for the calibration ratio, applied both when updating the EMA
 and when loading persisted state — one weird usage report (or a corrupted
-scratch) must not poison the estimate scale."""
+scratch) must not poison the estimate scale. The band is sized to the
+byte-weighted heuristic's legitimate residuals (measured: ~0.8× over on
+BPE-friendly prose, up to ~1.6× under on digit-dense text): the floor
+guards against estimate collapse (a near-zero ratio would disable proactive
+compaction outright), the ceiling bounds how hard one bad observation can
+over-compact — the direction with no reactive backstop. Ratios persisted by
+the pre-byte-weighting estimator (up to 4.0) clamp down on load by design:
+they were learned against different semantics."""
 
 
 @dataclass

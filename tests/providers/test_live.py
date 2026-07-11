@@ -470,3 +470,47 @@ async def test_anthropic_live_pdf_file_input() -> None:
     )
 
     assert marker in _assert_text_result(result)
+
+
+async def test_anthropic_live_usage_normalization_across_cache_states() -> None:
+    """Lock the ``input_tokens`` convention end-to-end: the adapter reports
+    the FULL prompt regardless of cache state. Anthropic-dialect endpoints
+    report ``input_tokens`` *excluding* cache reads (verified live against
+    DeepSeek's /anthropic: cold 813 = warm 45 + cache_read 768); the adapter
+    adds the cache counts back. If an endpoint ever switches to inclusive
+    accounting, the warm number here doubles and this test catches it."""
+    from lovia.providers import AnthropicProvider
+    from lovia.transcript import InputEntry, UsageDelta
+
+    model = _anthropic_model()
+    provider = AnthropicProvider(model=model)
+    entries = [
+        InputEntry(
+            role="system",
+            content="You are terse. " + ("Background context sentence. " * 200),
+        ),
+        InputEntry(role="user", content="Say OK."),
+    ]
+    settings = ModelSettings(max_tokens=8, temperature=0)
+
+    async def normalized_input_tokens() -> tuple[int, int]:
+        usage = None
+        async for delta in provider.stream(entries, settings=settings):
+            if isinstance(delta, UsageDelta):
+                usage = delta.usage
+        assert usage is not None
+        return usage.input_tokens, usage.cache_read_tokens
+
+    try:
+        cold, _ = await normalized_input_tokens()
+        warm, warm_cache_read = await normalized_input_tokens()
+    finally:
+        await provider.aclose()
+
+    # Same prompt → same normalized total, cache state notwithstanding. The
+    # tolerance absorbs provider-side prompt framing jitter, not accounting
+    # drift: an inclusive-reporting endpoint would inflate warm by the whole
+    # cached slice (~90% of the prompt here).
+    assert abs(warm - cold) <= max(8, cold // 20), (cold, warm)
+    if warm_cache_read == 0:
+        pytest.skip("endpoint reported no cache hit on the immediate re-send")

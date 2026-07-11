@@ -262,6 +262,10 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
   `Provider` 不会被 runner 关闭；可以跨运行复用，也请自己关闭。
 - **`supports_json_schema` 推断跟着端点走。** 兼容端点如果确实支持原生 JSON schema，
   需要显式传构造器参数，才会走原生接口。
+- **Anthropic 的 server tools 可能把 turn 暂停。** 通过 `provider_options` 启用 server
+  tool（web search、code execution）后，长 turn 可能以 `stop_reason: "pause_turn"` 结束——
+  这是 API 要求"重发对话以继续"的信号。lovia 目前不会自动续传：该 turn 以已有的部分内容
+  结束，原始 `pause_turn` 会原样透传到 finish reason，调用方可据此识别。
 
 ## 延伸阅读
 

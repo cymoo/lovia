@@ -312,6 +312,12 @@ triggers reactive compaction instead of retries. That error also carries
 - **`supports_json_schema` inference follows the host.** A compatible
   endpoint that *does* support native JSON schema needs the explicit
   constructor flag to get the native path.
+- **Anthropic server tools can pause a turn.** Enabling a server tool (web
+  search, code execution) through `provider_options` may end a long turn
+  with `stop_reason: "pause_turn"` — the API's request to re-send the
+  conversation and continue. lovia does not auto-continue yet: the turn
+  ends with its partial content, and the raw `pause_turn` finish reason is
+  passed through so callers can detect it.
 
 ## See also
 

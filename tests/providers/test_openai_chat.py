@@ -456,8 +456,8 @@ def test_headers_keep_explicit_api_key_when_extra_headers_overlap() -> None:
 
     headers = provider._headers()
 
-    assert headers["Authorization"] == "Bearer real-key"
-    assert headers["X-Test"] == "1"
+    assert headers["authorization"] == "Bearer real-key"  # canonical lowercase
+    assert headers["x-test"] == "1"
 
 
 @pytest.mark.asyncio
@@ -1192,3 +1192,28 @@ async def test_probe_follows_redirects_and_bounds_its_own_timeout() -> None:
         "write": 10.0,
         "pool": 10.0,
     }
+
+
+def test_tool_call_arguments_pass_through_verbatim() -> None:
+    """OpenAI's wire carries ``arguments`` as an opaque string, so even a
+    non-object payload replays byte-identically — the asymmetry that makes
+    the Anthropic adapter (which must unpack to an object) wrap instead."""
+    messages = entries_to_openai_messages(
+        [
+            ToolCallEntry(call_id="c1", name="f", arguments="[1,2]"),
+            ToolResultEntry(call_id="c1", output="err", is_error=True),
+        ]
+    )
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "[1,2]"
+
+
+def test_headers_merge_is_case_insensitive() -> None:
+    provider = OpenAIChatProvider(
+        model="m",
+        api_key="secret",
+        default_headers={"Authorization": "Bearer spoof", "X-Trace": "1"},
+    )
+    headers = provider._headers()
+    assert headers["authorization"] == "Bearer secret"
+    assert headers["x-trace"] == "1"
+    assert len([k for k in headers if k.lower() == "authorization"]) == 1

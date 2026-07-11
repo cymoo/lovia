@@ -189,6 +189,9 @@ class AnthropicProvider:
             )
 
     def _headers(self) -> dict[str, str]:
+        # Keys are lower-cased on merge: HTTP headers are case-insensitive,
+        # and a user override spelled "X-Api-Key" must replace the built-in
+        # entry, not ride alongside it as a duplicate header.
         headers = {
             "content-type": "application/json",
             "anthropic-version": self._version,
@@ -196,9 +199,10 @@ class AnthropicProvider:
         if self._api_key:
             headers["x-api-key"] = self._api_key
         for key, value in self._extra_headers.items():
-            if key.lower() == "x-api-key" and self._api_key:
+            lower = key.lower()
+            if lower == "x-api-key" and self._api_key:
                 continue
-            headers[key] = value
+            headers[lower] = value
         return headers
 
     def _build_payload(
@@ -504,7 +508,16 @@ class AnthropicProvider:
 
 
 def _normalize_stop_reason(reason: str | None) -> str | None:
-    """Map Anthropic stop reasons to OpenAI-style ``finish_reason`` strings."""
+    """Map Anthropic stop reasons to OpenAI-style ``finish_reason`` strings.
+
+    Unknown reasons pass through verbatim. The known gap is ``pause_turn``:
+    the official API emits it when a long (server-tool) turn pauses and wants
+    the conversation re-sent to continue. lovia does not enable server tools
+    itself, but ``provider_options`` can — and until auto-continuation is
+    implemented, such a turn ends with its partial content treated as final.
+    Documented in the provider docs; passing the raw reason through at least
+    makes the condition visible to callers.
+    """
     if reason is None:
         return None
     return {
@@ -629,6 +642,13 @@ def _to_anthropic_messages(
             # ``lovia.runtime.tool_calls._normalize_call_args``), so a stored
             # entry never carries unparseable arguments to re-serialize.
             parsed = json.loads(entry.arguments or "{}")
+            if not isinstance(parsed, dict):
+                # The wire requires an object, but entries that never passed
+                # this run's preflight (sessions persisted before non-object
+                # arguments were rejected there, hand-seeded history) can still
+                # carry one. Same wrapping as ``_normalize_call_args``, so both
+                # paths put identical bytes on the wire.
+                parsed = {"_raw": entry.arguments}
             pending_blocks.append(
                 {
                     "type": "tool_use",

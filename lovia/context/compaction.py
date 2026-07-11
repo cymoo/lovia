@@ -75,15 +75,20 @@ class Compaction:
     """Automatic context compaction — the default context policy.
 
     Every parameter has a sensible default: ``Compaction()`` asks the
-    provider for the model's context window and starts compacting at 75% of
-    the usable space, shrinking down to 50%. The only knob most users ever
+    provider for the model's context window and starts compacting at 85% of
+    the usable space, shrinking down to 60%. The only knob most users ever
     touch is ``context_window``::
 
         policy = Compaction(context_window=200_000)
 
     The two watermarks accept either a fraction of the usable window
-    (``compact_at=0.75``) or an absolute token count
-    (``compact_at=150_000``).
+    (``compact_at=0.85``) or an absolute token count
+    (``compact_at=150_000``). The defaults are sized to the byte-weighted
+    estimator: its residual error is small enough that 15% headroom
+    routinely holds, and the reactive overflow path (plus the endpoint
+    windows it learns) bounds the cost of the rare miss to one failed call.
+    On *small* windows the same fractions leave only a few thousand tokens
+    of headroom — prefer absolute watermarks there.
     """
 
     name = "compaction"
@@ -92,8 +97,8 @@ class Compaction:
         self,
         *,
         context_window: int | None = None,
-        compact_at: int | float = 0.75,
-        compact_to: int | float = 0.50,
+        compact_at: int | float = 0.85,
+        compact_to: int | float = 0.60,
         keep_recent_tokens: int | None = None,
         reserve_output_tokens: int = 16_384,
         stages: Sequence[Stage] | None = None,
@@ -109,7 +114,7 @@ class Compaction:
                 not know either, proactive compaction is skipped and only
                 the reactive overflow path runs.
             compact_at: When to start compacting — a fraction of the usable
-                window (``0.75`` = 75% full) or an absolute token count
+                window (``0.85`` = 85% full) or an absolute token count
                 (``150_000``).
             compact_to: How far a compaction burst shrinks the prompt, in
                 the same units. Must resolve below ``compact_at``; the gap

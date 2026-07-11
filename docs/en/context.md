@@ -15,8 +15,8 @@ agent = Agent(
     model="glm-5.2",
     context_policy=Compaction(
         context_window=200_000,
-        compact_at=0.75,
-        compact_to=0.50,
+        compact_at=0.85,
+        compact_to=0.60,
     ),
 )
 ```
@@ -88,8 +88,8 @@ the web UI renders these live and replays the last one on reload.
 ```python
 Compaction(
     context_window=None,        # tokens; None = ask the provider
-    compact_at=0.75,            # trigger watermark
-    compact_to=0.50,            # target after compaction
+    compact_at=0.85,            # trigger watermark
+    compact_to=0.60,            # target after compaction
     keep_recent_tokens=None,    # protected tail; None = usable // 5
     reserve_output_tokens=16_384,
     stages=None,                # your own pipeline; None = the three above
@@ -99,7 +99,7 @@ Compaction(
 )
 ```
 
-- **Watermarks** accept a fraction of the usable window (`0.75`) or an
+- **Watermarks** accept a fraction of the usable window (`0.85`) or an
   absolute token count (`150_000`); "usable" = window −
   `reserve_output_tokens`. Nothing happens below `compact_at`; a breach
   shrinks the view to `compact_to` (hysteresis, so the policy doesn't
@@ -202,7 +202,7 @@ content. `lovia/context/policy.py` is a one-screen read.
 - **The first overflow on an unknown model is a real, failed request.**
   The endpoint's rejection is what teaches lovia the window, and the
   compaction burst that follows targets ~25% of the usable window instead
-  of the proactive 50% — it compacts twice as hard. Set
+  of the proactive 60% — it compacts more than twice as hard. Set
   `context_window=...` up front where you know it. Ollama never overflows
   at all (it [truncates silently](providers.md#sharp-edges)), so there it
   is not optional.

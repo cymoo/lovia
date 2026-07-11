@@ -94,8 +94,8 @@ class TokenBudget:
 
     window: int
     reserve_output: int = 16_384
-    trigger: int | float = 0.75
-    target: int | float = 0.50
+    trigger: int | float = 0.85
+    target: int | float = 0.60
 
     def __post_init__(self) -> None:
         if self.window < 1:

@@ -12,8 +12,8 @@ agent = Agent(
     model="glm-5.2",
     context_policy=Compaction(
         context_window=200_000,
-        compact_at=0.75,
-        compact_to=0.50,
+        compact_at=0.85,
+        compact_to=0.60,
     ),
 )
 ```
@@ -71,8 +71,8 @@ agent = Agent(..., context_policy=NoopContextPolicy())
 ```python
 Compaction(
     context_window=None,        # token；None = 向 provider 询问
-    compact_at=0.75,            # 触发水位
-    compact_to=0.50,            # 压缩后的目标
+    compact_at=0.85,            # 触发水位
+    compact_to=0.60,            # 压缩后的目标
     keep_recent_tokens=None,    # 受保护尾部；None = usable // 5
     reserve_output_tokens=16_384,
     stages=None,                # 你自己的 pipeline；None = 上面三阶段
@@ -82,7 +82,7 @@ Compaction(
 )
 ```
 
-- **水位**可以是可用窗口比例（`0.75`），也可以是绝对 token 数（`150_000`）。“可用” =
+- **水位**可以是可用窗口比例（`0.85`），也可以是绝对 token 数（`150_000`）。“可用” =
   window − `reserve_output_tokens`。低于 `compact_at` 时不处理；越界后会把 view 缩到
   `compact_to`（有滞后，避免策略在边界抖动）。
 - **`context_window=None`** 会从端点解析窗口——它的 `/models` 列表，或者它第一次拒绝 prompt 时
@@ -159,7 +159,7 @@ required_sections=...)`，不要 fork 这段实现。
   触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
   预算敏感的部署需要注意：第 N 轮里可能包含一次额外的 LLM 调用。
 - **未知模型的第一次撞墙是一次真实的失败请求。** 正是端点的这次拒绝教会了 lovia 窗口大小；
-  紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 50%——它下手重一倍。
+  紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 60%——它下手重一倍多。
   知道窗口就请提前设置 `context_window=...`。Ollama 压根不会撞墙
   （它[静默截断](providers.md#容易踩的点)），所以对它来说这不是可选项。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于

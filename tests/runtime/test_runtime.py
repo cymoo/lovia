@@ -663,3 +663,164 @@ async def test_non_object_tool_arguments_rejected_and_normalized() -> None:
     # retry request (and any later Anthropic replay) carries an object.
     entry = next(e for e in result.entries if isinstance(e, ToolCallEntry))
     assert json.loads(entry.arguments) == {"_raw": "[1,2]"}
+
+
+# ---------------------------------------------------------------------------
+# Runtime review: checkpoint normalization, activation memo, sub-run usage
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_normalizes_malformed_args_persisted_before_rejection() -> None:
+    """The checkpoint persists a turn's entries before the tool phase rejects
+    a malformed call, so the snapshot keeps the original bytes even though the
+    live transcript was normalized. The load boundary must re-normalize —
+    otherwise every request after a resume replays invalid JSON verbatim."""
+    from lovia.stores import InMemoryCheckpointer
+
+    cp = InMemoryCheckpointer()
+    malformed = AssistantTurn(
+        content=None,
+        tool_calls=[ToolCall(id="c1", name="add", arguments='{"a": 1, ')],
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    provider = ScriptedProvider([malformed])
+    agent = Agent(name="t", model=provider, tools=[add])
+    with pytest.raises(Exception):  # MaxTurnsExceeded -> interrupted snapshot
+        await Runner.run(
+            agent, "go", max_turns=1, checkpoint=CheckpointOptions(cp, "r1")
+        )
+    snap = await cp.load("r1")
+    stored = [e for e in snap.entries if isinstance(e, ToolCallEntry)][0]
+    assert stored.arguments == '{"a": 1, '  # the poison is really in the store
+
+    resumed_provider = ScriptedProvider([text("done")])
+    agent2 = Agent(name="t", model=resumed_provider, tools=[add])
+    result = await Runner.run(
+        agent2, "ignored", max_turns=3, checkpoint=CheckpointOptions(cp, "r1")
+    )
+    assert result.output == "done"
+    # What the provider was actually sent is wire-safe.
+    sent = next(
+        m for m in resumed_provider.calls[0] if m.role == "assistant" and m.tool_calls
+    )
+    assert json.loads(sent.tool_calls[0].arguments) == {"_raw": '{"a": 1, '}
+
+
+async def test_handoff_reuses_activation_for_a_previously_active_agent() -> None:
+    """A -> B -> A must not re-run A's plugin setup (or re-open its
+    connections): activation is once per agent per run."""
+    from lovia.plugins import PluginInstance
+
+    setups: list[str] = []
+
+    class CountingPlugin:
+        def __init__(self, tag: str) -> None:
+            self.name = f"counter-{tag}"
+            self.tag = tag
+
+        async def setup(self) -> PluginInstance:
+            setups.append(self.tag)
+            return PluginInstance()
+
+    provider_b = ScriptedProvider([call("transfer_to_a", {})])
+    provider_a = ScriptedProvider([call("transfer_to_b", {}), text("done")])
+    b = Agent(name="b", model=provider_b, plugins=[CountingPlugin("b")])
+    a = Agent(name="a", model=provider_a, plugins=[CountingPlugin("a")], handoffs=[b])
+    b.handoffs = [a]
+
+    result = await Runner.run(a, "go")
+    assert result.output == "done"
+    assert sorted(setups) == ["a", "b"]  # one activation per agent, not per hop
+
+
+async def test_failed_subrun_usage_folds_into_parent() -> None:
+    """A sub-run that trips its own budget still spent real tokens; the
+    parent's books must include them."""
+    from lovia.handoff import agent_as_tool
+    from lovia.reliability import RunBudget
+
+    sub_provider = ScriptedProvider(
+        [
+            AssistantTurn(
+                content=None,
+                tool_calls=[ToolCall(id="s1", name="nope", arguments="{}")],
+                usage=Usage(input_tokens=400, output_tokens=100),
+            ),
+        ]
+    )
+    sub = Agent(name="sub", model=sub_provider)
+    sub_tool = agent_as_tool(sub, budget=RunBudget(max_total_tokens=450))
+
+    parent_provider = ScriptedProvider(
+        [call(sub_tool.name, {"input": "hi"}), text("done")]
+    )
+    parent = Agent(name="p", model=parent_provider, tools=[sub_tool])
+    result = await Runner.run(parent, "go")
+    assert result.output == "done"
+    assert result.usage.total_tokens >= 500  # the sub-run's spend is on the books
+
+
+async def test_replay_folds_usage_into_parent_accumulator() -> None:
+    from lovia.stores import InMemoryCheckpointer
+
+    cp = InMemoryCheckpointer()
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="t", model=provider)
+    await Runner.run(agent, "go", checkpoint=CheckpointOptions(cp, "r1"))
+
+    parent_usage = Usage()
+    result = await Runner.run(
+        agent,
+        "ignored",
+        checkpoint=CheckpointOptions(cp, "r1"),
+        _parent_usage=parent_usage,
+    )
+    assert parent_usage.total_tokens == result.usage.total_tokens > 0
+
+
+async def test_resume_drains_pending_handoff_call() -> None:
+    """A snapshot interrupted between persisting a handoff call and executing
+    it: the resume drain must execute the transfer and continue as the target."""
+    from lovia.checkpointer import RunHead
+    from lovia.stores import InMemoryCheckpointer
+    from lovia.transcript import InputEntry
+
+    target_provider = ScriptedProvider([text("from-target")])
+    target = Agent(name="target", model=target_provider)
+    entry_provider = ScriptedProvider([])  # never called on resume
+    entry = Agent(name="entry", model=entry_provider, handoffs=[target])
+
+    cp = InMemoryCheckpointer()
+    await cp.append(
+        "r1",
+        [
+            InputEntry(role="user", content="go"),
+            ToolCallEntry(call_id="h1", name="transfer_to_target", arguments="{}"),
+        ],
+        RunHead(agent_name="entry", usage=Usage(), turns=1, status="interrupted"),
+    )
+
+    result = await Runner.run(entry, "ignored", checkpoint=CheckpointOptions(cp, "r1"))
+    assert result.output == "from-target"
+    assert result.final_agent.name == "target"
+
+
+async def test_explicit_tool_shadows_context_policy_recall() -> None:
+    """An explicit tool named recall_tool_result wins over the policy's; the
+    conflict is a debug-level skip, not an error."""
+    from lovia.context import Compaction
+
+    @tool
+    def recall_tool_result(ref: str) -> str:
+        return f"explicit:{ref}"
+
+    provider = ScriptedProvider(
+        [call("recall_tool_result", {"ref": "x"}), text("done")]
+    )
+    agent = Agent(name="t", model=provider, tools=[recall_tool_result])
+    result = await Runner.run(
+        agent, "go", context_policy=Compaction(context_window=100_000)
+    )
+    assert result.output == "done"
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert tool_msg.content == "explicit:x"

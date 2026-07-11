@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, AsyncIterator
 
 import pytest
@@ -354,3 +355,17 @@ def test_model_list_is_rejected_with_migration_hint() -> None:
     agent = Agent(name="a", model=[ScriptedProvider([text("x")])])  # type: ignore[arg-type]
     with pytest.raises(UserError, match="no longer accepts a list"):
         agent.resolve_provider()
+
+
+def test_budget_max_seconds_trips_after_elapsed() -> None:
+    budget = RunBudget(max_seconds=0.0)
+    budget.check(Usage())  # first check starts the clock, never trips
+    time.sleep(0.01)
+    with pytest.raises(BudgetExceeded, match="elapsed"):
+        budget.check(Usage())
+
+
+def test_budget_max_input_tokens_trips() -> None:
+    budget = RunBudget(max_input_tokens=10)
+    with pytest.raises(BudgetExceeded, match="input tokens"):
+        budget.check(Usage(input_tokens=11))

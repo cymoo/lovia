@@ -10,6 +10,8 @@ facade) lets the loop own the whole start-vs-resume decision without a facade
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
 from typing import Any
 
 from ..agent import Agent
@@ -17,7 +19,9 @@ from ..checkpointer import IfRunExists, RunSnapshot
 from ..exceptions import UserError
 from ..handoff import Handoff
 from ..schema import coerce_output
+from ..transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
 from .result import RunResult
+from .tool_calls import wire_safe_arguments
 
 
 # Policy for ``stream``/``run`` when ``run_id`` already has a snapshot in the
@@ -28,6 +32,41 @@ from .result import RunResult
 # * ``restart`` — ignore any stored run and start fresh, overwriting it.
 # * ``fail``    — raise if a run already exists.
 # * ``resume_only`` — continue an existing run, else raise (resume a known run_id).
+
+
+def normalize_replayed_entries(
+    entries: list[TranscriptEntry],
+) -> list[TranscriptEntry]:
+    """Wire-safe copies of stored entries, for rehydrating a snapshot.
+
+    The live loop normalizes a rejected call's transcript entry in memory,
+    but the checkpoint had already persisted the original bytes — saves are
+    append-only and the entry was written with its model turn, before the
+    rejection ran. A snapshot can therefore carry non-wire-safe ``arguments``
+    that every later request would re-send verbatim: invalid JSON 400s
+    OpenAI-dialect endpoints, and the Anthropic serializer's ``json.loads``
+    raises outright. Normalizing at the load boundary is idempotent, so every
+    load also self-heals snapshots persisted before this existed.
+
+    Calls **without** a matching result are left untouched: the resume drain
+    is about to re-execute them, and its preflight rejection both produces
+    the right model-facing error for the raw payload and normalizes the
+    entry itself. Duplicate ids pair by occurrence, mirroring
+    :func:`~lovia.runtime.loop.pending_tool_calls`.
+    """
+    unconsumed = Counter(
+        entry.call_id for entry in entries if isinstance(entry, ToolResultEntry)
+    )
+    out: list[TranscriptEntry] = []
+    for entry in entries:
+        if isinstance(entry, ToolCallEntry) and unconsumed[entry.call_id] > 0:
+            unconsumed[entry.call_id] -= 1
+            normalized = wire_safe_arguments(entry.arguments)
+            if normalized is not None:
+                out.append(replace(entry, arguments=normalized))
+                continue
+        out.append(entry)
+    return out
 
 
 def reachable_agents(entry: Agent[Any]) -> dict[str, Agent[Any]]:
@@ -111,7 +150,10 @@ def result_from_completed_snapshot(
         output = ""
     return RunResult(
         output=output,
-        entries=list(snapshot.entries),
+        # Normalized: these entries feed the replay path's session heal, so
+        # non-wire-safe arguments persisted before normalization must not be
+        # re-published into the conversation history.
+        entries=normalize_replayed_entries(list(snapshot.entries)),
         final_agent=agent,
         usage=snapshot.usage.clone(),
         turns=snapshot.turns,
@@ -120,6 +162,7 @@ def result_from_completed_snapshot(
 
 __all__ = [
     "IfRunExists",
+    "normalize_replayed_entries",
     "reachable_agents",
     "resolve_resume_agent",
     "result_from_completed_snapshot",

@@ -45,6 +45,23 @@ from ..transcript import ToolCallEntry, ToolResultEntry
 logger = logging.getLogger(__name__)
 
 
+def wire_safe_arguments(arguments: str | None) -> str | None:
+    """The normalized replacement for non-wire-safe ``arguments``, else ``None``.
+
+    Wire-safe means a JSON *object*, not merely valid JSON: the Anthropic
+    adapter unpacks ``arguments`` into ``tool_use.input``, which must be an
+    object, so a bare array/scalar the model should never emit for tool args
+    (``"[1,2]"``, ``"5"``, ``"null"``) still 400s it and must be wrapped too.
+    The wrapping — the offending text under ``_raw`` (a JSON object, original
+    preserved) — is the one convention every re-serializer can trust.
+    """
+    try:
+        wire_safe = isinstance(json.loads(arguments or "{}"), dict)
+    except json.JSONDecodeError:
+        wire_safe = False
+    return None if wire_safe else json.dumps({"_raw": arguments})
+
+
 def _normalize_call_args(state: RunState, call_id: str) -> None:
     """Rewrite a rejected call's transcript entry to wire-safe arguments.
 
@@ -52,9 +69,11 @@ def _normalize_call_args(state: RunState, call_id: str) -> None:
     mid-call. Left raw in the transcript and echoed back next turn, they make
     the request invalid JSON and 400 the provider on every retry (it is the
     same bytes). Detection is the one place we already know the payload is
-    bad, so we normalize the stored entry here — wrapping the offending text
-    under ``_raw`` (a JSON object, original preserved) — and every serializer
-    can then trust the transcript instead of re-validating it on each re-send.
+    bad, so we normalize the stored entry here — and every serializer can
+    then trust the transcript instead of re-validating it on each re-send.
+    (The checkpoint may have persisted the original bytes before this ran;
+    the load boundary re-applies the same normalization — see
+    :func:`~lovia.runtime.resume.normalize_replayed_entries`.)
 
     Replaces the entry rather than mutating it: the copy already handed to
     observers on ``MessageCompleted`` must keep the exact payload the model
@@ -63,20 +82,9 @@ def _normalize_call_args(state: RunState, call_id: str) -> None:
     for i in range(len(state.transcript) - 1, -1, -1):
         entry = state.transcript[i]
         if isinstance(entry, ToolCallEntry) and entry.call_id == call_id:
-            try:
-                parsed = json.loads(entry.arguments or "{}")
-                # Wire-safe means a JSON *object*, not merely valid JSON: the
-                # Anthropic adapter unpacks ``arguments`` into ``tool_use.input``,
-                # which must be an object, so a bare array/scalar the model
-                # should never emit for tool args (``"[1,2]"``, ``"5"``, ``"null"``)
-                # still 400s it and must be wrapped too.
-                wire_safe = isinstance(parsed, dict)
-            except json.JSONDecodeError:
-                wire_safe = False
-            if not wire_safe:
-                state.transcript[i] = replace(
-                    entry, arguments=json.dumps({"_raw": entry.arguments})
-                )
+            normalized = wire_safe_arguments(entry.arguments)
+            if normalized is not None:
+                state.transcript[i] = replace(entry, arguments=normalized)
             return
 
 

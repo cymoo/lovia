@@ -12,7 +12,7 @@ from .helpers import call, out, user
 def _full_state() -> CompactionState:
     return CompactionState(
         cleared={"c1", "c2"},
-        offloaded={"c3": OffloadRecord(preview="pre", chars=9000)},
+        offloaded={"c3": OffloadRecord(preview="pre", chars=9000, digest="d3" * 8)},
         summary=SummaryState(text="S", covered=4, fingerprint="ab" * 8),
         ratio=1.5,
         last_view_estimate=1234,
@@ -41,25 +41,25 @@ def test_load_tolerates_missing_and_garbage():
     assert CompactionState.load({}) == CompactionState()
     assert CompactionState.load({"context": "garbage"}) == CompactionState()
     assert CompactionState.load({"context": {"version": 99}}) == CompactionState()
-    partial = {"context": {"version": 2, "cleared": ["a", 7], "ratio": "NaN"}}
+    partial = {"context": {"version": 3, "cleared": ["a", 7], "ratio": "NaN"}}
     state = CompactionState.load(partial)
     assert state.cleared == {"a"}
     assert state.ratio == 1.0
 
 
 def test_load_clamps_ratio():
-    state = CompactionState.load({"context": {"version": 2, "ratio": 100.0}})
+    state = CompactionState.load({"context": {"version": 3, "ratio": 100.0}})
     assert state.ratio == 2.5
     # Pre-byte-weighting sessions persisted ratios up to the old 4.0 clamp;
     # they clamp down on load because they were learned against different
     # estimator semantics.
-    legacy = CompactionState.load({"context": {"version": 2, "ratio": 4.0}})
+    legacy = CompactionState.load({"context": {"version": 3, "ratio": 4.0}})
     assert legacy.ratio == 2.5
 
 
 def test_load_drops_malformed_learned_windows():
     raw = {
-        "version": 2,
+        "version": 3,
         "learned_windows": {
             "ok\x00m": 65_536,
             "negative\x00m": -1,
@@ -73,16 +73,12 @@ def test_load_drops_malformed_learned_windows():
 
 
 def test_scratch_without_learned_windows_keeps_its_other_decisions():
-    """Adding the key must not have bumped ``_VERSION``.
-
-    A version bump silently discards every sticky decision a user's session
-    already carries; scratch written before this field must still load.
-    """
+    """A missing optional key must not discard the other decisions."""
     old = {
         "context": {
-            "version": 2,
+            "version": 3,
             "cleared": ["c1"],
-            "offloaded": {"c3": {"preview": "pre", "chars": 9000}},
+            "offloaded": {"c3": {"preview": "pre", "chars": 9000, "digest": "d3" * 8}},
             "summary": {"text": "S", "covered": 4, "fingerprint": "ab" * 8},
             "ratio": 1.5,
             "last_view_estimate": 1234,
@@ -91,9 +87,34 @@ def test_scratch_without_learned_windows_keeps_its_other_decisions():
     }
     state = CompactionState.load(old)
     assert state.cleared == {"c1"}
-    assert state.offloaded == {"c3": OffloadRecord(preview="pre", chars=9000)}
+    assert state.offloaded == {
+        "c3": OffloadRecord(preview="pre", chars=9000, digest="d3" * 8)
+    }
     assert state.summary == SummaryState(text="S", covered=4, fingerprint="ab" * 8)
     assert state.learned_windows == {}
+
+
+def test_pre_digest_scratch_is_discarded_wholesale():
+    """v2 scratch (pre content-addressed offload keys) loads as fresh state:
+    decisions re-derive, and recall of old bare-call_id markers still works
+    via the transcript fallback."""
+    v2 = {
+        "context": {
+            "version": 2,
+            "cleared": ["c1"],
+            "offloaded": {"c3": {"preview": "pre", "chars": 9000}},
+            "ratio": 1.5,
+        }
+    }
+    state = CompactionState.load(v2)
+    assert state.cleared == set() and state.offloaded == {} and state.ratio == 1.0
+
+
+def test_offload_record_without_digest_is_dropped():
+    """A v3 record missing ``digest`` cannot render a recallable marker —
+    treated like any other malformed record."""
+    raw = {"version": 3, "offloaded": {"c": {"preview": "p", "chars": 9}}}
+    assert CompactionState.load({"context": raw}).offloaded == {}
 
 
 def test_window_key_separates_endpoints_and_tolerates_a_missing_base_url():
@@ -110,7 +131,8 @@ def test_window_key_separates_endpoints_and_tolerates_a_missing_base_url():
 
 def test_decided_covers_both_kinds():
     state = CompactionState(
-        cleared={"a"}, offloaded={"b": OffloadRecord(preview="", chars=1)}
+        cleared={"a"},
+        offloaded={"b": OffloadRecord(preview="", chars=1, digest="ab" * 8)},
     )
     assert state.decided("a") and state.decided("b") and not state.decided("c")
 
@@ -136,8 +158,8 @@ def test_prune_drops_absent_and_ambiguous_records():
     state = CompactionState(
         cleared={"gone", "dup", "live"},
         offloaded={
-            "gone2": OffloadRecord(preview="p", chars=9),
-            "live2": OffloadRecord(preview="p", chars=9),
+            "gone2": OffloadRecord(preview="p", chars=9, digest="cd" * 8),
+            "live2": OffloadRecord(preview="p", chars=9, digest="cd" * 8),
         },
     )
     state.prune({"live", "live2"})
@@ -170,3 +192,21 @@ def test_fingerprint_ignores_tool_result_length():
     a = [user("hi"), call("c1"), out("c1", "x" * 10_000)]
     b = [user("hi"), call("c1"), out("c1", "x" * 10)]
     assert fingerprint(a) == fingerprint(b)
+
+
+def test_fingerprint_covers_multipart_input_entries():
+    from lovia.parts import ImagePart, TextPart
+    from lovia.transcript import InputEntry
+
+    def multipart(text: str) -> InputEntry:
+        return InputEntry(
+            role="user",
+            content=[
+                TextPart(text=text),
+                ImagePart(data="AAAA", mime_type="image/png"),
+            ],
+        )
+
+    a = fingerprint([multipart("hello")])
+    assert a == fingerprint([multipart("hello")])  # deterministic
+    assert a != fingerprint([multipart("hello!!")])  # part text length counts

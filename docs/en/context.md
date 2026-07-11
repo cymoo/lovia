@@ -130,8 +130,11 @@ from lovia.context import Compaction, FileResultStore
 policy = Compaction(context_window=200_000, store=FileResultStore(".cache/results"))
 ```
 
-`ResultStore` is two methods (`put(key, content)` / `get(key)`), keyed by
-`call_id`. `FileResultStore(dir)` writes one file per result (no eviction —
+`ResultStore` is two methods (`put(key, content)` / `get(key)`), keyed by a
+**content digest** of the output — the store is shared across sessions while
+call_ids are session-local, so digest keys make cross-session collisions
+impossible (and dedupe identical outputs for free); the offload marker hands
+the model the digest as its recall reference. `FileResultStore(dir)` writes one file per result (no eviction —
 retention is yours); `InMemoryResultStore(max_entries=1024)` is a bounded
 LRU. Without a store, offload markers still work — recall falls back to the
 transcript — but a [session `trim_tool_results`](sessions-and-checkpoints.md#maintenance)

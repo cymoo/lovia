@@ -16,7 +16,7 @@ from lovia.context import (
     TokenCounter,
 )
 from lovia.context.render import pair_safe_cuts
-from lovia.context.state import fingerprint
+from lovia.context.state import fingerprint, result_digest
 from lovia.transcript import ToolCallEntry
 
 from .helpers import (
@@ -172,10 +172,11 @@ async def test_offload_writes_store_and_records_marker_data():
     ctx = make_ctx(body, store=store, budget=budget)
     stage = OffloadToolResults(min_chars=4_000, keep_last=1)
     assert await stage.plan(body, ctx) is True
-    assert store.data["c0"] == "r" * 5_000
     record = ctx.state.offloaded["c0"]
+    assert store.data[record.digest] == "r" * 5_000
     assert record.preview == "r" * 400
     assert record.chars == 5_000
+    assert record.digest == result_digest("r" * 5_000)
     assert "c1" not in ctx.state.offloaded  # keep_last=1
 
 
@@ -262,10 +263,16 @@ async def test_offload_skips_summary_covered_results():
     ctx = make_ctx(body, store=store, state=state, budget=budget)
     await OffloadToolResults(min_chars=4_000, keep_last=0).plan(body, ctx)
     assert set(ctx.state.offloaded) == {"c2", "c3"}
-    assert set(store.data) == {"c2", "c3"}
+    # c2 and c3 carry identical content, so they share one store entry
+    # (content-addressed keys dedupe).
+    assert set(store.data) == {ctx.state.offloaded["c2"].digest}
+    assert ctx.state.offloaded["c2"].digest == ctx.state.offloaded["c3"].digest
 
 
-async def test_offload_keys_store_by_raw_call_id():
+async def test_offload_keys_store_by_content_digest():
+    """Store keys are content digests, not call_ids: ids are session-local
+    while the store is shared across sessions, and identical content across
+    sessions dedupes onto one entry (same key ⟹ same bytes, harmless)."""
     store = FakeResultStore()
     body = [
         ToolCallEntry(call_id="a/b:c", name="f", arguments="{}"),
@@ -277,7 +284,20 @@ async def test_offload_keys_store_by_raw_call_id():
     ctx = make_ctx(body, store=store, budget=budget)
     await OffloadToolResults(keep_last=1).plan(body, ctx)
     assert "a/b:c" in ctx.state.offloaded
-    assert store.data["a/b:c"] == "r" * 5_000
+    digest = ctx.state.offloaded["a/b:c"].digest
+    assert store.data[digest] == "r" * 5_000
+    assert digest == result_digest("r" * 5_000)
+
+
+async def test_offload_dedupes_identical_content_across_sessions():
+    store = FakeResultStore()
+    output = "shared blob " * 500
+    for session in range(2):  # two "sessions": fresh state, same store
+        body = [call("call_0"), out("call_0", output), call("z"), out("z", "tail")]
+        budget = TokenBudget(window=100, reserve_output=0, trigger=0.9, target=0.5)
+        ctx = make_ctx(body, store=store, budget=budget)
+        await OffloadToolResults(min_chars=4_000, keep_last=1).plan(body, ctx)
+    assert len(store.data) == 1  # one content, one entry
 
 
 # ---------------------------------------------------------------------------
@@ -601,4 +621,59 @@ async def test_offload_aggressive_archives_oversized_protected_result():
     budget = TokenBudget(window=4_000, reserve_output=0, trigger=0.75, target=0.5)
     ctx = make_ctx(body, store=store, aggressive=True, budget=budget, protected_from=0)
     assert await OffloadToolResults(keep_last=2).plan(body, ctx) is True
-    assert store.data["giant"] == "g" * 40_000
+    assert store.data[ctx.state.offloaded["giant"].digest] == "g" * 40_000
+
+
+# ---------------------------------------------------------------------------
+# Review round: partial-fold commit, constructor validation
+# ---------------------------------------------------------------------------
+
+
+class _FailAfterSummarizer:
+    """Succeeds for the first N chunks, then fails — a mid-burst outage."""
+
+    def __init__(self, succeed: int, text: str = "PARTIAL") -> None:
+        self.succeed = succeed
+        self.text = text
+        self.calls = 0
+
+    async def summarize(self, entries, *, req, prior_summary=None):
+        self.calls += 1
+        if self.calls > self.succeed:
+            raise RuntimeError("summarizer outage")
+        return self.text
+
+
+async def test_summarize_mid_fold_failure_keeps_committed_coverage():
+    """Each successful chunk commits immediately: a failure on chunk 2 must
+    keep chunk 1's coverage (and count one failure), not roll back."""
+    summarizer = _FailAfterSummarizer(succeed=1)
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)  # 8-entry span > half the window
+    stage = SummarizeHistory(summarizer=summarizer)
+    assert await stage.plan(body, ctx) is True  # chunk 1 folded before the outage
+    assert summarizer.calls == 2
+    state = ctx.state
+    assert state.summary is not None
+    assert 0 < state.summary.covered < 8  # partial, not full, coverage
+    assert state.summary.text == "PARTIAL"
+    assert state.summary_failures == 1
+
+
+def test_stage_constructor_validation():
+    with pytest.raises(ValueError, match="min_chars"):
+        OffloadToolResults(min_chars=0)
+    with pytest.raises(ValueError, match="keep_last"):
+        OffloadToolResults(keep_last=-1)
+    with pytest.raises(ValueError, match="preview_chars"):
+        OffloadToolResults(preview_chars=-1)
+    with pytest.raises(ValueError, match="keep_last"):
+        ClearToolResults(keep_last=-1)
+    with pytest.raises(ValueError, match="min_chars"):
+        ClearToolResults(min_chars=-1)
+    with pytest.raises(ValueError, match="min_savings_ratio"):
+        SummarizeHistory(summarizer=FakeSummarizer(), min_savings_ratio=1.0)
+    with pytest.raises(ValueError, match="max_failures"):
+        SummarizeHistory(summarizer=FakeSummarizer(), max_failures=0)
+    with pytest.raises(ValueError, match="max_summary_chars"):
+        SummarizeHistory(summarizer=FakeSummarizer(), max_summary_chars=0)

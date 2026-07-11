@@ -39,6 +39,7 @@ from lovia.context import (
     OffloadToolResults,
     SummarizeHistory,
 )
+from lovia.context.state import result_digest
 from lovia.tools import tool
 from lovia.transcript import ToolCallEntry, ToolResultEntry
 
@@ -334,7 +335,7 @@ async def test_live_offload_archives_to_store():
     assert result.output
     compacted = _compactions(seen)
     assert compacted and any("offload" in e.notice.reason for e in compacted)
-    assert await store.get("d1") == big
+    assert await store.get(result_digest(big)) == big
 
 
 # ---------------------------------------------------------------------------

@@ -227,27 +227,7 @@ class Compaction:
         # with records nothing can render.
         state.prune(unique_result_ids(body))
 
-        # Calibrate the estimator against the real usage of the previous call.
-        if req.last_input_tokens and state.last_view_estimate:
-            observed = req.last_input_tokens / max(1, state.last_view_estimate)
-            prev_ratio = state.ratio
-            state.ratio = min(
-                RATIO_MAX,
-                max(
-                    RATIO_MIN,
-                    (1 - _CALIBRATION_ALPHA) * state.ratio
-                    + _CALIBRATION_ALPHA * observed,
-                ),
-            )
-            logger.debug(
-                "context.calibrate: observed %.3f (real %d / est %d), "
-                "ratio %.3f -> %.3f",
-                observed,
-                req.last_input_tokens,
-                state.last_view_estimate,
-                prev_ratio,
-                state.ratio,
-            )
+        self._calibrate(state, req)
 
         counter = self._counter_for(req.provider)
         # The tool schemas are a fixed additive payload on every request.
@@ -296,24 +276,7 @@ class Compaction:
             window = max(tokens, 1) + self.reserve_output_tokens
         assert window is not None
 
-        budget = TokenBudget(
-            window=window,
-            reserve_output=self.reserve_output_tokens,
-            trigger=self.compact_at,
-            target=self.compact_to,
-        )
-        if aggressive:
-            # Tighten the target on *resolved* token counts so fraction and
-            # absolute watermarks compare in the same units.
-            budget = TokenBudget(
-                window=window,
-                reserve_output=self.reserve_output_tokens,
-                trigger=self.compact_at,
-                target=min(
-                    budget.target_tokens,
-                    max(1, int(_REACTIVE_TARGET * budget.usable)),
-                ),
-            )
+        budget = self._build_budget(window, aggressive)
         if not aggressive and tokens < budget.trigger_tokens:
             return self._result(
                 req, state, view, raw + overhead, tokens, tokens_before, [], budget
@@ -330,6 +293,20 @@ class Compaction:
         protected_from = protected_tail_start(
             render_entries(body, state), counter, state.ratio, tail_tokens
         )
+        if protected_from == 0 and body:
+            # Nothing precedes the protected tail: every stage is fenced off
+            # (aggressive-path oversized results excepted) and this burst will
+            # make no progress. Usually ``keep_recent_tokens`` at or above the
+            # usable window — a config problem worth a loud signal, because
+            # the silent version is stages running uselessly every turn until
+            # the provider overflows.
+            logger.warning(
+                "context: protected tail covers the entire view "
+                "(keep_recent_tokens=%s, usable=%d); stages have nothing to "
+                "compact — lower keep_recent_tokens or use absolute watermarks",
+                self.keep_recent_tokens,
+                budget.usable,
+            )
 
         reasons: list[str] = []
         try:
@@ -385,6 +362,58 @@ class Compaction:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _calibrate(self, state: CompactionState, req: CompactionRequest) -> None:
+        """Fold the previous call's real input-token count into the ratio.
+
+        ``last_input_tokens`` describes the view whose estimate was stored in
+        ``last_view_estimate`` (both schema-inclusive), so the observed ratio
+        is a like-for-like sample of pure estimator error. Clamped EMA; no-op
+        until both sides of a pair exist.
+        """
+        if not req.last_input_tokens or not state.last_view_estimate:
+            return
+        observed = req.last_input_tokens / max(1, state.last_view_estimate)
+        prev_ratio = state.ratio
+        state.ratio = min(
+            RATIO_MAX,
+            max(
+                RATIO_MIN,
+                (1 - _CALIBRATION_ALPHA) * state.ratio + _CALIBRATION_ALPHA * observed,
+            ),
+        )
+        logger.debug(
+            "context.calibrate: observed %.3f (real %d / est %d), ratio %.3f -> %.3f",
+            observed,
+            req.last_input_tokens,
+            state.last_view_estimate,
+            prev_ratio,
+            state.ratio,
+        )
+
+    def _build_budget(self, window: int, aggressive: bool) -> TokenBudget:
+        """Watermark budget for this call.
+
+        The aggressive form tightens the target on *resolved* token counts so
+        fraction and absolute watermarks compare in the same units.
+        """
+        budget = TokenBudget(
+            window=window,
+            reserve_output=self.reserve_output_tokens,
+            trigger=self.compact_at,
+            target=self.compact_to,
+        )
+        if aggressive:
+            budget = TokenBudget(
+                window=window,
+                reserve_output=self.reserve_output_tokens,
+                trigger=self.compact_at,
+                target=min(
+                    budget.target_tokens,
+                    max(1, int(_REACTIVE_TARGET * budget.usable)),
+                ),
+            )
+        return budget
 
     def _result(
         self,

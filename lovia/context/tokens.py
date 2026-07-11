@@ -176,6 +176,16 @@ class TokenCounter:
         """Estimated prompt tokens for ``entries``."""
         return sum(self.count_entry(entry) for entry in entries)
 
+    def count_text(self, text: str) -> int:
+        """Estimated tokens for a text-only entry body (marker, summary).
+
+        The one place stage code prices synthetic text it is about to put in
+        an entry's place — same byte-weighted arithmetic as :meth:`_measure`,
+        so savings projections can't drift from what the re-render will count.
+        Not memoized: callers price each string once.
+        """
+        return _utf8_len(text) // _BYTES_PER_TOKEN + self.entry_overhead
+
     def count_tools(self, tools: Sequence[object]) -> int:
         """Estimated tokens for the tool schemas sent alongside the entries.
 

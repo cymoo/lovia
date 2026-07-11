@@ -40,8 +40,9 @@ justification).
 ## Artifacts
 Files and paths created, modified, or archived — plus exact identifiers, \
 names, and IDs that later turns may need. When a dropped tool output is \
-likely to be needed again, note its ``recall_tool_result`` call_id with a \
-few words on what it holds (e.g. ``call_42: full test log``). List only \
+likely to be needed again, note the ``recall_tool_result`` reference shown \
+in its marker with a few words on what it holds (e.g. \
+``recall_tool_result("ab12cd34ef567890"): full test log``). List only \
 outputs worth recovering — do NOT enumerate every dropped result.
 
 ## Constraints & preferences

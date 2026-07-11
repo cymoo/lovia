@@ -84,3 +84,32 @@ async def test_file_store_edge_keys_round_trip_without_oserror(tmp_path):
         assert await store.get(k) == v
     # Every distinct key got its own file (injective).
     assert len(list(tmp_path.iterdir())) == len(cases)
+
+
+async def test_in_memory_unbounded_when_max_entries_is_none():
+    store = InMemoryResultStore(max_entries=None)
+    for i in range(2_000):
+        await store.put(f"k{i}", "v")
+    assert await store.get("k0") == "v"  # nothing evicted
+
+
+async def test_file_store_put_is_atomic_and_leaves_no_temp_files(tmp_path):
+    """put writes via temp+rename: an overwrite never exposes a truncated
+    file to a concurrent get, and no ``.tmp`` litter survives."""
+    store = FileResultStore(tmp_path)
+    await store.put("k", "first version")
+    await store.put("k", "second version, longer than the first one")
+    assert await store.get("k") == "second version, longer than the first one"
+    leftovers = [p for p in tmp_path.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []
+    # Exactly one payload file for the key.
+    assert len(list(tmp_path.iterdir())) == 1
+
+
+async def test_file_store_failed_put_cleans_up_its_temp_file(tmp_path):
+    store = FileResultStore(tmp_path)
+    # Make the rename target un-replaceable: a directory where the file goes.
+    store._path("k").mkdir(parents=True)
+    with pytest.raises(OSError):
+        await store.put("k", "content")
+    assert [p for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []

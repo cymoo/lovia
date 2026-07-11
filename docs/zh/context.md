@@ -104,7 +104,9 @@ from lovia.context import Compaction, FileResultStore
 policy = Compaction(context_window=200_000, store=FileResultStore(".cache/results"))
 ```
 
-`ResultStore` 只有两个方法：`put(key, content)` / `get(key)`，以 `call_id` 为 key。
+`ResultStore` 只有两个方法：`put(key, content)` / `get(key)`，以输出的**内容摘要**为 key——
+store 跨 session 共享而 call_id 是会话局部的，摘要键让跨会话撞键从构造上不可能（相同输出
+还能免费去重）；offload 标记交给模型的 recall 引用就是这个摘要。
 `FileResultStore(dir)` 每个结果写一个文件（不做驱逐，保留策略由你负责）；
 `InMemoryResultStore(max_entries=1024)` 是有界 LRU。没有 store 时，转存标记仍然可用，
 recall 会回退到 transcript；但如果之后做

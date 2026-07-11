@@ -36,7 +36,10 @@ from ..transcript import (
 
 SCRATCH_KEY = "context"
 """Key under which compaction state lives inside the per-run scratch dict."""
-_VERSION = 2
+# v3: OffloadRecord gained ``digest`` (content-addressed store keys). Older
+# scratch is discarded wholesale on load — decisions re-derive, and recall of
+# old bare-call_id markers still works via the transcript fallback.
+_VERSION = 3
 
 RATIO_MIN, RATIO_MAX = 0.5, 2.5
 """Clamp bounds for the calibration ratio, applied both when updating the EMA
@@ -60,6 +63,13 @@ class OffloadRecord:
     """The first characters of the output, kept inline as a teaser."""
     chars: int
     """Length of the original output."""
+    digest: str
+    """Content digest of the full output — the store key and the recall
+    reference shown in the marker. Content-addressed on purpose: ``call_id``
+    is session-local while the store is shared across sessions, so keying by
+    id lets one session's offload overwrite (and recall then serve) another's
+    under providers that reuse ids (``call_0``, ...). Same key ⟹ same bytes
+    makes that collision class impossible — and deduplicates for free."""
 
 
 @dataclass
@@ -158,9 +168,12 @@ class CompactionState:
                     and isinstance(rec, dict)
                     and isinstance(rec.get("preview"), str)
                     and isinstance(rec.get("chars"), int)
+                    and isinstance(rec.get("digest"), str)
                 ):
                     state.offloaded[call_id] = OffloadRecord(
-                        preview=rec["preview"], chars=rec["chars"]
+                        preview=rec["preview"],
+                        chars=rec["chars"],
+                        digest=rec["digest"],
                     )
 
         summary = raw.get("summary")
@@ -205,7 +218,7 @@ class CompactionState:
             "version": _VERSION,
             "cleared": sorted(self.cleared),
             "offloaded": {
-                call_id: {"preview": r.preview, "chars": r.chars}
+                call_id: {"preview": r.preview, "chars": r.chars, "digest": r.digest}
                 for call_id, r in self.offloaded.items()
             },
             "summary": (
@@ -222,6 +235,18 @@ class CompactionState:
             "summary_failures": self.summary_failures,
             "learned_windows": dict(self.learned_windows),
         }
+
+
+def result_digest(output: str) -> str:
+    """Content digest of a tool output — the offload store key.
+
+    One definition shared by the offload stage (computing keys) and the
+    recall tool (matching a marker's reference against transcript entries),
+    so the two can never drift. ``surrogatepass`` for the same reason as
+    token counting: malformed model output survives JSON round-trips and
+    must hash, not raise.
+    """
+    return hashlib.sha1(output.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def window_key(provider: object, model: str | None) -> str:
@@ -292,5 +317,6 @@ __all__ = [
     "OffloadRecord",
     "SummaryState",
     "fingerprint",
+    "result_digest",
     "unique_result_ids",
 ]

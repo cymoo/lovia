@@ -554,7 +554,7 @@ def render_report(ep: Endpoint, n_turns: int, results: list[ScenarioResult]) -> 
                                 "est_cal": t.est_cal,
                                 "ratio": round(t.ratio, 4),
                                 "observed": round(t.observed, 4)
-                                if t.observed
+                                if t.observed is not None
                                 else None,
                                 "cache_hit": t.cache_hit,
                             }

@@ -26,7 +26,8 @@ tests/
 ```
 
 辅助代码（`conftest.py`、`scripted_provider.py`）与测试放在同一目录，但它们**不会被
-作为测试收集**，因为文件发现规则仅匹配 `test_*.py`。
+作为测试收集** —— pytest 默认按 `test_*.py` 和 `*_test.py` 发现测试，这两个辅助文件
+都不匹配（`conftest.py` 仅作为 fixture 加载，不会被当作测试收集）。
 
 ## 运行测试
 

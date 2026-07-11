@@ -26,7 +26,9 @@ tests/
 ```
 
 Support code (`conftest.py`, `scripted_provider.py`) lives beside the tests and
-is **not** itself collected — file discovery is `test_*.py` only.
+is **not** itself collected — pytest's default discovery matches `test_*.py` and
+`*_test.py`, which neither support file does (`conftest.py` is loaded for its
+fixtures, not collected as a test).
 
 ## Running
 

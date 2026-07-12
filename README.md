@@ -90,16 +90,30 @@ Every stop below has a full guide; each snippet runs as written.
 ### Agents
 
 An `Agent` is declarative configuration — no conversation state, safe to
-share, cheap to `clone()`. Prompt fragments can be dynamic per run:
+share, cheap to `clone()`. Tools, a workspace, and plugins compose directly on
+that configuration:
 
 ```python
-from lovia import Agent
+from lovia import Agent, Memory, Skills, tool
+from lovia.workspace import Workspace
+
+
+@tool
+def light_travel_time(distance_km: float) -> str:
+    """Calculate one-way light-signal delay for a distance in kilometers."""
+    return f"{distance_km / 299_792.458:.2f} seconds"
+
 
 agent = Agent(
-    name="writer",
-    instructions="Lead with the conclusion and give one actionable next step.",
-    model="glm-5.2",
-    workspace=Workspace.local(".")
+    name="science-writer",
+    instructions="Explain complex science with vivid, everyday analogies.",
+    model="gpt-5.5",
+    tools=[light_travel_time],
+    workspace=Workspace.local(".", mode="readonly"),
+    plugins=[
+        Skills("./skills"),
+        Memory(),
+    ],
 )
 ```
 
@@ -114,7 +128,10 @@ exactly one terminal event.
 ```python
 from lovia import Runner, events
 
-handle = Runner.stream(agent, "Explain context windows in one paragraph.")
+handle = Runner.stream(
+    agent,
+    "How long does a signal take to reach Mars at 225 million km?",
+)
 
 async for ev in handle:
     if isinstance(ev, events.TextDelta):

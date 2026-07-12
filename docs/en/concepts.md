@@ -4,7 +4,7 @@ Six ideas carry the whole framework. Each exists because something concrete
 breaks without it; this page introduces them by the problem they solve, then
 walks one run end to end so the rest of the docs can assume the vocabulary.
 
-The six, in sixty seconds:
+A quick tour of the concepts:
 
 - **Agent vs Runner** — an `Agent` is immutable configuration; a `Runner`
   executes one run. Nothing about a conversation lives on the agent.
@@ -28,7 +28,7 @@ The six, in sixty seconds:
 ```python
 from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="Lead with the conclusion, then give one actionable next step.", model="<model>")
+agent = Agent(name="writer", instructions="Explain user impact before implementation details.", model="<model>")
 result = await Runner.run(agent, "Draft a release note.")
 ```
 

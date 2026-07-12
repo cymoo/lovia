@@ -12,8 +12,8 @@ cases = [
     Case("法国首都是哪里？", checks=[contains("巴黎")]),
     Case("23.4 * 91 等于多少？", checks=[tool_called("calculator")]),
     Case(
-        "用一句话告知用户密码重置链接已过期",
-        checks=[llm_judge("语气友好，说明链接已过期，并给出重新申请的下一步")],
+        "为一家书店写一句雨天文案",
+        checks=[llm_judge("不超过 30 个汉字，包含雨天和阅读意象，不使用感叹号")],
         samples=4,               # 把不确定性量出来，而不是靠重试掩盖
         pass_threshold=0.75,      # 4 个 sample 至少 3 个通过即通过
     ),
@@ -28,7 +28,7 @@ assert report.passed
 eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
   ✓ 法国首都是哪里？              1/1
   ✓ 23.4 * 91 等于多少？          1/1
-  ✗ 用一句话告知用户密码重置链接已过期  2/4  llm_judge (score 0.55) — 未说明如何重新申请
+  ✗ 为一家书店写一句雨天文案  2/4  llm_judge (score 0.55) — 缺少阅读意象
 ```
 
 ## 定义评测用例

@@ -8,8 +8,8 @@
 from lovia import Agent
 
 agent = Agent(
-    name="writer",
-    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
+    name="science-writer",
+    instructions="你是一位科普作者，善于用生动的日常比喻讲清复杂的科学概念。",
     model="<model>",
 )
 ```

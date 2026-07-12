@@ -9,8 +9,8 @@ rather than copies of live state.
 from lovia import Agent
 
 agent = Agent(
-    name="writer",
-    instructions="Lead with the conclusion and give one actionable next step.",
+    name="science-writer",
+    instructions="Explain complex science with vivid, everyday analogies.",
     model="<model>",
 )
 ```

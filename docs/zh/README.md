@@ -12,7 +12,7 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
+    instructions="你是一位科普作者，善于用生动的日常比喻讲清复杂的科学概念。",
     model="<model>",
 )
 
@@ -21,50 +21,32 @@ print(result.output)
 ```
 
 [创建第一个 Agent →](quickstart.md){ .md-button .md-button--primary }
-[打开 Web UI →](web-ui.md){ .md-button }
+[使用 Web UI →](web-ui.md){ .md-button }
 
 ## 为什么选择 lovia
 
 <div class="grid cards" markdown>
 
--   **轻量**
+-   **轻量而克制的 Core**
 
-    Core 只需要 HTTP 请求库和数据验证库。
+    Core 只需要 HTTP 请求库和数据验证库；其他集成按需引入。
 
--   **Provider 中立**
+-   **运行链路清晰**
 
-    可接入 OpenAI、Anthropic、兼容端点或自定义 Provider。
+    模型 Turn、Tool 调用、重试和失败始终沿同一条显式路径执行。类型化事件和权威
+    Transcript 让每一步都可以追踪。
 
--   **类型化且可观察**
+-   **不改写历史的上下文管理**
 
-    函数类型注解自动生成 Tool Schema。Run 提供类型化事件、权威 Transcript、用量和结构化错误。
+    压缩只改变下一次发给 Provider 的视图，完整记录始终保留；稳定的提示词前缀也能继续
+    利用 Provider 缓存。
 
--   **渐进式扩展**
+-   **统一的扩展方式**
 
-    从单文件脚本开始；以后可加入 Plugin、Session、Checkpoint、压缩、审批和 Workspace，
-    不必替换核心编程模型。
+    Skills、MCP、Todo 和 Memory 都通过 Plugin 接入；你自定义的能力也使用同一个扩展点，
+    不需要再建一套集成体系。
 
 </div>
-
-## 核心心智模型
-
-```text
-Agent 配置 + 输入
-        │
-        ▼
-Runner 创建一个 RunLoop
-        │
-        ▼
-权威 Transcript ─► 上下文策略 ─► Provider 视图 ─► 模型 Turn
-      ▲                                              │
-      └── Tool 结果 ◄─ 审批 / 超时 / 预算 ◄─ Tool 调用
-```
-
-`Agent` 是不可变配置；RunLoop 是一次 Run 中唯一持有可变状态的引擎。模型和 Tool 的
-结果都追加到权威 Transcript，上下文管理只从中派生更小的 Provider 视图，不改写记录。
-类型化事件实时暴露同一个循环；Session 追加已完成的 Run，Checkpoint 保存可恢复的运行中
-状态。正因为这些职责分开，流式输出、持久化和上下文压缩才不会变成几套互相冲突的状态。
-完整生命周期见[核心概念](concepts.md)。
 
 ## 按目标选择路径
 

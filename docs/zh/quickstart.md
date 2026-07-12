@@ -62,9 +62,6 @@ OpenAI-compatible 适配器；带 `anthropic:` 前缀的模型名使用 Anthropi
     `model=` 使用本地已经拉取的模型。Ollama 会静默截断过长的 prompt，因此应让
     `Compaction(context_window=...)` 与 `num_ctx` 一致；详见[上下文窗口](providers.md#上下文窗口)。
 
-环境变量用于配置凭证和 Base URL；模型名显式传给 `Agent`。Python 库不会自动加载
-`.env`；可以在 Shell 中导出变量、在应用中加载文件，或直接传入已配置的 Provider。
-
 ## 3. 运行第一个 Agent
 
 ```python
@@ -72,11 +69,11 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
+    instructions="你是一位科普作者，善于用生动的日常比喻讲清复杂的科学概念。",
     model="<model>",
 )
 
-result = agent.run_sync("讲一个只有 Python 开发者会懂的冷笑话。")
+result = agent.run_sync("秋天的树叶为什么会变色？")
 print(result.output)
 ```
 
@@ -187,8 +184,7 @@ lovia 会校验最终答案并返回 `CityFact`。Provider 支持时使用原生
 lovia web
 ```
 
-先安装文末列出的 [`web` extra](#可选-extra)，再打开 `http://127.0.0.1:8000`。首次运行向导可以
-收集并保存模型配置；详见 [Web UI](web-ui.md)。
+先安装 web 相关依赖，`pip install "lovia[web]"`，再访问 `http://127.0.0.1:8000`。详见 [Web UI](web-ui.md)。
 
 ## 选择下一步
 

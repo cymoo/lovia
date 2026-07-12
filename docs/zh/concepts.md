@@ -3,7 +3,7 @@
 理解六个概念，就能把整个框架串联起来。每个概念都对应一类实践中常见的问题。本页会先说明
 它们各自解决什么，再完整梳理一次运行流程。掌握这些概念后，后续文档中的术语便不再赘述。
 
-先用一分钟了解这六个概念：
+先快速了解这几个概念：
 
 - **Agent 与 Runner**：`Agent` 是不可变配置；`Runner` 负责执行一次运行。对话状态
   不保存在 Agent 上。
@@ -23,7 +23,7 @@
 ```python
 from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="先给结论，再给一个可执行的下一步。", model="<model>")
+agent = Agent(name="writer", instructions="先说明对用户的影响，再介绍实现细节。", model="<model>")
 result = await Runner.run(agent, "写一段发布说明。")
 ```
 

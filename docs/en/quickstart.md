@@ -65,11 +65,6 @@ Anthropic-compatible adapter. Pick the endpoint you use:
     prompts, so match `Compaction(context_window=...)` to its `num_ctx`; see
     [context windows](providers.md#context-windows).
 
-Environment variables configure credentials and Base URLs; pass the model name
-explicitly to `Agent`. The Python library does not load `.env` implicitly.
-Export variables in your shell, load the file in your application, or pass a
-Provider configured in code.
-
 ## 3. Run your first Agent
 
 ```python
@@ -77,11 +72,11 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="Lead with the conclusion and give one actionable next step.",
+    instructions="Explain complex science with vivid, everyday analogies.",
     model="<model>",
 )
 
-result = agent.run_sync("Tell a joke only Python developers would enjoy.")
+result = agent.run_sync("Why do leaves change color in autumn?")
 print(result.output)
 ```
 
@@ -195,7 +190,7 @@ See [Structured output](structured-output.md).
 lovia web
 ```
 
-Install the `web` extra listed [below](#optional-extras), then open
+Install the `web` extra listed [below](#optional-extras), then visit
 `http://127.0.0.1:8000`. The first-run prompt can collect and save model
 configuration; see [Web UI](web-ui.md).
 

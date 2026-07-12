@@ -13,7 +13,7 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="Lead with the conclusion and give one actionable next step.",
+    instructions="Explain complex science with vivid, everyday analogies.",
     model="<model>",
 )
 
@@ -22,54 +22,33 @@ print(result.output)
 ```
 
 [Build your first Agent →](quickstart.md){ .md-button .md-button--primary }
-[Open the Web UI →](web-ui.md){ .md-button }
+[Try the Web UI →](web-ui.md){ .md-button }
 
 ## Why lovia
 
 <div class="grid cards" markdown>
 
--   **Lightweight**
+-   **A small, deliberate core**
 
-    The core needs only an HTTP client and a data-validation library.
+    The core needs only an HTTP client and a data-validation library;
+    integrations stay opt-in.
 
--   **Provider-neutral**
+-   **A loop you can follow**
 
-    Use OpenAI, Anthropic, compatible endpoints, or your own Provider.
+    Model Turns, Tool calls, retries, and failures follow one explicit path.
+    Typed events and the canonical Transcript show exactly what happened.
 
--   **Typed and observable**
+-   **Context without rewritten history**
 
-    Function annotations become Tool schemas. Runs expose typed events, a
-    canonical Transcript, usage, and structured failures.
+    Compaction changes only the next provider view. The complete record stays
+    intact, while stable prompt prefixes keep provider caches useful.
 
--   **Progressive by design**
+-   **One extension model**
 
-    Begin with a one-file script. Add Plugins, Sessions, Checkpoints,
-    compaction, approvals, and Workspaces without replacing the core model.
+    Skills, MCP, Todo, and Memory use the same Plugin seam available to your
+    own capabilities, instead of growing separate integration systems.
 
 </div>
-
-## The mental model
-
-```text
-Agent configuration + input
-            │
-            ▼
-Runner creates one RunLoop
-            │
-            ▼
-canonical Transcript ─► context policy ─► provider view ─► model Turn
-       ▲                                                   │
-       └── Tool result ◄─ approval / timeout / budget ◄─ Tool call
-```
-
-An `Agent` is immutable configuration; the RunLoop is the only mutable engine
-for a Run. Each model or Tool result is appended to the canonical Transcript,
-while context management derives a smaller provider view without rewriting
-that record. Typed events expose the same loop as it happens. Sessions append
-finished Runs; Checkpoints preserve an in-flight Run for resumption. This
-separation is why streaming, persistence, and compaction compose without
-becoming competing sources of truth. [Core concepts](concepts.md) explains the
-lifecycle in detail.
 
 ## Choose a path
 

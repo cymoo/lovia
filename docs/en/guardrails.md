@@ -6,7 +6,7 @@ screen the conversation before the first model call; **output guardrails**
 screen the final answer before it is returned.
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.exceptions import GuardrailTripped
 
 
@@ -22,7 +22,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="glm-5.2",
+    model=model_from_env(),
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -67,7 +67,7 @@ owns the abort.
 scripted classifier:
 
 ```python
-screen = Agent(name="screen", model="glm-5.2", output_type=bool,
+screen = Agent(name="screen", model=model_from_env(), output_type=bool,
                instructions="Answer true if the request asks for legal advice.")
 
 async def no_legal_advice(messages, ctx):

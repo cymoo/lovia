@@ -29,6 +29,14 @@ Anything required but missing — the model, or an API key for the
 official endpoints — is asked interactively on the first run, verified
 against the endpoint, and can be saved to `~/.config/lovia/config.env`.
 
+!!! danger "Local by default; no built-in authentication"
+
+    Keep the default `127.0.0.1` bind for personal use. Before exposing the
+    server to a network, put it behind authentication and rate limiting, and
+    disable or restrict the default writable Workspace. A public server with a
+    writable Workspace is remote code execution as the server user. Review the
+    [deployment checklist](deployment.md) first.
+
 ## `serve()` and `create_app()`
 
 `serve(agent_or_agents, *, host="127.0.0.1", port=8000, ...)` builds the
@@ -156,5 +164,6 @@ The server runs a small scheduler over a durable `schedules` table
 ## See also
 
 - [HTTP API](http-api.md) — every endpoint, the SSE wire format, BYO front-end
+- [Deployment](deployment.md) — production security and durability checklist
 - [Memory](memory.md#how-memories-get-written) — the sidebar editor's backend
 - Example: [`26_web_serve.py`](../../examples/26_web_serve.py)

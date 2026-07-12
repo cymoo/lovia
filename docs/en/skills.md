@@ -6,12 +6,12 @@ instruction bundle the model discovers cheaply and loads only when needed,
 following the Agent Skills convention (`SKILL.md` + supporting files).
 
 ```python
-from lovia import Agent, Skills
+from lovia import Agent, Skills, model_from_env
 
 agent = Agent(
     name="support",
     instructions="Help customers using the right policy.",
-    model="glm-5.2",
+    model=model_from_env(),
     plugins=[Skills("./skills")],
 )
 ```

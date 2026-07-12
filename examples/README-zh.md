@@ -3,7 +3,8 @@
 [English](./README.md)
 
 每个文件都是自包含、可直接运行的小脚本，对应一个功能。按顺序读完就是一遍
-框架之旅；任何一个文件复制出去就是一个起点。
+框架之旅；任何一个文件复制出去就是一个起点。每项功能的完整指南都位于
+[`docs/zh`](../docs/zh/README.md)。
 
 ## 准备
 
@@ -13,8 +14,9 @@ cp .env.example .env                 # 然后设置 LOVIA_MODEL 和你的 API ke
 python examples/01_hello.py
 ```
 
-`LOVIA_MODEL` 决定所有示例使用的模型，例如 `glm-5.2` 或
-`anthropic:<model>`。把 `OPENAI_BASE_URL` 指向任意 OpenAI 兼容服务
+`LOVIA_MODEL` 决定所有示例使用的模型：OpenAI-compatible 服务使用其提供的裸模型名，
+Anthropic-compatible 服务使用 `anthropic:<model>`。把 `OPENAI_BASE_URL` 指向任意
+OpenAI-compatible 服务
 （DeepSeek、Ollama、vLLM 等），模型名直接写服务提供的裸名即可。
 需要写文件的脚本一律写入 `tmp/`（已被 gitignore）。
 
@@ -34,19 +36,19 @@ python examples/01_hello.py
 | `05_sessions.py` | 用 `SQLiteSession` 持久化多轮对话 |
 | `06_multimodal.py` | 通过 `ImagePart` 输入图片 |
 
-### 多 agent
+### 多 Agent
 
 | 文件 | 展示内容 |
 | --- | --- |
-| `07_handoff.py` | 移交控制权给专家 agent(可用 `Handoff` 定制) |
-| `08_agent_as_tool.py` | 把有边界的子任务委派给子 agent |
+| `07_handoff.py` | 移交控制权给专家 Agent（可用 `Handoff` 定制） |
+| `08_agent_as_tool.py` | 把有边界的子任务委派给子 Agent |
 
 ### 模型与 provider
 
 | 文件 | 展示内容 |
 | --- | --- |
 | `09_model_settings.py` | `ModelSettings`、`provider_options`、OpenAI 兼容端点 |
-| `10_custom_provider.py` | 实现 `Provider` 协议(离线可跑) |
+| `10_custom_provider.py` | 实现 `Provider` 协议（离线可跑） |
 
 ### 控制与生产
 
@@ -57,27 +59,27 @@ python examples/01_hello.py
 | `13_guardrails.py` | 输入/输出护栏 |
 | `14_reliability.py` | 预算、provider 与工具重试、超时、取消、fallback |
 | `15_resume.py` | 给运行做检查点，中途杀掉，再恢复 |
-| `16_steering.py` | 向运行中的 run 注入用户消息(`Mailbox`) |
+| `16_steering.py` | 向运行中的 Run 注入用户消息（`Mailbox`） |
 | `17_context_compaction.py` | 让长对话在上下文窗口内存活 |
-| `18_dependencies.py` | 按 run 注入依赖到指令和工具(`RunContext`) |
+| `18_dependencies.py` | 按 Run 向指令和工具注入依赖（`RunContext`） |
 
 ### 工作区与插件
 
 | 文件 | 展示内容 |
 | --- | --- |
-| `19_workspace.py` | 把工作区当作普通库使用(无 agent) |
-| `20_workspace_agent.py` | 带文件/shell 工具与命令策略的编码 agent |
+| `19_workspace.py` | 把工作区当作普通库使用（无 Agent） |
+| `20_workspace_agent.py` | 带文件和 Shell 工具及命令策略的编码 Agent |
 | `21_todos.py` | `Todo` 插件：外化计划、每轮提醒 |
-| `22_skills.py` | 可复用的 skill 指令包与渐进式披露 |
-| `23_memory.py` | 跨 run 的长期记忆(`Memory` 插件) |
+| `22_skills.py` | 可复用的 Skill 指令包与渐进式披露 |
+| `23_memory.py` | 跨 Run 的长期记忆（`Memory` 插件） |
 | `24_mcp.py` | 来自 MCP server 的工具 |
-| `25_custom_plugin.py` | 自己写插件(工具 + 注入器 + 清理) |
+| `25_custom_plugin.py` | 自己写插件（工具 + 注入器 + 清理） |
 
 ### 服务与应用
 
 | 文件 | 展示内容 |
 | --- | --- |
-| `26_web_serve.py` | 内置 HTTP 聊天 UI(`pip install "lovia[web]"`) |
+| `26_web_serve.py` | 内置 HTTP 聊天 UI（`pip install "lovia[web]"`） |
 | `27_web_api.py` | 仅 JSON + SSE API，前端自建 |
 | `28_eval.py` | 离线评测：检查项、LLM 评审、基线对比 |
 | `29_data_analysis.py` | 基于 SQLite 的数据分析 agent + 图表报告 |
@@ -85,8 +87,8 @@ python examples/01_hello.py
 
 ## 子目录
 
-- [`tools/`](tools/) — 每个内置工具族一个脚本(HTTP、时间、搜索、问人)。
+- [`tools/`](tools/) — 每个内置工具族一个脚本（HTTP、时间、搜索、问人）。
 - [`workflows/`](workflows/) — Anthropic《Building effective agents》中的各
-  模式(chaining、routing、parallelization、orchestrator、evaluator loop、
-  自主 agent)的纯 Python 实现。
-- [`skills/`](skills/) — `22_skills.py` 使用的示例 skill 目录。
+  模式（chaining、routing、parallelization、orchestrator、evaluator loop、
+  自主 Agent）的纯 Python 实现。
+- [`skills/`](skills/) — `22_skills.py` 使用的示例 Skill 目录。

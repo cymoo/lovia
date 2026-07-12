@@ -52,6 +52,8 @@ jobs:
         run: uv sync --extra docs
       - name: Build site (strict)
         run: uv run mkdocs build --strict
+      - name: Check links, anchors, and snippets
+        run: uv run python scripts/check_docs.py
 
   # Build the MkDocs site and upload it as the Pages artifact. Split from the
   # deploy job so a failed deploy can be re-run on its own without re-uploading
@@ -76,6 +78,8 @@ jobs:
         run: uv sync --extra docs
       - name: Build site (strict)
         run: uv run mkdocs build --strict
+      - name: Check links, anchors, and snippets
+        run: uv run python scripts/check_docs.py
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:

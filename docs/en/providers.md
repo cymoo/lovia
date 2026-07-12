@@ -26,7 +26,7 @@ instance.
 | `anthropic:` | Anthropic Messages | `claude:` |
 | *(none)* | OpenAI Chat Completions | — |
 
-A **bare name** (`"glm-5.2"`) routes to the OpenAI-compatible
+A **bare name** (`"endpoint-model"`) routes to the OpenAI-compatible
 provider — the intended spelling for `OPENAI_BASE_URL` services. One guard:
 a bare name starting with `claude` logs a warning, since it is almost always
 a missing `anthropic:` prefix. There is deliberately no default model:

@@ -98,14 +98,14 @@ channel.
 The inverse direction — the model needs information only a person has:
 
 ```python
-from lovia import Agent, Runner
+from lovia import Agent, Runner, model_from_env
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
 
 agent = Agent(
     name="assistant",
-    model="glm-5.2",
+    model=model_from_env(),
     tools=[ask_human(channel)],
 )
 ```

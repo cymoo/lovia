@@ -6,12 +6,12 @@ number of concurrent requests and per-request variants are cheap clones
 rather than copies of live state.
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
 agent = Agent(
     name="writer",
     instructions="Write concrete, concise answers.",
-    model="glm-5.2",
+    model=model_from_env(),
 )
 ```
 
@@ -59,7 +59,7 @@ run's `RunContext` (the same handle tools get) and may be sync or async:
 async def instructions(ctx) -> str:
     return f"You support the {ctx.deps.plan} plan. Be brief."
 
-agent = Agent(name="support", instructions=instructions, model="glm-5.2")
+agent = Agent(name="support", instructions=instructions, model=model_from_env())
 ```
 
 **Registered fragments** — keep the base static and append dynamic pieces
@@ -68,7 +68,7 @@ order after `instructions`, separated by blank lines; returning `""` skips a
 fragment conditionally:
 
 ```python
-agent = Agent(name="support", instructions="You are a support agent.", model="glm-5.2")
+agent = Agent(name="support", instructions="You are a support agent.", model=model_from_env())
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -98,7 +98,7 @@ derive per-request or per-experiment variants:
 
 ```python
 strict = agent.clone(instructions="Answer with citations only.")
-variant = agent.clone(model="glm-5.2")
+variant = agent.clone(model="<other-model>")
 ```
 
 The boundary between `@agent.instruction` and `clone()` is
@@ -133,7 +133,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "No open tickets."
 
 
-agent: Agent[Deps] = Agent(name="support", model="glm-5.2", tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model=model_from_env(), tools=[open_tickets])
 
 result = await Runner.run(agent, "Any open tickets?", context=Deps("u1", db))
 ```

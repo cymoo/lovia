@@ -1,45 +1,63 @@
-# lovia 中文文档
+# lovia
 
-初次接触 lovia，不必从头读完整套文档。先运行一个 Agent，再根据手头的任务查阅对应章节即可。
+**简洁、轻量、供应商中立的 Python Agent 框架。**先构建一个 Agent，再按需加入类型化工具、
+持久化、插件、工作区或 Web UI，无需一开始就引入整套技术栈。
 
-## 从这里开始
+```bash
+pip install lovia
+```
 
-- **想先跑起来**：[快速上手](quickstart.md)
-- **想直接看代码**：[示例](../../examples/README-zh.md)
-- **想理解运行机制**：[核心概念](concepts.md)
+<div class="grid cards" markdown>
 
-## 按任务查阅
+-   **运行第一个 Agent**
 
-| 我想做什么 | 看这里 |
+    配置模型，几分钟内得到第一份可用结果。
+
+    [开始快速上手 →](quickstart.md)
+
+-   **理解运行机制**
+
+    了解 Agent、Run、Turn、Tool、Transcript 和 Plugin 如何协同工作。
+
+    [阅读核心概念 →](concepts.md)
+
+-   **从示例开始构建**
+
+    按功能浏览小而完整、可直接运行的脚本。
+
+    [查看可运行示例 →](../../examples/README-zh.md)
+
+-   **为生产环境做准备**
+
+    补齐资源限制、持久化、安全门禁、可观测性和部署边界。
+
+    [查看生产部署清单 →](deployment.md)
+
+</div>
+
+## 按目标选择指南
+
+| 目标 | 指南 |
 | --- | --- |
-| 定义 agent、编写 instructions、派生变体 | [Agent](agents.md) |
-| 运行 agent，处理输入、结果和错误 | [运行 agent](running.md) |
-| 做流式 UI 或消费运行事件 | [流式输出](streaming.md) |
-| 让模型调用 Python 函数 | [工具](tools.md) |
-| 使用 HTTP、搜索、时间等内置工具 | [内置工具](built-in-tools.md) |
-| 让最终答案变成 Pydantic 对象或 JSON | [结构化输出](structured-output.md) |
-| 配置模型、OpenAI 兼容端点、自定义 provider | [Provider 与模型](providers.md) |
-| 组合多个 agent，做 handoff 或 agent-as-tool | [多 Agent](multi-agent.md) |
-| 打包可复用能力 | [插件](plugins.md) |
-| 加载团队知识、runbook、风格指南 | [技能](skills.md) |
-| 接入 MCP 服务器工具 | [MCP](mcp.md) |
-| 做跨会话长期记忆 | [记忆](memory.md) |
-| 保存多轮对话，支持崩溃恢复和幂等运行 | [Session 与 Checkpoint](sessions-and-checkpoints.md) |
-| 控制长上下文和压缩策略 | [上下文管理](context.md) |
-| 给危险工具加人工审批 | [人工介入](human-in-the-loop.md) |
-| 在运行前后加安全检查 | [护栏](guardrails.md) |
-| 设置重试、预算、取消 | [可靠性](reliability.md) |
-| 让 agent 访问文件和 shell | [工作区](workspace.md) |
-| 启动聊天 UI 或服务端 | [Web UI 与服务端](web.md) |
-| 接自己的前端或服务 | [HTTP API](http-api.md) |
-| 看日志、事件、trace 和 token 用量 | [可观测性](observability.md) |
-| 写确定性的离线测试 | [测试](testing.md) |
-| 做行为评测和基线对比 | [评测](eval.md) |
+| 定义并运行 Agent | [Agent](agents.md) · [运行 Agent](running.md) |
+| 配置模型或兼容端点 | [安装与模型配置](installation.md) · [Provider 与模型](providers.md) |
+| 为模型提供能力 | [工具](tools.md) · [工作区](workspace.md) · [多 Agent](multi-agent.md) |
+| 扩展 Agent | [插件](plugins.md) · [Skills](skills.md) · [MCP](mcp.md) · [记忆](memory.md) |
+| 让运行安全、可靠、可恢复 | [可靠性](reliability.md) · [Session](sessions-and-checkpoints.md) · [人工审批](human-in-the-loop.md) |
+| 提供服务并验证质量 | [Web 服务](web.md) · [HTTP API](http-api.md) · [测试](testing.md) · [评测](eval.md) |
 
-## 内部机制
+如果要查找具体类型、异常或常见故障，请使用 [API 参考](api-reference.md)或
+[故障排查](troubleshooting.md)。
 
-[架构笔记](../architecture.md)记录了框架本身的构造方式：模块地图、runner 内部机制和
-关键不变量。它主要面向贡献者；如果你想理解某个设计为什么这样取舍，也值得一读。
+!!! note "文档版本"
+
+    本站内容跟随当前 `main` 分支。对照源码文档排查行为差异时，可运行
+    `python -c "import lovia; print(lovia.__version__)"` 查看本地安装版本。
+
+## 面向贡献者
+
+[Architecture（英文）](../architecture.md)记录了模块结构、运行循环内部机制，以及修改
+lovia 本身时需要遵守的不变量。
 
 ---
 

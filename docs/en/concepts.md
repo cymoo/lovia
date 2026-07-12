@@ -1,23 +1,27 @@
 # Core concepts
 
-Five ideas carry the whole framework. Each exists because something concrete
+Six ideas carry the whole framework. Each exists because something concrete
 breaks without it; this page introduces them by the problem they solve, then
 walks one run end to end so the rest of the docs can assume the vocabulary.
 
-The five, in sixty seconds:
+The six, in sixty seconds:
 
 - **Agent vs Runner** — an `Agent` is immutable configuration; a `Runner`
   executes one run. Nothing about a conversation lives on the agent.
-- **Turns** — a run is a loop of turns: one model call, then the tool calls
-  it requested. The loop ends when the model answers without tool calls.
+- **Run vs turn** — a run is the complete execution of one input; a turn is
+  one iteration inside it: one model call followed by the tool calls it
+  requested. One run may contain many turns.
+- **Tools** — typed functions give the model capabilities beyond generating
+  text. lovia derives their schemas, validates calls, and feeds results back
+  into the run.
 - **Transcript vs view** — the transcript is the append-only record of what
   happened; the view is what one model call gets to see. Long chats survive
   because only the view shrinks.
 - **Session vs checkpoint** — a session is conversation memory *across* runs;
   a checkpoint is crash recovery *within* one run.
-- **Posture vs limits** — how the agent behaves under infrastructure trouble
-  is agent configuration; how much one request may spend is a per-run
-  argument.
+- **Plugins** — reusable capabilities contribute tools, instructions, view
+  injectors, hooks, and guardrails through one extension mechanism, while the
+  run loop retains control.
 
 ## The cast
 
@@ -44,6 +48,22 @@ lives inside the loop, created at start and gone at the end.
 active at the end — relevant after handoffs), and `entries` — the run's
 **own** transcript contribution, not the whole conversation.
 
+## Run vs turn
+
+A **run** takes one input through the agent loop to a final result or failure.
+A call to `Runner.run()` or `Runner.stream()` starts it; if interrupted, a
+later call may resume the same run from a checkpoint. The input, accumulated
+usage, limits, active agent, and transcript segment all belong to that run. A
+handoff changes the active agent but does not start a new run.
+
+A **turn** is one logical pass through the run loop: obtain one model response,
+then execute any tools it requested. Tool execution is still part of that
+turn; the next turn begins only when the model is called again with the
+results. Transparent provider retries do not create extra turns. A model
+response with no tool calls normally ends the run. Consequently, `max_turns`
+limits logical model steps rather than raw HTTP attempts, and `RunResult.turns`
+reports how many such iterations the run used.
+
 ## One run, turn by turn
 
 The problem this design solves: agent loops accrete special cases (approval
@@ -55,9 +75,7 @@ the actual order of events; every guide hangs off some step of it.
 
 1. Resolve the active agent: providers, structured output, workspace
    session, plugin `setup()` (once per plugin), and the merged tool set —
-   agent tools, plugin tools, workspace tools, handoff tools, and finally
-   context-policy tools like `recall_tool_result` (added last; an explicit
-   tool with the same name wins).
+   agent tools, plugin tools, workspace tools, and handoff tools.
 2. Build the transcript: `[system prompt] + prior session history + your
    input`. The system prompt concatenates the agent's instructions (plus
    dynamic fragments and any per-run `extra_instructions`), workspace
@@ -72,7 +90,9 @@ the actual order of events; every guide hangs off some step of it.
    transcript as user entries (this is how mid-run steering lands).
 3. The **context policy** renders this call's view of the transcript;
    plugin **view injectors** append their transient entries (todo
-   reminders and the like — never persisted).
+   reminders and the like). These entries are never persisted: repeated
+   injections neither disturb the stable prompt prefix (keeping provider
+   caching effective) nor accumulate until the transcript balloons.
 4. The provider streams the model's reply: text deltas, reasoning deltas,
    tool-call deltas. On a context-overflow error with nothing yet streamed,
    the policy gets one chance to shrink the view and the call is retried.
@@ -138,22 +158,32 @@ calling the model — that's what makes `run_id` an idempotency key, and it's
 why crashed workers can simply retry their whole job. See
 [Sessions & checkpoints](sessions-and-checkpoints.md).
 
-## Posture vs limits
+## Tools: capabilities the model can invoke
 
-The problem: reliability knobs sprawl until every call site sets twelve
-parameters. lovia's placement rule:
+A **tool** is a typed Python function exposed to the model. Add tools with
+`Agent(tools=[...])`; lovia turns each signature into JSON Schema, validates
+model-supplied arguments before invoking your code, and records both the call
+and its result in the transcript.
 
-- **Posture** — how the agent behaves when infrastructure hiccups — lives on
-  the `Agent` and is inherited by every run: provider `retry`,
-  `default_tool_retries` / `default_tool_timeout`, `context_policy`.
-- **Limits** — how much one request may spend — are `Runner.run` arguments
-  with no agent-side counterpart: `max_turns`, `budget`, `cancel_token`.
+```python
+from lovia import Agent, tool
 
-One consequence worth knowing: the *initial* agent's posture governs the
-whole run, handoffs included. A transfer changes who speaks, not the run's
-spine. Per-call overrides exist for posture too
-(`Runner.run(..., retry=..., context_policy=...)`) when one request really
-is special. See [Reliability](reliability.md).
+
+@tool
+async def lookup_order(order_id: str) -> str:
+    """Look up an order by id."""
+    return f"{order_id}: shipped"
+
+
+agent = Agent(name="support", model="glm-5.2", tools=[lookup_order])
+```
+
+When the model requests one or more tools, those calls and their results remain
+part of the current turn. The following model call starts the next turn, where
+the model can use the results to continue or answer. Tools may also come from
+plugins, workspaces, and handoffs; names must be unique across the merged set.
+See [Tools](tools.md) for schemas, concurrency, retries, approvals, and result
+handling.
 
 ## RunContext: the one handle
 
@@ -247,11 +277,10 @@ out as invariants you can build against:
 - **Everything correlates by id, not position.** Tool events pair by
   `call.id`; segments and snapshots pair by `run_id`. Concurrency reorders
   nothing that matters.
-- **Providers are protocols.** Two built-in adapters speak OpenAI and
-  Anthropic over `httpx`; a third is an implementation of a `Protocol`, not
-  a subclassing project.
-- **The core stays small.** `lovia` imports without the web stack or any
-  workspace machinery; those layers depend on the core, never the reverse.
+- **The core stays small.** The default install has only three runtime
+  dependencies: `httpx`, `pydantic`, and `pyyaml`. Capabilities that need
+  additional libraries, such as MCP and the web app, ship as opt-in extras
+  and are imported only when used.
 
 ## See also
 

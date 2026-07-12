@@ -74,10 +74,10 @@ plugins:
             Built-in tools: 内置工具
             Structured output: 结构化输出
             Providers & models: Provider 与模型
-            Composition: 组合
             Multi-agent: 多 Agent
             Plugins: 插件
-            Skills: 技能
+            Basics: 基础
+            Skills: Skills
             Memory: 记忆
             Production: 生产
             Sessions & checkpoints: Session 与 Checkpoint
@@ -134,20 +134,20 @@ nav:
       - Built-in tools: built-in-tools.md
       - Structured output: structured-output.md
       - Providers & models: providers.md
-  - Composition:
       - Multi-agent: multi-agent.md
-      - Plugins: plugins.md
+      - Context management: context.md
+      - Observability: observability.md
+      - Workspace: workspace.md
+  - Plugins:
+      - Basics: plugins.md
       - Skills: skills.md
       - MCP: mcp.md
       - Memory: memory.md
   - Production:
       - Sessions & checkpoints: sessions-and-checkpoints.md
-      - Context management: context.md
       - Human in the loop: human-in-the-loop.md
       - Guardrails: guardrails.md
       - Reliability: reliability.md
-      - Observability: observability.md
-      - Workspace: workspace.md
   - Serving & quality:
       - Web UI & server: web.md
       - HTTP API: http-api.md

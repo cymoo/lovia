@@ -47,7 +47,7 @@ app.include_router(build_api_router(deps))
 | `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision}` |
 | `POST /api/chat/cancel?session_id=` | 停止正在运行的任务（保留已完成轮次） |
 | `POST /api/chat/inject` / `uninject` | 为正在运行的任务排队 / 撤回[追加指令](cancellation.md#在运行中追加指令) |
-| `GET /api/sessions?q=&limit=` | 列出 / 搜索聊天（置顶优先）；`DELETE` 清空全部 |
+| `GET /api/sessions?q=&limit=&offset=` | 列出 / 搜索聊天（置顶优先，可分页）；`DELETE` 清空全部 |
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · 重命名/置顶 · 删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |

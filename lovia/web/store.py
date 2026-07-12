@@ -331,12 +331,12 @@ class ChatStore:
     # the ``list`` builtin inside the class body, so a later ``list[ChatMeta]``
     # annotation would resolve to the method and fail strict mypy. Matches the
     # schedule reads (``list_schedules``/``due_schedules``) anyway.
-    async def list(self, *, limit: int = 200) -> Sequence[ChatMeta]:
+    async def list(self, *, limit: int = 200, offset: int = 0) -> Sequence[ChatMeta]:
         """Return chat metadata, pinned first, then most recent activity."""
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
-            "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
-            (limit,),
+            "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
             ChatMeta.from_row,
         )
 
@@ -372,7 +372,9 @@ class ChatStore:
         if run_id:
             await self.checkpointer.delete(run_id)
 
-    async def search(self, query: str, *, limit: int = 200) -> Sequence[ChatMeta]:
+    async def search(
+        self, query: str, *, limit: int = 200, offset: int = 0
+    ) -> Sequence[ChatMeta]:
         """Search sessions whose title or id contains ``query`` (literally —
         LIKE wildcards in the query are escaped, so "100%" matches "100%")."""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -380,8 +382,8 @@ class ChatStore:
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
             "WHERE title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' "
-            "ORDER BY pinned DESC, updated_at DESC LIMIT ?",
-            (pattern, pattern, limit),
+            "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
+            (pattern, pattern, limit, offset),
             ChatMeta.from_row,
         )
 

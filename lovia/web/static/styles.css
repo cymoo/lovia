@@ -278,16 +278,16 @@ body.sidebar-collapsed .sidebar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 0 10px 6px;
+  gap: 2px;
+  padding: 0 10px 8px;
 }
 .sidebar-nav-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
+  gap: 10px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink-2);
   text-align: left;
@@ -370,6 +370,24 @@ body.sidebar-collapsed .sidebar {
   padding: 24px 12px;
   font-size: 13px;
   text-align: center;
+}
+/* Tail row shown when more chats exist than the sidebar page — opens the
+   "All chats" dialog. */
+.sessions-more {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--muted);
+  text-align: left;
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.sessions-more:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
 
 .session-item {
@@ -2109,6 +2127,73 @@ dialog.custom-dialog::backdrop {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+/* ---- All chats dialog ------------------------------------------------------------------- */
+.all-chats-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.all-chats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.all-chats-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.all-chats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(56vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.all-chats-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  transition: background var(--t-fast);
+}
+.all-chats-item:hover {
+  background: var(--surface-2);
+}
+.all-chats-item.active {
+  background: var(--accent-soft);
+}
+.all-chats-item.active .all-chats-title {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.all-chats-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.all-chats-item:hover .all-chats-title {
+  color: var(--ink);
+}
+.all-chats-time {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.all-chats-more {
+  align-self: center;
 }
 
 /* ---- Schedules -------------------------------------------------------------------------- */

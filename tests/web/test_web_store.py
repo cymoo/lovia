@@ -73,6 +73,22 @@ async def test_list_orders_by_updated_at_desc() -> None:
     assert ids == ["old", "new"]
 
 
+async def test_list_and_search_paginate_with_offset() -> None:
+    store = ChatStore.in_memory()
+    for i in range(5):
+        await store.upsert(f"s{i}", title=f"Chat {i}")
+
+    # Most recent first: s4 … s0; offset walks down that order.
+    assert [m.id for m in await store.list(limit=2)] == ["s4", "s3"]
+    assert [m.id for m in await store.list(limit=2, offset=2)] == ["s2", "s1"]
+    assert [m.id for m in await store.list(limit=2, offset=4)] == ["s0"]
+    assert await store.list(limit=2, offset=5) == []
+
+    # Search pages the same way.
+    hits = [m.id for m in await store.search("Chat", limit=2, offset=2)]
+    assert hits == ["s2", "s1"]
+
+
 async def test_delete_removes_transcript_and_meta(tmp_path: Path) -> None:
     store = ChatStore.sqlite(tmp_path / "x.db")
     await store.upsert("s1")

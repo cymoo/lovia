@@ -46,14 +46,16 @@ function contentText(content) {
 function renderMessage(m, toolNames = {}) {
   // A tool *result* message: attribute it to its call's name (results carry no
   // name of their own) and show the raw output in a <pre>, not as markdown.
+  // Tool and reasoning blocks render as <details> (collapsed by default) so
+  // the exported page reads as the conversation, with the machinery on demand.
   if (m.role === 'tool') {
     const result = contentText(m.content);
     if (!result.trim()) return '';
     const name = (m.tool_call_id && toolNames[m.tool_call_id]) || m.name || '';
     const label = name ? `Tool result: ${escapeHtml(name)}` : 'Tool result';
     return (
-      `<section class="msg msg-tool"><div class="tool-label">${label}</div>` +
-      `<pre class="tool-output">${escapeHtml(result)}</pre></section>`
+      `<section class="msg msg-tool"><details><summary class="tool-label">${label}</summary>` +
+      `<pre class="tool-output">${escapeHtml(result)}</pre></details></section>`
     );
   }
 
@@ -66,7 +68,7 @@ function renderMessage(m, toolNames = {}) {
   out.push(`<div class="msg-role">${escapeHtml(role)}</div>`);
   if (m.reasoning) {
     out.push(
-      `<div class="msg-reasoning"><div class="reasoning-label">💭 Thinking</div>${mdToHtml(m.reasoning)}</div>`,
+      `<details class="msg-reasoning"><summary class="reasoning-label">💭 Thinking</summary>${mdToHtml(m.reasoning)}</details>`,
     );
   }
   if (text.trim()) out.push(`<div class="msg-body">${mdToHtml(text)}</div>`);
@@ -74,8 +76,8 @@ function renderMessage(m, toolNames = {}) {
     // Build the <pre><code> directly (escaped) rather than a ```json fence: it's
     // robust to backticks in the arguments and still highlighted by the pass below.
     out.push(
-      `<div class="msg-tool"><div class="tool-label">Tool: ${escapeHtml(tc.name || '')}</div>` +
-        `<pre><code class="language-json">${escapeHtml(tc.arguments || '')}</code></pre></div>`,
+      `<details class="msg-tool"><summary class="tool-label">Tool: ${escapeHtml(tc.name || '')}</summary>` +
+        `<pre><code class="language-json">${escapeHtml(tc.arguments || '')}</code></pre></details>`,
     );
   }
   out.push('</section>');
@@ -191,6 +193,11 @@ body {
 }
 .msg-tool { margin-top:12px; }
 .tool-label { font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; }
+/* Reasoning / tool blocks are <details>, collapsed by default. */
+summary { cursor:pointer; user-select:none; }
+summary::marker { color:var(--muted-2); }
+summary.tool-label:hover { color:var(--ink-2); }
+/* summary is the first child of a <details>, so the first *content* child is :nth-child(2). */
 .msg-body > :first-child, .msg-reasoning > :nth-child(2) { margin-top:0; }
 .msg-body > :last-child { margin-bottom:0; }
 p { margin:0 0 14px; }

@@ -141,6 +141,6 @@ session append 是幂等的。
 
 - [核心概念：Session 与 Checkpoint](concepts.md#session-与-checkpoint)：关键区别
 - [上下文管理](context.md)：携带状态和结果存储
-- [Web UI 与服务端](web.md)：内置服务端如何接 session
+- [Web 服务端](web-server.md)：内置服务端如何接入 Session
 - 示例：[`05_sessions.py`](../../examples/05_sessions.py)，
   [`15_resume.py`](../../examples/15_resume.py)

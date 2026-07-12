@@ -50,13 +50,13 @@ the same defaults `create_app` uses.
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
 | `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision}` |
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
-| `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](reliability.md#steering-a-live-run) for the live run |
+| `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=` | list / search chats (pinned first); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
-| `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web.md#scheduling): list, create, retime/pause, delete, fire now |
+| `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
 
@@ -145,6 +145,6 @@ metadata features.
 
 ## See also
 
-- [Web UI & server](web.md) — the server around these routes
+- [Web server](web-server.md) — the server around these routes
 - [Streaming](streaming.md) — the in-process form of the same events
 - Example: [`27_web_api.py`](../../examples/27_web_api.py)

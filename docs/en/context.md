@@ -8,11 +8,11 @@ shrinks. "The model forgot" and "the record lost it" stay different
 questions.
 
 ```python
-from lovia import Agent, Compaction, model_from_env
+from lovia import Agent, Compaction
 
 agent = Agent(
     name="companion",
-    model=model_from_env(),
+    model="<model>",
     context_policy=Compaction(
         context_window=200_000,
         compact_at=0.85,

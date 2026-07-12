@@ -26,9 +26,9 @@ The six, in sixty seconds:
 ## The cast
 
 ```python
-from lovia import Agent, Runner, model_from_env
+from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="Be concrete.", model=model_from_env())
+agent = Agent(name="writer", instructions="Be concrete.", model="<model>")
 result = await Runner.run(agent, "Draft a release note.")
 ```
 
@@ -168,7 +168,7 @@ model-supplied arguments before invoking your code, and records both the call
 and its result in the transcript.
 
 ```python
-from lovia import Agent, model_from_env, tool
+from lovia import Agent, tool
 
 
 @tool
@@ -177,7 +177,7 @@ async def lookup_order(order_id: str) -> str:
     return f"{order_id}: shipped"
 
 
-agent = Agent(name="support", model=model_from_env(), tools=[lookup_order])
+agent = Agent(name="support", model="<model>", tools=[lookup_order])
 ```
 
 When the model requests one or more tools, those calls and their results remain

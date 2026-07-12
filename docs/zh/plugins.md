@@ -5,11 +5,11 @@
 插件是框架**唯一的扩展入口**，Skills、MCP、Todo 和 Memory 都建立在这套机制之上。
 
 ```python
-from lovia import Agent, Memory, Skills, Todo, model_from_env
+from lovia import Agent, Memory, Skills, Todo
 
 agent = Agent(
     name="builder",
-    model=model_from_env(),
+    model="<model>",
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
@@ -114,7 +114,7 @@ class GlossaryPlugin:
         )
 
 
-agent = Agent(name="assistant", model=model_from_env(), plugins=[GlossaryPlugin(MyGlossary())])
+agent = Agent(name="assistant", model="<model>", plugins=[GlossaryPlugin(MyGlossary())])
 ```
 
 如果插件在 `setup()` 中打开资源（MCP 连接、HTTP client），就通过 `aclose` 返回清理动作：

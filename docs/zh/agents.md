@@ -5,12 +5,12 @@
 用 `clone()` 派生一个变体即可，无须复制带有运行状态的对象。
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 
 agent = Agent(
     name="writer",
     instructions="回答要具体、简洁。",
-    model=model_from_env(),
+    model="<model>",
 )
 ```
 
@@ -33,7 +33,7 @@ agent = Agent(
 | `workspace` | `None` | 受策略限制的文件/shell 工具；见[工作区](workspace.md) |
 | `plugins` | `[]` | 能力包；见[插件](plugins.md) |
 | `hooks` | `None` | 观察每个运行事件的 `AgentHooks`；见[可观测性](observability.md) |
-| `approval_handler` | `None` | 程序化审批策略；见[人工介入](human-in-the-loop.md) |
+| `approval_handler` | `None` | 程序化审批策略；见[工具审批](tools.md#工具审批) |
 | `input_guardrails` / `output_guardrails` | `[]` | 有权停止运行的检查；见[护栏](guardrails.md) |
 | `default_tool_retries` | `0` | 没有自行设置重试的工具使用这个值 |
 | `default_tool_timeout` | `None` | 没有自行设置超时的工具每次尝试使用这个值 |
@@ -41,7 +41,7 @@ agent = Agent(
 | `tool_result_renderer` | `None` | agent 级工具结果渲染器；工具自身没有渲染器时使用 |
 
 可靠性相关字段遵循一条明确的配置原则：**故障处理策略属于 Agent，资源限制属于单次运行**。
-见[可靠性](reliability.md)。
+见 [Provider 重试](retries.md)和[预算与限制](budgets.md)。
 
 ## 指令
 
@@ -56,14 +56,14 @@ agent = Agent(
 async def instructions(ctx) -> str:
     return f"你正在支持 {ctx.deps.plan} 套餐用户。回复要简短。"
 
-agent = Agent(name="support", instructions=instructions, model=model_from_env())
+agent = Agent(name="support", instructions=instructions, model="<model>")
 ```
 
 **注册片段**：基础 prompt 保持静态，通过 `@agent.instruction` 装饰器追加动态片段。
 片段会按注册顺序渲染在 `instructions` 之后，以空行分隔；返回 `""` 可以按条件跳过：
 
 ```python
-agent = Agent(name="support", instructions="你是一名客服 agent。", model=model_from_env())
+agent = Agent(name="support", instructions="你是一名客服 agent。", model="<model>")
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -120,7 +120,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "没有未关闭工单。"
 
 
-agent: Agent[Deps] = Agent(name="support", model=model_from_env(), tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model="<model>", tools=[open_tickets])
 
 result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps("u1", db))
 ```

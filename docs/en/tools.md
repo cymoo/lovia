@@ -175,6 +175,59 @@ results only — the runner's `"Tool error: ..."` strings bypass them. The
 raw, un-rendered value still reaches observers via
 `ToolCallCompleted.result`.
 
+## Tool approval
+
+Use `needs_approval` when a Tool has side effects that require a human
+decision. It accepts a boolean or a predicate over the parsed arguments and
+live Run Context:
+
+```python
+from lovia import Agent, Runner, events, tool
+
+
+@tool(needs_approval=lambda args, ctx: args["amount_cents"] > 5_000)
+async def refund(order_id: str, amount_cents: int) -> str:
+    """Issue a refund."""
+    return "refunded"
+
+
+agent = Agent(name="support", model="<model>", tools=[refund])
+handle = Runner.stream(agent, "Refund 60 USD for order A123.")
+
+async for event in handle:
+    if isinstance(event, events.ApprovalRequired):
+        event.approve()  # or event.reject()
+
+result = await handle.result()
+```
+
+The runner emits `ApprovalRequired` before invoking the Tool. A decision is
+resolved in this order:
+
+1. The streaming consumer calls `event.approve()` or `event.reject()`.
+2. The Agent's `approval_handler` returns `True` / `"allow"`, `False` /
+   `"deny"`, or `"ask"` to defer to the consumer.
+3. If nobody decides, the call is denied. Approval always fails closed.
+
+For a web endpoint, bot, or another task, use the Run Handle's out-of-band
+channel:
+
+```python
+handle.approvals.approve(call_id)
+handle.approvals.reject(call_id)
+handle.approvals.release(decision=False)  # deny everything still pending
+```
+
+The bundled server exposes the same flow over SSE and
+`POST /api/chat/approve`. Workspace `ask` decisions and MCP tools configured
+with `needs_approval` also use this one channel.
+
+Approval is preflight and preserves request order. A predicate or handler that
+raises denies the call. Non-streaming `Runner.run()` callers must configure an
+`approval_handler`; otherwise gated calls are denied because no consumer can
+answer the event. Decisions are not persisted, so a resumed pending call asks
+again.
+
 ## Tool policies
 
 For cross-cutting behavior around a *single attempt* — caching, redaction,
@@ -203,8 +256,8 @@ the timeout wrap the *whole* chain, so each policy sees one attempt at a
 time. Argument validation happens innermost, at the function boundary — a
 policy that needs coerced values validates for itself.
 
-For gating that needs a *human decision* rather than code, use
-`needs_approval` — see [Human in the loop](human-in-the-loop.md).
+For gating that needs a *human decision* rather than code, use the
+[`needs_approval` flow](#tool-approval).
 
 ## Building tools programmatically
 
@@ -232,6 +285,6 @@ or lifecycle.
 ## See also
 
 - [Built-in tools](built-in-tools.md) — HTTP, search, time
-- [Human in the loop](human-in-the-loop.md) — approval gates
+- [Streaming](streaming.md#tools-and-approval) — approval events
 - [Plugins](plugins.md) — packaging tools with instructions and lifecycle
 - Example: [`02_tools.py`](../../examples/02_tools.py)

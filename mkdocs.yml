@@ -13,6 +13,8 @@ exclude_docs: |
   ratio-calibration.md
 hooks:
   - scripts/mkdocs_hooks.py
+extra_css:
+  - stylesheets/extra.css
 
 theme:
   name: material
@@ -65,7 +67,7 @@ plugins:
           nav_translations:
             Home: 首页
             Getting started: 快速开始
-            Installation & model setup: 安装与模型配置
+            Installation: 安装
             Quickstart: 快速上手
             Core concepts: 核心概念
             Core: 核心
@@ -85,14 +87,16 @@ plugins:
             Production: 生产
             Sessions & checkpoints: Session 与 Checkpoint
             Context management: 上下文管理
-            Human in the loop: 人工介入
             Guardrails: 护栏
-            Reliability: 可靠性
+            Provider retries: Provider 重试
+            Budgets & limits: 预算与限制
+            Cancellation & steering: 取消与运行中引导
             Deployment: 生产部署
             Observability: 可观测性
             Workspace: 工作区
             Serving: 服务
-            Web UI & server: Web UI 与服务端
+            Web UI: Web UI
+            Web server: Web 服务端
             Quality: 质量保障
             Evals: 评测
             Testing: 测试
@@ -132,7 +136,7 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Getting started:
-      - Installation & model setup: installation.md
+      - Installation: installation.md
       - Quickstart: quickstart.md
       - Core concepts: concepts.md
   - Core:
@@ -154,13 +158,15 @@ nav:
       - MCP: mcp.md
       - Memory: memory.md
   - Production:
-      - Reliability: reliability.md
+      - Provider retries: retries.md
+      - Budgets & limits: budgets.md
+      - Cancellation & steering: cancellation.md
       - Sessions & checkpoints: sessions-and-checkpoints.md
-      - Human in the loop: human-in-the-loop.md
       - Guardrails: guardrails.md
       - Deployment: deployment.md
   - Serving:
-      - Web UI & server: web.md
+      - Web UI: web-ui.md
+      - Web server: web-server.md
       - HTTP API: http-api.md
   - Quality:
       - Testing: testing.md

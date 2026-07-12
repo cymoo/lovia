@@ -12,11 +12,11 @@ verbs** the model already understands:
   pulled in only on demand with `recall(query)`.
 
 ```python
-from lovia import Agent, Memory, model_from_env
+from lovia import Agent, Memory
 
 agent = Agent(
     name="assistant",
-    model=model_from_env(),
+    model="<model>",
     plugins=[Memory("./.lovia/memory")],
 )
 ```
@@ -176,5 +176,5 @@ Memory plugin). Because lovia's transcript is durable and
 - [Plugins](plugins.md) — Memory is the flagship cross-run-state plugin
 - [Sessions & checkpoints](sessions-and-checkpoints.md) — within-conversation
   persistence, and where the transcripts come from
-- [Web UI & server](web.md) — the bundled Memory editor
+- [Web UI](web-ui.md) — the bundled Memory editor
 - Example: [`23_memory.py`](../../examples/23_memory.py)

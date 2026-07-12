@@ -23,12 +23,12 @@ user.
 ## A conservative starting point
 
 ```python
-from lovia import Agent, RunBudget, model_from_env
+from lovia import Agent, RunBudget
 from lovia.workspace import Workspace
 
 agent = Agent(
     name="service-agent",
-    model=model_from_env(),
+    model="<model>",
     workspace=Workspace.local("./data", mode="readonly"),
     default_tool_timeout=30,
     max_tool_output_chars=50_000,
@@ -79,8 +79,8 @@ with deliberate routing and storage ownership.
 
 ## See also
 
-- [Reliability](reliability.md) — retries, budgets, cancellation
+- [Provider retries](retries.md), [Budgets](budgets.md), and [Cancellation](cancellation.md)
 - [Sessions & checkpoints](sessions-and-checkpoints.md) — durability and idempotency
 - [Workspace](workspace.md) — ACLs and the Shell security boundary
-- [Web UI & server](web.md) — server lifecycle and configuration
+- [Web server](web-server.md) — server lifecycle and configuration
 - [Observability](observability.md) — Hooks, tracing, logging, and usage

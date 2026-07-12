@@ -5,12 +5,12 @@ updates it through a typed Tool, and a transient reminder re-shows the current
 plan every Turn without growing the Transcript.
 
 ```python
-from lovia import Agent, Runner, Todo, model_from_env
+from lovia import Agent, Runner, Todo
 
 agent = Agent(
     name="builder",
     instructions="Complete multi-step work carefully.",
-    model=model_from_env(),
+    model="<model>",
     plugins=[Todo()],
 )
 
@@ -62,7 +62,7 @@ function.
 ## Sharp edges
 
 - Todo is a planning aid, not a scheduler or durable job queue. Use
-  [scheduling](web.md#scheduling) for future work.
+  [scheduling](web-server.md#scheduling) for future work.
 - Transient reminders are intentionally absent from Sessions and Checkpoints;
   audit the `todo_write` Tool calls instead.
 - A vague task may cause noisy plan churn. Instructions should reserve Todo for

@@ -22,12 +22,12 @@
 ## 保守的起始配置
 
 ```python
-from lovia import Agent, RunBudget, model_from_env
+from lovia import Agent, RunBudget
 from lovia.workspace import Workspace
 
 agent = Agent(
     name="service-agent",
-    model=model_from_env(),
+    model="<model>",
     workspace=Workspace.local("./data", mode="readonly"),
     default_tool_timeout=30,
     max_tool_output_chars=50_000,
@@ -72,8 +72,8 @@ result = await agent.run(
 
 ## 延伸阅读
 
-- [可靠性](reliability.md)：重试、预算和取消
+- [Provider 重试](retries.md)、[预算](budgets.md)与[取消](cancellation.md)
 - [Session 与 Checkpoint](sessions-and-checkpoints.md)：持久化和幂等
 - [工作区](workspace.md)：ACL 与 Shell 安全边界
-- [Web UI 与服务端](web.md)：服务生命周期和配置
+- [Web 服务端](web-server.md)：服务生命周期和配置
 - [可观测性](observability.md)：Hook、Tracing、日志和用量

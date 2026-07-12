@@ -4,20 +4,19 @@
 构造代码，就能清楚知道它具备哪些能力。
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.tools.http import http_fetch
 from lovia.tools.search import duckduckgo_search
 from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model=model_from_env(),
+    model="<model>",
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
 
-文件和 shell 工具来自[工作区](workspace.md)。`ask_human` 会在[人工介入](human-in-the-loop.md#询问人工)
-中完整说明，下面只做简要介绍。
+文件和 Shell Tool 来自[工作区](workspace.md)。操作员输入 Tool 见下方[询问人工](#询问人工)。
 
 ## HTTP 请求
 
@@ -86,7 +85,7 @@ class WebSearch(Protocol):
   [指令片段](agents.md#指令)的工厂，将当天日期写入系统提示词：
 
   ```python
-  agent = Agent(name="researcher", model=model_from_env(), tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="<model>", tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -100,18 +99,33 @@ class WebSearch(Protocol):
 （和审批相反，审批是 **runner** 问“能不能做”）：
 
 ```python
+from lovia import Agent
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model=model_from_env(), tools=[ask_human(channel)])
+agent = Agent(name="assistant", model="<model>", tools=[ask_human(channel)])
 
 # 在操作员侧处理问题
 async for q in channel.questions():   # channel.close() 后结束
     channel.answer(q.id, "使用选项 A。")
 ```
 
-工具调用会阻塞，直到答案到达、问题被取消，或 channel 关闭。完整语义，包括轮询、取消、
-线程安全，见[人工介入](human-in-the-loop.md#询问人工)。
+Tool 调用会阻塞，直到答案到达、问题被取消，或 Channel 关闭。
+
+| API | 效果 |
+| --- | --- |
+| `questions()` | 异步迭代已经排队的问题；只允许一个消费者 |
+| `pending` | 用于轮询的未回答问题快照 |
+| `answer(id, text)` | 回答问题；Tool 返回 `text` |
+| `cancel(id, reason=...)` | 用模型可见的 `ToolError` 取消一个问题 |
+| `close(reason=...)` | 取消所有未回答问题、结束迭代，并拒绝后续提问 |
+
+取消和关闭会成为 Tool 错误结果，因此模型可以在没有答案时继续。操作员可能离线时，应为
+Tool 增加超时。从其他线程回答时，先切回事件循环线程，例如使用
+`loop.call_soon_threadsafe(channel.answer, qid, text)`。
+
+“是否允许执行？”并期待 yes/no 时使用审批；模型需要只有人知道的信息并期待自由文本时，
+使用 `ask_human`。
 
 ## 注意事项
 

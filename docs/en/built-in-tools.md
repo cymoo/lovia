@@ -4,21 +4,20 @@ Nothing is wired into an agent automatically — every built-in is an explicit
 import, so an agent's capabilities are visible at its construction site.
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.tools.http import http_fetch
 from lovia.tools.search import duckduckgo_search
 from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model=model_from_env(),
+    model="<model>",
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
 
-(File and shell tools come from [Workspace](workspace.md); `ask_human` is
-covered with the rest of [Human in the loop](human-in-the-loop.md#ask-a-human)
-and summarized below.)
+File and Shell Tools come from [Workspace](workspace.md). The operator-input
+Tool is covered in [Ask a human](#ask-a-human) below.
 
 ## HTTP fetch
 
@@ -95,7 +94,7 @@ construction time, not mid-run.
   the system prompt:
 
   ```python
-  agent = Agent(name="researcher", model=model_from_env(), tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model="<model>", tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -111,19 +110,36 @@ construction time, not mid-run.
 input mid-run (the inverse of approval, where the *runner* asks):
 
 ```python
+from lovia import Agent
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model=model_from_env(), tools=[ask_human(channel)])
+agent = Agent(name="assistant", model="<model>", tools=[ask_human(channel)])
 
 # elsewhere, the operator side:
 async for q in channel.questions():   # ends when channel.close() is called
     channel.answer(q.id, "Use option A.")
 ```
 
-The tool call blocks until an answer arrives, the question is cancelled, or
-the channel closes. Full semantics — polling, cancellation, thread safety —
-in [Human in the loop](human-in-the-loop.md#ask-a-human).
+The Tool call blocks until an answer arrives, the question is cancelled, or
+the channel closes.
+
+| API | Effect |
+| --- | --- |
+| `questions()` | Async-iterate queued questions; one consumer |
+| `pending` | Snapshot of unanswered questions for polling |
+| `answer(id, text)` | Resolve the question; the Tool returns `text` |
+| `cancel(id, reason=...)` | Fail one question with a `ToolError` the model can see |
+| `close(reason=...)` | Cancel outstanding questions, end iteration, and reject future asks |
+
+Cancellation and closure become Tool-error results, so the model can continue
+without the answer. Add a per-tool timeout when operators may be unavailable.
+Calls from another thread must hop to the event-loop thread first, for example
+with `loop.call_soon_threadsafe(channel.answer, qid, text)`.
+
+Use approval when the question is “may I do this?” and expects yes/no. Use
+`ask_human` when the model needs information only a person has and expects free
+text.
 
 ## Sharp edges
 

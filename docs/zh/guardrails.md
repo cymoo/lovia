@@ -4,7 +4,7 @@
 **输入护栏**在第一次模型调用前检查对话；**输出护栏**在最终答案返回前检查答案。
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.exceptions import GuardrailTripped
 
 
@@ -20,7 +20,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model=model_from_env(),
+    model="<model>",
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -55,7 +55,7 @@ tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）
 **用专门模型筛查**：guardrail 可以是 async，因此可以调用自己的分类器：
 
 ```python
-screen = Agent(name="screen", model=model_from_env(), output_type=bool,
+screen = Agent(name="screen", model="<model>", output_type=bool,
                instructions="如果请求在寻求法律建议，回答 true。")
 
 async def no_legal_advice(messages, ctx):
@@ -83,11 +83,11 @@ async def short_enough(output, ctx):
   它们已经在原始完成时运行过；重放直接返回已存结果。
 - **护栏延迟就是运行延迟。** 输入护栏在第一次模型调用前执行；LLM 筛查护栏会增加一次完整往返。
   把快检查放在列表前面。
-- **中途内容不在护栏范围内**，这是设计。要管单个工具调用，请用[审批](human-in-the-loop.md)或工具策略；
+- **中途内容不在护栏范围内**，这是设计。要管单个工具调用，请用[审批](tools.md#工具审批)或工具策略；
   要管流式文本，请在消费者里过滤。
 
 ## 延伸阅读
 
-- [人工介入](human-in-the-loop.md)：每个调用的门禁
+- [工具审批](tools.md#工具审批)：每个调用的门禁
 - [评测](eval.md)：输出护栏在开发期的对应物
 - 示例：[`13_guardrails.py`](../../examples/13_guardrails.py)

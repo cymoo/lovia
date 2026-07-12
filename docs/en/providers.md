@@ -107,7 +107,7 @@ above apply automatically.
 
 One agent speaks to one provider; lovia deliberately has no in-process
 fallback chain. Transient errors are the
-[retry policy](reliability.md#provider-retries)'s job. For vendor-level
+[retry policy](retries.md)'s job. For vendor-level
 failover, point `base_url` at a routing gateway (LiteLLM, OpenRouter, ...)
 that fails over server-side — the run keeps a single endpoint, a single
 context window, and a single capability set. And because sessions persist
@@ -285,7 +285,7 @@ the OS trust store when the optional `truststore` package is installed
 [`http_fetch` tool](built-in-tools.md#http-fetch), so one intranet-CA
 setting fixes every outbound request.
 
-**Error classification** feeds the [retry machinery](reliability.md):
+**Error classification** feeds the [retry machinery](retries.md):
 HTTP 408/429/5xx and transport-level timeouts/disconnects are retryable
 `ProviderError`s; context-length failures are detected per vendor
 (status + message needles) and raised as `ContextOverflowError`, which
@@ -322,7 +322,7 @@ triggers reactive compaction instead of retries. That error also carries
 ## See also
 
 - [Structured output](structured-output.md) — native vs prompt-path schemas
-- [Reliability](reliability.md) — retries, budgets, cancellation
+- [Provider retries](retries.md) — transient-failure handling
 - [Context management](context.md) — how windows and caching interact
 - Examples: [`09_model_settings.py`](../../examples/09_model_settings.py),
   [`10_custom_provider.py`](../../examples/10_custom_provider.py)

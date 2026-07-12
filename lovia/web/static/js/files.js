@@ -163,6 +163,29 @@ function setViewerPx(px) {
   applySplit((clamped / panel.height) * 100);
 }
 
+// Surface the split position to assistive tech (the separator is focusable
+// and keyboard-resizable): value = the preview's share of the panel, 0–100.
+function syncSplitAria() {
+  const total = els.panel.getBoundingClientRect().height;
+  if (!total) return;
+  els.split.setAttribute(
+    'aria-valuenow',
+    String(Math.round((viewerHeight() / total) * 100)),
+  );
+}
+
+// Re-clamp a restored split against the panel's current geometry: the saved
+// percentage was applied before the preview was ever visible, so it may
+// violate the px minimums at this panel size (a resize can do the same).
+// The stylesheet default is always in bounds — leave the var unset then.
+function clampSplit() {
+  if (els.viewer.classList.contains('hidden')) return;
+  if (document.documentElement.style.getPropertyValue('--files-viewer-h')) {
+    setViewerPx(viewerHeight());
+  }
+  syncSplitAria();
+}
+
 function initSplit() {
   // Ignore garbage/extreme saved values — the stylesheet default is fine.
   const saved = Number(localStorage.getItem(SPLIT_KEY));
@@ -177,6 +200,7 @@ function initSplit() {
     if (!total) return;
     // Re-read the rendered height: CSS min-height may have clamped harder.
     localStorage.setItem(SPLIT_KEY, ((viewerHeight() / total) * 100).toFixed(1));
+    syncSplitAria();
   };
 
   sp.addEventListener('pointerdown', (e) => {
@@ -202,6 +226,7 @@ function initSplit() {
   sp.addEventListener('dblclick', () => {
     applySplit(null);
     localStorage.removeItem(SPLIT_KEY);
+    syncSplitAria();
   });
   sp.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowUp' ? 24 : e.key === 'ArrowDown' ? -24 : 0;
@@ -209,6 +234,13 @@ function initSplit() {
     e.preventDefault();
     setViewerPx(viewerHeight() + step);
     persistSplit();
+  });
+
+  // A window resize can push the restored percentage past the px minimums.
+  let splitTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(splitTimer);
+    splitTimer = setTimeout(clampSplit, 120);
   });
 }
 
@@ -468,8 +500,12 @@ function renderText(content, path) {
 // with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
+  const viewerWasHidden = els.viewer.classList.contains('hidden');
   els.viewer.classList.remove('hidden');
   els.split?.classList.remove('hidden');
+  // First show: the restored split was applied blind (panel geometry unknown
+  // until now) — re-clamp it, and give the separator its initial aria value.
+  if (viewerWasHidden && els.split) clampSplit();
   els.viewerName.textContent = path;
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });

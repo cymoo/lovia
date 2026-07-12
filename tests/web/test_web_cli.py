@@ -294,8 +294,10 @@ def test_load_env_file_sets_vars(
     env = tmp_path / "custom.env"
     env.write_text("LOVIA_TEST_VAR=hello\n", encoding="utf-8")
     monkeypatch.delenv("LOVIA_TEST_VAR", raising=False)
-    cli.load_env_files([str(env)])
+    sources = cli.load_env_files([str(env)])
     assert os.getenv("LOVIA_TEST_VAR") == "hello"
+    # The summary names the actual file, not a generic ".env".
+    assert sources["LOVIA_TEST_VAR"] == "custom.env"
 
 
 def test_load_env_file_existing_env_wins(

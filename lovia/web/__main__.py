@@ -266,8 +266,9 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
     """Load the ``--env-file`` files (or ``./.env``); report the keys they added.
 
     The process environment always wins because files never override existing
-    variables (``override=False``). Returns ``{key: ".env"}`` for keys the
-    files introduced — the startup summary shows it as each value's source.
+    variables (``override=False``). Returns ``{key: <file name>}`` for keys
+    the files introduced (``".env"`` for the default autoload) — the startup
+    summary shows it as each value's source.
 
     A missing python-dotenv is fatal only when ``--env-file`` was given
     explicitly; otherwise auto-loading is silently skipped.
@@ -288,7 +289,7 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
         before = set(os.environ)
         load_dotenv(path, override=False)
         for key in os.environ.keys() - before:
-            sources[key] = ".env"
+            sources[key] = path.name
         log.debug("loaded env file %s", path)
 
     if env_files:

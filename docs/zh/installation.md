@@ -74,13 +74,15 @@ pip install lovia
     Ollama 会静默截断过长的提示词，因此应配置与 `num_ctx` 一致的
     `Compaction(context_window=...)`。详见 [Context Window](providers.md#上下文窗口)。
 
-在 Agent 中直接传入端点使用的模型名。环境变量用于配置凭证和 Base URL，不会替 Python API
-选择模型：
+环境变量只配置凭证和 Base URL，Python API 不会自动从环境变量选择模型。可以用
+`model_from_env()` 读取上面导出的 `LOVIA_MODEL`，或直接把模型名传给 Agent：
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
-agent = Agent(name="assistant", model="<model>")
+# model_from_env() 会读取 LOVIA_MODEL，其次是 OPENAI_DEFAULT_MODEL /
+# ANTHROPIC_DEFAULT_MODEL；也可以直接传入 model="<model>"。
+agent = Agent(name="assistant", model=model_from_env())
 ```
 
 !!! note ".env 文件"
@@ -91,9 +93,9 @@ agent = Agent(name="assistant", model="<model>")
 ## 验证配置
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
-agent = Agent(name="setup-check", model="<model>")
+agent = Agent(name="setup-check", model=model_from_env())
 print(agent.run_sync("请只回复：lovia is ready").output)
 ```
 

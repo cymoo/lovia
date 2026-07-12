@@ -87,7 +87,6 @@ plugins:
             Production: 生产
             Sessions & checkpoints: Session 与 Checkpoint
             Context management: 上下文管理
-            Tool approval: 工具审批
             Guardrails: 护栏
             Provider retries: Provider 重试
             Budgets & limits: 预算与限制

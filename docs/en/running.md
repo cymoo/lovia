@@ -58,8 +58,8 @@ All three entry points accept the same keywords:
 | `extra_instructions` | `None` | per-run system-prompt addendum, rendered after the agent's own instructions (and re-applied to every agent a handoff reaches) |
 | `max_turns` | `50` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |
 | `budget` | `None` | a `RunBudget` limiting what the run may spend ([Budgets](budgets.md)) |
-| `cancel_token` | `None` | pre-wired cooperative cancellation ([Reliability](cancellation.md#cancellation)) |
-| `mailbox` | `None` | inbound steering channel ([Reliability](cancellation.md#steering-a-live-run)) |
+| `cancel_token` | `None` | pre-wired cooperative cancellation ([Cancellation](cancellation.md#cancellation)) |
+| `mailbox` | `None` | inbound steering channel ([Steering](cancellation.md#steering-a-live-run)) |
 | `retry` | agent's | per-call override of the provider retry posture |
 | `context_policy` | agent's | per-call override of the [context policy](context.md) |
 | `session` + `session_id` | `None` | conversation persistence ([Sessions & checkpoints](sessions-and-checkpoints.md)) |

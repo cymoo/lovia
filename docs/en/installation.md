@@ -79,14 +79,16 @@ Anthropic-compatible adapter.
     `Compaction(context_window=...)` to match its `num_ctx`; see
     [context windows](providers.md#context-windows).
 
-Pass the endpoint's model name directly to the Agent. Environment variables
-configure credentials and Base URLs; they do not choose a model for the Python
-API:
+Environment variables configure credentials and Base URLs; the Python API does
+not pick a model from the environment on its own. Read the `LOVIA_MODEL` you
+exported with `model_from_env()`, or pass the model to the Agent directly:
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
-agent = Agent(name="assistant", model="<model>")
+# model_from_env() reads LOVIA_MODEL, then OPENAI_DEFAULT_MODEL /
+# ANTHROPIC_DEFAULT_MODEL; or pass model="<model>" directly.
+agent = Agent(name="assistant", model=model_from_env())
 ```
 
 !!! note ".env files"
@@ -99,9 +101,9 @@ agent = Agent(name="assistant", model="<model>")
 ## Verify the setup
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
-agent = Agent(name="setup-check", model="<model>")
+agent = Agent(name="setup-check", model=model_from_env())
 print(agent.run_sync("Reply with exactly: lovia is ready").output)
 ```
 

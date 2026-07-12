@@ -136,6 +136,114 @@ function initResizer() {
   });
 }
 
+// ---- List / preview split ---------------------------------------------------
+// The divider between the file list and the preview drags the split (arrow
+// keys nudge it, double-click resets) — mirrors initResizer. The viewer height
+// lives in a `--files-viewer-h` CSS var as a *percentage* of the panel (px
+// would crush the list when the window shrinks) and persists per browser.
+const SPLIT_KEY = 'lovia-files-split';
+const MIN_VIEWER_H = 240; // matches .files-viewer's min-height
+const MIN_LIST_H = 100; // keep some list visible above the preview
+
+const viewerHeight = () => els.viewer.getBoundingClientRect().height;
+
+function applySplit(pct) {
+  if (pct == null) document.documentElement.style.removeProperty('--files-viewer-h');
+  else document.documentElement.style.setProperty('--files-viewer-h', `${pct}%`);
+}
+
+// Clamp a proposed viewer height (px) so both halves stay usable, then apply
+// it as a percentage of the panel.
+function setViewerPx(px) {
+  const panel = els.panel.getBoundingClientRect();
+  if (!panel.height) return;
+  const listTop = els.list.getBoundingClientRect().top - panel.top;
+  const max = panel.height - listTop - MIN_LIST_H;
+  const clamped = Math.min(Math.max(px, MIN_VIEWER_H), Math.max(MIN_VIEWER_H, max));
+  applySplit((clamped / panel.height) * 100);
+}
+
+// Surface the split position to assistive tech (the separator is focusable
+// and keyboard-resizable): value = the preview's share of the panel, 0–100.
+function syncSplitAria() {
+  const total = els.panel.getBoundingClientRect().height;
+  if (!total) return;
+  els.split.setAttribute(
+    'aria-valuenow',
+    String(Math.round((viewerHeight() / total) * 100)),
+  );
+}
+
+// Re-clamp a restored split against the panel's current geometry: the saved
+// percentage was applied before the preview was ever visible, so it may
+// violate the px minimums at this panel size (a resize can do the same).
+// The stylesheet default is always in bounds — leave the var unset then.
+function clampSplit() {
+  if (els.viewer.classList.contains('hidden')) return;
+  if (document.documentElement.style.getPropertyValue('--files-viewer-h')) {
+    setViewerPx(viewerHeight());
+  }
+  syncSplitAria();
+}
+
+function initSplit() {
+  // Ignore garbage/extreme saved values — the stylesheet default is fine.
+  const saved = Number(localStorage.getItem(SPLIT_KEY));
+  if (saved >= 15 && saved <= 90) applySplit(saved);
+
+  const sp = els.split;
+  let startY = 0;
+  let startH = 0;
+
+  const persistSplit = () => {
+    const total = els.panel.getBoundingClientRect().height;
+    if (!total) return;
+    // Re-read the rendered height: CSS min-height may have clamped harder.
+    localStorage.setItem(SPLIT_KEY, ((viewerHeight() / total) * 100).toFixed(1));
+    syncSplitAria();
+  };
+
+  sp.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    startY = e.clientY;
+    startH = viewerHeight();
+    sp.setPointerCapture(e.pointerId);
+    document.body.classList.add('files-splitting');
+  });
+  sp.addEventListener('pointermove', (e) => {
+    if (!sp.hasPointerCapture(e.pointerId)) return;
+    setViewerPx(startH + (startY - e.clientY)); // viewer sits below: up = taller
+  });
+  const endDrag = (e) => {
+    if (!sp.hasPointerCapture(e.pointerId)) return;
+    sp.releasePointerCapture(e.pointerId);
+    document.body.classList.remove('files-splitting');
+    persistSplit();
+  };
+  sp.addEventListener('pointerup', endDrag);
+  sp.addEventListener('pointercancel', endDrag);
+
+  sp.addEventListener('dblclick', () => {
+    applySplit(null);
+    localStorage.removeItem(SPLIT_KEY);
+    syncSplitAria();
+  });
+  sp.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowUp' ? 24 : e.key === 'ArrowDown' ? -24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    setViewerPx(viewerHeight() + step);
+    persistSplit();
+  });
+
+  // A window resize can push the restored percentage past the px minimums.
+  let splitTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(splitTimer);
+    splitTimer = setTimeout(clampSplit, 120);
+  });
+}
+
 // ---- Panel open/close -----------------------------------------------------
 // `persist: false` is for forced closes (agent without a workspace) — they
 // must not overwrite the user's remembered open/closed preference.
@@ -290,6 +398,7 @@ function renderList() {
 function closeViewer() {
   state.viewing = null;
   els.viewer.classList.add('hidden');
+  els.split?.classList.add('hidden');
   els.viewerBody.replaceChildren();
   renderList(); // drop the active highlight
 }
@@ -391,7 +500,12 @@ function renderText(content, path) {
 // with a different base); true otherwise.
 async function openFile(path, { silent = false } = {}) {
   const name = basename(path);
+  const viewerWasHidden = els.viewer.classList.contains('hidden');
   els.viewer.classList.remove('hidden');
+  els.split?.classList.remove('hidden');
+  // First show: the restored split was applied blind (panel geometry unknown
+  // until now) — re-clamp it, and give the separator its initial aria value.
+  if (viewerWasHidden && els.split) clampSplit();
   els.viewerName.textContent = path;
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
@@ -555,6 +669,7 @@ export function initFiles() {
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
+  els.split = document.getElementById('files-split');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   els.close.innerHTML = icon('x', { size: 16 });
@@ -563,6 +678,7 @@ export function initFiles() {
   els.viewerClose.innerHTML = icon('x', { size: 15 });
 
   if (els.resizer) initResizer();
+  if (els.split) initSplit();
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
   els.close.addEventListener('click', () => setOpen(false));

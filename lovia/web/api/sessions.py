@@ -94,9 +94,12 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     async def list_sessions(
         q: str = Query("", max_length=200),
         limit: int = Query(200, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
     ) -> list[ChatSessionInfo]:
         metas = (
-            await store.search(q, limit=limit) if q else await store.list(limit=limit)
+            await store.search(q, limit=limit, offset=offset)
+            if q
+            else await store.list(limit=limit, offset=offset)
         )
         return [session_info(m) for m in metas]
 

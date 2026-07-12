@@ -604,6 +604,24 @@ def test_patch_session_pins_and_reorders_list() -> None:
     assert ids == ["new", "old"]
 
 
+def test_list_sessions_paginates_with_limit_and_offset() -> None:
+    c = TestClient(_app(_make_agent([text(str(i)) for i in range(5)])))
+    for i in range(5):
+        c.post("/api/chat", json={"message": "hi", "session_id": f"s{i}"})
+
+    # Most recent first: s4 … s0.
+    ids = [s["id"] for s in c.get("/api/sessions").json()]
+    assert ids == ["s4", "s3", "s2", "s1", "s0"]
+
+    page = [s["id"] for s in c.get("/api/sessions?limit=2&offset=2").json()]
+    assert page == ["s2", "s1"]
+    # Search pages the same way.
+    page = [s["id"] for s in c.get("/api/sessions?q=s&limit=2&offset=2").json()]
+    assert page == ["s2", "s1"]
+    # Past the end → empty, not an error.
+    assert c.get("/api/sessions?limit=2&offset=10").json() == []
+
+
 def test_patch_session_rename_still_works() -> None:
     c = TestClient(_app(_make_agent([text("a")])))
     c.post("/api/chat", json={"message": "hi", "session_id": "s1"})

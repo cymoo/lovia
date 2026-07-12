@@ -1,7 +1,7 @@
 // Session sidebar: list, search, switch, rename, delete, export.
 import { store } from './store.js';
 import { api } from './api.js';
-import { promptDialog, confirmDialog } from './ui.js';
+import { promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
@@ -16,14 +16,23 @@ const exportWrap = document.getElementById('export-wrap');
 // lucide `pin` — the at-rest marker and the pin/unpin menu button.
 const PIN_SVG = icon('pin', { size: 14 });
 
+// The sidebar renders at most one page of chats; anything beyond that lives in
+// the "View all" dialog, which loads further pages on demand.
+const PAGE_SIZE = 50;
+// Whether the last load hit the cap (⇒ show the "View all" row).
+let _hasMore = false;
+
 // ---- Load ----------------------------------------------------------------
 export async function loadSessions(query = '') {
   try {
     const [sessions, runs] = await Promise.all([
-      api.listSessions({ q: query }),
+      // Fetch one row past the page: its presence answers "is there more?"
+      // without a count endpoint or a response-shape change.
+      api.listSessions({ q: query, limit: PAGE_SIZE + 1 }),
       api.listRuns().catch(() => []),
     ]);
-    store.sessions = sessions;
+    _hasMore = sessions.length > PAGE_SIZE;
+    store.sessions = sessions.slice(0, PAGE_SIZE);
     store.activeRuns = new Set(runs.map((r) => r.session_id));
     renderSessions();
   } catch (err) {
@@ -38,6 +47,7 @@ let _lastRenderSig = null;
 function sessionsSignature() {
   return JSON.stringify([
     store.sessionId,
+    _hasMore,
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0]),
   ]);
@@ -121,6 +131,18 @@ function renderSessions() {
     menu.append(pinBtn, renameBtn, delBtn);
     item.append(main, pinMark, menu);
     sessionsList.appendChild(item);
+  }
+
+  // More chats exist than the sidebar page shows — open the full, paged list.
+  if (_hasMore) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'sessions-more';
+    more.textContent = 'View all chats…';
+    more.addEventListener('click', () =>
+      openAllSessionsDialog(sessionSearch?.value.trim() || ''),
+    );
+    sessionsList.appendChild(more);
   }
 
   // Sync header
@@ -257,6 +279,80 @@ export function clearChat() {
   if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
+}
+
+// ---- All chats dialog ------------------------------------------------------
+// The full session list, loaded a page at a time ("Load more"), so a long
+// history never lands in the sidebar DOM at once. Carries the sidebar's
+// current filter and keeps paging it.
+function openAllSessionsDialog(query = '') {
+  const panel = document.createElement('div');
+  panel.className = 'all-chats-panel';
+  panel.innerHTML = `
+    <div class="all-chats-head">
+      <h3>All chats</h3>
+      <button type="button" class="btn-icon all-chats-close" aria-label="Close">${icon('x', { size: 16 })}</button>
+    </div>
+    <div class="all-chats-list" role="list"></div>
+    <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>Load more</button>`;
+  const listEl = panel.querySelector('.all-chats-list');
+  const moreBtn = panel.querySelector('.all-chats-more');
+  let offset = 0;
+  let loading = false;
+
+  function rowFor(s) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'all-chats-item';
+    if (s.id === store.sessionId) b.classList.add('active');
+    b.title = s.title || s.id;
+    const title = document.createElement('span');
+    title.className = 'all-chats-title';
+    title.textContent = s.title || 'New chat';
+    const time = document.createElement('span');
+    time.className = 'all-chats-time';
+    time.textContent = formatTimeSmart(s.updated_at);
+    time.title = formatDateTime(s.updated_at);
+    b.append(title, time);
+    b.addEventListener('click', () => {
+      dialog.close();
+      switchSession(s.id).catch(() => {});
+    });
+    return b;
+  }
+
+  async function loadPage() {
+    if (loading) return;
+    loading = true;
+    moreBtn.disabled = true;
+    try {
+      // Same +1 sentinel as the sidebar. Offset paging can skip/repeat a row
+      // if chats churn between pages — fine for a picker.
+      const rows = await api.listSessions({ q: query, limit: PAGE_SIZE + 1, offset });
+      const page = rows.slice(0, PAGE_SIZE);
+      offset += page.length;
+      listEl.append(...page.map(rowFor));
+      moreBtn.hidden = rows.length <= PAGE_SIZE;
+      if (!listEl.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sessions-empty';
+        empty.textContent = 'No chats.';
+        listEl.appendChild(empty);
+      }
+    } catch (err) {
+      console.error('openAllSessionsDialog:', err);
+      toast('Couldn’t load chats', { type: 'error' });
+    } finally {
+      loading = false;
+      moreBtn.disabled = false;
+    }
+  }
+
+  const dialog = showDialog({ body: panel });
+  dialog.classList.add('dialog-wide');
+  panel.querySelector('.all-chats-close').addEventListener('click', () => dialog.close());
+  moreBtn.addEventListener('click', loadPage);
+  loadPage();
 }
 
 // ---- Export --------------------------------------------------------------

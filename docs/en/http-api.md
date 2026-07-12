@@ -51,7 +51,7 @@ the same defaults `create_app` uses.
 | `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision}` |
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
-| `GET /api/sessions?q=&limit=` | list / search chats (pinned first); `DELETE` clears all |
+| `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |

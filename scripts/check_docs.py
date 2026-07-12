@@ -6,6 +6,7 @@ import ast
 import importlib
 import re
 import sys
+import textwrap
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -15,7 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 SITE = ROOT / "site"
 SITE_PREFIX = "/lovia"
-PYTHON_FENCE = re.compile(r"^```python\s*$\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+# Fences can be indented under lists, admonitions, or content tabs; capture the
+# leading indent, require the closing fence at the same depth, and dedent the
+# body before parsing so those snippets are validated too.
+PYTHON_FENCE = re.compile(
+    r"^(?P<indent>[ \t]*)```python\s*$\n(?P<body>.*?)^(?P=indent)```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 class ParsedHTML(HTMLParser):
@@ -88,7 +95,7 @@ def _snippet_issues() -> list[str]:
     for path in sorted(DOCS.rglob("*.md")):
         text = path.read_text(encoding="utf-8")
         for index, match in enumerate(PYTHON_FENCE.finditer(text), 1):
-            source = match.group(1)
+            source = textwrap.dedent(match.group("body"))
             try:
                 tree = ast.parse(source)
                 compile(

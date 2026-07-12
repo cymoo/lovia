@@ -2477,6 +2477,41 @@ body.files-resizing {
   -webkit-user-select: none;
 }
 
+/* Divider between the file list and the preview: drag to move the split
+   (arrow keys nudge, double-click resets). In flow between the two, but with
+   zero net footprint — the hit area straddles the viewer's border-top. */
+.files-split {
+  position: relative;
+  flex-shrink: 0;
+  height: 9px;
+  margin: -4px 0 -5px;
+  cursor: row-resize;
+  z-index: 5;
+  touch-action: none;
+}
+.files-split::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px; /* sits over the viewer's border-top */
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.files-split:hover::after,
+.files-split:focus-visible::after,
+body.files-splitting .files-split::after {
+  opacity: 0.55;
+}
+body.files-splitting {
+  cursor: row-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .files-head {
   display: flex;
   align-items: center;
@@ -2646,7 +2681,7 @@ body.files-resizing {
 /* ---- Viewer ---- */
 .files-viewer {
   flex-shrink: 0;
-  height: 58%;
+  height: var(--files-viewer-h, 58%);
   min-height: 240px;
   display: flex;
   flex-direction: column;
@@ -2753,6 +2788,11 @@ body.files-resizing {
     transform: none;
   }
   .files-resizer {
+    display: none;
+  }
+  /* The drawer overlays at a fixed split — dragging it would fight
+     touch-scrolling in the list. */
+  .files-split {
     display: none;
   }
   .files-viewer {

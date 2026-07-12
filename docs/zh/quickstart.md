@@ -1,26 +1,78 @@
-# 快速上手
+# 快速开始
 
-从安装一路学习到 Tool、流式输出和类型化结果。本页每个 Python 代码块都是完整脚本：把
-`<model>` 替换为当前端点配置的模型名，保存到文件后即可运行。
+从全新环境一路学习到 Tool、流式输出、类型化结果和 Web UI。lovia 需要
+Python 3.10 或更高版本。本页每个 Python 代码块都是完整脚本：把 `<model>` 替换为
+当前端点的模型名，保存到文件后即可运行。
 
-## 1. 安装并配置凭证
+## 1. 安装 lovia
 
 ```bash
 pip install lovia
-export OPENAI_API_KEY="<api-key>"
 ```
 
-不带前缀的模型名使用 OpenAI-compatible 适配器。Anthropic、本地模型、网关和自定义 Base URL
-请从[安装](installation.md#配置模型)复制对应配置。
+## 2. 配置模型
 
-## 2. 运行第一个 Agent
+`Agent(model=...)` 接受 Provider 实例或模型字符串。不带前缀的模型名使用
+OpenAI-compatible 适配器；带 `anthropic:` 前缀的模型名使用 Anthropic-compatible
+适配器。选择你使用的端点：
+
+=== "OpenAI"
+
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    官方 Base URL 是默认值。Python 代码中使用 `model="<openai-model>"`。
+
+=== "Anthropic"
+
+    ```bash
+    export ANTHROPIC_API_KEY="sk-ant-..."
+    ```
+
+    Python 代码中使用 `model="anthropic:<anthropic-model>"`。
+
+=== "OpenAI-compatible"
+
+    DeepSeek、vLLM、LM Studio、模型网关等服务通常提供这种协议；部分本地服务
+    不需要 API key。
+
+    ```bash
+    export OPENAI_BASE_URL="https://your-endpoint.example/v1"
+    export OPENAI_API_KEY="<endpoint-key>"
+    ```
+
+    `model=` 使用端点实际公布的模型名。
+
+=== "Anthropic-compatible"
+
+    ```bash
+    export ANTHROPIC_BASE_URL="https://your-endpoint.example/anthropic"
+    export ANTHROPIC_API_KEY="<endpoint-key>"
+    ```
+
+    Python 代码中使用 `model="anthropic:<endpoint-model>"`。
+
+=== "Ollama"
+
+    ```bash
+    export OPENAI_BASE_URL="http://127.0.0.1:11434/v1"
+    ```
+
+    `model=` 使用本地已经拉取的模型。Ollama 会静默截断过长的 prompt，因此应让
+    `Compaction(context_window=...)` 与 `num_ctx` 一致；详见[上下文窗口](providers.md#上下文窗口)。
+
+环境变量用于配置凭证和 Base URL；模型名显式传给 `Agent`。Python 库不会自动加载
+`.env`；可以在 Shell 中导出变量、在应用中加载文件，或直接传入已配置的 Provider。
+
+## 3. 运行第一个 Agent
 
 ```python
 from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="回答要具体、简洁。",
+    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
     model="<model>",
 )
 
@@ -31,7 +83,7 @@ print(result.output)
 `Agent` 是可复用配置，不保存对话状态。普通脚本使用 `run_sync()`；异步应用使用
 `await agent.run(...)`，两者执行同一个 RunLoop。
 
-## 3. 为 Agent 添加 Tool
+## 4. 为 Agent 添加 Tool
 
 `@tool` 把带类型信息的函数变成模型可调用的能力。函数签名会转换为 JSON Schema，文档字符串
 则告诉模型何时调用它。
@@ -61,7 +113,7 @@ print(f"turns={result.turns}, tokens={result.usage.total_tokens}")
 如果模型调用 `check_inventory`，一个 Turn 请求并执行 Tool，下一 Turn 使用结果。详见
 [核心概念](concepts.md#run-与-turn)。
 
-## 4. 流式接收文本和 Tool 事件
+## 5. 流式接收文本和 Tool 事件
 
 UI 或 CLI 需要在最终答案前响应时，使用 `Runner.stream()`。`RunHandle` 既是异步事件流，
 也是可等待的结果。
@@ -98,7 +150,7 @@ asyncio.run(main())
 事件流以 `RunCompleted` 或 `RunFailed` 结束；调用 `result()` 会返回结果或抛出保存的异常。
 详见[流式输出](streaming.md)。
 
-## 5. 返回经过校验的数据
+## 6. 返回经过校验的数据
 
 下游代码需要对象而不是自然语言时，把 Pydantic Model 作为 `output_type`。
 
@@ -129,15 +181,14 @@ print(result.output.population_millions)
 lovia 会校验最终答案并返回 `CityFact`。Provider 支持时使用原生 JSON Schema，否则使用可移植
 的 Tool fallback。详见[结构化输出](structured-output.md)。
 
-## 6. 打开聊天 UI
+## 7. 打开聊天 UI
 
 ```bash
-pip install "lovia[web]"
 lovia web
 ```
 
-打开 `http://127.0.0.1:8000`。首次运行向导可以收集并保存模型配置。要服务自己模块中的 Agent，
-使用 `lovia web --app mymodule:agent`；详见 [Web UI](web-ui.md)。
+先安装文末列出的 [`web` extra](#可选-extra)，再打开 `http://127.0.0.1:8000`。首次运行向导可以
+收集并保存模型配置；详见 [Web UI](web-ui.md)。
 
 ## 选择下一步
 
@@ -149,3 +200,13 @@ lovia web
 | 添加 Skills、Todo 或 Memory | [插件](plugins.md) | [示例](../../examples/README-zh.md) |
 | 加入重试和成本限制 | [Provider 重试](retries.md) · [预算](budgets.md) | [`14_reliability.py`](../../examples/14_reliability.py) |
 | 不访问网络进行测试 | [测试](testing.md) | [`22_testing.py`](../../examples/22_testing.py) |
+
+## 可选 Extra
+
+只在需要时安装集成能力。多个 Extra 可以组合，例如 `pip install "lovia[mcp,web]"`。
+
+| 能力 | 安装命令 |
+| --- | --- |
+| MCP 客户端支持 | `pip install "lovia[mcp]"` |
+| DuckDuckGo 搜索后端 | `pip install "lovia[ddg]"` |
+| FastAPI 服务端、聊天 UI 和定时任务 | `pip install "lovia[web]"` |

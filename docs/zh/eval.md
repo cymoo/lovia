@@ -12,8 +12,8 @@ cases = [
     Case("法国首都是哪里？", checks=[contains("巴黎")]),
     Case("23.4 * 91 等于多少？", checks=[tool_called("calculator")]),
     Case(
-        "写一首关于春天的俳句",
-        checks=[llm_judge("一首 5-7-5 音节、能唤起春天意象的俳句")],
+        "用一句话告知用户密码重置链接已过期",
+        checks=[llm_judge("语气友好，说明链接已过期，并给出重新申请的下一步")],
         samples=4,               # 把不确定性量出来，而不是靠重试掩盖
         pass_threshold=0.75,      # 4 个 sample 至少 3 个通过即通过
     ),
@@ -28,7 +28,7 @@ assert report.passed
 eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
   ✓ 法国首都是哪里？              1/1
   ✓ 23.4 * 91 等于多少？          1/1
-  ✗ 写一首关于春天的俳句          2/4  llm_judge (score 0.55) — 第三行有八个音节
+  ✗ 用一句话告知用户密码重置链接已过期  2/4  llm_judge (score 0.55) — 未说明如何重新申请
 ```
 
 ## 定义评测用例

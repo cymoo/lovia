@@ -66,9 +66,8 @@ plugins:
           # HTTP API are identical in both languages and left untranslated.
           nav_translations:
             Home: 首页
-            Getting started: 快速开始
-            Installation: 安装
-            Quickstart: 快速上手
+            Start here: 开始使用
+            Quickstart: 快速开始
             Core concepts: 核心概念
             Core: 核心
             Agents: Agent
@@ -135,8 +134,7 @@ markdown_extensions:
 # docs/zh/… for the zh build (falling back to en if a translation is missing).
 nav:
   - Home: README.md
-  - Getting started:
-      - Installation: installation.md
+  - Start here:
       - Quickstart: quickstart.md
       - Core concepts: concepts.md
   - Core:

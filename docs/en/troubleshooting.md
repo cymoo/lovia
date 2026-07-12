@@ -19,10 +19,9 @@ dumps in bug reports.
 **Symptoms:** `UserError` before the first Turn, usually because the Agent has
 no model or the model string is invalid.
 
-Pass a valid `model=` to the Agent, or set `LOVIA_MODEL` and read it with
-`model_from_env()`; either way, provide the credentials/Base URL for your
-endpoint. Remember that the library does not load `.env` automatically. Follow
-[Installation](installation.md#configure-a-model).
+Pass a valid `model=` to the Agent and provide the credentials/Base URL for
+your endpoint. Remember that the library does not load `.env` automatically.
+Follow [Quickstart: configure a model](quickstart.md#2-configure-a-model).
 
 ## Provider authentication or endpoint failures
 

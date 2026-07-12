@@ -34,7 +34,7 @@ agent = Agent(
     max_tool_output_chars=50_000,
 )
 
-budget = RunBudget(max_total_tokens=100_000, max_tool_calls=20)
+budget = RunBudget(max_total_tokens=1_000_000, max_tool_calls=50)
 ```
 
 Pass the budget and a persistence configuration at the application boundary:

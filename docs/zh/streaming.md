@@ -102,7 +102,7 @@ session 时回放的也是同一个对象。
 
 ## 常见模式
 
-**渐进文本 + 工具状态**：快速上手里的循环就是这个模式。并发工具 spinner 要用
+**渐进文本 + 工具状态**：快速开始里的循环就是这个模式。并发工具 spinner 要用
 `call.id` 维护 map。
 
 **审批 UI**：遇到 `ApprovalRequired` 时暂停，展示 `ev.call.name` 和

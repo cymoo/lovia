@@ -1,6 +1,6 @@
 # lovia
 
-**A concise, provider-neutral Agent framework for Python.** Start with one
+**A lightweight, elegant, provider-neutral Agent framework for Python.** Start with one
 Agent and typed Tools. Add streaming, persistence, context management,
 plugins, a Workspace, or a Web UI only when the application needs them.
 
@@ -13,7 +13,7 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="Answer concretely and concisely.",
+    instructions="Lead with the conclusion and give one actionable next step.",
     model="<model>",
 )
 
@@ -22,21 +22,19 @@ print(result.output)
 ```
 
 [Build your first Agent →](quickstart.md){ .md-button .md-button--primary }
-[Install integrations →](installation.md){ .md-button }
+[Open the Web UI →](web-ui.md){ .md-button }
 
 ## Why lovia
 
 <div class="grid cards" markdown>
 
--   **Small by default**
+-   **Lightweight**
 
-    The core depends only on `httpx`, `pydantic`, and `pyyaml`. MCP, search,
-    and the Web server remain opt-in extras.
+    The core needs only an HTTP client and a data-validation library.
 
 -   **Provider-neutral**
 
-    Use OpenAI, Anthropic, compatible endpoints, or your own Provider without
-    changing Agent and Tool code.
+    Use OpenAI, Anthropic, compatible endpoints, or your own Provider.
 
 -   **Typed and observable**
 
@@ -53,27 +51,32 @@ print(result.output)
 ## The mental model
 
 ```text
-Agent configuration
-        │
-        ▼
-Runner ── model Turn ──► Tool calls ──► next Turn ──► RunResult
-        │                    │
-        ├─ typed events      └─ approval, timeout, policies
-        └─ Transcript + optional Session / Checkpoint
+Agent configuration + input
+            │
+            ▼
+Runner creates one RunLoop
+            │
+            ▼
+canonical Transcript ─► context policy ─► provider view ─► model Turn
+       ▲                                                   │
+       └── Tool result ◄─ approval / timeout / budget ◄─ Tool call
 ```
 
-An `Agent` is immutable configuration. `Runner` owns one Run, alternating
-between model Turns and Tool execution until it produces a final result. The
-Transcript is the source of truth; Sessions persist completed Runs and
-Checkpoints make an in-flight Run resumable. [Core concepts](concepts.md)
-explains the lifecycle in detail.
+An `Agent` is immutable configuration; the RunLoop is the only mutable engine
+for a Run. Each model or Tool result is appended to the canonical Transcript,
+while context management derives a smaller provider view without rewriting
+that record. Typed events expose the same loop as it happens. Sessions append
+finished Runs; Checkpoints preserve an in-flight Run for resumption. This
+separation is why streaming, persistence, and compaction compose without
+becoming competing sources of truth. [Core concepts](concepts.md) explains the
+lifecycle in detail.
 
 ## Choose a path
 
 | I want to… | Start here | Then add |
 | --- | --- | --- |
 | Build my first Agent | [Quickstart](quickstart.md) | [Agents](agents.md), [Running agents](running.md) |
-| Connect a model or gateway | [Installation](installation.md) | [Providers & models](providers.md) |
+| Connect a model or gateway | [Quickstart](quickstart.md#2-configure-a-model) | [Providers & models](providers.md) |
 | Give the model capabilities | [Tools](tools.md) | [Built-in tools](built-in-tools.md), [Workspace](workspace.md) |
 | Build a longer-running assistant | [Plugins](plugins.md) | [Skills](skills.md), [Todo](todo.md), [Memory](memory.md) |
 | Make Runs production-ready | [Provider retries](retries.md) | [Budgets](budgets.md), [Sessions](sessions-and-checkpoints.md), [Guardrails](guardrails.md) |

@@ -9,7 +9,7 @@ from lovia import Agent
 
 agent = Agent(
     name="writer",
-    instructions="回答要具体、简洁。",
+    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
     model="<model>",
 )
 ```

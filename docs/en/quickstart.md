@@ -1,28 +1,83 @@
 # Quickstart
 
-Go from installation to Tools, streaming, and typed output. Every Python block
-is a complete script: replace `<model>` with the model name configured for your
-endpoint, save the block to a file, and run it.
+Go from a fresh environment to Tools, streaming, typed output, and the Web UI.
+lovia requires Python 3.10 or newer. Every Python block is a complete script:
+replace `<model>` with your endpoint's model name, save the block to a file,
+and run it.
 
-## 1. Install and configure credentials
+## 1. Install lovia
 
 ```bash
 pip install lovia
-export OPENAI_API_KEY="<api-key>"
 ```
 
-Bare model names use the OpenAI-compatible adapter. For Anthropic, local
-models, gateways, and custom Base URLs, copy the matching setup from
-[Installation](installation.md#configure-a-model).
+## 2. Configure a model
 
-## 2. Run your first Agent
+`Agent(model=...)` accepts a Provider instance or a model string. Bare model
+names use the OpenAI-compatible adapter; `anthropic:` names use the
+Anthropic-compatible adapter. Pick the endpoint you use:
+
+=== "OpenAI"
+
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    The official Base URL is the default. In Python, use
+    `model="<openai-model>"`.
+
+=== "Anthropic"
+
+    ```bash
+    export ANTHROPIC_API_KEY="sk-ant-..."
+    ```
+
+    In Python, use `model="anthropic:<anthropic-model>"`.
+
+=== "OpenAI-compatible"
+
+    DeepSeek, vLLM, LM Studio, gateways, and similar services commonly expose
+    this dialect. Some local services do not require a key.
+
+    ```bash
+    export OPENAI_BASE_URL="https://your-endpoint.example/v1"
+    export OPENAI_API_KEY="<endpoint-key>"
+    ```
+
+    Use the exact model name published by the endpoint.
+
+=== "Anthropic-compatible"
+
+    ```bash
+    export ANTHROPIC_BASE_URL="https://your-endpoint.example/anthropic"
+    export ANTHROPIC_API_KEY="<endpoint-key>"
+    ```
+
+    In Python, use `model="anthropic:<endpoint-model>"`.
+
+=== "Ollama"
+
+    ```bash
+    export OPENAI_BASE_URL="http://127.0.0.1:11434/v1"
+    ```
+
+    Use a model you have pulled locally. Ollama silently truncates overlong
+    prompts, so match `Compaction(context_window=...)` to its `num_ctx`; see
+    [context windows](providers.md#context-windows).
+
+Environment variables configure credentials and Base URLs; pass the model name
+explicitly to `Agent`. The Python library does not load `.env` implicitly.
+Export variables in your shell, load the file in your application, or pass a
+Provider configured in code.
+
+## 3. Run your first Agent
 
 ```python
 from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="Answer concretely and concisely.",
+    instructions="Lead with the conclusion and give one actionable next step.",
     model="<model>",
 )
 
@@ -34,7 +89,7 @@ print(result.output)
 `run_sync()` is convenient in ordinary scripts. Async applications use
 `await agent.run(...)` and execute the same RunLoop.
 
-## 3. Give the Agent a Tool
+## 4. Give the Agent a Tool
 
 `@tool` turns a typed function into a model-callable capability. Its signature
 becomes JSON Schema and its docstring tells the model when to call it.
@@ -64,7 +119,7 @@ print(f"turns={result.turns}, tokens={result.usage.total_tokens}")
 If the model calls `check_inventory`, one Turn requests and runs the Tool; the
 next Turn uses its result. See [Core concepts](concepts.md#run-vs-turn).
 
-## 4. Stream text and Tool events
+## 5. Stream text and Tool events
 
 Use `Runner.stream()` when a UI or CLI should react before the final answer is
 ready. A `RunHandle` is both an async event stream and an awaitable result.
@@ -101,7 +156,7 @@ asyncio.run(main())
 The event stream ends with `RunCompleted` or `RunFailed`; call `result()` to
 return the result or raise the stored failure. See [Streaming](streaming.md).
 
-## 5. Return validated data
+## 6. Return validated data
 
 Pass a Pydantic model as `output_type` when downstream code needs an object
 instead of prose.
@@ -134,16 +189,15 @@ lovia validates the final answer and returns a `CityFact`. Provider-native JSON
 Schema is used when available; otherwise lovia uses a portable Tool fallback.
 See [Structured output](structured-output.md).
 
-## 6. Open the chat UI
+## 7. Open the chat UI
 
 ```bash
-pip install "lovia[web]"
 lovia web
 ```
 
-Open `http://127.0.0.1:8000`. The first-run prompt can collect and save model
-configuration. To serve an Agent defined in your own module, use
-`lovia web --app mymodule:agent`; see [Web UI](web-ui.md).
+Install the `web` extra listed [below](#optional-extras), then open
+`http://127.0.0.1:8000`. The first-run prompt can collect and save model
+configuration; see [Web UI](web-ui.md).
 
 ## Choose your next step
 
@@ -155,3 +209,14 @@ configuration. To serve an Agent defined in your own module, use
 | Add Skills, Todo, or Memory | [Plugins](plugins.md) | [Examples](../../examples/README.md) |
 | Add retry and cost limits | [Provider retries](retries.md) · [Budgets](budgets.md) | [`14_reliability.py`](../../examples/14_reliability.py) |
 | Test without network calls | [Testing](testing.md) | [`22_testing.py`](../../examples/22_testing.py) |
+
+## Optional extras
+
+Install integrations only when you need them. Extras compose normally, for
+example `pip install "lovia[mcp,web]"`.
+
+| Capability | Install |
+| --- | --- |
+| MCP client support | `pip install "lovia[mcp]"` |
+| DuckDuckGo search backend | `pip install "lovia[ddg]"` |
+| FastAPI server, chat UI, and scheduling | `pip install "lovia[web]"` |

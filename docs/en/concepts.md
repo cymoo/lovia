@@ -28,7 +28,7 @@ The six, in sixty seconds:
 ```python
 from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="Be concrete.", model="<model>")
+agent = Agent(name="writer", instructions="Lead with the conclusion, then give one actionable next step.", model="<model>")
 result = await Runner.run(agent, "Draft a release note.")
 ```
 

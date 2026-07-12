@@ -1,6 +1,6 @@
 # lovia
 
-[中文文档](./README-zh.md) · [Documentation](https://cymoo.github.io/lovia/) · [Examples](./examples/README.md)
+**English** | [简体中文](./README-zh.md)
 
 lovia is an elegant, restrained Python framework for developers who want to
 own the agent loop without rebuilding every supporting primitive from scratch.
@@ -43,10 +43,6 @@ the current directory included — in one line:
 pip install "lovia[web]" && lovia web
 ```
 
-No configuration yet? The first run asks for the model, endpoint, and API
-key right in the terminal, verifies them, and offers to save the answers to
-`./.env` so you never retype them.
-
 Anthropic is built in too: configure `ANTHROPIC_API_KEY`, set
 `ANTHROPIC_BASE_URL` for non-default endpoints, and use the `anthropic:`
 model prefix. Everything else about models lives in
@@ -72,8 +68,8 @@ Composable primitives, ordinary Python — no new universe of abstractions:
 - **Readable.** The critical path is concentrated and explicit: model
   calls, tool execution, retries, and persistence happen in a clear order.
   When something surprises you, there is one chain to follow.
-- **Lightweight model integration.** OpenAI and Anthropic are built in, and
-  OpenAI-compatible endpoints work directly. There is no adapter stack to
+- **Lightweight model integration.** OpenAI, Anthropic, and compatible
+  endpoints are built in. There is no adapter stack to
   fight; a new provider is just a small `Protocol`.
 - **Cache-friendly context management.** Compaction only changes what the
   model sees on the next call, keeping prompt prefixes stable while the
@@ -101,7 +97,7 @@ from lovia import Agent
 
 agent = Agent(
     name="writer",
-    instructions="Write concrete, concise answers.",
+    instructions="Lead with the conclusion and give one actionable next step.",
     model="glm-5.2",
     workspace=Workspace.local(".")
 )
@@ -258,7 +254,7 @@ async for ev in Runner.stream(agent, "Refund order A123."):
         ev.approve()          # or ev.reject()
 ```
 
-→ [Human in the loop](https://cymoo.github.io/lovia/human-in-the-loop/)
+→ [Tool approval](https://cymoo.github.io/lovia/tools/#tool-approval)
 
 ### Sessions and checkpoints
 
@@ -448,7 +444,7 @@ lovia web --port 9000 --model glm-5.2      # python -m lovia.web works too
 lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
-Anything required but missing (model; API key for the official endpoints)
+Anything required but missing (Base URL, API key, model name)
 is asked interactively on first run and can be saved to `./.env`.
 Configuration precedence: flag > environment > `./.env` (or `--env-file`).
 
@@ -457,7 +453,7 @@ API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
 mounting the router into your own FastAPI app — lets you build a custom
 front-end on the same endpoints.
 
-→ [Web UI & server](https://cymoo.github.io/lovia/web/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
+→ [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 
 ### Evals
 

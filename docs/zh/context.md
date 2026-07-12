@@ -93,7 +93,10 @@ Compaction(
 - **token 计数**是校准过的估算：UTF-8 字节数/4 启发式——中文按 ~0.75 token/字计入，
   而不是被纯字符计数低估 4 倍——图片/文件有固定成本，加上请求携带的工具 schema
   （这块固定的加性负载若混进乘性系数会把它带偏），再用 provider 返回的**实际**
-  input token 数做 EMA 修正。provider 可以实现 `TokenEstimator` 提供精确计数。
+  input token 数做 EMA 修正。在英文、中文、中英混合和代码混合的真实端点校准中，
+  估算值与真实值几乎一致，精度约 **99%**（稳态误差约 0.7–1.3%）；详见
+  [校准报告](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md)。provider 也可以实现
+  `TokenEstimator` 提供精确计数。
 
 ## 结果存储
 

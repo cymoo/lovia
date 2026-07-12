@@ -118,7 +118,10 @@ Compaction(
   schemas the request carries (a fixed additive payload that would
   otherwise poison the multiplier), corrected by an EMA against the
   provider's *real* input-token counts as turns complete. Providers can
-  supply exact counting by implementing `TokenEstimator`.
+  supply exact counting by implementing `TokenEstimator`. In live calibration
+  across English, Chinese, mixed-language, and code-heavy transcripts, the
+  calibrated estimate reached roughly **99% accuracy** (about 0.7–1.3% steady
+  error); see the [calibration report](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md).
 
 ## Result stores
 

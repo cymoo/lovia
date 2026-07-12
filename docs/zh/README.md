@@ -1,6 +1,6 @@
 # lovia
 
-**简洁、Provider 中立的 Python Agent 框架。** 从一个 Agent 和类型化 Tool 开始；只有应用
+**轻量、优雅、Provider 中立的 Python Agent 框架。** 从一个 Agent 和类型化 Tool 开始；只有应用
 真正需要时，再加入流式输出、持久化、上下文管理、插件、Workspace 或 Web UI。
 
 ```bash
@@ -12,7 +12,7 @@ from lovia import Agent
 
 agent = Agent(
     name="assistant",
-    instructions="回答要具体、简洁。",
+    instructions="先给结论；涉及操作时，补充一个可执行的下一步。",
     model="<model>",
 )
 
@@ -21,19 +21,19 @@ print(result.output)
 ```
 
 [创建第一个 Agent →](quickstart.md){ .md-button .md-button--primary }
-[安装集成 →](installation.md){ .md-button }
+[打开 Web UI →](web-ui.md){ .md-button }
 
 ## 为什么选择 lovia
 
 <div class="grid cards" markdown>
 
--   **默认轻量**
+-   **轻量**
 
-    Core 只依赖 `httpx`、`pydantic` 和 `pyyaml`。MCP、搜索与 Web 服务端都是按需安装。
+    Core 只需要 HTTP 请求库和数据验证库。
 
 -   **Provider 中立**
 
-    可接入 OpenAI、Anthropic、兼容端点或自定义 Provider，Agent 与 Tool 代码无需改写。
+    可接入 OpenAI、Anthropic、兼容端点或自定义 Provider。
 
 -   **类型化且可观察**
 
@@ -49,25 +49,29 @@ print(result.output)
 ## 核心心智模型
 
 ```text
-Agent 配置
-    │
-    ▼
-Runner ── 模型 Turn ──► Tool 调用 ──► 下一 Turn ──► RunResult
-    │                       │
-    ├─ 类型化事件           └─ 审批、超时、策略
-    └─ Transcript + 可选 Session / Checkpoint
+Agent 配置 + 输入
+        │
+        ▼
+Runner 创建一个 RunLoop
+        │
+        ▼
+权威 Transcript ─► 上下文策略 ─► Provider 视图 ─► 模型 Turn
+      ▲                                              │
+      └── Tool 结果 ◄─ 审批 / 超时 / 预算 ◄─ Tool 调用
 ```
 
-`Agent` 是不可变配置。`Runner` 管理一次 Run，在模型 Turn 与 Tool 执行之间循环，直到得到
-最终结果。Transcript 是事实来源；Session 持久化已经完成的 Run，Checkpoint 则让进行中的
-Run 可以恢复。完整生命周期见[核心概念](concepts.md)。
+`Agent` 是不可变配置；RunLoop 是一次 Run 中唯一持有可变状态的引擎。模型和 Tool 的
+结果都追加到权威 Transcript，上下文管理只从中派生更小的 Provider 视图，不改写记录。
+类型化事件实时暴露同一个循环；Session 追加已完成的 Run，Checkpoint 保存可恢复的运行中
+状态。正因为这些职责分开，流式输出、持久化和上下文压缩才不会变成几套互相冲突的状态。
+完整生命周期见[核心概念](concepts.md)。
 
 ## 按目标选择路径
 
 | 我想要… | 从这里开始 | 接着加入 |
 | --- | --- | --- |
-| 创建第一个 Agent | [快速上手](quickstart.md) | [Agent](agents.md)、[运行 Agent](running.md) |
-| 连接模型或网关 | [安装](installation.md) | [Provider 与模型](providers.md) |
+| 创建第一个 Agent | [快速开始](quickstart.md) | [Agent](agents.md)、[运行 Agent](running.md) |
+| 连接模型或网关 | [快速开始](quickstart.md#2-配置模型) | [Provider 与模型](providers.md) |
 | 为模型提供能力 | [工具](tools.md) | [内置工具](built-in-tools.md)、[工作区](workspace.md) |
 | 构建长期运行的助手 | [插件](plugins.md) | [Skills](skills.md)、[Todo](todo.md)、[记忆](memory.md) |
 | 让 Run 适合生产环境 | [Provider 重试](retries.md) | [预算](budgets.md)、[Session](sessions-and-checkpoints.md)、[护栏](guardrails.md) |

@@ -10,7 +10,7 @@ from lovia import Agent
 
 agent = Agent(
     name="writer",
-    instructions="Write concrete, concise answers.",
+    instructions="Lead with the conclusion and give one actionable next step.",
     model="<model>",
 )
 ```

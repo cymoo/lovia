@@ -172,6 +172,6 @@ several stores in one file, or a multi-process deployment.
 
 - [Core concepts](concepts.md#session-vs-checkpoint) — the mental model
 - [Context management](context.md) — carried state and result stores
-- [Web UI & server](web.md) — how the bundled server wires sessions
+- [Web server](web-server.md) — how the bundled server wires Sessions
 - Examples: [`05_sessions.py`](../../examples/05_sessions.py),
   [`15_resume.py`](../../examples/15_resume.py)

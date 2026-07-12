@@ -62,11 +62,11 @@ Three guarantees shape every consumer:
 | `ReasoningDelta` | `delta` | a fragment of chain-of-thought, for providers that expose it — render as collapsed/secondary text, never rely on it for behavior |
 | `OutputDiscarded` | — | the turn's streamed deltas so far are void; clear what you rendered — a fresh stream follows |
 | `MessageCompleted` | `entries` | one assistant turn fully assembled: the new `TranscriptEntry` values it produced |
-| `UserMessageInjected` | `content`, `turn` | a [mailbox](reliability.md#steering-a-live-run) message was folded in as a user turn |
+| `UserMessageInjected` | `content`, `turn` | a [mailbox](cancellation.md#steering-a-live-run) message was folded in as a user turn |
 
 `OutputDiscarded` fires when the runner recovers from a mid-stream provider
 error by retrying
-([`RetryPolicy.restart_on_partial`](reliability.md#provider-retries)). The
+([`RetryPolicy.restart_on_partial`](retries.md)). The
 persistent transcript is unaffected — it is assembled only from completed
 turns.
 
@@ -95,7 +95,7 @@ The fine print that UIs get wrong:
   out-of-band, via `handle.approvals`. Unresolved requests are **denied**
   when the turn needs the answer, so a forgetful UI can't hang a run. Other
   calls of the same turn keep executing while the stream sits at this
-  event. Full decision flow in [Human in the loop](human-in-the-loop.md).
+  event. Full decision flow in [Tool approval](tools.md#tool-approval).
 
 ### Transitions and context
 
@@ -146,6 +146,6 @@ for metrics so instrumentation doesn't depend on who is iterating.
 ## See also
 
 - [Running agents](running.md) — the handle and result surface
-- [Human in the loop](human-in-the-loop.md) — every way to resolve approvals
+- [Tool approval](tools.md#tool-approval) — every way to resolve approvals
 - [Observability](observability.md) — the same events, as hooks
 - Example: [`03_streaming.py`](../../examples/03_streaming.py)

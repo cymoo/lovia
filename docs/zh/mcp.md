@@ -9,12 +9,12 @@ pip install "lovia[mcp]"
 ```
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="assistant",
-    model=model_from_env(),
+    model="<model>",
     plugins=[
         MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
@@ -39,7 +39,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 | --- | --- | --- |
 | `name` | `None` | 给服务器工具加前缀：`name="web"` → `web__fetch` |
 | `include_tools` / `exclude_tools` | `None` | 原始工具名 allowlist / denylist |
-| `needs_approval` | `False` | bool 或谓词；让这个服务器的每个工具都走标准[审批流程](human-in-the-loop.md) |
+| `needs_approval` | `False` | bool 或谓词；让这个服务器的每个工具都走标准[审批流程](tools.md#工具审批) |
 | `retries` / `timeout` / `max_output_chars` / `result_renderer` | `None` | 应用于每个转换工具的工具级策略（见[工具](tools.md)） |
 | `auto_reconnect` | `True` | 连接失效后自动重开，并重试调用一次 |
 | `close_after_run` | `True` | 运行结束时关闭连接 |
@@ -59,7 +59,7 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:      # 只打开一次
-    agent = Agent(name="assistant", model=model_from_env(), plugins=[MCP(conn)])
+    agent = Agent(name="assistant", model="<model>", plugins=[MCP(conn)])
     await Runner.run(agent, "抓取 https://example.com 并总结。")
     await Runner.run(agent, "现在抓取 RFC 索引。")   # 同一连接
 ```
@@ -97,5 +97,5 @@ async with server.session() as conn:      # 只打开一次
 
 - [插件](plugins.md)：底层机制
 - [工具](tools.md)：转换后的 MCP 工具继承的一切行为
-- [人工介入](human-in-the-loop.md)：给服务器工具加门禁
+- [工具审批](tools.md#工具审批)：给服务器工具加门禁
 - 示例：[`24_mcp.py`](../../examples/24_mcp.py)

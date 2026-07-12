@@ -51,7 +51,7 @@ The contract:
 - Ordering guarantee: events reach hooks in emission order, at the loop's
   single dispatch point — the same order the stream consumer sees.
 - Hooks aren't observers only: `ctx` is live, so a handler can push into
-  `ctx.mailbox` ([steering](reliability.md#steering-a-live-run)) or trip
+  `ctx.mailbox` ([steering](cancellation.md#steering-a-live-run)) or trip
   `ctx.cancel_token`.
 
 [Plugins](plugins.md) can contribute their own `AgentHooks`, dispatched
@@ -144,5 +144,5 @@ model turn's own usage from the `model.done` log line.
 ## See also
 
 - [Streaming](streaming.md) — the full event catalog hooks receive
-- [Reliability](reliability.md) — the control half of `ctx`
+- [Cancellation & steering](cancellation.md) — the control half of `ctx`
 - Example: [`11_hooks.py`](../../examples/11_hooks.py)

@@ -7,13 +7,13 @@ and commands, so there is a single place to reason about what the agent may
 touch.
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.workspace import CommandRule, Workspace
 
 agent = Agent(
     name="coder",
     instructions="Make small, targeted code changes.",
-    model=model_from_env(),
+    model="<model>",
     workspace=Workspace.local(
         ".",
         mode="coding",
@@ -63,7 +63,7 @@ Three values, two enforcement points:
 - **`ask` is resolved at the tool layer** — the built-in tools carry
   `needs_approval` predicates that consult the policy, so `ask` decisions
   surface through the standard
-  [approval channel](human-in-the-loop.md#tool-approval), same as any gated
+  [approval channel](tools.md#tool-approval), same as any gated
   tool.
 
 **Path rules.** `PathRule(pattern, action, ops={"read","write"})`; patterns
@@ -192,7 +192,7 @@ By default each run opens a fresh session and closes it at run end; the
 
 ## See also
 
-- [Human in the loop](human-in-the-loop.md) — where `ask` decisions land
+- [Tool approval](tools.md#tool-approval) — where `ask` decisions land
 - [Tools](tools.md) — barriers, truncation, error semantics
 - Examples: [`19_workspace.py`](../../examples/19_workspace.py) (library),
   [`20_workspace_agent.py`](../../examples/20_workspace_agent.py) (coding agent)

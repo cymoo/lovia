@@ -8,11 +8,11 @@ extension axis: Skills, MCP, Todo, and Memory are all built on exactly this
 seam.
 
 ```python
-from lovia import Agent, Memory, Skills, Todo, model_from_env
+from lovia import Agent, Memory, Skills, Todo
 
 agent = Agent(
     name="builder",
-    model=model_from_env(),
+    model="<model>",
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
@@ -129,7 +129,7 @@ class GlossaryPlugin:
         )
 
 
-agent = Agent(name="assistant", model=model_from_env(), plugins=[GlossaryPlugin(MyGlossary())])
+agent = Agent(name="assistant", model="<model>", plugins=[GlossaryPlugin(MyGlossary())])
 ```
 
 A plugin that opens a resource in `setup()` (an MCP connection, an HTTP

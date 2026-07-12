@@ -1,4 +1,4 @@
-# Installation & model setup
+# Installation
 
 Install the small core first, then add integrations only when you use them.
 lovia requires Python 3.10 or newer.
@@ -79,27 +79,30 @@ Anthropic-compatible adapter.
     `Compaction(context_window=...)` to match its `num_ctx`; see
     [context windows](providers.md#context-windows).
 
-`model_from_env()` reads `LOVIA_MODEL`, then `OPENAI_DEFAULT_MODEL`, then
-`ANTHROPIC_DEFAULT_MODEL`. It raises a `UserError` with a setup hint when none
-is configured:
+Pass the endpoint's model name directly to the Agent. Environment variables
+configure credentials and Base URLs; they do not choose a model for the Python
+API:
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 
-agent = Agent(name="assistant", model=model_from_env())
+agent = Agent(name="assistant", model="<model>")
 ```
 
 !!! note ".env files"
 
     The Python library does not load `.env` implicitly. Export variables in
     your shell, load the file with `python-dotenv`, or pass configuration in
-    code. The `lovia web` CLI and repository examples load their documented
+    code. The `lovia web` CLI and repository examples can load their documented
     env files for you.
 
 ## Verify the setup
 
-```bash
-python -c "from lovia import model_from_env; print(model_from_env())"
+```python
+from lovia import Agent
+
+agent = Agent(name="setup-check", model="<model>")
+print(agent.run_sync("Reply with exactly: lovia is ready").output)
 ```
 
 Then continue with the [Quickstart](quickstart.md). For provider constructor

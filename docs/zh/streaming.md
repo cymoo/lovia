@@ -58,11 +58,11 @@ result = await handle.result()
 | `ReasoningDelta` | `delta` | reasoning/思考片段，仅限会暴露它的 provider；适合折叠显示或弱化显示，不要依赖它做行为判断 |
 | `OutputDiscarded` | — | 本轮已流出的 delta 作废；清掉你渲染的内容，之后会有一条新的流 |
 | `MessageCompleted` | `entries` | 一轮 assistant 回复已完整组装：包含它产生的新 `TranscriptEntry` |
-| `UserMessageInjected` | `content`, `turn` | [mailbox](reliability.md#运行中追加指令) 消息被折入为用户消息 |
+| `UserMessageInjected` | `content`, `turn` | [mailbox](cancellation.md#在运行中追加指令) 消息被折入为用户消息 |
 
 当 runner 通过重试从 provider 的中途流式错误中恢复时，会触发
 `OutputDiscarded`
-（见 [`RetryPolicy.restart_on_partial`](reliability.md#provider-调用重试)）。持久化
+（见 [`RetryPolicy.restart_on_partial`](retries.md)）。持久化
 transcript 不受影响；它只由已完成轮次组装出来。
 
 ### 工具与审批
@@ -87,7 +87,7 @@ UI 最容易写错的地方：
 - 处理 `ApprovalRequired` 时，可以在循环继续交还控制权给 runner 前调用
   `ev.approve()` 或 `ev.reject()`；也可以稍后通过 `handle.approvals` 处理。
   当本轮需要答案而请求仍未处理时，默认会**拒绝**，所以没处理审批的 UI 不会卡住运行。
-  同一轮里其他调用会在事件流停在审批事件处时继续执行。完整流程见[人工介入](human-in-the-loop.md)。
+  同一轮里其他调用会在事件流停在审批事件处时继续执行。完整流程见[工具审批](tools.md#工具审批)。
 
 ### 转移与上下文
 
@@ -134,6 +134,6 @@ async for ev in handle:
 ## 延伸阅读
 
 - [运行 agent](running.md)：handle 和 result 的用法
-- [人工介入](human-in-the-loop.md)：处理审批的所有方式
+- [工具审批](tools.md#工具审批)：处理审批的所有方式
 - [可观测性](observability.md)：同一套事件，作为 hooks 使用
 - 示例：[`03_streaming.py`](../../examples/03_streaming.py)

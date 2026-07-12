@@ -8,7 +8,7 @@ the run fails loudly after a bounded repair attempt.
 ```python
 from pydantic import BaseModel
 
-from lovia import Agent, Runner, model_from_env
+from lovia import Agent, Runner
 
 
 class Brief(BaseModel):
@@ -16,7 +16,7 @@ class Brief(BaseModel):
     bullets: list[str]
 
 
-agent = Agent(name="summarizer", model=model_from_env(), output_type=Brief)
+agent = Agent(name="summarizer", model="<model>", output_type=Brief)
 
 result = await Runner.run(agent, "Summarize lovia for a Python developer.")
 print(result.output.title)          # typed access — result.output is a Brief

@@ -16,12 +16,12 @@ dumps in bug reports.
 
 ## No model is configured
 
-**Symptoms:** `UserError` before the first Turn, or `model_from_env()` reports
-that no model was found.
+**Symptoms:** `UserError` before the first Turn, usually because the Agent has
+no model or the model string is invalid.
 
 Set `LOVIA_MODEL` and the credentials/Base URL for your endpoint. Remember that
 the library does not load `.env` automatically. Follow
-[Installation & model setup](installation.md#configure-a-model).
+[Installation](installation.md#configure-a-model).
 
 ## Provider authentication or endpoint failures
 

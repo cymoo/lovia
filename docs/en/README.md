@@ -1,68 +1,106 @@
 # lovia
 
-**A concise, provider-neutral agent framework for Python.** Build one agent,
-give it typed tools, then add persistence, plugins, a workspace, or a web UI
-only when the application needs them.
+**A concise, provider-neutral Agent framework for Python.** Start with one
+Agent and typed Tools. Add streaming, persistence, context management,
+plugins, a Workspace, or a Web UI only when the application needs them.
 
 ```bash
 pip install lovia
 ```
 
+```python
+from lovia import Agent
+
+agent = Agent(
+    name="assistant",
+    instructions="Answer concretely and concisely.",
+    model="<model>",
+)
+
+result = agent.run_sync("Explain why the sky is blue in three sentences.")
+print(result.output)
+```
+
+[Build your first Agent →](quickstart.md){ .md-button .md-button--primary }
+[Install integrations →](installation.md){ .md-button }
+
+## Why lovia
+
 <div class="grid cards" markdown>
 
--   **Run your first agent**
+-   **Small by default**
 
-    Configure a model and get a working answer in a few minutes.
+    The core depends only on `httpx`, `pydantic`, and `pyyaml`. MCP, search,
+    and the Web server remain opt-in extras.
 
-    [Start the quickstart →](quickstart.md)
+-   **Provider-neutral**
 
--   **Understand the runtime**
+    Use OpenAI, Anthropic, compatible endpoints, or your own Provider without
+    changing Agent and Tool code.
 
-    Learn how agents, runs, turns, tools, transcripts, and plugins fit
-    together.
+-   **Typed and observable**
 
-    [Read the core concepts →](concepts.md)
+    Function annotations become Tool schemas. Runs expose typed events, a
+    canonical Transcript, usage, and structured failures.
 
--   **Build from examples**
+-   **Progressive by design**
 
-    Copy small, self-contained scripts covering the framework feature by
-    feature.
-
-    [Browse runnable examples →](../../examples/README.md)
-
--   **Prepare for production**
-
-    Add reliability limits, persistence, safety gates, observability, and
-    deployment boundaries.
-
-    [Open the deployment checklist →](deployment.md)
+    Begin with a one-file script. Add Plugins, Sessions, Checkpoints,
+    compaction, approvals, and Workspaces without replacing the core model.
 
 </div>
 
-## Choose a guide
+## The mental model
 
-| Goal | Guide |
-| --- | --- |
-| Define and run an agent | [Agents](agents.md) · [Running agents](running.md) |
-| Configure a model or endpoint | [Installation & model setup](installation.md) · [Providers & models](providers.md) |
-| Give the model capabilities | [Tools](tools.md) · [Workspace](workspace.md) · [Multi-agent](multi-agent.md) |
-| Extend an agent | [Plugins](plugins.md) · [Skills](skills.md) · [MCP](mcp.md) · [Memory](memory.md) |
-| Keep runs safe and durable | [Reliability](reliability.md) · [Sessions](sessions-and-checkpoints.md) · [Human approval](human-in-the-loop.md) |
-| Serve and verify an application | [Web server](web.md) · [HTTP API](http-api.md) · [Testing](testing.md) · [Evals](eval.md) |
+```text
+Agent configuration
+        │
+        ▼
+Runner ── model Turn ──► Tool calls ──► next Turn ──► RunResult
+        │                    │
+        ├─ typed events      └─ approval, timeout, policies
+        └─ Transcript + optional Session / Checkpoint
+```
 
-Looking for an exact type, exception, or common failure? Use the
-[API reference](api-reference.md) or [troubleshooting guide](troubleshooting.md).
+An `Agent` is immutable configuration. `Runner` owns one Run, alternating
+between model Turns and Tool execution until it produces a final result. The
+Transcript is the source of truth; Sessions persist completed Runs and
+Checkpoints make an in-flight Run resumable. [Core concepts](concepts.md)
+explains the lifecycle in detail.
+
+## Choose a path
+
+| I want to… | Start here | Then add |
+| --- | --- | --- |
+| Build my first Agent | [Quickstart](quickstart.md) | [Agents](agents.md), [Running agents](running.md) |
+| Connect a model or gateway | [Installation](installation.md) | [Providers & models](providers.md) |
+| Give the model capabilities | [Tools](tools.md) | [Built-in tools](built-in-tools.md), [Workspace](workspace.md) |
+| Build a longer-running assistant | [Plugins](plugins.md) | [Skills](skills.md), [Todo](todo.md), [Memory](memory.md) |
+| Make Runs production-ready | [Provider retries](retries.md) | [Budgets](budgets.md), [Sessions](sessions-and-checkpoints.md), [Guardrails](guardrails.md) |
+| Add a chat experience | [Web UI](web-ui.md) | [Web server](web-server.md), [HTTP API](http-api.md) |
+| Test behavior | [Testing](testing.md) | [Evals](eval.md), [Observability](observability.md) |
+
+## Learn from runnable examples
+
+The repository examples form a feature-by-feature learning path. Every script
+is small enough to copy and modify:
+
+- [`01_hello.py`](../../examples/01_hello.py) — one Agent, one answer
+- [`02_tools.py`](../../examples/02_tools.py) — typed Tool calls
+- [`03_streaming.py`](../../examples/03_streaming.py) — typed events
+- [`04_structured_output.py`](../../examples/04_structured_output.py) — validated output
+- [`05_sessions.py`](../../examples/05_sessions.py) — conversation history
+- [Browse all examples](../../examples/README.md)
 
 !!! note "Documentation version"
 
-    This site follows the current `main` branch. Check your installed version
-    with `python -c "import lovia; print(lovia.__version__)"` when comparing
-    behavior with the source documentation.
+    This site follows the current `main` branch. Compare it with your installed
+    version using `python -c "import lovia; print(lovia.__version__)"`.
 
 ## For contributors
 
-The [architecture notes](../architecture.md) explain the module map, runner
-internals, and invariants for people changing lovia itself.
+The [architecture notes](../architecture.md) document the module map, RunLoop,
+Transcript invariants, Plugins, persistence, and context compaction.
 
 ---
 

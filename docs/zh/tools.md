@@ -150,6 +150,53 @@ async def top_customers(n: int = 10) -> list[dict]: ...
 渲染器。渲染器只处理**成功**结果；runner 生成的 `"Tool error: ..."` 字符串会绕过
 它们。原始、未渲染的值仍然会通过 `ToolCallCompleted.result` 到达观察者。
 
+## 工具审批
+
+Tool 会产生需要人工确认的副作用时，使用 `needs_approval`。它可以是布尔值，也可以是接收
+已解析参数和实时 Run Context 的谓词：
+
+```python
+from lovia import Agent, Runner, events, tool
+
+
+@tool(needs_approval=lambda args, ctx: args["amount_cents"] > 5_000)
+async def refund(order_id: str, amount_cents: int) -> str:
+    """执行退款。"""
+    return "refunded"
+
+
+agent = Agent(name="support", model="<model>", tools=[refund])
+handle = Runner.stream(agent, "为订单 A123 退款 60 美元。")
+
+async for event in handle:
+    if isinstance(event, events.ApprovalRequired):
+        event.approve()  # 或 event.reject()
+
+result = await handle.result()
+```
+
+Runner 会在调用 Tool 前发出 `ApprovalRequired`，并按以下顺序取得决定：
+
+1. 流式消费者调用 `event.approve()` 或 `event.reject()`。
+2. Agent 的 `approval_handler` 返回 `True` / `"allow"`、`False` / `"deny"`，
+   或返回 `"ask"` 交给消费者处理。
+3. 没有任何一方决定时拒绝调用；审批始终 fail closed。
+
+如果决定来自 Web 端点、机器人或另一个 Task，可使用 Run Handle 的带外通道：
+
+```python
+handle.approvals.approve(call_id)
+handle.approvals.reject(call_id)
+handle.approvals.release(decision=False)  # 拒绝所有仍在等待的调用
+```
+
+内置服务端通过 SSE 和 `POST /api/chat/approve` 暴露同一流程。Workspace 的 `ask` 决策和
+配置了 `needs_approval` 的 MCP Tool 也使用这个通道。
+
+审批属于预检，并保持请求顺序。谓词或 handler 抛异常时会拒绝调用。非流式
+`Runner.run()` 无法消费事件，必须设置 `approval_handler`，否则带门禁的调用会被拒绝。
+审批决定不会持久化，因此恢复未完成的调用时会再次询问。
+
 ## 工具策略
 
 如果要围绕**单次尝试**组合横切行为，如缓存、脱敏、限流、自定义鉴权，可以使用
@@ -174,7 +221,8 @@ async def search_docs(query: str) -> list[str]: ...
 顺序组合（第一个在最外层）；框架重试和 timeout 包住**整条**链，所以每个 policy 每次
 只看到一次尝试。参数校验发生在最内层、函数边界；需要转换后值的 policy 要自己校验。
 
-如果门禁需要的是**人的决策**，而不是代码逻辑，请使用 `needs_approval`，见[人工介入](human-in-the-loop.md)。
+如果门禁需要的是**人的决策**，而不是代码逻辑，请使用
+[`needs_approval` 流程](#工具审批)。
 
 ## 程序化构建工具
 
@@ -197,6 +245,6 @@ async def search_docs(query: str) -> list[str]: ...
 ## 延伸阅读
 
 - [内置工具](built-in-tools.md)：HTTP、搜索、时间
-- [人工介入](human-in-the-loop.md)：审批门禁
+- [流式输出](streaming.md#工具与审批)：审批事件
 - [插件](plugins.md)：把工具和 instructions、生命周期一起打包
 - 示例：[`02_tools.py`](../../examples/02_tools.py)

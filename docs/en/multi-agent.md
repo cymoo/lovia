@@ -9,15 +9,15 @@ parent carries on. Everything larger is composed from these in plain Python.
 ## Handoff
 
 ```python
-from lovia import Agent, Runner, model_from_env
+from lovia import Agent, Runner
 
-billing = Agent(name="billing", instructions="Handle billing issues.", model=model_from_env())
-support = Agent(name="support", instructions="Handle technical issues.", model=model_from_env())
+billing = Agent(name="billing", instructions="Handle billing issues.", model="<model>")
+support = Agent(name="support", instructions="Handle technical issues.", model="<model>")
 
 triage = Agent(
     name="triage",
     instructions="Route the user to the right specialist.",
-    model=model_from_env(),
+    model="<model>",
     handoffs=[billing, support],
 )
 
@@ -53,7 +53,7 @@ from lovia import Agent, Handoff
 
 triage = Agent(
     name="triage",
-    model=model_from_env(),
+    model="<model>",
     handoffs=[
         Handoff(
             target=billing,
@@ -99,13 +99,13 @@ output comes back as the tool result:
 summarizer = Agent(
     name="summarizer",
     instructions="Summarize text in five bullets.",
-    model=model_from_env(),
+    model="<model>",
 )
 
 manager = Agent(
     name="manager",
     instructions="Delegate summarization when useful.",
-    model=model_from_env(),
+    model="<model>",
     tools=[summarizer.as_tool(description="Summarize a passage.")],
 )
 ```

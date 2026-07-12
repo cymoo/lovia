@@ -11,12 +11,12 @@ pip install "lovia[mcp]"
 ```
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="assistant",
-    model=model_from_env(),
+    model="<model>",
     plugins=[
         MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
@@ -42,7 +42,7 @@ Shared options (on either config):
 | --- | --- | --- |
 | `name` | `None` | prefixes the server's tools: `name="web"` → `web__fetch` |
 | `include_tools` / `exclude_tools` | `None` | allowlist / denylist of raw tool names |
-| `needs_approval` | `False` | bool or predicate — gates every tool from this server through the normal [approval flow](human-in-the-loop.md) |
+| `needs_approval` | `False` | bool or predicate — gates every tool from this server through the normal [approval flow](tools.md#tool-approval) |
 | `retries` / `timeout` / `max_output_chars` / `result_renderer` | `None` | per-tool policies, applied to each converted tool ([Tools](tools.md)) |
 | `auto_reconnect` | `True` | reopen a dead connection and retry the call once |
 | `close_after_run` | `True` | close the connection when the run ends |
@@ -65,7 +65,7 @@ and connections:
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:      # opened once
-    agent = Agent(name="assistant", model=model_from_env(), plugins=[MCP(conn)])
+    agent = Agent(name="assistant", model="<model>", plugins=[MCP(conn)])
     await Runner.run(agent, "Fetch https://example.com and summarize it.")
     await Runner.run(agent, "Now fetch the RFC index.")   # same connection
 ```
@@ -115,5 +115,5 @@ single MCP session are unsupported; give each concurrent worker its own.
 
 - [Plugins](plugins.md) — the mechanism underneath
 - [Tools](tools.md) — everything a converted MCP tool inherits
-- [Human in the loop](human-in-the-loop.md) — gating server tools
+- [Tool approval](tools.md#tool-approval) — gating server tools
 - Example: [`24_mcp.py`](../../examples/24_mcp.py)

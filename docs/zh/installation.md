@@ -1,4 +1,4 @@
-# 安装与模型配置
+# 安装
 
 先安装精简核心，再按实际需要加入集成能力。lovia 要求 Python 3.10 或更高版本。
 
@@ -74,24 +74,27 @@ pip install lovia
     Ollama 会静默截断过长的提示词，因此应配置与 `num_ctx` 一致的
     `Compaction(context_window=...)`。详见 [Context Window](providers.md#上下文窗口)。
 
-`model_from_env()` 会依次读取 `LOVIA_MODEL`、`OPENAI_DEFAULT_MODEL` 和
-`ANTHROPIC_DEFAULT_MODEL`；如果都没有配置，则抛出带设置提示的 `UserError`：
+在 Agent 中直接传入端点使用的模型名。环境变量用于配置凭证和 Base URL，不会替 Python API
+选择模型：
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 
-agent = Agent(name="assistant", model=model_from_env())
+agent = Agent(name="assistant", model="<model>")
 ```
 
 !!! note ".env 文件"
 
     Python 库不会自动加载 `.env`。你可以在 Shell 中导出变量、使用 `python-dotenv`，或直接
-    在代码中传入配置。`lovia web` CLI 和仓库示例会按各自文档自动加载相应的环境文件。
+    在代码中传入配置。`lovia web` CLI 和仓库示例可以按各自文档加载相应的环境文件。
 
 ## 验证配置
 
-```bash
-python -c "from lovia import model_from_env; print(model_from_env())"
+```python
+from lovia import Agent
+
+agent = Agent(name="setup-check", model="<model>")
+print(agent.run_sync("请只回复：lovia is ready").output)
 ```
 
 配置完成后，继续阅读[快速上手](quickstart.md)。Provider 构造参数、端点方言判断、代理、TLS

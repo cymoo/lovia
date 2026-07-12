@@ -6,7 +6,7 @@ screen the conversation before the first model call; **output guardrails**
 screen the final answer before it is returned.
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 from lovia.exceptions import GuardrailTripped
 
 
@@ -22,7 +22,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model=model_from_env(),
+    model="<model>",
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -67,7 +67,7 @@ owns the abort.
 scripted classifier:
 
 ```python
-screen = Agent(name="screen", model=model_from_env(), output_type=bool,
+screen = Agent(name="screen", model="<model>", output_type=bool,
                instructions="Answer true if the request asks for legal advice.")
 
 async def no_legal_advice(messages, ctx):
@@ -104,11 +104,11 @@ pre-processing for input.
   Keep the fast checks first in the list.
 - **Mid-run content is out of scope by design** — guardrails bracket the
   run. To police individual tool calls, use
-  [approval](human-in-the-loop.md) or a tool policy; to police streamed
+  [approval](tools.md#tool-approval) or a tool policy; to police streamed
   text, filter in your consumer.
 
 ## See also
 
-- [Human in the loop](human-in-the-loop.md) — per-call gating
+- [Tool approval](tools.md#tool-approval) — per-call gating
 - [Eval](eval.md) — the development-time twin of output guardrails
 - Example: [`13_guardrails.py`](../../examples/13_guardrails.py)

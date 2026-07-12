@@ -15,10 +15,10 @@ enable_logging("DEBUG")
 
 ## 未配置模型
 
-**现象：**第一个 Turn 前抛出 `UserError`，或 `model_from_env()` 提示找不到模型。
+**现象：**第一个 Turn 前抛出 `UserError`，通常是 Agent 没有模型或模型字符串无效。
 
 设置 `LOVIA_MODEL`，并提供当前端点需要的凭证和 Base URL。注意 Python 库不会自动加载
-`.env`。具体配置见[安装与模型配置](installation.md#配置模型)。
+`.env`。具体配置见[安装](installation.md#配置模型)。
 
 ## Provider 鉴权或端点失败
 

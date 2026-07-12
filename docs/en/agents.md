@@ -6,12 +6,12 @@ number of concurrent requests and per-request variants are cheap clones
 rather than copies of live state.
 
 ```python
-from lovia import Agent, model_from_env
+from lovia import Agent
 
 agent = Agent(
     name="writer",
     instructions="Write concrete, concise answers.",
-    model=model_from_env(),
+    model="<model>",
 )
 ```
 
@@ -35,7 +35,7 @@ off, inherit, or auto-created.
 | `workspace` | `None` | file/shell tools scoped by a policy; see [Workspace](workspace.md) |
 | `plugins` | `[]` | capability bundles; see [Plugins](plugins.md) |
 | `hooks` | `None` | an `AgentHooks` observing every run event; see [Observability](observability.md) |
-| `approval_handler` | `None` | programmatic approval policy; see [Human in the loop](human-in-the-loop.md) |
+| `approval_handler` | `None` | programmatic approval policy; see [Tool approval](tools.md#tool-approval) |
 | `input_guardrails` / `output_guardrails` | `[]` | checks that can stop a run; see [Guardrails](guardrails.md) |
 | `default_tool_retries` | `0` | retries for tools that don't set their own |
 | `default_tool_timeout` | `None` | per-attempt timeout for tools that don't set their own |
@@ -44,7 +44,7 @@ off, inherit, or auto-created.
 
 The reliability-shaped fields follow one rule worth internalizing —
 **posture lives on the agent, limits live on the run** — covered in
-[Reliability](reliability.md).
+[Provider retries](retries.md) and [Budgets & limits](budgets.md).
 
 ## Instructions
 
@@ -59,7 +59,7 @@ run's `RunContext` (the same handle tools get) and may be sync or async:
 async def instructions(ctx) -> str:
     return f"You support the {ctx.deps.plan} plan. Be brief."
 
-agent = Agent(name="support", instructions=instructions, model=model_from_env())
+agent = Agent(name="support", instructions=instructions, model="<model>")
 ```
 
 **Registered fragments** — keep the base static and append dynamic pieces
@@ -68,7 +68,7 @@ order after `instructions`, separated by blank lines; returning `""` skips a
 fragment conditionally:
 
 ```python
-agent = Agent(name="support", instructions="You are a support agent.", model=model_from_env())
+agent = Agent(name="support", instructions="You are a support agent.", model="<model>")
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -133,7 +133,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "No open tickets."
 
 
-agent: Agent[Deps] = Agent(name="support", model=model_from_env(), tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model="<model>", tools=[open_tickets])
 
 result = await Runner.run(agent, "Any open tickets?", context=Deps("u1", db))
 ```

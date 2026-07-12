@@ -46,13 +46,13 @@ app.include_router(build_api_router(deps))
 | `POST /api/chat/reconnect?session_id=` | **SSE**：刷新后重新连接，或恢复中断 checkpoint |
 | `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision}` |
 | `POST /api/chat/cancel?session_id=` | 停止正在运行的任务（保留已完成轮次） |
-| `POST /api/chat/inject` / `uninject` | 为正在运行的任务排队 / 撤回[追加指令](reliability.md#运行中追加指令) |
+| `POST /api/chat/inject` / `uninject` | 为正在运行的任务排队 / 撤回[追加指令](cancellation.md#在运行中追加指令) |
 | `GET /api/sessions?q=&limit=` | 列出 / 搜索聊天（置顶优先）；`DELETE` 清空全部 |
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · 重命名/置顶 · 删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
-| `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
+| `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 基于 agent [工作区](workspace.md)的只读文件面板 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory notes](memory.md#记忆如何写入)（`{content, used, budget}`） |
 
@@ -123,6 +123,6 @@ for await (const { event, data } of readSSE(res)) {
 
 ## 延伸阅读
 
-- [Web UI 与服务端](web.md)：这些路由外面的服务端
+- [Web 服务端](web-server.md)：这些路由外面的服务端
 - [流式输出](streaming.md)：同一套事件的进程内形式
 - 示例：[`27_web_api.py`](../../examples/27_web_api.py)

@@ -5,12 +5,12 @@
 lovia 遵循 Agent Skills 约定，以 `SKILL.md` 搭配附属文件组织 Skill。
 
 ```python
-from lovia import Agent, Skills, model_from_env
+from lovia import Agent, Skills
 
 agent = Agent(
     name="support",
     instructions="按正确政策帮助顾客。",
-    model=model_from_env(),
+    model="<model>",
     plugins=[Skills("./skills")],
 )
 ```

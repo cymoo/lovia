@@ -44,7 +44,7 @@ agent = Agent(..., hooks=hooks)
   同一类型可有多个 handler，按注册顺序执行；catch-all 最先执行。
 - **失败时放行**：处理函数抛异常会被记录为 warning 日志（带 traceback）并跳过。坏掉的指标不应该中止被观察的运行。
 - 顺序保证：事件在循环的单一派发点按发出顺序到达 hooks，和 stream 消费者看到的顺序一致。
-- hooks 不只是观察者：`ctx` 是实时句柄，所以处理函数可以向 `ctx.mailbox` push（[运行中追加指令](reliability.md#运行中追加指令)），
+- hooks 不只是观察者：`ctx` 是实时句柄，所以处理函数可以向 `ctx.mailbox` push（[运行中追加指令](cancellation.md#在运行中追加指令)），
   或触发 `ctx.cancel_token`。
 
 [插件](plugins.md)也可以贡献自己的 `AgentHooks`，和 agent 自己的 hooks 一起派发。[Memory](memory.md)
@@ -124,5 +124,5 @@ cache 字段是对 `input_tokens` 的**细分**，不额外相加。成本公式
 ## 延伸阅读
 
 - [流式输出](streaming.md)：hooks 接收的完整事件清单
-- [可靠性](reliability.md)：`ctx` 的控制能力
+- [取消与运行中引导](cancellation.md)：`ctx` 的控制能力
 - 示例：[`11_hooks.py`](../../examples/11_hooks.py)

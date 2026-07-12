@@ -39,7 +39,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 终止事件结束：`RunCompleted` 或 `RunFailed`。`await handle` 是
 `await handle.result()` 的简写；如果尚未开始遍历事件流，`result()` 会自行驱动运行直至
 完成。`handle.cancel()` 可以在没有预先传 `CancelToken` 的情况下请求协作式取消；
-`handle.approvals` 是[审批通道](human-in-the-loop.md#通过审批通道处理)。
+`handle.approvals` 是[审批通道](tools.md#工具审批)。
 事件本身见[流式输出](streaming.md)。
 
 ## 运行选项
@@ -52,9 +52,9 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 | `output_type` | `None` | 本次运行覆盖 agent 的[输出类型](structured-output.md) |
 | `extra_instructions` | `None` | 本次运行追加到 system prompt 的内容，渲染在 agent 自身 instructions 后；handoff 到的每个 agent 都会重新应用 |
 | `max_turns` | `50` | 模型轮次的硬上限；超过会抛 `MaxTurnsExceeded` |
-| `budget` | `None` | 限制本次运行可消耗资源的 `RunBudget`（见[可靠性](reliability.md)） |
-| `cancel_token` | `None` | 预先接入的协作式取消（见[可靠性](reliability.md#取消)） |
-| `mailbox` | `None` | 运行中追加指令的通道（见[可靠性](reliability.md#运行中追加指令)） |
+| `budget` | `None` | 限制本次运行可消耗资源的 `RunBudget`（见[预算](budgets.md)） |
+| `cancel_token` | `None` | 预先接入的协作式取消（见[可靠性](cancellation.md#取消)） |
+| `mailbox` | `None` | 运行中追加指令的通道（见[可靠性](cancellation.md#在运行中追加指令)） |
 | `retry` | agent 的配置 | 本次调用覆盖 provider 重试策略 |
 | `context_policy` | agent 的配置 | 本次调用覆盖[上下文策略](context.md) |
 | `session` + `session_id` | `None` | 对话持久化（见 [Session 与 Checkpoint](sessions-and-checkpoints.md)） |
@@ -142,6 +142,6 @@ result = await Runner.run(
 
 - [流式输出](streaming.md)：`Runner.stream` 背后的事件清单
 - [Session 与 Checkpoint](sessions-and-checkpoints.md)：持久化选项
-- [可靠性](reliability.md)：预算、取消、运行中追加指令、重试
+- [生产控制](budgets.md)：预算、取消、运行中追加指令和重试
 - 示例：[`01_hello.py`](../../examples/01_hello.py)，
   [`06_multimodal.py`](../../examples/06_multimodal.py)

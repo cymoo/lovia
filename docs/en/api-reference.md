@@ -33,13 +33,30 @@ See [Running agents](running.md) for input forms and lifecycle semantics.
 
 ## Agent
 
-`Agent` is configuration, not conversation state. Its primary fields are:
+`Agent` is reusable configuration, not conversation state.
 
-`name`, `instructions`, `model`, `tools`, `plugins`, `handoffs`,
-`output_type`, `output_repair`, `settings`, `retry`, `context_policy`,
-`workspace`, `hooks`, `approval_handler`, `input_guardrails`,
-`output_guardrails`, `default_tool_retries`, `default_tool_timeout`,
-`max_tool_output_chars`, and `tool_result_renderer`.
+| Field | Default | Description |
+| --- | --- | --- |
+| `name` | required | Human-readable identity; also derives Handoff Tool names |
+| `instructions` | `""` | Static system text or sync/async callable receiving `RunContext` |
+| `model` | `None` | `"vendor:model"`, bare OpenAI-compatible model name, or `Provider`; required before running |
+| `tools` | `[]` | Tools directly available to the Agent |
+| `output_type` | `str` | Final output type: Pydantic model, dataclass, TypedDict, or builtin |
+| `output_repair` | `True` | Repair invalid structured output once, disable, or supply a custom strategy |
+| `handoffs` | `[]` | Agents or `Handoff` definitions the model may transfer to |
+| `settings` | `ModelSettings()` | Sampling and model request settings |
+| `retry` | `RetryPolicy()` | Provider retry posture; `None` disables it |
+| `context_policy` | `Compaction()` | Per-call Transcript View shaping |
+| `workspace` | `None` | Optional file and Shell capability provider |
+| `plugins` | `[]` | Plugins activated once per Run and per Handoff target |
+| `hooks` | `None` | `AgentHooks` event subscribers |
+| `approval_handler` | `None` | Programmatic allow/deny/ask policy for gated Tools |
+| `input_guardrails` | `[]` | Checks before the first model call |
+| `output_guardrails` | `[]` | Checks before returning the final output |
+| `default_tool_retries` | `0` | Retry count for Tools whose `retries` is `None` |
+| `default_tool_timeout` | `None` | Per-attempt seconds for Tools whose `timeout` is `None` |
+| `max_tool_output_chars` | `200_000` | Agent-wide cap on rendered Tool results; `None` stores in full |
+| `tool_result_renderer` | `None` | Agent-wide successful Tool-result renderer |
 
 Use `agent.clone(**overrides)` for variants. The field defaults and instruction
 forms are documented in [Agents](agents.md#the-fields).
@@ -56,10 +73,16 @@ forms are documented in [Agents](agents.md#the-fields).
 | `turns` | Number of logical model Turns |
 | `finish_reason` | Final Provider finish reason, if reported |
 
-`RunHandle` is async-iterable and awaitable. Event iteration ends with
-`RunCompleted` or `RunFailed`; `await handle.result()` returns the result or
-raises the Run failure. `handle.cancel()` requests cooperative cancellation,
-and `handle.approvals` exposes the out-of-band approval channel.
+| `RunHandle` API | Returns | Description |
+| --- | --- | --- |
+| `async for event in handle` | `Event` stream | Single-use stream ending in `RunCompleted` or `RunFailed`; Run failures do not raise during iteration |
+| `await handle` | `RunResult` | Await the final result or raise the stored Run failure |
+| `await handle.result()` | `RunResult` | Same result contract; drives the stream when it has not been consumed |
+| `handle.cancel(reason=None)` | `None` | Request cooperative cancellation at the next safe point |
+| `handle.approvals` | `ApprovalChannel` | Resolve pending Tool approvals by call ID |
+
+A Handle may only be iterated once. If iteration is abandoned before a
+terminal event, `result()` raises instead of returning a partial result.
 
 ## RunContext
 
@@ -81,17 +104,46 @@ instruction fragments.
 | `mailbox` | Always-present steering channel |
 | `system_prompt` | Fully rendered system prompt for the active Agent |
 
-## Tools and plugins
+## Tool
 
-`@tool` builds a `Tool` from a typed function. Common options are `name`,
-`description`, `strict`, `retries`, `timeout`, `parallel`,
-`max_output_chars`, `result_renderer`, `needs_approval`, and `policies`.
-See [Tools](tools.md).
+`@tool` derives the first four fields from a typed function. Construct `Tool`
+directly for factories and generated schemas.
 
-A `Plugin` has a stable `name` and async `setup()` returning a
-`PluginInstance`. An instance may contribute `tools`, `instructions`,
-`view_injectors`, `hooks`, `input_guardrails`, `output_guardrails`, and
-`aclose`. See [Plugins](plugins.md).
+| Field / decorator option | Default | Description |
+| --- | --- | --- |
+| `name` | function name | Unique name exposed to the model |
+| `description` | docstring | Guidance exposed in the Tool schema |
+| `parameters` | derived | JSON Schema for model-supplied arguments |
+| `invoke` | wrapped function | Async callable receiving raw arguments and `RunContext` |
+| `strict` | `False` (`@tool` only) | Require complete function annotations and strict schema generation when enabled |
+| `needs_approval` | `False` | Boolean or predicate that gates execution on approval |
+| `retries` | `None` | Retries after the first attempt; `None` inherits Agent default |
+| `timeout` | `None` | Per-attempt seconds; `None` inherits Agent default |
+| `parallel` | `True` | Whether the call may overlap other calls in the same Turn |
+| `max_output_chars` | `None` | Result cap; `None` inherits the Agent cap |
+| `result_renderer` | `None` | Convert a successful raw result into model-visible text |
+| `policies` | `()` | Per-attempt wrappers for caching, auth, redaction, or custom behavior |
+
+See [Tools](tools.md) for schema derivation, execution, approval, and errors.
+
+## Plugin and PluginInstance
+
+| `Plugin` member | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Stable identity, unique within one Agent |
+| `async setup()` | yes | Create fresh per-Run contributions and return `PluginInstance` |
+
+| `PluginInstance` field | Default | Description |
+| --- | --- | --- |
+| `tools` | `[]` | Tools merged into the Agent namespace |
+| `view_injectors` | `[]` | Per-turn callables adding transient Transcript entries to the model View |
+| `instructions` | `None` | Static text appended to the system prompt |
+| `hooks` | `None` | Event handlers dispatched with Agent Hooks |
+| `input_guardrails` | `[]` | Checks merged at the input checkpoint |
+| `output_guardrails` | `[]` | Checks merged at the output checkpoint |
+| `aclose` | no-op coroutine | Best-effort asynchronous resource cleanup |
+
+See [Plugins](plugins.md) for lifecycle and state-scoping rules.
 
 ## Exceptions
 

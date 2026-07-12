@@ -21,9 +21,9 @@
 ## 主要对象
 
 ```python
-from lovia import Agent, Runner, model_from_env
+from lovia import Agent, Runner
 
-agent = Agent(name="writer", instructions="回答要具体。", model=model_from_env())
+agent = Agent(name="writer", instructions="回答要具体。", model="<model>")
 result = await Runner.run(agent, "写一段发布说明。")
 ```
 
@@ -140,7 +140,7 @@ Worker 崩溃后，也可以安全地重新执行整个任务。详见
 并把工具调用和结果都写入运行记录。
 
 ```python
-from lovia import Agent, model_from_env, tool
+from lovia import Agent, tool
 
 
 @tool
@@ -149,7 +149,7 @@ async def lookup_order(order_id: str) -> str:
     return f"{order_id}: 已发货"
 
 
-agent = Agent(name="support", model=model_from_env(), tools=[lookup_order])
+agent = Agent(name="support", model="<model>", tools=[lookup_order])
 ```
 
 模型在一轮中请求的工具调用及其结果都属于当前 Turn。携带工具结果再次调用模型时，才会

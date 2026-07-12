@@ -44,7 +44,7 @@ always ends with exactly one terminal event — `RunCompleted` or `RunFailed`.
 iterated the stream yet, `result()` drives it to completion itself.
 `handle.cancel()` requests cooperative cancellation without pre-wiring a
 `CancelToken`, and `handle.approvals` is the out-of-band
-[approval channel](human-in-the-loop.md#out-of-band-the-approval-channel).
+[approval channel](tools.md#tool-approval).
 The events themselves are catalogued in [Streaming](streaming.md).
 
 ## Run options
@@ -57,9 +57,9 @@ All three entry points accept the same keywords:
 | `output_type` | `None` | run-wide override of the agent's [output type](structured-output.md) |
 | `extra_instructions` | `None` | per-run system-prompt addendum, rendered after the agent's own instructions (and re-applied to every agent a handoff reaches) |
 | `max_turns` | `50` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |
-| `budget` | `None` | a `RunBudget` limiting what the run may spend ([Reliability](reliability.md)) |
-| `cancel_token` | `None` | pre-wired cooperative cancellation ([Reliability](reliability.md#cancellation)) |
-| `mailbox` | `None` | inbound steering channel ([Reliability](reliability.md#steering-a-live-run)) |
+| `budget` | `None` | a `RunBudget` limiting what the run may spend ([Budgets](budgets.md)) |
+| `cancel_token` | `None` | pre-wired cooperative cancellation ([Reliability](cancellation.md#cancellation)) |
+| `mailbox` | `None` | inbound steering channel ([Reliability](cancellation.md#steering-a-live-run)) |
 | `retry` | agent's | per-call override of the provider retry posture |
 | `context_policy` | agent's | per-call override of the [context policy](context.md) |
 | `session` + `session_id` | `None` | conversation persistence ([Sessions & checkpoints](sessions-and-checkpoints.md)) |
@@ -157,6 +157,6 @@ checkpoint. For the full conversation, read `ctx.entries` inside a hook, or
 
 - [Streaming](streaming.md) — the event catalog behind `Runner.stream`
 - [Sessions & checkpoints](sessions-and-checkpoints.md) — persistence options
-- [Reliability](reliability.md) — budgets, cancellation, steering, retries
+- [Production controls](budgets.md) — budgets, cancellation, steering, and retries
 - Examples: [`01_hello.py`](../../examples/01_hello.py),
   [`06_multimodal.py`](../../examples/06_multimodal.py)

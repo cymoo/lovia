@@ -40,7 +40,7 @@ print(result.output)
 pip install "lovia[web]" && lovia web
 ```
 
-还没配置？首次运行会在终端里询问模型、端点和 API key，当场验证，并提供保存到 `~/.config/lovia/config.env` 的选项，之后无需重复输入。
+还没配置？首次运行会在终端里询问模型、端点和 API key，当场验证，并提供保存到 `./.env` 的选项，之后无需重复输入。
 
 Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点时再配置
 `ANTHROPIC_BASE_URL`。模型名使用 `anthropic:` 前缀即可。模型相关的更多内容见
@@ -429,7 +429,7 @@ lovia web --port 9000 --model glm-5.2      # python -m lovia.web 亦可
 lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
-缺失的必需配置（模型；官方端点的 API key）首次运行时会交互式询问，并可保存到 `~/.config/lovia/config.env`。配置优先级：命令行 flag > 环境变量 > `./.env` > `~/.config/lovia/config.env`。
+缺失的必需配置（模型；官方端点的 API key）首次运行时会交互式询问，并可保存到 `./.env`。配置优先级：命令行 flag > 环境变量 > `./.env`（或 `--env-file`）。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

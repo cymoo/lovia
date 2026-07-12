@@ -15,7 +15,7 @@ import logging
 import os
 import ssl
 
-__all__ = ["resolve_timeout", "resolve_trust_env", "resolve_verify"]
+__all__ = ["DEFAULT_TIMEOUT", "resolve_timeout", "resolve_trust_env", "resolve_verify"]
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,8 @@ _INSECURE_ENV = "LOVIA_HTTP_INSECURE"
 _CA_BUNDLE_ENV = "LOVIA_HTTP_CA_BUNDLE"
 _PROVIDER_TIMEOUT_ENV = "LOVIA_PROVIDER_TIMEOUT"
 _TRUST_ENV_ENV = "LOVIA_PROVIDER_TRUST_ENV"
-_DEFAULT_TIMEOUT = 300.0
+DEFAULT_TIMEOUT = 300.0
+"""Default provider request timeout in seconds (see :func:`resolve_timeout`)."""
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -73,24 +74,24 @@ def resolve_timeout(timeout: float | None) -> float:
 
     Precedence mirrors how providers source ``base_url``/``api_key``: an
     explicit ``timeout`` argument wins, then the ``LOVIA_PROVIDER_TIMEOUT``
-    environment variable, then a 60-second default. A non-numeric or
-    non-positive env value is ignored with a warning.
+    environment variable, then :data:`DEFAULT_TIMEOUT` (300 seconds). A
+    non-numeric or non-positive env value is ignored with a warning.
     """
     if timeout is not None:
         return timeout
     raw = os.environ.get(_PROVIDER_TIMEOUT_ENV)
     if not raw:
-        return _DEFAULT_TIMEOUT
+        return DEFAULT_TIMEOUT
     try:
         value = float(raw)
     except ValueError:
         logger.warning(
             "ignoring invalid %s=%r (not a number)", _PROVIDER_TIMEOUT_ENV, raw
         )
-        return _DEFAULT_TIMEOUT
+        return DEFAULT_TIMEOUT
     if value <= 0:
         logger.warning("ignoring non-positive %s=%r", _PROVIDER_TIMEOUT_ENV, raw)
-        return _DEFAULT_TIMEOUT
+        return DEFAULT_TIMEOUT
     return value
 
 

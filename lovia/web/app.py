@@ -40,11 +40,10 @@ def _normalise(
     return {agent_or_agents.name: agent_or_agents}
 
 
-def _default_db_path(agents: dict[str, Agent[Any]]) -> Path:
-    """Derive a SQLite filename from the first agent's name."""
-    name = next(iter(agents), "lovia")
+def _default_db_path(name: str) -> Path:
+    """Default SQLite path under ``./.lovia``, derived from the agent's name."""
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-    return Path(f"{safe}.db")
+    return Path(".lovia") / f"{safe}.db"
 
 
 def create_app(
@@ -76,7 +75,7 @@ def create_app(
     * ``store`` — fully-formed :class:`ChatStore`.
     * ``db_path`` — persist transcripts + metadata to a SQLite file.
     * ``session`` — bring-your-own :class:`Session`; metadata kept in-memory.
-    * neither — default: SQLite file named ``<agent_name>.db``.
+    * neither — default: SQLite file ``./.lovia/<agent_name>.db``.
 
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
@@ -118,7 +117,7 @@ def create_app(
     elif session is not None:
         chat_store = ChatStore(session, meta_path=":memory:")
     else:
-        chat_store = ChatStore.sqlite(_default_db_path(agents))
+        chat_store = ChatStore.sqlite(_default_db_path(next(iter(agents), "lovia")))
 
     approvals = ApprovalRegistry()
 

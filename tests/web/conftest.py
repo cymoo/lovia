@@ -1,15 +1,15 @@
 """Shared isolation for the web test suite.
 
-The CLI now auto-loads ``~/.config/lovia/config.env`` and reads the
-provider credential env vars, so a developer's real configuration must
-never leak into (or be touched by) tests.
+The CLI reads the provider credential env vars, so a developer's real
+configuration must never leak into (or be touched by) tests. Tests that
+exercise the wizard's ``./.env`` save isolate the filesystem with
+``monkeypatch.chdir(tmp_path)`` themselves.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 
@@ -26,10 +26,7 @@ _LEAKY_VARS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_user_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+def _isolate_user_config(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in _LEAKY_VARS:
         monkeypatch.delenv(var, raising=False)
 

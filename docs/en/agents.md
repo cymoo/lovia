@@ -30,7 +30,7 @@ off, inherit, or auto-created.
 | `output_repair` | `True` | one repair prompt on a failed output parse; `False` fails fast; an `OutputRepairStrategy` customizes it |
 | `handoffs` | `[]` | agents (or `Handoff` wrappers) the model may [transfer control to](multi-agent.md) |
 | `settings` | `ModelSettings()` | sampling parameters forwarded to the provider |
-| `retry` | `RetryPolicy()` | provider retry posture (3 retries, jittered backoff); `None` disables |
+| `retry` | `RetryPolicy()` | provider retry posture (4 retries, jittered backoff); `None` disables |
 | `context_policy` | `Compaction()` | how the per-call view is shaped; see [Context management](context.md) |
 | `workspace` | `None` | file/shell tools scoped by a policy; see [Workspace](workspace.md) |
 | `plugins` | `[]` | capability bundles; see [Plugins](plugins.md) |

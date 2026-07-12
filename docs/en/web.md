@@ -27,7 +27,7 @@ lovia web
 
 Anything required but missing — the model, or an API key for the
 official endpoints — is asked interactively on the first run, verified
-against the endpoint, and can be saved to `~/.config/lovia/config.env`.
+against the endpoint, and can be saved to `./.env`.
 
 !!! danger "Local by default; no built-in authentication"
 
@@ -47,7 +47,7 @@ process manager. The options that matter:
 | Option | Default | Effect |
 | --- | --- | --- |
 | `agent_or_agents` | required | one agent, or a `{name: agent}` dict to serve several |
-| `db_path` / `store` / `session` | `<agent>.db` in cwd | where transcripts + metadata live ([`ChatStore`](http-api.md#chatstore)) |
+| `db_path` / `store` / `session` | `./.lovia/<agent>.db` | where transcripts + metadata live ([`ChatStore`](http-api.md#chatstore)) |
 | `max_turns` / `budget` / `retry` / `context_policy` / `tracer` | — | run settings applied to every served run |
 | `generate_titles` / `title_model` | `True` / serving agent's model | background LLM chat titles (first user line shows until one lands; a manual rename always wins) |
 | `approval_timeout` | `None` | auto-deny pending approvals after N seconds |
@@ -64,14 +64,15 @@ composition, exactly: model from the environment; `Skills("./skills")`
 when that directory exists; a `Todo()` checklist; `Scheduling` (the agent
 can propose its own future runs — approval-gated); `Memory` under
 `./.lovia/memory` with background curation; tools `now` + `http_fetch`
-(plus `web_search` when the `ddg` backend is installed); a **trusted
-workspace on the current directory** (a root-level `.venv`/`venv` is
-[auto-activated](workspace.md#the-tools) for shell commands, so Python
+(plus `web_search` when the `ddg` backend is installed); a **coding-mode
+workspace on the current directory** — writes inside the root allowed,
+shell commands and out-of-root reads ask first (a root-level `.venv`/`venv`
+is [auto-activated](workspace.md#the-tools) for shell commands, so Python
 installs stay out of the global environment); today's date as an
 instruction fragment; instructions from `AGENTS.md` when present.
 
-Every option reads flag → env var → `./.env` (or `--env-file`) →
-`~/.config/lovia/config.env` (written by the first-run setup) → default.
+Every option reads flag → env var → `./.env` (or `--env-file`; the
+first-run setup offers to save there) → default.
 Model credentials use the provider's own variables
 ([Providers](providers.md)); every launch prints a summary of the
 effective configuration and where each value came from.
@@ -79,17 +80,17 @@ effective configuration and where each value came from.
 | Flag | Env | Default |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
-| `--db` | `LOVIA_DB` | `<agent>.db` in cwd |
+| `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--model` | `LOVIA_MODEL` → `OPENAI_DEFAULT_MODEL` → `ANTHROPIC_DEFAULT_MODEL` | asked on first run |
 | `--base-url` / `--api-key` | `OPENAI_BASE_URL` / `OPENAI_API_KEY` (or `ANTHROPIC_*`, by model prefix) | official endpoint / asked when required |
 | `--skills-dir` (repeatable) | `LOVIA_SKILLS_DIR` | `./skills` if present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` (on) |
-| `--workspace` / `--workspace-mode` / `--no-workspace` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `trusted` (on) |
+| `--workspace` / `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE` / `LOVIA_WORKSPACE_MODE` | `.` / `coding` (on) |
 | `--instructions` / `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md`, else generic |
 | `--app MODULE:ATTR` | `LOVIA_APP` | build the default agent |
 | `--title` / `--log-level` | `LOVIA_TITLE` / `LOVIA_LOG_LEVEL` | `lovia` / `info` |
-| `--max-retries` | `LOVIA_MAX_RETRIES` | agent posture (3 retries); `0` disables |
-| `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `60`s |
+| `--max-retries` | `LOVIA_MAX_RETRIES` | agent posture (4 retries); `0` disables |
+| `--provider-timeout` | `LOVIA_PROVIDER_TIMEOUT` | `300`s |
 | `--max-tokens` / `--context-window` | `LOVIA_MAX_TOKENS` / `LOVIA_CONTEXT_WINDOW` | provider default / ask the endpoint |
 | `--max-turns` | `LOVIA_MAX_TURNS` | `50` |
 | `--trust-env` | `LOVIA_PROVIDER_TRUST_ENV` | off (on → honor `HTTP(S)_PROXY`) |
@@ -151,9 +152,10 @@ The server runs a small scheduler over a durable `schedules` table
   exposing it. The CLI warns loudly when you combine a non-loopback host
   with a writable workspace, because that combination is *remote code
   execution as your user*.
-- **The default workspace mode is `trusted` on your cwd** — right for a
-  personal assistant in a project directory, wrong for anything shared.
-  `--workspace-mode readonly` or `--no-workspace` first, loosen later.
+- **The default workspace mode is `coding` on your cwd** — the agent can
+  edit files inside the directory; shell commands and out-of-root reads
+  ask first. `--readonly` or `--no-workspace` tightens it; `--trusted`
+  drops the prompts.
 - **Supervised state is per-process.** Live runs, approvals, and SSE hubs
   live in memory: run one process (`workers=1`); the SQLite stores use
   `wal` so *data* survives, but a multi-worker deployment needs sticky

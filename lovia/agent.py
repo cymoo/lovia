@@ -131,7 +131,7 @@ class Agent(Generic[TContext]):
 
     retry: "RetryPolicy | None" = field(default_factory=RetryPolicy)
     """Provider retry posture applied to every run of this agent. The default
-    :class:`~lovia.RetryPolicy` retries transient errors (3 retries, jittered
+    :class:`~lovia.RetryPolicy` retries transient errors (4 retries, jittered
     backoff); ``None`` disables provider retries. :meth:`Runner.run` may
     override it per call."""
 

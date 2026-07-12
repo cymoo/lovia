@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import io
-import stat
-import sys
 from pathlib import Path
 from typing import Callable
 
@@ -286,7 +284,7 @@ def test_validate_never_overrides_a_configured_window() -> None:
 
 
 def test_reported_window_skips_the_prompt_and_is_not_persisted() -> None:
-    """A deployment fact belongs in the run, not frozen into config.env."""
+    """A deployment fact belongs in the run, not frozen into ./.env."""
     conn = _conn(base_url="http://gw/v1", api_key="sk-1")
     setup.validate_connection(
         conn,
@@ -301,7 +299,7 @@ def test_reported_window_skips_the_prompt_and_is_not_persisted() -> None:
     assert "32,768 (endpoint)" in setup._context_window_cell(conn)
 
     # Nothing was entered by hand, so there is nothing to persist: an
-    # "endpoint" window must never reach config.env, where it would go on
+    # "endpoint" window must never reach ./.env, where it would go on
     # lying after the deployment is resized. With an empty save set
     # ``_offer_to_save`` returns before it can prompt.
     conn.model_source = conn.base_url_source = conn.api_key_source = "flag"
@@ -333,7 +331,10 @@ def run_wizard(
     return result, out.getvalue(), input_fn, getpass_fn
 
 
-def test_first_run_asks_everything_and_saves(tmp_path: Path) -> None:
+def test_first_run_asks_everything_and_saves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     conn, output, input_fn, getpass_fn = run_wizard(
         setup.Connection(),
         inputs=[
@@ -352,7 +353,7 @@ def test_first_run_asks_everything_and_saves(tmp_path: Path) -> None:
     assert "✓ endpoint reachable" in output
     assert not input_fn.remaining and not getpass_fn.remaining  # type: ignore[attr-defined]
 
-    path = setup.global_config_path()
+    path = Path(".env")
     assert path.is_file()
     from dotenv import dotenv_values
 
@@ -363,8 +364,8 @@ def test_first_run_asks_everything_and_saves(tmp_path: Path) -> None:
         "OPENAI_API_KEY": "sk-deep",
         "LOVIA_CONTEXT_WINDOW": "128000",
     }
-    if sys.platform != "win32":
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    # A key was saved -> the wizard nudges toward .gitignore.
+    assert ".gitignore" in output
 
 
 def test_wizard_asks_only_whats_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -481,68 +482,62 @@ def test_eof_mid_prompt_raises_user_error() -> None:
 
 
 def test_save_only_persists_prompt_sourced_values(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     conn = _resolve(model_flag="openai:mystery-model")
     # base URL accepted at prompt, context window entered; key/model not prompted.
-    result, _, _, _ = run_wizard(conn, inputs=["", "77000", ""])
+    result, output, _, _ = run_wizard(conn, inputs=["", "77000", ""])
     del result
     from dotenv import dotenv_values
 
-    saved = dotenv_values(setup.global_config_path())
+    saved = dotenv_values(Path(".env"))
     assert "OPENAI_API_KEY" not in saved
     assert "LOVIA_MODEL" not in saved
     assert saved["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
     assert saved["LOVIA_CONTEXT_WINDOW"] == "77000"
+    # No key among the saved values -> no .gitignore nudge.
+    assert ".gitignore" not in output
 
 
-def test_decline_save_writes_nothing() -> None:
+def test_decline_save_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     result, _, _, _ = run_wizard(
         setup.Connection(),
         inputs=["some-model", "http://gw/v1", "", "n"],
         keys=[""],
     )
     del result
-    assert not setup.global_config_path().exists()
+    assert not Path(".env").exists()
 
 
 # ------------------------------------------------------------ persistence -
 
 
-def test_global_config_path_ignores_relative_xdg(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Per the XDG spec — and to keep credentials out of project directories.
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/dir")
-    assert setup.global_config_path() == (
-        tmp_path / "home" / ".config" / "lovia" / "config.env"
-    )
-    monkeypatch.setenv("XDG_CONFIG_HOME", "")
-    assert setup.global_config_path() == (
-        tmp_path / "home" / ".config" / "lovia" / "config.env"
-    )
+def test_save_env_file_creates_the_file(tmp_path: Path) -> None:
+    path = setup.save_env_file({"A_KEY": "value", "B_KEY": "x y"}, path=tmp_path / ".env")
+    assert path.read_text() == "A_KEY=value\nB_KEY=x y\n"
 
 
-def test_save_global_config_creates_dirs_and_roundtrips() -> None:
-    path = setup.save_global_config({"A_KEY": "value", "B_KEY": "x y"})
-    assert path == setup.global_config_path()
+def test_save_env_file_appends_and_patches_missing_newline(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("# my note\nOTHER_KEY=1")  # no trailing newline
+    setup.save_env_file({"OPENAI_API_KEY": "sk-new"}, path=path)
+    assert path.read_text() == "# my note\nOTHER_KEY=1\nOPENAI_API_KEY=sk-new\n"
+
+
+def test_save_env_file_appended_duplicate_wins(tmp_path: Path) -> None:
+    # Append-only by design: python-dotenv's last-occurrence-wins parsing
+    # makes the newer value effective without any rewrite machinery.
+    path = tmp_path / ".env"
+    path.write_text("OPENAI_API_KEY=old\n")
+    setup.save_env_file({"OPENAI_API_KEY": "new"}, path=path)
     from dotenv import dotenv_values
 
-    assert dotenv_values(path) == {"A_KEY": "value", "B_KEY": "x y"}
-    if sys.platform != "win32":
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
-
-
-def test_save_global_config_merges_and_keeps_comments(tmp_path: Path) -> None:
-    path = tmp_path / "config.env"
-    path.write_text("# my note\nOTHER_KEY='1'\nOPENAI_API_KEY='old'\n")
-    setup.save_global_config({"OPENAI_API_KEY": "new"}, path=path)
-    from dotenv import dotenv_values
-
-    assert dotenv_values(path) == {"OTHER_KEY": "1", "OPENAI_API_KEY": "new"}
-    assert "# my note" in path.read_text()
+    assert dotenv_values(path) == {"OPENAI_API_KEY": "new"}
 
 
 # ---------------------------------------------------------------- summary -

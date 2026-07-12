@@ -18,14 +18,14 @@ Examples::
 
 First run: whatever required configuration is missing (the model; an API key
 when the endpoint is the official OpenAI/Anthropic API) is asked
-interactively, validated against the endpoint, and can be saved to
-``~/.config/lovia/config.env`` so it is never retyped.
+interactively, validated against the endpoint, and can be saved to ``./.env``
+so it is never retyped.
 
 Configuration precedence: command-line flag > environment variable >
-``./.env`` (or ``--env-file``) > ``~/.config/lovia/config.env``. The model
-endpoint uses the provider's standard variables — ``OPENAI_BASE_URL`` /
-``OPENAI_API_KEY`` or ``ANTHROPIC_*``, chosen by the model's vendor prefix —
-while everything else uses ``LOVIA_*``.
+``./.env`` (or ``--env-file``). The model endpoint uses the provider's
+standard variables — ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` or
+``ANTHROPIC_*``, chosen by the model's vendor prefix — while everything else
+uses ``LOVIA_*``.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from .. import __version__
 from ..agent import Agent
 from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
+from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
 from ..providers import ModelSettings, Provider, provider_from_string
@@ -50,7 +51,7 @@ from ..reliability import RetryPolicy
 from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from . import setup
-from .app import serve
+from .app import _default_db_path, serve
 from .scheduling import Scheduling
 from .store import ChatStore
 
@@ -63,9 +64,11 @@ DEFAULT_SKILLS_DIR = "skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
 DEFAULT_MAX_TURNS = 50
+# Rendered into --help from the core defaults so the text can never drift.
+DEFAULT_RETRIES = RetryPolicy().max_attempts - 1
 # Match the core library's ``Workspace.local`` default: shell and out-of-root
 # reads go through human approval. ``trusted`` (unprompted shell, read
-# anywhere) stays available via --workspace-mode / LOVIA_WORKSPACE_MODE.
+# anywhere) stays available via --trusted / LOVIA_WORKSPACE_MODE.
 DEFAULT_WORKSPACE_MODE = "coding"
 GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
@@ -120,7 +123,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--db",
         metavar="FILE",
         help="SQLite file for chat persistence "
-        "(env LOVIA_DB, default <agent>.db in cwd)",
+        "(env LOVIA_DB, default ./.lovia/<agent>.db)",
     )
     p.add_argument(
         "--model",
@@ -164,13 +167,21 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         help="workspace root the agent can read/edit/run in "
         "(env LOVIA_WORKSPACE, default .)",
     )
-    p.add_argument(
-        "--workspace-mode",
-        choices=WORKSPACE_MODES,
-        help=f"workspace permissions: {', '.join(WORKSPACE_MODES)} "
-        f"(env LOVIA_WORKSPACE_MODE, default {DEFAULT_WORKSPACE_MODE})",
+    ws = p.add_mutually_exclusive_group()
+    ws.add_argument(
+        "--readonly",
+        action="store_true",
+        help="workspace can only read files inside its root — no writes, no "
+        f"shell (default mode: {DEFAULT_WORKSPACE_MODE} — writes in the root "
+        "allowed, shell asks first; env LOVIA_WORKSPACE_MODE)",
     )
-    p.add_argument(
+    ws.add_argument(
+        "--trusted",
+        action="store_true",
+        help="workspace runs shell commands and reads outside its root "
+        "without asking (env LOVIA_WORKSPACE_MODE)",
+    )
+    ws.add_argument(
         "--no-workspace",
         action="store_true",
         help="give the agent no filesystem/shell workspace",
@@ -212,14 +223,14 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         metavar="N",
         help="provider retry attempts after the first on transient errors "
         "(env LOVIA_MAX_RETRIES; default: the agent's retry posture, "
-        "3 retries; 0 disables)",
+        f"{DEFAULT_RETRIES} retries; 0 disables)",
     )
     p.add_argument(
         "--provider-timeout",
         type=float,
         metavar="SECONDS",
         help="per-request model provider timeout in seconds "
-        "(env LOVIA_PROVIDER_TIMEOUT, default 60)",
+        f"(env LOVIA_PROVIDER_TIMEOUT, default {DEFAULT_TIMEOUT:g})",
     )
     p.add_argument(
         "--max-tokens",
@@ -252,13 +263,12 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
 
 def load_env_files(env_files: list[str] | None) -> dict[str, str]:
-    """Load the env-file layers; report which layer introduced each new key.
+    """Load the ``--env-file`` files (or ``./.env``); report the keys they added.
 
-    Order — earlier wins, and the process environment always wins because
-    files never override existing variables (``override=False``): the
-    ``--env-file`` files (or ``./.env``), then the global
-    ``~/.config/lovia/config.env`` saved by the first-run setup. Returns
-    ``{key: ".env" | "config"}`` for keys the files introduced.
+    The process environment always wins because files never override existing
+    variables (``override=False``). Returns ``{key: <file name>}`` for keys
+    the files introduced (``".env"`` for the default autoload) — the startup
+    summary shows it as each value's source.
 
     A missing python-dotenv is fatal only when ``--env-file`` was given
     explicitly; otherwise auto-loading is silently skipped.
@@ -275,11 +285,11 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
         log.debug("python-dotenv not installed; skipping .env autoload")
         return sources
 
-    def load(path: Path, label: str) -> None:
+    def load(path: Path) -> None:
         before = set(os.environ)
         load_dotenv(path, override=False)
         for key in os.environ.keys() - before:
-            sources[key] = label
+            sources[key] = path.name
         log.debug("loaded env file %s", path)
 
     if env_files:
@@ -287,14 +297,11 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
             path = Path(raw)
             if not path.is_file():
                 raise CliError(f"env file not found: {path}")
-            load(path, ".env")
+            load(path)
     else:
         default = Path(".env")
         if default.is_file():
-            load(default, ".env")
-    config = setup.global_config_path()
-    if config.is_file():
-        load(config, "config")
+            load(default)
     return sources
 
 
@@ -302,8 +309,7 @@ def resolve_max_retries(cli: int | None) -> int | None:
     """Explicit provider retry count, or ``None`` for the agent's posture.
 
     Precedence: ``--max-retries`` flag, then ``LOVIA_MAX_RETRIES``. ``None``
-    means no override — the agent's own :class:`RetryPolicy` (3 retries by
-    default) applies.
+    means no override — the agent's own :class:`RetryPolicy` default applies.
     """
     value = cli if cli is not None else _env_int_optional("LOVIA_MAX_RETRIES")
     if value is not None and value < 0:
@@ -398,6 +404,11 @@ def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
     return GENERIC_INSTRUCTIONS
 
 
+def _mode_flag(args: argparse.Namespace) -> str | None:
+    """Workspace mode selected by the boolean flags, if any."""
+    return "readonly" if args.readonly else "trusted" if args.trusted else None
+
+
 def resolve_workspace(
     cli_dir: str | None, cli_mode: str | None, no_workspace: bool
 ) -> LocalWorkspace | None:
@@ -465,9 +476,7 @@ def build_default_agent(
     memory = resolve_memory(args.memory_dir, args.no_memory)
     if memory is not None:
         plugins.append(memory)
-    workspace = resolve_workspace(
-        args.workspace, args.workspace_mode, args.no_workspace
-    )
+    workspace = resolve_workspace(args.workspace, _mode_flag(args), args.no_workspace)
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
@@ -493,7 +502,8 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("--memory-dir", args.memory_dir is not None),
         ("--no-memory", args.no_memory),
         ("--workspace", args.workspace is not None),
-        ("--workspace-mode", args.workspace_mode is not None),
+        ("--readonly", args.readonly),
+        ("--trusted", args.trusted),
         ("--no-workspace", args.no_workspace),
         ("--instructions", args.instructions is not None),
         ("--instructions-file", args.instructions_file is not None),
@@ -528,8 +538,7 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
         log.warning(
             "binding to non-loopback host %r with a write/shell-capable workspace: "
             "anyone who can reach this port can make the agent edit files or run "
-            "shell commands. Use --workspace-mode readonly, --no-workspace, or bind "
-            "to 127.0.0.1.",
+            "shell commands. Use --readonly, --no-workspace, or bind to 127.0.0.1.",
             host,
         )
 
@@ -539,7 +548,7 @@ def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
     if workspace is None:
         return "(none)"
     mode = (
-        _first(args.workspace_mode, os.getenv("LOVIA_WORKSPACE_MODE"))
+        _first(_mode_flag(args), os.getenv("LOVIA_WORKSPACE_MODE"))
         or DEFAULT_WORKSPACE_MODE
     )
     root = getattr(workspace, "root", ".")
@@ -603,12 +612,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 version=__version__,
                 app_target=app_target,
                 # Without --db, create_app derives the file from the agent name.
-                db_desc=db_path or "(derived from the agent's name)",
+                db_desc=db_path or "(./.lovia/<agent>.db, from the agent's name)",
                 host=host,
                 port=port,
             )
         else:
-            db_desc = db_path or f"{DEFAULT_AGENT_NAME}.db"
+            db_desc = db_path or str(_default_db_path(DEFAULT_AGENT_NAME))
             conn = setup.resolve_connection(
                 model_flag=args.model,
                 base_url_flag=args.base_url,

@@ -165,7 +165,7 @@ class RetryPolicy:
     three retries and ``max_attempts=1`` disables retrying.
 
     The defaults lean patient — network blips, timeouts, and 429s are routine
-    for long-running agents: 4 attempts with a jittered ~1s/2s/4s schedule,
+    for long-running agents: 5 attempts with a jittered ~1s/2s/4s/8s schedule,
     capped at 30s per wait. Interactive callers that prefer failing fast can
     tighten per agent (``Agent(retry=RetryPolicy(max_attempts=2))``) or per
     run.

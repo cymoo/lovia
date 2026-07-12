@@ -208,6 +208,22 @@ def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
         cli.resolve_workspace(str(tmp_path / "nope"), "trusted", no_workspace=False)
 
 
+def test_workspace_flags_map_to_modes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = cli.build_parser().parse_args(["--readonly"])
+    assert cli._mode_flag(args) == "readonly"
+    # The flag wins over the env var, like every other option.
+    monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "trusted")
+    ws = cli.resolve_workspace(str(tmp_path), cli._mode_flag(args), args.no_workspace)
+    assert ws is not None
+    assert ws.policy.write == "deny"
+    assert ws.policy.allow_shell is False
+
+    assert cli._mode_flag(cli.build_parser().parse_args(["--trusted"])) == "trusted"
+    assert cli._mode_flag(cli.build_parser().parse_args([])) is None
+
+
 # -------------------------------------------------------------- --app -
 
 
@@ -308,15 +324,18 @@ def test_parser_repeatable_skills_dir() -> None:
     assert args.skills_dir == ["a", "b"]
 
 
-def test_parser_rejects_bad_workspace_mode() -> None:
+def test_parser_workspace_flags_are_mutually_exclusive() -> None:
     with pytest.raises(SystemExit):
-        cli.build_parser().parse_args(["--workspace-mode", "bogus"])
+        cli.build_parser().parse_args(["--readonly", "--trusted"])
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--trusted", "--no-workspace"])
 
 
 def test_parser_defaults_are_none() -> None:
     args = cli.build_parser().parse_args([])
     assert args.host is None and args.port is None and args.model is None
     assert args.no_workspace is False
+    assert args.readonly is False and args.trusted is False
     assert args.memory_dir is None and args.no_memory is False
 
 
@@ -592,6 +611,14 @@ def test_parser_reliability_flags() -> None:
     assert args.trust_env is True
 
 
+def test_help_defaults_render_from_core_constants() -> None:
+    # The numbers in --help are f-string-rendered from the core defaults, so
+    # they can never drift from what the library actually does.
+    help_text = cli.build_parser().format_help()
+    assert f"default {cli.DEFAULT_TIMEOUT:g}" in help_text
+    assert f"{cli.DEFAULT_RETRIES} retries" in help_text
+
+
 def test_build_default_agent_max_tokens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -697,42 +724,17 @@ def test_load_env_files_source_map_and_precedence(
     (tmp_path / ".env").write_text(
         "LOVIA_TEST_A=dotenv\nLOVIA_TEST_B=dotenv\n", encoding="utf-8"
     )
-    config = cli.setup.global_config_path()
-    config.parent.mkdir(parents=True)
-    config.write_text(
-        "LOVIA_TEST_B=config\nLOVIA_TEST_C=config\n", encoding="utf-8"
-    )
     monkeypatch.setenv("LOVIA_TEST_A", "process")
     monkeypatch.delenv("LOVIA_TEST_B", raising=False)
-    monkeypatch.delenv("LOVIA_TEST_C", raising=False)
     try:
         sources = cli.load_env_files(None)
-        # Process env beats ./.env beats the global config.
+        # Process env beats ./.env.
         assert os.getenv("LOVIA_TEST_A") == "process"
         assert os.getenv("LOVIA_TEST_B") == "dotenv"
-        assert os.getenv("LOVIA_TEST_C") == "config"
         assert "LOVIA_TEST_A" not in sources  # pre-existing -> plain env
         assert sources["LOVIA_TEST_B"] == ".env"
-        assert sources["LOVIA_TEST_C"] == "config"
     finally:
         os.environ.pop("LOVIA_TEST_B", None)
-        os.environ.pop("LOVIA_TEST_C", None)
-
-
-def test_load_env_files_global_config_alone(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    config = cli.setup.global_config_path()
-    config.parent.mkdir(parents=True)
-    config.write_text("LOVIA_TEST_D=config\n", encoding="utf-8")
-    monkeypatch.delenv("LOVIA_TEST_D", raising=False)
-    try:
-        sources = cli.load_env_files(None)
-        assert os.getenv("LOVIA_TEST_D") == "config"
-        assert sources["LOVIA_TEST_D"] == "config"
-    finally:
-        os.environ.pop("LOVIA_TEST_D", None)
 
 
 def test_main_reports_missing_api_key_when_not_a_tty(
@@ -749,7 +751,7 @@ def test_main_reports_missing_api_key_when_not_a_tty(
     err = capsys.readouterr().err
     assert "no API key configured" in err
     # The hint names every configuration channel.
-    for channel in ("--api-key", "OPENAI_API_KEY", ".env", "config.env"):
+    for channel in ("--api-key", "OPENAI_API_KEY", ".env"):
         assert channel in err
 
 
@@ -932,4 +934,17 @@ def test_main_wizard_leaves_no_db_when_aborted(
     )
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     cli.main([])
-    assert not (tmp_path / "lovia.db").exists()
+    assert not (tmp_path / ".lovia").exists()
+
+
+def test_main_default_db_lands_under_dot_lovia(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main([])
+    assert rc == 0
+    assert (tmp_path / ".lovia" / "lovia.db").is_file()
+    assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")

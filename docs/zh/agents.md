@@ -28,7 +28,7 @@ agent = Agent(
 | `output_repair` | `True` | 输出解析失败时修复一次；`False` 表示快速失败；也可以用 `OutputRepairStrategy` 自定义 |
 | `handoffs` | `[]` | 模型可以[移交控制权](multi-agent.md)的 agent（或 `Handoff` 包装器） |
 | `settings` | `ModelSettings()` | 传给 provider 的采样参数 |
-| `retry` | `RetryPolicy()` | provider 重试策略（3 次重试、带 jitter 的退避）；`None` 表示关闭 |
+| `retry` | `RetryPolicy()` | provider 重试策略（4 次重试、带 jitter 的退避）；`None` 表示关闭 |
 | `context_policy` | `Compaction()` | 每次调用的 view 如何生成；见[上下文管理](context.md) |
 | `workspace` | `None` | 受策略限制的文件/shell 工具；见[工作区](workspace.md) |
 | `plugins` | `[]` | 能力包；见[插件](plugins.md) |

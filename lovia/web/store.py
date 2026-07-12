@@ -246,6 +246,9 @@ class ChatStore:
         workers (or to let readers proceed during writes) — it enables WAL
         journal mode and a busy timeout on all three.
         """
+        # The default path nests under ./.lovia, and sqlite3.connect cannot
+        # create parent directories.
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         return cls(
             SQLiteSession(path, wal=wal),
             meta_path=path,

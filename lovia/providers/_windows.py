@@ -182,7 +182,7 @@ def window_from_models_payload(payload: Any, model: str) -> int | None:
 
 
 # The probe runs before the first model call, so its latency is charged to run
-# start. The provider timeout (60s by default) is sized for generation, not for
+# start. The provider timeout (300s by default) is sized for generation, not for
 # a metadata lookup that is pure upside: a slow endpoint should cost a moment
 # and then be forgotten, never stall the run.
 _PROBE_TIMEOUT = 10.0

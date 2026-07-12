@@ -45,7 +45,7 @@ pip install "lovia[web]" && lovia web
 
 No configuration yet? The first run asks for the model, endpoint, and API
 key right in the terminal, verifies them, and offers to save the answers to
-`~/.config/lovia/config.env` so you never retype them.
+`./.env` so you never retype them.
 
 Anthropic is built in too: configure `ANTHROPIC_API_KEY`, set
 `ANTHROPIC_BASE_URL` for non-default endpoints, and use the `anthropic:`
@@ -449,9 +449,8 @@ lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
 Anything required but missing (model; API key for the official endpoints)
-is asked interactively on first run and can be saved to
-`~/.config/lovia/config.env`. Configuration precedence: flag > environment >
-`./.env` > `~/.config/lovia/config.env`.
+is asked interactively on first run and can be saved to `./.env`.
+Configuration precedence: flag > environment > `./.env` (or `--env-file`).
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST
 API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or

@@ -30,14 +30,14 @@ context_policy=...)`) for the one request that really is special. The
 ## Provider retries
 
 Retries are **on by default**: `Agent.retry` defaults to `RetryPolicy()` —
-4 total attempts (3 retries) with a jittered exponential backoff of roughly
-1s / 2s / 4s, capped at 30s per wait. `retry=None` disables provider
+5 total attempts (4 retries) with a jittered exponential backoff of roughly
+1s / 2s / 4s / 8s, capped at 30s per wait. `retry=None` disables provider
 retries entirely; `RetryPolicy(max_attempts=1)` is the per-run spelling of
 the same thing.
 
 | `RetryPolicy` field | Default | Meaning |
 | --- | --- | --- |
-| `max_attempts` | `4` | total calls per provider (first counts as 1) |
+| `max_attempts` | `5` | total calls per provider (first counts as 1) |
 | `restart_on_partial` | `True` | recover from mid-stream failures by discarding partial output and re-streaming the turn |
 | `backoff_base` / `backoff_max` | `1.0` / `30.0` | exponential schedule, ±50% jitter |
 | `retry_on` | retryable `ProviderError`s | predicate deciding what counts as transient |
@@ -162,8 +162,8 @@ The semantics, precisely:
 
 ## Sharp edges
 
-- **Retries multiply latency before they surface errors.** Four attempts
-  with backoff can hold a turn for ~10s before failing; interactive UIs
+- **Retries multiply latency before they surface errors.** Five attempts
+  with backoff can hold a turn for ~15s before failing; interactive UIs
   usually want `max_attempts=2` posture and let the user retry.
 - **`max_seconds` is not a deadline.** It trips at the next *check* — a
   60s budget with a 5-minute tool call ends at ~5 minutes. Enforce true

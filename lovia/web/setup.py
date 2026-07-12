@@ -3,9 +3,9 @@
 Resolves the model connection (model id, base URL, API key, context window)
 from flags and environment layers with per-value source tracking, prompts
 interactively for whatever is missing, validates freshly entered values
-against the endpoint, and offers to persist them to a user-global config
-file (``~/.config/lovia/config.env``) that the CLI auto-loads at the lowest
-precedence: flag > environment > ``./.env`` > global config.
+against the endpoint, and offers to persist them to ``./.env`` in the
+current directory — auto-loaded on the next launch at the lowest
+precedence: flag > environment > ``./.env`` (or ``--env-file``).
 """
 
 from __future__ import annotations
@@ -38,10 +38,9 @@ log = logging.getLogger("lovia.web.setup")
 
 # How a resolved value can be configured, in the order shown to the user.
 CONFIG_HINT = (
-    "pass --model / --base-url / --api-key, set LOVIA_MODEL and "
-    "OPENAI_API_KEY (or ANTHROPIC_*) in the environment or ./.env, or save "
-    "them to ~/.config/lovia/config.env; run in a terminal for interactive "
-    "setup"
+    "pass --model / --base-url / --api-key, or set LOVIA_MODEL and "
+    "OPENAI_API_KEY (or ANTHROPIC_*) in the environment or ./.env; run in "
+    "a terminal for interactive setup"
 )
 
 # Where a resolved value came from; shown in the startup summary and used to
@@ -263,47 +262,23 @@ def _adopt_reported_window(conn: Connection, response: httpx.Response) -> None:
 # ------------------------------------------------------------ persistence -
 
 
-def global_config_path() -> Path:
-    # Per the XDG spec, a relative XDG_CONFIG_HOME must be ignored — and it
-    # would risk dropping credentials into the current project directory.
-    raw = os.environ.get("XDG_CONFIG_HOME", "")
-    base = Path(raw) if raw and os.path.isabs(raw) else Path.home() / ".config"
-    return base / "lovia" / "config.env"
+def save_env_file(values: Mapping[str, str], path: Path | None = None) -> Path:
+    """Append plain ``KEY=value`` lines to ``./.env`` (created if missing).
 
-
-def _chmod_private(path: Path) -> None:
-    # Windows: chmod only toggles read-only; best effort, never fatal.
-    try:
-        os.chmod(path, 0o600)
-    except OSError as exc:  # pragma: no cover - platform-specific
-        log.debug("could not chmod %s: %s", path, exc)
-
-
-def save_global_config(values: Mapping[str, str], path: Path | None = None) -> Path:
-    """Merge ``values`` into the global config file, keeping it private."""
-    from dotenv import set_key
-
-    path = path or global_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.touch()
-    # Tighten permissions before any secret lands in the file, and again
-    # after: set_key may replace the file on some platforms.
-    _chmod_private(path)
-    for key, value in values.items():
-        set_key(str(path), key, value)
-    _chmod_private(path)
+    Deliberately append-only: no dedup or rewrite — python-dotenv's
+    last-occurrence-wins parsing makes an appended value effective, and a key
+    already loaded from ``./.env`` is never offered for saving again.
+    """
+    path = path or Path(".env")
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    # Patch a missing trailing newline so we never glue onto the last line.
+    prefix = "" if not existing or existing.endswith("\n") else "\n"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(prefix + "".join(f"{key}={value}\n" for key, value in values.items()))
     return path
 
 
 # ------------------------------------------------------------ interaction -
-
-
-def _display_path(path: Path) -> str:
-    try:
-        return f"~/{path.relative_to(Path.home())}"
-    except ValueError:
-        return str(path)
 
 
 def interactive_setup(
@@ -350,7 +325,7 @@ def _run_wizard(
 
     say("")
     say("lovia needs a model endpoint to serve the web UI — answering here")
-    say("takes a few seconds, and can be saved so you never retype it.")
+    say("takes a few seconds, and can be saved to ./.env so you never retype it.")
     say(f"(non-interactive alternatives: {CONFIG_HINT})")
     say("")
 
@@ -501,11 +476,15 @@ def _offer_to_save(
         to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
     if not to_save:
         return
-    target = _display_path(global_config_path())
-    answer = input_fn(f"  Save to {target} for next launches? [Y/n]: ").strip().lower()
+    answer = input_fn("  Save to ./.env for next launches? [Y/n]: ").strip().lower()
     if answer in ("", "y", "yes"):
-        path = save_global_config(to_save)
-        print(f"  saved — future launches read {_display_path(path)}", file=out)
+        save_env_file(to_save)
+        print("  saved — future launches in this directory read ./.env", file=out)
+        if any(key.endswith("_API_KEY") for key in to_save):
+            print(
+                "  tip: keep .env out of version control (add it to .gitignore)",
+                file=out,
+            )
     else:
         print("  not saved; this configuration applies to this launch only", file=out)
 

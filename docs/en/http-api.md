@@ -54,7 +54,7 @@ the same defaults `create_app` uses.
 | `GET /api/sessions?q=&limit=` | list / search chats (pinned first); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
-| `GET /api/sessions/{id}/todos` | current [todo list](plugins.md#todo), rebuilt from the transcript |
+| `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |

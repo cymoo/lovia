@@ -6,11 +6,11 @@
 两个彼此独立的问题。
 
 ```python
-from lovia import Agent, Compaction
+from lovia import Agent, Compaction, model_from_env
 
 agent = Agent(
     name="companion",
-    model="glm-5.2",
+    model=model_from_env(),
     context_policy=Compaction(
         context_window=200_000,
         compact_at=0.85,

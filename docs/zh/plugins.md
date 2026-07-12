@@ -5,11 +5,11 @@
 插件是框架**唯一的扩展入口**，Skills、MCP、Todo 和 Memory 都建立在这套机制之上。
 
 ```python
-from lovia import Agent, Memory, Skills, Todo
+from lovia import Agent, Memory, Skills, Todo, model_from_env
 
 agent = Agent(
     name="builder",
-    model="glm-5.2",
+    model=model_from_env(),
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
@@ -114,7 +114,7 @@ class GlossaryPlugin:
         )
 
 
-agent = Agent(name="assistant", model="glm-5.2", plugins=[GlossaryPlugin(MyGlossary())])
+agent = Agent(name="assistant", model=model_from_env(), plugins=[GlossaryPlugin(MyGlossary())])
 ```
 
 如果插件在 `setup()` 中打开资源（MCP 连接、HTTP client），就通过 `aclose` 返回清理动作：
@@ -129,41 +129,13 @@ async def setup(self) -> PluginInstance:
 
 | 插件 | 一句话 | 指南 |
 | --- | --- | --- |
-| `Todo()` | 外置 checklist，每轮重新展示 | 下方 |
-| `Skills(...)` | 带渐进披露的指令包 | [技能](skills.md) |
+| `Todo()` | 外置 Checklist，每轮重新展示 | [Todo](todo.md) |
+| `Skills(...)` | 带渐进披露的指令包 | [Skills](skills.md) |
 | `MCP(...)` | Model Context Protocol 服务器提供的工具 | [MCP](mcp.md) |
 | `Memory(...)` | 跨会话长期记忆 | [记忆](memory.md) |
 
-### Todo
-
-```python
-from lovia import Agent, Runner, Todo
-
-agent = Agent(
-    name="builder",
-    instructions="认真完成多步任务。",
-    model="glm-5.2",
-    plugins=[Todo()],
-)
-
-await Runner.run(agent, "实现一个小 REST API，带测试和文档。")
-```
-
-`Todo` 给模型一个 `todo_write` 工具（全量替换：每次调用都传完整列表），再加一个 view
-injector，把当前列表每轮以 `<system-reminder>` block 重新展示。这样模型会持续看到计划，
-但 transcript 不会增长。每个 item 包含 `content`、`TodoStatus`
-（`pending` / `in_progress` / `completed`；最多一个 in-progress，多出来的会降级而不是拒绝）
-和可选 `active_form` 标签；运行作用域的 store 是 `TodoList`，`render_todos(items)` 生成模型看到的
-checklist 字符串。
-
-配置：`Todo(tool_name="todo_write", inject=True, instructions=...)`。设置
-`instructions=None` 可去掉使用说明；`inject=False` 可保留工具但不每轮提醒。
-
-store 是运行作用域的，但列表仍能跨中断存活：在[恢复](sessions-and-checkpoints.md)或 handoff 时，
-injector 会从 transcript 中最新的有效 `todo_write` 调用重建状态。宿主想观察 todos，可以筛选
-`ToolCallCompleted` 事件中 `call.name == "todo_write"` 的项（`.result` 是结构化的
-`list[TodoItem]`），也可以从已存 transcript 用 `lovia.plugins.todos_from_entries(entries)` 重建；
-Web UI 就是这样做的。
+`Todo` 的模型交互方式、恢复行为和观察接口无需编写自定义插件也很有用，因此单独整理在
+[Todo](todo.md)中。
 
 ## 注意事项
 
@@ -178,7 +150,7 @@ Web UI 就是这样做的。
 
 ## 延伸阅读
 
-- [技能](skills.md) · [MCP](mcp.md) · [记忆](memory.md)：深入了解内置插件
+- [Todo](todo.md) · [Skills](skills.md) · [MCP](mcp.md) · [记忆](memory.md)：深入了解内置插件
 - [上下文管理](context.md)：view 如何围绕 injector 组装
 - 示例：[`21_todos.py`](../../examples/21_todos.py)，
   [`25_custom_plugin.py`](../../examples/25_custom_plugin.py)

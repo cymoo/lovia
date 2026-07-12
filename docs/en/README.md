@@ -1,47 +1,68 @@
-# lovia documentation
+# lovia
 
-You do not need to read the whole manual before trying lovia. Run one agent
-first, then jump to the page for the job in front of you.
+**A concise, provider-neutral agent framework for Python.** Build one agent,
+give it typed tools, then add persistence, plugins, a workspace, or a web UI
+only when the application needs them.
 
-## Start here
+```bash
+pip install lovia
+```
 
-- **Run something first**: [Quickstart](quickstart.md)
-- **Learn by copying code**: [Examples](../../examples/README.md)
-- **Understand the run loop**: [Core concepts](concepts.md)
+<div class="grid cards" markdown>
 
-## Find the page you need
+-   **Run your first agent**
 
-| I want to... | Read |
+    Configure a model and get a working answer in a few minutes.
+
+    [Start the quickstart →](quickstart.md)
+
+-   **Understand the runtime**
+
+    Learn how agents, runs, turns, tools, transcripts, and plugins fit
+    together.
+
+    [Read the core concepts →](concepts.md)
+
+-   **Build from examples**
+
+    Copy small, self-contained scripts covering the framework feature by
+    feature.
+
+    [Browse runnable examples →](../../examples/README.md)
+
+-   **Prepare for production**
+
+    Add reliability limits, persistence, safety gates, observability, and
+    deployment boundaries.
+
+    [Open the deployment checklist →](deployment.md)
+
+</div>
+
+## Choose a guide
+
+| Goal | Guide |
 | --- | --- |
-| Define agents, instructions, and variants | [Agents](agents.md) |
-| Run agents and handle inputs, results, and errors | [Running agents](running.md) |
-| Build streaming UIs or consume run events | [Streaming](streaming.md) |
-| Let the model call Python functions | [Tools](tools.md) |
-| Use built-in HTTP, search, and time tools | [Built-in tools](built-in-tools.md) |
-| Return Pydantic objects or JSON | [Structured output](structured-output.md) |
-| Configure models, compatible endpoints, or custom providers | [Providers & models](providers.md) |
-| Compose agents with handoff or agent-as-tool | [Multi-agent](multi-agent.md) |
-| Package reusable capabilities | [Plugins](plugins.md) |
-| Load team knowledge, runbooks, or style guides | [Skills](skills.md) |
-| Connect MCP server tools | [MCP](mcp.md) |
-| Add long-term memory across conversations | [Memory](memory.md) |
-| Persist chats, recover crashes, and make runs idempotent | [Sessions & checkpoints](sessions-and-checkpoints.md) |
-| Manage long context and compaction | [Context management](context.md) |
-| Add human approval for risky tools | [Human in the loop](human-in-the-loop.md) |
-| Add input/output safety checks | [Guardrails](guardrails.md) |
-| Configure retries, budgets, and cancellation | [Reliability](reliability.md) |
-| Give an agent files and shell access | [Workspace](workspace.md) |
-| Serve a chat UI or backend | [Web UI & server](web.md) |
-| Bring my own frontend or service | [HTTP API](http-api.md) |
-| Inspect logs, events, traces, and token usage | [Observability](observability.md) |
-| Write deterministic offline tests | [Testing](testing.md) |
-| Run behavioral evals and compare baselines | [Evals](eval.md) |
+| Define and run an agent | [Agents](agents.md) · [Running agents](running.md) |
+| Configure a model or endpoint | [Installation & model setup](installation.md) · [Providers & models](providers.md) |
+| Give the model capabilities | [Tools](tools.md) · [Workspace](workspace.md) · [Multi-agent](multi-agent.md) |
+| Extend an agent | [Plugins](plugins.md) · [Skills](skills.md) · [MCP](mcp.md) · [Memory](memory.md) |
+| Keep runs safe and durable | [Reliability](reliability.md) · [Sessions](sessions-and-checkpoints.md) · [Human approval](human-in-the-loop.md) |
+| Serve and verify an application | [Web server](web.md) · [HTTP API](http-api.md) · [Testing](testing.md) · [Evals](eval.md) |
 
-## Internals
+Looking for an exact type, exception, or common failure? Use the
+[API reference](api-reference.md) or [troubleshooting guide](troubleshooting.md).
 
-[Architecture notes](../architecture.md) document how the framework itself is
-built: module map, runner internals, and invariants. They are written for
-contributors, but are useful whenever you want the design rationale.
+!!! note "Documentation version"
+
+    This site follows the current `main` branch. Check your installed version
+    with `python -c "import lovia; print(lovia.__version__)"` when comparing
+    behavior with the source documentation.
+
+## For contributors
+
+The [architecture notes](../architecture.md) explain the module map, runner
+internals, and invariants for people changing lovia itself.
 
 ---
 

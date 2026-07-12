@@ -24,7 +24,7 @@ agent = Agent(
 | `anthropic:` | Anthropic Messages | `claude:` |
 | （无） | OpenAI Chat Completions | — |
 
-**不带前缀的模型名**（如 `"glm-5.2"`）会走 OpenAI 兼容 provider。这是
+**不带前缀的模型名**（如 `"endpoint-model"`）会走 OpenAI-compatible Provider。这是
 `OPENAI_BASE_URL` 服务的推荐写法。有一个保护：模型名如果不带前缀且以 `claude` 开头，会记录 warning 日志，
 因为这几乎总是漏了 `anthropic:` 前缀。lovia 不设默认模型；没有模型就运行 agent
 会抛 `UserError`。

@@ -26,9 +26,9 @@ The six, in sixty seconds:
 ## The cast
 
 ```python
-from lovia import Agent, Runner
+from lovia import Agent, Runner, model_from_env
 
-agent = Agent(name="writer", instructions="Be concrete.", model="glm-5.2")
+agent = Agent(name="writer", instructions="Be concrete.", model=model_from_env())
 result = await Runner.run(agent, "Draft a release note.")
 ```
 
@@ -71,7 +71,7 @@ here, retry there, persistence somewhere else) until nobody can say what
 happens in what order. lovia's answer is one loop with fixed phases. This is
 the actual order of events; every guide hangs off some step of it.
 
-**Setup, once per run:**
+### Setup, once per run
 
 1. Resolve the active agent: providers, structured output, workspace
    session, plugin `setup()` (once per plugin), and the merged tool set —
@@ -83,7 +83,7 @@ the actual order of events; every guide hangs off some step of it.
    JSON-schema support — the structured-output contract.
 3. Run **input guardrails** once against the built transcript.
 
-**Then the loop. Each iteration is one turn:**
+### Each turn
 
 1. Check limits: `max_turns`, cancellation, budget.
 2. `TurnStarted` fires; queued **mailbox** messages drain into the
@@ -108,7 +108,9 @@ the actual order of events; every guide hangs off some step of it.
 8. `TurnEnded` fires. A pending **handoff** swaps the active agent (new
    system prompt, same conversation body) and the loop continues.
 
-**On completion:** **output guardrails** run, the checkpoint is finalized,
+### On completion
+
+**Output guardrails** run, the checkpoint is finalized,
 and only then is the run's segment appended to the session — in that order,
 so a crash can never leave a run both persisted and resumable. Every event
 above is also dispatched to [hooks](observability.md) as it happens.
@@ -166,7 +168,7 @@ model-supplied arguments before invoking your code, and records both the call
 and its result in the transcript.
 
 ```python
-from lovia import Agent, tool
+from lovia import Agent, model_from_env, tool
 
 
 @tool
@@ -175,7 +177,7 @@ async def lookup_order(order_id: str) -> str:
     return f"{order_id}: shipped"
 
 
-agent = Agent(name="support", model="glm-5.2", tools=[lookup_order])
+agent = Agent(name="support", model=model_from_env(), tools=[lookup_order])
 ```
 
 When the model requests one or more tools, those calls and their results remain
@@ -187,9 +189,10 @@ handling.
 
 ## RunContext: the one handle
 
-Tools, hooks, guardrails, and dynamic instruction fragments all receive the
-same live `RunContext`. A tool opts in by *type-annotating* its first
-parameter — the name doesn't matter, the annotation does:
+Tools, hooks, guardrails, and dynamic instruction fragments receive the same
+live `RunContext`. It exposes the current dependencies, Agent, transcript,
+usage, persistence keys, Workspace, cancellation token, and Mailbox. A Tool
+opts in by type-annotating a parameter — the parameter name does not matter:
 
 ```python
 from dataclasses import dataclass
@@ -208,20 +211,10 @@ async def lookup(ctx: RunContext[Deps], user_id: int) -> str:
     return await ctx.deps.db.fetch(user_id)
 ```
 
-| Field | What it is |
-| --- | --- |
-| `deps` (alias `context`) | the object you passed as `Runner.run(..., context=...)` |
-| `entries` | the live transcript — treat as read-only |
-| `messages` | chat-format view of `entries`, derived fresh on each access |
-| `agent` | the currently active agent (changes on handoff) |
-| `usage` | cumulative token usage so far |
-| `turn` | 1-based index of the turn in flight |
-| `session_id` / `run_id` | the run's persistence keys (`None` when unused) |
-| `budget` | the run's `RunBudget`, for tools that want to self-throttle |
-| `workspace` | the active agent's live workspace session, if any |
-| `cancel_token` | always present — a tool or hook can request cancellation |
-| `mailbox` | always present — push a message and the model sees it next turn |
-| `system_prompt` | the fully rendered system prompt this run is using |
+Treat `ctx.entries` as read-only. Use `ctx.deps` for application dependencies,
+`ctx.cancel_token` to request cancellation, and `ctx.mailbox` to steer the next
+Turn. The complete field catalog is in the
+[API reference](api-reference.md#runcontext).
 
 ## Plugins: the one extension axis
 
@@ -240,28 +233,16 @@ exactly this seam, which is the proof it suffices. See [Plugins](plugins.md).
 
 ## When things go wrong
 
-Every framework exception inherits `LoviaError`, so `except LoviaError`
-catches lovia without catching your bugs. Errors carry an optional `hint` —
-a one-line "what to try next" appended to the message.
+Every framework exception inherits `LoviaError` and may carry a `.hint` with
+the next action to try. Configuration problems raise `UserError`; provider,
+context, validation, budget, cancellation, and guardrail failures use specific
+subclasses so callers can recover narrowly. The full catalog is in the
+[API reference](api-reference.md#exceptions), with symptom-driven fixes in
+[Troubleshooting](troubleshooting.md).
 
-| Exception | Raised when |
-| --- | --- |
-| `UserError` | the framework is misconfigured (no model, bad option) — fix the call site |
-| `ProviderError` | the model API failed; carries `vendor`, `status_code`, `retryable` |
-| `ContextOverflowError` | the prompt exceeds the context window and compaction couldn't save it; carries `reported_window` when the endpoint named its limit |
-| `ToolError` | a tool failed in a way worth structuring (yours to raise) |
-| `InvalidToolArguments` | tool arguments failed schema validation (surfaced to the model to fix) |
-| `OutputValidationError` | the final answer doesn't parse as `output_type` (after any repair) |
-| `MaxTurnsExceeded` | the loop hit `max_turns` without a final answer |
-| `BudgetExceeded` | a `RunBudget` limit tripped mid-run |
-| `RunCancelled` | a `CancelToken` was tripped |
-| `GuardrailTripped` | an input/output guardrail rejected a value |
-| `MCPError` | an MCP server connection or call failed |
-
-Two nuances: a tool raising an ordinary exception does **not** end the run —
-the error is rendered back to the model as the tool result so it can adapt
-(see [Tools](tools.md)); and in streaming mode these exceptions surface
-through `handle.result()`, never through iteration.
+Two rules matter immediately: an ordinary Tool exception becomes a result the
+model can react to instead of ending the Run; and streaming failures surface
+from `await handle.result()`, never while iterating events.
 
 ## Design constraints you can rely on
 

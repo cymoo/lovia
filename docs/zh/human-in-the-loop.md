@@ -84,14 +84,14 @@ handle.approvals.release(decision=False)   # 收尾：处理所有未决请求
 除了等待操作审批，模型有时还需要向人询问只有操作员掌握的信息。
 
 ```python
-from lovia import Agent, Runner
+from lovia import Agent, Runner, model_from_env
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
 
 agent = Agent(
     name="assistant",
-    model="glm-5.2",
+    model=model_from_env(),
     tools=[ask_human(channel)],
 )
 ```

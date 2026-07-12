@@ -4,14 +4,14 @@ Nothing is wired into an agent automatically — every built-in is an explicit
 import, so an agent's capabilities are visible at its construction site.
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.tools.http import http_fetch
 from lovia.tools.search import duckduckgo_search
 from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model="glm-5.2",
+    model=model_from_env(),
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
@@ -95,7 +95,7 @@ construction time, not mid-run.
   the system prompt:
 
   ```python
-  agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model=model_from_env(), tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -114,7 +114,7 @@ input mid-run (the inverse of approval, where the *runner* asks):
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model="glm-5.2", tools=[ask_human(channel)])
+agent = Agent(name="assistant", model=model_from_env(), tools=[ask_human(channel)])
 
 # elsewhere, the operator side:
 async for q in channel.questions():   # ends when channel.close() is called

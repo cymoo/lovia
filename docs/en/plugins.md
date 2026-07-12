@@ -8,11 +8,11 @@ extension axis: Skills, MCP, Todo, and Memory are all built on exactly this
 seam.
 
 ```python
-from lovia import Agent, Memory, Skills, Todo
+from lovia import Agent, Memory, Skills, Todo, model_from_env
 
 agent = Agent(
     name="builder",
-    model="glm-5.2",
+    model=model_from_env(),
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
@@ -129,7 +129,7 @@ class GlossaryPlugin:
         )
 
 
-agent = Agent(name="assistant", model="glm-5.2", plugins=[GlossaryPlugin(MyGlossary())])
+agent = Agent(name="assistant", model=model_from_env(), plugins=[GlossaryPlugin(MyGlossary())])
 ```
 
 A plugin that opens a resource in `setup()` (an MCP connection, an HTTP
@@ -145,46 +145,14 @@ async def setup(self) -> PluginInstance:
 
 | Plugin | One line | Guide |
 | --- | --- | --- |
-| `Todo()` | externalized checklist, re-shown every turn | below |
+| `Todo()` | externalized checklist, re-shown every turn | [Todo](todo.md) |
 | `Skills(...)` | instruction bundles with progressive disclosure | [Skills](skills.md) |
 | `MCP(...)` | tools from Model Context Protocol servers | [MCP](mcp.md) |
 | `Memory(...)` | long-term, cross-session memory | [Memory](memory.md) |
 
-### Todo
-
-```python
-from lovia import Agent, Runner, Todo
-
-agent = Agent(
-    name="builder",
-    instructions="Complete multi-step work carefully.",
-    model="glm-5.2",
-    plugins=[Todo()],
-)
-
-await Runner.run(agent, "Implement a small REST API with tests and docs.")
-```
-
-`Todo` gives the model a `todo_write` tool (full-replace: every call passes
-the complete list) plus a view injector that re-shows the current list each
-turn as a `<system-reminder>` block — visible pressure to keep the plan
-updated, at zero transcript growth. Items carry `content`, a `TodoStatus`
-(`pending` / `in_progress` / `completed`; at most one in-progress — extras
-are demoted, not rejected), and an optional `active_form` label; the
-run-scoped store is a `TodoList`, and `render_todos(items)` produces the
-checklist string the model sees.
-
-Configuration: `Todo(tool_name="todo_write", inject=True, instructions=...)` —
-set `instructions=None` to drop the usage guidance, `inject=False` to keep
-the tool without the per-turn reminder.
-
-The store is run-scoped, but the list survives interruptions anyway: on a
-[resume](sessions-and-checkpoints.md) or handoff the injector rehydrates
-from the newest valid `todo_write` call in the transcript. To observe todos
-from the host, filter `ToolCallCompleted` events where `call.name ==
-"todo_write"` (`.result` is the structured `list[TodoItem]`), or reconstruct
-from a stored transcript with `lovia.plugins.todos_from_entries(entries)` —
-that is what the web UI does.
+`Todo` has its own guide because its model-facing workflow, recovery behavior,
+and observation API are useful without writing a custom plugin. See
+[Todo](todo.md).
 
 ## Sharp edges
 
@@ -202,7 +170,7 @@ that is what the web UI does.
 
 ## See also
 
-- [Skills](skills.md) · [MCP](mcp.md) · [Memory](memory.md) — the built-ins
+- [Todo](todo.md) · [Skills](skills.md) · [MCP](mcp.md) · [Memory](memory.md) — the built-ins
   in depth
 - [Context management](context.md) — how views are assembled around injectors
 - Examples: [`21_todos.py`](../../examples/21_todos.py),

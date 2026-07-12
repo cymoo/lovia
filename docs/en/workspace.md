@@ -7,13 +7,13 @@ and commands, so there is a single place to reason about what the agent may
 touch.
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.workspace import CommandRule, Workspace
 
 agent = Agent(
     name="coder",
     instructions="Make small, targeted code changes.",
-    model="glm-5.2",
+    model=model_from_env(),
     workspace=Workspace.local(
         ".",
         mode="coding",

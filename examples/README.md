@@ -15,8 +15,9 @@ cp .env.example .env                 # then set LOVIA_MODEL + your API key
 python examples/01_hello.py
 ```
 
-`LOVIA_MODEL` picks the model for every example, e.g. `glm-5.2` or
-`anthropic:<model>`. Point `OPENAI_BASE_URL` at any OpenAI-compatible
+`LOVIA_MODEL` picks the model for every example: use the bare model name from
+an OpenAI-compatible service, or `anthropic:<model>` for an
+Anthropic-compatible service. Point `OPENAI_BASE_URL` at any OpenAI-compatible
 service (DeepSeek, Ollama, vLLM, ...) and use the bare model name it provides.
 Scripts that write anything write into `tmp/` (gitignored).
 

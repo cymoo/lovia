@@ -5,12 +5,12 @@
 用 `clone()` 派生一个变体即可，无须复制带有运行状态的对象。
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 
 agent = Agent(
     name="writer",
     instructions="回答要具体、简洁。",
-    model="glm-5.2",
+    model=model_from_env(),
 )
 ```
 
@@ -56,14 +56,14 @@ agent = Agent(
 async def instructions(ctx) -> str:
     return f"你正在支持 {ctx.deps.plan} 套餐用户。回复要简短。"
 
-agent = Agent(name="support", instructions=instructions, model="glm-5.2")
+agent = Agent(name="support", instructions=instructions, model=model_from_env())
 ```
 
 **注册片段**：基础 prompt 保持静态，通过 `@agent.instruction` 装饰器追加动态片段。
 片段会按注册顺序渲染在 `instructions` 之后，以空行分隔；返回 `""` 可以按条件跳过：
 
 ```python
-agent = Agent(name="support", instructions="你是一名客服 agent。", model="glm-5.2")
+agent = Agent(name="support", instructions="你是一名客服 agent。", model=model_from_env())
 
 @agent.instruction
 async def user_tier(ctx) -> str:
@@ -88,7 +88,7 @@ runner 追加在它后面。
 
 ```python
 strict = agent.clone(instructions="只回答带引用的内容。")
-variant = agent.clone(model="glm-5.2")
+variant = agent.clone(model="<other-model>")
 ```
 
 `@agent.instruction` 和 `clone()` 采用“注册时复制”的规则：派生前已注册的片段会复制到新实例中
@@ -120,7 +120,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
     return "\n".join(rows) or "没有未关闭工单。"
 
 
-agent: Agent[Deps] = Agent(name="support", model="glm-5.2", tools=[open_tickets])
+agent: Agent[Deps] = Agent(name="support", model=model_from_env(), tools=[open_tickets])
 
 result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps("u1", db))
 ```

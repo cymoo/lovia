@@ -50,7 +50,7 @@ app.include_router(build_api_router(deps))
 | `GET /api/sessions?q=&limit=` | 列出 / 搜索聊天（置顶优先）；`DELETE` 清空全部 |
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · 重命名/置顶 · 删除 |
-| `GET /api/sessions/{id}/todos` | 当前 [todo list](plugins.md#todo)，从 transcript 重建 |
+| `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 基于 agent [工作区](workspace.md)的只读文件面板 |

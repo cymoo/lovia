@@ -4,14 +4,14 @@
 构造代码，就能清楚知道它具备哪些能力。
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.tools.http import http_fetch
 from lovia.tools.search import duckduckgo_search
 from lovia.tools.time import now
 
 agent = Agent(
     name="researcher",
-    model="glm-5.2",
+    model=model_from_env(),
     tools=[http_fetch, duckduckgo_search(), now],
 )
 ```
@@ -86,7 +86,7 @@ class WebSearch(Protocol):
   [指令片段](agents.md#指令)的工厂，将当天日期写入系统提示词：
 
   ```python
-  agent = Agent(name="researcher", model="glm-5.2", tools=[duckduckgo_search()])
+  agent = Agent(name="researcher", model=model_from_env(), tools=[duckduckgo_search()])
   agent.instruction(current_date())
   ```
 
@@ -103,7 +103,7 @@ class WebSearch(Protocol):
 from lovia.tools.human import HumanChannel, ask_human
 
 channel = HumanChannel()
-agent = Agent(name="assistant", model="glm-5.2", tools=[ask_human(channel)])
+agent = Agent(name="assistant", model=model_from_env(), tools=[ask_human(channel)])
 
 # 在操作员侧处理问题
 async for q in channel.questions():   # channel.close() 后结束

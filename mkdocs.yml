@@ -9,8 +9,10 @@ repo_url: https://github.com/cymoo/lovia
 edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  ratio-calibration.md
 hooks:
-  - mkdocs_hooks.py
+  - scripts/mkdocs_hooks.py
 
 theme:
   name: material
@@ -18,7 +20,6 @@ theme:
   icon:
     repo: fontawesome/brands/github
   features:
-    - navigation.sections
     - navigation.top
     - navigation.tracking
     - navigation.footer
@@ -64,11 +65,12 @@ plugins:
           nav_translations:
             Home: 首页
             Getting started: 快速开始
+            Installation & model setup: 安装与模型配置
             Quickstart: 快速上手
             Core concepts: 核心概念
             Core: 核心
             Agents: Agent
-            Running agents: 运行 agent
+            Running agents: 运行 Agent
             Streaming: 流式输出
             Tools: 工具
             Built-in tools: 内置工具
@@ -77,6 +79,7 @@ plugins:
             Multi-agent: 多 Agent
             Plugins: 插件
             Basics: 基础
+            Todo: Todo
             Skills: Skills
             Memory: 记忆
             Production: 生产
@@ -85,14 +88,19 @@ plugins:
             Human in the loop: 人工介入
             Guardrails: 护栏
             Reliability: 可靠性
+            Deployment: 生产部署
             Observability: 可观测性
             Workspace: 工作区
-            Serving & quality: 服务与质量
+            Serving: 服务
             Web UI & server: Web UI 与服务端
+            Quality: 质量保障
             Evals: 评测
             Testing: 测试
+            Reference: 参考
+            API reference: API 参考
+            Troubleshooting: 故障排查
             Internals: 内部机制
-            Architecture: 架构
+            Architecture: Architecture（英文）
 
 markdown_extensions:
   - toc:
@@ -124,34 +132,41 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Getting started:
+      - Installation & model setup: installation.md
       - Quickstart: quickstart.md
       - Core concepts: concepts.md
   - Core:
       - Agents: agents.md
       - Running agents: running.md
-      - Streaming: streaming.md
+      - Providers & models: providers.md
       - Tools: tools.md
       - Built-in tools: built-in-tools.md
       - Structured output: structured-output.md
-      - Providers & models: providers.md
+      - Streaming: streaming.md
       - Multi-agent: multi-agent.md
       - Context management: context.md
-      - Observability: observability.md
       - Workspace: workspace.md
+      - Observability: observability.md
   - Plugins:
       - Basics: plugins.md
+      - Todo: todo.md
       - Skills: skills.md
       - MCP: mcp.md
       - Memory: memory.md
   - Production:
+      - Reliability: reliability.md
       - Sessions & checkpoints: sessions-and-checkpoints.md
       - Human in the loop: human-in-the-loop.md
       - Guardrails: guardrails.md
-      - Reliability: reliability.md
-  - Serving & quality:
+      - Deployment: deployment.md
+  - Serving:
       - Web UI & server: web.md
       - HTTP API: http-api.md
-      - Evals: eval.md
+  - Quality:
       - Testing: testing.md
+      - Evals: eval.md
+  - Reference:
+      - API reference: api-reference.md
+      - Troubleshooting: troubleshooting.md
   - Internals:
       - Architecture: architecture.md

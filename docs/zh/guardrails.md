@@ -4,7 +4,7 @@
 **输入护栏**在第一次模型调用前检查对话；**输出护栏**在最终答案返回前检查答案。
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.exceptions import GuardrailTripped
 
 
@@ -20,7 +20,7 @@ async def must_cite(output, ctx):
 
 agent = Agent(
     name="researcher",
-    model="glm-5.2",
+    model=model_from_env(),
     input_guardrails=[no_email_addresses],
     output_guardrails=[must_cite],
 )
@@ -55,7 +55,7 @@ tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）
 **用专门模型筛查**：guardrail 可以是 async，因此可以调用自己的分类器：
 
 ```python
-screen = Agent(name="screen", model="glm-5.2", output_type=bool,
+screen = Agent(name="screen", model=model_from_env(), output_type=bool,
                instructions="如果请求在寻求法律建议，回答 true。")
 
 async def no_legal_advice(messages, ctx):

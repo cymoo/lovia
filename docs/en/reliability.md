@@ -11,9 +11,9 @@ lovia separates the knobs accordingly, with one placement rule:
   with no agent-side counterpart: `max_turns`, `budget`, `cancel_token`.
 
 ```python
-from lovia import Agent, RetryPolicy, RunBudget, Runner
+from lovia import Agent, RetryPolicy, RunBudget, Runner, model_from_env
 
-agent = Agent(name="analyst", model="glm-5.2",
+agent = Agent(name="analyst", model=model_from_env(),
               retry=RetryPolicy(max_attempts=2))          # posture
 
 result = await Runner.run(

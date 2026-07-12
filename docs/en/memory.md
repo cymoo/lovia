@@ -12,11 +12,11 @@ verbs** the model already understands:
   pulled in only on demand with `recall(query)`.
 
 ```python
-from lovia import Agent, Memory
+from lovia import Agent, Memory, model_from_env
 
 agent = Agent(
     name="assistant",
-    model="glm-5.2",
+    model=model_from_env(),
     plugins=[Memory("./.lovia/memory")],
 )
 ```

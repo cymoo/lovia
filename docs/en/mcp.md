@@ -11,12 +11,12 @@ pip install "lovia[mcp]"
 ```
 
 ```python
-from lovia import Agent
+from lovia import Agent, model_from_env
 from lovia.plugins.mcp import MCP, MCPServerStdio
 
 agent = Agent(
     name="assistant",
-    model="glm-5.2",
+    model=model_from_env(),
     plugins=[
         MCP(MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"]))
     ],
@@ -65,7 +65,7 @@ and connections:
 server = MCPServerStdio(name="web", command="uvx", args=["mcp-server-fetch"])
 
 async with server.session() as conn:      # opened once
-    agent = Agent(name="assistant", model="glm-5.2", plugins=[MCP(conn)])
+    agent = Agent(name="assistant", model=model_from_env(), plugins=[MCP(conn)])
     await Runner.run(agent, "Fetch https://example.com and summarize it.")
     await Runner.run(agent, "Now fetch the RFC index.")   # same connection
 ```

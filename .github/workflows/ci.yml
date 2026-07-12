@@ -49,7 +49,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install docs dependencies
-        run: uv sync --extra docs
+        # Extras back the modules that doc snippets import (lovia.web, .plugins.mcp,
+        # .tools.search); the snippet checker imports them for real to verify symbols.
+        run: uv sync --extra docs --extra mcp --extra web --extra ddg
       - name: Build site (strict)
         run: uv run mkdocs build --strict
       - name: Check links, anchors, and snippets
@@ -75,7 +77,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install docs dependencies
-        run: uv sync --extra docs
+        # Extras back the modules that doc snippets import (lovia.web, .plugins.mcp,
+        # .tools.search); the snippet checker imports them for real to verify symbols.
+        run: uv sync --extra docs --extra mcp --extra web --extra ddg
       - name: Build site (strict)
         run: uv run mkdocs build --strict
       - name: Check links, anchors, and snippets

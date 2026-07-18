@@ -243,7 +243,7 @@ async def stream_with_retries(
     :class:`ContextOverflowError` always propagate immediately.
 
     ``cancel_token``, when supplied, is checked around each retry backoff so a
-    cooperatively cancelled run stops here instead of sleeping out the backoff
+    cooperatively canceled run stops here instead of sleeping out the backoff
     and paying for another attempt before the loop's next safe point.
     """
     max_attempts = retry.max_attempts if retry is not None else 1
@@ -302,7 +302,7 @@ async def stream_with_retries(
                 truncate_repr(str(exc)),
             )
             # Checked on both sides of the sleep: before, so an
-            # already-cancelled run skips the backoff entirely; after,
+            # already-canceled run skips the backoff entirely; after,
             # so a cancel that lands mid-sleep stops the retry rather
             # than paying for one more full attempt.
             if cancel_token is not None:

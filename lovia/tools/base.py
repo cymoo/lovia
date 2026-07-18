@@ -61,7 +61,7 @@ ApprovalPredicate = Callable[[dict[str, Any], "RunContext[Any]"], bool]
 
 # A ``wrap`` callable receives the underlying ``invoke``, the raw (unvalidated)
 # args, and the run context. It must return (or await) the tool result. Use it to
-# insert custom behaviour around a single attempt (caching, mocking, custom
+# insert custom behavior around a single attempt (caching, mocking, custom
 # auth, redaction). Retries and timeout, when configured, are applied *around*
 # wrap — i.e. wrap sees one attempt at a time.
 ToolInvoker = Callable[[dict[str, Any], "RunContext[Any]"], Awaitable[Any]]
@@ -111,9 +111,9 @@ class Tool:
     # agent's default_tool_timeout if set).
     timeout: float | None = None
     # Cap (in characters) on the rendered output stored in the transcript;
-    # longer outputs are truncated head+tail with a marker and the raw return
-    # value is dropped. ``None`` means "use the agent's
-    # ``max_tool_output_chars``" (which itself defaults to unlimited).
+    # longer outputs are truncated head+tail with a marker.
+    # ``None`` means "use the agent's
+    # ``max_tool_output_chars``" (which itself defaults to 200K).
     max_output_chars: int | None = None
     # Optional custom renderer for the result string the model sees.
     result_renderer: ToolResultRenderer | None = None

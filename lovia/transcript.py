@@ -694,6 +694,7 @@ __all__ = [
     "ToolCallEntry",
     "ToolResultEntry",
     "TranscriptEntry",
+    "UsageDelta",
     "assistant_to_entries",
     "messages_to_entries",
     "entries_to_messages",
@@ -703,5 +704,6 @@ __all__ = [
     "leading_system_count",
     "safe_window",
     "split_system",
+    "to_json_safe",
     "drop_dangling_tool_calls",
 ]

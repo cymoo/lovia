@@ -16,7 +16,7 @@ duplicate handoff, malformed arguments, denial, error, success) appends
 exactly one :class:`ToolResultEntry` — such calls never dangle. Calls
 interrupted by an abort are the deliberate exception: ``RunCancelled``, a
 checkpoint store failure, or the consumer abandoning the stream cancels the
-turn's in-flight tasks, and a cancelled call leaves no entry — it stays
+turn's in-flight tasks, and a canceled call leaves no entry — it stays
 pending and a resume re-executes it (see ``pending_tool_calls``). Results
 append in completion order — safe, because everything downstream pairs
 calls to results by ``call_id``, never by position.
@@ -465,7 +465,7 @@ class ToolCallProcessor:
     def _apply_handler_decision(self, call_id: str, decision: object) -> None:
         # String decisions follow the declared ``ApprovalDecision`` contract
         # (``"allow"`` / ``"deny"`` / ``"ask"``). ``"deny"`` and anything
-        # unrecognised resolve to deny, matching the run's fail-closed posture.
+        # unrecognized resolve to deny, matching the run's fail-closed posture.
         if isinstance(decision, str):
             token = decision.strip().lower()
             if token == "ask":

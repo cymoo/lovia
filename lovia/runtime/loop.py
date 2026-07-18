@@ -154,7 +154,7 @@ class RunLoop:
         self.budget = budget
         # Always hold a token so it can be exposed on RunContext (for tools and
         # hooks to call cancel()) and inherited by agent-as-tool sub-runs. When
-        # the caller didn't pass one, a fresh token is never cancelled, so this
+        # the caller didn't pass one, a fresh token is never canceled, so this
         # is behaviourally identical to the old None for callers who don't reach
         # for it.
         self.cancel_token = cancel_token or CancelToken()
@@ -451,10 +451,10 @@ class RunLoop:
                         type(exc).__name__,
                         truncate_repr(str(exc)),
                     )
-                    # Shield the terminal save: a run cancelled via
+                    # Shield the terminal save: a run canceled via
                     # wait_for/timeout must still leave an ``interrupted``
                     # snapshot. Without the shield, awaiting here could itself
-                    # be cancelled and drop the checkpoint.
+                    # be canceled and drop the checkpoint.
                     await asyncio.shield(self.checkpoints.save_terminal(state, exc))
                     # A failed sub-run's spend is still real spend: fold what
                     # accumulated up to the failure into the parent's books
@@ -1000,7 +1000,7 @@ class RunLoop:
             # GeneratorExit (consumer abandoned the stream), or normal
             # completion (everything below is then a no-op). NO yields here —
             # an async generator must not yield while closing; plain awaits
-            # are fine. If the consuming task is itself being cancelled the
+            # are fine. If the consuming task is itself being canceled the
             # gather may be interrupted after cancel() was already delivered —
             # the tasks then die on their own (best-effort teardown, matching
             # the shield-only-the-terminal-save posture of the run loop).

@@ -2,6 +2,7 @@
 // cron · interval · one-shot schedules served by /api/schedules. Opened from the
 // clock button in the topbar (shown only when the server advertises the
 // `scheduling` feature).
+import { t } from './i18n.js';
 import { api } from './api.js';
 import { store } from './store.js';
 import { showDialog, confirmDialog } from './ui.js';
@@ -13,9 +14,9 @@ import { switchSession } from './sessions.js';
 function humanizeEvery(expr) {
   const secs = Number(expr);
   if (!Number.isFinite(secs)) return `every ${expr}`;
-  if (secs % 3600 === 0) return `every ${secs / 3600}h`;
-  if (secs % 60 === 0) return `every ${secs / 60}m`;
-  return `every ${secs}s`;
+  if (secs % 3600 === 0) return t('sched.everyH', { n: secs / 3600 });
+  if (secs % 60 === 0) return t('sched.everyM', { n: secs / 60 });
+  return t('sched.everyS', { n: secs });
 }
 
 // ---- Cron in plain words --------------------------------------------------
@@ -23,20 +24,20 @@ function humanizeEvery(expr) {
 // lists/ranges, */N steps, day-of-month); anything fancier returns null and
 // the raw expression is shown instead. Deliberately hand-rolled: a full cron
 // describer is a dependency for five lines of benefit.
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const dayName = (d) => t(`cron.day${d % 7}`);
 
 function dayLabel(field) {
-  if (field === '1-5') return 'weekdays';
-  if (field === '0,6' || field === '6,0') return 'weekends';
+  if (field === '1-5') return t('cron.weekdays');
+  if (field === '0,6' || field === '6,0') return t('cron.weekends');
   const names = [];
   for (const part of field.split(',')) {
     const range = part.match(/^([0-7])-([0-7])$/);
     if (range) {
       const [from, to] = [Number(range[1]), Number(range[2])];
       if (from > to) return null;
-      for (let d = from; d <= to; d++) names.push(DAY_NAMES[d % 7]);
+      for (let d = from; d <= to; d++) names.push(dayName(d));
     } else if (/^[0-7]$/.test(part)) {
-      names.push(DAY_NAMES[Number(part) % 7]);
+      names.push(dayName(Number(part)));
     } else {
       return null;
     }
@@ -54,25 +55,25 @@ export function humanizeCron(expr) {
   const step = (s) => (/^\*\/\d+$/.test(s) ? s.slice(2) : null);
 
   if (min === '*' && hour === '*' && dom === '*' && dow === '*') {
-    return 'every minute';
+    return t('cron.everyMinute');
   }
   if (step(min) && hour === '*' && dom === '*' && dow === '*') {
-    return `every ${step(min)} min`;
+    return t('cron.everyNMin', { n: step(min) });
   }
   if (isNum(min) && step(hour) && dom === '*' && dow === '*') {
-    return `every ${step(hour)}h at :${pad(min)}`;
+    return t('cron.everyNHours', { n: step(hour), m: pad(min) });
   }
   if (isNum(min) && hour === '*' && dom === '*' && dow === '*') {
-    return `hourly at :${pad(min)}`;
+    return t('cron.hourlyAt', { m: pad(min) });
   }
   if (isNum(min) && isNum(hour)) {
-    const t = `${pad(hour)}:${pad(min)}`;
-    if (dom === '*' && dow === '*') return `daily at ${t}`;
+    const hm = `${pad(hour)}:${pad(min)}`;
+    if (dom === '*' && dow === '*') return t('cron.dailyAt', { t: hm });
     if (dom === '*') {
       const days = dayLabel(dow);
-      return days ? `${days} at ${t}` : null;
+      return days ? t('cron.daysAt', { days, t: hm }) : null;
     }
-    if (isNum(dom) && dow === '*') return `monthly on day ${dom} at ${t}`;
+    if (isNum(dom) && dow === '*') return t('cron.monthlyAt', { d: dom, t: hm });
   }
   return null;
 }
@@ -82,15 +83,17 @@ function describeTrigger(s) {
   if (s.trigger_kind === 'cron') {
     return humanizeCron(s.trigger_expr) || `cron ${s.trigger_expr}`;
   }
-  if (s.trigger_kind === 'at') return `at ${formatDateTime(Number(s.trigger_expr))}`;
+  if (s.trigger_kind === 'at') {
+    return t('sched.atTime', { time: formatDateTime(Number(s.trigger_expr)) });
+  }
   return `${s.trigger_kind} ${s.trigger_expr}`;
 }
 
 // One-line format reminder per trigger kind, shown under the form.
 const TRIGGER_HINTS = {
-  every: 'Interval in seconds — 3600 runs hourly.',
-  cron: 'min hour day month weekday — e.g. "0 9 * * 1-5" = weekdays at 09:00.',
-  at: 'Runs once at the chosen local time.',
+  get every() { return t('sched.hintEvery'); },
+  get cron() { return t('sched.hintCron'); },
+  get at() { return t('sched.hintAt'); },
 };
 
 // ---- the adaptive trigger-expression input -------------------------------
@@ -117,13 +120,13 @@ function buildExprInput(kind) {
 // Read the raw input back as the API's `trigger_expr` string (or throw).
 function exprValue(kind, input) {
   if (kind === 'at') {
-    if (!input.value) throw new Error('pick a date and time');
+    if (!input.value) throw new Error(t('sched.pickTime'));
     const epoch = Math.floor(new Date(input.value).getTime() / 1000);
-    if (!Number.isFinite(epoch)) throw new Error('invalid date');
+    if (!Number.isFinite(epoch)) throw new Error(t('sched.invalidDate'));
     return String(epoch);
   }
   const v = input.value.trim();
-  if (!v) throw new Error('enter a trigger expression');
+  if (!v) throw new Error(t('sched.enterExpr'));
   return v;
 }
 
@@ -164,15 +167,15 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
   const meta = document.createElement('div');
   meta.className = 'sched-item-meta';
   meta.textContent = s.active
-    ? `${describeTrigger(s)} · next ${formatDateTime(s.next_fire)}`
-    : `${describeTrigger(s)} · ${done ? 'done' : 'paused'}`;
+    ? `${describeTrigger(s)} · ${t('sched.next', { time: formatDateTime(s.next_fire) })}`
+    : `${describeTrigger(s)} · ${done ? t('sched.done') : t('sched.paused')}`;
   // The humanized trigger keeps the raw expression one hover away.
   meta.title = `${s.trigger_kind} ${s.trigger_expr}`;
   // Outcome of the most recent fire (None until it first completes).
   if (s.last_status) {
     const status = document.createElement('span');
     status.className = `sched-status ${s.last_status}`;
-    status.textContent = s.last_status === 'ok' ? '✓' : '✕ failed';
+    status.textContent = s.last_status === 'ok' ? '✓' : t('sched.failed');
     if (s.last_error) status.title = s.last_error;
     meta.append(' · ', status);
   }
@@ -181,8 +184,8 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
     const link = document.createElement('button');
     link.type = 'button';
     link.className = 'sched-last-run';
-    link.textContent = 'last run ↗';
-    link.title = 'Open the chat of the most recent run';
+    link.textContent = t('sched.lastRun');
+    link.title = t('sched.lastRunTitle');
     link.addEventListener('click', () => onOpenSession(s.last_session_id));
     meta.append(' · ', link);
   }
@@ -200,12 +203,12 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
     return b;
   };
 
-  btn('Run now', 'zap', async () => {
+  btn(t('sched.runNow'), 'zap', async () => {
     try {
       await api.runSchedule(s.id);
-      toast('Fired — running in the background');
+      toast(t('sched.fired'));
     } catch (err) {
-      toast(err.message || 'Couldn’t run schedule', { type: 'error' });
+      toast(err.message || t('sched.runFailed'), { type: 'error' });
     } finally {
       onChange();
     }
@@ -213,24 +216,24 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
 
   // A finished one-shot can't meaningfully resume — no pause/resume for it.
   if (!done) {
-    btn(s.active ? 'Pause' : 'Resume', s.active ? 'pause' : 'play', async () => {
+    btn(s.active ? t('sched.pause') : t('sched.resume'), s.active ? 'pause' : 'play', async () => {
       try {
         await api.setScheduleActive(s.id, !s.active);
         onChange();
       } catch (err) {
-        toast(err.message || 'Couldn’t update schedule', { type: 'error' });
+        toast(err.message || t('sched.updateFailed'), { type: 'error' });
       }
     });
   }
 
-  btn('Edit', 'pencil', () => onEdit(s));
+  btn(t('sched.edit'), 'pencil', () => onEdit(s));
 
-  btn('Delete', 'x', async () => {
-    if (!(await confirmDialog('Delete this schedule?'))) return;
+  btn(t('sched.delete'), 'x', async () => {
+    if (!(await confirmDialog(t('sched.deleteConfirm')))) return;
     try {
       await api.deleteSchedule(s.id);
     } catch (err) {
-      toast(err.message || 'Couldn’t delete schedule', { type: 'error' });
+      toast(err.message || t('sched.deleteFailed'), { type: 'error' });
     } finally {
       onChange(); // refresh either way — a 404 just means it's already gone
     }
@@ -245,21 +248,21 @@ export async function openSchedulesDialog() {
   panel.className = 'schedules-panel';
   panel.innerHTML = `
     <div class="schedules-head">
-      <h3>Scheduled runs</h3>
+      <h3>${t('sched.title')}</h3>
       <button type="button" class="btn-icon sched-close" aria-label="Close">${icon('x', { size: 16 })}</button>
     </div>
     <form class="sched-form">
-      <textarea class="dialog-input sched-input" rows="2" placeholder="Prompt to run on schedule…" required></textarea>
+      <textarea class="dialog-input sched-input" rows="2" placeholder="${t('sched.promptPlaceholder')}" required></textarea>
       <div class="sched-row">
         <select class="dialog-input sched-agent" aria-label="Agent" hidden></select>
         <select class="dialog-input sched-kind" aria-label="Trigger kind">
-          <option value="every">Every</option>
-          <option value="cron">Cron</option>
-          <option value="at">At</option>
+          <option value="every">${t('sched.every')}</option>
+          <option value="cron">${t('sched.cron')}</option>
+          <option value="at">${t('sched.at')}</option>
         </select>
         <span class="sched-expr-wrap"></span>
-        <button type="button" class="btn btn-ghost btn-sm sched-cancel-edit" hidden>Cancel</button>
-        <button type="submit" class="btn btn-primary btn-sm">Add</button>
+        <button type="button" class="btn btn-ghost btn-sm sched-cancel-edit" hidden>${t('sched.cancel')}</button>
+        <button type="submit" class="btn btn-primary btn-sm">${t('sched.add')}</button>
       </div>
       <div class="sched-hint"></div>
     </form>
@@ -316,7 +319,7 @@ export async function openSchedulesDialog() {
   function exitEditMode() {
     editingId = null;
     input.value = '';
-    submitBtn.textContent = 'Add';
+    submitBtn.textContent = t('sched.add');
     cancelEditBtn.hidden = true;
   }
 
@@ -331,7 +334,7 @@ export async function openSchedulesDialog() {
       s.trigger_kind === 'at' ? epochToLocalInput(s.trigger_expr) : s.trigger_expr;
     exprWrap.replaceChildren(exprInput);
     syncHint();
-    submitBtn.textContent = 'Save';
+    submitBtn.textContent = t('sched.save');
     cancelEditBtn.hidden = false;
     input.focus();
   }
@@ -342,7 +345,7 @@ export async function openSchedulesDialog() {
     try {
       const rows = await api.listSchedules();
       if (!rows.length) {
-        listEl.innerHTML = '<div class="sched-empty">No schedules yet.</div>';
+        listEl.innerHTML = `<div class="sched-empty">${t('sched.none')}</div>`;
         return;
       }
       listEl.replaceChildren(
@@ -358,7 +361,7 @@ export async function openSchedulesDialog() {
         ),
       );
     } catch (err) {
-      listEl.innerHTML = '<div class="sched-empty">Couldn’t load schedules.</div>';
+      listEl.innerHTML = `<div class="sched-empty">${t('sched.loadFailed')}</div>`;
     }
   }
 
@@ -385,7 +388,7 @@ export async function openSchedulesDialog() {
       }
       await refresh();
     } catch (err) {
-      toast(err.message || 'Couldn’t save schedule', { type: 'error' });
+      toast(err.message || t('sched.saveFailed'), { type: 'error' });
     }
   });
 

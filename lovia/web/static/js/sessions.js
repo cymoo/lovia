@@ -1,10 +1,12 @@
 // Session sidebar: list, search, switch, rename, delete, export.
+import { t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
 import { promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
+import { notificationsEnabled } from './settings.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -43,11 +45,17 @@ function _notifyRunFinished(sid) {
   if (stoppedAt && Date.now() - stoppedAt < STOPPED_GRACE_MS) return;
   // The chat on screen ends its own stream visibly — no extra notice.
   if (sid === store.sessionId && store.streaming) return;
-  const title = store.sessions.find((s) => s.id === sid)?.title || 'Background run';
-  toast(`Finished: ${title}`, { type: 'success' });
+  const title = store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun');
+  toast(t('toast.runFinished', { title }), { type: 'success' });
   if (document.hidden) {
     _unseenFinished += 1;
     document.title = `(${_unseenFinished}) ${_baseTitle}`;
+    // Only while hidden — a visible tab's toast is notification enough.
+    if (notificationsEnabled()) {
+      try {
+        new Notification(_baseTitle, { body: t('toast.runFinished', { title }) });
+      } catch { /* platform quirks (e.g. no Notification in this context) */ }
+    }
   }
 }
 
@@ -67,10 +75,10 @@ async function stopRun(sid) {
   setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
   try {
     await api.cancel(sid);
-    toast('Run stopped');
+    toast(t('toast.runStopped'));
   } catch (err) {
     console.error('stopRun:', err);
-    toast('Couldn’t stop the run', { type: 'error' });
+    toast(t('toast.stopFailed'), { type: 'error' });
   }
   loadSessions(sessionSearch?.value.trim() || '');
 }
@@ -126,7 +134,7 @@ function renderSessions() {
   if (!store.sessions.length) {
     const empty = document.createElement('div');
     empty.className = 'sessions-empty';
-    empty.textContent = 'No chats yet.';
+    empty.textContent = t('nav.noChats');
     sessionsList.appendChild(empty);
     return;
   }
@@ -148,7 +156,7 @@ function renderSessions() {
     main.className = 'session-main';
     main.title = s.title || s.id;
     main.innerHTML = `<div class="session-title"></div><div class="session-meta"></div>`;
-    main.querySelector('.session-title').textContent = s.title || 'New chat';
+    main.querySelector('.session-title').textContent = s.title || t('session.newChat');
     const meta = main.querySelector('.session-meta');
     meta.textContent = formatTimeSmart(s.updated_at);
     meta.title = formatDateTime(s.updated_at);
@@ -175,7 +183,7 @@ function renderSessions() {
     if (store.activeRuns?.has(s.id)) {
       const stopBtn = document.createElement('button');
       stopBtn.type = 'button';
-      stopBtn.title = 'Stop run';
+      stopBtn.title = t('session.stop');
       stopBtn.className = 'session-stop';
       stopBtn.innerHTML = icon('square', { size: 13 });
       stopBtn.addEventListener('click', (e) => {
@@ -187,7 +195,7 @@ function renderSessions() {
 
     const pinBtn = document.createElement('button');
     pinBtn.type = 'button';
-    pinBtn.title = s.pinned ? 'Unpin' : 'Pin';
+    pinBtn.title = s.pinned ? t('session.unpin') : t('session.pin');
     pinBtn.innerHTML = PIN_SVG;
     if (s.pinned) pinBtn.classList.add('active');
     pinBtn.addEventListener('click', (e) => {
@@ -197,7 +205,7 @@ function renderSessions() {
 
     const renameBtn = document.createElement('button');
     renameBtn.type = 'button';
-    renameBtn.title = 'Rename';
+    renameBtn.title = t('session.rename');
     renameBtn.innerHTML = icon('pencil', { size: 14 });
     renameBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -206,7 +214,7 @@ function renderSessions() {
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
-    delBtn.title = 'Delete';
+    delBtn.title = t('session.delete');
     delBtn.innerHTML = icon('trash-2', { size: 14 });
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -223,7 +231,7 @@ function renderSessions() {
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'sessions-more';
-    more.textContent = 'View all chats…';
+    more.textContent = t('nav.viewAll');
     more.addEventListener('click', () =>
       openAllSessionsDialog(sessionSearch?.value.trim() || ''),
     );
@@ -257,20 +265,20 @@ function updateSessionInSidebar(sessionId, title) {
 
   // Update header if this is the active session (fall back when cleared)
   if (sessionId === store.sessionId && chatTitleEl) {
-    chatTitleEl.textContent = title || 'New chat';
+    chatTitleEl.textContent = title || t('session.newChat');
   }
 }
 
 // ---- Actions -------------------------------------------------------------
 async function renameSession(s) {
-  const title = await promptDialog('Rename chat:', s.title || '');
+  const title = await promptDialog(t('dialog.renameChat'), s.title || '');
   if (title === null) return; // cancelled — empty string means "clear the title"
   try {
     await api.renameSession(s.id, title);
     updateSessionInSidebar(s.id, title);
   } catch (err) {
     console.error(err);
-    toast('Couldn’t rename chat', { type: 'error' });
+    toast(t('toast.renameFailed'), { type: 'error' });
   }
 }
 
@@ -280,7 +288,7 @@ async function togglePin(s) {
     await api.setPinned(s.id, next);
   } catch (err) {
     console.error(err);
-    toast('Couldn’t update pin', { type: 'error' });
+    toast(t('toast.pinFailed'), { type: 'error' });
     return;
   }
   // Update locally and re-sort to match the server's "pinned first, then most
@@ -299,14 +307,16 @@ export async function deleteSession(id) {
   // Untitled chats use the same display fallback the sidebar row shows.
   const target = store.sessions.find((s) => s.id === id);
   const ok = await confirmDialog(
-    target ? `Delete "${target.title || 'New chat'}"?` : 'Delete this chat?',
+    target
+      ? t('dialog.deleteNamed', { title: target.title || t('session.newChat') })
+      : t('dialog.deleteChat'),
   );
   if (!ok) return;
   try {
     await api.deleteSession(id);
   } catch (err) {
     console.error(err);
-    toast('Couldn’t delete chat', { type: 'error' });
+    toast(t('toast.deleteFailed'), { type: 'error' });
     return; // leave the view untouched if the delete didn't land
   }
   if (store.sessionId === id) {
@@ -343,7 +353,7 @@ export async function switchSession(id) {
     // the sync may reset the Files panel, which must not eat the replayed
     // workspace touches. Follow-ups then run on the agent this chat belongs to.
     store.emit('sync-agent', data.agent);
-    if (chatTitleEl) chatTitleEl.textContent = data.title || 'New chat';
+    if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
     store.emit('render-history', data.entries || []);
     // Auto-reconnect when the session has an unfinished run — a page refresh
     // mid-stream, or a run left streaming when we switched away. The SSE
@@ -357,7 +367,7 @@ export async function switchSession(id) {
     const errState = document.createElement('div');
     errState.className = 'empty-state';
     const h2 = document.createElement('h2');
-    h2.textContent = "Couldn't load chat";
+    h2.textContent = t('chat.couldntLoad');
     const p = document.createElement('p');
     p.textContent = err.message ?? String(err);
     errState.append(h2, p);
@@ -369,7 +379,7 @@ export function clearChat() {
   store.sessionId = null;
   store.syncURL(null);
   store.lastMessage = null;
-  if (chatTitleEl) chatTitleEl.textContent = 'New chat';
+  if (chatTitleEl) chatTitleEl.textContent = t('session.newChat');
   if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
@@ -384,11 +394,11 @@ function openAllSessionsDialog(query = '') {
   panel.className = 'all-chats-panel';
   panel.innerHTML = `
     <div class="all-chats-head">
-      <h3>All chats</h3>
+      <h3>${t('nav.allChats')}</h3>
       <button type="button" class="btn-icon all-chats-close" aria-label="Close">${icon('x', { size: 16 })}</button>
     </div>
     <div class="all-chats-list" role="list"></div>
-    <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>Load more</button>`;
+    <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>${t('nav.loadMore')}</button>`;
   const listEl = panel.querySelector('.all-chats-list');
   const moreBtn = panel.querySelector('.all-chats-more');
   let offset = 0;
@@ -402,7 +412,7 @@ function openAllSessionsDialog(query = '') {
     b.title = s.title || s.id;
     const title = document.createElement('span');
     title.className = 'all-chats-title';
-    title.textContent = s.title || 'New chat';
+    title.textContent = s.title || t('session.newChat');
     const time = document.createElement('span');
     time.className = 'all-chats-time';
     time.textContent = formatTimeSmart(s.updated_at);
@@ -430,12 +440,12 @@ function openAllSessionsDialog(query = '') {
       if (!listEl.children.length) {
         const empty = document.createElement('div');
         empty.className = 'sessions-empty';
-        empty.textContent = 'No chats.';
+        empty.textContent = t('nav.none');
         listEl.appendChild(empty);
       }
     } catch (err) {
       console.error('openAllSessionsDialog:', err);
-      toast('Couldn’t load chats', { type: 'error' });
+      toast(t('toast.loadChatsFailed'), { type: 'error' });
     } finally {
       loading = false;
       moreBtn.disabled = false;
@@ -464,10 +474,10 @@ export async function exportSession(format = 'md') {
     a.download = exportFilename(title, format);
     a.click();
     URL.revokeObjectURL(url);
-    toast('Chat exported');
+    toast(t('toast.exported'));
   } catch (err) {
     console.error('export:', err);
-    toast('Export failed', { type: 'error' });
+    toast(t('toast.exportFailed'), { type: 'error' });
   }
 }
 

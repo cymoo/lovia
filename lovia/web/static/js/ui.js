@@ -1,4 +1,5 @@
 // UI utilities: theme, sidebar toggle, dialogs.
+import { t } from './i18n.js';
 import { store } from './store.js';
 import { icon } from './icons.js';
 
@@ -6,6 +7,25 @@ const darkToggle = document.getElementById('dark-toggle');
 const themeIcon = darkToggle?.querySelector('.theme-icon');
 
 // ---- Theme -------------------------------------------------------------
+// Three-way preference: 'system' (default — follows the OS live), 'light',
+// 'dark'. The stored value is the PREFERENCE; store.theme always holds the
+// RESOLVED light/dark the page is actually showing.
+const THEME_KEY = 'lovia-theme';
+const _dark = window.matchMedia('(prefers-color-scheme: dark)');
+
+export function themePref() {
+  const saved = localStorage.getItem(THEME_KEY);
+  return saved === 'light' || saved === 'dark' ? saved : 'system';
+}
+
+function resolveTheme(pref) {
+  return pref === 'light' || pref === 'dark'
+    ? pref
+    : _dark.matches
+      ? 'dark'
+      : 'light';
+}
+
 // The static <meta name="theme-color" media=…> pair in the template follows
 // the OS. Once JS owns the theme (saved preference may oppose the OS), browser
 // chrome must follow the *resolved* theme: swap the pair for one meta fed from
@@ -24,19 +44,29 @@ function syncThemeColor() {
   if (bg) meta.content = bg;
 }
 
-function applyTheme(theme) {
+function applyResolved(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   store.theme = theme;
-  localStorage.setItem('lovia-theme', theme);
   syncThemeColor();
   // Show the destination: a sun in dark mode (click → light), a moon in light.
   if (themeIcon) themeIcon.innerHTML = icon(theme === 'dark' ? 'sun' : 'moon', { size: 17 });
 }
 
+export function setThemePref(pref) {
+  localStorage.setItem(THEME_KEY, pref);
+  applyResolved(resolveTheme(pref));
+}
+
 export function initTheme() {
-  applyTheme(store.theme);
+  applyResolved(resolveTheme(themePref()));
+  // 'system' follows OS changes live; explicit picks ignore them.
+  _dark.addEventListener?.('change', () => {
+    if (themePref() === 'system') applyResolved(resolveTheme('system'));
+  });
+  // The topbar button is a quick light/dark flip — an explicit choice. The
+  // settings dialog is where 'system' comes back.
   darkToggle?.addEventListener('click', () => {
-    applyTheme(store.theme === 'dark' ? 'light' : 'dark');
+    setThemePref(store.theme === 'dark' ? 'light' : 'dark');
   });
 }
 
@@ -159,12 +189,12 @@ export function confirmDialog(message) {
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
+    cancelBtn.textContent = t('dialog.cancel');
     cancelBtn.addEventListener('click', () => dialog.close('cancel'));
 
     const okBtn = document.createElement('button');
     okBtn.className = 'btn btn-primary';
-    okBtn.textContent = 'OK';
+    okBtn.textContent = t('dialog.ok');
     okBtn.addEventListener('click', () => dialog.close('ok'));
 
     actions.appendChild(cancelBtn);
@@ -213,12 +243,12 @@ export function promptDialog(message, defaultValue = '') {
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn-ghost';
-    cancelBtn.textContent = 'Cancel';
+    cancelBtn.textContent = t('dialog.cancel');
     cancelBtn.addEventListener('click', () => dialog.close(''));
 
     const okBtn = document.createElement('button');
     okBtn.className = 'btn btn-primary';
-    okBtn.textContent = 'Save';
+    okBtn.textContent = t('dialog.save');
     okBtn.addEventListener('click', submit);
 
     actions.appendChild(cancelBtn);

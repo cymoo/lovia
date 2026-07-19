@@ -1,4 +1,5 @@
 // Entry point — wires together all modules.
+import { applyStaticI18n, t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
 import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
@@ -7,6 +8,7 @@ import { initSessions, loadSessions, clearChat, switchSession } from './sessions
 import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
+import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 
 // ---- Auth ---------------------------------------------------------------
@@ -34,11 +36,9 @@ function adoptTokenFromURL() {
 }
 
 async function promptForToken() {
-  const token = await promptDialog(
-    'This server requires an access token (see the server startup log):',
-  );
+  const token = await promptDialog(t('auth.tokenPrompt'));
   if (!token) {
-    toast('Unauthorized — reload and enter the server token', { type: 'error' });
+    toast(t('toast.unauthorized'), { type: 'error' });
     return;
   }
   saveToken(token);
@@ -109,7 +109,7 @@ async function loadAgents() {
       return;
     }
     console.error('loadAgents:', err);
-    toast('Couldn’t load agents', { type: 'error' });
+    toast(t('toast.loadAgentsFailed'), { type: 'error' });
   }
 }
 
@@ -153,17 +153,17 @@ store.on('detach-stream', detachStream);
 function openShortcutHelp() {
   const mod = /mac/i.test(navigator.platform) ? '⌘' : 'Ctrl';
   const rows = [
-    ['Enter', 'Send message (queues while a run is streaming)'],
-    ['Shift + Enter', 'New line'],
-    [`${mod} + K`, 'Filter chats'],
-    [`${mod} + Shift + O`, 'New chat'],
-    ['Esc', 'Close panels and dialogs'],
-    ['?', 'This help'],
+    ['Enter', t('keys.send')],
+    ['Shift + Enter', t('keys.newline')],
+    [`${mod} + K`, t('keys.filter')],
+    [`${mod} + Shift + O`, t('keys.newChat')],
+    ['Esc', t('keys.esc')],
+    ['?', t('keys.help')],
   ];
   const body = document.createElement('div');
   body.className = 'shortcuts-panel';
   const h = document.createElement('h3');
-  h.textContent = 'Keyboard shortcuts';
+  h.textContent = t('keys.title');
   body.appendChild(h);
   const list = document.createElement('dl');
   list.className = 'shortcuts-list';
@@ -180,7 +180,7 @@ function openShortcutHelp() {
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'btn btn-ghost';
-  close.textContent = 'Close';
+  close.textContent = t('dialog.close');
   const dialog = showDialog({ body, actions: close });
   close.addEventListener('click', () => dialog.close());
 }
@@ -219,6 +219,7 @@ function initKeyboardShortcuts() {
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
   adoptTokenFromURL(); // before the first API call
+  applyStaticI18n(); // before init code reads/sets any labels
   loadPageConfig();
   initTheme();
   initSidebarToggle();
@@ -227,6 +228,7 @@ function initKeyboardShortcuts() {
   initSchedules();
   initFiles();
   initMemory();
+  initSettings();
   initKeyboardShortcuts();
   await loadAgents();
   document.getElementById('prompt')?.focus();

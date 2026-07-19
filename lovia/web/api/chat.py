@@ -28,6 +28,7 @@ from ..schemas import (
     InjectRequest,
 )
 from ..sse import _coerce, usage_dict
+from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from .deps import RouterDeps
@@ -38,18 +39,18 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     store = deps.store
     session = deps.session
 
-    async def upsert_session(sid: str, agent_name: str, message: str) -> bool:
-        """Insert/touch the session's metadata row; returns whether it's new."""
-        is_new = (await store.get(sid)) is None
+    async def upsert_session(
+        sid: str, agent_name: str, message: str, *, is_new: bool
+    ) -> None:
+        """Insert/touch the session's metadata row."""
         await store.upsert(
             sid,
             agent=agent_name,
             title=provisional_title(message) if is_new else None,
         )
-        return is_new
 
-    async def resolve_agent(sid: str, requested: str | None) -> Agent[Any]:
-        """The agent that runs this turn.
+    def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
+        """The agent that runs this turn, given the session's metadata (if any).
 
         An existing session keeps the agent it was created with — a stale tab
         (or a switcher left on another agent) must not silently swap a chat's
@@ -57,7 +58,6 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         the fallback when the stored agent is no longer served. Side benefit:
         continuing an existing session needs no ``agent`` field at all.
         """
-        meta = await store.get(sid)
         if meta is not None and meta.agent and meta.agent in deps.agents:
             return deps.agents[meta.agent]
         return deps.pick(requested)
@@ -69,7 +69,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if not req.message.strip():
             raise HTTPException(status_code=422, detail="empty message")
         sid = req.session_id or uuid.uuid4().hex
-        agent = await resolve_agent(sid, req.agent)
+        meta = await store.get(sid)  # one read feeds agent choice AND is_new
+        agent = resolve_agent(meta, req.agent)
+        is_new = meta is None
         if deps.supervisor.get(sid) is not None:
             # A supervised run owns this session; a second concurrent run would
             # interleave two transcripts. Stream endpoints attach/inject instead.
@@ -78,7 +80,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 detail="a streaming run is active for this session; "
                 "use /api/chat/stream to attach or inject",
             )
-        is_new = await upsert_session(sid, deps.name_of(agent), req.message)
+        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
         result = await Runner.run(
             agent,
             req.message,
@@ -101,12 +103,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     @router.post("/api/chat/stream")
     async def chat_stream(req: ChatRequest) -> EventSourceResponse:
         sid = req.session_id or uuid.uuid4().hex
-        agent = await resolve_agent(sid, req.agent)
+        meta = await store.get(sid)  # one read feeds agent choice AND is_new
+        agent = resolve_agent(meta, req.agent)
+        is_new = meta is None
         # An empty message is only meaningful as a pure attach to a live run;
         # rejecting it before the upsert avoids littering empty "New chat" rows.
         if not req.message.strip() and deps.supervisor.get(sid) is None:
             raise HTTPException(status_code=422, detail="empty message")
-        is_new = await upsert_session(sid, deps.name_of(agent), req.message)
+        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects

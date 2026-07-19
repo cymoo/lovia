@@ -221,9 +221,10 @@ async function togglePin(s) {
 
 export async function deleteSession(id) {
   // Name what's about to disappear — a bare "this chat?" invites misclicks.
-  const title = store.sessions.find((s) => s.id === id)?.title;
+  // Untitled chats use the same display fallback the sidebar row shows.
+  const target = store.sessions.find((s) => s.id === id);
   const ok = await confirmDialog(
-    title ? `Delete "${title}"?` : 'Delete this chat?',
+    target ? `Delete "${target.title || 'New chat'}"?` : 'Delete this chat?',
   );
   if (!ok) return;
   try {

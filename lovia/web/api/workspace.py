@@ -261,9 +261,12 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if_none_match = request.headers.get("if-none-match")
         if etag and if_none_match:
             candidates = {
-                t.strip().removeprefix("W/") for t in if_none_match.split(",")
+                stripped.removeprefix("W/")
+                for t in if_none_match.split(",")
+                if (stripped := t.strip())
             }
-            if etag.removeprefix("W/") in candidates:
+            # "*" matches any current representation (RFC 9110 §13.1.2).
+            if "*" in candidates or etag.removeprefix("W/") in candidates:
                 return Response(
                     status_code=304,
                     headers={"etag": etag, "cache-control": "no-cache"},

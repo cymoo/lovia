@@ -315,6 +315,14 @@ def test_raw_revalidation_etag_304(client: TestClient, ws_app) -> None:
     )
     assert r3.status_code == 304
 
+    # "*" matches any current representation (RFC 9110 §13.1.2).
+    r3b = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "pic.png"},
+        headers={"if-none-match": "*"},
+    )
+    assert r3b.status_code == 304
+
     # Changed file → validator no longer matches, full bytes again.
     root = Path(ws_app.state.agents["bot"].workspace.root)
     (root / "pic.png").write_bytes(PNG_BYTES + b"\x00")

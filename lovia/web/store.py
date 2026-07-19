@@ -41,7 +41,8 @@ _META_COLS = "id, title, agent, created_at, updated_at, pinned"
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
-    "next_fire, active, last_session_id, created_at, updated_at"
+    "next_fire, active, last_session_id, last_status, last_error, "
+    "created_at, updated_at"
 )
 
 
@@ -67,6 +68,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     next_fire REAL NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     last_session_id TEXT,
+    last_status TEXT,
+    last_error TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -116,6 +119,10 @@ class ScheduleRow:
     last_session_id: str | None  # session of the last fire (overlap check)
     created_at: float
     updated_at: float
+    # Outcome of the most recent fire: "ok" | "error" | None (never fired /
+    # still running). ``last_error`` carries the message behind an "error".
+    last_status: str | None = None
+    last_error: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -129,8 +136,10 @@ class ScheduleRow:
             next_fire=row[6],
             active=bool(row[7]),
             last_session_id=row[8],
-            created_at=row[9],
-            updated_at=row[10],
+            last_status=row[9],
+            last_error=row[10],
+            created_at=row[11],
+            updated_at=row[12],
         )
 
     def to_dict(self) -> JsonObject:
@@ -144,6 +153,8 @@ class ScheduleRow:
             "next_fire": self.next_fire,
             "active": self.active,
             "last_session_id": self.last_session_id,
+            "last_status": self.last_status,
+            "last_error": self.last_error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -187,24 +198,30 @@ class ChatStore:
         ``_META_SCHEMA``) because that script also runs against legacy DBs
         before this migration adds the column.
         """
+
+        def add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+            except sqlite3.OperationalError as exc:
+                # Another worker added the column between our PRAGMA check and
+                # this ALTER (concurrent multi-worker startup). Tolerate that
+                # one case; re-raise anything else.
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
         with self._meta._tx() as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
             if "pinned" not in cols:
-                try:
-                    conn.execute(
-                        "ALTER TABLE chat_sessions "
-                        "ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-                    )
-                except sqlite3.OperationalError as exc:
-                    # Another worker added the column between our PRAGMA check and
-                    # this ALTER (concurrent multi-worker startup). Tolerate that
-                    # one case; re-raise anything else.
-                    if "duplicate column" not in str(exc).lower():
-                        raise
+                add_column(conn, "chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
+            sched_cols = {r[1] for r in conn.execute("PRAGMA table_info(schedules)")}
+            if "last_status" not in sched_cols:
+                add_column(conn, "schedules", "last_status TEXT")
+            if "last_error" not in sched_cols:
+                add_column(conn, "schedules", "last_error TEXT")
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -429,7 +446,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -440,6 +457,8 @@ class ChatStore:
                 row.next_fire,
                 int(row.active),
                 row.last_session_id,
+                row.last_status,
+                row.last_error,
                 row.created_at,
                 row.updated_at,
             ),
@@ -507,6 +526,16 @@ class ChatStore:
             "UPDATE schedules SET next_fire = ?, active = ?, "
             "last_session_id = ?, updated_at = ? WHERE id = ?",
             (next_fire, int(active), last_session_id, time.time(), schedule_id),
+        )
+
+    async def set_schedule_result(
+        self, schedule_id: str, *, status: str, error: str | None = None
+    ) -> None:
+        """Record the outcome of the most recent fire ("ok" | "error")."""
+        await self._write(
+            "UPDATE schedules SET last_status = ?, last_error = ?, updated_at = ? "
+            "WHERE id = ?",
+            (status, error, time.time(), schedule_id),
         )
 
     async def set_schedule_active(

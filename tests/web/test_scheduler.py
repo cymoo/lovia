@@ -671,3 +671,153 @@ def test_cors_origins_enables_cross_origin_requests() -> None:
     # Origins not on the list get no CORS headers.
     r = c.get("/api/info", headers={"origin": "http://evil.example"})
     assert "access-control-allow-origin" not in r.headers
+
+
+# --------------------------------------------------------------------------- #
+# fire outcomes (last_status / last_error)
+# --------------------------------------------------------------------------- #
+
+from lovia.exceptions import ProviderError  # noqa: E402
+
+
+class _FailingProvider(ScriptedProvider):
+    """Raise a non-retryable ProviderError on the first model call."""
+
+    async def stream(self, entries, *, tools=None, response_format=None, settings=None):
+        err = ProviderError("scripted terminal failure")
+        err.retryable = False
+        raise err
+        yield  # pragma: no cover - makes this an async generator
+
+
+async def _wait_status(store: ChatStore, sched_id: str, timeout: float = 5.0):
+    """The row once its last_status lands (the result write is a bg task)."""
+    deadline = time.time() + timeout
+    while True:
+        row = await store.get_schedule(sched_id)
+        if row is not None and row.last_status is not None:
+            return row
+        if time.time() > deadline:  # pragma: no cover - failure path
+            raise AssertionError("schedule result was never recorded")
+        await asyncio.sleep(0.02)
+
+
+async def test_fire_records_ok_status() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("done")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now))
+
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+
+    after = await _wait_status(store, "s")
+    assert after.last_status == "ok"
+    assert after.last_error is None
+
+
+async def test_fire_records_error_status_with_message() -> None:
+    store = ChatStore.in_memory()
+    agent = Agent(name="bot", model=_FailingProvider([]))
+    app = _app(agent, store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now))
+
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+
+    after = await _wait_status(store, "s")
+    assert after.last_status == "error"
+    assert after.last_error and "scripted terminal failure" in after.last_error
+
+
+async def test_fire_unavailable_agent_records_error() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("hi")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", agent="ghost", next_fire=now - 1, now=now))
+
+    await Scheduler(deps).run_due()
+
+    after = await _wait_status(store, "s")
+    assert after.last_status == "error"
+    assert after.last_error and "ghost" in after.last_error
+    assert after.next_fire > now  # still advanced — no refire storm
+
+
+async def test_fire_resolves_agent_self_name_to_registry_key() -> None:
+    # The schedule_run tool stores agent.name; when the registry key differs
+    # (create_app({"alias": agent})), the scheduler recovers by self-name.
+    store = ChatStore.in_memory()
+    agent = _agent([text("aliased ok")], name="inner-name")
+    app = create_app({"alias": agent}, store=store, generate_titles=False)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(id="s", agent="inner-name", next_fire=now - 1, now=now)
+    )
+
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+
+    after = await _wait_status(store, "s")
+    assert after.last_status == "ok"
+    # The session metadata carries the registry key, not the self-name.
+    assert after.last_session_id is not None
+    meta = await store.get(after.last_session_id)
+    assert meta is not None and meta.agent == "alias"
+
+
+def test_schedule_info_exposes_status_fields() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("hi")]), store)
+    c = TestClient(app)
+    created = c.post(
+        "/api/schedules",
+        json={"input": "do it", "trigger_kind": "every", "trigger_expr": "3600"},
+    ).json()
+    assert created["last_status"] is None and created["last_error"] is None
+
+
+async def test_migrate_adds_status_columns_to_legacy_db(tmp_path) -> None:
+    """A pre-existing schedules table (without the status columns) is upgraded
+    in place on ChatStore construction, keeping its rows readable."""
+    import sqlite3
+    from pathlib import Path
+
+    path = Path(tmp_path) / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE schedules (
+            id TEXT PRIMARY KEY,
+            agent TEXT,
+            input TEXT NOT NULL,
+            session_id TEXT,
+            trigger_kind TEXT NOT NULL,
+            trigger_expr TEXT NOT NULL,
+            next_fire REAL NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            last_session_id TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO schedules VALUES "
+        "('s', 'bot', 'x', NULL, 'every', '3600', 1.0, 1, NULL, 1.0, 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = ChatStore.sqlite(path)
+    row = await store.get_schedule("s")
+    assert row is not None
+    assert row.last_status is None and row.last_error is None
+    await store.set_schedule_result("s", status="ok")
+    upgraded = await store.get_schedule("s")
+    assert upgraded is not None and upgraded.last_status == "ok"

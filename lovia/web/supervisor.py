@@ -19,7 +19,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -224,6 +224,10 @@ class RunController:
         # in the finally, or the wind-down would re-create transcript rows for a
         # chat that no longer exists.
         self._discard_partial = False
+        # Optional completion hook (the scheduler records fire outcomes with
+        # it): called once from the run task's wind-down as
+        # ``on_finished(succeeded, error_message)`` — keep it non-blocking.
+        self.on_finished: Callable[[bool, str | None], None] | None = None
         self.task: asyncio.Task[None] | None = None
 
     # -- lifecycle ------------------------------------------------------- #
@@ -384,6 +388,7 @@ class RunController:
         title_args: tuple[str, str, Any, str] | None = None
         succeeded = False
         error_seen = False
+        final_error: str | None = None  # message for the on_finished hook
         failed_terminally = False  # ended in a non-resumable failure (drop checkpoint)
         try:
             while True:
@@ -478,6 +483,7 @@ class RunController:
             # loop didn't already surface as an `error` event: synthesize one so
             # subscribers see a clear notice, mirroring the old drive_stream.
             log.warning("supervised run %s ended: %s", sid, exc)
+            final_error = str(exc) or exc.__class__.__name__
             if not error_seen:
                 # Publish via _publish so the synthesized error also lands in the
                 # snapshot mirror / in-flight buffer — a dropped client that
@@ -516,6 +522,17 @@ class RunController:
             self.supervisor._evict(sid, self)
             if title_args is not None:
                 deps.schedule_title(*title_args)
+            if self.on_finished is not None:
+                if not succeeded and final_error is None:
+                    # No exception reached us: a cooperative stop (user cancel
+                    # or shutdown) — name it rather than reporting a bare fail.
+                    final_error = "cancelled"
+                try:
+                    self.on_finished(succeeded, None if succeeded else final_error)
+                except (
+                    Exception
+                ):  # pragma: no cover - a hook must never break wind-down
+                    log.exception("on_finished hook failed for %s", sid)
 
 
 # --------------------------------------------------------------------------- #

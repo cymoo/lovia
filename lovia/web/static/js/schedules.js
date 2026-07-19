@@ -18,9 +18,70 @@ function humanizeEvery(expr) {
   return `every ${secs}s`;
 }
 
+// ---- Cron in plain words --------------------------------------------------
+// Covers the patterns people actually write (fixed minute/hour, day-of-week
+// lists/ranges, */N steps, day-of-month); anything fancier returns null and
+// the raw expression is shown instead. Deliberately hand-rolled: a full cron
+// describer is a dependency for five lines of benefit.
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function dayLabel(field) {
+  if (field === '1-5') return 'weekdays';
+  if (field === '0,6' || field === '6,0') return 'weekends';
+  const names = [];
+  for (const part of field.split(',')) {
+    const range = part.match(/^([0-7])-([0-7])$/);
+    if (range) {
+      const [from, to] = [Number(range[1]), Number(range[2])];
+      if (from > to) return null;
+      for (let d = from; d <= to; d++) names.push(DAY_NAMES[d % 7]);
+    } else if (/^[0-7]$/.test(part)) {
+      names.push(DAY_NAMES[Number(part) % 7]);
+    } else {
+      return null;
+    }
+  }
+  return names.length ? names.join(', ') : null;
+}
+
+export function humanizeCron(expr) {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const [min, hour, dom, month, dow] = fields;
+  if (month !== '*') return null; // month constraints: show the raw expression
+  const pad = (n) => String(n).padStart(2, '0');
+  const isNum = (s) => /^\d{1,2}$/.test(s);
+  const step = (s) => (/^\*\/\d+$/.test(s) ? s.slice(2) : null);
+
+  if (min === '*' && hour === '*' && dom === '*' && dow === '*') {
+    return 'every minute';
+  }
+  if (step(min) && hour === '*' && dom === '*' && dow === '*') {
+    return `every ${step(min)} min`;
+  }
+  if (isNum(min) && step(hour) && dom === '*' && dow === '*') {
+    return `every ${step(hour)}h at :${pad(min)}`;
+  }
+  if (isNum(min) && hour === '*' && dom === '*' && dow === '*') {
+    return `hourly at :${pad(min)}`;
+  }
+  if (isNum(min) && isNum(hour)) {
+    const t = `${pad(hour)}:${pad(min)}`;
+    if (dom === '*' && dow === '*') return `daily at ${t}`;
+    if (dom === '*') {
+      const days = dayLabel(dow);
+      return days ? `${days} at ${t}` : null;
+    }
+    if (isNum(dom) && dow === '*') return `monthly on day ${dom} at ${t}`;
+  }
+  return null;
+}
+
 function describeTrigger(s) {
   if (s.trigger_kind === 'every') return humanizeEvery(s.trigger_expr);
-  if (s.trigger_kind === 'cron') return `cron ${s.trigger_expr}`;
+  if (s.trigger_kind === 'cron') {
+    return humanizeCron(s.trigger_expr) || `cron ${s.trigger_expr}`;
+  }
   if (s.trigger_kind === 'at') return `at ${formatDateTime(Number(s.trigger_expr))}`;
   return `${s.trigger_kind} ${s.trigger_expr}`;
 }
@@ -105,6 +166,16 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
   meta.textContent = s.active
     ? `${describeTrigger(s)} · next ${formatDateTime(s.next_fire)}`
     : `${describeTrigger(s)} · ${done ? 'done' : 'paused'}`;
+  // The humanized trigger keeps the raw expression one hover away.
+  meta.title = `${s.trigger_kind} ${s.trigger_expr}`;
+  // Outcome of the most recent fire (None until it first completes).
+  if (s.last_status) {
+    const status = document.createElement('span');
+    status.className = `sched-status ${s.last_status}`;
+    status.textContent = s.last_status === 'ok' ? '✓' : '✕ failed';
+    if (s.last_error) status.title = s.last_error;
+    meta.append(' · ', status);
+  }
   // Answer "where did my scheduled run go?" — jump to the last fire's chat.
   if (s.last_session_id) {
     const link = document.createElement('button');
@@ -219,12 +290,25 @@ export async function openSchedulesDialog() {
     agentSel.value = store.agent ?? store.agents[0].name;
   }
 
-  let exprInput = buildExprInput(kindSel.value);
+  // Live preview: while typing a cron expression, the hint line leads with
+  // its plain-words reading ("weekdays at 09:00 — min hour …").
+  const syncHint = () => {
+    let hint = TRIGGER_HINTS[kindSel.value] || '';
+    if (kindSel.value === 'cron') {
+      const human = humanizeCron(exprInput.value);
+      if (human) hint = `→ ${human} · ${hint}`;
+    }
+    hintEl.textContent = hint;
+  };
+  const attachExpr = (el) => {
+    el.addEventListener('input', syncHint);
+    return el;
+  };
+  let exprInput = attachExpr(buildExprInput(kindSel.value));
   exprWrap.appendChild(exprInput);
-  const syncHint = () => { hintEl.textContent = TRIGGER_HINTS[kindSel.value] || ''; };
   syncHint();
   kindSel.addEventListener('change', () => {
-    exprInput = buildExprInput(kindSel.value);
+    exprInput = attachExpr(buildExprInput(kindSel.value));
     exprWrap.replaceChildren(exprInput);
     syncHint();
   });
@@ -242,7 +326,7 @@ export async function openSchedulesDialog() {
     input.value = s.input;
     if (store.agents.length > 1 && s.agent) agentSel.value = s.agent;
     kindSel.value = s.trigger_kind;
-    exprInput = buildExprInput(s.trigger_kind);
+    exprInput = attachExpr(buildExprInput(s.trigger_kind));
     exprInput.value =
       s.trigger_kind === 'at' ? epochToLocalInput(s.trigger_expr) : s.trigger_expr;
     exprWrap.replaceChildren(exprInput);

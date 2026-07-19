@@ -206,6 +206,10 @@ class ScheduleInfo(BaseModel):
     active: bool
     # Session of the most recent fire — lets a UI link to the run's results.
     last_session_id: str | None = None
+    # Outcome of the most recent fire: "ok" | "error" | None (never fired or
+    # still running); ``last_error`` carries the message behind an "error".
+    last_status: str | None = None
+    last_error: str | None = None
     created_at: float
     updated_at: float
 

@@ -83,6 +83,13 @@ a snapshot of completed turns, a replay of the current turn, then the live
 tail. The Stop button explicitly cancels the Run and keeps completed turns in
 the Session.
 
+Running sessions show a pulsing dot in the sidebar and can be stopped from
+there directly. The UI polls for background activity: when a run you're not
+watching finishes, a toast appears — and if the tab is hidden, the browser
+tab's title gains an unseen-count badge. Scheduled runs record the outcome of
+their last fire (shown as ✓ / ✕ in the schedules dialog, with the error
+message a hover away).
+
 ## See also
 
 - [Web server](web-server.md) — Python API, lifecycle, and scheduling

@@ -141,37 +141,65 @@ function setTurnTimestamp(turn, ts = Date.now()) {
   }
 }
 
-function argValue(v, compact) {
+function argValue(v) {
   if (typeof v === 'string') {
-    if (!compact) return v; // block form: keep real newlines for the <pre>
     const oneLine = v.replace(/\s+/g, ' ').trim();
     return oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine;
   }
   return JSON.stringify(v);
 }
 
-// compact: a one-line `(k: v, …)` preview for the tool bubble's summary.
-// block:   one `k: v` per line (string values keep real newlines) for the
-//          approval card's <pre>, so multi-line prompts read naturally.
-function formatArgs(args, { compact = true } = {}) {
-  if (!args) return compact ? '()' : '';
+// A one-line `(k: v, …)` preview for the tool bubble's summary. The full
+// values live in the expanded card's params rows (fillParams).
+function formatArgs(args) {
+  if (!args) return '()';
   let obj;
   try {
     obj = JSON.parse(args);
   } catch {
-    return compact ? `(${args})` : String(args);
+    return `(${args})`;
   }
   const entries = Object.entries(obj);
-  if (entries.length === 0) return compact ? '()' : '';
-  if (compact) {
-    return `(${entries.map(([k, v]) => `${k}: ${argValue(v, true)}`).join(', ')})`;
+  if (entries.length === 0) return '()';
+  return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
+}
+
+// Full arguments as key/value rows — the one renderer behind both the
+// expanded tool card and the approval card. Values stay plain text: args are
+// model *inputs*, so no linkification. Short values sit inline next to their
+// key; multi-line or long ones become full-width scrollable blocks. Empty
+// args append nothing, leaving the container :empty so CSS hides it.
+function fillParams(container, args) {
+  if (!container || !args) return;
+  const addBlock = (text) => {
+    const div = document.createElement('div');
+    div.className = 'param-val block';
+    div.textContent = text;
+    container.appendChild(div);
+  };
+  let obj;
+  try {
+    obj = JSON.parse(args);
+  } catch {
+    addBlock(String(args)); // unparsable — show the raw payload
+    return;
   }
-  return entries
-    .map(([k, v]) => {
-      const val = argValue(v, false);
-      return val.includes('\n') ? `${k}:\n${val}` : `${k}: ${val}`;
-    })
-    .join('\n');
+  if (!obj || typeof obj !== 'object') {
+    addBlock(String(args));
+    return;
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    let val = typeof v === 'string' ? v : JSON.stringify(v);
+    const block = val.includes('\n') || val.length > 80;
+    if (block && typeof v !== 'string') val = JSON.stringify(v, null, 2);
+    const key = document.createElement('div');
+    key.className = 'param-key';
+    key.textContent = k;
+    const value = document.createElement('div');
+    value.className = block ? 'param-val block' : 'param-val';
+    value.textContent = val;
+    container.append(key, value);
+  }
 }
 
 function contentText(content) {
@@ -301,6 +329,7 @@ function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
   node.querySelector('.tool-name').textContent = call.name;
   node.querySelector('.tool-args').textContent = formatArgs(call.arguments);
+  fillParams(node.querySelector('.tool-params'), call.arguments);
   return node;
 }
 
@@ -469,7 +498,7 @@ function appendApproval(call) {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-approval');
   node.querySelector('.approval-name').textContent = call.name;
-  node.querySelector('.approval-args').textContent = formatArgs(call.arguments, { compact: false });
+  fillParams(node.querySelector('.approval-args'), call.arguments);
   const resolve = async (decision) => {
     node.classList.add('resolved');
     // Leave a record of which way it went instead of just dimming the card.
@@ -797,7 +826,10 @@ export function renderHistory(entries) {
     // History entries are MessageOut (role + tool_call_id), with no `type`
     // field — gating on `it.type` here left every result unmatched and hidden.
     if (it.role === 'tool' && it.tool_call_id)
-      pendingResults.set(it.tool_call_id, contentText(it.content));
+      pendingResults.set(it.tool_call_id, {
+        text: contentText(it.content),
+        isError: !!it.is_error,
+      });
   }
 
   let currentBubble = null;
@@ -852,8 +884,11 @@ export function renderHistory(entries) {
           }
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
-          if (result !== undefined && result !== '') {
-            node.querySelector('.tool-result').innerHTML = linkifyText(String(result));
+          if (result !== undefined && result.text !== '') {
+            node.querySelector('.tool-result').innerHTML = linkifyText(String(result.text));
+            // Mirror the live path (updateToolResult): error styling rides on
+            // a non-empty result.
+            if (result.isError) node.classList.add('error');
           } else {
             // No result stored — hide the empty <pre>
             const pre = node.querySelector('.tool-result');

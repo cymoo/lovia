@@ -1,0 +1,522 @@
+// i18n.js — a tiny dictionary-based translator (no library).
+//
+// `t('key')` looks up the active language, falling back to English, then to
+// the key itself (a missing translation shows readable English, never a blank).
+// `{name}` placeholders interpolate via the params object. The language
+// preference lives in localStorage ('auto' follows the browser); changing it
+// takes effect on reload — the app re-reads every string at boot, which keeps
+// this module free of re-render machinery.
+//
+// Static HTML (buttons, placeholders, tooltips in index.html) is translated
+// once at boot by applyStaticI18n(); strings built in JS call t() directly.
+// Server-provided copy (empty-state config, agent instructions) is shown
+// verbatim — the server owner localizes those.
+
+const LANG_KEY = 'lovia-lang'; // 'auto' | 'en' | 'zh'
+
+const MESSAGES = {
+  zh: {
+    // ---- sidebar / nav
+    'nav.newChat': '新对话',
+    'nav.memory': '记忆',
+    'nav.memoryTitle': 'Agent 记住的关于你的信息',
+    'nav.schedules': '定时任务',
+    'nav.settings': '设置',
+    'nav.chats': '对话',
+    'nav.filterChats': '筛选…',
+    'nav.noChats': '还没有对话。',
+    'nav.viewAll': '查看全部对话…',
+    'nav.allChats': '全部对话',
+    'nav.loadMore': '加载更多',
+    'nav.none': '没有对话。',
+    'nav.collapse': '收起侧栏',
+    'nav.expand': '展开侧栏',
+    // ---- session row actions
+    'session.pin': '置顶',
+    'session.unpin': '取消置顶',
+    'session.rename': '重命名',
+    'session.delete': '删除',
+    'session.stop': '停止运行',
+    'session.newChat': '新对话',
+    // ---- dialogs
+    'dialog.cancel': '取消',
+    'dialog.ok': '确定',
+    'dialog.save': '保存',
+    'dialog.close': '关闭',
+    'dialog.renameChat': '重命名对话：',
+    'dialog.deleteChat': '删除这个对话？',
+    'dialog.deleteNamed': '删除「{title}」？',
+    // ---- composer / topbar
+    'composer.placeholder': '输入消息…',
+    'composer.queuePlaceholder': '追加一条消息…',
+    'composer.send': '发送消息',
+    'composer.stop': '停止',
+    'composer.queuedCancel': '取消这条排队中的消息',
+    'topbar.export': '导出',
+    'topbar.exportText': '纯文本',
+    'topbar.theme': '切换主题',
+    'topbar.files': '工作区文件',
+    'topbar.turn': '第 {n} 轮',
+    // ---- toasts / errors
+    'toast.exported': '对话已导出',
+    'toast.exportFailed': '导出失败',
+    'toast.renameFailed': '重命名失败',
+    'toast.pinFailed': '置顶状态更新失败',
+    'toast.deleteFailed': '删除失败',
+    'toast.loadChatsFailed': '加载对话失败',
+    'toast.loadAgentsFailed': '加载 Agent 失败',
+    'toast.runStopped': '已停止运行',
+    'toast.stopFailed': '停止失败',
+    'toast.runFinished': '已完成：{title}',
+    'toast.backgroundRun': '后台任务',
+    'toast.pathCopied': '已复制路径',
+    'toast.memorySaved': '记忆已保存',
+    'toast.unauthorized': '未授权——请刷新页面并输入服务器令牌',
+    // ---- auth
+    'auth.tokenPrompt': '此服务器需要访问令牌（见服务器启动日志）：',
+    // ---- chat body
+    'chat.thinking': '思考中…',
+    'chat.thought': '思考了 {s} 秒',
+    'chat.cancelled': '_已取消。_',
+    'chat.retry': '重试',
+    'chat.copy': '复制消息',
+    'chat.copyCode': '复制',
+    'chat.copied': '已复制！',
+    'chat.today': '今天',
+    'chat.yesterday': '昨天',
+    'chat.loadEarlier': '显示更早的消息（{n} 条）',
+    'chat.error': '出错',
+    'chat.couldntLoad': '无法加载对话',
+    // ---- humanized errors
+    'err.serverToken': '此服务器需要访问令牌——请刷新页面后输入。',
+    'err.rateLimit': '模型服务商正在限流——稍等片刻再重试。',
+    'err.auth': '模型服务商认证失败——请检查 API key 和 base URL。',
+    'err.quota': '服务商报告配额或账单问题——请检查账户。',
+    'err.overloaded': '模型服务商当前过载——请稍后再试。',
+    'err.timeout': '请求超时——服务商可能响应较慢，重试通常有效。',
+    'err.network': '无法连接服务器——请确认 lovia 仍在运行。',
+    // ---- todo panel
+    'todo.plan': '计划',
+    'todo.show': '展开计划',
+    'todo.hide': '收起计划',
+    // ---- approvals
+    'approval.waiting': '等待你的决定',
+    'approval.approve': '允许',
+    'approval.deny': '拒绝',
+    'approval.approved': '✓ 已允许',
+    'approval.denied': '✕ 已拒绝',
+    'approval.always': '本对话中总是允许 {name}',
+    'approval.auto': '✓ {name} 已自动允许（本对话已授权）',
+    // ---- context notices / meter
+    'context.compacted': '上下文已压缩',
+    'context.proactive': '主动',
+    'context.reactive': '溢出恢复',
+    'context.summary': '摘要',
+    'context.meter':
+      '上下文：{used} / {window} tokens（{pct}%）——压缩会自动腾出空间',
+    // ---- tool cards
+    'tool.copyResult': '复制结果',
+    'tool.expand': '展开结果',
+    'tool.collapse': '收起结果',
+    'tool.openInFiles': '在文件面板中打开',
+    'tool.old': '− 旧',
+    'tool.new': '+ 新',
+    // ---- files panel
+    'files.recent': '最近',
+    'files.browse': '浏览',
+    'files.refresh': '刷新',
+    'files.close': '关闭',
+    'files.filter': '筛选文件…',
+    'files.noFiles': '还没有文件。',
+    'files.emptyDir': '空目录。',
+    'files.noMatch': '没有匹配的文件。',
+    'files.folder': '文件夹',
+    'files.binary': '二进制文件——无预览。',
+    'files.download': '下载',
+    'files.loadMore': '加载更多',
+    'files.showingLines': '显示第 1–{end} 行，共 {total} 行。',
+    'files.copyPath': '复制路径',
+    'files.readFailed': '无法读取文件',
+    'files.loadFailed': '无法加载文件',
+    'files.rendered': '显示渲染效果',
+    'files.raw': '显示原始 Markdown',
+    'files.wrap': '自动换行',
+    'files.nowrap': '取消自动换行',
+    'files.noWorkspace': '当前 Agent 没有工作区',
+    'files.openFailed': '无法在面板中打开该文件',
+    // ---- memory dialog
+    'memory.title': '记忆',
+    'memory.hint':
+      'Agent 带入每次对话的长期事实，每行一条 `- 事实`。保存时生效；非列表行会被丢弃。',
+    'memory.loading': '加载中…',
+    'memory.chars': '{used} / {budget} 字符',
+    'memory.dropped': '{n} 行非列表内容将被丢弃',
+    'memory.loadFailed': '无法加载记忆',
+    'memory.editorLabel': '记忆内容',
+    'memory.placeholder': '- 用户偏好 …',
+    'memory.saveFailed': '无法保存记忆',
+    // ---- schedules
+    'sched.title': '定时任务',
+    'sched.promptPlaceholder': '按计划运行的 prompt…',
+    'sched.every': '每隔',
+    'sched.cron': 'Cron',
+    'sched.at': '定时',
+    'sched.add': '添加',
+    'sched.save': '保存',
+    'sched.cancel': '取消',
+    'sched.none': '还没有定时任务。',
+    'sched.loadFailed': '无法加载定时任务。',
+    'sched.saveFailed': '无法保存定时任务',
+    'sched.deleteConfirm': '删除这个定时任务？',
+    'sched.deleteFailed': '无法删除定时任务',
+    'sched.updateFailed': '无法更新定时任务',
+    'sched.runNow': '立即运行',
+    'sched.fired': '已触发——正在后台运行',
+    'sched.runFailed': '无法运行定时任务',
+    'sched.pause': '暂停',
+    'sched.resume': '恢复',
+    'sched.edit': '编辑',
+    'sched.delete': '删除',
+    'sched.next': '下次 {time}',
+    'sched.paused': '已暂停',
+    'sched.done': '已完成',
+    'sched.lastRun': '最近运行 ↗',
+    'sched.lastRunTitle': '打开最近一次运行的对话',
+    'sched.failed': '✕ 失败',
+    'sched.hintEvery': '间隔秒数——3600 表示每小时。',
+    'sched.hintCron': '分 时 日 月 星期——如 "0 9 * * 1-5" = 工作日 09:00。',
+    'sched.hintAt': '在所选本地时间运行一次。',
+    'sched.pickTime': '请选择日期和时间',
+    'sched.invalidDate': '无效日期',
+    'sched.enterExpr': '请输入触发表达式',
+    'sched.agentLabel': 'Agent',
+    'sched.triggerKind': '触发类型',
+    // ---- cron humanizer
+    'cron.everyMinute': '每分钟',
+    'cron.everyNMin': '每 {n} 分钟',
+    'cron.everyNHours': '每 {n} 小时的 :{m}',
+    'cron.hourlyAt': '每小时 :{m}',
+    'cron.dailyAt': '每天 {t}',
+    'cron.daysAt': '{days} {t}',
+    'cron.monthlyAt': '每月 {d} 日 {t}',
+    'cron.weekdays': '工作日',
+    'cron.weekends': '周末',
+    'cron.day0': '周日',
+    'cron.day1': '周一',
+    'cron.day2': '周二',
+    'cron.day3': '周三',
+    'cron.day4': '周四',
+    'cron.day5': '周五',
+    'cron.day6': '周六',
+    'sched.everyH': '每 {n} 小时',
+    'sched.everyM': '每 {n} 分钟',
+    'sched.everyS': '每 {n} 秒',
+    'sched.atTime': '定时 {time}',
+    // ---- shortcuts
+    'keys.title': '键盘快捷键',
+    'keys.send': '发送消息（运行中则排队）',
+    'keys.newline': '换行',
+    'keys.filter': '筛选对话',
+    'keys.newChat': '新对话',
+    'keys.esc': '关闭面板和对话框',
+    'keys.help': '本帮助',
+    // ---- settings
+    'settings.title': '设置',
+    'settings.language': '语言',
+    'settings.langAuto': '跟随浏览器',
+    'settings.theme': '主题',
+    'settings.themeSystem': '跟随系统',
+    'settings.themeLight': '浅色',
+    'settings.themeDark': '深色',
+    'settings.notifications': '后台任务完成时发送桌面通知',
+    'settings.notifDenied': '浏览器已拒绝通知权限——请在浏览器设置中开启',
+    'settings.reloadNote': '语言更改将在刷新后生效。',
+  },
+};
+
+// English is the source language: keys double as fallbacks via EN below.
+const EN = {
+  'nav.newChat': 'New chat',
+  'nav.memory': 'Memory',
+  'nav.memoryTitle': 'What the agent remembers about you',
+  'nav.schedules': 'Scheduled runs',
+  'nav.settings': 'Settings',
+  'nav.chats': 'Chats',
+  'nav.filterChats': 'Filter…',
+  'nav.noChats': 'No chats yet.',
+  'nav.viewAll': 'View all chats…',
+  'nav.allChats': 'All chats',
+  'nav.loadMore': 'Load more',
+  'nav.none': 'No chats.',
+  'nav.collapse': 'Collapse sidebar',
+  'nav.expand': 'Show sidebar',
+  'session.pin': 'Pin',
+  'session.unpin': 'Unpin',
+  'session.rename': 'Rename',
+  'session.delete': 'Delete',
+  'session.stop': 'Stop run',
+  'session.newChat': 'New chat',
+  'dialog.cancel': 'Cancel',
+  'dialog.ok': 'OK',
+  'dialog.save': 'Save',
+  'dialog.close': 'Close',
+  'dialog.renameChat': 'Rename chat:',
+  'dialog.deleteChat': 'Delete this chat?',
+  'dialog.deleteNamed': 'Delete "{title}"?',
+  'composer.placeholder': 'Send a message…',
+  'composer.queuePlaceholder': 'Queue a follow-up…',
+  'composer.send': 'Send message',
+  'composer.stop': 'Stop',
+  'composer.queuedCancel': 'Cancel this queued message',
+  'topbar.export': 'Export',
+  'topbar.exportText': 'Text',
+  'topbar.theme': 'Toggle theme',
+  'topbar.files': 'Workspace files',
+  'topbar.turn': 'Turn {n}',
+  'toast.exported': 'Chat exported',
+  'toast.exportFailed': 'Export failed',
+  'toast.renameFailed': 'Couldn’t rename chat',
+  'toast.pinFailed': 'Couldn’t update pin',
+  'toast.deleteFailed': 'Couldn’t delete chat',
+  'toast.loadChatsFailed': 'Couldn’t load chats',
+  'toast.loadAgentsFailed': 'Couldn’t load agents',
+  'toast.runStopped': 'Run stopped',
+  'toast.stopFailed': 'Couldn’t stop the run',
+  'toast.runFinished': 'Finished: {title}',
+  'toast.backgroundRun': 'Background run',
+  'toast.pathCopied': 'Path copied',
+  'toast.memorySaved': 'Memory saved',
+  'toast.unauthorized': 'Unauthorized — reload and enter the server token',
+  'auth.tokenPrompt':
+    'This server requires an access token (see the server startup log):',
+  'chat.thinking': 'Thinking…',
+  'chat.thought': 'Thought for {s}s',
+  'chat.cancelled': '_Cancelled._',
+  'chat.retry': 'Retry',
+  'chat.copy': 'Copy message',
+  'chat.copyCode': 'Copy',
+  'chat.copied': 'Copied!',
+  'chat.today': 'Today',
+  'chat.yesterday': 'Yesterday',
+  'chat.loadEarlier': 'Show earlier messages ({n})',
+  'chat.error': 'Error',
+  'chat.couldntLoad': "Couldn't load chat",
+  'err.serverToken': 'This server requires an access token — reload the page and enter it.',
+  'err.rateLimit':
+    'The model provider is rate-limiting requests — give it a moment, then retry.',
+  'err.auth':
+    'Authentication with the model provider failed — check the API key and base URL.',
+  'err.quota': 'The provider reports a quota or billing problem — check the account.',
+  'err.overloaded': 'The model provider is overloaded right now — try again shortly.',
+  'err.timeout':
+    'The request timed out — the provider may be slow right now; retrying usually works.',
+  'err.network': 'Can’t reach the server — check that lovia is still running.',
+  'todo.plan': 'Plan',
+  'todo.show': 'Show plan',
+  'todo.hide': 'Hide plan',
+  'approval.waiting': 'Awaiting your decision',
+  'approval.approve': 'Approve',
+  'approval.deny': 'Deny',
+  'approval.approved': '✓ Approved',
+  'approval.denied': '✕ Denied',
+  'approval.always': 'Always allow {name} in this chat',
+  'approval.auto': '✓ {name} auto-approved (allowed for this chat)',
+  'context.compacted': 'Context compacted',
+  'context.proactive': 'Proactive',
+  'context.reactive': 'Overflow recovery',
+  'context.summary': 'Summary',
+  'context.meter':
+    'Context: {used} of {window} tokens ({pct}%) — compaction makes room automatically',
+  'tool.copyResult': 'Copy result',
+  'tool.expand': 'Expand result',
+  'tool.collapse': 'Collapse result',
+  'tool.openInFiles': 'Open in Files panel',
+  'tool.old': '− old',
+  'tool.new': '+ new',
+  'files.recent': 'Recent',
+  'files.browse': 'Browse',
+  'files.refresh': 'Refresh',
+  'files.close': 'Close',
+  'files.filter': 'Filter files…',
+  'files.noFiles': 'No files yet.',
+  'files.emptyDir': 'Empty directory.',
+  'files.noMatch': 'No files match the filter.',
+  'files.folder': 'folder',
+  'files.binary': 'Binary file — no preview.',
+  'files.download': 'Download',
+  'files.loadMore': 'Load more',
+  'files.showingLines': 'Showing lines 1–{end} of {total}.',
+  'files.copyPath': 'Copy path',
+  'files.readFailed': 'Couldn’t read file',
+  'files.loadFailed': 'Couldn’t load more',
+  'files.rendered': 'Show rendered',
+  'files.raw': 'Show raw markdown',
+  'files.wrap': 'Wrap long lines',
+  'files.nowrap': 'Don’t wrap long lines',
+  'files.noWorkspace': 'This agent has no workspace',
+  'files.openFailed': 'Couldn’t open that file in the panel',
+  'memory.title': 'Memory',
+  'memory.hint':
+    'Durable facts the agent carries into every chat, one per `- fact` line. Edits apply on save; lines that aren’t bullets are dropped.',
+  'memory.loading': 'Loading…',
+  'memory.chars': '{used} / {budget} chars',
+  'memory.dropped': '{n} non-bullet lines will be dropped',
+  'memory.loadFailed': 'Couldn’t load memory',
+  'memory.editorLabel': 'Memory notes',
+  'memory.placeholder': '- The user prefers …',
+  'memory.saveFailed': 'Couldn’t save memory',
+  'sched.title': 'Scheduled runs',
+  'sched.promptPlaceholder': 'Prompt to run on schedule…',
+  'sched.every': 'Every',
+  'sched.cron': 'Cron',
+  'sched.at': 'At',
+  'sched.add': 'Add',
+  'sched.save': 'Save',
+  'sched.cancel': 'Cancel',
+  'sched.none': 'No schedules yet.',
+  'sched.loadFailed': 'Couldn’t load schedules.',
+  'sched.saveFailed': 'Couldn’t save schedule',
+  'sched.deleteConfirm': 'Delete this schedule?',
+  'sched.deleteFailed': 'Couldn’t delete schedule',
+  'sched.updateFailed': 'Couldn’t update schedule',
+  'sched.runNow': 'Run now',
+  'sched.fired': 'Fired — running in the background',
+  'sched.runFailed': 'Couldn’t run schedule',
+  'sched.pause': 'Pause',
+  'sched.resume': 'Resume',
+  'sched.edit': 'Edit',
+  'sched.delete': 'Delete',
+  'sched.next': 'next {time}',
+  'sched.paused': 'paused',
+  'sched.done': 'done',
+  'sched.lastRun': 'last run ↗',
+  'sched.lastRunTitle': 'Open the chat of the most recent run',
+  'sched.failed': '✕ failed',
+  'sched.hintEvery': 'Interval in seconds — 3600 runs hourly.',
+  'sched.hintCron': 'min hour day month weekday — e.g. "0 9 * * 1-5" = weekdays at 09:00.',
+  'sched.hintAt': 'Runs once at the chosen local time.',
+  'sched.pickTime': 'pick a date and time',
+  'sched.invalidDate': 'invalid date',
+  'sched.enterExpr': 'enter a trigger expression',
+  'sched.agentLabel': 'Agent',
+  'sched.triggerKind': 'Trigger kind',
+  'cron.everyMinute': 'every minute',
+  'cron.everyNMin': 'every {n} min',
+  'cron.everyNHours': 'every {n}h at :{m}',
+  'cron.hourlyAt': 'hourly at :{m}',
+  'cron.dailyAt': 'daily at {t}',
+  'cron.daysAt': '{days} at {t}',
+  'cron.monthlyAt': 'monthly on day {d} at {t}',
+  'cron.weekdays': 'weekdays',
+  'cron.weekends': 'weekends',
+  'cron.day0': 'Sun',
+  'cron.day1': 'Mon',
+  'cron.day2': 'Tue',
+  'cron.day3': 'Wed',
+  'cron.day4': 'Thu',
+  'cron.day5': 'Fri',
+  'cron.day6': 'Sat',
+  'sched.everyH': 'every {n}h',
+  'sched.everyM': 'every {n}m',
+  'sched.everyS': 'every {n}s',
+  'sched.atTime': 'at {time}',
+  'keys.title': 'Keyboard shortcuts',
+  'keys.send': 'Send message (queues while a run is streaming)',
+  'keys.newline': 'New line',
+  'keys.filter': 'Filter chats',
+  'keys.newChat': 'New chat',
+  'keys.esc': 'Close panels and dialogs',
+  'keys.help': 'This help',
+  'settings.title': 'Settings',
+  'settings.language': 'Language',
+  'settings.langAuto': 'Match browser',
+  'settings.theme': 'Theme',
+  'settings.themeSystem': 'System',
+  'settings.themeLight': 'Light',
+  'settings.themeDark': 'Dark',
+  'settings.notifications': 'Desktop notification when a background run finishes',
+  'settings.notifDenied':
+    'The browser has blocked notifications — enable them in browser settings',
+  'settings.reloadNote': 'Language changes apply after a reload.',
+};
+
+function browserLang() {
+  return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+}
+
+export function langPref() {
+  const saved = localStorage.getItem(LANG_KEY);
+  return saved === 'en' || saved === 'zh' || saved === 'auto' ? saved : 'auto';
+}
+
+export function setLangPref(pref) {
+  localStorage.setItem(LANG_KEY, pref);
+}
+
+const _lang = langPref() === 'auto' ? browserLang() : langPref();
+
+export function currentLang() {
+  return _lang;
+}
+
+export function t(key, params) {
+  let s = (_lang !== 'en' && MESSAGES[_lang]?.[key]) || EN[key] || key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      s = s.replaceAll(`{${k}}`, String(v));
+    }
+  }
+  return s;
+}
+
+// ---- Static chrome -------------------------------------------------------
+// index.html ships English; this pass re-labels it at boot. Selector →
+// [textKey, titleKey?, placeholderKey?, ariaKey?] — null skips a slot.
+const STATIC = [
+  ['#new-chat span', 'nav.newChat', null, null],
+  ['#new-chat', null, 'nav.newChat', 'nav.newChat'],
+  ['#memory-btn span', 'nav.memory', null, null],
+  ['#memory-btn', null, 'nav.memoryTitle', null],
+  ['#schedules-btn span', 'nav.schedules', null, null],
+  ['#settings-btn span', 'nav.settings', null, null],
+  ['#settings-btn', null, 'nav.settings', null],
+  ['#sidebar-collapse', null, 'nav.collapse', 'nav.collapse'],
+  ['#sidebar-expand', null, 'nav.expand', 'nav.expand'],
+  ['.sidebar-section-label', 'nav.chats', null, null],
+  ['#export-btn', null, 'topbar.export', null],
+  ['#dark-toggle', null, 'topbar.theme', null],
+  ['#files-btn', null, 'topbar.files', 'topbar.files'],
+  ['#stop', 'composer.stop', null, 'composer.stop'],
+  ['#send', null, null, 'composer.send'],
+  ['#files-tab-recent', 'files.recent', null, null],
+  ['#files-tab-browse', 'files.browse', null, null],
+  ['#files-refresh', null, 'files.refresh', 'files.refresh'],
+  ['#files-close', null, 'files.close', 'files.close'],
+  ['#files-copy-path', null, 'files.copyPath', 'files.copyPath'],
+  ['#files-download', null, 'files.download', 'files.download'],
+  ['.export-menu-item[data-format="txt"]', 'topbar.exportText', null, null],
+];
+
+const PLACEHOLDERS = [
+  ['#session-search', 'nav.filterChats', 'nav.filterChats'],
+  ['#files-filter', 'files.filter', 'files.filter'],
+  ['#prompt', 'composer.placeholder', null],
+];
+
+export function applyStaticI18n() {
+  if (_lang === 'en') return; // the HTML already is English
+  for (const [sel, textKey, titleKey, ariaKey] of STATIC) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (textKey) el.textContent = t(textKey);
+      if (titleKey) el.title = t(titleKey);
+      if (ariaKey) el.setAttribute('aria-label', t(ariaKey));
+    }
+  }
+  for (const [sel, phKey, ariaKey] of PLACEHOLDERS) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    el.placeholder = t(phKey);
+    if (ariaKey) el.setAttribute('aria-label', t(ariaKey));
+  }
+  document.documentElement.lang = _lang;
+}

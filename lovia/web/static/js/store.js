@@ -36,12 +36,16 @@ export const store = {
   // Set when the current run created a brand-new session whose title is being
   // generated server-side, so the chat view knows to poll for it.
   titlePending: false,
-  // Saved preference wins; otherwise follow the OS on first load.
-  theme:
-    localStorage.getItem("lovia-theme") ||
-    (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+  // The RESOLVED theme on screen (light/dark). 'system' (or nothing) stored
+  // means "follow the OS"; ui.js owns preference handling after boot.
+  theme: (() => {
+    const saved = localStorage.getItem("lovia-theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
       ? "dark"
-      : "light"),
+      : "light";
+  })(),
 
   on(event, fn) {
     if (!_listeners.has(event)) _listeners.set(event, []);

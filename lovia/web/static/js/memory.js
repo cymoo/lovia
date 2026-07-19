@@ -6,6 +6,7 @@
 // (bullets only, dedup), so the meter warns *before* saving when a line would
 // be dropped. Opened from the sidebar footer; visible only for agents that
 // carry the plugin (AgentInfo.memory).
+import { t } from './i18n.js';
 import { api } from './api.js';
 import { store } from './store.js';
 import { showDialog } from './ui.js';
@@ -29,19 +30,18 @@ async function openMemoryDialog() {
   const who = store.agents.length > 1 && store.agent ? ` — ${store.agent}` : '';
   panel.innerHTML = `
     <div class="memory-head">
-      <h3>Memory${who}</h3>
-      <button type="button" class="btn-icon memory-close" aria-label="Close">${icon('x', { size: 16 })}</button>
+      <h3>${t('memory.title')}${who}</h3>
+      <button type="button" class="btn-icon memory-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
-    <p class="memory-hint">Durable facts the agent carries into every chat, one per
-      <code>- fact</code> line. Edits apply on save; lines that aren't bullets are dropped.</p>
-    <label class="vh" for="memory-editor">Memory notes</label>
+    <p class="memory-hint">${t('memory.hint')}</p>
+    <label class="vh" for="memory-editor">${t('memory.editorLabel')}</label>
     <textarea id="memory-editor" class="dialog-input memory-editor" spellcheck="false"
-      placeholder="- The user prefers …" disabled></textarea>
+      placeholder="${t('memory.placeholder')}" disabled></textarea>
     <div class="memory-foot">
-      <span class="memory-meter">Loading…</span>
+      <span class="memory-meter">${t('memory.loading')}</span>
       <div class="memory-actions">
-        <button type="button" class="btn btn-ghost memory-cancel">Cancel</button>
-        <button type="button" class="btn btn-primary memory-save" disabled>Save</button>
+        <button type="button" class="btn btn-ghost memory-cancel">${t('dialog.cancel')}</button>
+        <button type="button" class="btn btn-primary memory-save" disabled>${t('dialog.save')}</button>
       </div>
     </div>`;
 
@@ -58,8 +58,13 @@ async function openMemoryDialog() {
   const syncMeter = () => {
     const used = editor.value.length;
     const dropped = droppedLines(editor.value);
-    const bits = [`${used.toLocaleString()} / ${budget.toLocaleString()} chars`];
-    if (dropped) bits.push(`${dropped} non-bullet ${dropped === 1 ? 'line' : 'lines'} will be dropped`);
+    const bits = [
+      t('memory.chars', {
+        used: used.toLocaleString(),
+        budget: budget.toLocaleString(),
+      }),
+    ];
+    if (dropped) bits.push(t('memory.dropped', { n: dropped }));
     meter.textContent = bits.join(' · ');
     meter.classList.toggle('warn', dropped > 0 || used > budget);
   };
@@ -68,10 +73,10 @@ async function openMemoryDialog() {
     saveBtn.disabled = true;
     try {
       await api.putMemory({ agent: store.agent, content: editor.value });
-      toast('Memory saved');
+      toast(t('toast.memorySaved'));
       dialog.close();
     } catch (err) {
-      toast(err.message || 'Couldn’t save memory', { type: 'error' });
+      toast(err.message || t('memory.saveFailed'), { type: 'error' });
       saveBtn.disabled = false;
     }
   }
@@ -86,7 +91,7 @@ async function openMemoryDialog() {
     editor.focus();
     editor.setSelectionRange(editor.value.length, editor.value.length);
   } catch (err) {
-    meter.textContent = err.message || 'Couldn’t load memory';
+    meter.textContent = err.message || t('memory.loadFailed');
     meter.classList.add('warn');
     return;
   }

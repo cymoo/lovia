@@ -9,6 +9,7 @@
 // Wiring: chat.js emits `workspace-file-touched` for write_file/edit_file
 // tool calls (live and replayed history) and `workspace-maybe-stale` after a
 // shell run; this module owns everything else.
+import { t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
 import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
@@ -303,7 +304,7 @@ async function refresh() {
       });
     }
   } catch (err) {
-    els.list.replaceChildren(emptyNode(err.message || 'Couldn’t load files'));
+    els.list.replaceChildren(emptyNode(err.message || t('files.loadFailed')));
     return;
   }
   renderCrumbs();
@@ -370,10 +371,10 @@ function renderList() {
     frag.appendChild(
       emptyNode(
         needle
-          ? 'No files match the filter.'
+          ? t('files.noMatch')
           : state.mode === 'recent'
-            ? 'No files yet.'
-            : 'Empty directory.',
+            ? t('files.noFiles')
+            : t('files.emptyDir'),
       ),
     );
   }
@@ -397,7 +398,7 @@ function renderList() {
     sub.className = 'file-row-sub';
     const bits = [];
     if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
-    if (entry.is_dir) bits.push('folder');
+    if (entry.is_dir) bits.push(t('files.folder'));
     else if (entry.size != null) bits.push(formatBytes(entry.size));
     if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
     if (entry.symlink_target) bits.push('→ ' + entry.symlink_target);
@@ -564,7 +565,7 @@ async function openFile(path, { silent = false } = {}) {
   try {
     data = await api.workspaceFile({ agent: store.agent, path });
   } catch (err) {
-    els.viewerBody.replaceChildren(viewerNote(err.message || 'Couldn’t read file'));
+    els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
     return false;
   }
   if (state.viewing?.path !== path) return true; // user opened something else meanwhile
@@ -572,11 +573,11 @@ async function openFile(path, { silent = false } = {}) {
   if (data.binary) {
     const dl = document.createElement('a');
     dl.className = 'btn btn-ghost btn-sm';
-    dl.textContent = 'Download';
+    dl.textContent = t('files.download');
     dl.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
     dl.setAttribute('download', '');
     els.viewerBody.replaceChildren(
-      viewerNote('Binary file — no preview.', dl),
+      viewerNote(t('files.binary'), dl),
     );
     return true;
   }
@@ -611,7 +612,7 @@ async function followViewerLink(href) {
 
 function syncWrapButton() {
   els.wrapToggle.innerHTML = icon('wrap-text', { size: 15 });
-  els.wrapToggle.title = state.wrap ? 'Don’t wrap long lines' : 'Wrap long lines';
+  els.wrapToggle.title = state.wrap ? t('files.nowrap') : t('files.wrap');
   els.wrapToggle.classList.toggle('active', state.wrap);
 }
 
@@ -628,17 +629,17 @@ function renderViewerContent() {
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'btn btn-ghost btn-sm';
-    more.textContent = 'Load more';
+    more.textContent = t('files.loadMore');
     more.addEventListener('click', loadMore);
     els.viewerBody.appendChild(
-      viewerNote(`Showing lines 1–${v.end} of ${v.totalLines}.`, more),
+      viewerNote(t('files.showingLines', { end: v.end, total: v.totalLines }), more),
     );
   }
 
   if (v.kind === 'md') {
     els.mdToggle.classList.remove('hidden');
     els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
-    els.mdToggle.title = v.raw ? 'Show rendered' : 'Show raw markdown';
+    els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
     if (!v.raw) {
       const { turn, body } = bodyWrapper();
       body.innerHTML = renderMarkdown(v.content);
@@ -672,7 +673,7 @@ async function loadMore() {
     v.truncated = data.truncated;
     renderViewerContent();
   } catch (err) {
-    toast(err.message || 'Couldn’t load more', { type: 'error' });
+    toast(err.message || t('files.loadFailed'), { type: 'error' });
   }
 }
 
@@ -747,7 +748,7 @@ export function initFiles() {
   });
   els.copyPath.addEventListener('click', async () => {
     if (!state.viewing) return;
-    if (await copyToClipboard(state.viewing.path)) toast('Path copied');
+    if (await copyToClipboard(state.viewing.path)) toast(t('toast.pathCopied'));
   });
   els.viewerBody.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
@@ -802,12 +803,12 @@ export function initFiles() {
   // jump straight to the file the tool touched.
   store.on('open-workspace-file', async ({ path }) => {
     if (!state.available) {
-      toast('This agent has no workspace');
+      toast(t('files.noWorkspace'));
       return;
     }
     if (!state.open) setOpen(true);
     if (!(await openFile(path))) {
-      toast('Couldn’t open that file in the panel', { type: 'error' });
+      toast(t('files.openFailed'), { type: 'error' });
     }
   });
 }

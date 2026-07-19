@@ -1,4 +1,5 @@
 // Chat streaming, SSE handling, message rendering.
+import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, readSSE } from './api.js';
 import { copyToClipboard } from './ui.js';
@@ -84,17 +85,27 @@ function addCodeBlockControls(container) {
     const btn = document.createElement('button');
     btn.className = 'btn-copy-code';
     btn.type = 'button';
-    btn.title = 'Copy code';
-    btn.innerHTML = `${icon('copy', { size: 12 })} Copy`;
+    btn.title = t('chat.copyCode');
+    btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const codeText = code?.textContent || pre.textContent?.replace(/Copy$/, '') || '';
+      let codeText = code?.textContent;
+      if (!codeText) {
+        // Fallback for a bare <pre>: strip the UI chrome (copy button,
+        // language label) instead of pattern-matching on its label — which
+        // broke in non-English UIs and on snippets ending with "Copy".
+        const clone = pre.cloneNode(true);
+        clone
+          .querySelectorAll('.btn-copy-code, .code-lang')
+          .forEach((n) => n.remove());
+        codeText = clone.textContent || '';
+      }
       const ok = await copyToClipboard(codeText.trimEnd());
       if (ok) {
-        btn.innerHTML = `${icon('check', { size: 12 })} Copied!`;
+        btn.innerHTML = `${icon('check', { size: 12 })} ${t('chat.copied')}`;
         btn.classList.add('copied');
         setTimeout(() => {
-          btn.innerHTML = `${icon('copy', { size: 12 })} Copy`;
+          btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
           btn.classList.remove('copied');
         }, 2000);
       }
@@ -215,7 +226,7 @@ function fillParams(container, args) {
       const old = k === 'old_string';
       const key = document.createElement('div');
       key.className = 'param-key';
-      key.textContent = old ? '− old' : '+ new';
+      key.textContent = old ? t('tool.old') : t('tool.new');
       const value = document.createElement('div');
       value.className = `param-val block ${old ? 'diff-old' : 'diff-new'}`;
       value.textContent = v;
@@ -281,9 +292,9 @@ let _lastDateKey = null;
 function dateLabel(ts) {
   const d = toDate(ts);
   const now = new Date();
-  if (d.toDateString() === now.toDateString()) return 'Today';
+  if (d.toDateString() === now.toDateString()) return t('chat.today');
   if (d.toDateString() === new Date(now.getTime() - 86400000).toDateString()) {
-    return 'Yesterday';
+    return t('chat.yesterday');
   }
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -361,7 +372,7 @@ function ensureReasoning() {
     details.className = 'reasoning';
     details.open = true;
     const summary = document.createElement('summary');
-    summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Thinking…</span>';
+    summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thinking')}</span>`;
     details.appendChild(summary);
     const content = document.createElement('div');
     content.className = 'reasoning-content';
@@ -386,7 +397,7 @@ function finalizeReasoning() {
   const start = store.reasoningStart || end;
   const elapsed = ((end - start) / 1000).toFixed(1);
   const label = store.reasoningNode.querySelector('.reasoning-label');
-  if (label) label.textContent = `Thought for ${elapsed}s`;
+  if (label) label.textContent = t('chat.thought', { s: elapsed });
 }
 
 // ---- Tool cards ----------------------------------------------------------
@@ -427,7 +438,7 @@ function buildToolNode(call) {
   const path = toolPath(call.arguments);
   if (path && PATH_TOOLS.has(call.name)) {
     node.dataset.toolPath = path;
-    const open = toolActionBtn('folder', 'Open in Files panel');
+    const open = toolActionBtn('folder', t('tool.openInFiles'));
     open.classList.add('tool-open-file');
     open.addEventListener('click', (e) => {
       // Inside <summary>: don't let the click also toggle the card.
@@ -492,14 +503,14 @@ function setToolResult(node, result, isError) {
   actions.replaceChildren(); // idempotent across repeated result updates
 
   if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
-    const expand = toolActionBtn('maximize-2', 'Expand result');
+    const expand = toolActionBtn('maximize-2', t('tool.expand'));
     expand.addEventListener('click', () => {
       const on = pre.classList.toggle('expanded');
-      expand.title = on ? 'Collapse result' : 'Expand result';
+      expand.title = on ? t('tool.collapse') : t('tool.expand');
     });
     actions.append(expand);
   }
-  const copy = toolActionBtn('copy', 'Copy result');
+  const copy = toolActionBtn('copy', t('tool.copyResult'));
   copy.addEventListener('click', async () => {
     if (await copyToClipboard(text)) {
       copy.innerHTML = icon('check', { size: 12 });
@@ -540,10 +551,10 @@ function parseTodos(args) {
   try {
     const obj = JSON.parse(args);
     if (obj && Array.isArray(obj.todos)) {
-      return obj.todos.map((t) => ({
-        content: t.content ?? '',
-        status: t.status ?? 'pending',
-        active_form: t.active_form ?? null,
+      return obj.todos.map((todo) => ({
+        content: todo.content ?? '',
+        status: todo.status ?? 'pending',
+        active_form: todo.active_form ?? null,
       }));
     }
   } catch { /* not a todo payload */ }
@@ -552,13 +563,13 @@ function parseTodos(args) {
 
 function fillTodoCard(card, todos) {
   const total = todos.length;
-  const done = todos.filter((t) => t.status === 'completed').length;
+  const done = todos.filter((todo) => todo.status === 'completed').length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const expanded = !store.todoCollapsed;
   card.classList.toggle('complete', total > 0 && done === total);
   card.innerHTML =
-    `<button class="todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? 'Hide plan' : 'Show plan'}">` +
-    '<span class="todo-title">Plan</span>' +
+    `<button class="todo-toggle" type="button" aria-expanded="${expanded}" title="${expanded ? t('todo.hide') : t('todo.show')}">` +
+    `<span class="todo-title">${t('todo.plan')}</span>` +
     `<span class="todo-count">${done}/${total}</span>` +
     `<span class="todo-toggle-icon" aria-hidden="true">${expanded ? '-' : '+'}</span>` +
     '</button>' +
@@ -569,11 +580,14 @@ function fillTodoCard(card, todos) {
   const toggle = card.querySelector('.todo-toggle');
   toggle?.addEventListener('click', () => setTodoCollapsed(!store.todoCollapsed));
   const ul = card.querySelector('.todo-list');
-  for (const t of todos) {
-    const status = ['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending';
+  for (const todo of todos) {
+    const status = ['pending', 'in_progress', 'completed'].includes(todo.status)
+      ? todo.status
+      : 'pending';
     const li = document.createElement('li');
     li.className = `todo-item ${status}`;
-    const label = status === 'in_progress' && t.active_form ? t.active_form : t.content;
+    const label =
+      status === 'in_progress' && todo.active_form ? todo.active_form : todo.content;
     const mark = document.createElement('span');
     mark.className = 'todo-mark';
     mark.innerHTML = TODO_MARK[status];
@@ -599,7 +613,7 @@ function setTodoCollapsed(collapsed) {
   const toggle = panel?.querySelector('.todo-toggle');
   const icon = panel?.querySelector('.todo-toggle-icon');
   toggle?.setAttribute('aria-expanded', String(!collapsed));
-  if (toggle) toggle.title = collapsed ? 'Show plan' : 'Hide plan';
+  if (toggle) toggle.title = collapsed ? t('todo.show') : t('todo.hide');
   if (icon) icon.textContent = collapsed ? '+' : '-';
 }
 
@@ -682,7 +696,7 @@ function appendApproval(call) {
     // A quiet record instead of a card — the decision was already made.
     const note = document.createElement('div');
     note.className = 'approval-auto';
-    note.textContent = `✓ ${call.name} auto-approved (allowed for this chat)`;
+    note.textContent = t('approval.auto', { name: call.name });
     appendBubbleContent(store.bubble, note);
     api
       .approve({ session_id: store.sessionId, call_id: call.id, decision: 'approve' })
@@ -693,6 +707,10 @@ function appendApproval(call) {
     return;
   }
   const node = cloneTemplate('tmpl-approval');
+  const head = node.querySelector('.approval-head');
+  if (head) head.textContent = t('approval.waiting');
+  node.querySelector('.approve').textContent = t('approval.approve');
+  node.querySelector('.decline').textContent = t('approval.deny');
   node.querySelector('.approval-name').textContent = call.name;
   fillParams(node.querySelector('.approval-args'), call.arguments);
 
@@ -700,7 +718,7 @@ function appendApproval(call) {
   always.className = 'approval-always';
   const box = document.createElement('input');
   box.type = 'checkbox';
-  always.append(box, ` Always allow ${call.name} in this chat`);
+  always.append(box, ` ${t('approval.always', { name: call.name })}`);
   node.querySelector('.approval-actions')?.before(always);
 
   const resolve = async (decision) => {
@@ -712,7 +730,8 @@ function appendApproval(call) {
     if (actions) {
       const status = document.createElement('span');
       status.className = `approval-status ${decision}`;
-      status.textContent = decision === 'approve' ? '✓ Approved' : '✕ Denied';
+      status.textContent =
+        decision === 'approve' ? t('approval.approved') : t('approval.denied');
       actions.replaceChildren(status);
     }
     try {
@@ -760,9 +779,11 @@ function updateContextMeter(inputTokens) {
   el.classList.remove('hidden');
   el.classList.toggle('warn', pct >= 70 && pct < 90);
   el.classList.toggle('danger', pct >= 90);
-  const detail =
-    `Context: ${formatTokens(inputTokens)} of ${formatTokens(window_)} tokens (${pct}%)` +
-    ' — compaction makes room automatically';
+  const detail = t('context.meter', {
+    used: formatTokens(inputTokens),
+    window: formatTokens(window_),
+    pct,
+  });
   el.title = detail;
   el.setAttribute('aria-label', detail); // keep assistive tech in sync
   el.querySelector('.context-meter-fill').style.width = `${pct}%`;
@@ -786,16 +807,18 @@ store.on('session-switched', hideContextMeter);
 function appendContextCompacted(target, data) {
   if (!target || !data) return;
   const node = cloneTemplate('tmpl-context-compacted');
+  const titleEl = node.querySelector('.context-title');
+  if (titleEl) titleEl.textContent = t('context.compacted');
   if (data.reason) node.title = `reason: ${data.reason}`;
 
   // Trigger chip — reactive means we recovered from a provider context-overflow;
   // otherwise compaction fired proactively at the high-water mark.
   const trigger = node.querySelector('.context-trigger');
   if (data.reactive) {
-    trigger.textContent = 'Overflow recovery';
+    trigger.textContent = t('context.reactive');
     trigger.classList.add('context-trigger--reactive');
   } else {
-    trigger.textContent = 'Proactive';
+    trigger.textContent = t('context.proactive');
     trigger.classList.add('context-trigger--proactive');
   }
 
@@ -836,7 +859,7 @@ function appendContextCompacted(target, data) {
     const details = document.createElement('details');
     details.className = 'context-summary';
     const label = document.createElement('summary');
-    label.textContent = 'Summary';
+    label.textContent = t('context.summary');
     details.appendChild(label);
     const body = document.createElement('div');
     body.className = 'context-summary-body';
@@ -851,7 +874,9 @@ function appendContextCompacted(target, data) {
 function appendRetry() {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-retry');
-  node.querySelector('.retry-btn').addEventListener('click', () => store.emit('retry'));
+  const btn = node.querySelector('.retry-btn');
+  btn.textContent = t('chat.retry');
+  btn.addEventListener('click', () => store.emit('retry'));
   appendBubbleContent(store.bubble, node);
 }
 
@@ -863,20 +888,13 @@ function appendRetry() {
 const ERROR_HINTS = [
   // Before the provider-auth pattern: the server's own 401 mentions "server
   // token" precisely so it doesn't read as an API-key problem.
-  [/server token/i,
-    'This server requires an access token — reload the page and enter it.'],
-  [/rate.?limit|too many requests|\b429\b/i,
-    'The model provider is rate-limiting requests — give it a moment, then retry.'],
-  [/unauthorized|forbidden|api.?key|authenticat|\b401\b|\b403\b/i,
-    'Authentication with the model provider failed — check the API key and base URL.'],
-  [/quota|billing|insufficient|credit/i,
-    'The provider reports a quota or billing problem — check the account.'],
-  [/overloaded|service unavailable|\b529\b|\b503\b/i,
-    'The model provider is overloaded right now — try again shortly.'],
-  [/timed?.?out|timeout/i,
-    'The request timed out — the provider may be slow right now; retrying usually works.'],
-  [/failed to fetch|networkerror|load failed|fetch failed/i,
-    'Can’t reach the server — check that lovia is still running.'],
+  [/server token/i, t('err.serverToken')],
+  [/rate.?limit|too many requests|\b429\b/i, t('err.rateLimit')],
+  [/unauthorized|forbidden|api.?key|authenticat|\b401\b|\b403\b/i, t('err.auth')],
+  [/quota|billing|insufficient|credit/i, t('err.quota')],
+  [/overloaded|service unavailable|\b529\b|\b503\b/i, t('err.overloaded')],
+  [/timed?.?out|timeout/i, t('err.timeout')],
+  [/failed to fetch|networkerror|load failed|fetch failed/i, t('err.network')],
 ];
 
 // The friendly sentence for a raw error, or null when it's unrecognized
@@ -1054,8 +1072,8 @@ function addWithdrawButton(node, injectId) {
   const btn = document.createElement('button');
   btn.className = 'withdraw-btn';
   btn.type = 'button';
-  btn.title = 'Cancel this queued message';
-  btn.setAttribute('aria-label', 'Cancel queued message');
+  btn.title = t('composer.queuedCancel');
+  btn.setAttribute('aria-label', t('composer.queuedCancel'));
   btn.innerHTML = icon('x', { size: 13 });
   btn.addEventListener('click', () => withdrawQueued(node));
   bubble.appendChild(btn);
@@ -1085,9 +1103,47 @@ function flushQueuedTurns() {
 }
 
 // ---- History rendering --------------------------------------------------
+// The transcript renders a bounded tail of the history; earlier chunks load
+// on demand. Full replay of a months-long chat froze the tab on open — the
+// DOM cost, not the fetch, is the bottleneck (entries are already in hand).
+const HISTORY_PAGE = 150; // entries per window step
+let _historyEntries = [];
+let _historyStart = 0; // index of the first rendered entry
+
+// Snap a window start onto a user turn so a tool result never renders
+// without the call (and turn pairs stay intact).
+function alignHistoryStart(idx) {
+  if (idx <= 0) return 0;
+  for (let i = idx; i < _historyEntries.length; i++) {
+    if (_historyEntries[i].role === 'user') return i;
+  }
+  return idx;
+}
+
 export function renderHistory(entries) {
+  _historyEntries = Array.isArray(entries) ? entries : [];
+  _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
+  renderHistoryWindow({ stickBottom: true });
+}
+
+function loadEarlierHistory() {
+  const el = document.getElementById('transcript');
+  if (!el) return;
+  const prevHeight = el.scrollHeight;
+  const prevTop = el.scrollTop;
+  _historyStart = alignHistoryStart(_historyStart - HISTORY_PAGE);
+  renderHistoryWindow({ stickBottom: false });
+  // Keep the viewport anchored on the content it was showing.
+  requestAnimationFrame(() => {
+    el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+    _lastScrollTop = el.scrollTop;
+  });
+}
+
+function renderHistoryWindow({ stickBottom }) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
+  const entries = _historyEntries;
   // Swapping the transcript collapses scrollHeight and snaps scrollTop to 0,
   // firing a 'scroll' event the handler would misread as the user scrolling up
   // — which disables sticky-bottom. Guard the swap exactly like scrollDown()
@@ -1097,13 +1153,15 @@ export function renderHistory(entries) {
   // live tail.
   _programmaticScroll = true;
   transcriptEl.innerHTML = '';
-  _resumeAutoScroll();
+  if (stickBottom) _resumeAutoScroll();
   resetChatView();
   store.bubble = null;
   store.body = null;
   store.rawText = '';
   store.toolNodes.clear();
 
+  // Results are looked up from the FULL history — a window boundary must not
+  // orphan a call from its result.
   const pendingResults = new Map();
   for (const it of entries) {
     // History entries are MessageOut (role + tool_call_id), with no `type`
@@ -1115,8 +1173,17 @@ export function renderHistory(entries) {
       });
   }
 
+  if (_historyStart > 0) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'btn btn-ghost btn-sm load-earlier';
+    more.textContent = t('chat.loadEarlier', { n: _historyStart });
+    more.addEventListener('click', loadEarlierHistory);
+    transcriptEl.appendChild(more);
+  }
+
   let currentBubble = null;
-  for (const it of entries) {
+  for (const it of entries.slice(_historyStart)) {
     if (it.role === 'user') {
       currentBubble = null;
       if (it.timestamp) {
@@ -1144,7 +1211,7 @@ export function renderHistory(entries) {
         const details = document.createElement('details');
         details.className = 'reasoning done';
         const summary = document.createElement('summary');
-        summary.innerHTML = '<span class="reasoning-icon">💭</span><span class="reasoning-label">Thinking</span>';
+        summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thinking')}</span>`;
         details.appendChild(summary);
         const rc = document.createElement('div');
         rc.className = 'reasoning-content';
@@ -1192,11 +1259,13 @@ export function renderHistory(entries) {
   store.bubble = null;
   store.body = null;
   store.rawText = '';
-  // Land at the bottom now (content is static at this point) and record it as
-  // _lastScrollTop so the swap's async scroll event reads as "no movement";
-  // then release the guard next frame. Live deltas re-pin via scrollDown().
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
-  _lastScrollTop = transcriptEl.scrollTop;
+  if (stickBottom) {
+    // Land at the bottom now (content is static at this point) and record it as
+    // _lastScrollTop so the swap's async scroll event reads as "no movement";
+    // then release the guard next frame. Live deltas re-pin via scrollDown().
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    _lastScrollTop = transcriptEl.scrollTop;
+  }
   requestAnimationFrame(() => { _programmaticScroll = false; });
 }
 
@@ -1444,7 +1513,7 @@ async function handleEvent({ event, data }) {
       appendTool(data);
       // The pill says what the run is doing, not just how far it is.
       if (turnProgressEl && _currentTurn) {
-        turnProgressEl.textContent = `Turn ${_currentTurn} · ${data.name}…`;
+        turnProgressEl.textContent = `${t('topbar.turn', { n: _currentTurn })} · ${data.name}…`;
       }
       break;
 
@@ -1473,7 +1542,7 @@ async function handleEvent({ event, data }) {
     case 'turn_started':
       _currentTurn = data.turn;
       if (turnProgressEl) {
-        turnProgressEl.textContent = `Turn ${data.turn}`;
+        turnProgressEl.textContent = t('topbar.turn', { n: data.turn });
         turnProgressEl.classList.remove('hidden');
       }
       break;
@@ -1559,7 +1628,7 @@ let _streamAbortController = null;
 function enterStreamingUI() {
   store.streaming = true;
   if (stopBtn) stopBtn.style.display = '';
-  if (promptEl) promptEl.placeholder = 'Queue a follow-up…';
+  if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
   // they pick the transcript back up once the turn settles.
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
@@ -1569,7 +1638,7 @@ function exitStreamingUI() {
   store.streaming = false;
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
-    promptEl.placeholder = 'Send a message…';
+    promptEl.placeholder = t('composer.placeholder');
     promptEl.focus();
   }
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
@@ -1603,7 +1672,7 @@ export async function runStream(message) {
       } catch { /* not JSON */ }
       const hint = humanizeError(detail);
       ensureBody().innerHTML =
-        `<span class="error-text">Error: ${escapeHtml(hint ?? detail)}</span>` +
+        `<span class="error-text">${t('chat.error')}: ${escapeHtml(hint ?? detail)}</span>` +
         (hint ? `<div class="error-notice-detail">${escapeHtml(detail)}</div>` : '');
       appendRetry();
       return;
@@ -1622,13 +1691,13 @@ export async function runStream(message) {
     if (store.chatEpoch !== streamEpoch) return;
     if (err.name === 'AbortError') {
       ensureBody();
-      if (!store.rawText) store.rawText = '_Cancelled._';
+      if (!store.rawText) store.rawText = t('chat.cancelled');
       flushRender(true);
     } else {
       ensureBody();
       const raw = err.message ?? String(err);
       const hint = humanizeError(raw);
-      store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
+      store.rawText += `\n\n> ⚠️ **${t('chat.error')}:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender(true);
       appendRetry();
     }
@@ -1705,7 +1774,7 @@ export async function runReconnect(sessionId) {
       ensureBody();
       const raw = err.message ?? String(err);
       const hint = humanizeError(raw);
-      store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
+      store.rawText += `\n\n> ⚠️ **${t('chat.error')}:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender(true);
     }
   } finally {

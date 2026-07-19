@@ -25,6 +25,17 @@ function loadPageConfig() {
 }
 
 // ---- Agent loading ------------------------------------------------------
+// First instruction line as a hover hint — the switcher shows bare names, so
+// this is the only in-UI answer to "which agent does what".
+function agentHint(agent) {
+  const line = (agent?.instructions || '').split('\n', 1)[0].trim();
+  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+}
+
+function syncAgentTooltip(select) {
+  select.title = agentHint(store.agents.find((a) => a.name === store.agent));
+}
+
 async function loadAgents() {
   const select = document.getElementById('agent-select');
   const switcher = document.getElementById('agent-switcher');
@@ -38,12 +49,15 @@ async function loadAgents() {
         const opt = document.createElement('option');
         opt.value = a.name;
         opt.textContent = a.name;
+        opt.title = agentHint(a);
         return opt;
       }));
       select.value = store.agent;
+      syncAgentTooltip(select);
       if (switcher) switcher.classList.remove('hidden');
       select.addEventListener('change', () => {
         store.agent = select.value;
+        syncAgentTooltip(select);
         clearChat();
         store.emit('agent-changed', store.agent);
         document.getElementById('prompt')?.focus();
@@ -57,6 +71,21 @@ async function loadAgents() {
     toast('Couldn’t load agents', { type: 'error' });
   }
 }
+
+// A chat opened from the sidebar belongs to the agent it was created with —
+// reflect that in the switcher (without the clearChat a manual switch does)
+// so follow-up messages run on, and the panels reflect, the right agent.
+store.on('sync-agent', (name) => {
+  if (!name || name === store.agent) return;
+  if (!store.agents.some((a) => a.name === name)) return; // no longer served
+  store.agent = name;
+  const select = document.getElementById('agent-select');
+  if (select) {
+    select.value = name;
+    syncAgentTooltip(select);
+  }
+  store.emit('agent-changed', name);
+});
 
 // ---- Cross-module events ------------------------------------------------
 store.on('render-history', (entries) => renderHistory(entries));

@@ -48,8 +48,11 @@ function sessionsSignature() {
   return JSON.stringify([
     store.sessionId,
     _hasMore,
+    store.agents.length > 1, // agent chips appear once agents finish loading
     [...(store.activeRuns || [])].sort(),
-    store.sessions.map((s) => [s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0]),
+    store.sessions.map((s) => [
+      s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
+    ]),
   ]);
 }
 
@@ -89,6 +92,13 @@ function renderSessions() {
     const meta = main.querySelector('.session-meta');
     meta.textContent = formatTimeSmart(s.updated_at);
     meta.title = formatDateTime(s.updated_at);
+    // Which brain a chat belongs to — only worth pixels when there's a choice.
+    if (store.agents.length > 1 && s.agent) {
+      const chip = document.createElement('span');
+      chip.className = 'session-agent';
+      chip.textContent = s.agent;
+      meta.append(' · ', chip);
+    }
     main.addEventListener('click', () => switchSession(s.id));
 
     // At-rest pin marker (hidden on hover, where the menu takes its place).
@@ -170,16 +180,16 @@ function updateSessionInSidebar(sessionId, title) {
     if (titleEl) titleEl.textContent = title || 'New chat';
   }
 
-  // Update header if this is the active session
-  if (sessionId === store.sessionId && title) {
-    if (chatTitleEl) chatTitleEl.textContent = title;
+  // Update header if this is the active session (fall back when cleared)
+  if (sessionId === store.sessionId && chatTitleEl) {
+    chatTitleEl.textContent = title || 'New chat';
   }
 }
 
 // ---- Actions -------------------------------------------------------------
 async function renameSession(s) {
   const title = await promptDialog('Rename chat:', s.title || '');
-  if (!title) return;
+  if (title === null) return; // cancelled — empty string means "clear the title"
   try {
     await api.renameSession(s.id, title);
     updateSessionInSidebar(s.id, title);
@@ -210,7 +220,12 @@ async function togglePin(s) {
 }
 
 export async function deleteSession(id) {
-  const ok = await confirmDialog('Delete this chat?');
+  // Name what's about to disappear — a bare "this chat?" invites misclicks.
+  // Untitled chats use the same display fallback the sidebar row shows.
+  const target = store.sessions.find((s) => s.id === id);
+  const ok = await confirmDialog(
+    target ? `Delete "${target.title || 'New chat'}"?` : 'Delete this chat?',
+  );
   if (!ok) return;
   try {
     await api.deleteSession(id);
@@ -249,6 +264,10 @@ export async function switchSession(id) {
   try {
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
+    // Align the switcher with the chat's own agent BEFORE the history replay:
+    // the sync may reset the Files panel, which must not eat the replayed
+    // workspace touches. Follow-ups then run on the agent this chat belongs to.
+    store.emit('sync-agent', data.agent);
     if (chatTitleEl) chatTitleEl.textContent = data.title || 'New chat';
     store.emit('render-history', data.entries || []);
     // Auto-reconnect when the session has an unfinished run — a page refresh
@@ -430,4 +449,7 @@ export function initSessions() {
 
   initExportMenu();
   store.on('clear-chat', clearChat);
+  // Agents usually land after the first session render — the signature covers
+  // the flip, so this redraws exactly once to add the agent chips.
+  store.on('agents-loaded', renderSessions);
 }

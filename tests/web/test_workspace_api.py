@@ -289,6 +289,55 @@ def test_raw_download_any_file(client: TestClient) -> None:
     assert 'attachment; filename="report.csv"' in r.headers["content-disposition"]
 
 
+def test_raw_revalidation_etag_304(client: TestClient, ws_app) -> None:
+    # First fetch: revalidate-always caching (no-cache) with a validator.
+    r = client.get("/api/workspace/raw", params={"agent": "bot", "path": "pic.png"})
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    etag = r.headers["etag"]
+    assert etag
+
+    # Unchanged file → 304, no body, validator retained.
+    r2 = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "pic.png"},
+        headers={"if-none-match": etag},
+    )
+    assert r2.status_code == 304
+    assert r2.content == b""
+    assert r2.headers["etag"] == etag
+
+    # Weak-validator and multi-candidate forms browsers send still match.
+    r3 = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "pic.png"},
+        headers={"if-none-match": f'W/"nope", {etag}'},
+    )
+    assert r3.status_code == 304
+
+    # "*" matches any current representation (RFC 9110 §13.1.2).
+    r3b = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "pic.png"},
+        headers={"if-none-match": "*"},
+    )
+    assert r3b.status_code == 304
+
+    # Changed file → validator no longer matches, full bytes again.
+    root = Path(ws_app.state.agents["bot"].workspace.root)
+    (root / "pic.png").write_bytes(PNG_BYTES + b"\x00")
+    import os
+
+    os.utime(root / "pic.png", (1, 1))  # force a different mtime
+    r4 = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "pic.png"},
+        headers={"if-none-match": etag},
+    )
+    assert r4.status_code == 200
+    assert r4.headers["etag"] != etag
+
+
 def test_raw_size_cap(client: TestClient, ws_app) -> None:
     root = Path(ws_app.state.agents["bot"].workspace.root)
     limit = ws_app.state.agents["bot"].workspace.limits.max_file_read_bytes

@@ -178,6 +178,11 @@ export function confirmDialog(message) {
   });
 }
 
+// Resolves to the entered string on Save/Enter (possibly ''), or null on
+// Cancel/Esc — an empty submission is a real answer ("clear it"), so the two
+// must stay distinguishable. The sentinel returnValue carries the ok/cancel
+// bit; the value itself rides in `submitted` (returnValue coerces everything
+// to string, which would fold null and "null" together).
 export function promptDialog(message, defaultValue = '') {
   return new Promise((resolve) => {
     const body = document.createElement('div');
@@ -186,12 +191,18 @@ export function promptDialog(message, defaultValue = '') {
     label.textContent = message;
     body.appendChild(label);
 
+    let submitted = null;
+    const submit = () => {
+      submitted = input.value.trim();
+      dialog.close('ok');
+    };
+
     const input = document.createElement('input');
     input.type = 'text';
     input.value = defaultValue;
     input.className = 'dialog-input';
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') dialog.close(input.value.trim());
+      if (e.key === 'Enter') submit();
     });
     body.appendChild(input);
 
@@ -203,18 +214,20 @@ export function promptDialog(message, defaultValue = '') {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn-ghost';
     cancelBtn.textContent = 'Cancel';
-    // Cancel closes with '' (same as Esc) — dialog.close(null) would coerce
-    // the returnValue to the string "null", indistinguishable from typing it.
     cancelBtn.addEventListener('click', () => dialog.close(''));
 
     const okBtn = document.createElement('button');
     okBtn.className = 'btn btn-primary';
     okBtn.textContent = 'Save';
-    okBtn.addEventListener('click', () => dialog.close(input.value.trim()));
+    okBtn.addEventListener('click', submit);
 
     actions.appendChild(cancelBtn);
     actions.appendChild(okBtn);
-    const dialog = showDialog({ body, actions, onClose: (val) => resolve(val || null) });
+    const dialog = showDialog({
+      body,
+      actions,
+      onClose: (val) => resolve(val === 'ok' ? submitted : null),
+    });
     setTimeout(() => input.focus(), 100);
   });
 }

@@ -110,7 +110,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             RunInfo(
                 session_id=sid,
                 run_id=c.run_id,
-                agent=c.agent.name,
+                agent=deps.name_of(c.agent),  # registry key, same as AgentInfo
                 status=c.status,
                 turns=c.turns,
             )

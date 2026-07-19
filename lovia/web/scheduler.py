@@ -186,7 +186,7 @@ class Scheduler:
         try:
             await self.store.upsert(
                 target,
-                agent=agent.name,
+                agent=agent_name,  # registry key — the identity pick() speaks
                 title=provisional_title(sched.input) if is_new else None,
             )
             await self.deps.supervisor.start(

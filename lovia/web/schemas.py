@@ -88,6 +88,9 @@ class ChatRequest(BaseModel):
     # (behind a reverse proxy).
     message: str = Field(max_length=10_000_000)
     session_id: str | None = None
+    # Applies to new sessions only: an existing session always continues with
+    # the agent it was created with (so a stale tab can't switch a chat's brain
+    # mid-conversation), falling back to this when that agent is gone.
     agent: str | None = None
 
 

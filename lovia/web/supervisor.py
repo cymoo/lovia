@@ -457,7 +457,9 @@ class RunController:
                         sid,
                         self._title_message,
                         self.final_output,
-                        self.agent.name,
+                        # Registry key, not agent.name: schedule_title re-picks
+                        # the agent from the registry by this string.
+                        deps.name_of(self.agent),
                     )
                 # Auto-chain: leftovers re-queued, next run starts with empty
                 # input so the loop drains+emits them as user turns (Phase 1).

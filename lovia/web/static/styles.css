@@ -1585,10 +1585,10 @@ body.sidebar-collapsed .sidebar-expand-btn {
   word-wrap: break-word;
   min-width: 0;
 }
-/* Inline chat blocks (params/results/reasoning/approvals) deliberately DON'T
-   overscroll-contain: hitting their end must hand the wheel back to the
-   transcript, or reading past an expanded card means parking the cursor
-   elsewhere first. */
+/* Inline chat blocks (params/results/reasoning/approvals) deliberately omit
+   `overscroll-behavior: contain`: hitting their end must hand the wheel back
+   to the transcript, or reading past an expanded card means parking the
+   cursor elsewhere first. */
 .tool-params .param-val.block {
   grid-column: 1 / -1;
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));

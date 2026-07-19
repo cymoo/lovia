@@ -205,7 +205,23 @@ function fillParams(container, args) {
     addBlock(String(args));
     return;
   }
+  // old_string/new_string pairs (edit_file and friends) ARE a diff — color
+  // them so an approval is reviewed as a change, not two look-alike walls of
+  // text. No diff algorithm needed: the arguments are already the two sides.
+  const isDiff =
+    typeof obj.old_string === 'string' && typeof obj.new_string === 'string';
   for (const [k, v] of Object.entries(obj)) {
+    if (isDiff && (k === 'old_string' || k === 'new_string')) {
+      const old = k === 'old_string';
+      const key = document.createElement('div');
+      key.className = 'param-key';
+      key.textContent = old ? '− old' : '+ new';
+      const value = document.createElement('div');
+      value.className = `param-val block ${old ? 'diff-old' : 'diff-new'}`;
+      value.textContent = v;
+      container.append(key, value);
+      continue;
+    }
     let val = typeof v === 'string' ? v : JSON.stringify(v);
     const block = val.includes('\n') || val.length > 80;
     if (block && typeof v !== 'string') val = JSON.stringify(v, null, 2);
@@ -641,13 +657,56 @@ function upsertTodoCard(todos) {
   scrollDown();
 }
 
+// Per-chat tool allowlist (this browser tab only): approving with the
+// "always allow" box ticked auto-approves that tool's future calls in the
+// same chat — repeated identical approvals are pure friction. Deliberately
+// NOT persisted: a reload starts asking again.
+const _autoApprove = new Map(); // session id → Set<tool name>
+
+function isAutoApproved(name) {
+  return _autoApprove.get(store.sessionId)?.has(name) ?? false;
+}
+
+function rememberApproval(name) {
+  let set = _autoApprove.get(store.sessionId);
+  if (!set) {
+    set = new Set();
+    _autoApprove.set(store.sessionId, set);
+  }
+  set.add(name);
+}
+
 function appendApproval(call) {
   if (!store.bubble) return;
+  if (isAutoApproved(call.name)) {
+    // A quiet record instead of a card — the decision was already made.
+    const note = document.createElement('div');
+    note.className = 'approval-auto';
+    note.textContent = `✓ ${call.name} auto-approved (allowed for this chat)`;
+    appendBubbleContent(store.bubble, note);
+    api
+      .approve({ session_id: store.sessionId, call_id: call.id, decision: 'approve' })
+      .catch((err) => console.error(err));
+    store.body = null;
+    store.rawText = '';
+    scrollDown();
+    return;
+  }
   const node = cloneTemplate('tmpl-approval');
   node.querySelector('.approval-name').textContent = call.name;
   fillParams(node.querySelector('.approval-args'), call.arguments);
+
+  const always = document.createElement('label');
+  always.className = 'approval-always';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  always.append(box, ` Always allow ${call.name} in this chat`);
+  node.querySelector('.approval-actions')?.before(always);
+
   const resolve = async (decision) => {
     node.classList.add('resolved');
+    if (decision === 'approve' && box.checked) rememberApproval(call.name);
+    always.remove();
     // Leave a record of which way it went instead of just dimming the card.
     const actions = node.querySelector('.approval-actions');
     if (actions) {
@@ -1246,6 +1305,18 @@ export function renderEmptyState() {
     p.textContent = desc;
     empty.appendChild(p);
   }
+  if (store.emptyExamples?.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'empty-examples';
+    for (const example of store.emptyExamples) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'empty-example';
+      btn.textContent = example;
+      wrap.appendChild(btn);
+    }
+    empty.appendChild(wrap);
+  }
   transcript.replaceChildren(empty);
 }
 
@@ -1727,6 +1798,17 @@ export function initComposer() {
       e.preventDefault();
       composer?.requestSubmit();
     }
+  });
+
+  // Example prompts (server-rendered or renderEmptyState's) fill the
+  // composer for editing — clicking must not fire a send behind your back.
+  document.getElementById('transcript')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.empty-example');
+    if (!btn || !promptEl) return;
+    promptEl.value = btn.textContent;
+    autoresize();
+    if (sendBtn) sendBtn.disabled = false;
+    promptEl.focus();
   });
 
   composer?.addEventListener('submit', async (e) => {

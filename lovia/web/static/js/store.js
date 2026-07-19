@@ -12,6 +12,7 @@ export const store = {
   // missing or unparsable.
   emptyTitle: "Where shall we begin?",
   emptyDescription: "A good question is already half the answer.",
+  emptyExamples: [],
   sidebarCollapsed: localStorage.getItem("lovia-sidebar-collapsed") === "1",
   streaming: false,
   turnNode: null,

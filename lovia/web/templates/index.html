@@ -96,6 +96,8 @@
         <div class="export-menu" id="export-menu" role="menu" hidden>
           <button type="button" class="export-menu-item" role="menuitem" data-format="md">Markdown</button>
           <button type="button" class="export-menu-item" role="menuitem" data-format="html">HTML</button>
+          <button type="button" class="export-menu-item" role="menuitem" data-format="json">JSON</button>
+          <button type="button" class="export-menu-item" role="menuitem" data-format="txt">Text</button>
         </div>
       </div>
       <button id="dark-toggle" class="btn-icon" type="button" title="Toggle theme" aria-label="Toggle dark mode">
@@ -120,6 +122,13 @@
           <li>{{ item }}</li>
           {% endfor %}
         </ul>
+        {% endif %}
+        {% if empty_examples %}
+        <div class="empty-examples">
+          {% for example in empty_examples %}
+          <button type="button" class="empty-example">{{ example }}</button>
+          {% endfor %}
+        </div>
         {% endif %}
       </div>
     </section>
@@ -155,6 +164,9 @@
     </div>
   </div>
   <nav id="files-crumbs" class="files-crumbs hidden" aria-label="Directory path"></nav>
+  <div class="files-search">
+    <input type="search" id="files-filter" class="search-input" placeholder="Filter files…" autocomplete="off" />
+  </div>
   <div id="files-list" class="files-list"></div>
   <div id="files-split" class="files-split hidden" role="separator" aria-orientation="horizontal" aria-label="Resize file preview (arrow keys; double-click resets)" aria-controls="files-viewer" aria-valuemin="0" aria-valuemax="100" aria-valuenow="58" tabindex="0"></div>
   <section id="files-viewer" class="files-viewer hidden" aria-label="File preview">
@@ -162,6 +174,7 @@
       <span id="files-viewer-name" class="files-viewer-name" title=""></span>
       <div class="files-viewer-actions">
         <button id="files-md-toggle" class="btn-icon hidden" type="button" title="Toggle rendered / raw" aria-label="Toggle rendered or raw markdown"></button>
+        <button id="files-wrap-toggle" class="btn-icon hidden" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
         <button id="files-copy-path" class="btn-icon" type="button" title="Copy path" aria-label="Copy file path"></button>
         <a id="files-download" class="btn-icon" title="Download" aria-label="Download file" download></a>
         <button id="files-viewer-close" class="btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>

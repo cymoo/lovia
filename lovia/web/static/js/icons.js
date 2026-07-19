@@ -28,6 +28,8 @@ const PATHS = {
   pause:
     '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
   square: '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  'wrap-text':
+    '<line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/>',
   play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   minus: '<path d="M5 12h14"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',

@@ -27,8 +27,13 @@ def build_ui_router(
     title: str = "lovia",
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
+    empty_examples: Sequence[str] | None = None,
 ) -> APIRouter:
-    """Router that serves the bundled single-page chat UI."""
+    """Router that serves the bundled single-page chat UI.
+
+    ``empty_examples`` are clickable starter prompts on the blank chat state —
+    clicking one fills the composer (it doesn't send).
+    """
     router = APIRouter()
 
     @router.get("/", include_in_schema=False)
@@ -36,6 +41,7 @@ def build_ui_router(
         description = empty_description
         if description is None:
             description = "A good question is already half the answer."
+        examples = list(empty_examples) if empty_examples else []
         return _TEMPLATES.TemplateResponse(
             request,
             "index.html",
@@ -43,9 +49,11 @@ def build_ui_router(
                 "title": title,
                 "empty_title": empty_title,
                 "empty_description": description,
+                "empty_examples": examples,
                 "app_config": {
                     "empty_title": empty_title,
                     "empty_description": description,
+                    "empty_examples": examples,
                 },
             },
         )

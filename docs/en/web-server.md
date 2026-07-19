@@ -36,6 +36,7 @@ application without starting a process.
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for `/api/*`, or your own FastAPI dependency (see below) |
 | `title` / `empty_title` / `empty_description` | lovia defaults | UI copy and branding |
+| `empty_examples` | `None` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
 
 For endpoint contracts and the `ChatStore` interface, see
 [HTTP API](http-api.md).

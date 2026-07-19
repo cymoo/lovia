@@ -56,7 +56,10 @@ def token_dependency(token: str) -> Callable[[Request], Awaitable[None]]:
     Accepts the token from the ``Authorization: Bearer`` header first, then
     the :data:`TOKEN_COOKIE` cookie. Comparison is constant-time.
     """
+    token = (token or "").strip()
     if not token:
+        # A blank token could never be presented (both carriers strip) — it
+        # would lock every client out while looking like auth is on.
         raise ValueError("token must be non-empty")
 
     def supplied(request: Request) -> str | None:

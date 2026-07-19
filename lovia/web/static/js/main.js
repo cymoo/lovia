@@ -26,9 +26,9 @@ function saveToken(token) {
 
 function adoptTokenFromURL() {
   const url = new URL(location.href);
-  const token = url.searchParams.get('token');
-  if (!token) return;
-  saveToken(token);
+  if (!url.searchParams.has('token')) return;
+  const token = (url.searchParams.get('token') || '').trim();
+  if (token) saveToken(token); // a blank param is stripped, never stored
   url.searchParams.delete('token'); // keep the credential out of the URL bar
   history.replaceState({}, '', url);
 }

@@ -107,6 +107,18 @@ def test_token_and_auth_are_mutually_exclusive() -> None:
         _client(token=TOKEN, auth=lambda: None)
 
 
+def test_blank_token_fails_fast_instead_of_disabling_auth() -> None:
+    for blank in ("", "   "):
+        with pytest.raises(ValueError, match="non-empty"):
+            _client(token=blank)
+
+
+def test_token_is_stripped() -> None:
+    c = _client(token=f"  {TOKEN}  ")
+    r = c.get("/api/agents", headers={"authorization": f"Bearer {TOKEN}"})
+    assert r.status_code == 200
+
+
 # ------------------------------------------------------------- serve() -
 
 
@@ -139,12 +151,33 @@ def test_serve_generates_token_off_loopback(
     )
     out = capsys.readouterr().out
     assert "web API token (generated):" in out
+    # Wildcard binds aren't browsable — the printed link uses loopback.
+    assert "http://127.0.0.1:1234/?token=" in out
+    assert "0.0.0.0" not in out
     token = out.split("web API token (generated):", 1)[1].split()[0]
 
     c = TestClient(captured["app"])
     assert c.get("/api/agents").status_code == 401
     ok = c.get("/api/agents", headers={"authorization": f"Bearer {token}"})
     assert ok.status_code == 200
+
+
+def test_serve_blank_token_off_loopback_still_generates(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `token=""` must not thread the needle between "skip generation" and
+    # "no guard installed" — it fails fast instead.
+    from lovia.web import serve
+
+    _fake_uvicorn(monkeypatch)
+    with pytest.raises(ValueError, match="non-empty"):
+        serve(
+            _agent(),
+            host="0.0.0.0",
+            token="   ",
+            store=ChatStore.in_memory(),
+            generate_titles=False,
+        )
 
 
 def test_serve_loopback_stays_open(

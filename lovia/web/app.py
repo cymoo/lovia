@@ -47,6 +47,25 @@ def _default_db_path(name: str) -> Path:
     return Path(".lovia") / f"{safe}.db"
 
 
+def _clean_token(token: str | None) -> str | None:
+    """Strip a caller-supplied token; reject one that is empty after stripping.
+
+    ``token=""`` must fail fast, not silently disable auth (or, in ``serve``,
+    silently skip the off-loopback auto-generation).
+    """
+    if token is None:
+        return None
+    cleaned = token.strip()
+    if not cleaned:
+        raise ValueError("token must be non-empty")
+    return cleaned
+
+
+def _display_host(host: str) -> str:
+    """A browsable form of ``host`` for printed URLs — wildcards aren't one."""
+    return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+
+
 def create_app(
     agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
@@ -120,6 +139,7 @@ def create_app(
     """
     agents = _normalise(agent_or_agents)
 
+    token = _clean_token(token)
     if token is not None and auth is not None:
         raise ValueError("pass either token= or auth=, not both")
 
@@ -264,6 +284,8 @@ def serve(
 
         raise_missing_web_extra(exc)
 
+    token = _clean_token(token)  # "" must not skip the generation below
+    ui_url = f"http://{_display_host(host)}:{port}/?token="
     if token is None and auth is None and not is_loopback(host):
         token = generate_token()
         # stdout on purpose: this must be visible at every log level — it is
@@ -271,14 +293,11 @@ def serve(
         print(
             f"web API token (generated): {token}\n"
             f"  fix it with serve(token=...), --token, or LOVIA_WEB_TOKEN\n"
-            f"  UI: http://{host}:{port}/?token={token}",
+            f"  UI: {ui_url}{token}",
             flush=True,
         )
     elif token:
-        print(
-            f"web API auth enabled — UI: http://{host}:{port}/?token={token}",
-            flush=True,
-        )
+        print(f"web API auth enabled — UI: {ui_url}{token}", flush=True)
 
     app = create_app(
         agent_or_agents,

@@ -21,11 +21,14 @@ The default Agent includes `Todo`, optional Skills from `./skills`, Memory in
 and a coding-mode Workspace rooted at the current directory. If `AGENTS.md`
 exists, its content becomes the Agent's instructions.
 
-!!! danger "Local by default; no built-in authentication"
+!!! danger "Local by default; token-guarded beyond that"
 
-    Keep the default `127.0.0.1` binding for personal use. Before exposing the
-    UI, add authentication and rate limiting, then restrict or disable the
-    writable Workspace. See [Deployment](deployment.md).
+    The default `127.0.0.1` binding needs no credentials. Binding any other
+    host requires an API token — `--token` / `LOVIA_WEB_TOKEN`, or one is
+    generated and printed with a ready `/?token=...` link (the UI stores it
+    and asks for it on 401). The token then protects file edits and shell,
+    so treat it like a password, and prefer `--readonly` off-loopback. For
+    real multi-user exposure see [Deployment](deployment.md).
 
 ## Serve your own Agent
 
@@ -58,6 +61,7 @@ Every option resolves in this order: command-line flag, environment variable,
 | Flag | Environment | Default |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--token` | `LOVIA_WEB_TOKEN` | None on loopback; generated + printed otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--model` | `LOVIA_MODEL` | Asked on first run |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |

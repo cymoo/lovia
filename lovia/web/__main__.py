@@ -52,6 +52,7 @@ from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from . import setup
 from .app import _default_db_path, serve
+from .auth import is_loopback
 from .scheduling import Scheduling
 from .store import ChatStore
 
@@ -209,6 +210,14 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         metavar="FILE",
         help="load environment from FILE via python-dotenv; repeatable "
         "(default ./.env if present)",
+    )
+    p.add_argument(
+        "--token",
+        metavar="TOKEN",
+        help="API auth token; loopback binds don't need one, non-loopback "
+        "binds get one generated and printed when omitted (env "
+        "LOVIA_WEB_TOKEN; prefer the env — flags are visible in the "
+        "process list)",
     )
     p.add_argument("--title", help="web UI title (env LOVIA_TITLE, default lovia)")
     p.add_argument(
@@ -515,20 +524,15 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         log.warning("--app set; ignoring default-agent options: %s", ", ".join(ignored))
 
 
-def _is_loopback(host: str) -> bool:
-    # NB: "::" and "0.0.0.0" are wildcards (all interfaces), NOT loopback.
-    return host in {"127.0.0.1", "localhost", "::1"} or host.startswith("127.")
-
-
 def _warn_if_exposed(host: str, workspace: object) -> None:
     """Warn when a write/shell-capable workspace is reachable off-host.
 
-    Binding to a non-loopback address with a write- or shell-capable workspace
-    (the default ``coding`` mode included) lets anyone who can reach the port
-    make the agent edit files or run shell commands.
+    Non-loopback binds are always token-guarded (``serve`` generates one when
+    none is given), but a leaked or shared token then grants file edits and
+    shell — worth a heads-up whenever such a workspace leaves loopback.
     """
     policy = getattr(workspace, "policy", None)
-    if policy is None or _is_loopback(host):
+    if policy is None or is_loopback(host):
         return
     write_capable = (
         getattr(policy, "write", "deny") != "deny"
@@ -537,7 +541,7 @@ def _warn_if_exposed(host: str, workspace: object) -> None:
     if getattr(policy, "allow_shell", False) or write_capable:
         log.warning(
             "binding to non-loopback host %r with a write/shell-capable workspace: "
-            "anyone who can reach this port can make the agent edit files or run "
+            "anyone holding the API token can make the agent edit files or run "
             "shell commands. Use --readonly, --no-workspace, or bind to 127.0.0.1.",
             host,
         )
@@ -588,6 +592,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)
         title = _first(args.title, os.getenv("LOVIA_TITLE")) or "lovia"
         db_path = _first(args.db, os.getenv("LOVIA_DB"))
+        # None on a non-loopback bind → serve() generates and prints one.
+        token = _first(args.token, os.getenv("LOVIA_WEB_TOKEN"))
 
         agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]]
         # For the default agent we build the store up front (rather than letting
@@ -672,6 +678,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             context_policy=context_policy,
             max_turns=resolve_max_turns(args.max_turns),
             retry=retry,
+            token=token,
             log_level=level.lower(),
         )
     except UserError as exc:

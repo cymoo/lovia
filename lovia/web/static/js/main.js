@@ -1,13 +1,49 @@
 // Entry point — wires together all modules.
 import { store } from './store.js';
 import { api } from './api.js';
-import { initTheme, initSidebarToggle } from './ui.js';
+import { initTheme, initSidebarToggle, promptDialog } from './ui.js';
 import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
 import { toast } from './toast.js';
+
+// ---- Auth ---------------------------------------------------------------
+// The server may guard /api/* with a token (see lovia/web/auth.py). The UI
+// holds it in a cookie so requests the browser makes without JS headers
+// (<img> previews, download links) carry it too. Two ways in: the printed
+// /?token=... link (adopted here, then stripped from the URL), or the prompt
+// shown when the first API call answers 401.
+const TOKEN_COOKIE = 'lovia_token';
+
+function saveToken(token) {
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie =
+    `${TOKEN_COOKIE}=${encodeURIComponent(token)}` +
+    `; path=/; SameSite=Strict; Max-Age=31536000${secure}`;
+}
+
+function adoptTokenFromURL() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has('token')) return;
+  const token = (url.searchParams.get('token') || '').trim();
+  if (token) saveToken(token); // a blank param is stripped, never stored
+  url.searchParams.delete('token'); // keep the credential out of the URL bar
+  history.replaceState({}, '', url);
+}
+
+async function promptForToken() {
+  const token = await promptDialog(
+    'This server requires an access token (see the server startup log):',
+  );
+  if (!token) {
+    toast('Unauthorized — reload and enter the server token', { type: 'error' });
+    return;
+  }
+  saveToken(token);
+  location.reload();
+}
 
 // ---- Page config --------------------------------------------------------
 function loadPageConfig() {
@@ -67,6 +103,10 @@ async function loadAgents() {
     }
     store.emit('agents-loaded', store.agents);
   } catch (err) {
+    if (err.status === 401) {
+      await promptForToken(); // reloads on success
+      return;
+    }
     console.error('loadAgents:', err);
     toast('Couldn’t load agents', { type: 'error' });
   }
@@ -128,6 +168,7 @@ function initKeyboardShortcuts() {
 
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
+  adoptTokenFromURL(); // before the first API call
   loadPageConfig();
   initTheme();
   initSidebarToggle();

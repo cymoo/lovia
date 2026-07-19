@@ -623,6 +623,10 @@ function appendRetry() {
 // says what happened and what to do; the original text stays visible in
 // small print — friendly must never mean information destroyed.
 const ERROR_HINTS = [
+  // Before the provider-auth pattern: the server's own 401 mentions "server
+  // token" precisely so it doesn't read as an API-key problem.
+  [/server token/i,
+    'This server requires an access token — reload the page and enter it.'],
   [/rate.?limit|too many requests|\b429\b/i,
     'The model provider is rate-limiting requests — give it a moment, then retry.'],
   [/unauthorized|forbidden|api.?key|authenticat|\b401\b|\b403\b/i,

@@ -34,6 +34,15 @@ app.include_router(build_api_router(deps))
 （`max_turns`、`budget`、`retry`、`tracer`、`approval_timeout`、`max_background_runs`、
 标题选项）是字段，默认值和 `create_app` 一致。
 
+## 认证
+
+当服务器启用了 token（[`serve(token=...)` 或绑定非回环地址](web-server.md#认证)）时，
+所有 `/api/*` 路由都需要它——普通请求和 SSE 一律用 `Authorization: Bearer <token>`
+（流是 `fetch` 消费的，header 照常生效）。`GET /healthz` 保持开放。凭据缺失或
+错误时返回 `401`，其 `detail` 会明确写出 *server token*，客户端可以据此与模型
+provider 的认证失败区分开。自己挂载 `build_api_router` 的应用需要自行添加依赖
+（`lovia.web.auth` 的 `token_dependency(token)`，或任意 FastAPI 依赖）。
+
 ## 端点
 
 | Method & path | 用途 |
@@ -112,8 +121,9 @@ for await (const { event, data } of readSSE(res)) {
 
 ## 注意事项
 
-- **没有 auth，没有 rate limit**：这是组件，不是产品边界。请挂在自己的 gateway 后面；`cors_origins`
-  默认不设置（无 CORS），直到你明确开启。
+- **`build_api_router` 本身没有 auth 和 rate limit**：它是组件。`create_app`/`serve`
+  负责加上 token 门禁（见[认证](#认证)）；超出单一共享 token 的需求（多用户、配额）
+  属于你的 gateway。`cors_origins` 默认不设置（无 CORS），直到你明确开启。
 - **SSE 响应由 POST 发起**，不是 `EventSource` 兼容的 GET。请像 `api.js` 一样用 `fetch` + reader；
   原生 `EventSource` 不能用。
 - **`tool_result` 里的 `result` 是原始值**（JSON-safe 形态），和

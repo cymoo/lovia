@@ -32,9 +32,43 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `max_background_runs` | `8` | 并发托管 Run；超额启动返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API |
 | `cors_origins` | `None` | 允许的浏览器 Origin；不设置就不发送 CORS header |
+| `token` / `auth` | `None` | `/api/*` 的 Bearer token 门禁，或自定义 FastAPI 依赖（见下文） |
 | `title` / `empty_title` / `empty_description` | lovia 默认文案 | UI 文案和品牌 |
 
 端点契约与 `ChatStore` 接口见 [HTTP API](http-api.md)。
+
+## 认证
+
+回环地址绑定无需任何凭据。除此之外 `serve()` 默认安全：绑定非回环地址时，
+若既没传 `token` 也没传 `auth`，会自动生成一个 token 并打印一次——附带可直接
+打开的 `/?token=...` UI 链接——API 永远不会在无认证的情况下暴露。
+
+```python
+serve(agent, host="0.0.0.0", token="s3cret")        # 固定 token
+serve(agent, host="0.0.0.0")                        # 自动生成并打印
+```
+
+一个 token，两条通道，守住所有 `/api/*` 路由（`/healthz` 对探针保持开放；
+UI 页面与静态资源本身不含数据，保持公开）：
+
+- **API 客户端**发送 `Authorization: Bearer <token>`——SSE 也一样，因为流
+  是用 `fetch` 消费的。
+- **内置 UI** 把 token 存入 cookie（从 `/?token=...` 链接自动采集，或在
+  401 时弹框输入），因此 `<img>` 预览和下载链接也能带上凭据。
+
+需要会话、OAuth 或按用户识别身份时，用任意 FastAPI 依赖替换内置检查——
+守卫的仍是同一批路由：
+
+```python
+async def my_auth(request: Request) -> None:
+    if not valid(request):
+        raise HTTPException(status_code=401)
+
+serve(agent, host="0.0.0.0", auth=my_auth)
+```
+
+`create_app()` 接受同样的两个参数，但默认保持中立——不会替你生成 token；
+自己掌管应用时请显式接线认证。
 
 ## 托管 Run 生命周期
 
@@ -64,11 +98,14 @@ Web 包持久化 Schedule，并支持三种触发方式：
 
 ## 安全检查
 
-- 除非应用位于带认证的反向代理后，否则保持 `host="127.0.0.1"`。
-- 面向不可信用户时限制或关闭可写 Workspace。
+- 个人使用保持 `host="127.0.0.1"`；非回环绑定会自动加上 token 门禁，但此后
+  一切都系于这个 token——请像对待密码一样对待它。
+- 面向不可信用户时限制或关闭可写 Workspace：持有 token 的任何人都能让
+  agent 改文件、跑 shell。
 - 设置 `approval_timeout`，避免无人处理的弹窗长期占用容量。
 - 只使用一个 Worker，并备份 SQLite 数据库。
-- 暴露到网络前增加请求级认证、授权和限流。
+- 真正的多用户暴露还需要 TLS、按用户认证（`auth=`）与限流——共享 token
+  只是单用户级别的安全。
 
 生产使用前请阅读完整的[生产部署](deployment.md)指南。
 

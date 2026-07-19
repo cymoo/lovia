@@ -18,10 +18,13 @@ lovia web
 HTTP Tool、可选 DuckDuckGo 搜索、定时任务，以及根目录为当前目录的 coding 模式 Workspace。
 如果存在 `AGENTS.md`，其内容会成为 Agent 的 instructions。
 
-!!! danger "默认仅供本机使用；不提供内置认证"
+!!! danger "默认仅供本机使用；离开本机自动加 token 门禁"
 
-    个人使用时请保持默认的 `127.0.0.1` 绑定。暴露 UI 前应加入认证和限流，并限制或关闭
-    可写 Workspace。详见[生产部署](deployment.md)。
+    默认的 `127.0.0.1` 绑定无需任何凭据。绑定其他地址则必须有 API token——
+    通过 `--token` / `LOVIA_WEB_TOKEN` 指定，否则自动生成并打印（附带可直接
+    打开的 `/?token=...` 链接；UI 会存下它，401 时也会弹框询问）。此后文件
+    编辑和 shell 都系于这个 token，请像密码一样对待，离开本机时优先配合
+    `--readonly`。真正的多用户暴露见[生产部署](deployment.md)。
 
 ## 服务自己的 Agent
 
@@ -53,6 +56,7 @@ lovia web --app app:assistant
 | Flag | 环境变量 | 默认值 |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需；否则自动生成并打印 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--model` | `LOVIA_MODEL` | 首次运行时询问 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent |

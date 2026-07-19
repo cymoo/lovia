@@ -34,10 +34,46 @@ application without starting a process.
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
 | `ui` | `True` | Set `False` for API-only serving |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
+| `token` / `auth` | `None` | Bearer-token guard for `/api/*`, or your own FastAPI dependency (see below) |
 | `title` / `empty_title` / `empty_description` | lovia defaults | UI copy and branding |
 
 For endpoint contracts and the `ChatStore` interface, see
 [HTTP API](http-api.md).
+
+## Authentication
+
+Loopback binds need no credentials. `serve()` is safe by default beyond that:
+binding a non-loopback host with neither `token` nor `auth` generates a token
+and prints it once — with a ready `/?token=...` UI link — so the API is never
+exposed unauthenticated.
+
+```python
+serve(agent, host="0.0.0.0", token="s3cret")        # fixed token
+serve(agent, host="0.0.0.0")                        # generated + printed
+```
+
+One token, two carriers, all `/api/*` routes guarded (`/healthz` stays open
+for probes; the UI shell and static assets are public — they carry no data):
+
+- **API clients** send `Authorization: Bearer <token>` — SSE included, since
+  streams are consumed via `fetch`.
+- **The bundled UI** stores the token in a cookie (adopted from the
+  `/?token=...` link, or typed into the prompt shown on a 401), so `<img>`
+  previews and download links carry it too.
+
+For sessions, OAuth, or per-user identity, replace the built-in check with any
+FastAPI dependency — it guards the same routes:
+
+```python
+async def my_auth(request: Request) -> None:
+    if not valid(request):
+        raise HTTPException(status_code=401)
+
+serve(agent, host="0.0.0.0", auth=my_auth)
+```
+
+`create_app()` accepts the same two parameters but stays neutral by default —
+no token is generated for you; wire auth explicitly when you own the app.
 
 ## Supervised Run lifecycle
 
@@ -75,11 +111,15 @@ is skipped while the previous one is still running.
 
 ## Security checklist
 
-- Keep `host="127.0.0.1"` unless an authenticated reverse proxy protects the app.
-- Restrict or disable writable Workspace access for untrusted users.
+- Keep `host="127.0.0.1"` for personal use; non-loopback binds are
+  token-guarded automatically, but the token then protects everything —
+  treat it like a password.
+- Restrict or disable writable Workspace access for untrusted users: anyone
+  holding the token can make the agent edit files or run shell commands.
 - Configure `approval_timeout` so abandoned dialogs do not occupy capacity.
 - Use one worker and back up the SQLite database.
-- Add request-level authentication, authorization, and rate limiting before network exposure.
+- For real multi-user exposure add TLS, per-user auth (`auth=`), and rate
+  limiting — a shared token is single-user security.
 
 See the complete [Deployment](deployment.md) guide before production use.
 

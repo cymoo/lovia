@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 try:
-    from fastapi import FastAPI
+    from fastapi import Depends, FastAPI
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -25,6 +25,7 @@ from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
 from .api.memory import memory_plugin
 from .approvals import ApprovalRegistry
+from .auth import generate_token, is_loopback, token_dependency
 from .scheduler import Scheduler
 from .store import ChatStore
 from .ui import build_ui_router
@@ -46,6 +47,25 @@ def _default_db_path(name: str) -> Path:
     return Path(".lovia") / f"{safe}.db"
 
 
+def _clean_token(token: str | None) -> str | None:
+    """Strip a caller-supplied token; reject one that is empty after stripping.
+
+    ``token=""`` must fail fast, not silently disable auth (or, in ``serve``,
+    silently skip the off-loopback auto-generation).
+    """
+    if token is None:
+        return None
+    cleaned = token.strip()
+    if not cleaned:
+        raise ValueError("token must be non-empty")
+    return cleaned
+
+
+def _display_host(host: str) -> str:
+    """A browsable form of ``host`` for printed URLs — wildcards aren't one."""
+    return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+
+
 def create_app(
     agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
     *,
@@ -65,6 +85,8 @@ def create_app(
     scheduler_poll: float = 1.0,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
+    token: str | None = None,
+    auth: Any = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
 ) -> FastAPI:
@@ -105,10 +127,21 @@ def create_app(
     a front-end is served from (e.g. ``["http://localhost:5173"]``) — omitted,
     no CORS headers are sent and cross-origin browsers are refused.
 
+    ``token`` guards every ``/api/*`` route with bearer-token auth (see
+    :mod:`lovia.web.auth`: ``Authorization: Bearer`` header or the UI's token
+    cookie; ``/healthz`` stays open). ``auth`` replaces that check with your
+    own FastAPI dependency (sessions, OAuth, …) — pass one or the other, not
+    both. Neither is set by default: :func:`create_app` alone imposes no auth,
+    while :func:`serve` refuses non-loopback binds without one.
+
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines.
     """
     agents = _normalise(agent_or_agents)
+
+    token = _clean_token(token)
+    if token is not None and auth is not None:
+        raise ValueError("pass either token= or auth=, not both")
 
     if store is not None:
         chat_store = store
@@ -175,7 +208,13 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
-    app.include_router(build_api_router(deps))
+    # Auth guards the API router only: static assets and the UI shell carry no
+    # data, and serving them lets the UI collect the token client-side.
+    guard = auth if auth is not None else (token_dependency(token) if token else None)
+    app.include_router(
+        build_api_router(deps),
+        dependencies=[Depends(guard)] if guard is not None else None,
+    )
     if ui:
         app.include_router(
             build_ui_router(
@@ -220,6 +259,8 @@ def serve(
     approval_timeout: float | None = None,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
+    token: str | None = None,
+    auth: Any = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
@@ -230,6 +271,11 @@ def serve(
     overrides the agent's retry posture (see :func:`create_app`); ``ui=False``
     serves the JSON + SSE API only; any remaining keyword arguments are
     forwarded to ``uvicorn.run`` (e.g. ``log_level``, ``reload``, ``workers``).
+
+    Safe by default off-loopback: binding a non-loopback ``host`` with neither
+    ``token`` nor ``auth`` generates a token and prints it (with a ready
+    ``/?token=...`` UI link) — the API is never exposed unauthenticated.
+    Loopback binds stay credential-free unless a ``token`` is passed.
     """
     try:
         import uvicorn
@@ -237,6 +283,21 @@ def serve(
         from ._deps import raise_missing_web_extra
 
         raise_missing_web_extra(exc)
+
+    token = _clean_token(token)  # "" must not skip the generation below
+    ui_url = f"http://{_display_host(host)}:{port}/?token="
+    if token is None and auth is None and not is_loopback(host):
+        token = generate_token()
+        # stdout on purpose: this must be visible at every log level — it is
+        # the only copy of the credential.
+        print(
+            f"web API token (generated): {token}\n"
+            f"  fix it with serve(token=...), --token, or LOVIA_WEB_TOKEN\n"
+            f"  UI: {ui_url}{token}",
+            flush=True,
+        )
+    elif token:
+        print(f"web API auth enabled — UI: {ui_url}{token}", flush=True)
 
     app = create_app(
         agent_or_agents,
@@ -254,6 +315,8 @@ def serve(
         approval_timeout=approval_timeout,
         ui=ui,
         cors_origins=cors_origins,
+        token=token,
+        auth=auth,
         empty_title=empty_title,
         empty_description=empty_description,
     )

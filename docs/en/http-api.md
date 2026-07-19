@@ -38,6 +38,18 @@ required; run settings (`max_turns`, `budget`, `retry`, `tracer`,
 `approval_timeout`, `max_background_runs`, title options) are fields with
 the same defaults `create_app` uses.
 
+## Authentication
+
+When the server runs with a token
+([`serve(token=...)` or a non-loopback bind](web-server.md#authentication)),
+every `/api/*` route requires it — `Authorization: Bearer <token>` on plain
+requests and SSE alike (streams are `fetch`-consumed, so headers work).
+`GET /healthz` stays open. Missing/wrong credentials answer `401` with a
+`detail` that names the *server token*, so clients can distinguish it from a
+model-provider auth failure. Apps mounting `build_api_router` themselves add
+their own dependency (`token_dependency(token)` from `lovia.web.auth`, or any
+FastAPI dependency).
+
 ## Endpoints
 
 | Method & path | Purpose |
@@ -128,9 +140,11 @@ metadata features.
 
 ## Sharp edges
 
-- **No auth, no rate limits** — this is a component, not a product edge.
-  Mount it behind your gateway; `cors_origins` stays unset (no CORS) until
-  you say otherwise.
+- **`build_api_router` alone has no auth or rate limits** — it is a
+  component. `create_app`/`serve` add the token guard
+  ([Authentication](#authentication)); anything beyond a single shared
+  token (users, quotas) belongs to your gateway. `cors_origins` stays
+  unset (no CORS) until you say otherwise.
 - **SSE responses are POST-initiated**, not `EventSource`-compatible GETs.
   Use `fetch` + a reader (as `api.js` does); native `EventSource` won't
   work.

@@ -462,6 +462,31 @@ def test_main_port_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     assert captured["port"] == 7777
 
 
+def test_main_token_flag_env_precedence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(
+        tmp_path,
+        "agentmod_token",
+        "from lovia import Agent\nagent = Agent(name='t', model='m')\n",
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+
+    # Default: no token — serve() decides (loopback = open, else generated).
+    assert cli.main(["--app", "agentmod_token:agent"]) == 0
+    assert captured["token"] is None
+
+    monkeypatch.setenv("LOVIA_WEB_TOKEN", "from-env")
+    assert cli.main(["--app", "agentmod_token:agent"]) == 0
+    assert captured["token"] == "from-env"
+
+    # The flag beats the env.
+    assert cli.main(["--app", "agentmod_token:agent", "--token", "from-flag"]) == 0
+    assert captured["token"] == "from-flag"
+
+
 def test_main_help_exits_zero() -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["--help"])
@@ -500,15 +525,7 @@ def test_main_passes_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 
 # ----------------------------------------------------- exposure warning -
-
-
-def test_is_loopback() -> None:
-    assert cli._is_loopback("127.0.0.1")
-    assert cli._is_loopback("localhost")
-    assert cli._is_loopback("::1")
-    assert not cli._is_loopback("0.0.0.0")
-    assert not cli._is_loopback("::")
-    assert not cli._is_loopback("192.168.1.5")
+# (is_loopback itself moved to lovia.web.auth; covered in test_auth.py.)
 
 
 def test_warn_when_trusted_workspace_exposed(
@@ -838,9 +855,7 @@ def test_main_runs_wizard_when_config_missing_on_a_tty(
 
     monkeypatch.setattr(cli.setup, "interactive_setup", fake_wizard)
     captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        cli, "serve", lambda a, **k: captured.update({"agent": a, **k})
-    )
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
     rc = cli.main([])
     assert rc == 0
     assert len(calls) == 1

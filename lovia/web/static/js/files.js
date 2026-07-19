@@ -29,6 +29,10 @@ const state = {
   browsePath: '', // '' = workspace root
   entries: [],
   touched: new Set(), // paths this chat's write_file/edit_file produced
+  // Per-path edit counter — busts the browser's in-page image cache only when
+  // the agent actually touched the file. First opens use the bare URL, so the
+  // HTTP cache (revalidated via the server's ETag/no-cache) does its job.
+  revs: new Map(),
   stale: false, // a shell run may have changed files
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
 };
@@ -44,6 +48,16 @@ function isTouched(entryPath) {
     if (entryPath === p || p.endsWith(`/${entryPath}`)) return true;
   }
   return false;
+}
+
+// Sum of edit revisions for a path (same relative/absolute matching as
+// isTouched); 0 = never touched this chat → cacheable bare URL.
+function revOf(path) {
+  let n = 0;
+  for (const [p, r] of state.revs) {
+    if (p === path || p.endsWith(`/${path}`)) n += r;
+  }
+  return n;
 }
 
 // ---- Panel sizing -----------------------------------------------------------
@@ -526,7 +540,9 @@ async function openFile(path, { silent = false } = {}) {
     const img = document.createElement('img');
     img.className = 'files-img';
     img.alt = name;
-    img.src = api.workspaceRawUrl({ agent: store.agent, path }) + `&t=${Date.now()}`;
+    const rev = revOf(path);
+    img.src =
+      api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(img);
     return true;
   }
@@ -717,16 +733,24 @@ export function initFiles() {
   store.on('agents-loaded', updateVisibility);
   store.on('agent-changed', () => {
     state.touched.clear();
+    state.revs.clear();
     state.browsePath = '';
     closeViewer();
     updateVisibility();
     if (state.open) refresh();
   });
-  // "touched" is scoped to the chat on screen.
-  store.on('session-switched', () => state.touched.clear());
-  store.on('reset-chat-view', () => state.touched.clear());
+  // "touched" (and the edit revisions) are scoped to the chat on screen.
+  store.on('session-switched', () => {
+    state.touched.clear();
+    state.revs.clear();
+  });
+  store.on('reset-chat-view', () => {
+    state.touched.clear();
+    state.revs.clear();
+  });
   store.on('workspace-file-touched', ({ path }) => {
     state.touched.add(path);
+    state.revs.set(path, (state.revs.get(path) || 0) + 1);
     if (state.open) refresh();
     maybeReloadViewing(path);
   });

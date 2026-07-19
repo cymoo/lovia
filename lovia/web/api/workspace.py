@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
-    from fastapi.responses import FileResponse
+    from fastapi import APIRouter, HTTPException, Query, Request
+    from fastapi.responses import FileResponse, Response
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
@@ -218,10 +218,11 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
 
     @router.get("/api/workspace/raw")
     async def raw_file(
+        request: Request,
         agent: str | None = Query(None),
         path: str = Query(..., max_length=4096),
         download: bool = Query(False),
-    ) -> FileResponse:
+    ) -> Response:
         """Raw bytes: inline for images (viewer preview), attachment for any
         file when ``download=1`` — "take the file the assistant made" is a
         first-class action for an assistant UI."""
@@ -236,19 +237,37 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if not resolved.abs.is_file():
             raise HTTPException(status_code=404, detail="no such file")
         try:
-            size = resolved.abs.stat().st_size
+            stat_result = resolved.abs.stat()
         except OSError as exc:  # vanished between the is_file check and here
             raise HTTPException(status_code=404, detail="no such file") from exc
-        if size > cfg.limits.max_file_read_bytes:
+        if stat_result.st_size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
         media_type = mimetypes.guess_type(resolved.abs.name)[0]
         if not download and not (media_type or "").startswith("image/"):
             raise HTTPException(status_code=415, detail="inline preview is images-only")
-        return FileResponse(
+        # `no-cache` = cache but revalidate: the viewer re-opens the same URL
+        # constantly (and re-renders after every agent edit), so unchanged
+        # files answer 304 from the ETag below instead of re-sending bytes —
+        # and changed files show fresh without any query-string busting.
+        response = FileResponse(
             resolved.abs,
             media_type=media_type or "application/octet-stream",
+            stat_result=stat_result,
             filename=resolved.abs.name if download else None,
             content_disposition_type="attachment" if download else "inline",
+            headers={"cache-control": "no-cache"},
         )
+        etag = response.headers.get("etag")
+        if_none_match = request.headers.get("if-none-match")
+        if etag and if_none_match:
+            candidates = {
+                t.strip().removeprefix("W/") for t in if_none_match.split(",")
+            }
+            if etag.removeprefix("W/") in candidates:
+                return Response(
+                    status_code=304,
+                    headers={"etag": etag, "cache-control": "no-cache"},
+                )
+        return response
 
     return router

@@ -177,7 +177,12 @@ function openShortcutHelp() {
     list.append(dt, dd);
   }
   body.appendChild(list);
-  showDialog({ body });
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-ghost';
+  close.textContent = 'Close';
+  const dialog = showDialog({ body, actions: close });
+  close.addEventListener('click', () => dialog.close());
 }
 
 function isTyping(target) {

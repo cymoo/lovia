@@ -41,7 +41,11 @@ def build_ui_router(
         description = empty_description
         if description is None:
             description = "A good question is already half the answer."
-        examples = list(empty_examples) if empty_examples else []
+        # A bare string is one example, not an iterable of characters.
+        if isinstance(empty_examples, str):
+            examples = [empty_examples]
+        else:
+            examples = list(empty_examples) if empty_examples else []
         return _TEMPLATES.TemplateResponse(
             request,
             "index.html",

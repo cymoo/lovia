@@ -89,7 +89,17 @@ function addCodeBlockControls(container) {
     btn.innerHTML = `${icon('copy', { size: 12 })} ${t('chat.copyCode')}`;
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const codeText = code?.textContent || pre.textContent?.replace(/Copy$/, '') || '';
+      let codeText = code?.textContent;
+      if (!codeText) {
+        // Fallback for a bare <pre>: strip the UI chrome (copy button,
+        // language label) instead of pattern-matching on its label — which
+        // broke in non-English UIs and on snippets ending with "Copy".
+        const clone = pre.cloneNode(true);
+        clone
+          .querySelectorAll('.btn-copy-code, .code-lang')
+          .forEach((n) => n.remove());
+        codeText = clone.textContent || '';
+      }
       const ok = await copyToClipboard(codeText.trimEnd());
       if (ok) {
         btn.innerHTML = `${icon('check', { size: 12 })} ${t('chat.copied')}`;

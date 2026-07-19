@@ -31,12 +31,12 @@ async function openMemoryDialog() {
   panel.innerHTML = `
     <div class="memory-head">
       <h3>${t('memory.title')}${who}</h3>
-      <button type="button" class="btn-icon memory-close" aria-label="Close">${icon('x', { size: 16 })}</button>
+      <button type="button" class="btn-icon memory-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
     <p class="memory-hint">${t('memory.hint')}</p>
-    <label class="vh" for="memory-editor">Memory notes</label>
+    <label class="vh" for="memory-editor">${t('memory.editorLabel')}</label>
     <textarea id="memory-editor" class="dialog-input memory-editor" spellcheck="false"
-      placeholder="- The user prefers …" disabled></textarea>
+      placeholder="${t('memory.placeholder')}" disabled></textarea>
     <div class="memory-foot">
       <span class="memory-meter">${t('memory.loading')}</span>
       <div class="memory-actions">

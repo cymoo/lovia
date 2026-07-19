@@ -395,7 +395,7 @@ function openAllSessionsDialog(query = '') {
   panel.innerHTML = `
     <div class="all-chats-head">
       <h3>${t('nav.allChats')}</h3>
-      <button type="button" class="btn-icon all-chats-close" aria-label="Close">${icon('x', { size: 16 })}</button>
+      <button type="button" class="btn-icon all-chats-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
     <div class="all-chats-list" role="list"></div>
     <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>${t('nav.loadMore')}</button>`;

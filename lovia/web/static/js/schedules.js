@@ -249,13 +249,13 @@ export async function openSchedulesDialog() {
   panel.innerHTML = `
     <div class="schedules-head">
       <h3>${t('sched.title')}</h3>
-      <button type="button" class="btn-icon sched-close" aria-label="Close">${icon('x', { size: 16 })}</button>
+      <button type="button" class="btn-icon sched-close" aria-label="${t('dialog.close')}">${icon('x', { size: 16 })}</button>
     </div>
     <form class="sched-form">
       <textarea class="dialog-input sched-input" rows="2" placeholder="${t('sched.promptPlaceholder')}" required></textarea>
       <div class="sched-row">
-        <select class="dialog-input sched-agent" aria-label="Agent" hidden></select>
-        <select class="dialog-input sched-kind" aria-label="Trigger kind">
+        <select class="dialog-input sched-agent" aria-label="${t('sched.agentLabel')}" hidden></select>
+        <select class="dialog-input sched-kind" aria-label="${t('sched.triggerKind')}">
           <option value="every">${t('sched.every')}</option>
           <option value="cron">${t('sched.cron')}</option>
           <option value="at">${t('sched.at')}</option>

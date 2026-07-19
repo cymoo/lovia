@@ -159,6 +159,7 @@ function formatArgs(args) {
   } catch {
     return `(${args})`;
   }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return `(${args})`;
   const entries = Object.entries(obj);
   if (entries.length === 0) return '()';
   return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
@@ -184,7 +185,7 @@ function fillParams(container, args) {
     addBlock(String(args)); // unparsable — show the raw payload
     return;
   }
-  if (!obj || typeof obj !== 'object') {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
     addBlock(String(args));
     return;
   }

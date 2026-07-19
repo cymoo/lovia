@@ -126,6 +126,74 @@ def test_list_agents_multi_and_pick() -> None:
     assert ok.json()["output"] == "a"
 
 
+def test_existing_session_keeps_its_agent() -> None:
+    # A session created with alpha continues on alpha even when the request
+    # names beta (a stale tab / switcher left elsewhere must not swap brains).
+    a = _make_agent([text("a1"), text("a2")])
+    b = _make_agent([text("b1")])
+    c = TestClient(_app({"alpha": a, "beta": b}))
+    sid = c.post("/api/chat", json={"message": "hi", "agent": "alpha"}).json()[
+        "session_id"
+    ]
+    res = c.post(
+        "/api/chat", json={"message": "more", "agent": "beta", "session_id": sid}
+    )
+    assert res.json()["output"] == "a2"
+    # The metadata label matches the brain that actually ran.
+    rows = c.get("/api/sessions").json()
+    assert next(s for s in rows if s["id"] == sid)["agent"] == "alpha"
+
+
+def test_existing_session_needs_no_agent_field() -> None:
+    # Side benefit of stored-agent-wins: continuing an existing session no
+    # longer 400s for lacking `agent` on a multi-agent server.
+    a = _make_agent([text("a1"), text("a2")])
+    b = _make_agent([text("b1")])
+    c = TestClient(_app({"alpha": a, "beta": b}))
+    sid = c.post("/api/chat", json={"message": "hi", "agent": "alpha"}).json()[
+        "session_id"
+    ]
+    res = c.post("/api/chat", json={"message": "more", "session_id": sid})
+    assert res.status_code == 200
+    assert res.json()["output"] == "a2"
+
+
+def test_stored_agent_gone_falls_back_to_requested() -> None:
+    # Same store, new server without "alpha": its sessions continue on the
+    # agent the request names instead of erroring on the stale label.
+    store = ChatStore.in_memory()
+    a = _make_agent([text("a1")])
+    b = _make_agent([text("b1")])
+    c1 = TestClient(_app({"alpha": a, "beta": b}, store=store))
+    sid = c1.post("/api/chat", json={"message": "hi", "agent": "alpha"}).json()[
+        "session_id"
+    ]
+    b2 = _make_agent([text("b-new")])
+    c2 = TestClient(_app({"beta": b2}, store=store))
+    res = c2.post(
+        "/api/chat", json={"message": "again", "agent": "beta", "session_id": sid}
+    )
+    assert res.json()["output"] == "b-new"
+
+
+def test_stream_existing_session_keeps_its_agent() -> None:
+    # The streaming endpoint resolves the agent the same way as the blocking one.
+    a = _make_agent([text("a1"), text("a2")])
+    b = _make_agent([text("b1")])
+    c = TestClient(_app({"alpha": a, "beta": b}))
+    sid = c.post("/api/chat", json={"message": "hi", "agent": "alpha"}).json()[
+        "session_id"
+    ]
+    with c.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "more", "agent": "beta", "session_id": sid},
+    ) as res:
+        body = "".join(res.iter_text())
+    deltas = [d["delta"] for e, d in _parse_sse(body) if e == "text_delta"]
+    assert "".join(deltas) == "a2"
+
+
 # -------------------------------------------------------------- chat round -
 
 

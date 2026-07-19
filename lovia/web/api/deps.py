@@ -124,6 +124,19 @@ class RouterDeps:
             raise HTTPException(status_code=404, detail=f"unknown agent {name!r}")
         return self.agents[name]
 
+    def name_of(self, agent: Agent[Any]) -> str:
+        """The registry key an agent is served under — the API-facing identity.
+
+        ``create_app({"alpha": Agent(name="bot")})`` serves the agent as
+        "alpha": that key is what ``pick``/AgentInfo/session metadata all speak,
+        so anything persisted or displayed must use it, never ``agent.name``
+        (which is only the agent's internal self-identity, e.g. for handoffs).
+        """
+        for name, a in self.agents.items():
+            if a is agent:
+                return name
+        return agent.name  # unregistered (shouldn't happen) — best effort
+
     def schedule_title(
         self, session_id: str, user_msg: str, output: Any, agent_name: str
     ) -> None:

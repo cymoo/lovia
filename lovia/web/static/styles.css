@@ -3336,4 +3336,120 @@ body.files-splitting {
   .turn-footer .usage {
     opacity: 1;
   }
+  .tool .tool-result-actions,
+  .tool summary .tool-open-file {
+    opacity: 1;
+  }
+}
+
+/* ---- Context meter (topbar) ------------------------------------------------------------------------- */
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: help;
+}
+.context-meter.hidden {
+  display: none;
+}
+.context-meter-track {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.context-meter-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition:
+    width var(--t-med) var(--ease),
+    background var(--t-fast);
+}
+.context-meter-label {
+  font-size: 11px;
+  color: var(--muted-2);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.context-meter.warn .context-meter-fill {
+  background: var(--warn);
+}
+.context-meter.danger .context-meter-fill {
+  background: var(--danger);
+}
+
+/* ---- Tool result actions (copy / expand / open-in-files) -------------------------------------------- */
+.tool .tool-result-box {
+  position: relative;
+}
+.tool .tool-result-actions {
+  position: absolute;
+  top: 7px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.tool .tool-result-box:hover .tool-result-actions,
+.tool .tool-result-actions:focus-within {
+  opacity: 1;
+}
+.tool-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition:
+    color var(--t-fast),
+    background var(--t-fast),
+    border-color var(--t-fast);
+}
+.tool-action:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.tool .tool-result.expanded {
+  max-height: none;
+}
+/* Open-in-files sits at the summary's right edge, revealed on hover. */
+.tool summary .tool-open-file {
+  opacity: 0;
+  flex-shrink: 0;
+}
+.tool summary:hover .tool-open-file,
+.tool summary .tool-open-file:focus-visible {
+  opacity: 1;
+}
+
+/* ---- Date separators -------------------------------------------------------------------------------- */
+.date-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 6px;
+  font-size: 11px;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.date-separator::before,
+.date-separator::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }

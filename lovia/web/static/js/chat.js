@@ -11,6 +11,7 @@ import {
   formatTimeSmart,
   highlightIn,
   renderMarkdown,
+  toDate,
 } from './util.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
@@ -108,8 +109,25 @@ function scheduleRender() {
   clearTimeout(_renderTimer);
   _renderTimer = setTimeout(flushRender, 60);
 }
-function flushRender() {
+
+// True while the user has an active (non-collapsed) selection inside `node`.
+function selectionInside(node) {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return node.contains(sel.getRangeAt(0).commonAncestorContainer);
+}
+
+// `force` bypasses the selection guard — end-of-turn flushes must land even
+// mid-selection, or the bubble would freeze on stale content.
+function flushRender(force = false) {
   if (!store.body || !store.rawText) return;
+  // Replacing innerHTML destroys a selection in progress — copying from a
+  // streaming reply would be impossible. Skip this flush; the next delta
+  // (or the turn's final, forced flush) repaints.
+  if (!force && selectionInside(store.body)) {
+    scheduleRender();
+    return;
+  }
   store.body.dataset.raw = store.rawText;
   store.body.innerHTML = renderMarkdown(store.rawText);
   highlightCode(store.body);
@@ -241,10 +259,41 @@ function appendBubbleContent(bubble, node) {
   }
 }
 
+// ---- Date separators -----------------------------------------------------
+// A quiet "Today / Yesterday / 2026-07-18" line whenever the calendar date
+// changes between turns — long chats need anchors when scrolling back.
+let _lastDateKey = null;
+
+function dateLabel(ts) {
+  const d = toDate(ts);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return 'Today';
+  if (d.toDateString() === new Date(now.getTime() - 86400000).toDateString()) {
+    return 'Yesterday';
+  }
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// `anchorFirst` labels even the very first turn (history replay wants the
+// anchor; a live chat's first message doesn't need a "Today" above it).
+function maybeDateSeparator(transcriptEl, ts, { anchorFirst = false } = {}) {
+  const key = toDate(ts).toDateString();
+  if (key === _lastDateKey) return;
+  const isFirst = _lastDateKey === null;
+  _lastDateKey = key;
+  if (isFirst && !anchorFirst) return;
+  const sep = document.createElement('div');
+  sep.className = 'date-separator';
+  sep.textContent = dateLabel(ts);
+  transcriptEl.appendChild(sep);
+}
+
 // ---- Render helpers ----------------------------------------------------
 export function appendUserTurn(text, { queued = false, before = null } = {}) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return null;
+  if (!before) maybeDateSeparator(transcriptEl, Date.now());
   const node = makeTurn('user');
   if (queued) node.classList.add('queued');
   const body = document.createElement('div');
@@ -326,11 +375,54 @@ function finalizeReasoning() {
   if (label) label.textContent = `Thought for ${elapsed}s`;
 }
 
+// ---- Tool cards ----------------------------------------------------------
+// Tools whose `path` argument points into the agent's workspace — their cards
+// offer "open in the Files panel", and read_file results highlight by
+// extension.
+const PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
+const RESULT_HL_MAX = 200_000; // chars — hljs over megabyte dumps janks the tab
+const RESULT_EXPANDABLE_LINES = 12; // roughly what the capped height shows
+
+function toolPath(args) {
+  try {
+    const p = JSON.parse(args || '{}').path;
+    return typeof p === 'string' && p ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+function toolActionBtn(iconName, title) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'tool-action';
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.innerHTML = icon(iconName, { size: 12 });
+  return b;
+}
+
 function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
   node.querySelector('.tool-name').textContent = call.name;
   node.querySelector('.tool-args').textContent = formatArgs(call.arguments);
   fillParams(node.querySelector('.tool-params'), call.arguments);
+  // The result renderer only needs the name and the path — stash those
+  // instead of the full arguments (write_file args can be megabytes).
+  node.dataset.toolName = call.name;
+  const path = toolPath(call.arguments);
+  if (path && PATH_TOOLS.has(call.name)) {
+    node.dataset.toolPath = path;
+    const open = toolActionBtn('folder', 'Open in Files panel');
+    open.classList.add('tool-open-file');
+    open.addEventListener('click', (e) => {
+      // Inside <summary>: don't let the click also toggle the card.
+      e.preventDefault();
+      e.stopPropagation();
+      store.emit('open-workspace-file', { path });
+    });
+    node.querySelector('summary')?.appendChild(open);
+  }
   return node;
 }
 
@@ -344,16 +436,71 @@ function appendTool(call) {
   scrollDown();
 }
 
+// Language for a highlighted result: read_file content only — shell output is
+// mixed text where wrong highlighting is worse than none.
+function resultLang(node) {
+  if (node.dataset.toolName !== 'read_file') return null;
+  const ext = (node.dataset.toolPath?.split('.').pop() || '').toLowerCase();
+  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : null;
+}
+
+// The one renderer behind both the live tool_result event and history replay:
+// content (highlighted or linkified), error styling, and the hover actions
+// (copy, expand when clipped).
+function setToolResult(node, result, isError) {
+  const pre = node.querySelector('.tool-result');
+  if (!pre) return;
+  const text = String(result ?? '');
+  if (!text.trim()) {
+    pre.style.display = 'none';
+    return;
+  }
+  const lang = !isError && text.length <= RESULT_HL_MAX ? resultLang(node) : null;
+  if (lang) {
+    const code = document.createElement('code');
+    code.className = `language-${lang}`;
+    code.textContent = text;
+    pre.replaceChildren(code);
+    highlightIn(node);
+  } else {
+    pre.innerHTML = linkifyText(text);
+  }
+  if (isError) node.classList.add('error');
+
+  const box = node.querySelector('.tool-result-box');
+  if (!box) return;
+  let actions = box.querySelector('.tool-result-actions');
+  if (!actions) {
+    actions = document.createElement('div');
+    actions.className = 'tool-result-actions';
+    box.prepend(actions);
+  }
+  actions.replaceChildren(); // idempotent across repeated result updates
+
+  if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
+    const expand = toolActionBtn('maximize-2', 'Expand result');
+    expand.addEventListener('click', () => {
+      const on = pre.classList.toggle('expanded');
+      expand.title = on ? 'Collapse result' : 'Expand result';
+    });
+    actions.append(expand);
+  }
+  const copy = toolActionBtn('copy', 'Copy result');
+  copy.addEventListener('click', async () => {
+    if (await copyToClipboard(text)) {
+      copy.innerHTML = icon('check', { size: 12 });
+      setTimeout(() => {
+        copy.innerHTML = icon('copy', { size: 12 });
+      }, 1500);
+    }
+  });
+  actions.append(copy);
+}
+
 function updateToolResult(id, result, isError) {
   const node = store.toolNodes.get(id);
   if (!node) return;
-  const pre = node.querySelector('.tool-result');
-  if (!result || !String(result).trim()) {
-    if (pre) pre.style.display = 'none';
-    return;
-  }
-  if (pre) pre.innerHTML = linkifyText(String(result));
-  if (isError) node.classList.add('error');
+  setToolResult(node, result, isError);
 }
 
 function removeToolNode(id) {
@@ -459,6 +606,7 @@ function clearTodoPanel() {
 }
 
 function resetChatView() {
+  _lastDateKey = null;
   store.bubble = null;
   store.turnNode = null;
   store.body = null;
@@ -537,6 +685,37 @@ function formatTokens(n) {
   if (n < 1000000) return `${Math.round(n / 1000)}k`;
   return `${(n / 1000000).toFixed(1)}M`;
 }
+
+// ---- Context meter -------------------------------------------------------
+// How full the model's context is, from the wire data already at hand: the
+// last request's input_tokens IS the prompt the model just saw, and the agent
+// advertises its window via AgentInfo.context_window. Hidden until both are
+// known; hides again on chat switches (usage is per-view, not persisted).
+function updateContextMeter(inputTokens) {
+  const el = document.getElementById('context-meter');
+  if (!el) return;
+  const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
+  if (!window_ || !inputTokens) {
+    el.classList.add('hidden');
+    return;
+  }
+  const pct = Math.min(100, Math.round((inputTokens / window_) * 100));
+  el.classList.remove('hidden');
+  el.classList.toggle('warn', pct >= 70 && pct < 90);
+  el.classList.toggle('danger', pct >= 90);
+  el.title =
+    `Context: ${formatTokens(inputTokens)} of ${formatTokens(window_)} tokens (${pct}%)` +
+    ' — compaction makes room automatically';
+  el.querySelector('.context-meter-fill').style.width = `${pct}%`;
+  el.querySelector('.context-meter-label').textContent = `${pct}%`;
+}
+
+function hideContextMeter() {
+  document.getElementById('context-meter')?.classList.add('hidden');
+}
+
+// Usage is a property of the conversation on screen — switching away clears it.
+store.on('session-switched', hideContextMeter);
 
 // Surface why compaction fired and how much it saved. Policy-agnostic: the
 // numeric fields (tokens_before/after) ride at the top level and the policy
@@ -881,6 +1060,9 @@ export function renderHistory(entries) {
   for (const it of entries) {
     if (it.role === 'user') {
       currentBubble = null;
+      if (it.timestamp) {
+        maybeDateSeparator(transcriptEl, it.timestamp, { anchorFirst: true });
+      }
       const turn = makeTurn('user', it.timestamp);
       const body = document.createElement('div');
       body.className = 'body';
@@ -892,6 +1074,9 @@ export function renderHistory(entries) {
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
+        if (it.timestamp) {
+          maybeDateSeparator(transcriptEl, it.timestamp, { anchorFirst: true });
+        }
         const result = startAssistantTurn(it.timestamp);
         currentBubble = result.bubble;
       }
@@ -929,16 +1114,9 @@ export function renderHistory(entries) {
           }
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
-          if (result !== undefined && result.text !== '') {
-            node.querySelector('.tool-result').innerHTML = linkifyText(String(result.text));
-            // Mirror the live path (updateToolResult): error styling rides on
-            // a non-empty result.
-            if (result.isError) node.classList.add('error');
-          } else {
-            // No result stored — hide the empty <pre>
-            const pre = node.querySelector('.tool-result');
-            if (pre) pre.style.display = 'none';
-          }
+          // Same renderer as the live path: highlighting, error styling, and
+          // the copy/expand actions all match; absent results hide the <pre>.
+          setToolResult(node, result?.text ?? '', result?.isError ?? false);
           appendBubbleContent(currentBubble, node);
         }
       }
@@ -1073,6 +1251,7 @@ export function renderEmptyState() {
 
 // ---- SSE ---------------------------------------------------------------
 const turnProgressEl = document.getElementById('turn-progress');
+let _currentTurn = 0; // the pill shows "Turn N · <current tool>…"
 
 // True while the most recent SSE event was `error`. If the stream then ends
 // (no `done`), the failure was terminal — offer a Retry; a mid-run tool error
@@ -1109,15 +1288,19 @@ async function handleEvent({ event, data }) {
       scheduleRender();
       break;
 
-    case 'reasoning_delta':
+    case 'reasoning_delta': {
       ensureReasoning();
       if (!store.reasoningStart) store.reasoningStart = Date.now();
       store.reasoningEnd = Date.now();
       store.reasoningText += data.delta;
-      if (store.reasoningNode)
-        store.reasoningNode.querySelector('.reasoning-content').textContent = store.reasoningText;
+      const content = store.reasoningNode?.querySelector('.reasoning-content');
+      // Same selection guard as flushRender — the next delta catches up.
+      if (content && !selectionInside(content)) {
+        content.textContent = store.reasoningText;
+      }
       scrollDown();
       break;
+    }
 
     case 'output_discarded':
       // A transient mid-stream error discarded this turn's partial output; a
@@ -1137,7 +1320,7 @@ async function handleEvent({ event, data }) {
 
     case 'message_completed':
       clearTimeout(_renderTimer);
-      if (store.body && store.rawText) flushRender();
+      if (store.body && store.rawText) flushRender(true);
       store.body = null;
       store.rawText = '';
       if (!store.reasoningNode && data.message?.reasoning && store.bubble) {
@@ -1188,6 +1371,10 @@ async function handleEvent({ event, data }) {
       }
       finalizeReasoning();
       appendTool(data);
+      // The pill says what the run is doing, not just how far it is.
+      if (turnProgressEl && _currentTurn) {
+        turnProgressEl.textContent = `Turn ${_currentTurn} · ${data.name}…`;
+      }
       break;
 
     case 'tool_result':
@@ -1213,6 +1400,7 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'turn_started':
+      _currentTurn = data.turn;
       if (turnProgressEl) {
         turnProgressEl.textContent = `Turn ${data.turn}`;
         turnProgressEl.classList.remove('hidden');
@@ -1229,6 +1417,7 @@ async function handleEvent({ event, data }) {
 
     case 'done': {
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
+      updateContextMeter(data?.usage?.input_tokens);
       // Stamp the run's token spend into the turn footer — the data is
       // already on the wire; hovering shows the input/output split.
       const tokens = formatTokens(data?.usage?.total_tokens);
@@ -1363,13 +1552,13 @@ export async function runStream(message) {
     if (err.name === 'AbortError') {
       ensureBody();
       if (!store.rawText) store.rawText = '_Cancelled._';
-      flushRender();
+      flushRender(true);
     } else {
       ensureBody();
       const raw = err.message ?? String(err);
       const hint = humanizeError(raw);
       store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
-      flushRender();
+      flushRender(true);
       appendRetry();
     }
   } finally {
@@ -1379,7 +1568,7 @@ export async function runStream(message) {
     if (store.chatEpoch === streamEpoch) {
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText; // store raw markdown for copy
-        flushRender();
+        flushRender(true);
       }
       // Stream ended right after an `error` event → the failure was terminal
       // (a recovered tool error is followed by more events). Offer a Retry.
@@ -1446,7 +1635,7 @@ export async function runReconnect(sessionId) {
       const raw = err.message ?? String(err);
       const hint = humanizeError(raw);
       store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
-      flushRender();
+      flushRender(true);
     }
   } finally {
     clearTimeout(_renderTimer);
@@ -1454,7 +1643,7 @@ export async function runReconnect(sessionId) {
     if (store.chatEpoch === streamEpoch) {
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText;
-        flushRender();
+        flushRender(true);
       }
       // Retry re-sends store.lastMessage — only offer it when there is one
       // (a reconnect after a page refresh has nothing to re-send).
@@ -1476,6 +1665,7 @@ export function resetChatForNewSession() {
   detachStream(); // keep any live run going server-side; just disconnect from it
   resetChatView();
   renderEmptyState();
+  hideContextMeter();
   _resumeAutoScroll(); // after the swap, so the reset's scroll event is a no-op
 }
 

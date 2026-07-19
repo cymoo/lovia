@@ -17,6 +17,10 @@ class AgentInfo(BaseModel):
     # True when the agent carries a Memory plugin (the sidebar's Memory
     # editor shows itself only for such agents).
     memory: bool = False
+    # The model's context window in tokens (server override > agent policy >
+    # provider-advertised), or None when unknown — the UI's context meter
+    # shows itself only when this is set.
+    context_window: int | None = None
 
 
 class MemoryNotes(BaseModel):

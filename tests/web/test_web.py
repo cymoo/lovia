@@ -107,6 +107,7 @@ def test_list_agents_single() -> None:
             "tools": [],
             "workspace": False,
             "memory": False,
+            "context_window": None,
         }
     ]
 
@@ -124,6 +125,32 @@ def test_list_agents_multi_and_pick() -> None:
     # Picking by name works.
     ok = c.post("/api/chat", json={"message": "hi", "agent": "alpha"})
     assert ok.json()["output"] == "a"
+
+
+def test_agent_info_context_window_resolution() -> None:
+    from lovia.context import Compaction
+
+    # Unknown everywhere → None (the UI meter stays hidden).
+    c = TestClient(_app(_make_agent([text("a")])))
+    assert c.get("/api/agents").json()[0]["context_window"] is None
+
+    # Server-level policy override wins.
+    c2 = TestClient(
+        _app(
+            _make_agent([text("a")]),
+            context_policy=Compaction(context_window=100_000),
+        )
+    )
+    assert c2.get("/api/agents").json()[0]["context_window"] == 100_000
+
+    # Provider-advertised window is the fallback.
+    class _Windowed(ScriptedProvider):
+        def context_window(self) -> int:
+            return 32_000
+
+    agent = Agent(name="bot", model=_Windowed([text("a")]))
+    c3 = TestClient(_app(agent))
+    assert c3.get("/api/agents").json()[0]["context_window"] == 32_000
 
 
 def test_existing_session_keeps_its_agent() -> None:
@@ -745,6 +772,7 @@ def test_get_agent_by_name() -> None:
         "tools": [],
         "workspace": False,
         "memory": False,
+        "context_window": None,
     }
     assert c.get("/api/agents/nope").status_code == 404
 
@@ -872,6 +900,7 @@ def test_build_api_router_is_embeddable() -> None:
             "tools": [],
             "workspace": False,
             "memory": False,
+            "context_window": None,
         }
     ]
 

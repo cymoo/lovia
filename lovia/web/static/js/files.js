@@ -758,4 +758,16 @@ export function initFiles() {
     state.stale = true;
     if (state.open) els.refresh.classList.add('stale');
   });
+  // A tool card's "open in Files panel" action (chat.js) — open the panel and
+  // jump straight to the file the tool touched.
+  store.on('open-workspace-file', async ({ path }) => {
+    if (!state.available) {
+      toast('This agent has no workspace');
+      return;
+    }
+    if (!state.open) setOpen(true);
+    if (!(await openFile(path))) {
+      toast('Couldn’t open that file in the panel', { type: 'error' });
+    }
+  });
 }

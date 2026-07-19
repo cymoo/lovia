@@ -187,17 +187,10 @@ class ToolCallProcessor:
         try:
             args: dict[str, Any] = json.loads(call.arguments or "{}")
         except json.JSONDecodeError as exc:
-            # Feed the parse error back to the model instead of silently
-            # running the tool with empty arguments. When the turn hit the
-            # output-token ceiling, say so: the generic "invalid JSON" would
-            # send the model looping on the same oversized call, never learning
-            # it was truncated rather than malformed.
             if state.last_finish_reason == "length":
                 err = (
                     f"Tool {call.name} arguments are incomplete: the response was "
-                    "cut off at the output token limit (finish_reason=length) "
-                    "mid-call. Emit a smaller call — e.g. write the file in "
-                    "chunks / use append mode."
+                    "cut off at the output token limit (finish_reason=length) mid-call."
                 )
             else:
                 err = f"Invalid JSON in tool arguments: {exc}"
@@ -299,7 +292,7 @@ class ToolCallProcessor:
         handoff-signal capture, rendering, truncation, the transcript append,
         and ``ToolCallCompleted``. Every terminal outcome (success, tool
         error, render failure) appends exactly one :class:`ToolResultEntry`;
-        only a call whose task is cancelled mid-flight (sibling cancellation
+        only a call whose task is canceled mid-flight (sibling cancellation
         when the batch aborts) appends nothing — it stays a pending call that
         a resume re-executes. Re-raises :class:`RunCancelled` (a run-global
         signal); converts every other failure into an error result.

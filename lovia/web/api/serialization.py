@@ -16,7 +16,12 @@ from typing import Any
 
 from ...messages import Message
 from ...session import NOTICE_META_KEY, Segment
-from ...transcript import InputEntry, TranscriptEntry, entries_to_messages
+from ...transcript import (
+    InputEntry,
+    ToolResultEntry,
+    TranscriptEntry,
+    entries_to_messages,
+)
 from ..schemas import ChatSessionInfo, MessageOut
 from ..store import ChatMeta
 
@@ -63,6 +68,27 @@ def display_text(m: Message) -> str:
     return val if isinstance(val, str) else str(val or "")
 
 
+def _apply_tool_errors(
+    outs: list[MessageOut], entries: list[TranscriptEntry]
+) -> list[MessageOut]:
+    """Stamp ``is_error`` onto tool-result messages.
+
+    ``entries_to_messages`` flattens :class:`ToolResultEntry` down to a plain
+    ``tool`` message and loses the error flag the live SSE stream carries, so
+    replayed sessions rendered without the error styling. Re-derive it here.
+    """
+    errs = {
+        e.call_id
+        for e in entries
+        if isinstance(e, ToolResultEntry) and e.is_error and e.call_id
+    }
+    if errs:
+        for o in outs:
+            if o.role == "tool" and o.tool_call_id in errs:
+                o.is_error = True
+    return outs
+
+
 def message_to_out(m: Message, *, timestamp: float | None = None) -> MessageOut:
     return MessageOut(
         role=m.role,
@@ -101,13 +127,19 @@ def segments_to_out(
     at run boundaries; each borrows the timestamp of the message it follows.
     """
     all_msgs: list[Message] = []
+    all_entries: list[TranscriptEntry] = []
     boundaries: list[tuple[int, dict[str, Any]]] = []  # (msg index, notice)
     for seg in segments:
-        all_msgs.extend(entries_to_messages(drop_system_entries(seg.entries)))
+        kept = drop_system_entries(seg.entries)
+        all_entries.extend(kept)
+        all_msgs.extend(entries_to_messages(kept))
         notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
             boundaries.append((len(all_msgs), notice))
-    outs = messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at)
+    outs = _apply_tool_errors(
+        messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
+        all_entries,
+    )
     # Insert from last to first so earlier boundary indices stay valid.
     for idx, notice in reversed(boundaries):
         ts = outs[idx - 1].timestamp if idx > 0 else created_at
@@ -129,10 +161,14 @@ def view_messages(
     """Project a transcript (session history + a run's own entries) to the
     session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
     live re-attach snapshot so both render byte-identically."""
-    return messages_to_out(
-        entries_to_messages(drop_system_entries(entries)),
-        created_at=created_at,
-        updated_at=updated_at,
+    kept = drop_system_entries(entries)
+    return _apply_tool_errors(
+        messages_to_out(
+            entries_to_messages(kept),
+            created_at=created_at,
+            updated_at=updated_at,
+        ),
+        kept,
     )
 
 

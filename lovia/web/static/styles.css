@@ -1550,6 +1550,48 @@ body.sidebar-collapsed .sidebar-expand-btn {
   text-overflow: ellipsis;
   flex: 1;
 }
+/* Expanded card: full arguments as key/value rows (shared with .approval-args).
+   Grid keeps keys aligned across rows; a long/multi-line value spans the full
+   width as a scrollable block beneath its key. */
+.tool-params {
+  display: grid;
+  grid-template-columns: fit-content(160px) 1fr;
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 5px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.tool-params:empty {
+  display: none;
+}
+.tool .tool-params {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+}
+.tool-params .param-key {
+  color: var(--muted-2);
+  font-size: 11px;
+  padding-top: 1px; /* optical top-align with the 12px value text */
+  overflow-wrap: anywhere;
+}
+.tool-params .param-val {
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  min-width: 0;
+}
+.tool-params .param-val.block {
+  grid-column: 1 / -1;
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  max-height: 250px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .tool .tool-result {
   margin: 0;
   padding: 12px 14px;
@@ -1623,20 +1665,19 @@ body.sidebar-collapsed .sidebar-expand-btn {
   font-size: 13px;
   font-weight: 500;
 }
+/* Row layout comes from .tool-params; this keeps the card-specific chrome.
+   The container scrolls as one unit so the Approve/Deny row stays in view. */
 .approval-args {
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.6;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  padding: 9px 12px;
   margin: 8px 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  max-height: 220px;
+  max-height: 260px;
   overflow-y: auto;
-  color: var(--ink-2);
+  overscroll-behavior: contain;
+}
+.approval-args .param-val.block {
+  max-height: none; /* one scroll context — the container, not nested blocks */
 }
 .approval-actions {
   display: flex;

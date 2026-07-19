@@ -776,6 +776,10 @@ def test_ui_true_serves_bundled_page_and_static() -> None:
     assert "<html" in page.lower()
     assert "mermaid" in page.lower()  # diagram rendering library is bundled in
     assert c.get("/static/js/api.js").status_code == 200
+    assert 'href="http://testserver/static/favicon.svg"' in page
+    favicon = c.get("/static/favicon.svg")
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"].startswith("image/svg+xml")
 
 
 def test_build_api_router_is_embeddable() -> None:

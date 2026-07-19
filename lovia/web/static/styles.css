@@ -1852,6 +1852,15 @@ body.sidebar-collapsed .sidebar-expand-btn {
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-sm);
 }
+/* The raw provider error under a humanized headline — kept visible (small,
+   mono) so the friendly wording never costs debuggability. */
+.error-notice-detail {
+  margin-top: 3px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--muted);
+  word-break: break-word;
+}
 
 /* ---- Composer — a floating pill over the paper ------------------------------------- */
 .composer {
@@ -3291,5 +3300,28 @@ body.files-splitting {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ---- No-hover devices ------------------------------------------------------------------------------- */
+/* Hover-revealed affordances must simply be visible where hover doesn't
+   exist. Keyed on capability, not width — a wide tablet has no hover either,
+   so the phone media query alone would miss it. */
+@media (hover: none) {
+  .session-menu {
+    display: flex;
+  }
+  .session-item.pinned .session-pin {
+    display: none; /* the menu's pin button (always visible here) takes over */
+  }
+  .btn-copy,
+  .btn-copy-code {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+  .turn .timestamp,
+  .turn-footer .usage {
+    opacity: 1;
   }
 }

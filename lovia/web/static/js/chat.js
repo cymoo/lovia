@@ -617,6 +617,36 @@ function appendRetry() {
   appendBubbleContent(store.bubble, node);
 }
 
+// ---- Error humanizing ---------------------------------------------------
+// Raw provider/network errors ("429 Too Many Requests", "Failed to fetch")
+// mean nothing to most users. Map the recognizable ones onto a sentence that
+// says what happened and what to do; the original text stays visible in
+// small print — friendly must never mean information destroyed.
+const ERROR_HINTS = [
+  [/rate.?limit|too many requests|\b429\b/i,
+    'The model provider is rate-limiting requests — give it a moment, then retry.'],
+  [/unauthorized|forbidden|api.?key|authenticat|\b401\b|\b403\b/i,
+    'Authentication with the model provider failed — check the API key and base URL.'],
+  [/quota|billing|insufficient|credit/i,
+    'The provider reports a quota or billing problem — check the account.'],
+  [/overloaded|service unavailable|\b529\b|\b503\b/i,
+    'The model provider is overloaded right now — try again shortly.'],
+  [/timed?.?out|timeout/i,
+    'The request timed out — the provider may be slow right now; retrying usually works.'],
+  [/failed to fetch|networkerror|load failed|fetch failed/i,
+    'Can’t reach the server — check that lovia is still running.'],
+];
+
+// The friendly sentence for a raw error, or null when it's unrecognized
+// (callers then show the raw message alone).
+function humanizeError(message) {
+  const msg = String(message ?? '');
+  for (const [re, hint] of ERROR_HINTS) {
+    if (re.test(msg)) return hint;
+  }
+  return null;
+}
+
 // A run-level error that the run itself recovers from — most commonly a tool
 // raising, which lovia feeds back to the model to handle. Show it as a quiet
 // inline notice (no Retry: re-sending the whole turn doesn't retry the tool,
@@ -625,7 +655,17 @@ function appendErrorNotice(message) {
   if (!store.bubble) return;
   const note = document.createElement('div');
   note.className = 'error-notice';
-  note.textContent = `⚠️ ${message}`;
+  const hint = humanizeError(message);
+  if (hint) {
+    const head = document.createElement('div');
+    head.textContent = `⚠️ ${hint}`;
+    const detail = document.createElement('div');
+    detail.className = 'error-notice-detail';
+    detail.textContent = String(message);
+    note.append(head, detail);
+  } else {
+    note.textContent = `⚠️ ${message}`;
+  }
   appendBubbleContent(store.bubble, note);
   // Begin a fresh body so any recovery text doesn't merge into the pre-error one.
   store.body = null;
@@ -1003,7 +1043,7 @@ scrollBtn?.addEventListener('click', () => {
 export function renderEmptyState() {
   const transcript = document.getElementById('transcript');
   if (!transcript) return;
-  const title = store.emptyTitle || 'Wake up, Neo.';
+  const title = store.emptyTitle || 'Where shall we begin?';
   const desc = store.emptyDescription;
   const empty = document.createElement('div');
   empty.className = 'empty-state';
@@ -1297,7 +1337,10 @@ export async function runStream(message) {
         const body = await res.json();
         if (body?.detail) detail = String(body.detail);
       } catch { /* not JSON */ }
-      ensureBody().innerHTML = `<span class="error-text">Error: ${escapeHtml(detail)}</span>`;
+      const hint = humanizeError(detail);
+      ensureBody().innerHTML =
+        `<span class="error-text">Error: ${escapeHtml(hint ?? detail)}</span>` +
+        (hint ? `<div class="error-notice-detail">${escapeHtml(detail)}</div>` : '');
       appendRetry();
       return;
     }
@@ -1319,7 +1362,9 @@ export async function runStream(message) {
       flushRender();
     } else {
       ensureBody();
-      store.rawText += `\n\n> ⚠️ **Error:** ${err.message ?? err}`;
+      const raw = err.message ?? String(err);
+      const hint = humanizeError(raw);
+      store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender();
       appendRetry();
     }
@@ -1394,7 +1439,9 @@ export async function runReconnect(sessionId) {
     if (store.chatEpoch !== streamEpoch) return; // detached by a switch — not an error
     if (err.name !== 'AbortError') {
       ensureBody();
-      store.rawText += `\n\n> ⚠️ **Error:** ${err.message ?? err}`;
+      const raw = err.message ?? String(err);
+      const hint = humanizeError(raw);
+      store.rawText += `\n\n> ⚠️ **Error:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender();
     }
   } finally {

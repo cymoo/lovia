@@ -8,8 +8,10 @@ export const store = {
   sessions: [],
   activeRuns: new Set(), // session ids with a live background run (sidebar dot)
   chatEpoch: 0,
-  emptyTitle: "Wake up, Neo.",
-  emptyDescription: "The Matrix has you.",
+  // Mirrors the server defaults in web/ui.py — used only if app-config is
+  // missing or unparsable.
+  emptyTitle: "Where shall we begin?",
+  emptyDescription: "A good question is already half the answer.",
   sidebarCollapsed: localStorage.getItem("lovia-sidebar-collapsed") === "1",
   streaming: false,
   turnNode: null,

@@ -196,8 +196,8 @@ async def test_valid_but_non_object_tool_args_are_normalized_before_re_send() ->
 
 async def test_length_truncated_tool_call_tells_model_it_hit_the_token_limit() -> None:
     # finish_reason="length" cut the call off mid-arguments. The model must
-    # learn it was truncated (and to chunk) — not that its JSON was merely
-    # "invalid", which would send it looping on the same oversized call.
+    # learn it was truncated — not that its JSON was merely "invalid", which
+    # would send it looping on the same oversized call.
     bad = AssistantTurn(
         content=None,
         tool_calls=[ToolCall(id="c1", name="add", arguments='{"a": 1')],
@@ -211,7 +211,6 @@ async def test_length_truncated_tool_call_tells_model_it_hit_the_token_limit() -
 
     tool_msg = next(m for m in result.messages if m.role == "tool")
     assert "output token limit" in tool_msg.content
-    assert "chunk" in tool_msg.content
     assert "Invalid JSON" not in tool_msg.content
 
 

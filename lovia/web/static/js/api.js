@@ -9,7 +9,11 @@
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 async function _json(res) {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${res.statusText}`);
+    err.status = res.status; // callers branch on 401 (token prompt)
+    throw err;
+  }
   return res.json();
 }
 
@@ -168,7 +172,9 @@ export const api = {
 async function _jsonOrDetail(res) {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+    const err = new Error(body?.detail || `${res.status} ${res.statusText}`);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }

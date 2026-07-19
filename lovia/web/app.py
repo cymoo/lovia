@@ -89,6 +89,7 @@ def create_app(
     auth: Any = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
+    empty_examples: Sequence[str] | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -135,7 +136,9 @@ def create_app(
     while :func:`serve` refuses non-loopback binds without one.
 
     ``empty_title`` and ``empty_description`` customize the blank chat state;
-    ``empty_description`` may be a string or a list of short lines.
+    ``empty_description`` may be a string or a list of short lines, and
+    ``empty_examples`` lists clickable starter prompts (clicking fills the
+    composer without sending).
     """
     agents = _normalise(agent_or_agents)
 
@@ -221,6 +224,7 @@ def create_app(
                 title=title,
                 empty_title=empty_title,
                 empty_description=empty_description,
+                empty_examples=empty_examples,
             )
         )
         app.mount(
@@ -263,6 +267,7 @@ def serve(
     auth: Any = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
+    empty_examples: Sequence[str] | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking).
@@ -319,5 +324,6 @@ def serve(
         auth=auth,
         empty_title=empty_title,
         empty_description=empty_description,
+        empty_examples=empty_examples,
     )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

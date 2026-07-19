@@ -92,6 +92,20 @@ def test_index_accepts_custom_empty_state() -> None:
     assert "Listen for the reply" in res.text
 
 
+def test_index_renders_example_prompts() -> None:
+    app = _app(
+        _make_agent([text("hi")]),
+        empty_examples=["Summarize my inbox", "Plan a weekend trip"],
+    )
+    res = TestClient(app).get("/")
+    assert res.status_code == 200
+    # Rendered as clickable chips AND carried in the app-config blob so the
+    # client-side empty-state re-render shows them too.
+    assert res.text.count("Summarize my inbox") == 2
+    assert 'class="empty-example"' in res.text
+    assert "empty_examples" in res.text
+
+
 def test_list_agents_single() -> None:
     agent = Agent(
         name="writer",

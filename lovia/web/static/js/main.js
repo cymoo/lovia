@@ -1,7 +1,7 @@
 // Entry point — wires together all modules.
 import { store } from './store.js';
 import { api } from './api.js';
-import { initTheme, initSidebarToggle, promptDialog } from './ui.js';
+import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
 import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
 import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
 import { initSchedules } from './schedules.js';
@@ -55,6 +55,7 @@ function loadPageConfig() {
     if (typeof cfg.empty_description === 'string' || Array.isArray(cfg.empty_description)) {
       store.emptyDescription = cfg.empty_description;
     }
+    if (Array.isArray(cfg.empty_examples)) store.emptyExamples = cfg.empty_examples;
   } catch (err) {
     console.error('app-config:', err);
   }
@@ -149,8 +150,57 @@ store.on('reconnect', (sessionId) => {
 store.on('detach-stream', detachStream);
 
 // ---- Keyboard shortcuts -------------------------------------------------
+function openShortcutHelp() {
+  const mod = /mac/i.test(navigator.platform) ? '⌘' : 'Ctrl';
+  const rows = [
+    ['Enter', 'Send message (queues while a run is streaming)'],
+    ['Shift + Enter', 'New line'],
+    [`${mod} + K`, 'Filter chats'],
+    [`${mod} + Shift + O`, 'New chat'],
+    ['Esc', 'Close panels and dialogs'],
+    ['?', 'This help'],
+  ];
+  const body = document.createElement('div');
+  body.className = 'shortcuts-panel';
+  const h = document.createElement('h3');
+  h.textContent = 'Keyboard shortcuts';
+  body.appendChild(h);
+  const list = document.createElement('dl');
+  list.className = 'shortcuts-list';
+  for (const [keys, what] of rows) {
+    const dt = document.createElement('dt');
+    const kbd = document.createElement('kbd');
+    kbd.textContent = keys;
+    dt.appendChild(kbd);
+    const dd = document.createElement('dd');
+    dd.textContent = what;
+    list.append(dt, dd);
+  }
+  body.appendChild(list);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-ghost';
+  close.textContent = 'Close';
+  const dialog = showDialog({ body, actions: close });
+  close.addEventListener('click', () => dialog.close());
+}
+
+function isTyping(target) {
+  return (
+    target instanceof HTMLElement &&
+    (target.closest('input, textarea, select') || target.isContentEditable)
+  );
+}
+
 function initKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
+    // `?` opens the shortcut help — but never while typing a message.
+    if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (isTyping(e.target)) return;
+      e.preventDefault();
+      openShortcutHelp();
+      return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const key = e.key.toLowerCase();
     if (key === 'k') {

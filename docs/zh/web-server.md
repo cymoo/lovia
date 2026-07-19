@@ -34,6 +34,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `cors_origins` | `None` | 允许的浏览器 Origin；不设置就不发送 CORS header |
 | `token` / `auth` | `None` | `/api/*` 的 Bearer token 门禁，或自定义 FastAPI 依赖（见下文） |
 | `title` / `empty_title` / `empty_description` | lovia 默认文案 | UI 文案和品牌 |
+| `empty_examples` | `None` | 空白聊天页上可点击的示例 prompt（点击填入输入框） |
 
 端点契约与 `ChatStore` 接口见 [HTTP API](http-api.md)。
 

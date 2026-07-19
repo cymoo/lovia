@@ -34,6 +34,8 @@ const state = {
   // HTTP cache (revalidated via the server's ETag/no-cache) does its job.
   revs: new Map(),
   stale: false, // a shell run may have changed files
+  filter: '', // case-insensitive substring over listed paths
+  wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
 };
 
@@ -360,12 +362,22 @@ function rowIcon(entry) {
 
 function renderList() {
   const frag = document.createDocumentFragment();
-  if (!state.entries.length) {
+  const needle = state.filter.toLowerCase();
+  const entries = needle
+    ? state.entries.filter((e) => e.path.toLowerCase().includes(needle))
+    : state.entries;
+  if (!entries.length) {
     frag.appendChild(
-      emptyNode(state.mode === 'recent' ? 'No files yet.' : 'Empty directory.'),
+      emptyNode(
+        needle
+          ? 'No files match the filter.'
+          : state.mode === 'recent'
+            ? 'No files yet.'
+            : 'Empty directory.',
+      ),
     );
   }
-  for (const entry of state.entries) {
+  for (const entry of entries) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'file-row';
@@ -524,6 +536,7 @@ async function openFile(path, { silent = false } = {}) {
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
   els.mdToggle.classList.add('hidden');
+  els.wrapToggle?.classList.add('hidden'); // renderViewerContent re-shows for text
 
   const kind = IMAGE_EXT.has(ext(path))
     ? 'image'
@@ -596,10 +609,20 @@ async function followViewerLink(href) {
   if (rootRelative !== fileRelative) await openFile(rootRelative);
 }
 
+function syncWrapButton() {
+  els.wrapToggle.innerHTML = icon('wrap-text', { size: 15 });
+  els.wrapToggle.title = state.wrap ? 'Don’t wrap long lines' : 'Wrap long lines';
+  els.wrapToggle.classList.toggle('active', state.wrap);
+}
+
 function renderViewerContent() {
   const v = state.viewing;
   if (!v) return;
   els.viewerBody.replaceChildren();
+  els.viewerBody.classList.toggle('nowrap', !state.wrap);
+  // Wrap toggling only means something for plain text / raw views.
+  const textual = v.kind === 'text' || (v.kind === 'md' && v.raw) || v.kind === 'csv';
+  els.wrapToggle.classList.toggle('hidden', !textual);
 
   if (v.truncated) {
     const more = document.createElement('button');
@@ -680,6 +703,8 @@ export function initFiles() {
   els.viewer = document.getElementById('files-viewer');
   els.viewerName = document.getElementById('files-viewer-name');
   els.viewerBody = document.getElementById('files-viewer-body');
+  els.filter = document.getElementById('files-filter');
+  els.wrapToggle = document.getElementById('files-wrap-toggle');
   els.mdToggle = document.getElementById('files-md-toggle');
   els.copyPath = document.getElementById('files-copy-path');
   els.download = document.getElementById('files-download');
@@ -702,6 +727,19 @@ export function initFiles() {
   els.tabRecent.addEventListener('click', () => setMode('recent'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
   els.viewerClose.addEventListener('click', closeViewer);
+  els.filter?.addEventListener('input', () => {
+    state.filter = els.filter.value.trim();
+    renderList();
+  });
+  if (els.wrapToggle) {
+    syncWrapButton();
+    els.wrapToggle.addEventListener('click', () => {
+      state.wrap = !state.wrap;
+      localStorage.setItem('lovia-files-wrap', state.wrap ? '1' : '0');
+      syncWrapButton();
+      renderViewerContent();
+    });
+  }
   els.mdToggle.addEventListener('click', () => {
     if (!state.viewing) return;
     state.viewing.raw = !state.viewing.raw;
@@ -735,6 +773,8 @@ export function initFiles() {
     state.touched.clear();
     state.revs.clear();
     state.browsePath = '';
+    state.filter = '';
+    if (els.filter) els.filter.value = '';
     closeViewer();
     updateVisibility();
     if (state.open) refresh();

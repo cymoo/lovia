@@ -2,7 +2,8 @@
 
 The optional browser UI turns any lovia Agent into a local chat application.
 It includes streaming text and Tool activity, conversation history, titles,
-approvals, schedules, a memory editor, and a read-only Workspace file panel.
+approvals, schedules, a memory editor, a context-usage meter, and a read-only
+Workspace file panel.
 All browser assets are bundled, so the page works without a CDN or external
 font requests.
 

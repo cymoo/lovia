@@ -112,8 +112,7 @@ const MESSAGES = {
     'context.proactive': '主动',
     'context.reactive': '溢出恢复',
     'context.summary': '摘要',
-    'context.meter':
-      '上下文：{used} / {window} tokens（{pct}%）——压缩会自动腾出空间',
+    'context.meter': '上下文：{used} / {window} tokens（{pct}%）',
     // ---- tool cards
     'tool.copyResult': '复制结果',
     'tool.expand': '展开结果',
@@ -325,8 +324,7 @@ const EN = {
   'context.proactive': 'Proactive',
   'context.reactive': 'Overflow recovery',
   'context.summary': 'Summary',
-  'context.meter':
-    'Context: {used} of {window} tokens ({pct}%) — compaction makes room automatically',
+  'context.meter': 'Context: {used} of {window} tokens ({pct}%)',
   'tool.copyResult': 'Copy result',
   'tool.expand': 'Expand result',
   'tool.collapse': 'Collapse result',

@@ -1487,7 +1487,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   word-wrap: break-word;
   max-height: 280px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 /* ---- Tool cards ---------------------------------------------------------------- */
@@ -1586,6 +1585,10 @@ body.sidebar-collapsed .sidebar-expand-btn {
   word-wrap: break-word;
   min-width: 0;
 }
+/* Inline chat blocks (params/results/reasoning/approvals) deliberately omit
+   `overscroll-behavior: contain`: hitting their end must hand the wheel back
+   to the transcript, or reading past an expanded card means parking the
+   cursor elsewhere first. */
 .tool-params .param-val.block {
   grid-column: 1 / -1;
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
@@ -1594,7 +1597,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   padding: 8px 10px;
   max-height: 250px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 .tool .tool-result {
   margin: 0;
@@ -1606,7 +1608,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   word-wrap: break-word;
   max-height: 300px;
   overflow-y: auto;
-  overscroll-behavior: contain;
   color: var(--ink-2);
   line-height: 1.6;
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
@@ -1678,7 +1679,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   border-radius: var(--radius-sm);
   max-height: 260px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 .approval-args .param-val.block {
   max-height: none; /* one scroll context — the container, not nested blocks */

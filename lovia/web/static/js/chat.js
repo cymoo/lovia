@@ -122,12 +122,10 @@ function selectionInside(node) {
 function flushRender(force = false) {
   if (!store.body || !store.rawText) return;
   // Replacing innerHTML destroys a selection in progress — copying from a
-  // streaming reply would be impossible. Skip this flush; the next delta
-  // (or the turn's final, forced flush) repaints.
-  if (!force && selectionInside(store.body)) {
-    scheduleRender();
-    return;
-  }
+  // streaming reply would be impossible. Skip this flush: the next delta
+  // (streaming keeps them coming) or the turn's final, forced flush repaints,
+  // so no self-reschedule is needed while the selection is held.
+  if (!force && selectionInside(store.body)) return;
   store.body.dataset.raw = store.rawText;
   store.body.innerHTML = renderMarkdown(store.rawText);
   highlightCode(store.body);
@@ -695,7 +693,7 @@ function updateContextMeter(inputTokens) {
   const el = document.getElementById('context-meter');
   if (!el) return;
   const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
-  if (!window_ || !inputTokens) {
+  if (!window_ || inputTokens == null) {
     el.classList.add('hidden');
     return;
   }
@@ -703,9 +701,11 @@ function updateContextMeter(inputTokens) {
   el.classList.remove('hidden');
   el.classList.toggle('warn', pct >= 70 && pct < 90);
   el.classList.toggle('danger', pct >= 90);
-  el.title =
+  const detail =
     `Context: ${formatTokens(inputTokens)} of ${formatTokens(window_)} tokens (${pct}%)` +
     ' — compaction makes room automatically';
+  el.title = detail;
+  el.setAttribute('aria-label', detail); // keep assistive tech in sync
   el.querySelector('.context-meter-fill').style.width = `${pct}%`;
   el.querySelector('.context-meter-label').textContent = `${pct}%`;
 }

@@ -497,6 +497,10 @@ body.sidebar-collapsed .sidebar {
 .session-menu button.active {
   color: var(--accent);
 }
+.session-menu button.session-stop:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 /* At-rest pin marker: visible only while pinned and not hovering (the hover
    menu reuses the same slot). */
 .session-pin {
@@ -2292,6 +2296,14 @@ dialog.custom-dialog::backdrop {
 .sched-last-run:hover {
   color: var(--accent);
   text-decoration-color: currentColor;
+}
+/* Outcome of the most recent fire. */
+.sched-status.ok {
+  color: var(--ok);
+}
+.sched-status.error {
+  color: var(--danger);
+  cursor: help; /* the tooltip carries last_error */
 }
 .sched-input {
   resize: vertical;

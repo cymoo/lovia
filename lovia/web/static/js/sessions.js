@@ -62,6 +62,9 @@ function _schedulePoll() {
 async function stopRun(sid) {
   // Suppress the "finished" notice for a stop the user just asked for.
   _recentlyStopped.set(sid, Date.now());
+  // Entries only matter within the grace window — don't let the map grow
+  // for the lifetime of the tab.
+  setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
   try {
     await api.cancel(sid);
     toast('Run stopped');

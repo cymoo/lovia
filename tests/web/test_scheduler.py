@@ -18,6 +18,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent, tool  # noqa: E402
+from lovia.exceptions import ProviderError  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.scheduler import (  # noqa: E402
     Scheduler,
@@ -677,8 +678,6 @@ def test_cors_origins_enables_cross_origin_requests() -> None:
 # fire outcomes (last_status / last_error)
 # --------------------------------------------------------------------------- #
 
-from lovia.exceptions import ProviderError  # noqa: E402
-
 
 class _FailingProvider(ScriptedProvider):
     """Raise a non-retryable ProviderError on the first model call."""
@@ -821,3 +820,31 @@ async def test_migrate_adds_status_columns_to_legacy_db(tmp_path) -> None:
     await store.set_schedule_result("s", status="ok")
     upgraded = await store.get_schedule("s")
     assert upgraded is not None and upgraded.last_status == "ok"
+
+
+async def test_cancelled_fire_records_stable_cancelled_text() -> None:
+    # A user stop surfaces internally as RunCancelled("user requested stop");
+    # the recorded outcome must be the stable "cancelled", not that phrasing.
+    release = asyncio.Event()
+    store = ChatStore.in_memory()
+    agent = _agent(
+        [call("block", {}, call_id="c1"), text("done")],
+        tools=[_blocking_tool(release)],
+    )
+    app = _app(agent, store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now))
+
+    await Scheduler(deps).run_due()
+    after = await store.get_schedule("s")
+    assert after is not None and after.last_session_id is not None
+    sid = after.last_session_id
+    await _wait_alive(deps, sid)
+    deps.supervisor.cancel(sid)
+    release.set()
+    await _drain_runs(deps)
+
+    row = await _wait_status(store, "s")
+    assert row.last_status == "error"
+    assert row.last_error == "cancelled"

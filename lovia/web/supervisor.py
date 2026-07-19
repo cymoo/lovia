@@ -523,9 +523,11 @@ class RunController:
             if title_args is not None:
                 deps.schedule_title(*title_args)
             if self.on_finished is not None:
-                if not succeeded and final_error is None:
-                    # No exception reached us: a cooperative stop (user cancel
-                    # or shutdown) — name it rather than reporting a bare fail.
+                if not succeeded and (self._user_cancelled or final_error is None):
+                    # Stable outcome text for every cooperative stop: a user
+                    # cancel surfaces as RunCancelled ("user requested stop"),
+                    # a shutdown reaches here with no exception at all — both
+                    # must read "cancelled", not whatever the exception said.
                     final_error = "cancelled"
                 try:
                     self.on_finished(succeeded, None if succeeded else final_error)

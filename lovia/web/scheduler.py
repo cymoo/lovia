@@ -184,13 +184,14 @@ class Scheduler:
                 agent_name,
             )
         if agent_name is None or agent_name not in self.deps.agents:
-            log.warning(
-                "schedule %s: agent %r unavailable; advancing", sched.id, sched.agent
+            detail = (
+                f"agent {sched.agent!r} is not served anymore"
+                if sched.agent
+                else "no agent specified and no default is available"
             )
+            log.warning("schedule %s: %s; advancing", sched.id, detail)
             await self._advance(sched, now, last_session_id=sched.last_session_id)
-            self._record_result(
-                sched.id, False, f"agent {sched.agent!r} is not served anymore"
-            )
+            self._record_result(sched.id, False, detail)
             return None
         agent = self.deps.agents[agent_name]
 

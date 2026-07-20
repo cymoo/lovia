@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import AsyncIterator, cast
+from typing import AsyncIterator, Callable, cast
 
 from ..types import JsonObject, JsonValue
 from .. import events
@@ -22,6 +22,17 @@ from ..transcript import (
     ToolCallEntry,
     TranscriptEntry,
 )
+
+
+def _dumps(payload: object, default: Callable[[object], object] | None = None) -> str:
+    """``json.dumps`` that keeps non-ASCII text as itself.
+
+    The default ``ensure_ascii=True`` renders CJK and emoji as ``\\uXXXX``
+    escapes, which makes the raw event stream unreadable when inspected in
+    devtools. SSE is UTF-8 and only splits lines on CR/LF, so unescaped text is
+    safe on the wire.
+    """
+    return json.dumps(payload, ensure_ascii=False, default=default)
 
 
 def usage_dict(usage: Usage) -> dict[str, int]:
@@ -86,25 +97,25 @@ def _coerce(value: object) -> JsonValue:
 def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
     if isinstance(ev, events.TextDelta):
-        return {"event": "text_delta", "data": json.dumps({"delta": ev.delta})}
+        return {"event": "text_delta", "data": _dumps({"delta": ev.delta})}
     if isinstance(ev, events.ReasoningDelta):
-        return {"event": "reasoning_delta", "data": json.dumps({"delta": ev.delta})}
+        return {"event": "reasoning_delta", "data": _dumps({"delta": ev.delta})}
     if isinstance(ev, events.OutputDiscarded):
         return {"event": "output_discarded", "data": "{}"}
     if isinstance(ev, events.MessageCompleted):
         return {
             "event": "message_completed",
-            "data": json.dumps({"message": _entries_to_dict(ev.entries)}),
+            "data": _dumps({"message": _entries_to_dict(ev.entries)}),
         }
     if isinstance(ev, events.UserMessageInjected):
         return {
             "event": "user_injected",
-            "data": json.dumps({"content": text_of(ev.content), "turn": ev.turn}),
+            "data": _dumps({"content": text_of(ev.content), "turn": ev.turn}),
         }
     if isinstance(ev, events.ToolCallStarted):
         return {
             "event": "tool_call",
-            "data": json.dumps(
+            "data": _dumps(
                 {"id": ev.call.id, "name": ev.call.name, "arguments": ev.call.arguments}
             ),
         }
@@ -121,7 +132,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         ):
             return {
                 "event": "todo",
-                "data": json.dumps(
+                "data": _dumps(
                     {
                         "call_id": ev.call.id,
                         "name": ev.call.name,
@@ -131,7 +142,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             }
         return {
             "event": "tool_result",
-            "data": json.dumps(
+            "data": _dumps(
                 {
                     "id": ev.call.id,
                     "name": ev.call.name,
@@ -143,7 +154,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     if isinstance(ev, events.ApprovalRequired):
         return {
             "event": "approval_required",
-            "data": json.dumps(
+            "data": _dumps(
                 {
                     "id": ev.call.id,
                     "name": ev.call.name,
@@ -154,12 +165,12 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
     if isinstance(ev, events.HandoffOccurred):
         return {
             "event": "handoff",
-            "data": json.dumps({"from": ev.from_agent.name, "to": ev.to_agent.name}),
+            "data": _dumps({"from": ev.from_agent.name, "to": ev.to_agent.name}),
         }
     if isinstance(ev, events.TurnStarted):
         return {
             "event": "turn_started",
-            "data": json.dumps({"turn": ev.turn, "agent": ev.agent.name}),
+            "data": _dumps({"turn": ev.turn, "agent": ev.agent.name}),
         }
     if isinstance(ev, events.ContextCompacted):
         # The notice is already JSON-safe and self-contained (reason, token
@@ -168,7 +179,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         # same shape the reload path reads back from the segment ``meta``.
         return {
             "event": "context_compacted",
-            "data": json.dumps({"session_id": ev.session_id, **asdict(ev.notice)}),
+            "data": _dumps({"session_id": ev.session_id, **asdict(ev.notice)}),
         }
     if isinstance(ev, (events.ToolCallFailed, events.RunFailed)):
         # Same wire shape for both: a tool-scoped error and a terminal run
@@ -176,7 +187,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         # the stream ending right after a RunFailed.
         return {
             "event": "error",
-            "data": json.dumps(
+            "data": _dumps(
                 {"type": type(ev.error).__name__, "message": str(ev.error)}
             ),
         }
@@ -186,7 +197,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             # default=str: last-resort stringification for exotic values nested
             # inside a dict/list output — never lose the terminal event over
             # one unserialisable field.
-            "data": json.dumps(
+            "data": _dumps(
                 {
                     "output": _coerce(ev.result.output),
                     "usage": usage_dict(ev.result.usage),

@@ -77,11 +77,13 @@ class Session(Protocol):
     history is what lets the runner persist only a run's delta and keeps
     cross-run state (run boundaries, per-run ``meta``) consistent.
 
-    The bundled stores additionally provide ``trim_tool_results(...)``, an
-    operator-invoked maintenance method deliberately kept **off** this protocol
-    (so custom stores need not implement it): it truncates old stored tool
-    outputs while preserving run and entry structure — the one sanctioned
-    exception to append-only. See :mod:`lovia.stores.session`.
+    The bundled stores additionally provide two operator-invoked maintenance
+    methods deliberately kept **off** this protocol (so custom stores need not
+    implement them) — the sanctioned exceptions to append-only:
+    ``trim_tool_results(...)`` truncates old stored tool outputs while
+    preserving run and entry structure, and ``rewind(session_id,
+    keep_entries=N)`` drops the transcript's tail (the primitive behind "edit
+    & resend" / "regenerate"). See :mod:`lovia.stores.session`.
     """
 
     async def segments(self, session_id: str) -> list[Segment]:

@@ -149,24 +149,33 @@ class TavilySearch:
                     else None
                 ),
             )
-        rows = resp.json().get("results") or []
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise ToolError(
+                "Tavily search failed: non-JSON response from api.tavily.com."
+            ) from exc
+        rows = body.get("results") if isinstance(body, dict) else None
         return [
             SearchResult(
                 title=r.get("title", ""),
                 url=r.get("url", ""),
                 snippet=r.get("content", ""),
             )
-            for r in rows
+            for r in rows or []
         ]
 
 
 def _tavily_error(resp: httpx.Response) -> str:
     # Error bodies look like {"detail": {"error": "..."}}; fall back to raw text.
     try:
-        detail = resp.json().get("detail")
-        return str(detail.get("error")) if isinstance(detail, dict) else str(detail)
+        body = resp.json()
     except ValueError:
         return resp.text[:200]
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        return str(detail.get("error"))
+    return str(detail) if detail is not None else resp.text[:200]
 
 
 def _render_search_results(result: Any, ctx: Any) -> str:

@@ -34,9 +34,11 @@ _BY_KEY = {s.key: s for s in SCENARIOS}
 
 def _endpoint() -> Endpoint:
     """Resolve the live endpoint, skipping (not failing) when not opted in."""
-    _load_env()
+    # Gate before loading: a normal run must not pull real .env keys into
+    # os.environ (and the opt-in itself must come from the shell, not .env).
     if os.getenv("LOVIA_LIVE_TESTS") != "1":
         pytest.skip("opt-in: set LOVIA_LIVE_TESTS=1 to run live provider tests")
+    _load_env()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY is not configured")
     base = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")

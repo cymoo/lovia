@@ -50,9 +50,11 @@ def _load_env_file() -> None:
 
 
 def _require_live() -> None:
-    _load_env_file()
+    # Gate before loading: a normal run must not pull real .env keys into
+    # os.environ (and the opt-in itself must come from the shell, not .env).
     if os.getenv("LOVIA_LIVE_TESTS") != "1":
         pytest.skip("opt-in: set LOVIA_LIVE_TESTS=1 to run live provider tests")
+    _load_env_file()
 
 
 def _openai_chat_model() -> str:

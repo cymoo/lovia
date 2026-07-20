@@ -483,6 +483,36 @@ async def test_tavily_http_error_surfaces_as_tool_error(
     assert "401" in msg and "Unauthorized" in msg
 
 
+@pytest.mark.asyncio
+async def test_tavily_tolerates_malformed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.tools.search import TavilySearch
+
+    responses = iter(
+        [
+            httpx.Response(200, text="<html>gateway</html>"),
+            httpx.Response(200, json=["unexpected"]),
+            httpx.Response(500, json=["unexpected"]),
+        ]
+    )
+    _mock_http(
+        monkeypatch,
+        lambda request: next(responses),
+        "lovia.tools.search.httpx.AsyncClient",
+    )
+    backend = TavilySearch(api_key="k")
+
+    # A 200 that isn't JSON must become a ToolError, not an AttributeError.
+    with pytest.raises(ToolError):
+        await backend.search("q")
+    # Non-dict JSON: a 200 yields no rows; an error status keeps its ToolError.
+    assert await backend.search("q") == []
+    with pytest.raises(ToolError) as exc_info:
+        await backend.search("q")
+    assert "500" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------- human
 
 

@@ -187,9 +187,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         # the stream ending right after a RunFailed.
         return {
             "event": "error",
-            "data": _dumps(
-                {"type": type(ev.error).__name__, "message": str(ev.error)}
-            ),
+            "data": _dumps({"type": type(ev.error).__name__, "message": str(ev.error)}),
         }
     if isinstance(ev, events.RunCompleted):
         return {

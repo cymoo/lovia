@@ -108,9 +108,10 @@ class Endpoint:
 
 
 def _endpoint() -> Endpoint:
-    _load_env()
+    # Gate before loading: the opt-in must come from the shell, not .env.
     if os.getenv("LOVIA_LIVE_TESTS") != "1":
         sys.exit("opt-in required: set LOVIA_LIVE_TESTS=1 (this makes real API calls)")
+    _load_env()
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         sys.exit("OPENAI_API_KEY is not configured")

@@ -1328,6 +1328,14 @@ def test_rewind_reaches_into_a_stale_resumable_checkpoint() -> None:
     users = [m["content"] for m in view["entries"] if m["role"] == "user"]
     assert users == ["one", "two"]
 
+    # An out-of-range ordinal (stale client) must refuse WITHOUT destroying
+    # the resumable checkpoint.
+    assert (
+        c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 5}).status_code == 404
+    )
+    assert asyncio.run(store.get_active_run_id(sid)) == "r-int"
+    assert asyncio.run(store.checkpointer.load("r-int")) is not None
+
     res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 1})
     assert res.status_code == 200
     data = res.json()

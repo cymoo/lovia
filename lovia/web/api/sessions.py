@@ -190,23 +190,20 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 status_code=501,
                 detail="the configured session store does not support rewind",
             )
-        # Any stored resume pointer dies with every rewind — and its snapshot
-        # may hold user turns the client rendered (the spliced view) that the
-        # store doesn't. Drop it FIRST, remembering how many user turns it
-        # contributed, so ordinal mapping agrees with what the client saw.
+        # A resumable checkpoint's snapshot may hold user turns the client
+        # rendered (the spliced view) that the store doesn't — count them so
+        # ordinal mapping agrees with what the client saw. Read-only for now:
+        # nothing is destroyed until the ordinal validates.
         ckpt_user_turns = 0
         stale = await store.get_active_run_id(session_id)
-        if stale:
-            if store.checkpointer is not None:
-                snapshot = await store.checkpointer.load(stale)
-                if snapshot is not None and snapshot.status in _RESUMABLE:
-                    ckpt_user_turns = sum(
-                        1
-                        for e in snapshot.entries
-                        if isinstance(e, InputEntry) and e.role == "user"
-                    )
-                await store.checkpointer.delete(stale)
-            await store.clear_active_run_id(session_id, expected=stale)
+        if stale and store.checkpointer is not None:
+            snapshot = await store.checkpointer.load(stale)
+            if snapshot is not None and snapshot.status in _RESUMABLE:
+                ckpt_user_turns = sum(
+                    1
+                    for e in snapshot.entries
+                    if isinstance(e, InputEntry) and e.role == "user"
+                )
         # Map the user-turn ordinal onto the flat entry index that starts it.
         entries = await session.load(session_id)
         cut = None
@@ -217,17 +214,21 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 if seen == req.user_turn:
                     cut = i
                     break
-        if cut is None:
-            if req.user_turn <= seen + ckpt_user_turns:
-                # The target lived only in the just-dropped checkpoint:
-                # rewinding to before it keeps the whole stored transcript.
-                removed = 0
-            else:
-                raise HTTPException(
-                    status_code=404, detail=f"user turn {req.user_turn} not found"
-                )
-        else:
-            removed = await rewind(session_id, keep_entries=cut)
+        if cut is None and req.user_turn > seen + ckpt_user_turns:
+            # Out of range (e.g. a stale client): refuse BEFORE touching the
+            # checkpoint — a bad ordinal must not cost a resumable run.
+            raise HTTPException(
+                status_code=404, detail=f"user turn {req.user_turn} not found"
+            )
+        # Validated — now the destructive part. The resume pointer dies with
+        # every rewind (its snapshot replays a tail that no longer exists);
+        # a cut inside the checkpoint's own turns means "drop the checkpoint,
+        # keep the whole stored transcript" (removed = 0).
+        if stale:
+            if store.checkpointer is not None:
+                await store.checkpointer.delete(stale)
+            await store.clear_active_run_id(session_id, expected=stale)
+        removed = 0 if cut is None else await rewind(session_id, keep_entries=cut)
         meta = await store.get(session_id)
         now = time.time()
         view, _ = await _session_view(

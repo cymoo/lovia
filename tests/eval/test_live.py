@@ -26,9 +26,11 @@ def _load_env_file() -> None:
 
 
 def _live_model() -> str:
-    _load_env_file()
+    # Gate before loading: a normal run must not pull real .env keys into
+    # os.environ (and the opt-in itself must come from the shell, not .env).
     if os.getenv("LOVIA_LIVE_TESTS") != "1":
         pytest.skip("opt-in: set LOVIA_LIVE_TESTS=1 to run live provider tests")
+    _load_env_file()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not configured")
     return os.getenv("OPENAI_DEFAULT_MODEL", "openai:gpt-5.5")

@@ -17,7 +17,8 @@ lovia web
 `./.env`。
 
 默认 Agent 包含 `Todo`、`./skills` 下的可选 Skills、`./.lovia/memory` 下的 Memory、时间和
-HTTP Tool、可选 DuckDuckGo 搜索、定时任务，以及根目录为当前目录的 coding 模式 Workspace。
+HTTP Tool、Web 搜索（设置了 `TAVILY_API_KEY` 时用 Tavily，否则用可选的 DuckDuckGo）、
+定时任务，以及根目录为当前目录的 coding 模式 Workspace。
 如果存在 `AGENTS.md`，其内容会成为 Agent 的 instructions。
 
 !!! danger "默认仅供本机使用；离开本机自动加 token 门禁"

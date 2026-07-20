@@ -129,10 +129,24 @@ def test_resolve_tools_skips_search_when_backend_missing(
     def _missing() -> object:
         raise UserError("ddgs not installed")
 
+    # A real key may have leaked from .env via the live-test helpers.
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(cli, "duckduckgo_search", _missing)
     # The missing optional backend must degrade gracefully, not crash.
     names = {t.name for t in cli.resolve_tools()}
     assert names == {"now", "http_fetch"}
+
+
+def test_resolve_tools_prefers_tavily_when_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom() -> object:
+        raise AssertionError("duckduckgo_search must not be constructed")
+
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    monkeypatch.setattr(cli, "duckduckgo_search", _boom)
+    names = {t.name for t in cli.resolve_tools()}
+    assert names == {"now", "http_fetch", "web_search"}
 
 
 # ---------------------------------------------------------- instructions -

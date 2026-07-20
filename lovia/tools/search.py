@@ -1,13 +1,15 @@
 """Pluggable web-search tool.
 
 The :class:`WebSearch` :class:`typing.Protocol` is the extension point —
-implement it for whatever backend you like. A convenience
-:func:`duckduckgo_search` factory is provided behind the optional
-``lovia[ddg]`` extra so users can get started without an API key::
+implement it for whatever backend you like. Two convenience factories are
+bundled: :func:`duckduckgo_search` (keyless, behind the optional
+``lovia[ddg]`` extra) and :func:`tavily_search` (no extra install — httpx is
+a core dependency — but needs ``TAVILY_API_KEY``)::
 
-    from lovia.tools.search import duckduckgo_search, web_search
+    from lovia.tools.search import duckduckgo_search, tavily_search, web_search
 
     search = duckduckgo_search()         # requires lovia[ddg]
+    keyed = tavily_search()              # requires TAVILY_API_KEY
     custom = web_search(MySearchBackend())    # or your own implementation
     agent = Agent(name="x", tools=[search])
 
@@ -20,17 +22,23 @@ keyword argument.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Protocol
 
-from ..exceptions import UserError
+import httpx
+
+from ..exceptions import ToolError, UserError
+from ..http_config import resolve_verify
 from .base import Tool, default_result_renderer, tool
 
 __all__ = [
     "DuckDuckGoSearch",
     "SearchResult",
+    "TavilySearch",
     "WebSearch",
     "duckduckgo_search",
+    "tavily_search",
     "web_search",
 ]
 
@@ -98,6 +106,78 @@ class DuckDuckGoSearch:
         ]
 
 
+_TAVILY_ENDPOINT = "https://api.tavily.com/search"
+
+
+class TavilySearch:
+    """Backend using the Tavily Search API (requires an API key)."""
+
+    def __init__(self, *, api_key: str | None = None, timeout: float = 30.0) -> None:
+        key = api_key or os.environ.get("TAVILY_API_KEY")
+        if not key:
+            raise UserError(
+                "TavilySearch requires an API key.",
+                hint="Set TAVILY_API_KEY or pass api_key=...",
+            )
+        self._api_key = key
+        self._timeout = timeout
+
+    async def search(
+        self, query: str, *, max_results: int = 5, time_range: str | None = None
+    ) -> list[SearchResult]:
+        payload: dict[str, Any] = {"query": query, "max_results": max_results}
+        if time_range is not None:
+            # Tavily accepts 'd'/'w'/'m'/'y' directly (alongside 'day'/'week'/...).
+            payload["time_range"] = time_range
+        async with httpx.AsyncClient(
+            timeout=self._timeout, verify=resolve_verify()
+        ) as client:
+            resp = await client.post(
+                _TAVILY_ENDPOINT,
+                json=payload,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+        if resp.status_code != 200:
+            raise ToolError(
+                f"Tavily search failed (HTTP {resp.status_code}): "
+                f"{_tavily_error(resp)}",
+                hint=(
+                    "Check TAVILY_API_KEY."
+                    if resp.status_code == 401
+                    else "Tavily plan/usage limit reached."
+                    if resp.status_code in (432, 433)
+                    else None
+                ),
+            )
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise ToolError(
+                "Tavily search failed: non-JSON response from api.tavily.com."
+            ) from exc
+        rows = body.get("results") if isinstance(body, dict) else None
+        return [
+            SearchResult(
+                title=r.get("title", ""),
+                url=r.get("url", ""),
+                snippet=r.get("content", ""),
+            )
+            for r in rows or []
+        ]
+
+
+def _tavily_error(resp: httpx.Response) -> str:
+    # Error bodies look like {"detail": {"error": "..."}}; fall back to raw text.
+    try:
+        body = resp.json()
+    except ValueError:
+        return resp.text[:200]
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        return str(detail.get("error"))
+    return str(detail) if detail is not None else resp.text[:200]
+
+
 def _render_search_results(result: Any, ctx: Any) -> str:
     """The text both the model and the web UI see for a ``web_search`` result.
 
@@ -154,3 +234,8 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
 def duckduckgo_search(*, name: str = "web_search") -> Tool:
     """Build a ``web_search`` tool using the optional DuckDuckGo backend."""
     return web_search(DuckDuckGoSearch(), name=name)
+
+
+def tavily_search(*, api_key: str | None = None, name: str = "web_search") -> Tool:
+    """Build a ``web_search`` tool using the Tavily backend (needs an API key)."""
+    return web_search(TavilySearch(api_key=api_key), name=name)

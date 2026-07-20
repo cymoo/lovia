@@ -43,17 +43,19 @@ agent = Agent(
 
 ## Web 搜索
 
-`lovia.tools.search`：可插拔搜索工具。内置后端是 DuckDuckGo（不需要 API key），
-位于 `ddg` extra 中：
+`lovia.tools.search`：可插拔搜索工具。内置两个后端：DuckDuckGo（免 key，
+位于 `ddg` extra 中）和 Tavily（无需额外安装——设置 `TAVILY_API_KEY` 或传入
+`api_key=`）：
 
 ```bash
-pip install "lovia[ddg]"
+pip install "lovia[ddg]"   # 仅 DuckDuckGo 后端需要
 ```
 
 ```python
-from lovia.tools.search import duckduckgo_search, web_search
+from lovia.tools.search import duckduckgo_search, tavily_search, web_search
 
-tools = [duckduckgo_search()]            # 内置后端
+tools = [duckduckgo_search()]            # 免 key，需要 lovia[ddg]
+tools = [tavily_search()]                # Tavily API，读取 TAVILY_API_KEY
 tools = [web_search(MySearchBackend())]  # 或你自己的后端
 ```
 
@@ -131,10 +133,11 @@ Tool 增加超时。从其他线程回答时，先切回事件循环线程，例
 
 - **`http_fetch` 是最锋利的内置工具。** 和不可信输入组合时，它就是 SSRF 原语。
   公开暴露前请加门禁或沙箱网络。
-- **`duckduckgo_search()` 会立即构造。** 缺少 `ddgs` 包时，它会在构建时抛
-  `UserError`。这正是你想在启动时看到的快速失败，而不是运行中捕获后忽略。
+- **`duckduckgo_search()` / `tavily_search()` 会立即构造。** 缺少 `ddgs` 包或
+  `TAVILY_API_KEY` 时，它们会在构建时抛 `UserError`。这正是你想在启动时看到的
+  快速失败，而不是运行中捕获后忽略。
 - **搜索结果质量取决于后端。** DDG 后端不需要 key，但实际使用中有频率限制；
-  生产应用通常会换成自己的 `WebSearch`。
+  生产应用通常会用带 key 的后端（`tavily_search()`）或自己的 `WebSearch`。
 
 ## 延伸阅读
 

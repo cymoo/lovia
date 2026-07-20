@@ -144,7 +144,9 @@ def test_missing_key_on_official_host() -> None:
 
 
 def test_keyless_gateway_is_complete() -> None:
-    conn = _resolve(model_flag="deepseek-v4-pro", base_url_flag="http://localhost:11434/v1")
+    conn = _resolve(
+        model_flag="deepseek-v4-pro", base_url_flag="http://localhost:11434/v1"
+    )
     assert conn.missing() == []
 
 
@@ -172,9 +174,7 @@ def test_validate_ok_and_openai_headers() -> None:
         return httpx.Response(200, json={"data": []})
 
     conn = _conn(base_url="http://gw/v1", api_key="sk-1")
-    outcome, _ = setup.validate_connection(
-        conn, transport=httpx.MockTransport(handler)
-    )
+    outcome, _ = setup.validate_connection(conn, transport=httpx.MockTransport(handler))
     assert outcome is setup.ValidationOutcome.OK
     assert str(seen[0].url) == "http://gw/v1/models"
     assert seen[0].headers["authorization"] == "Bearer sk-1"
@@ -278,7 +278,8 @@ def test_validate_never_overrides_a_configured_window() -> None:
     conn = _conn(base_url="http://gw/v1", api_key="sk-1")
     conn.context_window, conn.context_window_source = 111_111, "flag"
     setup.validate_connection(
-        conn, transport=_models_transport({"id": "deepseek-v4-pro", "max_model_len": 4096})
+        conn,
+        transport=_models_transport({"id": "deepseek-v4-pro", "max_model_len": 4096}),
     )
     assert (conn.context_window, conn.context_window_source) == (111_111, "flag")
 
@@ -338,10 +339,10 @@ def test_first_run_asks_everything_and_saves(
     conn, output, input_fn, getpass_fn = run_wizard(
         setup.Connection(),
         inputs=[
-            "deepseek-v4-pro",          # model
+            "deepseek-v4-pro",  # model
             "https://api.deepseek.example",  # base URL (over the shown default)
-            "128000",                   # context window (unknown model)
-            "",                         # save? -> default yes
+            "128000",  # context window (unknown model)
+            "",  # save? -> default yes
         ],
         keys=["sk-deep"],
     )
@@ -518,7 +519,9 @@ def test_decline_save_writes_nothing(
 
 
 def test_save_env_file_creates_the_file(tmp_path: Path) -> None:
-    path = setup.save_env_file({"A_KEY": "value", "B_KEY": "x y"}, path=tmp_path / ".env")
+    path = setup.save_env_file(
+        {"A_KEY": "value", "B_KEY": "x y"}, path=tmp_path / ".env"
+    )
     assert path.read_text() == "A_KEY=value\nB_KEY=x y\n"
 
 

@@ -21,7 +21,7 @@ lovia/
   tools/            # @tool decorator, Tool type, and opt-in tool factories
     base.py         #   core Tool/tool API
     http.py         #   http_fetch
-    search.py       #   duckduckgo_search_tool  (requires lovia[ddg])
+    search.py       #   duckduckgo_search (requires lovia[ddg]) / tavily_search (TAVILY_API_KEY)
     human.py        #   HumanChannel + ask_human
     recall.py       #   recall_tool_result (recovers compacted tool outputs)
     time.py         #   now

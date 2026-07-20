@@ -524,6 +524,7 @@ agentic patterns in plain Python (`workflows/`). Setup and the full index:
 | --- | --- |
 | Core framework | `pip install lovia` |
 | DuckDuckGo search | `pip install "lovia[ddg]"` |
+| Tavily search | no extra — set `TAVILY_API_KEY` |
 | MCP integration | `pip install "lovia[mcp]"` |
 | Web UI | `pip install "lovia[web]"` |
 | Runnable examples | `pip install "lovia[examples,web]"` |

@@ -3327,7 +3327,9 @@ body.files-splitting {
     display: none; /* the menu's pin button (always visible here) takes over */
   }
   .btn-copy,
-  .btn-copy-code {
+  .btn-copy-code,
+  .btn-edit,
+  .btn-regen {
     opacity: 1;
     transform: none;
     pointer-events: auto;
@@ -3609,4 +3611,72 @@ body.files-splitting {
 .load-earlier {
   display: block;
   margin: 4px auto 14px;
+}
+
+/* ---- Edit & regenerate ------------------------------------------------------------------------------ */
+/* Same whisper-visibility as the copy action. */
+.btn-edit,
+.btn-regen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition:
+    opacity var(--t-med) var(--ease),
+    color var(--t-fast),
+    background var(--t-fast);
+  opacity: 0;
+  pointer-events: none;
+}
+.turn.user:hover .btn-edit,
+.turn.user:focus-within .btn-edit,
+.btn-edit:focus-visible,
+.turn .bubble:hover .btn-regen,
+.turn .bubble:focus-within .btn-regen,
+.btn-regen:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.btn-edit:hover,
+.btn-regen:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+/* Inline editor swapped in for the bubble text. */
+.turn.user .bubble:has(.edit-area) {
+  width: 100%;
+  max-width: 680px;
+}
+.edit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.edit-area textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.edit-area textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }

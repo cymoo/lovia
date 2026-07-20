@@ -218,6 +218,21 @@ class ScheduleInfo(BaseModel):
     updated_at: float
 
 
+class RewindRequest(BaseModel):
+    # 0-based index of the user turn to rewind to: everything from that user
+    # message onward is dropped (edit-and-resend / regenerate then send a
+    # fresh message). Counted over the transcript's user messages in order —
+    # the same order a UI renders its user bubbles.
+    user_turn: int = Field(ge=0)
+
+
+class RewindResponse(BaseModel):
+    removed: int  # flat transcript entries dropped
+    # The authoritative post-rewind view (same shape as SessionDetail.entries)
+    # so the client re-renders without a second fetch.
+    entries: list[MessageOut] = Field(default_factory=list)
+
+
 class SessionPatch(BaseModel):
     """Partial update for a session — rename, (un)pin, or both."""
 

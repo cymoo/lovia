@@ -72,6 +72,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "memory": any(
                     memory_plugin(a) is not None for a in deps.agents.values()
                 ),
+                # Edit-and-resend / regenerate need the store's off-protocol
+                # rewind (both bundled stores have it; custom ones may not).
+                "rewind": hasattr(deps.session, "rewind"),
             },
         )
 

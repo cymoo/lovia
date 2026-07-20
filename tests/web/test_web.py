@@ -1198,3 +1198,98 @@ def test_coerce_handles_datetime_fields_in_structured_output() -> None:
     out = _coerce(Report(title="x", due=dt.datetime(2026, 7, 5, 12, 0)))
     # Must round-trip through json.dumps — the SSE `done` event depends on it.
     assert _json.loads(_json.dumps(out)) == {"title": "x", "due": "2026-07-05T12:00:00"}
+
+
+# ------------------------------------------------------------- rewind API -
+
+
+def test_rewind_endpoint_edits_history() -> None:
+    agent = _make_agent([text("a1"), text("a2"), text("a3")])
+    c = TestClient(_app(agent))
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    c.post("/api/chat", json={"message": "two", "session_id": sid})
+
+    res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 1})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["removed"] == 2  # user "two" + its reply
+    contents = [m["content"] for m in data["entries"]]
+    assert contents == ["one", "a1"]
+
+    # The session continues cleanly from the rewound state.
+    out = c.post("/api/chat", json={"message": "two v2", "session_id": sid})
+    assert out.json()["output"] == "a3"
+    transcript = c.get(f"/api/sessions/{sid}").json()["entries"]
+    assert [m["content"] for m in transcript] == ["one", "a1", "two v2", "a3"]
+
+
+def test_rewind_to_zero_and_unknown_turn() -> None:
+    c = TestClient(_app(_make_agent([text("a1")])))
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    assert (
+        c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 5}).status_code == 404
+    )
+    res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 0})
+    assert res.status_code == 200
+    assert res.json()["entries"] == []
+
+
+def test_rewind_refused_while_run_is_live() -> None:
+    app = _app(_make_agent([text("hi")]))
+    c = TestClient(app)
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    # A live supervised run owns the session — rewinding under it would let
+    # the run's wind-down resurrect the tail.
+    app.state.deps.supervisor._controllers[sid] = object()
+    try:
+        res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 0})
+        assert res.status_code == 409
+    finally:
+        app.state.deps.supervisor._controllers.pop(sid, None)
+
+
+def test_rewind_clears_stale_resume_pointer() -> None:
+    import asyncio
+
+    store = ChatStore.in_memory()
+    c = TestClient(_app(_make_agent([text("a1")]), store=store))
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    asyncio.run(store.set_active_run_id(sid, "r-stale"))
+
+    res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 0})
+    assert res.status_code == 200
+    # The stale pointer would offer a reconnect that replays the undone tail.
+    assert asyncio.run(store.get_active_run_id(sid)) is None
+
+
+def test_rewind_unsupported_store_501_and_feature_flag() -> None:
+    from lovia.session import Session
+    from lovia.stores import InMemorySession
+
+    class _NoRewindSession(Session):
+        """Protocol-only store — no off-protocol rewind."""
+
+        def __init__(self) -> None:
+            self._inner = InMemorySession()
+
+        async def segments(self, session_id):
+            return await self._inner.segments(session_id)
+
+        async def append(self, session_id, entries, *, run_id=None, meta=None):
+            return await self._inner.append(
+                session_id, entries, run_id=run_id, meta=meta
+            )
+
+        async def clear(self, session_id):
+            await self._inner.clear(session_id)
+
+    store = ChatStore(_NoRewindSession(), meta_path=":memory:")
+    c = TestClient(_app(_make_agent([text("a1")]), store=store))
+    assert c.get("/api/info").json()["features"]["rewind"] is False
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 0})
+    assert res.status_code == 501
+
+    # The bundled stores advertise support.
+    c2 = TestClient(_app(_make_agent([text("x")])))
+    assert c2.get("/api/info").json()["features"]["rewind"] is True

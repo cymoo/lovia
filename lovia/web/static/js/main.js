@@ -230,17 +230,18 @@ function initKeyboardShortcuts() {
   initMemory();
   initSettings();
   initKeyboardShortcuts();
+  // Fetch capabilities in parallel with the agent list, but resolve them
+  // BEFORE any chat history renders — edit/regenerate affordances must not
+  // flash in on servers whose store can't rewind.
+  const infoPromise = api.info().catch(() => null);
   await loadAgents();
   document.getElementById('prompt')?.focus();
 
-  // Reveal the schedules button only when the server advertises the feature.
-  api.info()
-    .then((info) => {
-      if (info?.features?.scheduling) {
-        document.getElementById('schedules-btn')?.classList.remove('hidden');
-      }
-    })
-    .catch(() => {});
+  const info = await infoPromise;
+  if (info?.features?.scheduling) {
+    document.getElementById('schedules-btn')?.classList.remove('hidden');
+  }
+  if (info) store.canRewind = !!info.features?.rewind;
 
   // Restore session from URL query string (?session=xxx).
   // Wait for the initial session list to land so the sidebar

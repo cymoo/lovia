@@ -67,6 +67,7 @@ FastAPI dependency).
 | `GET /api/runs` | live supervised runs |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
+| `POST /api/sessions/{id}/rewind` | drop everything from the `user_turn`-th user message on (edit & resend / regenerate); 409 while a run is live, 501 if the store lacks `rewind` |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |

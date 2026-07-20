@@ -326,6 +326,7 @@ async function rewindTo(userTurn, message) {
   try {
     const res = await api.rewindSession(store.sessionId, userTurn);
     renderHistory(res.entries || []);
+    hideContextMeter(); // the old fill describes a transcript that's gone
   } catch (err) {
     toast(err.message || t('chat.rewindFailed'), { type: 'error' });
     return false;

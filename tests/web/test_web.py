@@ -1293,3 +1293,58 @@ def test_rewind_unsupported_store_501_and_feature_flag() -> None:
     # The bundled stores advertise support.
     c2 = TestClient(_app(_make_agent([text("x")])))
     assert c2.get("/api/info").json()["features"]["rewind"] is True
+
+
+def test_rewind_reaches_into_a_stale_resumable_checkpoint() -> None:
+    # An interrupted run's user turns live only in its checkpoint; the GET
+    # view splices them in, so the client can ask to rewind to one. That must
+    # resolve as "drop the checkpoint, keep the whole stored transcript" —
+    # not a 404 for a turn the user can plainly see.
+    import asyncio
+
+    from lovia import Usage
+    from lovia.checkpointer import RunSnapshot
+    from lovia.transcript import AssistantTextEntry, InputEntry
+
+    store = ChatStore.in_memory()
+    c = TestClient(_app(_make_agent([text("a1")]), store=store))
+    sid = c.post("/api/chat", json={"message": "one"}).json()["session_id"]
+    snap = RunSnapshot(
+        run_id="r-int",
+        agent_name="bot",
+        entries=[
+            InputEntry(role="user", content="two"),
+            AssistantTextEntry(content="partial"),
+        ],
+        usage=Usage(),
+        turns=1,
+        status="interrupted",
+    )
+    asyncio.run(store.checkpointer.append(snap.run_id, snap.entries, snap.head))
+    asyncio.run(store.set_active_run_id(sid, "r-int"))
+
+    # The spliced view renders both user turns.
+    view = c.get(f"/api/sessions/{sid}").json()
+    users = [m["content"] for m in view["entries"] if m["role"] == "user"]
+    assert users == ["one", "two"]
+
+    # An out-of-range ordinal (stale client) must refuse WITHOUT destroying
+    # the resumable checkpoint.
+    assert (
+        c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 5}).status_code == 404
+    )
+    assert asyncio.run(store.get_active_run_id(sid)) == "r-int"
+    assert asyncio.run(store.checkpointer.load("r-int")) is not None
+
+    res = c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 1})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["removed"] == 0  # nothing stored was dropped
+    assert [m["content"] for m in data["entries"]] == ["one", "a1"]
+    assert asyncio.run(store.get_active_run_id(sid)) is None
+    assert asyncio.run(store.checkpointer.load("r-int")) is None
+
+    # Past everything that ever existed → still a 404.
+    assert (
+        c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 5}).status_code == 404
+    )

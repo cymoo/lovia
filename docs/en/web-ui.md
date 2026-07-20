@@ -20,9 +20,10 @@ Open `http://127.0.0.1:8000`. On first launch the CLI asks for missing model
 configuration, verifies it, and can save it to `./.env`.
 
 The default Agent includes `Todo`, optional Skills from `./skills`, Memory in
-`./.lovia/memory`, time and HTTP Tools, optional DuckDuckGo search, scheduling,
-and a coding-mode Workspace rooted at the current directory. If `AGENTS.md`
-exists, its content becomes the Agent's instructions.
+`./.lovia/memory`, time and HTTP Tools, web search (Tavily when
+`TAVILY_API_KEY` is set, else optional DuckDuckGo), scheduling, and a
+coding-mode Workspace rooted at the current directory. If `AGENTS.md` exists,
+its content becomes the Agent's instructions.
 
 !!! danger "Local by default; token-guarded beyond that"
 

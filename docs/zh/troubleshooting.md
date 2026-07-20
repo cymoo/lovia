@@ -98,6 +98,8 @@ pip install "lovia[ddg]"   # DuckDuckGo 搜索
 pip install "lovia[web]"   # FastAPI 服务端和 UI
 ```
 
+（Tavily 搜索后端无需 Extra——设置 `TAVILY_API_KEY` 即可。）
+
 ## 提交有效的问题报告
 
 请包含：

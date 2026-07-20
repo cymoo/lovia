@@ -28,8 +28,10 @@ from .recall import make_recall_tool
 from .search import (
     DuckDuckGoSearch,
     SearchResult,
+    TavilySearch,
     WebSearch,
     duckduckgo_search,
+    tavily_search,
     web_search,
 )
 from .time import current_date, now, sleep
@@ -40,6 +42,7 @@ __all__ = [
     "HumanChannel",
     "HumanQuestion",
     "SearchResult",
+    "TavilySearch",
     "Tool",
     "ToolInvoker",
     "ToolPolicy",
@@ -57,6 +60,7 @@ __all__ = [
     "truncate_tool_output",
     "run_tool",
     "sleep",
+    "tavily_search",
     "tool",
     "web_search",
 ]

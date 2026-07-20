@@ -48,7 +48,14 @@ from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
 from ..providers import ModelSettings, Provider, provider_from_string
 from ..reliability import RetryPolicy
-from ..tools import Tool, current_date, duckduckgo_search, http_fetch, now
+from ..tools import (
+    Tool,
+    current_date,
+    duckduckgo_search,
+    http_fetch,
+    now,
+    tavily_search,
+)
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from . import setup
 from .app import _default_db_path, serve
@@ -381,18 +388,22 @@ def resolve_tools() -> list[Tool]:
     """The always-on built-in tools for the default agent.
 
     ``now`` (current time) and ``http_fetch`` have no extra dependencies. Web
-    search needs the optional ``ddgs`` backend (bundled with the ``web``/``ddg``
-    extras); when it is missing we load the rest and log how to enable it rather
-    than failing.
+    search prefers the Tavily backend when ``TAVILY_API_KEY`` is set; otherwise
+    it falls back to the keyless ``ddgs`` backend (bundled with the
+    ``web``/``ddg`` extras). When neither is available we load the rest and log
+    how to enable it rather than failing.
     """
     tools: list[Tool] = [now, http_fetch]
-    try:
-        tools.append(duckduckgo_search())
-    except UserError:
-        log.info(
-            "web_search disabled: the 'ddgs' backend is not installed "
-            "(pip install 'lovia[ddg]')."
-        )
+    if os.environ.get("TAVILY_API_KEY"):
+        tools.append(tavily_search())
+    else:
+        try:
+            tools.append(duckduckgo_search())
+        except UserError:
+            log.info(
+                "web_search disabled: set TAVILY_API_KEY or install the "
+                "'ddgs' backend (pip install 'lovia[ddg]')."
+            )
     return tools
 
 

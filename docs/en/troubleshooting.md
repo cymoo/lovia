@@ -110,6 +110,8 @@ pip install "lovia[ddg]"   # DuckDuckGo search
 pip install "lovia[web]"   # FastAPI server and UI
 ```
 
+(The Tavily search backend needs no extra — set `TAVILY_API_KEY` instead.)
+
 ## Reporting a useful issue
 
 Include:

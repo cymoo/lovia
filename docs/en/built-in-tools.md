@@ -48,17 +48,19 @@ followed; TLS honors the [`LOVIA_HTTP_*` settings](providers.md#networking-timeo
 
 ## Web search
 
-`lovia.tools.search` — a pluggable search tool. The bundled backend is
-DuckDuckGo (no API key), behind the `ddg` extra:
+`lovia.tools.search` — a pluggable search tool. Two backends are bundled:
+DuckDuckGo (keyless, behind the `ddg` extra) and Tavily (no extra install —
+set `TAVILY_API_KEY` or pass `api_key=`):
 
 ```bash
-pip install "lovia[ddg]"
+pip install "lovia[ddg]"   # only needed for the DuckDuckGo backend
 ```
 
 ```python
-from lovia.tools.search import duckduckgo_search, web_search
+from lovia.tools.search import duckduckgo_search, tavily_search, web_search
 
-tools = [duckduckgo_search()]            # bundled backend
+tools = [duckduckgo_search()]            # keyless, requires lovia[ddg]
+tools = [tavily_search()]                # Tavily API, reads TAVILY_API_KEY
 tools = [web_search(MySearchBackend())]  # or your own
 ```
 
@@ -146,12 +148,13 @@ text.
 - **`http_fetch` is the sharpest built-in.** Combined with untrusted input
   it is an SSRF primitive — gate it or sandbox the network before exposing
   it in anything public-facing.
-- **`duckduckgo_search()` constructs eagerly.** It raises `UserError` at
-  build time when the `ddgs` package is missing — a fail-fast you want at
-  startup, not one to catch and ignore.
+- **`duckduckgo_search()` / `tavily_search()` construct eagerly.** They
+  raise `UserError` at build time — missing `ddgs` package, missing
+  `TAVILY_API_KEY` — a fail-fast you want at startup, not one to catch and
+  ignore.
 - **Search result quality is the backend's.** The DDG backend is keyless
-  and rate-limited in practice; production apps usually swap in their own
-  `WebSearch`.
+  and rate-limited in practice; production apps usually use a keyed backend
+  (`tavily_search()`) or their own `WebSearch`.
 
 ## See also
 

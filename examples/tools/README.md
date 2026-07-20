@@ -8,7 +8,7 @@ style lovia uses everywhere.
 | --- | --- | --- |
 | `01_http.py` | `lovia.tools.http.http_fetch` | Fetch a URL and let the model summarize it |
 | `02_time.py` | `lovia.tools.time.now`, `sleep` | Give the model controlled access to time |
-| `03_search.py` | `lovia.tools.search.duckduckgo_search` | Requires `pip install "lovia[ddg]"` |
+| `03_search.py` | `lovia.tools.search.duckduckgo_search` | Requires `pip install "lovia[ddg]"`; swap in `tavily_search()` (`TAVILY_API_KEY`) for the keyed backend |
 | `04_human.py` | `HumanChannel` + `ask_human` | Let the model ask an operator for missing information |
 
 For filesystem and shell tools (`read_file`, `write_file`, `edit_file`,

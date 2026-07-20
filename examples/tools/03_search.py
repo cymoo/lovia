@@ -4,8 +4,9 @@ Install with::
 
     pip install 'lovia[ddg]'
 
-Or plug your own backend by implementing the :class:`WebSearch` Protocol
-and passing it to ``web_search(my_backend)``.
+For the keyed Tavily backend (no extra install), set ``TAVILY_API_KEY`` and
+swap in ``tavily_search()``. Or plug your own backend by implementing the
+:class:`WebSearch` Protocol and passing it to ``web_search(my_backend)``.
 
 Run::
 

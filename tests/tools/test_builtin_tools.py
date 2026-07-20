@@ -15,7 +15,12 @@ from lovia.exceptions import ToolError, UserError
 from lovia.run_context import RunContext
 from lovia.tools.http import html_to_text, http_fetch
 from lovia.tools.human import HumanChannel, ask_human
-from lovia.tools.search import SearchResult, duckduckgo_search, web_search
+from lovia.tools.search import (
+    SearchResult,
+    duckduckgo_search,
+    tavily_search,
+    web_search,
+)
 from lovia.tools.time import current_date, now, sleep
 
 
@@ -29,6 +34,7 @@ def _ctx() -> RunContext:
 def _mock_http(
     monkeypatch: pytest.MonkeyPatch,
     handler: Callable[[httpx.Request], httpx.Response],
+    target: str = "lovia.tools.http.httpx.AsyncClient",
 ) -> None:
     real_client = httpx.AsyncClient
 
@@ -36,7 +42,7 @@ def _mock_http(
         kwargs["transport"] = httpx.MockTransport(handler)
         return real_client(**kwargs)
 
-    monkeypatch.setattr("lovia.tools.http.httpx.AsyncClient", factory)
+    monkeypatch.setattr(target, factory)
 
 
 @pytest.mark.asyncio
@@ -391,6 +397,90 @@ def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(UserError) as exc_info:
         duckduckgo_search()
     assert "lovia[ddg]" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_tavily_backend_maps_rows_and_forwards_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.tools.search import TavilySearch
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers["authorization"]
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "T",
+                        "url": "https://x.example",
+                        "content": "B",
+                        "score": 0.9,
+                    }
+                ]
+            },
+        )
+
+    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
+    rows = await TavilySearch(api_key="k").search("q", max_results=7, time_range="w")
+    assert seen["url"] == "https://api.tavily.com/search"
+    assert seen["auth"] == "Bearer k"
+    # 'w' passes through unmapped — Tavily accepts d/w/m/y directly.
+    assert seen["body"] == {"query": "q", "max_results": 7, "time_range": "w"}
+    assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
+
+
+@pytest.mark.asyncio
+async def test_tavily_omits_time_range_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.tools.search import TavilySearch
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
+
+    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
+    rows = await TavilySearch(api_key="k").search("q")
+    assert "time_range" not in seen["body"]
+    assert rows == []
+
+
+def test_tavily_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    with pytest.raises(UserError) as exc_info:
+        tavily_search()
+    assert "TAVILY_API_KEY" in str(exc_info.value)
+
+
+def test_tavily_reads_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lovia.tools.search import TavilySearch
+
+    monkeypatch.setenv("TAVILY_API_KEY", "k")
+    TavilySearch()  # constructs without raising
+
+
+@pytest.mark.asyncio
+async def test_tavily_http_error_surfaces_as_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.tools.search import TavilySearch
+
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(401, json={"detail": {"error": "Unauthorized"}}),
+        "lovia.tools.search.httpx.AsyncClient",
+    )
+    with pytest.raises(ToolError) as exc_info:
+        await TavilySearch(api_key="bad").search("q")
+    msg = str(exc_info.value)
+    assert "401" in msg and "Unauthorized" in msg
 
 
 # ---------------------------------------------------------------- human

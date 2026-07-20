@@ -1,6 +1,7 @@
 // Chat streaming, SSE handling, message rendering.
 import { t } from './i18n.js';
 import { store } from './store.js';
+import { toast } from './toast.js';
 import { api, readSSE } from './api.js';
 import { copyToClipboard } from './ui.js';
 import { loadSessions } from './sessions.js';
@@ -314,6 +315,128 @@ function maybeDateSeparator(transcriptEl, ts, { anchorFirst = false } = {}) {
   transcriptEl.appendChild(sep);
 }
 
+// ---- Edit & regenerate ---------------------------------------------------
+// User turns carry their 0-based ordinal (dataset.userTurn) — the currency of
+// POST /sessions/{id}/rewind. History renders assign it from the full entry
+// list; live sends take the next number chronologically (queued bubbles get
+// theirs only once the run confirms them, matching server transcript order).
+let _userTurnCount = 0;
+
+async function rewindTo(userTurn, message) {
+  try {
+    const res = await api.rewindSession(store.sessionId, userTurn);
+    renderHistory(res.entries || []);
+  } catch (err) {
+    toast(err.message || t('chat.rewindFailed'), { type: 'error' });
+    return false;
+  }
+  document.getElementById('empty-state')?.remove();
+  appendUserTurn(message);
+  runStream(message); // fire-and-forget: its own finally restores the UI
+  return true;
+}
+
+function addEditButton(node) {
+  if (!store.canRewind) return;
+  const bubble = node.querySelector('.bubble');
+  const footer = bubble?.querySelector(':scope > .turn-footer');
+  if (!footer || footer.querySelector('.btn-edit')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-edit';
+  btn.title = t('chat.edit');
+  btn.setAttribute('aria-label', t('chat.edit'));
+  btn.innerHTML = icon('pencil', { size: 13 });
+  btn.addEventListener('click', () => startEditUserTurn(node));
+  footer.appendChild(btn);
+}
+
+// Swap the bubble's text for an inline editor; sending rewinds to just
+// before this message and re-runs the edited text as a fresh turn.
+function startEditUserTurn(node) {
+  if (store.streaming) {
+    toast(t('chat.editBusy'), { type: 'error' });
+    return;
+  }
+  const bubble = node.querySelector('.bubble');
+  const body = bubble?.querySelector('.body');
+  if (!bubble || !body || node.dataset.userTurn == null) return;
+  if (bubble.querySelector('.edit-area')) return; // already editing
+
+  const wrap = document.createElement('div');
+  wrap.className = 'edit-area';
+  const ta = document.createElement('textarea');
+  ta.value = body.textContent;
+  const actions = document.createElement('div');
+  actions.className = 'edit-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'btn btn-ghost btn-sm';
+  cancelBtn.textContent = t('dialog.cancel');
+  const sendBtn = document.createElement('button');
+  sendBtn.type = 'button';
+  sendBtn.className = 'btn btn-primary btn-sm';
+  sendBtn.textContent = t('chat.send');
+  actions.append(cancelBtn, sendBtn);
+  wrap.append(ta, actions);
+
+  const restore = () => {
+    wrap.remove();
+    body.style.display = '';
+  };
+  const commit = async () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    sendBtn.disabled = true;
+    // On success the whole transcript re-renders (editor included); only a
+    // failure leaves this editor alive — re-enable it for another try.
+    if (!(await rewindTo(Number(node.dataset.userTurn), text))) {
+      sendBtn.disabled = false;
+    }
+  };
+  cancelBtn.addEventListener('click', restore);
+  sendBtn.addEventListener('click', commit);
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') restore();
+    else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      commit();
+    }
+  });
+
+  body.style.display = 'none';
+  bubble.insertBefore(wrap, body);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+// One floating regenerate action on the last assistant turn: rewind to just
+// before the last user message and re-run it verbatim.
+function updateRegenButton() {
+  document.querySelector('.btn-regen')?.remove();
+  if (!store.canRewind || store.streaming || !store.sessionId) return;
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl) return;
+  const turns = transcriptEl.querySelectorAll('.turn');
+  const last = turns[turns.length - 1];
+  if (!last || !last.classList.contains('assistant')) return;
+  const users = transcriptEl.querySelectorAll('.turn.user[data-user-turn]');
+  const lastUser = users[users.length - 1];
+  if (!lastUser) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-regen';
+  btn.title = t('chat.regenerate');
+  btn.setAttribute('aria-label', t('chat.regenerate'));
+  btn.innerHTML = icon('refresh-cw', { size: 13 });
+  btn.addEventListener('click', () => {
+    if (store.streaming) return;
+    const text = lastUser.querySelector('.body')?.textContent?.trim();
+    if (text) rewindTo(Number(lastUser.dataset.userTurn), text);
+  });
+  ensureFooter(last.querySelector('.bubble'))?.appendChild(btn);
+}
+
 // ---- Render helpers ----------------------------------------------------
 export function appendUserTurn(text, { queued = false, before = null } = {}) {
   const transcriptEl = document.getElementById('transcript');
@@ -327,7 +450,11 @@ export function appendUserTurn(text, { queued = false, before = null } = {}) {
   const bubble = node.querySelector('.bubble');
   appendBubbleContent(bubble, body);
   ensureFooter(bubble);
-  if (!queued) addCopyButton(bubble); // queued bubbles get their copy button on confirm
+  if (!queued) {
+    node.dataset.userTurn = String(_userTurnCount++);
+    addCopyButton(bubble); // queued bubbles get their copy button on confirm
+    addEditButton(node);
+  }
   if (before && before.parentNode === transcriptEl) {
     transcriptEl.insertBefore(node, before);
   } else {
@@ -635,6 +762,7 @@ function clearTodoPanel() {
 
 function resetChatView() {
   _lastDateKey = null;
+  _userTurnCount = 0;
   store.bubble = null;
   store.turnNode = null;
   store.body = null;
@@ -1059,7 +1187,10 @@ function confirmQueuedTurn(node) {
   node.classList.remove('queued');
   node.querySelector('.withdraw-btn')?.remove();
   delete node.dataset.injectId;
+  // Confirmation order matches the server's drain order — number it now.
+  node.dataset.userTurn = String(_userTurnCount++);
   addCopyButton(node.querySelector('.bubble'));
+  addEditButton(node);
 }
 
 // Add a cancel affordance to a queued bubble once its server token is known, so
@@ -1173,6 +1304,13 @@ function renderHistoryWindow({ stickBottom }) {
       });
   }
 
+  // Absolute user-turn numbering spans the FULL history — the rendered
+  // window may start mid-transcript.
+  _userTurnCount = entries.filter((e) => e.role === 'user').length;
+  let userIdx = entries
+    .slice(0, _historyStart)
+    .filter((e) => e.role === 'user').length;
+
   if (_historyStart > 0) {
     const more = document.createElement('button');
     more.type = 'button';
@@ -1190,6 +1328,7 @@ function renderHistoryWindow({ stickBottom }) {
         maybeDateSeparator(transcriptEl, it.timestamp, { anchorFirst: true });
       }
       const turn = makeTurn('user', it.timestamp);
+      turn.dataset.userTurn = String(userIdx++);
       const body = document.createElement('div');
       body.className = 'body';
       body.textContent = contentText(it.content);
@@ -1197,6 +1336,7 @@ function renderHistoryWindow({ stickBottom }) {
       appendBubbleContent(bubble, body);
       ensureFooter(bubble);
       addCopyButton(bubble);
+      addEditButton(turn);
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
@@ -1267,6 +1407,7 @@ function renderHistoryWindow({ stickBottom }) {
     _lastScrollTop = transcriptEl.scrollTop;
   }
   requestAnimationFrame(() => { _programmaticScroll = false; });
+  updateRegenButton();
 }
 
 // ---- Scroll ------------------------------------------------------------
@@ -1632,6 +1773,7 @@ function enterStreamingUI() {
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
   // they pick the transcript back up once the turn settles.
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
+  updateRegenButton(); // streaming: no regen affordance until the run settles
 }
 
 function exitStreamingUI() {
@@ -1642,6 +1784,7 @@ function exitStreamingUI() {
     promptEl.focus();
   }
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
+  updateRegenButton();
 }
 
 export async function runStream(message) {

@@ -239,6 +239,7 @@ function initKeyboardShortcuts() {
       if (info?.features?.scheduling) {
         document.getElementById('schedules-btn')?.classList.remove('hidden');
       }
+      store.canRewind = !!info?.features?.rewind;
     })
     .catch(() => {});
 

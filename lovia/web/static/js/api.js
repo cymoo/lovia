@@ -103,6 +103,14 @@ export const api = {
   deleteAllSessions: () => fetch('/api/sessions', { method: 'DELETE' }),
   getTodos: (id) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}/todos`).then(_json),
+  // Rewind to just before the userTurn-th user message (edit / regenerate);
+  // resolves to { removed, entries } — the authoritative post-rewind view.
+  rewindSession: (id, userTurn) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}/rewind`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ user_turn: userTurn }),
+    }).then(_jsonOrDetail),
   exportUrl: (id, format = 'md') =>
     `/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`,
 

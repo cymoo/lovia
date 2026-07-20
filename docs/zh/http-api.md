@@ -60,6 +60,7 @@ provider 的认证失败区分开。自己挂载 `build_api_router` 的应用需
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · 重命名/置顶 · 删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
+| `POST /api/sessions/{id}/rewind` | 丢弃第 `user_turn` 条用户消息起的所有内容（编辑重发/重新生成）；运行中返回 409，存储不支持 `rewind` 返回 501 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 基于 agent [工作区](workspace.md)的只读文件面板 |

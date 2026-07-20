@@ -14,10 +14,12 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...plugins import todos_from_entries
-from ...transcript import entries_to_messages
+from ...transcript import InputEntry, entries_to_messages
 from ..schemas import (
     ChatSessionInfo,
     MessageOut,
+    RewindRequest,
+    RewindResponse,
     RunInfo,
     SessionDetail,
     SessionPatch,
@@ -167,6 +169,58 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         deps.supervisor.cancel(session_id, discard=True)
         await store.delete(session_id)
         return {"ok": True}
+
+    @router.post("/api/sessions/{session_id}/rewind", response_model=RewindResponse)
+    async def rewind_session(session_id: str, req: RewindRequest) -> RewindResponse:
+        """Rewind to just before the ``user_turn``-th user message.
+
+        The destructive-undo behind edit-and-resend / regenerate: the target
+        user message and everything after it are dropped; the caller then
+        sends the (edited or original) text as a fresh turn. Refused while a
+        run is live — its in-flight state would resurrect the tail.
+        """
+        if deps.supervisor.get(session_id) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="a run is active for this session; stop it first",
+            )
+        rewind = getattr(session, "rewind", None)
+        if rewind is None:
+            raise HTTPException(
+                status_code=501,
+                detail="the configured session store does not support rewind",
+            )
+        # Map the user-turn ordinal onto the flat entry index that starts it.
+        entries = await session.load(session_id)
+        cut = None
+        seen = -1
+        for i, entry in enumerate(entries):
+            if isinstance(entry, InputEntry) and entry.role == "user":
+                seen += 1
+                if seen == req.user_turn:
+                    cut = i
+                    break
+        if cut is None:
+            raise HTTPException(
+                status_code=404, detail=f"user turn {req.user_turn} not found"
+            )
+        removed = await rewind(session_id, keep_entries=cut)
+        # A stored resume pointer now replays a tail that no longer exists —
+        # drop the checkpoint with it.
+        stale = await store.get_active_run_id(session_id)
+        if stale:
+            if store.checkpointer is not None:
+                await store.checkpointer.delete(stale)
+            await store.clear_active_run_id(session_id, expected=stale)
+        meta = await store.get(session_id)
+        now = time.time()
+        view, _ = await _session_view(
+            deps,
+            session_id,
+            created_at=meta.created_at if meta else now,
+            updated_at=meta.updated_at if meta else now,
+        )
+        return RewindResponse(removed=removed, entries=view)
 
     @router.get("/api/sessions/{session_id}/todos", response_model=TodosResponse)
     async def get_todos(session_id: str) -> TodosResponse:

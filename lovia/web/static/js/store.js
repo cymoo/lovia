@@ -13,6 +13,9 @@ export const store = {
   emptyTitle: "Where shall we begin?",
   emptyDescription: "A good question is already half the answer.",
   emptyExamples: [],
+  // Both bundled stores support rewind — assume yes until /api/info says no
+  // (custom Session backends may lack it).
+  canRewind: true,
   sidebarCollapsed: localStorage.getItem("lovia-sidebar-collapsed") === "1",
   streaming: false,
   turnNode: null,

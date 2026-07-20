@@ -445,3 +445,126 @@ async def test_wal_option_enables_wal_journal_mode(tmp_path: Path) -> None:
     await cp.append("r1", [InputEntry(role="user", content="hi")], _head())
     snap = await cp.load("r1")
     assert snap is not None and len(snap.entries) == 1
+
+
+# ------------------------------------------------------------------ rewind ---
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def rw_session(request, tmp_path):
+    if request.param == "memory":
+        return InMemorySession()
+    return SQLiteSession(tmp_path / "rewind.db")
+
+
+def _turn(i: int) -> list:
+    """One user→assistant run: [user u{i}, assistant a{i}]."""
+    return [
+        InputEntry(role="user", content=f"u{i}"),
+        AssistantTextEntry(content=f"a{i}"),
+    ]
+
+
+async def test_rewind_drops_whole_later_runs(rw_session) -> None:
+    s = rw_session
+    for i in range(3):
+        await s.append("s", _turn(i), run_id=f"r{i}", meta={"note": i})
+
+    removed = await s.rewind("s", keep_entries=4)  # cut on the r1/r2 edge
+    assert removed == 2
+    entries = await s.load("s")
+    assert [e.content for e in entries] == ["u0", "a0", "u1", "a1"]
+    # Kept runs survive whole — segments, run ids, and metas untouched.
+    segs = await s.segments("s")
+    assert [seg.run_id for seg in segs] == ["r0", "r1"]
+    assert [seg.meta for seg in segs] == [{"note": 0}, {"note": 1}]
+
+
+async def test_rewind_truncates_inside_a_run_and_drops_its_meta(rw_session) -> None:
+    s = rw_session
+    await s.append("s", _turn(0), run_id="r0", meta={"note": 0})
+    # r1 holds two user turns (a mid-run injection).
+    await s.append("s", _turn(1) + _turn(2), run_id="r1", meta={"note": 1})
+
+    removed = await s.rewind("s", keep_entries=4)  # keep r0 + r1's first turn
+    assert removed == 2
+    entries = await s.load("s")
+    assert [e.content for e in entries] == ["u0", "a0", "u1", "a1"]
+    segs = await s.segments("s")
+    assert [seg.run_id for seg in segs] == ["r0", "r1"]
+    assert segs[0].meta == {"note": 0}
+    # The truncated run's meta was computed after content that no longer
+    # exists (carried context state) — it must not survive the cut.
+    assert segs[1].meta is None
+
+
+async def test_rewind_drops_dangling_tool_call_at_the_cut(rw_session) -> None:
+    s = rw_session
+    await s.append(
+        "s",
+        [
+            InputEntry(role="user", content="u"),
+            ToolCallEntry(call_id="c1", name="f", arguments="{}"),
+            ToolResultEntry(call_id="c1", output="r"),
+            AssistantTextEntry(content="a"),
+        ],
+        run_id="r0",
+    )
+    # Cutting between the call and its result must not leave the dangling
+    # call behind (providers reject a tool_use without its result).
+    removed = await s.rewind("s", keep_entries=2)
+    assert removed == 3
+    entries = await s.load("s")
+    assert [type(e).__name__ for e in entries] == ["InputEntry"]
+
+
+async def test_rewind_boundary_truncated_to_nothing_drops_the_run(rw_session) -> None:
+    s = rw_session
+    await s.append("s", _turn(0), run_id="r0")
+    await s.append(
+        "s",
+        [
+            ToolCallEntry(call_id="c1", name="f", arguments="{}"),
+            ToolResultEntry(call_id="c1", output="r"),
+        ],
+        run_id="r1",
+    )
+    # Keeping only r1's dangling call leaves nothing valid — the run goes too.
+    removed = await s.rewind("s", keep_entries=3)
+    assert removed == 2
+    assert [seg.run_id for seg in await s.segments("s")] == ["r0"]
+
+
+async def test_rewind_to_zero_empties_the_session(rw_session) -> None:
+    s = rw_session
+    await s.append("s", _turn(0))
+    assert await s.rewind("s", keep_entries=0) == 2
+    assert await s.load("s") == []
+    assert await s.segments("s") == []
+
+
+async def test_rewind_past_the_end_is_a_noop(rw_session) -> None:
+    s = rw_session
+    await s.append("s", _turn(0), run_id="r0", meta={"note": 0})
+    assert await s.rewind("s", keep_entries=2) == 0
+    assert await s.rewind("s", keep_entries=99) == 0
+    assert await s.rewind("missing", keep_entries=0) == 0
+    segs = await s.segments("s")
+    assert len(segs) == 1 and segs[0].meta == {"note": 0}
+
+
+async def test_rewind_validates_arguments(rw_session) -> None:
+    with pytest.raises(ValueError, match="keep_entries"):
+        await rw_session.rewind("s", keep_entries=-1)
+
+
+async def test_rewind_survives_sqlite_reopen(tmp_path) -> None:
+    path = tmp_path / "rewound.db"
+    s = SQLiteSession(path)
+    for i in range(2):
+        await s.append("s", _turn(i), run_id=f"r{i}")
+    await s.rewind("s", keep_entries=2)
+
+    reopened = SQLiteSession(path)
+    entries = await reopened.load("s")
+    assert [e.content for e in entries] == ["u0", "a0"]

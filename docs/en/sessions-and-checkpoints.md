@@ -46,8 +46,11 @@ exists for exactly that.
 
 ### Maintenance
 
-Long-lived sessions accumulate huge old tool outputs. The bundled stores
-(not the protocol) provide one sanctioned carve-out from append-only:
+The bundled stores (not the protocol) provide two sanctioned carve-outs from
+append-only.
+
+Long-lived sessions accumulate huge old tool outputs — `trim_tool_results`
+reclaims the space:
 
 ```python
 trimmed = await session.trim_tool_results("u1", keep_chars=400, keep_runs=1)
@@ -58,6 +61,22 @@ It truncates *stored* tool outputs older than the last `keep_runs` runs
 with a [`FileResultStore`](context.md#result-stores) on the compaction
 policy *before* relying on it — archived outputs stay recoverable via
 `recall_tool_result`; un-archived ones are truncated for good.
+
+`rewind` drops the transcript's tail — the primitive behind "edit that
+message and resend" / "regenerate" (a linear, destructive undo; there is no
+branching):
+
+```python
+removed = await session.rewind("u1", keep_entries=12)
+```
+
+`keep_entries` counts over the flat `load()` view. Whole later runs are
+deleted; a run the cut lands inside is truncated, kept tool-consistent (a
+dangling tool call at the cut is dropped too), and loses its per-run `meta` —
+carried context state computed after content that no longer exists must not
+leak back into the next run. `keep_entries=0` empties the session; a count at
+or past the end is a no-op. If the rewound run has a live checkpoint, delete
+it too — a later resume would replay the undone tail.
 
 ## Checkpoints
 

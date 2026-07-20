@@ -8,16 +8,24 @@ old row); :class:`InMemorySession` keeps the segments in a list. No extra
 dependencies — SQLite goes through the stdlib :mod:`sqlite3` driver and
 :func:`asyncio.to_thread`.
 
-Both also provide ``trim_tool_results`` — an explicit **maintenance** operation
-(not part of the :class:`~lovia.session.Session` protocol) that truncates old
-stored tool outputs in place. It is the one sanctioned carve-out from
-append-only: the runner never rewrites history, but an operator may reclaim
-space, and the operation preserves what everything else depends on — run
-boundaries, entry count and order, ``call_id`` pairing — so body indices,
-summary coverage, and the (result-length-blind) compaction fingerprint all
-survive. Configure a :class:`~lovia.context.FileResultStore` on the compaction
-policy *before* relying on trim: offloaded outputs archived there stay fully
-recoverable via ``recall_tool_result``; un-archived ones are truncated for good.
+Both also provide two explicit **maintenance** operations (neither is part of
+the :class:`~lovia.session.Session` protocol) — the sanctioned carve-outs from
+append-only:
+
+* ``trim_tool_results`` truncates old stored tool outputs in place. The runner
+  never rewrites history, but an operator may reclaim space, and the operation
+  preserves what everything else depends on — run boundaries, entry count and
+  order, ``call_id`` pairing — so body indices, summary coverage, and the
+  (result-length-blind) compaction fingerprint all survive. Configure a
+  :class:`~lovia.context.FileResultStore` on the compaction policy *before*
+  relying on trim: offloaded outputs archived there stay fully recoverable via
+  ``recall_tool_result``; un-archived ones are truncated for good.
+* ``rewind`` drops the transcript's tail — the primitive behind "edit that
+  message and resend" / "regenerate" (a linear, destructive undo; no
+  branching). Whole later runs are deleted; a run the cut lands inside is
+  truncated, kept tool-consistent, and loses its per-run ``meta`` (carried
+  context state computed after content that no longer exists must not leak
+  back in).
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from ..types import JsonObject
 from ..transcript import (
     ToolResultEntry,
     TranscriptEntry,
+    drop_dangling_tool_calls,
     entry_from_dict,
     entry_to_dict,
 )
@@ -94,6 +103,47 @@ def _validate_trim_args(keep_chars: int, keep_runs: int) -> None:
         raise ValueError("keep_chars must be >= 0")
     if keep_runs < 0:
         raise ValueError("keep_runs must be >= 0")
+
+
+def _validate_keep_entries(keep_entries: int) -> None:
+    if keep_entries < 0:
+        raise ValueError("keep_entries must be >= 0")
+
+
+# Shared rewind walk over in-order segments (backend-agnostic).
+#
+# Splits ``segments`` at the ``keep_entries``-th flat entry: segments wholly
+# before the cut survive untouched; the segment the cut lands inside is
+# truncated (then made tool-consistent — cutting between a call and its result
+# would otherwise leave a dangling pair the providers reject) and loses its
+# ``meta``, which was computed at that run's END, after content that no longer
+# exists; everything later is dropped. Returns ``(kept, boundary, removed)``
+# where ``boundary`` is the truncated segment (``None`` when the cut falls on
+# a segment edge or the truncation left nothing worth keeping) and ``removed``
+# counts entries dropped from the flat view. ``removed == 0`` means no-op.
+def _rewind_split(
+    segments: list[Segment], keep_entries: int
+) -> tuple[list[Segment], Segment | None, int]:
+    total = sum(len(seg.entries) for seg in segments)
+    if keep_entries >= total:
+        return segments, None, 0
+    kept: list[Segment] = []
+    boundary: Segment | None = None
+    remaining = keep_entries
+    for seg in segments:
+        if remaining >= len(seg.entries):
+            kept.append(seg)
+            remaining -= len(seg.entries)
+            continue
+        if remaining > 0:
+            entries = drop_dangling_tool_calls(seg.entries[:remaining])
+            if entries:
+                boundary = Segment(run_id=seg.run_id, entries=entries, meta=None)
+        break
+    kept_total = sum(len(seg.entries) for seg in kept) + (
+        len(boundary.entries) if boundary is not None else 0
+    )
+    return kept, boundary, total - kept_total
 
 
 class InMemorySession(Session):
@@ -160,6 +210,30 @@ class InMemorySession(Session):
                     seg.entries = entries
                     total += trimmed
             return total
+
+    async def rewind(self, session_id: str, *, keep_entries: int) -> int:
+        """Drop everything after the first ``keep_entries`` flat entries.
+
+        The destructive-undo primitive behind "edit & resend" / "regenerate":
+        indices refer to the flat :meth:`~lovia.session.Session.load` view.
+        Whole later runs are deleted; a run the cut lands inside is truncated,
+        made tool-consistent (a dangling tool call at the cut is dropped too),
+        and loses its per-run ``meta``. ``keep_entries=0`` empties the session;
+        a count at or past the end is a no-op. Returns the number of entries
+        removed from the flat view.
+        """
+        _validate_keep_entries(keep_entries)
+        async with self._lock:
+            segs = self._segments.get(session_id, [])
+            kept, boundary, removed = _rewind_split(segs, keep_entries)
+            if removed == 0:
+                return 0
+            new_segs = kept + ([boundary] if boundary is not None else [])
+            if new_segs:
+                self._segments[session_id] = new_segs
+            else:
+                self._segments.pop(session_id, None)
+            return removed
 
 
 _SESSION_SCHEMA = """
@@ -287,5 +361,52 @@ class SQLiteSession(SQLiteStore, Session):
                         )
                         total += trimmed
                 return total
+
+        return await self._run(_impl)
+
+    async def rewind(self, session_id: str, *, keep_entries: int) -> int:
+        """Drop everything after the first ``keep_entries`` flat entries.
+
+        Same contract as :meth:`InMemorySession.rewind`; row deletes and the
+        boundary-row rewrite happen in one transaction.
+        """
+        _validate_keep_entries(keep_entries)
+
+        def _impl() -> int:
+            with self._tx() as conn:
+                rows = conn.execute(
+                    "SELECT id, run_id, entries_json FROM session_runs "
+                    "WHERE session_id = ? ORDER BY id ASC",
+                    (session_id,),
+                ).fetchall()
+                segments = [
+                    Segment(
+                        run_id=r[1],
+                        entries=[entry_from_dict(d) for d in json.loads(r[2])],
+                    )
+                    for r in rows
+                ]
+                kept, boundary, removed = _rewind_split(segments, keep_entries)
+                if removed == 0:
+                    return 0
+                # Rows past the kept prefix: rewrite the boundary run in place
+                # (dropping its meta — see _rewind_split), delete the rest.
+                next_row = len(kept)
+                if boundary is not None:
+                    conn.execute(
+                        "UPDATE session_runs "
+                        "SET entries_json = ?, meta_json = NULL WHERE id = ?",
+                        (
+                            json.dumps(
+                                [entry_to_dict(e) for e in boundary.entries],
+                                ensure_ascii=False,
+                            ),
+                            rows[next_row][0],
+                        ),
+                    )
+                    next_row += 1
+                for row in rows[next_row:]:
+                    conn.execute("DELETE FROM session_runs WHERE id = ?", (row[0],))
+                return removed
 
         return await self._run(_impl)

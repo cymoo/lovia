@@ -1,8 +1,9 @@
 # Session 与 Checkpoint
 
-两类不同的持久化需求，分别由两种存储解决。**Session** 回答“这段对话到目前为止说过什么？”，
-用于保存跨运行的多轮对话；**Checkpoint** 回答“本次运行执行到哪里了？”，用于单次运行中的
-崩溃恢复和幂等处理。两者都采用追加写入，绝不改写历史记录。
+两类持久化需求分别由两种存储解决。**Session** 记录“这段对话到目前为止说过什么”，
+用于保存跨运行的多轮对话；**Checkpoint** 记录“本次运行执行到哪里了”，用于单次运行的
+崩溃恢复和幂等处理。Runner 正常运行时只会追加记录，不会覆写已有历史；内置存储另有明确的
+维护操作，可以按需截断或回退 Session。
 
 ## Session
 
@@ -16,9 +17,9 @@ result = await Runner.run(agent, "我的项目叫什么？", session=session, se
 # "Atlas"：第二次运行把第一次运行的 transcript 加载为历史
 ```
 
-`session_id` 由调用方指定，可以按用户、线程、工单，或产品中表示“对话”的其他实体来划分。Runner 会在运行
-开始时加载之前的历史；当运行**完成**时，把本次运行自己的 entries 作为一个 `Segment`
-追加进去（run id + entries + 每次运行的不透明 `meta`）。内置两个实现：
+`session_id` 由调用方指定，可以按用户、线程、工单或产品中的其他“对话”实体来划分。
+Runner 在运行开始时加载历史记录；运行**完成**后，将本次运行产生的 entries 作为一个
+`Segment` 追加进去，其中包含 run id、entries 和不透明的单次运行 `meta`。内置两个实现：
 `SQLiteSession(path, *, wal=False)` 和 `InMemorySession()`。
 
 ### 契约
@@ -31,15 +32,17 @@ result = await Runner.run(agent, "我的项目叫什么？", session=session, se
   也让运行边界和每次运行 `meta`（例如携带的[压缩状态](context.md)）保持一致。
 - **按 `run_id` 幂等。** 对已保存的 `run_id` 再次 append 不会做任何事，所以重放运行不会重复写入 entries。
 
-中断的运行**不会**自动 append。它们保留在 checkpoint 中。是否把一个被放弃的部分运行记录为已完成
-segment，是**调用方**决定（内置 Web UI 在用户停止运行时会这样做）；收尾部分运行时必须保持
-工具一致性，`lovia.transcript.drop_dangling_tool_calls` 正是为此存在。
+中断的运行**不会**自动写入 Session，而是保留在 checkpoint 中。是否将放弃的部分结果作为
+已完成 segment 写入，由**调用方**决定；内置 Web UI 会在用户停止运行时这样处理。写入前必须
+移除没有对应结果的工具调用，保持 transcript 完整，可使用
+`lovia.transcript.drop_dangling_tool_calls` 处理。
 
 ### 维护
 
-内置存储（不是 protocol）提供两个受控的 append-only 例外。
+除 `Session` protocol 已定义的 `clear()` 外，内置存储还允许在两种维护场景下修改已有数据。
+下面两项能力不属于 protocol，自定义存储无需实现。
 
-长生命周期 session 会积累巨大的旧工具输出——`trim_tool_results` 回收空间：
+长期使用的 session 可能积累大量旧工具输出。可用 `trim_tool_results` 回收空间：
 
 ```python
 trimmed = await session.trim_tool_results("u1", keep_chars=400, keep_runs=1)
@@ -50,22 +53,23 @@ trimmed = await session.trim_tool_results("u1", keep_chars=400, keep_runs=1)
 [`FileResultStore`](context.md#结果存储)：归档输出仍可通过 `recall_tool_result` 恢复；
 没有归档的输出被截断后就无法恢复。
 
-`rewind` 丢弃 transcript 的尾部——"编辑消息重发"/"重新生成"背后的原语（线性、
-破坏式撤销；没有分支）：
+`rewind` 从指定位置截去 transcript 尾部，是“编辑后重发”和“重新生成”的底层操作。
+它会直接修改现有历史，不会创建分支：
 
 ```python
 removed = await session.rewind("u1", keep_entries=12)
 ```
 
-`keep_entries` 按扁平 `load()` 视图计数。切点之后的整段运行被删除；切点落在中间的运行
-被截断并保持工具一致性（切点处悬空的工具调用一并丢弃），同时丢弃其 per-run `meta`——
-那是运行**结束**时计算的携带上下文状态，指向已不存在的内容，绝不能泄漏回下一次运行。
-`keep_entries=0` 清空 session；切点在末尾或之后则为 no-op。如果被回退的运行还有存活的
-checkpoint，也要一并删除——否则后续 resume 会重放已撤销的尾部。
+`keep_entries` 按 `load()` 返回的扁平视图计数。切点之后的运行会被整段删除；如果切点
+落在某次运行内部，该运行会被截断，同时移除切点处失去结果的工具调用，以保证记录仍然
+完整。被截断运行的 `meta` 也会清除，因为其中的上下文状态是在运行结束时计算的，已与
+回退后的 transcript 不一致。`keep_entries=0` 会清空 session；切点位于末尾或超过末尾时
+不做任何操作。若被回退的运行仍留有 checkpoint，也应一并删除，否则后续恢复会重新写入
+已经撤销的尾部内容。
 
 ## Checkpoint
 
-需要承受崩溃，或需要安全重发的运行，应该加 checkpoint：
+如果运行需要在进程崩溃后恢复，或需要安全地重复提交，应启用 checkpoint：
 
 ```python
 from uuid import uuid4

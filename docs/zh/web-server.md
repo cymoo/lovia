@@ -29,36 +29,38 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `generate_titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `approval_timeout` | `None` | N 秒后自动拒绝未解决的审批 |
-| `max_background_runs` | `8` | 并发托管 Run；超额启动返回 429 |
+| `max_background_runs`（仅 `create_app()`） | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API |
 | `cors_origins` | `None` | 允许的浏览器 Origin；不设置就不发送 CORS header |
-| `token` / `auth` | `None` | `/api/*` 的 Bearer token 门禁，或自定义 FastAPI 依赖（见下文） |
+| `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
 | `title` / `empty_title` / `empty_description` | lovia 默认文案 | UI 文案和品牌 |
-| `empty_examples` | `None` | 空白聊天页上可点击的示例 prompt（点击填入输入框） |
+| `empty_examples` | `None` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
 
 端点契约与 `ChatStore` 接口见 [HTTP API](http-api.md)。
 
 ## 认证
 
-回环地址绑定无需任何凭据。除此之外 `serve()` 默认安全：绑定非回环地址时，
-若既没传 `token` 也没传 `auth`，会自动生成一个 token 并打印一次——附带可直接
-打开的 `/?token=...` UI 链接——API 永远不会在无认证的情况下暴露。
+`serve()` 绑定回环地址时默认不要求凭据。绑定非回环地址时，如果既未传入 `token`
+也未传入 `auth`，它会自动生成一个 token，并在启动时打印一次，同时给出可直接打开的
+`/?token=...` UI 链接。因此，通过 `serve()` 启动时，API 不会未经认证就暴露在
+非回环地址上。
 
 ```python
 serve(agent, host="0.0.0.0", token="s3cret")        # 固定 token
 serve(agent, host="0.0.0.0")                        # 自动生成并打印
 ```
 
-一个 token，两条通道，守住所有 `/api/*` 路由（`/healthz` 对探针保持开放；
-UI 页面与静态资源本身不含数据，保持公开）：
+token 会保护 `build_api_router` 注册的业务路由。`/healthz`、`/api/docs`、
+`/api/openapi.json`、UI 页面和静态资源不包含会话或工作区数据，默认不要求认证。
+客户端可以通过两种方式提交 token：
 
-- **API 客户端**发送 `Authorization: Bearer <token>`——SSE 也一样，因为流
-  是用 `fetch` 消费的。
-- **内置 UI** 把 token 存入 cookie（从 `/?token=...` 链接自动采集，或在
-  401 时弹框输入），因此 `<img>` 预览和下载链接也能带上凭据。
+- **API 客户端**发送 `Authorization: Bearer <token>`。SSE 流由 `fetch` 读取，
+  同样可以携带这个请求头。
+- **内置 UI** 会把 token 保存到 cookie。token 可以从 `/?token=...` 链接自动读取，
+  也可以在收到 401 后按提示输入。这样，`<img>` 预览和下载链接也会自动携带凭据。
 
-需要会话、OAuth 或按用户识别身份时，用任意 FastAPI 依赖替换内置检查——
-守卫的仍是同一批路由：
+如需会话认证、OAuth 或按用户区分身份，可以传入任意 FastAPI 依赖来替换内置检查；
+保护范围仍是同一组路由：
 
 ```python
 async def my_auth(request: Request) -> None:
@@ -68,8 +70,8 @@ async def my_auth(request: Request) -> None:
 serve(agent, host="0.0.0.0", auth=my_auth)
 ```
 
-`create_app()` 接受同样的两个参数，但默认保持中立——不会替你生成 token；
-自己掌管应用时请显式接线认证。
+`create_app()` 也接受这两个参数，但默认不会生成 token。自行管理应用时，请显式配置
+认证依赖。
 
 ## 托管 Run 生命周期
 
@@ -93,20 +95,20 @@ Web 包持久化 Schedule，并支持三种触发方式：
 | `every` | 秒数间隔 |
 | `cron` | Cron 表达式；`lovia[web]` 已包含 `croniter` |
 
-`Scheduling(store)` 提供带审批门禁的 `schedule_run` Tool。模型可以提出未来 Run，但只有用户
-批准 Tool 调用后才会真正创建。`continue_session=True` 把结果追加到同一聊天，否则每次触发
-都会创建新 Session。投递采用 at-most-once 并合并触发：上一次仍在运行时跳过本次触发。
+`Scheduling(store)` 提供需要审批的 `schedule_run` Tool。模型可以建议创建定时运行，
+只有用户批准 Tool 调用后才会保存日程。`continue_session=True` 会把结果追加到同一聊天；
+否则每次触发都创建新的 Session。每次触发至多投递一次；上一次运行尚未结束时，本次触发
+直接跳过，不会排队积压。
 
 ## 安全检查
 
-- 个人使用保持 `host="127.0.0.1"`；非回环绑定会自动加上 token 门禁，但此后
-  一切都系于这个 token——请像对待密码一样对待它。
-- 面向不可信用户时限制或关闭可写 Workspace：持有 token 的任何人都能让
-  agent 改文件、跑 shell。
+- 个人使用时保持 `host="127.0.0.1"`。非回环绑定会自动启用 token 验证；请妥善保管
+  token，将其视同密码。
+- 面向不可信用户时，应限制或关闭可写 Workspace。任何持有 token 的人都可以让 Agent
+  修改文件或执行 Shell 命令。
 - 设置 `approval_timeout`，避免无人处理的弹窗长期占用容量。
 - 只使用一个 Worker，并备份 SQLite 数据库。
-- 真正的多用户暴露还需要 TLS、按用户认证（`auth=`）与限流——共享 token
-  只是单用户级别的安全。
+- 多用户部署还需要 TLS、按用户认证（`auth=`）和限流。共享 token 只适合单用户场景。
 
 生产使用前请阅读完整的[生产部署](deployment.md)指南。
 

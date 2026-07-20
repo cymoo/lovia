@@ -205,5 +205,5 @@ lovia web
 | --- | --- |
 | MCP 客户端支持 | `pip install "lovia[mcp]"` |
 | DuckDuckGo 搜索后端 | `pip install "lovia[ddg]"` |
-| Tavily 搜索后端 | 无需 Extra——设置 `TAVILY_API_KEY` |
+| Tavily 搜索后端 | 无需安装额外依赖；设置 `TAVILY_API_KEY` 即可 |
 | FastAPI 服务端、聊天 UI 和定时任务 | `pip install "lovia[web]"` |

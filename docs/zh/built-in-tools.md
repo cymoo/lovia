@@ -20,7 +20,8 @@ agent = Agent(
 
 ## HTTP 请求
 
-`lovia.tools.http.http_fetch`：带边界限制、可识别内容类型（content type）的一次性请求工具。
+`lovia.tools.http.http_fetch` 用于发送单次 HTTP 请求，并限制下载大小、超时和返回内容长度；
+它还会根据内容类型处理响应。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -43,9 +44,9 @@ agent = Agent(
 
 ## Web 搜索
 
-`lovia.tools.search`：可插拔搜索工具。内置两个后端：DuckDuckGo（免 key，
-位于 `ddg` extra 中）和 Tavily（无需额外安装——设置 `TAVILY_API_KEY` 或传入
-`api_key=`）：
+`lovia.tools.search` 提供可插拔的搜索工具，自带两种后端：DuckDuckGo 无需 API 密钥，
+但要安装 `ddg` extra；Tavily 无需安装额外依赖，但要设置 `TAVILY_API_KEY` 或传入
+`api_key=`。
 
 ```bash
 pip install "lovia[ddg]"   # 仅 DuckDuckGo 后端需要
@@ -54,7 +55,7 @@ pip install "lovia[ddg]"   # 仅 DuckDuckGo 后端需要
 ```python
 from lovia.tools.search import duckduckgo_search, tavily_search, web_search
 
-tools = [duckduckgo_search()]            # 免 key，需要 lovia[ddg]
+tools = [duckduckgo_search()]            # 无需 API 密钥，需要 lovia[ddg]
 tools = [tavily_search()]                # Tavily API，读取 TAVILY_API_KEY
 tools = [web_search(MySearchBackend())]  # 或你自己的后端
 ```
@@ -91,9 +92,9 @@ class WebSearch(Protocol):
   agent.instruction(current_date())
   ```
 
-  日期在 prompt 里，模型搜索时就会带上当前年份，而不是先浪费一轮调用 `now`。它只写
-  日期是有意为之：日期在任意 prompt cache 窗口内基本恒定，不会实质破坏
-  [provider 缓存](providers.md#提示词缓存)。精确时间需要时交给 `now`。
+  日期写入提示词后，模型搜索时可以直接使用当前年份，无需先调用一轮 `now`。这里只写日期，
+  不写精确时间，因为日期在提示词缓存周期内通常不会变化，对
+  [Provider 缓存](providers.md#提示词缓存)影响很小。需要精确时间时再调用 `now`。
 
 ## 询问人工
 
@@ -126,18 +127,18 @@ Tool 调用会阻塞，直到答案到达、问题被取消，或 Channel 关闭
 Tool 增加超时。从其他线程回答时，先切回事件循环线程，例如使用
 `loop.call_soon_threadsafe(channel.answer, qid, text)`。
 
-“是否允许执行？”并期待 yes/no 时使用审批；模型需要只有人知道的信息并期待自由文本时，
-使用 `ask_human`。
+如果问题是“是否允许执行”，并且答案为允许或拒绝，应使用审批；如果模型需要向人询问信息，
+并接收自由文本回答，则使用 `ask_human`。
 
 ## 注意事项
 
-- **`http_fetch` 是最锋利的内置工具。** 和不可信输入组合时，它就是 SSRF 原语。
-  公开暴露前请加门禁或沙箱网络。
-- **`duckduckgo_search()` / `tavily_search()` 会立即构造。** 缺少 `ddgs` 包或
-  `TAVILY_API_KEY` 时，它们会在构建时抛 `UserError`。这正是你想在启动时看到的
-  快速失败，而不是运行中捕获后忽略。
-- **搜索结果质量取决于后端。** DDG 后端不需要 key，但实际使用中有频率限制；
-  生产应用通常会用带 key 的后端（`tavily_search()`）或自己的 `WebSearch`。
+- **谨慎开放 `http_fetch`。** 模型受到不可信输入影响时，攻击者可能借此发起 SSRF 请求。
+  对外提供服务前，应为工具启用审批，或隔离其网络环境。
+- **`duckduckgo_search()` / `tavily_search()` 会立即创建后端。** 缺少 `ddgs` 包或
+  `TAVILY_API_KEY` 时，构建工具便会抛出 `UserError`，让配置问题在启动阶段暴露，
+  而不是拖到运行中途。
+- **搜索结果质量取决于后端。** DDG 后端不需要 API 密钥，但实际使用中可能遇到频率限制；
+  生产环境通常使用 Tavily 等需要密钥的后端，或自行实现 `WebSearch`。
 
 ## 延伸阅读
 

@@ -497,7 +497,7 @@ provider = ScriptedProvider([
 | --- | --- |
 | 核心框架 | `pip install lovia` |
 | DuckDuckGo 搜索 | `pip install "lovia[ddg]"` |
-| Tavily 搜索 | 无需 extra——设置 `TAVILY_API_KEY` |
+| Tavily 搜索 | 无需安装额外依赖；设置 `TAVILY_API_KEY` 即可 |
 | MCP 集成 | `pip install "lovia[mcp]"` |
 | Web UI | `pip install "lovia[web]"` |
 | 可运行示例 | `pip install "lovia[examples,web]"` |

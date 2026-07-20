@@ -81,8 +81,9 @@ Provider 客户端默认忽略环境中的 `HTTP_PROXY` / `HTTPS_PROXY`。如果
 
 ## Web 服务无法访问或不适合暴露
 
-- 默认绑定 `127.0.0.1:8000`，远程机器无法访问 Loopback。
-- 内置服务没有身份认证或限流。
+- 默认绑定 `127.0.0.1:8000`，只能从本机访问。
+- `serve()` 绑定非回环地址时会要求或自动生成 Bearer token；`create_app()` 不会自动生成。
+  内置服务仍不提供限流，多用户部署还需要自行接入认证和授权。
 - 使用单 Worker；实时 Run 托管和审批状态属于进程内状态。
 - 暴露服务前，关闭或严格限制可写 Workspace。
 
@@ -90,7 +91,7 @@ Provider 客户端默认忽略环境中的 `HTTP_PROXY` / `HTTPS_PROXY`。如果
 
 ## 缺少可选依赖
 
-安装对应的 Extra：
+安装对应的 extra：
 
 ```bash
 pip install "lovia[mcp]"   # MCP
@@ -98,7 +99,7 @@ pip install "lovia[ddg]"   # DuckDuckGo 搜索
 pip install "lovia[web]"   # FastAPI 服务端和 UI
 ```
 
-（Tavily 搜索后端无需 Extra——设置 `TAVILY_API_KEY` 即可。）
+Tavily 搜索后端无需安装额外依赖，只需设置 `TAVILY_API_KEY`。
 
 ## 提交有效的问题报告
 

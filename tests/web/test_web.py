@@ -326,6 +326,21 @@ def test_context_compacted_sse_forwards_notice() -> None:
     assert data["detail"] == ["context was 82% full", "3 tool results cleared"]
 
 
+def test_sse_payloads_keep_non_ascii_readable() -> None:
+    """Non-ASCII text rides the wire as itself, not as ``\\uXXXX`` escapes.
+
+    Escaped payloads still decode correctly, but make the raw event stream
+    unreadable when inspected in devtools.
+    """
+    from lovia import events
+    from lovia.web.sse import event_to_sse
+
+    payload = event_to_sse(events.TextDelta(delta="汉字、emoji 🎉"))
+    assert payload is not None
+    assert payload["data"] == '{"delta": "汉字、emoji 🎉"}'
+    assert json.loads(payload["data"])["delta"] == "汉字、emoji 🎉"
+
+
 def test_session_detail_replays_persisted_compaction_notice() -> None:
     """A finished session surfaces a per-run compaction notice (persisted in the
     segment meta) as a synthetic ``context_compacted`` entry at the run boundary."""

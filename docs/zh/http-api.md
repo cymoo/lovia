@@ -127,7 +127,7 @@ for await (const { event, data } of readSSE(res)) {
 ## ChatStore
 
 `ChatStore` 组合了 API 所需的几类存储：保存 transcript 的 `Session`、保存标题、时间戳、
-置顶状态和可恢复 `active_run_id` 的 `ChatMeta` 表，以及 checkpointer 和 schedules 表。
+置顶状态和可恢复 `active_run_id` 的 `ChatMeta` 表，以及 checkpointer、定时任务表和运行记录表。
 `ChatStore.sqlite(path, wal=False)` 将这些数据放进同一个文件；`ChatStore.in_memory()` 适合
 测试和演示；`ChatStore(session=..., meta_path=...)` 可以接入自定义 `Session` 后端，
 同时保留聊天元数据功能。

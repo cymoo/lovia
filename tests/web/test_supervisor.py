@@ -804,7 +804,7 @@ def test_lifespan_sweeps_stale_running_records(tmp_path) -> None:
     store = ChatStore.sqlite(path)  # constructing it ensures the schema
     conn = sqlite3.connect(path)
     conn.execute(
-        "INSERT INTO runs (id, session_id, agent, source, status, started_at) "
+        "INSERT INTO chat_runs (id, session_id, agent, source, status, started_at) "
         "VALUES ('stale', 's1', 'bot', 'user', 'running', 1.0)"
     )
     conn.commit()

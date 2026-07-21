@@ -18,9 +18,12 @@ class AgentInfo(BaseModel):
     # editor shows itself only for such agents).
     memory: bool = False
     # The model's context window in tokens (server override > agent policy >
-    # provider-advertised), or None when unknown — the UI's context meter
+    # provider-advertised), or None when unknown — the UI's context ring
     # shows itself only when this is set.
     context_window: int | None = None
+    # The model id the agent runs on (a plain string, or the provider's own
+    # ``model`` attribute) — shown in the context ring's detail view.
+    model: str | None = None
 
 
 class MemoryNotes(BaseModel):

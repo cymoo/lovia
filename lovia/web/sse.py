@@ -36,10 +36,16 @@ def _dumps(payload: object, default: Callable[[object], object] | None = None) -
 
 
 def usage_dict(usage: Usage) -> dict[str, int]:
-    """The ``{input,output,total}`` token shape shared by REST + SSE responses."""
+    """The token-usage shape shared by REST + SSE responses (and run records).
+
+    Cache counts ride along for cost visibility (the context ring's detail
+    view); ``input_tokens`` already includes them — see :class:`Usage`.
+    """
     return {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
         "total_tokens": usage.total_tokens,
     }
 

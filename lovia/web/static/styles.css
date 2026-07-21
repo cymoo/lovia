@@ -3382,44 +3382,93 @@ body.files-splitting {
   }
 }
 
-/* ---- Context meter (topbar) ------------------------------------------------------------------------- */
-.context-meter {
+/* ---- Context ring (composer) ------------------------------------------------------------------------ */
+/* How full the model's window is; click opens the detail popover. */
+.context-ring {
+  align-self: flex-end;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  cursor: help;
+  justify-content: center;
+  width: 30px;
+  height: 34px; /* matches the send button's row height */
+  margin-left: -8px; /* tuck into the pill's left padding */
+  border-radius: 50%;
+  color: var(--accent);
+  cursor: pointer;
 }
-.context-meter.hidden {
+.context-ring.hidden {
   display: none;
 }
-.context-meter-track {
-  width: 44px;
-  height: 4px;
-  border-radius: 2px;
+.context-ring:hover {
   background: var(--surface-3);
-  overflow: hidden;
 }
-.context-meter-fill {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: 2px;
-  background: var(--accent);
+.context-ring-track {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 2.5;
+}
+.context-ring-fill {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 100;
+  transform: rotate(-90deg);
+  transform-origin: center;
   transition:
-    width var(--t-med) var(--ease),
-    background var(--t-fast);
+    stroke-dasharray var(--t-med) var(--ease),
+    stroke var(--t-fast);
 }
-.context-meter-label {
-  font-size: 11px;
-  color: var(--muted-2);
+.context-ring.warn {
+  color: var(--warn);
+}
+.context-ring.danger {
+  color: var(--danger);
+}
+.composer-inner {
+  position: relative; /* anchors .context-popover to the centered pill */
+}
+.context-popover {
+  position: absolute;
+  left: 6px;
+  bottom: calc(100% + 10px);
+  min-width: 220px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+}
+[data-theme="dark"] .context-popover {
+  background: var(--surface-2);
+}
+.context-popover-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.context-popover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  font-size: 12px;
+}
+.context-popover-row .k {
+  color: var(--muted);
+}
+.context-popover-row .v {
+  color: var(--ink);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.context-meter.warn .context-meter-fill {
-  background: var(--warn);
-}
-.context-meter.danger .context-meter-fill {
-  background: var(--danger);
+.context-popover-row.context-popover-head .v {
+  font-weight: 600;
 }
 
 /* ---- Tool result actions (copy / expand / open-in-files) -------------------------------------------- */

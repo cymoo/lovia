@@ -122,6 +122,7 @@ def test_list_agents_single() -> None:
             "workspace": False,
             "memory": False,
             "context_window": None,
+            "model": None,
         }
     ]
 
@@ -802,8 +803,36 @@ def test_get_agent_by_name() -> None:
         "workspace": False,
         "memory": False,
         "context_window": None,
+        "model": None,
     }
     assert c.get("/api/agents/nope").status_code == 404
+
+
+def test_agent_info_reports_model_name() -> None:
+    # A string model is itself the id; a Provider exposes its `model` attr
+    # (ScriptedProvider has none → None, as the exact-dict tests above pin).
+    from lovia.web.api.agents import model_name
+
+    assert model_name(Agent(name="a", model="claude-fable-5")) == "claude-fable-5"
+    provider = ScriptedProvider([text("hi")])
+    provider.model = "scripted-v1"
+    assert model_name(Agent(name="b", model=provider)) == "scripted-v1"
+
+
+def test_usage_dict_includes_cache_counts() -> None:
+    from lovia.messages import Usage
+    from lovia.web.sse import usage_dict
+
+    d = usage_dict(
+        Usage(input_tokens=10, output_tokens=2, cache_read_tokens=7, cache_write_tokens=1)
+    )
+    assert d == {
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cache_read_tokens": 7,
+        "cache_write_tokens": 1,
+        "total_tokens": 12,
+    }
 
 
 # ----------------------------------------------------- delete-all + limit -
@@ -930,6 +959,7 @@ def test_build_api_router_is_embeddable() -> None:
             "workspace": False,
             "memory": False,
             "context_window": None,
+            "model": None,
         }
     ]
 

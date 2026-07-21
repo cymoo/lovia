@@ -42,7 +42,67 @@ const _recentlyStopped = new Map(); // sid → ts of a UI-initiated stop
 let _unseenFinished = 0; // completions while the tab was hidden
 const _baseTitle = document.title;
 
+// ---- Missed-completion catch-up ------------------------------------------
+// While a page is open, completions arrive live (event stream or poll diff).
+// This covers the rest: runs that finished while NO page was open. The
+// localStorage watermark means "this browser knows all results up to T"; on
+// load, anything in /api/runs/history that finished after it gets a catch-up
+// toast, then the watermark moves to now.
+const RUNS_SEEN_KEY = 'lovia-runs-seen';
+const MISSED_TOAST_MAX = 5;
+
+function _markRunsSeen() {
+  try {
+    localStorage.setItem(RUNS_SEEN_KEY, String(Date.now() / 1000));
+  } catch { /* storage unavailable (e.g. private mode) — feature degrades off */ }
+}
+
+async function checkMissedRuns() {
+  let seen = NaN;
+  try {
+    seen = parseFloat(localStorage.getItem(RUNS_SEEN_KEY));
+  } catch {
+    return;
+  }
+  if (!Number.isFinite(seen)) {
+    _markRunsSeen(); // first visit seeds the watermark quietly
+    return;
+  }
+  let records;
+  try {
+    // Generous limit: the toasts cap themselves below, but the watermark only
+    // advances over what this fetch actually covered.
+    records = await api.runHistory({ since: seen, limit: 100 });
+  } catch {
+    // An older server or a blip: keep the old watermark so the next load
+    // retries instead of silently dropping those notices forever.
+    return;
+  }
+  _markRunsSeen();
+  // completed/failed are outcomes worth announcing; "cancelled" was the user's
+  // own doing and "interrupted" is a resumable pause, not a result.
+  const missed = records.filter(
+    (r) => r.status === 'completed' || r.status === 'failed',
+  );
+  const titleOf = (sid) =>
+    store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun');
+  for (const r of missed.slice(0, MISSED_TOAST_MAX)) {
+    const ok = r.status === 'completed';
+    toast(
+      t(ok ? 'toast.missedRunFinished' : 'toast.missedRunFailed', {
+        title: titleOf(r.session_id),
+      }),
+      { type: ok ? 'success' : 'error' },
+    );
+  }
+  if (missed.length > MISSED_TOAST_MAX) {
+    toast(t('toast.missedRunMore', { n: missed.length - MISSED_TOAST_MAX }));
+  }
+}
+
 function _notifyRunFinished(sid) {
+  // Whatever else happens below, this browser has now seen results up to here.
+  _markRunsSeen();
   const stoppedAt = _recentlyStopped.get(sid);
   if (stoppedAt && Date.now() - stoppedAt < STOPPED_GRACE_MS) return;
   // The chat on screen ends its own stream visibly — no extra notice.
@@ -570,7 +630,8 @@ export function initSearch() {
 
 // ---- Init ----------------------------------------------------------------
 export function initSessions() {
-  loadSessions();
+  // Catch-up runs after the first session load so titles are resolvable.
+  loadSessions().then(checkMissedRuns);
   initSearch();
 
   document.getElementById('new-chat')?.addEventListener('click', () => {

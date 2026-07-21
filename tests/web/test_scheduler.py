@@ -834,8 +834,9 @@ async def test_schedule_info_derives_status_and_history_from_records() -> None:
 
 
 async def test_legacy_db_with_dropped_status_columns_still_works(tmp_path) -> None:
-    """A 0.8.x DB whose schedules table still carries last_status/last_error
-    opens cleanly: the dead columns are ignored and the runs table appears."""
+    """A 0.8.x DB whose ``schedules`` table still carries last_status/last_error
+    opens cleanly: the rows fold into ``chat_schedules`` (shedding the dead
+    columns) and the run-records table appears."""
     import sqlite3
     from pathlib import Path
 

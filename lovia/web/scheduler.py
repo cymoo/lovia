@@ -1,6 +1,6 @@
 """Scheduled / deferred background runs (Phase 3).
 
-A single async loop polls the ``schedules`` table and, when a schedule is due,
+A single async loop polls the ``chat_schedules`` table and, when a schedule is due,
 fires a **supervised** run via :class:`~lovia.web.supervisor.RunSupervisor`
 (headless — no client needs to be attached). Triggers: ``cron`` (croniter),
 ``every`` (interval seconds), ``at`` (one-shot epoch timestamp).

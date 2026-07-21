@@ -434,3 +434,43 @@ async def test_delete_schedule_drops_its_run_records() -> None:
 
     await store.delete_schedule("x")
     assert [r.id for r in await store.list_runs()] == ["b"]
+
+
+async def test_migration_folds_legacy_schedules_into_chat_schedules(
+    tmp_path: Path,
+) -> None:
+    # Pre-0.8.27 DBs name the table ``schedules`` (some with the retired
+    # last_status/last_error columns). Opening one moves the rows to
+    # ``chat_schedules`` and drops the old table — dead columns and all.
+    # Idempotent: reopening must not duplicate or fail.
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE schedules (id TEXT PRIMARY KEY, agent TEXT, "
+        "input TEXT NOT NULL, session_id TEXT, trigger_kind TEXT NOT NULL, "
+        "trigger_expr TEXT NOT NULL, next_fire REAL NOT NULL, "
+        "active INTEGER NOT NULL DEFAULT 1, last_session_id TEXT, "
+        "last_status TEXT, last_error TEXT, "
+        "created_at REAL NOT NULL, updated_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO schedules VALUES ('x', 'bot', 'go', NULL, 'every', "
+        "'3600', 1.0, 1, NULL, 'ok', NULL, 1.0, 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    for _ in range(2):
+        store = ChatStore.sqlite(path)
+        row = await store.get_schedule("x")
+        assert row is not None and row.input == "go" and row.active
+        assert len(await store.list_schedules()) == 1
+
+    conn = sqlite3.connect(path)
+    names = {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    conn.close()
+    assert "chat_schedules" in names and "schedules" not in names

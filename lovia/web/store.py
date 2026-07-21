@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
-CREATE TABLE IF NOT EXISTS schedules (
+CREATE TABLE IF NOT EXISTS chat_schedules (
     id TEXT PRIMARY KEY,
     agent TEXT,
     input TEXT NOT NULL,
@@ -77,8 +77,9 @@ CREATE TABLE IF NOT EXISTS schedules (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(active, next_fire);
-CREATE TABLE IF NOT EXISTS runs (
+CREATE INDEX IF NOT EXISTS idx_chat_schedules_due
+    ON chat_schedules(active, next_fire);
+CREATE TABLE IF NOT EXISTS chat_runs (
     id TEXT PRIMARY KEY,
     session_id TEXT,
     agent TEXT,
@@ -89,8 +90,10 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at REAL,
     usage_json TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_runs_session
+    ON chat_runs(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_runs_source
+    ON chat_runs(source, started_at DESC);
 """
 
 
@@ -123,7 +126,7 @@ class ChatMeta:
 
 @dataclass(frozen=True)
 class ScheduleRow:
-    """One row of the ``schedules`` table (a scheduled background run)."""
+    """One row of the ``chat_schedules`` table (a scheduled background run)."""
 
     id: str
     agent: str | None
@@ -171,7 +174,9 @@ class ScheduleRow:
 
 @dataclass(frozen=True)
 class RunRow:
-    """One row of the ``runs`` table — the durable record of a supervised run.
+    """One row of the ``chat_runs`` table — the durable record of a
+    supervised run (its *outcome*; the transcript itself lives in the session
+    store, e.g. ``session_runs``).
 
     ``id`` is the run's checkpoint run_id when checkpointing is on (so a
     resumed run finalizes the same row), else a minted uuid. ``source`` names
@@ -278,9 +283,23 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
-            # Dropped columns (schedules.last_status/last_error, replaced by the
-            # ``runs`` table) are left in place on legacy DBs — every statement
-            # names its columns, so they are simply never touched again.
+            # Pre-0.8.27 DBs name the schedule table ``schedules`` — before the
+            # chat_ prefix marked every ChatStore-owned table in the shared DB
+            # file. The base schema (already ensured) created the empty
+            # ``chat_schedules``; fold the legacy rows in and drop the old
+            # table. Naming _SCHED_COLS explicitly also sheds the dead
+            # ``last_status``/``last_error`` columns some legacy DBs carry
+            # (retired by the run-records table) — they vanish with the DROP.
+            legacy = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='schedules'"
+            ).fetchone()
+            if legacy is not None:
+                conn.execute(
+                    f"INSERT OR IGNORE INTO chat_schedules ({_SCHED_COLS}) "
+                    f"SELECT {_SCHED_COLS} FROM schedules"
+                )
+                conn.execute("DROP TABLE schedules")
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -426,7 +445,9 @@ class ChatStore:
         await self._drop_checkpoint(session_id)
         await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-        await self._write("DELETE FROM runs WHERE session_id = ?", (session_id,))
+        await self._write(
+            "DELETE FROM chat_runs WHERE session_id = ?", (session_id,)
+        )
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
@@ -440,7 +461,7 @@ class ChatStore:
             await self._drop_checkpoint(session_id)
             await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions")
-        await self._write("DELETE FROM runs")
+        await self._write("DELETE FROM chat_runs")
 
     async def _drop_checkpoint(self, session_id: str) -> None:
         """Delete the session's active-run snapshot, if any (best-effort)."""
@@ -506,7 +527,7 @@ class ChatStore:
 
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
-            f"INSERT INTO schedules ({_SCHED_COLS}) "
+            f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
@@ -525,14 +546,14 @@ class ChatStore:
 
     async def list_schedules(self) -> Sequence[ScheduleRow]:
         return await self._read_all(
-            f"SELECT {_SCHED_COLS} FROM schedules ORDER BY created_at DESC",
+            f"SELECT {_SCHED_COLS} FROM chat_schedules ORDER BY created_at DESC",
             (),
             ScheduleRow.from_row,
         )
 
     async def get_schedule(self, schedule_id: str) -> ScheduleRow | None:
         return await self._read_one(
-            f"SELECT {_SCHED_COLS} FROM schedules WHERE id = ?",
+            f"SELECT {_SCHED_COLS} FROM chat_schedules WHERE id = ?",
             (schedule_id,),
             ScheduleRow.from_row,
         )
@@ -540,7 +561,7 @@ class ChatStore:
     async def update_schedule(self, row: ScheduleRow) -> None:
         """Overwrite every mutable column of the schedule (keyed by ``row.id``)."""
         await self._write(
-            "UPDATE schedules SET agent = ?, input = ?, session_id = ?, "
+            "UPDATE chat_schedules SET agent = ?, input = ?, session_id = ?, "
             "trigger_kind = ?, trigger_expr = ?, next_fire = ?, active = ?, "
             "last_session_id = ?, updated_at = ? WHERE id = ?",
             (
@@ -560,16 +581,16 @@ class ChatStore:
     async def delete_schedule(self, schedule_id: str) -> bool:
         """Delete a schedule (and its run history); returns whether it existed."""
         existed = (await self.get_schedule(schedule_id)) is not None
-        await self._write("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        await self._write("DELETE FROM chat_schedules WHERE id = ?", (schedule_id,))
         await self._write(
-            "DELETE FROM runs WHERE source = ?", (f"schedule:{schedule_id}",)
+            "DELETE FROM chat_runs WHERE source = ?", (f"schedule:{schedule_id}",)
         )
         return existed
 
     async def due_schedules(self, now: float) -> Sequence[ScheduleRow]:
         """Active schedules whose ``next_fire`` is at or before ``now``."""
         return await self._read_all(
-            f"SELECT {_SCHED_COLS} FROM schedules "
+            f"SELECT {_SCHED_COLS} FROM chat_schedules "
             "WHERE active = 1 AND next_fire <= ? ORDER BY next_fire",
             (now,),
             ScheduleRow.from_row,
@@ -585,7 +606,7 @@ class ChatStore:
     ) -> None:
         """Advance a schedule after a fire (or deactivate a one-shot)."""
         await self._write(
-            "UPDATE schedules SET next_fire = ?, active = ?, "
+            "UPDATE chat_schedules SET next_fire = ?, active = ?, "
             "last_session_id = ?, updated_at = ? WHERE id = ?",
             (next_fire, int(active), last_session_id, time.time(), schedule_id),
         )
@@ -596,12 +617,12 @@ class ChatStore:
         """Pause/resume a schedule (resume passes a freshly-computed next_fire)."""
         if next_fire is None:
             await self._write(
-                "UPDATE schedules SET active = ?, updated_at = ? WHERE id = ?",
+                "UPDATE chat_schedules SET active = ?, updated_at = ? WHERE id = ?",
                 (int(active), time.time(), schedule_id),
             )
         else:
             await self._write(
-                "UPDATE schedules SET active = ?, next_fire = ?, updated_at = ? "
+                "UPDATE chat_schedules SET active = ?, next_fire = ?, updated_at = ? "
                 "WHERE id = ?",
                 (int(active), next_fire, time.time(), schedule_id),
             )
@@ -620,7 +641,7 @@ class ChatStore:
         and ``source``, so the whole run stays one record.
         """
         await self._write(
-            f"INSERT INTO runs ({_RUN_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            f"INSERT INTO chat_runs ({_RUN_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET status = excluded.status, "
             "error = excluded.error, finished_at = excluded.finished_at",
             (
@@ -646,7 +667,7 @@ class ChatStore:
     ) -> None:
         """Finalize a run record with its terminal status/error/usage."""
         await self._write(
-            "UPDATE runs SET status = ?, error = ?, finished_at = ?, "
+            "UPDATE chat_runs SET status = ?, error = ?, finished_at = ?, "
             "usage_json = ? WHERE id = ?",
             (
                 status,
@@ -685,7 +706,7 @@ class ChatStore:
             params.append(since)
         clause = f"WHERE {' AND '.join(where)} " if where else ""
         return await self._read_all(
-            f"SELECT {_RUN_COLS} FROM runs {clause}"
+            f"SELECT {_RUN_COLS} FROM chat_runs {clause}"
             "ORDER BY started_at DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
             RunRow.from_row,
@@ -694,7 +715,7 @@ class ChatStore:
     async def latest_run_for(self, source: str) -> RunRow | None:
         """The most recent run started by ``source`` (a schedule's last outcome)."""
         return await self._read_one(
-            f"SELECT {_RUN_COLS} FROM runs WHERE source = ? "
+            f"SELECT {_RUN_COLS} FROM chat_runs WHERE source = ? "
             "ORDER BY started_at DESC LIMIT 1",
             (source,),
             RunRow.from_row,
@@ -708,7 +729,7 @@ class ChatStore:
         previous process took down with it.
         """
         await self._write(
-            "UPDATE runs SET status = 'interrupted', finished_at = ? "
+            "UPDATE chat_runs SET status = 'interrupted', finished_at = ? "
             "WHERE status = 'running'",
             (time.time(),),
         )

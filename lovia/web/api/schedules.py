@@ -13,19 +13,31 @@ from dataclasses import replace
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter, HTTPException, Query
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
 from ..scheduler import Scheduler, initial_next_fire, validate_trigger
-from ..schemas import ScheduleInfo, SchedulePatch, ScheduleSpec
-from ..store import ScheduleRow
+from ..schemas import RunRecordInfo, ScheduleInfo, SchedulePatch, ScheduleSpec
+from ..store import RunRow, ScheduleRow
 from .deps import RouterDeps
+from .serialization import run_record
 
 
-def _info(row: ScheduleRow) -> ScheduleInfo:
+def _info(row: ScheduleRow, last: RunRow | None = None) -> ScheduleInfo:
+    """Project a schedule row (+ its latest run record) onto the wire shape.
+
+    ``last_status``/``last_error`` are derived, not stored: the run records
+    keyed by ``source = "schedule:<id>"`` are the single source of truth for
+    outcomes. A still-``running`` record reads as "no outcome yet" (None),
+    matching a schedule that has never fired.
+    """
+    last_status = last_error = None
+    if last is not None and last.status != "running":
+        last_status = "ok" if last.status == "completed" else "error"
+        last_error = last.error
     return ScheduleInfo(
         id=row.id,
         agent=row.agent,
@@ -36,8 +48,8 @@ def _info(row: ScheduleRow) -> ScheduleInfo:
         next_fire=row.next_fire,
         active=row.active,
         last_session_id=row.last_session_id,
-        last_status=row.last_status,
-        last_error=row.last_error,
+        last_status=last_status,
+        last_error=last_error,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -74,16 +86,29 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     # without needing that loop to run — this instance is never start()ed.
     fire_scheduler = Scheduler(deps)
 
+    async def _with_last(row: ScheduleRow) -> ScheduleInfo:
+        return _info(row, await store.latest_run_for(f"schedule:{row.id}"))
+
     @router.get("/api/schedules", response_model=list[ScheduleInfo])
     async def list_schedules() -> list[ScheduleInfo]:
-        return [_info(r) for r in await store.list_schedules()]
+        return [await _with_last(r) for r in await store.list_schedules()]
 
     @router.get("/api/schedules/{schedule_id}", response_model=ScheduleInfo)
     async def get_schedule(schedule_id: str) -> ScheduleInfo:
         row = await store.get_schedule(schedule_id)
         if row is None:
             raise HTTPException(status_code=404, detail="schedule not found")
-        return _info(row)
+        return await _with_last(row)
+
+    @router.get("/api/schedules/{schedule_id}/runs", response_model=list[RunRecordInfo])
+    async def schedule_runs(
+        schedule_id: str, limit: int = Query(20, ge=1, le=200)
+    ) -> list[RunRecordInfo]:
+        """This schedule's fire history, newest first (its run records)."""
+        if await store.get_schedule(schedule_id) is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        rows = await store.list_runs(source=f"schedule:{schedule_id}", limit=limit)
+        return [run_record(r) for r in rows]
 
     @router.post("/api/schedules", response_model=ScheduleInfo)
     async def create_schedule(spec: ScheduleSpec) -> ScheduleInfo:
@@ -153,7 +178,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
         if changes:
             row = replace(row, updated_at=time.time(), **changes)
             await store.update_schedule(row)
-        return _info(row)
+        return await _with_last(row)
 
     @router.post("/api/schedules/{schedule_id}/run")
     async def run_schedule(schedule_id: str) -> dict[str, Any]:

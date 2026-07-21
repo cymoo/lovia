@@ -147,6 +147,12 @@ export const api = {
     fetch(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
       _jsonOrDetail,
     ),
+  // A schedule's fire history, newest first: [{ run_id, session_id, status,
+  // error, started_at, finished_at, usage }].
+  scheduleRuns: (id, { limit } = {}) =>
+    fetch(`/api/schedules/${encodeURIComponent(id)}/runs${qs({ limit })}`).then(
+      _json,
+    ),
 
   // ---- workspace (Files panel; read-only) ----
   workspaceInfo: ({ agent } = {}) =>

@@ -65,11 +65,13 @@ FastAPI dependency).
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
+| `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `POST /api/sessions/{id}/rewind` | drop everything from the `user_turn`-th user message on (edit & resend / regenerate); 409 while a run is live, 501 if the store lacks `rewind` |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
+| `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
 

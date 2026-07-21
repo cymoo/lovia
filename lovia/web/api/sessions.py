@@ -21,6 +21,7 @@ from ..schemas import (
     RewindRequest,
     RewindResponse,
     RunInfo,
+    RunRecordInfo,
     SessionDetail,
     SessionPatch,
     TodoItemOut,
@@ -31,6 +32,7 @@ from .serialization import (
     export_md,
     export_txt,
     message_to_json_dict,
+    run_record,
     segments_to_out,
     session_info,
     view_messages,
@@ -118,6 +120,28 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             )
             for sid, c in deps.supervisor
         ]
+
+    @router.get("/api/runs/history", response_model=list[RunRecordInfo])
+    async def run_history(
+        session_id: str | None = Query(None),
+        source: str | None = Query(None, max_length=200),
+        since: float | None = Query(None),
+        limit: int = Query(50, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ) -> list[RunRecordInfo]:
+        """Persisted run records, newest first (live runs stay on ``/api/runs``).
+
+        ``since`` keeps only runs finished after that timestamp — how a client
+        asks "what completed while I was away?" after a reload.
+        """
+        rows = await store.list_runs(
+            session_id=session_id,
+            source=source,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
+        return [run_record(r) for r in rows]
 
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:

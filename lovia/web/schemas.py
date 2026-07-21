@@ -167,6 +167,23 @@ class RunInfo(BaseModel):
     turns: int
 
 
+class RunRecordInfo(BaseModel):
+    """A persisted run record, for ``GET /api/runs/history`` and per-schedule
+    history — the durable "did that run succeed?" that outlives the process."""
+
+    run_id: str
+    session_id: str | None = None
+    agent: str | None = None
+    # What started the run: "user" | "schedule:<id>".
+    source: str
+    status: Literal["running", "completed", "failed", "cancelled", "interrupted"]
+    error: str | None = None
+    started_at: float
+    finished_at: float | None = None
+    # Token spend, when known: {input_tokens, output_tokens, total_tokens}.
+    usage: dict[str, int] | None = None
+
+
 class ScheduleSpec(BaseModel):
     """Create a scheduled background run.
 
@@ -210,8 +227,9 @@ class ScheduleInfo(BaseModel):
     active: bool
     # Session of the most recent fire — lets a UI link to the run's results.
     last_session_id: str | None = None
-    # Outcome of the most recent fire: "ok" | "error" | None (never fired or
-    # still running); ``last_error`` carries the message behind an "error".
+    # Outcome of the schedule's most recent run, derived from its run records:
+    # "ok" | "error" | None (never fired or still running); ``last_error``
+    # carries the message behind an "error".
     last_status: str | None = None
     last_error: str | None = None
     created_at: float

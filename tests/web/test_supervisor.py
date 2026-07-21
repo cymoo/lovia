@@ -526,6 +526,7 @@ async def test_persist_partial_trims_dangling_resumed_tool_call() -> None:
         seed_entries=[],
         is_new=False,
         title_message=None,
+        source="user",
     )
     # The mirror a resumed-then-stopped run would carry: a pending, unexecuted call.
     ctrl.completed_mirror = [
@@ -696,3 +697,107 @@ async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
     # The window attacher's subscription ends promptly instead of hanging.
     with pytest.raises(StopAsyncIteration):
         await asyncio.wait_for(attachment.subscription.__anext__(), timeout=2)
+
+
+# ------------------------------------------------------ durable run records -
+
+
+async def _wait_record(store, run_id, *, timeout=5.0):
+    """Poll until the run record reaches a terminal status (the finalizing
+    write lands in the run task's wind-down, after eviction)."""
+    for _ in range(int(timeout / 0.02)):
+        recs = {r.id: r for r in await store.list_runs()}
+        rec = recs.get(run_id)
+        if rec is not None and rec.status != "running":
+            return rec
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"run {run_id} never recorded a terminal status")
+
+
+@pytest.mark.asyncio
+async def test_completed_run_leaves_a_completed_record() -> None:
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="bot", model=provider)
+    app = _app(agent)
+    store = app.state.store
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", gone=True)
+        await task
+
+        recs = (await ac.get("/api/runs/history")).json()
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["session_id"] == "s1" and rec["agent"] == "bot"
+    assert rec["source"] == "user"  # interactive start
+    assert rec["status"] == "completed" and rec["error"] is None
+    assert rec["finished_at"] >= rec["started_at"]
+    stored = await _wait_record(store, rec["run_id"])
+    assert stored.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_leaves_a_cancelled_record() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent)
+    store = app.state.store
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")
+        run_id = (await ac.get("/api/runs")).json()[0]["run_id"]
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        release.set()
+        await _kill(task)
+
+        rec = await _wait_record(store, run_id)
+    assert rec.status == "cancelled" and rec.error == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_failed_run_leaves_a_failed_record() -> None:
+    provider = _ScriptThenFail([])  # fails on the very first model call
+    agent = Agent(name="bot", model=provider)
+    app = _app(agent, retry=RetryPolicy(max_attempts=1))
+    store = app.state.store
+    async with _client(app) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1", gone=True)
+        await task
+        recs = await store.list_runs(session_id="s1")
+    assert len(recs) == 1
+    rec = await _wait_record(store, recs[0].id)
+    assert rec.status == "failed"
+    assert rec.error and "scripted non-retryable failure" in rec.error
+
+
+def test_lifespan_sweeps_stale_running_records(tmp_path) -> None:
+    # A record left "running" by a dead process reads as "interrupted" once a
+    # new app starts (the lifespan sweep) — not as a phantom live run forever.
+    import sqlite3
+
+    from fastapi.testclient import TestClient
+
+    path = tmp_path / "app.db"
+    store = ChatStore.sqlite(path)  # constructing it ensures the schema
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO runs (id, session_id, agent, source, status, started_at) "
+        "VALUES ('stale', 's1', 'bot', 'user', 'running', 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
+    app = _app(agent, store=store)
+    with TestClient(app) as c:  # entering the context runs the lifespan
+        recs = c.get("/api/runs/history").json()
+    assert recs and recs[0]["run_id"] == "stale"
+    assert recs[0]["status"] == "interrupted"

@@ -675,7 +675,7 @@ def test_cors_origins_enables_cross_origin_requests() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# fire outcomes (last_status / last_error)
+# run records (durable outcomes; schedule status + history derive from them)
 # --------------------------------------------------------------------------- #
 
 
@@ -689,19 +689,20 @@ class _FailingProvider(ScriptedProvider):
         yield  # pragma: no cover - makes this an async generator
 
 
-async def _wait_status(store: ChatStore, sched_id: str, timeout: float = 5.0):
-    """The row once its last_status lands (the result write is a bg task)."""
+async def _wait_outcome(store: ChatStore, source: str, timeout: float = 5.0):
+    """The latest run record for ``source`` once it reaches a terminal status
+    (the finalizing write lands in the run task's wind-down)."""
     deadline = time.time() + timeout
     while True:
-        row = await store.get_schedule(sched_id)
-        if row is not None and row.last_status is not None:
+        row = await store.latest_run_for(source)
+        if row is not None and row.status != "running":
             return row
         if time.time() > deadline:  # pragma: no cover - failure path
-            raise AssertionError("schedule result was never recorded")
+            raise AssertionError("run outcome was never recorded")
         await asyncio.sleep(0.02)
 
 
-async def test_fire_records_ok_status() -> None:
+async def test_fire_records_completed_run() -> None:
     store = ChatStore.in_memory()
     app = _app(_agent([text("done")]), store)
     deps = app.state.deps
@@ -711,12 +712,15 @@ async def test_fire_records_ok_status() -> None:
     await Scheduler(deps).run_due()
     await _drain_runs(deps)
 
-    after = await _wait_status(store, "s")
-    assert after.last_status == "ok"
-    assert after.last_error is None
+    rec = await _wait_outcome(store, "schedule:s")
+    assert rec.status == "completed" and rec.error is None
+    assert rec.agent == "bot"
+    assert rec.finished_at is not None and rec.finished_at >= rec.started_at
+    after = await store.get_schedule("s")
+    assert after is not None and rec.session_id == after.last_session_id
 
 
-async def test_fire_records_error_status_with_message() -> None:
+async def test_fire_records_failed_run_with_message() -> None:
     store = ChatStore.in_memory()
     agent = Agent(name="bot", model=_FailingProvider([]))
     app = _app(agent, store)
@@ -727,12 +731,12 @@ async def test_fire_records_error_status_with_message() -> None:
     await Scheduler(deps).run_due()
     await _drain_runs(deps)
 
-    after = await _wait_status(store, "s")
-    assert after.last_status == "error"
-    assert after.last_error and "scripted terminal failure" in after.last_error
+    rec = await _wait_outcome(store, "schedule:s")
+    assert rec.status == "failed"
+    assert rec.error and "scripted terminal failure" in rec.error
 
 
-async def test_fire_unavailable_agent_records_error() -> None:
+async def test_fire_unavailable_agent_records_failed_record() -> None:
     store = ChatStore.in_memory()
     app = _app(_agent([text("hi")]), store)
     deps = app.state.deps
@@ -741,10 +745,12 @@ async def test_fire_unavailable_agent_records_error() -> None:
 
     await Scheduler(deps).run_due()
 
-    after = await _wait_status(store, "s")
-    assert after.last_status == "error"
-    assert after.last_error and "ghost" in after.last_error
-    assert after.next_fire > now  # still advanced — no refire storm
+    rec = await _wait_outcome(store, "schedule:s")
+    assert rec.status == "failed"
+    assert rec.error and "ghost" in rec.error
+    assert rec.session_id is None  # the fire never reached a session
+    after = await store.get_schedule("s")
+    assert after is not None and after.next_fire > now  # advanced — no refire storm
 
 
 async def test_fire_resolves_agent_self_name_to_registry_key() -> None:
@@ -762,15 +768,17 @@ async def test_fire_resolves_agent_self_name_to_registry_key() -> None:
     await Scheduler(deps).run_due()
     await _drain_runs(deps)
 
-    after = await _wait_status(store, "s")
-    assert after.last_status == "ok"
-    # The session metadata carries the registry key, not the self-name.
-    assert after.last_session_id is not None
-    meta = await store.get(after.last_session_id)
+    rec = await _wait_outcome(store, "schedule:s")
+    assert rec.status == "completed"
+    # The run record and session metadata carry the registry key, not the
+    # self-name.
+    assert rec.agent == "alias"
+    assert rec.session_id is not None
+    meta = await store.get(rec.session_id)
     assert meta is not None and meta.agent == "alias"
 
 
-def test_schedule_info_exposes_status_fields() -> None:
+def test_schedule_info_null_status_before_first_fire() -> None:
     store = ChatStore.in_memory()
     app = _app(_agent([text("hi")]), store)
     c = TestClient(app)
@@ -781,9 +789,53 @@ def test_schedule_info_exposes_status_fields() -> None:
     assert created["last_status"] is None and created["last_error"] is None
 
 
-async def test_migrate_adds_status_columns_to_legacy_db(tmp_path) -> None:
-    """A pre-existing schedules table (without the status columns) is upgraded
-    in place on ChatStore construction, keeping its rows readable."""
+async def test_schedule_info_derives_status_and_history_from_records() -> None:
+    import httpx
+
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("one"), text("two")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now))
+
+    sched = Scheduler(deps)
+    await sched.run_due()
+    await _drain_runs(deps)
+    await _wait_outcome(store, "schedule:s")
+    # Fire a second time so the history has an order to check.
+    row = await store.get_schedule("s")
+    assert row is not None
+    await sched.fire_now(row)
+    await _drain_runs(deps)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        info = next(
+            s for s in (await ac.get("/api/schedules")).json() if s["id"] == "s"
+        )
+        assert info["last_status"] == "ok" and info["last_error"] is None
+
+        history = (await ac.get("/api/schedules/s/runs")).json()
+        assert len(history) == 2
+        assert all(r["status"] == "completed" for r in history)
+        assert all(r["source"] == "schedule:s" for r in history)
+        # Newest first, each linked to the session it ran in.
+        assert history[0]["started_at"] >= history[1]["started_at"]
+        assert all(r["session_id"] for r in history)
+
+        assert (await ac.get("/api/schedules/nope/runs")).status_code == 404
+
+        # The general history endpoint filters by source too.
+        by_source = (
+            await ac.get("/api/runs/history", params={"source": "schedule:s"})
+        ).json()
+        assert [r["run_id"] for r in by_source] == [r["run_id"] for r in history]
+
+
+async def test_legacy_db_with_dropped_status_columns_still_works(tmp_path) -> None:
+    """A 0.8.x DB whose schedules table still carries last_status/last_error
+    opens cleanly: the dead columns are ignored and the runs table appears."""
     import sqlite3
     from pathlib import Path
 
@@ -801,6 +853,8 @@ async def test_migrate_adds_status_columns_to_legacy_db(tmp_path) -> None:
             next_fire REAL NOT NULL,
             active INTEGER NOT NULL DEFAULT 1,
             last_session_id TEXT,
+            last_status TEXT,
+            last_error TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -808,23 +862,22 @@ async def test_migrate_adds_status_columns_to_legacy_db(tmp_path) -> None:
     )
     conn.execute(
         "INSERT INTO schedules VALUES "
-        "('s', 'bot', 'x', NULL, 'every', '3600', 1.0, 1, NULL, 1.0, 1.0)"
+        "('s', 'bot', 'x', NULL, 'every', '3600', 1.0, 1, NULL, 'ok', NULL, 1.0, 1.0)"
     )
     conn.commit()
     conn.close()
 
     store = ChatStore.sqlite(path)
     row = await store.get_schedule("s")
-    assert row is not None
-    assert row.last_status is None and row.last_error is None
-    await store.set_schedule_result("s", status="ok")
-    upgraded = await store.get_schedule("s")
-    assert upgraded is not None and upgraded.last_status == "ok"
+    assert row is not None and row.input == "x"
+    await store.add_schedule(_row(id="s2", now=2.0, next_fire=2.0))
+    assert {r.id for r in await store.list_schedules()} == {"s", "s2"}
+    assert await store.latest_run_for("schedule:s") is None  # runs table exists
 
 
-async def test_cancelled_fire_records_stable_cancelled_text() -> None:
+async def test_cancelled_fire_records_cancelled_status() -> None:
     # A user stop surfaces internally as RunCancelled("user requested stop");
-    # the recorded outcome must be the stable "cancelled", not that phrasing.
+    # the record must read status "cancelled" with the stable "cancelled" text.
     release = asyncio.Event()
     store = ChatStore.in_memory()
     agent = _agent(
@@ -845,6 +898,6 @@ async def test_cancelled_fire_records_stable_cancelled_text() -> None:
     release.set()
     await _drain_runs(deps)
 
-    row = await _wait_status(store, "s")
-    assert row.last_status == "error"
-    assert row.last_error == "cancelled"
+    rec = await _wait_outcome(store, "schedule:s")
+    assert rec.status == "cancelled"
+    assert rec.error == "cancelled"

@@ -19,7 +19,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -32,7 +32,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from .. import events
 from ..checkpointer import CheckpointOptions
-from ..messages import Message
+from ..messages import Message, Usage
 from ..reliability import CancelToken
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
@@ -45,7 +45,8 @@ from ..transcript import (
 )
 from .api.serialization import drop_system_entries, view_messages
 from .schemas import MessageOut
-from .sse import event_to_sse
+from .sse import event_to_sse, usage_dict
+from .store import RunRow
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -192,11 +193,13 @@ class RunController:
         seed_entries: list[TranscriptEntry],
         is_new: bool,
         title_message: str | None,
+        source: str,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
+        self.source = source
         self.cancel = CancelToken()
         self.mailbox = Mailbox()
         self.hub = EventHub()
@@ -207,6 +210,9 @@ class RunController:
         self.turns = 0
         self.succeeded = False
         self.final_output: Any = None
+        self.started_at = time.time()
+        # Cumulative usage across auto-chained legs, for the durable run record.
+        self.usage = Usage()
         # snapshot mirror (task-private until read synchronously by attach)
         self.history_baseline: list[TranscriptEntry] = []
         self.completed_mirror: list[TranscriptEntry] = []
@@ -224,10 +230,6 @@ class RunController:
         # in the finally, or the wind-down would re-create transcript rows for a
         # chat that no longer exists.
         self._discard_partial = False
-        # Optional completion hook (the scheduler records fire outcomes with
-        # it): called once from the run task's wind-down as
-        # ``on_finished(succeeded, error_message)`` — keep it non-blocking.
-        self.on_finished: Callable[[bool, str | None], None] | None = None
         self.task: asyncio.Task[None] | None = None
 
     # -- lifecycle ------------------------------------------------------- #
@@ -388,8 +390,28 @@ class RunController:
         title_args: tuple[str, str, Any, str] | None = None
         succeeded = False
         error_seen = False
-        final_error: str | None = None  # message for the on_finished hook
+        final_error: str | None = None  # message for the durable run record
         failed_terminally = False  # ended in a non-resumable failure (drop checkpoint)
+        # The durable run record. Keyed by the first leg's run_id so a resumed
+        # run finalizes the row it opened; minted when checkpointing is off.
+        # Best-effort bookkeeping: never let it break the run itself.
+        record_id = self.run_id or uuid.uuid4().hex
+        try:
+            await store.start_run(
+                RunRow(
+                    id=record_id,
+                    session_id=sid,
+                    agent=deps.name_of(self.agent),
+                    source=self.source,
+                    status="running",
+                    error=None,
+                    started_at=self.started_at,
+                    finished_at=None,
+                    usage=None,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("run record insert failed for %s: %s", sid, exc)
         try:
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None
@@ -435,6 +457,7 @@ class RunController:
                         succeeded = True
                         self.succeeded = True
                         self.final_output = ev.result.output
+                        self.usage.add(ev.result.usage)
                     if isinstance(ev, events.ApprovalRequired):
                         # The loop gates on the consumer: do not advance the
                         # iterator until the decision lands (mirrors the old
@@ -504,6 +527,17 @@ class RunController:
             #     a reconnect can resume it; the Session is left untouched.
             #   * success -> the loop already persisted + cleared; nothing to do.
             rid = self.run_id
+            # A leg that didn't complete published no RunCompleted, so its
+            # spend lives only in the checkpoint head — fold it in before the
+            # snapshot is (possibly) deleted below. Best effort, like the rest
+            # of the run record.
+            if not succeeded and rid and store.checkpointer is not None:
+                try:
+                    snapshot = await store.checkpointer.load(rid)
+                    if snapshot is not None:
+                        self.usage.add(snapshot.usage)
+                except Exception as exc:  # pragma: no cover - defensive
+                    log.warning("usage read failed for run %s: %s", rid, exc)
             if (
                 store.checkpointer is not None
                 and rid
@@ -522,19 +556,32 @@ class RunController:
             self.supervisor._evict(sid, self)
             if title_args is not None:
                 deps.schedule_title(*title_args)
-            if self.on_finished is not None:
-                if not succeeded and (self._user_cancelled or final_error is None):
-                    # Stable outcome text for every cooperative stop: a user
-                    # cancel surfaces as RunCancelled ("user requested stop"),
-                    # a shutdown reaches here with no exception at all — both
-                    # must read "cancelled", not whatever the exception said.
-                    final_error = "cancelled"
-                try:
-                    self.on_finished(succeeded, None if succeeded else final_error)
-                except (
-                    Exception
-                ):  # pragma: no cover - a hook must never break wind-down
-                    log.exception("on_finished hook failed for %s", sid)
+            if not succeeded and (self._user_cancelled or final_error is None):
+                # Stable outcome text for every cooperative stop: a user cancel
+                # surfaces as RunCancelled ("user requested stop"), a shutdown
+                # reaches here with no exception at all — both must read
+                # "cancelled", not whatever the exception said.
+                final_error = "cancelled"
+            if succeeded:
+                status = "completed"
+            elif self._user_cancelled:
+                status = "cancelled"
+            elif failed_terminally:
+                status = "failed"
+            else:
+                # Cooperative shutdown or a resumable failure: the checkpoint
+                # survives, so a reconnect may pick this run back up — in which
+                # case start_run flips this same row back to "running".
+                status = "interrupted"
+            try:
+                await store.finish_run(
+                    record_id,
+                    status=status,
+                    error=None if succeeded else final_error,
+                    usage=usage_dict(self.usage) if self.usage.total_tokens else None,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("run record write failed for %s: %s", sid, exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -577,6 +624,7 @@ class RunSupervisor:
         is_new: bool,
         title_message: str | None,
         autostart: bool = False,
+        source: str = "user",
     ) -> RunController:
         if session_id in self._controllers:
             raise HTTPException(
@@ -597,6 +645,7 @@ class RunSupervisor:
             seed_entries=seed,
             is_new=is_new,
             title_message=title_message,
+            source=source,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the
@@ -644,6 +693,9 @@ class RunSupervisor:
             seed_entries=seed,
             is_new=False,
             title_message=None,
+            # The resumer's identity; if the run already has a record (it
+            # normally does — same run_id), start_run keeps the original source.
+            source="user",
         )
         self._controllers[session_id] = ctrl
         return ctrl

@@ -79,23 +79,27 @@ class _Subscription:
     def __aiter__(self) -> _Subscription:
         return self
 
-    async def __anext__(self) -> tuple[int, events.Event]:
+    async def __anext__(self) -> tuple[int, Any]:
         item = await self._q.get()
         if item is _CLOSED:
             raise StopAsyncIteration
         if item is _DROPPED:
             raise _Overflow()
-        return cast("tuple[int, events.Event]", item)
+        return cast("tuple[int, Any]", item)
 
     def close(self) -> None:
         self._hub._unsubscribe(self)
 
 
 class EventHub:
-    """Fan-out of run events to per-subscriber queues, with a monotonic ``seq``.
+    """Fan-out of events to per-subscriber queues, with a monotonic ``seq``.
 
     ``publish`` is synchronous (no ``await``), so it cannot interleave with a
     snapshot capture — the basis of the attach no-gap/no-overlap guarantee.
+
+    The payload is opaque: each ``RunController`` runs one hub of
+    :class:`~lovia.events.Event`, and ``RouterDeps.bus`` runs one process-wide
+    hub of pre-encoded SSE dicts (the ``/api/events`` lifecycle stream).
     """
 
     def __init__(self, *, queue_maxsize: int = 512) -> None:
@@ -108,7 +112,7 @@ class EventHub:
     def seq(self) -> int:
         return self._seq
 
-    def publish(self, ev: events.Event) -> int:
+    def publish(self, ev: Any) -> int:
         self._seq += 1
         for sub in list(self._subs):
             try:
@@ -412,6 +416,13 @@ class RunController:
             )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("run record insert failed for %s: %s", sid, exc)
+        deps.emit(
+            "run_started",
+            session_id=sid,
+            run_id=record_id,
+            agent=deps.name_of(self.agent),
+            source=self.source,
+        )
         try:
             while True:
                 self.run_id = ckpt.resolved_run_id if ckpt is not None else None
@@ -582,6 +593,14 @@ class RunController:
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("run record write failed for %s: %s", sid, exc)
+            deps.emit(
+                "run_finished",
+                session_id=sid,
+                run_id=record_id,
+                status=status,
+                error=None if succeeded else final_error,
+                source=self.source,
+            )
 
 
 # --------------------------------------------------------------------------- #

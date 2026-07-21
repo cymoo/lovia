@@ -183,6 +183,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(session_id)
         if meta is None:  # deleted concurrently between the update and re-read
             raise HTTPException(status_code=404, detail="session not found")
+        if req.title is not None:
+            deps.emit("session_retitled", session_id=session_id, title=meta.title)
         return session_info(meta)
 
     @router.delete("/api/sessions/{session_id}")

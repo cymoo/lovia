@@ -25,16 +25,18 @@ const PAGE_SIZE = 50;
 let _hasMore = false;
 
 // ---- Background-run awareness --------------------------------------------
-// Completion is detected wherever the run set refreshes: a session that was
-// running and no longer is has finished. Detection lives in loadSessions() so
-// every refresh path benefits; the poller below just guarantees refreshes
-// keep happening — at a lively cadence while the tab is visible, slowly while
-// hidden (a hidden tab is exactly where "your run finished" matters most).
+// Preferred path: the server's /api/events lifecycle stream (initEventStream)
+// pushes run/session changes; each (re)connect does one snapshot fetch and the
+// poll loop below stays off. Fallback (feature off, or no EventSource):
+// poll-and-diff — a session that was running and no longer is has finished —
+// at a lively cadence while the tab is visible, slowly while hidden (a hidden
+// tab is exactly where "your run finished" matters most).
 const POLL_VISIBLE_MS = 8000;
 const POLL_HIDDEN_MS = 30000;
 const STOPPED_GRACE_MS = 10000;
 
 let _pollTimer = null;
+let _eventsLive = false; // /api/events connected → the poll loop stays off
 let _runsPrimed = false; // first load only seeds the baseline — no notices
 const _recentlyStopped = new Map(); // sid → ts of a UI-initiated stop
 let _unseenFinished = 0; // completions while the tab was hidden
@@ -61,10 +63,44 @@ function _notifyRunFinished(sid) {
 
 function _schedulePoll() {
   clearTimeout(_pollTimer);
+  if (_eventsLive) return; // pushed, not polled
   _pollTimer = setTimeout(async () => {
     await loadSessions(sessionSearch?.value.trim() || '');
     _schedulePoll();
   }, document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS);
+}
+
+// ---- /api/events lifecycle stream ----------------------------------------
+// One EventSource replaces the poll loop. No replay semantics: every open
+// (first connect AND each auto-reconnect) refetches one snapshot, then the
+// stream keeps it current — a disconnect gap is closed by the next snapshot.
+export function initEventStream() {
+  if (typeof EventSource === 'undefined') return; // keep polling instead
+  const refresh = () => loadSessions(sessionSearch?.value.trim() || '');
+  const es = new EventSource('/api/events');
+  es.onopen = () => {
+    _eventsLive = true;
+    clearTimeout(_pollTimer);
+    refresh();
+  };
+  // EventSource reconnects by itself; onopen's snapshot covers the gap. If the
+  // server is gone for good the stream just stays silent — like a failing poll.
+  es.addEventListener('run_started', refresh);
+  es.addEventListener('run_finished', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      // "interrupted" is a server shutdown/resumable pause, not an outcome.
+      if (d.status !== 'interrupted') _notifyRunFinished(d.session_id);
+    } catch { /* malformed payload — the refresh below still fixes the UI */ }
+    refresh();
+  });
+  es.addEventListener('session_created', refresh);
+  es.addEventListener('session_retitled', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      updateSessionInSidebar(d.session_id, d.title);
+    } catch { /* ignore */ }
+  });
 }
 
 async function stopRun(sid) {
@@ -96,7 +132,9 @@ export async function loadSessions(query = '') {
     store.sessions = sessions.slice(0, PAGE_SIZE);
     const prevRuns = store.activeRuns || new Set();
     store.activeRuns = new Set(runs.map((r) => r.session_id));
-    if (_runsPrimed) {
+    // Diff-based completion detection belongs to the polling fallback; with
+    // the event stream live, run_finished notifies directly (no double toast).
+    if (_runsPrimed && !_eventsLive) {
       for (const sid of prevRuns) {
         if (!store.activeRuns.has(sid)) _notifyRunFinished(sid);
       }

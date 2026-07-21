@@ -217,10 +217,11 @@ class Scheduler:
             is_new = True
 
         try:
+            title = provisional_title(sched.input) if is_new else None
             await self.store.upsert(
                 target,
                 agent=agent_name,  # registry key — the identity pick() speaks
-                title=provisional_title(sched.input) if is_new else None,
+                title=title,
             )
             await self.deps.supervisor.start(
                 session_id=target,
@@ -245,6 +246,12 @@ class Scheduler:
                     await self.store.delete(target)
                 return None
             raise
+        if is_new:
+            # After start() succeeded — a 429-deferred fire deletes its fresh
+            # session above, which must not have been announced.
+            self.deps.emit(
+                "session_created", session_id=target, agent=agent_name, title=title
+            )
         await self._advance(sched, now, last_session_id=target)
         return target
 

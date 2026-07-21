@@ -190,6 +190,9 @@ def create_app(
         finally:
             await scheduler.stop()
             await deps.supervisor.shutdown()
+            # End any open /api/events streams so shutdown doesn't wait on them.
+            if deps._bus is not None:
+                deps._bus.close()
             # Background memory curation (curate_in_background) gets a bounded
             # window to land — a clean stop shouldn't drop the last run's
             # curation, but must not hang shutdown on a stuck model call.

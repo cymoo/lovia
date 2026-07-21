@@ -66,6 +66,7 @@ FastAPI dependency).
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
+| `GET /api/events` | **SSE**: the process-wide lifecycle stream — `run_started` / `run_finished` (with the run-record status), `session_created` / `session_retitled` — so a UI pushes instead of polling. No replay: refetch one snapshot on every (re)connect, then trust the stream |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
 | `POST /api/sessions/{id}/rewind` | drop everything from the `user_turn`-th user message on (edit & resend / regenerate); 409 while a run is live, 501 if the store lacks `rewind` |

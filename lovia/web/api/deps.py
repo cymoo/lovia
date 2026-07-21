@@ -11,6 +11,7 @@ API from the bundled UI.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -34,7 +35,7 @@ from ..store import ChatStore
 from ..titles import generate_title, provisional_title
 
 if TYPE_CHECKING:
-    from ..supervisor import RunSupervisor
+    from ..supervisor import EventHub, RunSupervisor
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,9 @@ class RouterDeps:
     # Lazily-built process-wide run supervisor (owns live runs' tasks + hubs +
     # per-session cancel token + mailbox); exposed via the ``supervisor`` prop.
     _supervisor: RunSupervisor | None = field(default=None, init=False, repr=False)
+    # Lazily-built process-wide lifecycle bus behind ``GET /api/events``
+    # (run started/finished, session created/retitled); see ``bus``/``emit``.
+    _bus: EventHub | None = field(default=None, init=False, repr=False)
 
     @property
     def session(self) -> Session:
@@ -89,6 +93,29 @@ class RouterDeps:
 
             self._supervisor = RunSupervisor(self)
         return self._supervisor
+
+    @property
+    def bus(self) -> EventHub:
+        """The process-wide lifecycle event bus (lazily constructed).
+
+        Per-process, like the supervisor: under multiple uvicorn workers each
+        process fans out only its own lifecycle facts.
+        """
+        if self._bus is None:
+            from ..supervisor import EventHub
+
+            self._bus = EventHub()
+        return self._bus
+
+    def emit(self, event: str, **data: Any) -> None:
+        """Publish one lifecycle fact to the bus, pre-encoded as an SSE dict.
+
+        Payloads are small JSON facts (ids, status, title) — never the per-token
+        stream, which stays on each run's own hub.
+        """
+        self.bus.publish(
+            {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+        )
 
     @property
     def cancel_tokens(self) -> dict[str, CancelToken]:
@@ -174,5 +201,10 @@ class RouterDeps:
             await self.store.set_title_if_unchanged(
                 session_id, title, expected=provisional
             )
+            # Emit whatever title actually stuck (the generated one, or the
+            # user's rename the CAS protected) so sidebars catch up either way.
+            meta = await self.store.get(session_id)
+            if meta is not None and meta.title:
+                self.emit("session_retitled", session_id=session_id, title=meta.title)
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("title generation for %s failed: %s", session_id, exc)

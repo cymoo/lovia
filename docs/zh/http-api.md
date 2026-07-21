@@ -64,6 +64,7 @@ app.include_router(build_api_router(deps))
 | `GET /api/sessions?q=&limit=&offset=` | 列出 / 搜索聊天（置顶优先，可分页）；`DELETE` 清空全部 |
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | 持久化的运行记录（结果、错误、时长、token 用量）；`since` 只保留在该时间戳之后结束的运行 |
+| `GET /api/events` | **SSE**：进程级生命周期事件流——`run_started` / `run_finished`（携带运行记录状态）、`session_created` / `session_retitled`——UI 由轮询改为推送。不做重放：每次（重）连接先拉一次快照，之后信任事件流 |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · 重命名/置顶 · 删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/rewind` | 从索引为 `user_turn` 的用户消息起删除后续内容，索引从 0 开始（用于编辑后重发或重新生成）；运行中返回 409，存储不支持 `rewind` 时返回 501 |

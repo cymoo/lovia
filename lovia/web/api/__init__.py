@@ -32,6 +32,7 @@ from ..schemas import ServerInfo
 from .agents import build_agents_router
 from .chat import build_chat_router
 from .deps import RouterDeps
+from .events import build_events_router
 from .memory import build_memory_router, memory_plugin
 from .schedules import build_schedules_router
 from .sessions import build_sessions_router
@@ -75,11 +76,14 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 # Edit-and-resend / regenerate need the store's off-protocol
                 # rewind (both bundled stores have it; custom ones may not).
                 "rewind": hasattr(deps.session, "rewind"),
+                # The /api/events lifecycle stream (push instead of poll).
+                "events": True,
             },
         )
 
     router.include_router(build_agents_router(deps))
     router.include_router(build_chat_router(deps))
+    router.include_router(build_events_router(deps))
     router.include_router(build_sessions_router(deps))
     router.include_router(build_schedules_router(deps))
     router.include_router(build_workspace_router(deps))

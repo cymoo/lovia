@@ -4,7 +4,13 @@ import { store } from './store.js';
 import { api } from './api.js';
 import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
 import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
-import { initSessions, loadSessions, clearChat, switchSession } from './sessions.js';
+import {
+  initSessions,
+  initEventStream,
+  loadSessions,
+  clearChat,
+  switchSession,
+} from './sessions.js';
 import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
@@ -242,6 +248,9 @@ function initKeyboardShortcuts() {
     document.getElementById('schedules-btn')?.classList.remove('hidden');
   }
   if (info) store.canRewind = !!info.features?.rewind;
+  // Push instead of poll: the lifecycle stream replaces the sidebar's run
+  // polling wherever the server (and browser) support it.
+  if (info?.features?.events) initEventStream();
 
   // Restore session from URL query string (?session=xxx).
   // Wait for the initial session list to land so the sidebar

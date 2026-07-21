@@ -305,6 +305,11 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     assert (
         "".join(d["delta"] for (e, d) in evs if e == "text_delta") == "resumed-answer"
     )
+    # The record is keyed by the snapshot's run_id (via resolved_run_id), so the
+    # resumed run finalizes ONE row under the original id — no duplicate.
+    rec = await _wait_record(store, "run-1")
+    assert rec.status == "completed"
+    assert [r.id for r in await store.list_runs(session_id=sid)] == ["run-1"]
 
 
 @pytest.mark.asyncio

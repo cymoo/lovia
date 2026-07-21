@@ -174,19 +174,23 @@ class Scheduler:
             await self._advance(sched, now, last_session_id=sched.last_session_id)
             # No run ever started, so the supervisor writes no record — file a
             # zero-length failed one so the schedule's history shows the miss.
-            await self.store.start_run(
-                RunRow(
-                    id=uuid.uuid4().hex,
-                    session_id=None,
-                    agent=agent_name,
-                    source=f"schedule:{sched.id}",
-                    status="failed",
-                    error=detail,
-                    started_at=now,
-                    finished_at=now,
-                    usage=None,
+            # Best-effort bookkeeping: never let it break the fire loop.
+            try:
+                await self.store.start_run(
+                    RunRow(
+                        id=uuid.uuid4().hex,
+                        session_id=None,
+                        agent=agent_name,
+                        source=f"schedule:{sched.id}",
+                        status="failed",
+                        error=detail,
+                        started_at=now,
+                        finished_at=now,
+                        usage=None,
+                    )
                 )
-            )
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("schedule %s: run record write failed: %s", sched.id, exc)
             return None
         agent = self.deps.agents[agent_name]
 

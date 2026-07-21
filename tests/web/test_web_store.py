@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
+from lovia.web.store import RunRow, ScheduleRow
 
 
 async def test_in_memory_roundtrip() -> None:
@@ -312,3 +314,123 @@ async def test_search_treats_like_wildcards_literally() -> None:
     assert await store.search("100_") == []  # _ is literal, not any-char
     # A lone backslash in the query must not break the ESCAPE clause.
     assert await store.search("\\") == []
+
+
+# --------------------------------------------------------------------------- #
+# run records
+# --------------------------------------------------------------------------- #
+
+
+def _run_row(**kw) -> RunRow:
+    fields: dict = {
+        "id": "r1",
+        "session_id": "s1",
+        "agent": "bot",
+        "source": "user",
+        "status": "running",
+        "error": None,
+        "started_at": 100.0,
+        "finished_at": None,
+        "usage": None,
+    }
+    fields.update(kw)
+    return RunRow(**fields)
+
+
+async def test_run_record_start_finish_roundtrip() -> None:
+    store = ChatStore.in_memory()
+    await store.start_run(_run_row())
+    await store.finish_run(
+        "r1", status="completed", usage={"input_tokens": 3, "output_tokens": 5}
+    )
+
+    rec = await store.latest_run_for("user")
+    assert rec is not None
+    assert rec.status == "completed" and rec.error is None
+    assert rec.finished_at is not None
+    assert rec.usage == {"input_tokens": 3, "output_tokens": 5}
+
+
+async def test_run_record_resume_keeps_identity() -> None:
+    # Resuming an interrupted run re-inserts the same id: the row flips back to
+    # "running" but keeps its original started_at and source.
+    store = ChatStore.in_memory()
+    await store.start_run(_run_row(source="schedule:s", started_at=100.0))
+    await store.finish_run("r1", status="interrupted", error="cancelled")
+    await store.start_run(_run_row(source="user", started_at=200.0))
+
+    rec = await store.latest_run_for("schedule:s")
+    assert rec is not None
+    assert rec.status == "running" and rec.error is None and rec.finished_at is None
+    assert rec.started_at == 100.0 and rec.source == "schedule:s"
+
+
+async def test_list_runs_filters_and_orders() -> None:
+    store = ChatStore.in_memory()
+    await store.start_run(_run_row(id="a", session_id="s1", started_at=10.0))
+    await store.start_run(
+        _run_row(id="b", session_id="s2", source="schedule:x", started_at=20.0)
+    )
+    await store.start_run(_run_row(id="c", session_id="s1", started_at=30.0))
+    await store.finish_run("a", status="completed")
+
+    assert [r.id for r in await store.list_runs()] == ["c", "b", "a"]
+    assert [r.id for r in await store.list_runs(session_id="s1")] == ["c", "a"]
+    assert [r.id for r in await store.list_runs(source="schedule:x")] == ["b"]
+    # ``since`` keeps only runs finished after the cutoff (unfinished excluded).
+    assert [r.id for r in await store.list_runs(since=0.0)] == ["a"]
+    assert await store.list_runs(since=time.time() + 60) == []
+    assert [r.id for r in await store.list_runs(limit=1, offset=1)] == ["b"]
+
+
+async def test_sweep_stale_runs_marks_running_interrupted() -> None:
+    store = ChatStore.in_memory()
+    await store.start_run(_run_row(id="a"))
+    await store.start_run(_run_row(id="b", started_at=50.0))
+    await store.finish_run("b", status="completed")
+
+    await store.sweep_stale_runs()
+
+    a = await store.latest_run_for("user")  # newest first → "a" (started later)
+    assert a is not None and a.id == "a"
+    assert a.status == "interrupted" and a.finished_at is not None
+    runs = {r.id: r.status for r in await store.list_runs()}
+    assert runs == {"a": "interrupted", "b": "completed"}  # terminal untouched
+
+
+async def test_delete_session_drops_its_run_records() -> None:
+    store = ChatStore.in_memory()
+    await store.upsert("s1")
+    await store.start_run(_run_row(id="a", session_id="s1"))
+    await store.start_run(_run_row(id="b", session_id="s2"))
+
+    await store.delete("s1")
+    assert [r.id for r in await store.list_runs()] == ["b"]
+
+    await store.delete_all()
+    assert await store.list_runs() == []
+
+
+async def test_delete_schedule_drops_its_run_records() -> None:
+    store = ChatStore.in_memory()
+    now = time.time()
+    await store.add_schedule(
+        ScheduleRow(
+            id="x",
+            agent=None,
+            input="go",
+            session_id=None,
+            trigger_kind="every",
+            trigger_expr="60",
+            next_fire=now,
+            active=True,
+            last_session_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await store.start_run(_run_row(id="a", source="schedule:x"))
+    await store.start_run(_run_row(id="b", source="user"))
+
+    await store.delete_schedule("x")
+    assert [r.id for r in await store.list_runs()] == ["b"]

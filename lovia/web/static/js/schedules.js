@@ -153,6 +153,47 @@ function isDone(s) {
   );
 }
 
+// One line of a schedule's fire history (a persisted run record).
+function runLine(r, onOpenSession) {
+  const line = document.createElement('div');
+  line.className = 'sched-run';
+  const when = document.createElement('span');
+  when.textContent = formatDateTime(r.started_at);
+  const status = document.createElement('span');
+  status.className = `sched-run-status ${r.status}`;
+  status.textContent =
+    {
+      completed: t('sched.stCompleted'),
+      failed: t('sched.failed'),
+      cancelled: t('sched.stCancelled'),
+      interrupted: t('sched.stInterrupted'),
+      running: t('sched.stRunning'),
+    }[r.status] || r.status;
+  if (r.error) status.title = r.error;
+  line.append(when, status);
+  if (r.finished_at && r.finished_at > r.started_at) {
+    const dur = document.createElement('span');
+    const secs = r.finished_at - r.started_at;
+    dur.textContent = secs >= 90 ? `${Math.round(secs / 60)}m` : `${Math.round(secs)}s`;
+    line.append(dur);
+  }
+  if (r.usage?.total_tokens) {
+    const tok = document.createElement('span');
+    tok.textContent = `${r.usage.total_tokens.toLocaleString()} tok`;
+    line.append(tok);
+  }
+  if (r.session_id) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'sched-last-run';
+    link.textContent = '↗';
+    link.title = t('sched.lastRunTitle');
+    link.addEventListener('click', () => onOpenSession(r.session_id));
+    line.append(link);
+  }
+  return line;
+}
+
 function rowEl(s, { onChange, onEdit, onOpenSession }) {
   const done = isDone(s);
   const item = document.createElement('div');
@@ -189,7 +230,11 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
     link.addEventListener('click', () => onOpenSession(s.last_session_id));
     meta.append(' · ', link);
   }
-  main.append(prompt, meta);
+  // Fire history, folded away until asked for (loaded fresh on each open).
+  const history = document.createElement('div');
+  history.className = 'sched-history';
+  history.hidden = true;
+  main.append(prompt, meta, history);
 
   const actions = document.createElement('div');
   actions.className = 'sched-item-actions';
@@ -225,6 +270,23 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
       }
     });
   }
+
+  btn(t('sched.history'), 'history', async () => {
+    if (!history.hidden) {
+      history.hidden = true;
+      return;
+    }
+    history.hidden = false;
+    try {
+      const runs = await api.scheduleRuns(s.id);
+      history.replaceChildren(...runs.map((r) => runLine(r, onOpenSession)));
+      if (!runs.length) {
+        history.innerHTML = `<div class="sched-history-empty">${t('sched.historyNone')}</div>`;
+      }
+    } catch {
+      history.innerHTML = `<div class="sched-history-empty">${t('sched.historyFailed')}</div>`;
+    }
+  });
 
   btn(t('sched.edit'), 'pencil', () => onEdit(s));
 

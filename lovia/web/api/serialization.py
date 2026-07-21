@@ -12,7 +12,7 @@ change the wire format.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ...messages import Message
 from ...session import NOTICE_META_KEY, Segment
@@ -22,8 +22,8 @@ from ...transcript import (
     TranscriptEntry,
     entries_to_messages,
 )
-from ..schemas import ChatSessionInfo, MessageOut
-from ..store import ChatMeta
+from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo
+from ..store import ChatMeta, RunRow
 
 
 def session_info(meta: ChatMeta) -> ChatSessionInfo:
@@ -35,6 +35,23 @@ def session_info(meta: ChatMeta) -> ChatSessionInfo:
         created_at=meta.created_at,
         updated_at=meta.updated_at,
         pinned=meta.pinned,
+    )
+
+
+def run_record(row: RunRow) -> RunRecordInfo:
+    """Project a run record onto the public run-history shape."""
+    # The store keeps status/usage as plain SQLite values; the supervisor only
+    # ever writes the literal statuses and usage_dict shape the model declares.
+    return RunRecordInfo(
+        run_id=row.id,
+        session_id=row.session_id,
+        agent=row.agent,
+        source=row.source,
+        status=cast(Any, row.status),
+        error=row.error,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        usage=cast("dict[str, int] | None", row.usage),
     )
 
 

@@ -13,6 +13,7 @@ metadata table is owned by this module.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
@@ -31,7 +32,7 @@ from ..stores import (
 )
 from ..stores._sqlite import SQLiteStore
 
-__all__ = ["ChatMeta", "ChatStore", "ScheduleRow"]
+__all__ = ["ChatMeta", "ChatStore", "RunRow", "ScheduleRow"]
 
 _T = TypeVar("_T")
 
@@ -41,8 +42,13 @@ _META_COLS = "id, title, agent, created_at, updated_at, pinned"
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
-    "next_fire, active, last_session_id, last_status, last_error, "
-    "created_at, updated_at"
+    "next_fire, active, last_session_id, created_at, updated_at"
+)
+
+# Column order shared by every ``RunRow`` SELECT (and ``from_row``).
+_RUN_COLS = (
+    "id, session_id, agent, source, status, error, "
+    "started_at, finished_at, usage_json"
 )
 
 
@@ -68,12 +74,23 @@ CREATE TABLE IF NOT EXISTS schedules (
     next_fire REAL NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     last_session_id TEXT,
-    last_status TEXT,
-    last_error TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(active, next_fire);
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    agent TEXT,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    started_at REAL NOT NULL,
+    finished_at REAL,
+    usage_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source, started_at DESC);
 """
 
 
@@ -119,10 +136,6 @@ class ScheduleRow:
     last_session_id: str | None  # session of the last fire (overlap check)
     created_at: float
     updated_at: float
-    # Outcome of the most recent fire: "ok" | "error" | None (never fired /
-    # still running). ``last_error`` carries the message behind an "error".
-    last_status: str | None = None
-    last_error: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -136,10 +149,8 @@ class ScheduleRow:
             next_fire=row[6],
             active=bool(row[7]),
             last_session_id=row[8],
-            last_status=row[9],
-            last_error=row[10],
-            created_at=row[11],
-            updated_at=row[12],
+            created_at=row[9],
+            updated_at=row[10],
         )
 
     def to_dict(self) -> JsonObject:
@@ -153,10 +164,58 @@ class ScheduleRow:
             "next_fire": self.next_fire,
             "active": self.active,
             "last_session_id": self.last_session_id,
-            "last_status": self.last_status,
-            "last_error": self.last_error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class RunRow:
+    """One row of the ``runs`` table — the durable record of a supervised run.
+
+    ``id`` is the run's checkpoint run_id when checkpointing is on (so a
+    resumed run finalizes the same row), else a minted uuid. ``source`` names
+    what started the run: ``"user"`` or ``"schedule:<id>"`` — a plain string,
+    so new starters need no schema change. ``status`` extends the core
+    :data:`~lovia.checkpointer.RunStatus` vocabulary with ``"cancelled"``
+    (a user-requested stop, distinct from a failure).
+    """
+
+    id: str
+    session_id: str | None  # NULL → the run never reached a session (bad fire)
+    agent: str | None
+    source: str
+    status: str  # "running" | "completed" | "failed" | "cancelled" | "interrupted"
+    error: str | None
+    started_at: float
+    finished_at: float | None
+    usage: JsonObject | None  # {"input_tokens", "output_tokens", "total_tokens"}
+
+    @classmethod
+    def from_row(cls, row: Any) -> "RunRow":
+        return cls(
+            id=row[0],
+            session_id=row[1],
+            agent=row[2],
+            source=row[3],
+            status=row[4],
+            error=row[5],
+            started_at=row[6],
+            finished_at=row[7],
+            usage=json.loads(row[8]) if row[8] else None,
+        )
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "agent": self.agent,
+            "source": self.source,
+            "status": self.status,
+            "error": self.error,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "usage": self.usage,
         }
 
 
@@ -217,11 +276,9 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
-            sched_cols = {r[1] for r in conn.execute("PRAGMA table_info(schedules)")}
-            if "last_status" not in sched_cols:
-                add_column(conn, "schedules", "last_status TEXT")
-            if "last_error" not in sched_cols:
-                add_column(conn, "schedules", "last_error TEXT")
+            # Dropped columns (schedules.last_status/last_error, replaced by the
+            # ``runs`` table) are left in place on legacy DBs — every statement
+            # names its columns, so they are simply never touched again.
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -367,6 +424,7 @@ class ChatStore:
         await self._drop_checkpoint(session_id)
         await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+        await self._write("DELETE FROM runs WHERE session_id = ?", (session_id,))
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
@@ -380,6 +438,7 @@ class ChatStore:
             await self._drop_checkpoint(session_id)
             await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions")
+        await self._write("DELETE FROM runs")
 
     async def _drop_checkpoint(self, session_id: str) -> None:
         """Delete the session's active-run snapshot, if any (best-effort)."""
@@ -446,7 +505,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -457,8 +516,6 @@ class ChatStore:
                 row.next_fire,
                 int(row.active),
                 row.last_session_id,
-                row.last_status,
-                row.last_error,
                 row.created_at,
                 row.updated_at,
             ),
@@ -499,9 +556,12 @@ class ChatStore:
         )
 
     async def delete_schedule(self, schedule_id: str) -> bool:
-        """Delete a schedule; returns whether it existed."""
+        """Delete a schedule (and its run history); returns whether it existed."""
         existed = (await self.get_schedule(schedule_id)) is not None
         await self._write("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        await self._write(
+            "DELETE FROM runs WHERE source = ?", (f"schedule:{schedule_id}",)
+        )
         return existed
 
     async def due_schedules(self, now: float) -> Sequence[ScheduleRow]:
@@ -528,16 +588,6 @@ class ChatStore:
             (next_fire, int(active), last_session_id, time.time(), schedule_id),
         )
 
-    async def set_schedule_result(
-        self, schedule_id: str, *, status: str, error: str | None = None
-    ) -> None:
-        """Record the outcome of the most recent fire ("ok" | "error")."""
-        await self._write(
-            "UPDATE schedules SET last_status = ?, last_error = ?, updated_at = ? "
-            "WHERE id = ?",
-            (status, error, time.time(), schedule_id),
-        )
-
     async def set_schedule_active(
         self, schedule_id: str, *, active: bool, next_fire: float | None = None
     ) -> None:
@@ -553,3 +603,110 @@ class ChatStore:
                 "WHERE id = ?",
                 (int(active), next_fire, time.time(), schedule_id),
             )
+
+    # ---- run records -----------------------------------------------------
+    # The durable side of run supervision: the supervisor inserts a row when a
+    # run starts and finalizes it on wind-down, so "did that run succeed?"
+    # survives eviction and restarts (schedule history, missed-completion
+    # notices, a future runs view).
+
+    async def start_run(self, row: RunRow) -> None:
+        """Insert a run record.
+
+        Re-inserting an existing id — resuming an interrupted run — flips the
+        row back to the new status while keeping the original ``started_at``
+        and ``source``, so the whole run stays one record.
+        """
+        await self._write(
+            f"INSERT INTO runs ({_RUN_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET status = excluded.status, "
+            "error = excluded.error, finished_at = excluded.finished_at",
+            (
+                row.id,
+                row.session_id,
+                row.agent,
+                row.source,
+                row.status,
+                row.error,
+                row.started_at,
+                row.finished_at,
+                json.dumps(row.usage) if row.usage is not None else None,
+            ),
+        )
+
+    async def finish_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        usage: dict[str, Any] | None = None,
+    ) -> None:
+        """Finalize a run record with its terminal status/error/usage."""
+        await self._write(
+            "UPDATE runs SET status = ?, error = ?, finished_at = ?, "
+            "usage_json = ? WHERE id = ?",
+            (
+                status,
+                error,
+                time.time(),
+                json.dumps(usage) if usage is not None else None,
+                run_id,
+            ),
+        )
+
+    async def list_runs(
+        self,
+        *,
+        session_id: str | None = None,
+        source: str | None = None,
+        since: float | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[RunRow]:
+        """Run records, newest first, optionally filtered.
+
+        ``since`` keeps only runs that finished after that timestamp — the
+        "what completed while I was away?" query behind reload-surviving
+        notifications.
+        """
+        where: list[str] = []
+        params: list[Any] = []
+        if session_id is not None:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if source is not None:
+            where.append("source = ?")
+            params.append(source)
+        if since is not None:
+            where.append("finished_at > ?")
+            params.append(since)
+        clause = f"WHERE {' AND '.join(where)} " if where else ""
+        return await self._read_all(
+            f"SELECT {_RUN_COLS} FROM runs {clause}"
+            "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+            RunRow.from_row,
+        )
+
+    async def latest_run_for(self, source: str) -> RunRow | None:
+        """The most recent run started by ``source`` (a schedule's last outcome)."""
+        return await self._read_one(
+            f"SELECT {_RUN_COLS} FROM runs WHERE source = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (source,),
+            RunRow.from_row,
+        )
+
+    async def sweep_stale_runs(self) -> None:
+        """Settle rows a dead process left ``running`` as ``interrupted``.
+
+        Call once at startup, before any run starts: live runs are per-process
+        (the supervisor's), so at that point every ``running`` row is a run the
+        previous process took down with it.
+        """
+        await self._write(
+            "UPDATE runs SET status = 'interrupted', finished_at = ? "
+            "WHERE status = 'running'",
+            (time.time(),),
+        )

@@ -177,6 +177,9 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Run records left "running" belong to a previous process that died
+        # with them — settle them before anything new starts.
+        await chat_store.sweep_stale_runs()
         # Start the scheduler loop; on shutdown stop it, then wind down any live
         # background runs cooperatively (leaving resumable checkpoints).
         scheduler = Scheduler(deps, poll_interval=scheduler_poll)

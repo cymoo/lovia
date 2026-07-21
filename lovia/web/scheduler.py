@@ -28,6 +28,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
+from .store import RunRow
 from .titles import provisional_title
 
 if TYPE_CHECKING:
@@ -113,9 +114,6 @@ class Scheduler:
         self.store = deps.store
         self._poll = poll_interval
         self._task: asyncio.Task[None] | None = None
-        # Fire-and-forget result writers (see _record_result) — referenced here
-        # so the event loop can't garbage-collect them mid-flight.
-        self._bg: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
         if self._task is None:
@@ -153,23 +151,6 @@ class Scheduler:
         """
         return await self._fire(sched, time.time())
 
-    def _record_result(self, schedule_id: str, ok: bool, error: str | None) -> None:
-        """Persist a fire's outcome in the background (never blocks wind-down)."""
-
-        async def write() -> None:
-            try:
-                await self.store.set_schedule_result(
-                    schedule_id, status="ok" if ok else "error", error=error
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                log.warning(
-                    "schedule %s: recording result failed: %s", schedule_id, exc
-                )
-
-        task = asyncio.ensure_future(write())
-        self._bg.add(task)
-        task.add_done_callback(self._bg.discard)
-
     async def _fire(self, sched: ScheduleRow, now: float) -> str | None:
         """Fire one schedule; returns the session it ran/injected into, or
         ``None`` when skipped (agent unavailable, previous run still live, or
@@ -191,7 +172,25 @@ class Scheduler:
             )
             log.warning("schedule %s: %s; advancing", sched.id, detail)
             await self._advance(sched, now, last_session_id=sched.last_session_id)
-            self._record_result(sched.id, False, detail)
+            # No run ever started, so the supervisor writes no record — file a
+            # zero-length failed one so the schedule's history shows the miss.
+            # Best-effort bookkeeping: never let it break the fire loop.
+            try:
+                await self.store.start_run(
+                    RunRow(
+                        id=uuid.uuid4().hex,
+                        session_id=None,
+                        agent=agent_name,
+                        source=f"schedule:{sched.id}",
+                        status="failed",
+                        error=detail,
+                        started_at=now,
+                        finished_at=now,
+                        usage=None,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("schedule %s: run record write failed: %s", sched.id, exc)
             return None
         agent = self.deps.agents[agent_name]
 
@@ -202,9 +201,8 @@ class Scheduler:
             if live is not None:
                 live.inject(sched.input)
                 await self._advance(sched, now, last_session_id=target)
-                # Delivered into a live run — that run's outcome is its own;
-                # the fire itself succeeded.
-                self._record_result(sched.id, True, None)
+                # Delivered into a live run — that run's outcome is its own
+                # (and recorded under the run's own source), so no record here.
                 return target
             is_new = (await self.store.get(target)) is None
         else:
@@ -224,17 +222,17 @@ class Scheduler:
                 agent=agent_name,  # registry key — the identity pick() speaks
                 title=provisional_title(sched.input) if is_new else None,
             )
-            ctrl = await self.deps.supervisor.start(
+            await self.deps.supervisor.start(
                 session_id=target,
                 agent=agent,
                 input=sched.input,
                 is_new=is_new,
                 title_message=sched.input,
                 autostart=True,  # clientless: begin the run with no subscriber
+                # The supervisor records the run under this source, which is
+                # exactly what makes it this schedule's history/last outcome.
+                source=f"schedule:{sched.id}",
             )
-            # Record the run's outcome when it winds down (ok / error + message).
-            sched_id = sched.id
-            ctrl.on_finished = lambda ok, err: self._record_result(sched_id, ok, err)
         except HTTPException as exc:
             if exc.status_code == 429:
                 # At the concurrency cap: defer (leave next_fire due → retried).

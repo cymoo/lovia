@@ -1165,6 +1165,7 @@ class RunLoop:
             usage=state.run_ctx.usage,
             turns=state.turns,
             finish_reason=state.last_finish_reason,
+            last_input_tokens=state.last_input_tokens,
         )
 
         if self.parent_usage is not None:

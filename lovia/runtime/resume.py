@@ -157,6 +157,7 @@ def result_from_completed_snapshot(
         final_agent=agent,
         usage=snapshot.usage.clone(),
         turns=snapshot.turns,
+        last_input_tokens=snapshot.last_input_tokens,
     )
 
 

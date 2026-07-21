@@ -135,6 +135,9 @@ async def test_resume_completed_snapshot_returns_without_rerunning_provider() ->
 
     assert result.output == "done"
     assert len(provider.calls) == 1
+    # The snapshot's final-prompt size survives the replay (scripted turns
+    # report input_tokens=1).
+    assert result.last_input_tokens == 1
 
 
 @pytest.mark.asyncio

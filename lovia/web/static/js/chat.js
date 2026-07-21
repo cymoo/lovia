@@ -892,18 +892,25 @@ function formatTokens(n) {
 }
 
 // ---- Context ring --------------------------------------------------------
-// How full the model's context is, from the wire data already at hand: the
-// last request's input_tokens IS the prompt the model just saw, and the agent
-// advertises its window via AgentInfo.context_window. Hidden until both are
-// known; hides again on chat switches (usage is per-view, not persisted).
-// Clicking the ring opens a detail popover (tokens, cache split, model).
+// How full the model's context is: the run's last_input_tokens IS the prompt
+// the model just saw (usage.input_tokens sums every call's prompt, so it
+// overstates fill on tool-looping runs — older records lack the field and
+// fall back to it), and the agent advertises its window via
+// AgentInfo.context_window. Hidden until usage is known; hides again on chat
+// switches. Clicking the ring opens a detail popover (tokens, cache split,
+// model).
 let _lastUsage = null; // the most recent run's usage dict, for the popover
+
+// The prompt size of the run's final model call — the context-fill numerator.
+function contextFill(usage) {
+  return usage?.last_input_tokens ?? usage?.input_tokens;
+}
 
 function updateContextMeter(usage) {
   const el = document.getElementById('context-ring');
   if (!el) return;
   const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
-  const inputTokens = usage?.input_tokens;
+  const inputTokens = contextFill(usage);
   if (!window_ || inputTokens == null) {
     hideContextMeter();
     return;
@@ -937,12 +944,13 @@ function fillContextPopover() {
   const agent = store.agents.find((a) => a.name === store.agent);
   const window_ = agent?.context_window;
   const u = _lastUsage || {};
-  const pct = window_ && u.input_tokens != null
-    ? Math.min(100, Math.round((u.input_tokens / window_) * 100))
+  const fill = contextFill(u);
+  const pct = window_ && fill != null
+    ? Math.min(100, Math.round((fill / window_) * 100))
     : null;
   const entries = [
     [t('ctx.context'), pct != null
-      ? `${formatTokens(u.input_tokens)} / ${formatTokens(window_)} · ${pct}%`
+      ? `${formatTokens(fill)} / ${formatTokens(window_)} · ${pct}%`
       : null, true],
     [t('ctx.model'), agent?.model, false],
     [t('ctx.input'), formatTokens(u.input_tokens), false],

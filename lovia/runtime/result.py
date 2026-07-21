@@ -48,6 +48,11 @@ class RunResult:
     the result was replayed from a completed checkpoint (it is not persisted
     in snapshots)."""
 
+    last_input_tokens: int | None = None
+    """Prompt size of the run's **final** model call — how full the context
+    actually is, unlike :attr:`usage`'s ``input_tokens`` which sums the
+    prompts of every call the run made. ``None`` when no call reported it."""
+
     @property
     def messages(self) -> list[Message]:
         """Lossy message view derived from :attr:`entries`."""

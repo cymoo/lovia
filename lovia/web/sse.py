@@ -35,19 +35,25 @@ def _dumps(payload: object, default: Callable[[object], object] | None = None) -
     return json.dumps(payload, ensure_ascii=False, default=default)
 
 
-def usage_dict(usage: Usage) -> dict[str, int]:
+def usage_dict(usage: Usage, *, last_input_tokens: int | None = None) -> dict[str, int]:
     """The token-usage shape shared by REST + SSE responses (and run records).
 
     Cache counts ride along for cost visibility (the context ring's detail
-    view); ``input_tokens`` already includes them — see :class:`Usage`.
+    view); ``input_tokens`` already includes them — see :class:`Usage`. Note
+    ``input_tokens`` is *cumulative* across the run's model calls;
+    ``last_input_tokens`` (when known) is the final call's prompt size — the
+    number that describes actual context fill.
     """
-    return {
+    payload = {
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cache_read_tokens": usage.cache_read_tokens,
         "cache_write_tokens": usage.cache_write_tokens,
         "total_tokens": usage.total_tokens,
     }
+    if last_input_tokens is not None:
+        payload["last_input_tokens"] = last_input_tokens
+    return payload
 
 
 def _todo_payload(todos: list[TodoItem]) -> list[JsonObject]:
@@ -204,7 +210,10 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
             "data": _dumps(
                 {
                     "output": _coerce(ev.result.output),
-                    "usage": usage_dict(ev.result.usage),
+                    "usage": usage_dict(
+                        ev.result.usage,
+                        last_input_tokens=ev.result.last_input_tokens,
+                    ),
                 },
                 default=str,
             ),

@@ -217,6 +217,9 @@ class RunController:
         self.started_at = time.time()
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
+        # Final model call's prompt size (context fill), from the last leg that
+        # reported one — rides in the run record next to the cumulative usage.
+        self.last_input_tokens: int | None = None
         # snapshot mirror (task-private until read synchronously by attach)
         self.history_baseline: list[TranscriptEntry] = []
         self.completed_mirror: list[TranscriptEntry] = []
@@ -469,6 +472,8 @@ class RunController:
                         self.succeeded = True
                         self.final_output = ev.result.output
                         self.usage.add(ev.result.usage)
+                        if ev.result.last_input_tokens is not None:
+                            self.last_input_tokens = ev.result.last_input_tokens
                     if isinstance(ev, events.ApprovalRequired):
                         # The loop gates on the consumer: do not advance the
                         # iterator until the decision lands (mirrors the old
@@ -547,6 +552,8 @@ class RunController:
                     snapshot = await store.checkpointer.load(rid)
                     if snapshot is not None:
                         self.usage.add(snapshot.usage)
+                        if snapshot.last_input_tokens is not None:
+                            self.last_input_tokens = snapshot.last_input_tokens
                 except Exception as exc:  # pragma: no cover - defensive
                     log.warning("usage read failed for run %s: %s", rid, exc)
             if (
@@ -589,7 +596,11 @@ class RunController:
                     record_id,
                     status=status,
                     error=None if succeeded else final_error,
-                    usage=usage_dict(self.usage) if self.usage.total_tokens else None,
+                    usage=usage_dict(
+                        self.usage, last_input_tokens=self.last_input_tokens
+                    )
+                    if self.usage.total_tokens
+                    else None,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("run record write failed for %s: %s", sid, exc)

@@ -34,6 +34,19 @@ def resolve_context_window(agent: Agent[Any], server_policy: Any) -> int | None:
     return provider_context_window(model) if model is not None else None
 
 
+def model_name(agent: Agent[Any]) -> str | None:
+    """The model id the agent runs on, or None when it can't be named.
+
+    ``agent.model`` is either the id string itself or a Provider instance —
+    the bundled providers all keep the id on a ``model`` attribute.
+    """
+    model = getattr(agent, "model", None)
+    if isinstance(model, str):
+        return model
+    name = getattr(model, "model", None)
+    return name if isinstance(name, str) else None
+
+
 def agent_info(
     name: str, agent: Agent[Any], *, context_window: int | None = None
 ) -> AgentInfo:
@@ -47,6 +60,7 @@ def agent_info(
         workspace=workspace_cfg(agent) is not None,
         memory=memory_plugin(agent) is not None,
         context_window=context_window,
+        model=model_name(agent),
     )
 
 

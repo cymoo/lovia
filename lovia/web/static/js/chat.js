@@ -891,19 +891,24 @@ function formatTokens(n) {
   return `${(n / 1000000).toFixed(1)}M`;
 }
 
-// ---- Context meter -------------------------------------------------------
+// ---- Context ring --------------------------------------------------------
 // How full the model's context is, from the wire data already at hand: the
 // last request's input_tokens IS the prompt the model just saw, and the agent
 // advertises its window via AgentInfo.context_window. Hidden until both are
 // known; hides again on chat switches (usage is per-view, not persisted).
-function updateContextMeter(inputTokens) {
-  const el = document.getElementById('context-meter');
+// Clicking the ring opens a detail popover (tokens, cache split, model).
+let _lastUsage = null; // the most recent run's usage dict, for the popover
+
+function updateContextMeter(usage) {
+  const el = document.getElementById('context-ring');
   if (!el) return;
   const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
+  const inputTokens = usage?.input_tokens;
   if (!window_ || inputTokens == null) {
-    el.classList.add('hidden');
+    hideContextMeter();
     return;
   }
+  _lastUsage = usage;
   const pct = Math.min(100, Math.round((inputTokens / window_) * 100));
   el.classList.remove('hidden');
   el.classList.toggle('warn', pct >= 70 && pct < 90);
@@ -915,12 +920,79 @@ function updateContextMeter(inputTokens) {
   });
   el.title = detail;
   el.setAttribute('aria-label', detail); // keep assistive tech in sync
-  el.querySelector('.context-meter-fill').style.width = `${pct}%`;
-  el.querySelector('.context-meter-label').textContent = `${pct}%`;
+  // pathLength="100" on the circle → the dash array speaks percentages.
+  el.querySelector('.context-ring-fill').style.strokeDasharray = `${pct} 100`;
+  if (!document.getElementById('context-popover')?.hidden) fillContextPopover();
 }
 
 function hideContextMeter() {
-  document.getElementById('context-meter')?.classList.add('hidden');
+  _lastUsage = null;
+  document.getElementById('context-ring')?.classList.add('hidden');
+  toggleContextPopover(false);
+}
+
+function fillContextPopover() {
+  const rows = document.querySelector('#context-popover .context-popover-rows');
+  if (!rows) return;
+  const agent = store.agents.find((a) => a.name === store.agent);
+  const window_ = agent?.context_window;
+  const u = _lastUsage || {};
+  const pct = window_ && u.input_tokens != null
+    ? Math.min(100, Math.round((u.input_tokens / window_) * 100))
+    : null;
+  const entries = [
+    [t('ctx.context'), pct != null
+      ? `${formatTokens(u.input_tokens)} / ${formatTokens(window_)} · ${pct}%`
+      : null, true],
+    [t('ctx.model'), agent?.model, false],
+    [t('ctx.input'), formatTokens(u.input_tokens), false],
+    [t('ctx.output'), formatTokens(u.output_tokens), false],
+    [t('ctx.cacheRead'), formatTokens(u.cache_read_tokens), false],
+    [t('ctx.cacheWrite'), formatTokens(u.cache_write_tokens), false],
+  ];
+  rows.replaceChildren(
+    ...entries
+      .filter(([, v]) => v != null)
+      .map(([k, v, head]) => {
+        const row = document.createElement('div');
+        row.className = 'context-popover-row' + (head ? ' context-popover-head' : '');
+        const key = document.createElement('span');
+        key.className = 'k';
+        key.textContent = k;
+        const val = document.createElement('span');
+        val.className = 'v';
+        val.textContent = v;
+        val.title = v;
+        row.append(key, val);
+        return row;
+      }),
+  );
+}
+
+function toggleContextPopover(open) {
+  const pop = document.getElementById('context-popover');
+  const ring = document.getElementById('context-ring');
+  if (!pop || !ring) return;
+  const show = open ?? pop.hidden;
+  if (show) fillContextPopover();
+  pop.hidden = !show;
+  ring.setAttribute('aria-expanded', String(show));
+}
+
+export function initContextRing() {
+  const ring = document.getElementById('context-ring');
+  const pop = document.getElementById('context-popover');
+  if (!ring || !pop) return;
+  ring.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleContextPopover();
+  });
+  document.addEventListener('click', (e) => {
+    if (!pop.hidden && !pop.contains(e.target)) toggleContextPopover(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !pop.hidden) toggleContextPopover(false);
+  });
 }
 
 // Usage is a property of the conversation on screen — switching away clears it.
@@ -1699,7 +1771,7 @@ async function handleEvent({ event, data }) {
 
     case 'done': {
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
-      updateContextMeter(data?.usage?.input_tokens);
+      updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
       // already on the wire; hovering shows the input/output split.
       const tokens = formatTokens(data?.usage?.total_tokens);
@@ -1999,6 +2071,7 @@ const autoresize = () => {
 };
 
 export function initComposer() {
+  initContextRing();
   // On touch devices Enter inserts a newline (there's no Shift key to combine
   // with) and the send button does the sending; on desktop Enter sends.
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;

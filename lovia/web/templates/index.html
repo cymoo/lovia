@@ -91,12 +91,6 @@
     <h1 id="chat-title" class="chat-title">New chat</h1>
     <div class="topbar-actions">
       <span id="turn-progress" class="turn-progress hidden"></span>
-      <!-- Context fill: appears once a turn reports usage and the agent's
-           window is known; details live in the tooltip. -->
-      <span id="context-meter" class="context-meter hidden" role="img" aria-label="Context usage">
-        <span class="context-meter-track"><span class="context-meter-fill"></span></span>
-        <span class="context-meter-label"></span>
-      </span>
       <div class="export-wrap" id="export-wrap" style="display:none">
         <button id="export-btn" class="btn btn-ghost btn-sm" type="button" title="Export chat" aria-haspopup="menu" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>Export</button>
         <div class="export-menu" id="export-menu" role="menu" hidden>
@@ -146,6 +140,18 @@
 
   <form id="composer" class="composer" autocomplete="off">
     <div class="composer-inner">
+      <!-- Context ring: how full the model's window is, once a turn reports
+           usage. Click for details (tokens, cache, model). -->
+      <button id="context-ring" class="context-ring hidden" type="button"
+              aria-haspopup="dialog" aria-expanded="false" aria-controls="context-popover">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <circle class="context-ring-track" cx="12" cy="12" r="9.5" pathLength="100"/>
+          <circle class="context-ring-fill" cx="12" cy="12" r="9.5" pathLength="100"/>
+        </svg>
+      </button>
+      <div id="context-popover" class="context-popover" role="dialog" aria-label="Context details" hidden>
+        <div class="context-popover-rows"></div>
+      </div>
       <label class="vh" for="prompt">message</label>
       <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…"></textarea>
       <button id="stop" class="btn btn-danger" type="button" aria-label="Stop" style="display:none">Stop</button>

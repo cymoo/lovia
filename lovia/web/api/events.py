@@ -41,7 +41,11 @@ def build_events_router(deps: RouterDeps) -> APIRouter:
             sub = deps.bus.subscribe()
             try:
                 async for _seq, payload in sub:
-                    yield payload
+                    # The bus payload type is opaque; only emit()'s SSE dicts
+                    # belong on the wire — anything else must not kill the
+                    # stream for every connected client.
+                    if isinstance(payload, dict):
+                        yield payload
             except _Overflow:
                 # Fell behind → end the stream; EventSource auto-reconnects
                 # and the client's on-open snapshot refetch closes the gap.

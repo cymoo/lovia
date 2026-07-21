@@ -83,8 +83,16 @@ export function initEventStream() {
     clearTimeout(_pollTimer);
     refresh();
   };
-  // EventSource reconnects by itself; onopen's snapshot covers the gap. If the
-  // server is gone for good the stream just stays silent — like a failing poll.
+  es.onerror = () => {
+    // CONNECTING → a transient drop: EventSource retries by itself and the
+    // next onopen's snapshot closes the gap; keep the poll off meanwhile.
+    // CLOSED → the browser gave up for good (e.g. an auth failure) — fall
+    // back to the poll loop so the sidebar doesn't silently freeze.
+    if (es.readyState === EventSource.CLOSED) {
+      _eventsLive = false;
+      _schedulePoll();
+    }
+  };
   es.addEventListener('run_started', refresh);
   es.addEventListener('run_finished', (e) => {
     try {

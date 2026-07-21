@@ -733,9 +733,7 @@ async def test_completed_run_leaves_a_completed_record() -> None:
         await task
 
         recs = (await ac.get("/api/runs/history")).json()
-        scoped = (
-            await ac.get("/api/runs/history", params={"session_id": "s1"})
-        ).json()
+        scoped = (await ac.get("/api/runs/history", params={"session_id": "s1"})).json()
         other = (
             await ac.get("/api/runs/history", params={"session_id": "nope"})
         ).json()

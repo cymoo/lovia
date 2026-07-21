@@ -3,7 +3,8 @@
 The optional browser UI turns any lovia Agent into a local chat application.
 It includes streaming text and Tool activity, conversation history with
 edit-and-resend and regenerate, titles, approvals, schedules, a memory editor,
-a context-usage ring by the composer (click it for token/cache/model details),
+a context-usage ring by the Send button (click it for token/cache/model
+details; it persists across reloads),
 and a read-only Workspace file panel. The interface speaks English and Chinese (following the
 browser language; switchable in Settings, along with a system/light/dark theme
 and desktop notifications for finished background runs).

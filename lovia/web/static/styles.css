@@ -2064,20 +2064,10 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .session-pin svg,
 .sched-item-actions button svg,
 .mermaid-lightbox-btn svg,
-.theme-icon svg,
 .todo-mark svg,
 .withdraw-btn svg,
 .btn-send svg {
   display: block;
-}
-
-/* theme toggle */
-#dark-toggle .theme-icon {
-  display: inline-flex;
-  transition: transform var(--t-slow) var(--ease);
-}
-#dark-toggle:hover .theme-icon {
-  transform: rotate(40deg);
 }
 
 /* hamburger */
@@ -3392,7 +3382,6 @@ body.files-splitting {
   justify-content: center;
   width: 30px;
   height: 34px; /* matches the send button's row height */
-  margin-left: -8px; /* tuck into the pill's left padding */
   border-radius: 50%;
   color: var(--accent);
   cursor: pointer;
@@ -3439,7 +3428,7 @@ body.files-splitting {
 }
 .context-popover {
   position: absolute;
-  left: 6px;
+  right: 6px; /* anchored by the ring's end of the pill */
   bottom: calc(100% + 10px);
   min-width: 220px;
   padding: 10px 12px;

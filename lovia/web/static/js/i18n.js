@@ -54,7 +54,6 @@ const MESSAGES = {
     'composer.queuedCancel': '取消这条排队中的消息',
     'topbar.export': '导出',
     'topbar.exportText': '纯文本',
-    'topbar.theme': '切换主题',
     'topbar.files': '工作区文件',
     'topbar.turn': '第 {n} 轮',
     // ---- toasts / errors
@@ -291,7 +290,6 @@ const EN = {
   'composer.queuedCancel': 'Cancel this queued message',
   'topbar.export': 'Export',
   'topbar.exportText': 'Text',
-  'topbar.theme': 'Toggle theme',
   'topbar.files': 'Workspace files',
   'topbar.turn': 'Turn {n}',
   'toast.exported': 'Chat exported',
@@ -526,7 +524,6 @@ const STATIC = [
   ['#sidebar-expand', null, 'nav.expand', 'nav.expand'],
   ['.sidebar-section-label', 'nav.chats', null, null],
   ['#export-btn', null, 'topbar.export', null],
-  ['#dark-toggle', null, 'topbar.theme', null],
   ['#files-btn', null, 'topbar.files', 'topbar.files'],
   ['#stop', 'composer.stop', null, 'composer.stop'],
   ['#send', null, null, 'composer.send'],

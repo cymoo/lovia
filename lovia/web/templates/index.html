@@ -100,10 +100,9 @@
           <button type="button" class="export-menu-item" role="menuitem" data-format="txt">Text</button>
         </div>
       </div>
-      <button id="dark-toggle" class="btn-icon" type="button" title="Toggle theme" aria-label="Toggle dark mode">
-        <span class="theme-icon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></span>
-      </button>
-      <!-- Rightmost: the toggle sits next to the panel it opens. -->
+      <!-- Rightmost: the toggle sits next to the panel it opens. (Theme
+           lives in Settings — an app-level concern; the topbar stays
+           chat-scoped.) -->
       <button id="files-btn" class="btn-icon hidden" type="button" title="Files" aria-label="Workspace files" aria-expanded="false" aria-controls="files-panel">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
       </button>
@@ -140,8 +139,12 @@
 
   <form id="composer" class="composer" autocomplete="off">
     <div class="composer-inner">
+      <label class="vh" for="prompt">message</label>
+      <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…"></textarea>
       <!-- Context ring: how full the model's window is, once a turn reports
-           usage. Click for details (tokens, cache, model). -->
+           usage. Click for details (tokens, cache, model). Sits in the action
+           cluster by Send — the composer's left edge is reserved for the
+           upcoming attach button. -->
       <button id="context-ring" class="context-ring hidden" type="button"
               aria-haspopup="dialog" aria-expanded="false" aria-controls="context-popover">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -152,8 +155,6 @@
       <div id="context-popover" class="context-popover" role="dialog" aria-label="Context details" hidden>
         <div class="context-popover-rows"></div>
       </div>
-      <label class="vh" for="prompt">message</label>
-      <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…"></textarea>
       <button id="stop" class="btn btn-danger" type="button" aria-label="Stop" style="display:none">Stop</button>
       <button id="send" class="btn-send" type="submit" aria-label="Send message" title="Send (Enter)" disabled>
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>

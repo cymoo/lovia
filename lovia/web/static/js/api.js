@@ -85,6 +85,10 @@ export const api = {
     fetch(`/api/sessions${qs({ q, limit, offset })}`).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
   listRuns: () => fetch('/api/runs').then(_json),
+  // Persisted run records, newest first. `since` keeps only runs finished
+  // after that timestamp — the missed-completion catch-up on page load.
+  runHistory: ({ since, limit } = {}) =>
+    fetch(`/api/runs/history${qs({ since, limit })}`).then(_json),
   getSession: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
   renameSession: (id, title) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}`, {

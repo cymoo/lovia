@@ -88,11 +88,13 @@ tail. The Stop button explicitly cancels the Run and keeps completed turns in
 the Session.
 
 Running sessions show a pulsing dot in the sidebar and can be stopped from
-there directly. The UI polls for background activity: when a run you're not
-watching finishes, a toast appears — and if the tab is hidden, the browser
-tab's title gains an unseen-count badge. Scheduled runs record the outcome of
-their last fire (shown as ✓ / ✕ in the schedules dialog, with the error
-message a hover away).
+there directly. The UI subscribes to the server's lifecycle stream
+(`/api/events`; it falls back to polling where that's unavailable): when a run
+you're not watching finishes, a toast appears — if the tab is hidden, the
+browser tab's title gains an unseen-count badge, and runs that finished while
+no page was open at all are announced on the next load. Scheduled runs keep
+their full run history (✓ / ✕ per fire in the schedules dialog, with duration,
+token spend, and the error message a hover away).
 
 ## See also
 

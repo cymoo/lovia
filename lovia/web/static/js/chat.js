@@ -327,6 +327,7 @@ async function rewindTo(userTurn, message) {
     const res = await api.rewindSession(store.sessionId, userTurn);
     renderHistory(res.entries || []);
     hideContextMeter(); // the old fill describes a transcript that's gone
+    _staleMeterSessions.add(store.sessionId); // …and so does its run record
   } catch (err) {
     toast(err.message || t('chat.rewindFailed'), { type: 'error' });
     return false;
@@ -910,25 +911,27 @@ function updateContextMeter(usage) {
   const el = document.getElementById('context-ring');
   if (!el) return;
   const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
-  const inputTokens = contextFill(usage);
-  if (!window_ || inputTokens == null) {
+  const fill = contextFill(usage);
+  if (fill == null) {
     hideContextMeter();
     return;
   }
   _lastUsage = usage;
-  const pct = Math.min(100, Math.round((inputTokens / window_) * 100));
+  _staleMeterSessions.delete(store.sessionId);
+  // Unknown window (provider advertises none): a neutral ring with no fill —
+  // the popover still serves the token/cache detail.
+  const pct = window_ ? Math.min(100, Math.round((fill / window_) * 100)) : null;
   el.classList.remove('hidden');
-  el.classList.toggle('warn', pct >= 70 && pct < 90);
-  el.classList.toggle('danger', pct >= 90);
-  const detail = t('context.meter', {
-    used: formatTokens(inputTokens),
-    window: formatTokens(window_),
-    pct,
-  });
+  el.classList.toggle('nowin', pct == null);
+  el.classList.toggle('warn', pct != null && pct >= 70 && pct < 90);
+  el.classList.toggle('danger', pct != null && pct >= 90);
+  const detail = pct != null
+    ? t('context.meter', { used: formatTokens(fill), window: formatTokens(window_), pct })
+    : t('context.meterNoWindow', { used: formatTokens(fill) });
   el.title = detail;
   el.setAttribute('aria-label', detail); // keep assistive tech in sync
   // pathLength="100" on the circle → the dash array speaks percentages.
-  el.querySelector('.context-ring-fill').style.strokeDasharray = `${pct} 100`;
+  el.querySelector('.context-ring-fill').style.strokeDasharray = `${pct ?? 0} 100`;
   if (!document.getElementById('context-popover')?.hidden) fillContextPopover();
 }
 
@@ -951,7 +954,7 @@ function fillContextPopover() {
   const entries = [
     [t('ctx.context'), pct != null
       ? `${formatTokens(fill)} / ${formatTokens(window_)} · ${pct}%`
-      : null, true],
+      : formatTokens(fill), true],
     [t('ctx.model'), agent?.model, false],
     [t('ctx.input'), formatTokens(u.input_tokens), false],
     [t('ctx.output'), formatTokens(u.output_tokens), false],
@@ -1003,8 +1006,30 @@ export function initContextRing() {
   });
 }
 
-// Usage is a property of the conversation on screen — switching away clears it.
+// Usage is a property of the conversation on screen — switching away clears
+// it, and entering a chat restores it from the durable run record (so the
+// ring survives reloads). Restore hooks 'render-history', which fires after
+// 'sync-agent' — the window lookup needs the chat's own agent in place.
+// Sessions rewound this page-view are skipped: their latest record describes
+// a transcript that's gone; the next completed run un-marks them.
+const _staleMeterSessions = new Set();
+
+async function restoreContextMeter(sessionId) {
+  if (!sessionId || _staleMeterSessions.has(sessionId)) return;
+  let records = [];
+  try {
+    records = await api.runHistory({ session_id: sessionId, limit: 5 });
+  } catch {
+    return; // cosmetic — a failed restore just leaves the ring hidden
+  }
+  const usage = records.find((r) => r.usage)?.usage; // bad fires store none
+  // Bail when superseded: the user switched on, or a live `done` beat us.
+  if (!usage || store.sessionId !== sessionId || _lastUsage) return;
+  updateContextMeter(usage);
+}
+
 store.on('session-switched', hideContextMeter);
+store.on('render-history', () => restoreContextMeter(store.sessionId));
 
 // Surface why compaction fired and how much it saved. Policy-agnostic: the
 // numeric fields (tokens_before/after) ride at the top level and the policy

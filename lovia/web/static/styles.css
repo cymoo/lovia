@@ -3426,6 +3426,14 @@ body.files-splitting {
 .context-ring.danger {
   color: var(--danger);
 }
+/* Window unknown: no fill to draw — a dashed track signals "tokens known,
+   share of the window not". */
+.context-ring.nowin {
+  color: var(--muted);
+}
+.context-ring.nowin .context-ring-track {
+  stroke-dasharray: 3 3.2;
+}
 .composer-inner {
   position: relative; /* anchors .context-popover to the centered pill */
 }

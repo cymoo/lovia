@@ -733,14 +733,26 @@ async def test_completed_run_leaves_a_completed_record() -> None:
         await task
 
         recs = (await ac.get("/api/runs/history")).json()
+        scoped = (
+            await ac.get("/api/runs/history", params={"session_id": "s1"})
+        ).json()
+        other = (
+            await ac.get("/api/runs/history", params={"session_id": "nope"})
+        ).json()
     assert len(recs) == 1
     rec = recs[0]
     assert rec["session_id"] == "s1" and rec["agent"] == "bot"
     assert rec["source"] == "user"  # interactive start
     assert rec["status"] == "completed" and rec["error"] is None
     assert rec["finished_at"] >= rec["started_at"]
+    # The session_id filter is what the context-ring restore queries on reload.
+    assert scoped == recs and other == []
     stored = await _wait_record(store, rec["run_id"])
     assert stored.status == "completed"
+    # Usage lands in the record — token totals plus the final prompt size the
+    # restored ring measures fill with (scripted turns report input_tokens=1).
+    assert stored.usage["input_tokens"] == 1
+    assert stored.usage["last_input_tokens"] == 1
 
 
 @pytest.mark.asyncio

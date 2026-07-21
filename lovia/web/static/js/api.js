@@ -87,8 +87,9 @@ export const api = {
   listRuns: () => fetch('/api/runs').then(_json),
   // Persisted run records, newest first. `since` keeps only runs finished
   // after that timestamp — the missed-completion catch-up on page load.
-  runHistory: ({ since, limit } = {}) =>
-    fetch(`/api/runs/history${qs({ since, limit })}`).then(_json),
+  // `session_id` scopes to one chat — the context-ring restore on reload.
+  runHistory: ({ session_id, since, limit } = {}) =>
+    fetch(`/api/runs/history${qs({ session_id, since, limit })}`).then(_json),
   getSession: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
   renameSession: (id, title) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}`, {

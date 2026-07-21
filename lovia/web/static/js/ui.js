@@ -1,15 +1,12 @@
 // UI utilities: theme, sidebar toggle, dialogs.
 import { t } from './i18n.js';
 import { store } from './store.js';
-import { icon } from './icons.js';
-
-const darkToggle = document.getElementById('dark-toggle');
-const themeIcon = darkToggle?.querySelector('.theme-icon');
 
 // ---- Theme -------------------------------------------------------------
 // Three-way preference: 'system' (default — follows the OS live), 'light',
 // 'dark'. The stored value is the PREFERENCE; store.theme always holds the
-// RESOLVED light/dark the page is actually showing.
+// RESOLVED light/dark the page is actually showing. Switching lives in the
+// settings dialog — an app-level concern, so no topbar button.
 const THEME_KEY = 'lovia-theme';
 const _dark = window.matchMedia('(prefers-color-scheme: dark)');
 
@@ -48,8 +45,6 @@ function applyResolved(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   store.theme = theme;
   syncThemeColor();
-  // Show the destination: a sun in dark mode (click → light), a moon in light.
-  if (themeIcon) themeIcon.innerHTML = icon(theme === 'dark' ? 'sun' : 'moon', { size: 17 });
 }
 
 export function setThemePref(pref) {
@@ -62,11 +57,6 @@ export function initTheme() {
   // 'system' follows OS changes live; explicit picks ignore them.
   _dark.addEventListener?.('change', () => {
     if (themePref() === 'system') applyResolved(resolveTheme('system'));
-  });
-  // The topbar button is a quick light/dark flip — an explicit choice. The
-  // settings dialog is where 'system' comes back.
-  darkToggle?.addEventListener('click', () => {
-    setThemePref(store.theme === 'dark' ? 'light' : 'dark');
   });
 }
 

@@ -257,6 +257,20 @@ async def test_agent_as_tool_propagates_usage() -> None:
     assert result.usage.output_tokens >= 3
 
 
+async def test_last_input_tokens_is_final_call_not_cumulative() -> None:
+    from lovia.messages import Usage
+
+    turn1 = call("add", {"a": 1, "b": 2}, call_id="c1")
+    turn1.usage = Usage(input_tokens=10, output_tokens=2)
+    turn2 = text("3")
+    turn2.usage = Usage(input_tokens=25, output_tokens=3)
+    agent = Agent(name="t", model=ScriptedProvider([turn1, turn2]), tools=[add])
+
+    result = await Runner.run(agent, "1+2?")
+    assert result.usage.input_tokens == 35  # cumulative across both calls
+    assert result.last_input_tokens == 25  # the final prompt alone
+
+
 # ------------------------------------------------------------------------- #
 # Provider lifecycle
 # ------------------------------------------------------------------------- #

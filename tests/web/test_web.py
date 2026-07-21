@@ -835,6 +835,38 @@ def test_usage_dict_includes_cache_counts() -> None:
     }
 
 
+def test_usage_dict_carries_last_input_tokens_when_known() -> None:
+    # ``input_tokens`` sums every call's prompt; ``last_input_tokens`` is the
+    # final call's alone (the context-fill number). Absent → key omitted, so
+    # old records and clients see an unchanged shape.
+    from lovia.messages import Usage
+
+    from lovia.web.sse import usage_dict
+
+    u = Usage(input_tokens=35, output_tokens=5)
+    assert usage_dict(u, last_input_tokens=25)["last_input_tokens"] == 25
+    assert "last_input_tokens" not in usage_dict(u)
+
+
+def test_chat_usage_reports_last_input_tokens() -> None:
+    # Scripted turns report input_tokens=1 each; with a tool loop the REST
+    # response's cumulative input is 2 while the final prompt stays 1.
+    @tool
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider(
+            [call("add", {"a": 1, "b": 2}, call_id="c1"), text("3")]
+        ),
+        tools=[add],
+    )
+    res = TestClient(_app(agent)).post("/api/chat", json={"message": "1+2?"}).json()
+    assert res["usage"]["input_tokens"] == 2
+    assert res["usage"]["last_input_tokens"] == 1
+
+
 # ----------------------------------------------------- delete-all + limit -
 
 

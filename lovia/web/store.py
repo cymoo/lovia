@@ -189,7 +189,9 @@ class RunRow:
     error: str | None
     started_at: float
     finished_at: float | None
-    usage: JsonObject | None  # {"input_tokens", "output_tokens", "total_tokens"}
+    # The sse.usage_dict shape: token totals, cache counts, and (when known)
+    # last_input_tokens — the final call's prompt size.
+    usage: JsonObject | None
 
     @classmethod
     def from_row(cls, row: Any) -> "RunRow":

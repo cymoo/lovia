@@ -98,7 +98,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return ChatResponse(
             output=_coerce(result.output),
             session_id=sid,
-            usage=usage_dict(result.usage),
+            usage=usage_dict(result.usage, last_input_tokens=result.last_input_tokens),
         )
 
     @router.post("/api/chat/stream")

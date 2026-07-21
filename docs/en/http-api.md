@@ -40,15 +40,21 @@ the same defaults `create_app` uses.
 
 ## Authentication
 
-When the server runs with a token
-([`serve(token=...)` or a non-loopback bind](web-server.md#authentication)),
-every `/api/*` route requires it — `Authorization: Bearer <token>` on plain
-requests and SSE alike (streams are `fetch`-consumed, so headers work).
-`GET /healthz` stays open. Missing/wrong credentials answer `401` with a
-`detail` that names the *server token*, so clients can distinguish it from a
-model-provider auth failure. Apps mounting `build_api_router` themselves add
-their own dependency (`token_dependency(token)` from `lovia.web.auth`, or any
-FastAPI dependency).
+With `create_app(token=...)` or `serve(token=...)`, every business route
+registered by `build_api_router` requires authentication. A non-loopback
+`serve()` bind also generates a token when no authentication was supplied.
+
+Plain requests, `POST /api/chat/stream`, and `POST /api/chat/reconnect` send
+`Authorization: Bearer <token>`. `GET /api/events` uses `EventSource`, which
+cannot set custom headers, so the bundled UI authenticates it with the
+`lovia_token` cookie. `GET /healthz` stays open. Missing or invalid credentials
+return `401`; the `detail` names the *server token* so clients can distinguish
+this from model-provider authentication failures.
+
+Apps mounting `build_api_router` themselves must add their own dependency,
+such as `token_dependency(token)` from `lovia.web.auth` or any FastAPI
+authentication dependency. `/api/docs` and `/api/openapi.json` belong to the
+FastAPI app rather than this router and remain public by default.
 
 ## Endpoints
 
@@ -57,7 +63,7 @@ FastAPI dependency).
 | `GET /healthz` | liveness |
 | `GET /api/info` | title, agents, default agent, version, feature flags |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities) |
-| `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}` |
+| `POST /api/chat` | one **blocking** Run → `{output, session_id, usage}` |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
 | `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision}` |
@@ -66,29 +72,41 @@ FastAPI dependency).
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
 | `GET /api/runs` | live supervised runs |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
-| `GET /api/events` | **SSE**: the process-wide lifecycle stream — `run_started` / `run_finished` (with the run-record status), `session_created` / `session_retitled` — so a UI pushes instead of polling. No replay: refetch one snapshot on every (re)connect, then trust the stream |
+| `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
-| `POST /api/sessions/{id}/rewind` | drop everything from the `user_turn`-th user message on (edit & resend / regenerate); 409 while a run is live, 501 if the store lacks `rewind` |
+| `POST /api/sessions/{id}/rewind` | drop everything from the user-message index `user_turn` onward (zero-based); 409 while a run is live, 501 if the store lacks `rewind` |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
 
-Semantics worth knowing: `/api/chat` returns 409 while a stream owns the
-session; starting a second stream on a live session *attaches* instead of
-erroring; workspace routes run through a forced-readonly session (the
-agent's `denied_paths` carried over) regardless of the agent's own mode,
-and hide regenerable environment junk (`__pycache__`, `*.pyc`, `venv`,
-`node_modules` — dotfiles were already hidden) so `/recent` stays about
-the user's actual files.
+### Lifecycle events
 
-## The SSE stream
+`GET /api/events` uses GET + `EventSource` to publish `run_started`,
+`run_finished`, `session_created`, and `session_retitled`. It does not replay
+history. On every connection or reconnection, fetch current state from
+`/api/sessions` and `/api/runs` before processing new events. The server closes
+subscribers that fall behind; recover them with the same snapshot-first flow.
+To find Runs that finished while disconnected, query `/api/runs/history` with
+`since`.
 
-`POST /api/chat/stream` (and `/reconnect`) answer with an `text/event-stream`
-of `event:` / `data:` pairs — the runner's
-[typed events](streaming.md#event-catalog), JSON-encoded:
+### Other behavior
+
+- `/api/chat` returns 409 while a chat stream owns the Session.
+- Starting another chat stream while that Session has a live Run attaches to
+  the existing Run instead of starting a second one or failing.
+- Workspace routes always access the workspace in read-only mode, regardless
+  of the Agent's mode, and preserve its `denied_paths`. They hide regenerable
+  files such as `__pycache__`, `*.pyc`, `venv`, and `node_modules`; dotfiles
+  stay hidden too.
+
+## Chat SSE streams
+
+`POST /api/chat/stream` and `/api/chat/reconnect` return a `text/event-stream`
+of `event:` / `data:` pairs: the Runner's
+[typed events](streaming.md#event-catalog), with JSON-encoded data.
 
 | SSE event | Payload |
 | --- | --- |
@@ -105,20 +123,17 @@ of `event:` / `data:` pairs — the runner's
 | `error` | `{type, message}` — tool-scoped, or terminal when the stream then ends |
 | `done` | `{output, usage}` — terminal success |
 
-The reconnect contract is deliberately simple: there is no Last-Event-Id
-bookkeeping. A client that loses the connection (or whose subscriber queue
-overflowed — the server closes slow consumers) just re-POSTs
-`/api/chat/reconnect` and receives a fresh authoritative `snapshot`, a
-replay of the in-flight turn's events (a still-pending
-`approval_required` included), then the live tail. Comment lines (`:`) are
-keep-alives — skip them.
+Chat streams do not use Last-Event-Id. After a disconnect, POST
+`/api/chat/reconnect` again to receive the latest `snapshot`, a replay of the
+in-flight Turn (including any pending `approval_required`), and then live
+events. The same recovery applies when the server disconnects a slow client.
+Comment lines (`:`) are keep-alives and should be ignored.
 
 ## The bundled browser client
 
-`lovia/web/static/js/api.js` is a dependency-free client covering every
-endpoint (`api.chat`, `api.streamChat`, `api.reconnect`, `api.approve`,
-sessions, schedules, workspace, memory) plus `readSSE(response)` — an async
-generator over `{event, data}` pairs:
+`lovia/web/static/js/api.js` is a dependency-free client for chat, Session,
+scheduling, Workspace, Memory, and related endpoints. It also provides
+`readSSE(response)`, an async generator over `{event, data}` pairs:
 
 ```js
 import { api, readSSE } from "./api.js";
@@ -134,9 +149,9 @@ it is intentionally small.
 
 ## ChatStore
 
-`ChatStore` is the storage bundle behind the API: a `Session` (transcripts)
-plus a metadata table (`ChatMeta` rows — titles, timestamps, pins, the
-resumable `active_run_id`) plus a checkpointer and the schedule + run-record tables.
+`ChatStore` is the storage bundle behind the API: a `Session` for transcripts,
+a metadata table for `ChatMeta` rows (titles, timestamps, pins, and the
+resumable `active_run_id`), a checkpointer, and schedule and run-record tables.
 `ChatStore.sqlite(path, wal=False)` keeps everything in one file;
 `ChatStore.in_memory()` is for tests and demos; `ChatStore(session=...,
 meta_path=...)` wraps a custom `Session` backend while keeping the
@@ -144,14 +159,15 @@ metadata features.
 
 ## Sharp edges
 
-- **`build_api_router` alone has no auth or rate limits** — it is a
-  component. `create_app`/`serve` add the token guard
-  ([Authentication](#authentication)); anything beyond a single shared
-  token (users, quotas) belongs to your gateway. `cors_origins` stays
-  unset (no CORS) until you say otherwise.
-- **SSE responses are POST-initiated**, not `EventSource`-compatible GETs.
-  Use `fetch` + a reader (as `api.js` does); native `EventSource` won't
-  work.
+- **`build_api_router` alone has no authentication or rate limits.**
+  `create_app(token=...)` and `serve(token=...)` add token authentication;
+  `serve()` also generates a token automatically for non-loopback binds
+  ([Authentication](#authentication)). User identities, permissions, quotas,
+  and other multi-user concerns belong in your gateway. `cors_origins` stays
+  unset (no CORS) until configured.
+- **Chat SSE responses are POST-initiated.** Use `fetch` + a reader for
+  `/api/chat/stream` and `/api/chat/reconnect`; native `EventSource` will not
+  work for them. `GET /api/events` is the `EventSource`-compatible stream.
 - **`result` in `tool_result` is the raw value** (JSON-safe form) — the
   same duality as
   [`ToolCallCompleted`](streaming.md#tools-and-approval); render `result`

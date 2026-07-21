@@ -3,13 +3,8 @@
 The optional browser UI turns any lovia Agent into a local chat application.
 It includes streaming text and Tool activity, conversation history with
 edit-and-resend and regenerate, titles, approvals, schedules, a memory editor,
-a context-usage ring by the Send button (click it for token/cache/model
-details; it persists across reloads),
-and a read-only Workspace file panel. The interface speaks English and Chinese (following the
-browser language; switchable in Settings, along with a system/light/dark theme
-and desktop notifications for finished background runs).
-All browser assets are bundled, so the page works without a CDN or external
-font requests.
+and a read-only Workspace file panel. All browser assets are bundled, so the
+page works without a CDN or external font requests.
 
 ## Start in one command
 
@@ -81,22 +76,12 @@ Every option resolves in this order: command-line flag, environment variable,
 Run `lovia web --help` for the full list, including TLS, Provider timeout,
 context-window, and proxy options.
 
-## What happens when the browser disconnects
+## Closing or refreshing the page
 
-The server owns the Run; an SSE connection is only a subscriber. Closing or
-refreshing the browser does not stop work. Reopening the conversation receives
-a snapshot of completed turns, a replay of the current turn, then the live
-tail. The Stop button explicitly cancels the Run and keeps completed turns in
-the Session.
-
-Running sessions show a pulsing dot in the sidebar and can be stopped from
-there directly. The UI subscribes to the server's lifecycle stream
-(`/api/events`; it falls back to polling where that's unavailable): when a run
-you're not watching finishes, a toast appears — if the tab is hidden, the
-browser tab's title gains an unseen-count badge, and runs that finished while
-no page was open at all are announced on the next load. Scheduled runs keep
-their full run history (✓ / ✕ per fire in the schedules dialog, with duration,
-token spend, and the error message a hover away).
+Runs are managed by the server, so closing or refreshing the page does not stop
+them. Reopen the conversation to catch up and resume live updates. Only the
+Stop button cancels a Run; completed turns remain in the Session. Running
+sessions are marked in the sidebar and can also be stopped there.
 
 ## See also
 

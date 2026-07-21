@@ -47,6 +47,7 @@ const MESSAGES = {
     'dialog.deleteChat': '删除这个对话？',
     'dialog.deleteNamed': '删除「{title}」？',
     // ---- composer / topbar
+    'composer.message': '消息',
     'composer.placeholder': '输入消息…',
     'composer.queuePlaceholder': '追加一条消息…',
     'composer.send': '发送消息',
@@ -283,6 +284,7 @@ const EN = {
   'dialog.renameChat': 'Rename chat:',
   'dialog.deleteChat': 'Delete this chat?',
   'dialog.deleteNamed': 'Delete "{title}"?',
+  'composer.message': 'message',
   'composer.placeholder': 'Send a message…',
   'composer.queuePlaceholder': 'Queue a follow-up…',
   'composer.send': 'Send message',
@@ -525,6 +527,7 @@ const STATIC = [
   ['.sidebar-section-label', 'nav.chats', null, null],
   ['#export-btn', null, 'topbar.export', null],
   ['#files-btn', null, 'topbar.files', 'topbar.files'],
+  ['label[for="prompt"]', 'composer.message', null, null],
   ['#stop', 'composer.stop', null, 'composer.stop'],
   ['#send', null, null, 'composer.send'],
   ['#files-tab-recent', 'files.recent', null, null],

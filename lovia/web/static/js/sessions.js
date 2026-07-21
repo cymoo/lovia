@@ -64,14 +64,21 @@ async function checkMissedRuns() {
   } catch {
     return;
   }
-  _markRunsSeen();
-  if (!Number.isFinite(seen)) return; // first visit seeds the watermark quietly
+  if (!Number.isFinite(seen)) {
+    _markRunsSeen(); // first visit seeds the watermark quietly
+    return;
+  }
   let records;
   try {
-    records = await api.runHistory({ since: seen, limit: 20 });
+    // Generous limit: the toasts cap themselves below, but the watermark only
+    // advances over what this fetch actually covered.
+    records = await api.runHistory({ since: seen, limit: 100 });
   } catch {
-    return; // an older server or a blip must never break startup
+    // An older server or a blip: keep the old watermark so the next load
+    // retries instead of silently dropping those notices forever.
+    return;
   }
+  _markRunsSeen();
   // completed/failed are outcomes worth announcing; "cancelled" was the user's
   // own doing and "interrupted" is a resumable pause, not a result.
   const missed = records.filter(

@@ -283,23 +283,29 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
-            # Pre-0.8.27 DBs name the schedule table ``schedules`` — before the
-            # chat_ prefix marked every ChatStore-owned table in the shared DB
-            # file. The base schema (already ensured) created the empty
-            # ``chat_schedules``; fold the legacy rows in and drop the old
-            # table. Naming _SCHED_COLS explicitly also sheds the dead
-            # ``last_status``/``last_error`` columns some legacy DBs carry
+            # DBs from before the chat_ prefix (lovia <= 0.8.26) name the
+            # schedule table ``schedules``. The base schema (already ensured)
+            # created the empty ``chat_schedules``; fold the legacy rows in and
+            # drop the old table. Naming _SCHED_COLS explicitly also sheds the
+            # dead ``last_status``/``last_error`` columns some legacy DBs carry
             # (retired by the run-records table) — they vanish with the DROP.
             legacy = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name='schedules'"
             ).fetchone()
             if legacy is not None:
-                conn.execute(
-                    f"INSERT OR IGNORE INTO chat_schedules ({_SCHED_COLS}) "
-                    f"SELECT {_SCHED_COLS} FROM schedules"
-                )
-                conn.execute("DROP TABLE schedules")
+                try:
+                    conn.execute(
+                        f"INSERT OR IGNORE INTO chat_schedules ({_SCHED_COLS}) "
+                        f"SELECT {_SCHED_COLS} FROM schedules"
+                    )
+                except sqlite3.OperationalError as exc:
+                    # Another worker folded and dropped the table between our
+                    # check and this read (concurrent multi-worker startup) —
+                    # same tolerance as add_column above.
+                    if "no such table" not in str(exc).lower():
+                        raise
+                conn.execute("DROP TABLE IF EXISTS schedules")
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.

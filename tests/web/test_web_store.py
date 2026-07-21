@@ -439,10 +439,11 @@ async def test_delete_schedule_drops_its_run_records() -> None:
 async def test_migration_folds_legacy_schedules_into_chat_schedules(
     tmp_path: Path,
 ) -> None:
-    # Pre-0.8.27 DBs name the table ``schedules`` (some with the retired
-    # last_status/last_error columns). Opening one moves the rows to
-    # ``chat_schedules`` and drops the old table — dead columns and all.
-    # Idempotent: reopening must not duplicate or fail.
+    # DBs from before the chat_ prefix (lovia <= 0.8.26) name the table
+    # ``schedules`` (some with the retired last_status/last_error columns).
+    # Opening one moves the rows to ``chat_schedules`` and drops the old
+    # table — dead columns and all. Idempotent: reopening must not duplicate
+    # or fail.
     import sqlite3
 
     path = tmp_path / "legacy.db"

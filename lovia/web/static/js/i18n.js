@@ -162,6 +162,8 @@ const MESSAGES = {
     'files.nowrap': '取消自动换行',
     'files.noWorkspace': '当前 Agent 没有工作区',
     'files.openFailed': '无法在面板中打开该文件',
+    'lightbox.close': '关闭',
+    'lightbox.download': '下载原图',
     // ---- memory dialog
     'memory.title': '记忆',
     'memory.hint':
@@ -398,6 +400,8 @@ const EN = {
   'files.nowrap': 'Don’t wrap long lines',
   'files.noWorkspace': 'This agent has no workspace',
   'files.openFailed': 'Couldn’t open that file in the panel',
+  'lightbox.close': 'Close',
+  'lightbox.download': 'Download original',
   'memory.title': 'Memory',
   'memory.hint':
     'Durable facts the agent carries into every chat, one per `- fact` line. Edits apply on save; lines that aren’t bullets are dropped.',

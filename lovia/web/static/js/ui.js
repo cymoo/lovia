@@ -1,6 +1,7 @@
 // UI utilities: theme, sidebar toggle, dialogs.
 import { t } from './i18n.js';
 import { store } from './store.js';
+import { icon } from './icons.js';
 
 // ---- Theme -------------------------------------------------------------
 // Three-way preference: 'system' (default — follows the OS live), 'light',
@@ -268,4 +269,62 @@ export async function copyToClipboard(text) {
     document.body.removeChild(ta);
     return true;
   }
+}
+
+// ---- Image lightbox ----------------------------------------------------
+// A focused, in-app viewer for chat-attached images: click a thumbnail to see
+// it large instead of leaving for a new tab. Built on <dialog> so Esc, the
+// backdrop, and focus handling come for free.
+export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
+  const dialog = document.createElement('dialog');
+  // The app targets <dialog>-capable browsers (see showDialog above); if
+  // showModal is somehow unavailable, degrade to opening the image directly.
+  if (typeof dialog.showModal !== 'function') {
+    window.open(src, '_blank', 'noopener');
+    return;
+  }
+  dialog.className = 'lightbox';
+
+  // A relative frame sizes to the image and anchors the action bar to its
+  // corner, instead of relying on the dialog's UA positioning.
+  const frame = document.createElement('div');
+  frame.className = 'lightbox-frame';
+
+  const bar = document.createElement('div');
+  bar.className = 'lightbox-bar';
+  if (downloadHref) {
+    const dl = document.createElement('a');
+    dl.className = 'lightbox-btn';
+    dl.href = downloadHref;
+    dl.setAttribute('download', '');
+    dl.title = t('lightbox.download');
+    dl.setAttribute('aria-label', t('lightbox.download'));
+    dl.innerHTML = icon('download', { size: 18 });
+    bar.appendChild(dl);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'lightbox-btn';
+  close.title = t('lightbox.close');
+  close.setAttribute('aria-label', t('lightbox.close'));
+  close.innerHTML = icon('x', { size: 18 });
+  close.addEventListener('click', () => dialog.close());
+  bar.appendChild(close);
+
+  const img = document.createElement('img');
+  img.className = 'lightbox-img';
+  img.src = src;
+  img.alt = alt;
+
+  frame.appendChild(bar);
+  frame.appendChild(img);
+  dialog.appendChild(frame);
+
+  // A click on the backdrop (outside the image frame) closes.
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }

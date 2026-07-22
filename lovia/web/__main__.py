@@ -141,8 +141,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--model",
-        help="model id, e.g. openai:gpt-5.5 (env LOVIA_MODEL, then "
-        "OPENAI_DEFAULT_MODEL / ANTHROPIC_DEFAULT_MODEL)",
+        help="model id, e.g. openai:gpt-5.5 (env LOVIA_MODEL)",
     )
     p.add_argument(
         "--base-url",

@@ -273,6 +273,27 @@ def test_raw_image_inline(client: TestClient) -> None:
     assert r.headers["content-type"] == "image/png"
     assert r.content == PNG_BYTES
     assert "attachment" not in r.headers.get("content-disposition", "")
+    # user-uploaded bytes served inline must not be MIME-sniffed
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_raw_avif_uses_explicit_mime_not_os_guess(client: TestClient) -> None:
+    # AVIF isn't in every OS mime database; the explicit preview map must still
+    # send a correct image Content-Type, or the nosniff'd inline preview breaks.
+    up = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("pic.avif", b"\x00\x00\x00\x1cftypavif", "application/octet-stream")},
+    )
+    assert up.status_code == 200
+    assert up.json()["kind"] == "image"
+    assert up.json()["mime"] == "image/avif"
+    raw = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
+    )
+    assert raw.status_code == 200
+    assert raw.headers["content-type"] == "image/avif"
+    assert raw.headers["x-content-type-options"] == "nosniff"
 
 
 def test_raw_non_image_inline_refused(client: TestClient) -> None:
@@ -440,6 +461,64 @@ def test_upload_svg_is_not_treated_as_inline_image(client: TestClient) -> None:
         "/api/workspace/raw", params={"agent": "bot", "path": path, "download": 1}
     )
     assert dl.status_code == 200
+
+
+def test_upload_rejects_disallowed_extension(client: TestClient) -> None:
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("payload.exe", b"MZ\x00\x00", "application/octet-stream")},
+    )
+    assert r.status_code == 415
+
+
+def test_upload_allowlist_can_be_overridden(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A narrow allowlist rejects an otherwise-common type...
+    monkeypatch.setenv("LOVIA_UPLOAD_ALLOWED_EXT", "png, jpg")
+    assert (
+        client.post(
+            "/api/workspace/upload",
+            params={"agent": "bot"},
+            files={"file": ("notes.txt", b"hi", "text/plain")},
+        ).status_code
+        == 415
+    )
+    # ...and "*" opens it back up to anything.
+    monkeypatch.setenv("LOVIA_UPLOAD_ALLOWED_EXT", "*")
+    assert (
+        client.post(
+            "/api/workspace/upload",
+            params={"agent": "bot"},
+            files={"file": ("weird.xyz", b"data", "application/octet-stream")},
+        ).status_code
+        == 200
+    )
+
+
+def test_upload_extensionless_file_is_allowed(client: TestClient) -> None:
+    # No extension (README, Makefile, LICENSE) → not rejected by the allowlist.
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("Makefile", b"all:\n\techo hi\n", "text/plain")},
+    )
+    assert r.status_code == 200
+    assert r.json()["kind"] == "file"
+
+
+def test_upload_size_cap_from_env(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOVIA_MAX_UPLOAD_MB", "1")
+    oversize = b"x" * (1024 * 1024 + 1)
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("big.txt", oversize, "text/plain")},
+    )
+    assert r.status_code == 413
 
 
 # --------------------------------------------------- chat attachment guard -

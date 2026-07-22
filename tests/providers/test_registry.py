@@ -297,26 +297,21 @@ def _clear_model_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-def test_model_from_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_from_env_reads_lovia_model(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_model_env(monkeypatch)
     monkeypatch.setenv("LOVIA_MODEL", "openai:a")
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "b")
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "c")
-    assert model_from_env() == "openai:a"  # LOVIA_MODEL wins
-
-    monkeypatch.delenv("LOVIA_MODEL")
-    assert model_from_env() == "b"  # then OPENAI_DEFAULT_MODEL, bare = openai path
+    assert model_from_env() == "openai:a"
 
 
-def test_model_from_env_prefixes_bare_anthropic_model(
+def test_model_from_env_ignores_legacy_default_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_model_env(monkeypatch)
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-opus-4-8")
-    assert model_from_env() == "anthropic:claude-opus-4-8"
-    # An explicit vendor prefix is kept as-is.
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude:claude-opus-4-8")
-    assert model_from_env() == "claude:claude-opus-4-8"
+    # LOVIA_MODEL is the single knob; OPENAI_/ANTHROPIC_DEFAULT_MODEL are no
+    # longer consulted.
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "b")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "c")
+    assert model_from_env(required=False) is None
 
 
 def test_model_from_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -17,7 +17,11 @@ import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { formatBytes, formatTimeSmart, highlightIn, renderMarkdown } from './util.js';
 
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'ico']);
+// Browser-renderable image previews. This set mirrors the server's
+// PREVIEW_IMAGE_EXT (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is
+// excluded: it can carry scripts and is never served inline, so it renders as
+// source text here instead.
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico']);
 const MD_EXT = new Set(['md', 'markdown']);
 const CSV_EXT = new Set(['csv', 'tsv']);
 const CSV_MAX_ROWS = 500;

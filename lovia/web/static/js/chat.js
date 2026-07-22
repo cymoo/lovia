@@ -3,7 +3,7 @@ import { t } from './i18n.js';
 import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, readSSE } from './api.js';
-import { copyToClipboard } from './ui.js';
+import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
@@ -2243,11 +2243,22 @@ function makeAttachmentView(att) {
     ? api.workspaceRawUrl({ agent: store.agent, path: att.path })
     : att.src || null;
   if (att.kind === 'image' && url) {
+    // Click opens the image in an in-app lightbox rather than a new tab. The
+    // href stays set so cmd/ctrl-click can still open the raw image, and so it
+    // degrades to a plain link without JS.
     const a = document.createElement('a');
     a.href = url;
     a.target = '_blank';
     a.rel = 'noopener';
     a.className = 'msg-attach-image';
+    a.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      const downloadHref = att.path
+        ? api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true })
+        : url;
+      openImageLightbox(url, { alt: att.name || '', downloadHref });
+    });
     const img = document.createElement('img');
     img.src = url;
     img.alt = att.name || '';
@@ -2255,10 +2266,17 @@ function makeAttachmentView(att) {
     a.appendChild(img);
     return a;
   }
+  // A workspace file opens in the Files panel (rendered in-app: text, md, csv,
+  // code, or a download for binaries) instead of forcing a browser download.
   const a = document.createElement('a');
   a.className = 'msg-attach-file';
   if (att.path) {
     a.href = api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true });
+    a.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+      e.preventDefault();
+      store.emit('open-workspace-file', { path: att.path });
+    });
   }
   a.innerHTML = icon('file-text', { size: 15 });
   const name = document.createElement('span');

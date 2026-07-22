@@ -13,8 +13,8 @@ Run with the chat endpoint from ``.env``::
 
     LOVIA_LIVE_TESTS=1 pytest tests/plugins/test_memory_recall_eval.py -m live_provider -s
 
-Set ``OPENAI_EMBEDDING_MODEL`` (plus ``OPENAI_EMBEDDING_BASE_URL`` /
-``OPENAI_EMBEDDING_API_KEY`` if embeddings live on a different host than
+Set ``LOVIA_EMBEDDING_MODEL`` (plus ``LOVIA_EMBEDDING_BASE_URL`` /
+``LOVIA_EMBEDDING_API_KEY`` if embeddings live on a different host than
 chat) to include the vector and hybrid arms.
 """
 
@@ -109,7 +109,7 @@ def _print_table(rows: dict[str, dict[str, str]]) -> None:
 
 
 def _embedder_from_env() -> OpenAIEmbedder | None:
-    model = os.getenv("OPENAI_EMBEDDING_MODEL")
+    model = os.getenv("LOVIA_EMBEDDING_MODEL")
     if not model:
         return None
     return OpenAIEmbedder(model)

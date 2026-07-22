@@ -60,6 +60,8 @@ The composer's **+** button (also drag-drop or paste) uploads images and files
 into the Workspace's `uploads/` directory. Each upload is referenced from your
 message by its workspace path, so the Agent can open it with its file tools —
 this works with any model, and the uploads also appear in the Files panel.
+Clicking an attachment keeps you in the app: files open in the Files panel and
+images open in a lightbox, rather than a new browser tab or a download.
 
 Images additionally go **inline** to models that can see them:
 
@@ -79,6 +81,11 @@ Images additionally go **inline** to models that can see them:
 
 Attachments require a Workspace (the same switch as the Files panel), so
 `--no-workspace` hides the **+** button.
+
+Uploads are capped at `LOVIA_MAX_UPLOAD_MB` MiB (default 25) and limited to a
+built-in allowlist of common image, document, data, and code extensions. Set
+`LOVIA_UPLOAD_ALLOWED_EXT` (comma/space-separated extensions, or `*` for any) to
+override it.
 
 ## Useful CLI options
 

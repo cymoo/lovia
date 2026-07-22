@@ -32,11 +32,9 @@ a bare name starting with `claude` logs a warning, since it is almost always
 a missing `anthropic:` prefix. There is deliberately no default model:
 running an agent without one raises `UserError`.
 
-To avoid hard-coding models in scripts, `model_from_env()` reads (in order)
-`LOVIA_MODEL`, `OPENAI_DEFAULT_MODEL`, `ANTHROPIC_DEFAULT_MODEL`, raising
-with a setup hint when none is set (`required=False` returns `None` instead;
-a bare `ANTHROPIC_DEFAULT_MODEL` gets the `anthropic:` prefix
-automatically).
+To avoid hard-coding models in scripts, `model_from_env()` reads `LOVIA_MODEL`
+— the single knob — raising with a setup hint when it is not set
+(`required=False` returns `None` instead).
 
 ## The OpenAI provider
 

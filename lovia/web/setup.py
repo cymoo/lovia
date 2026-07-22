@@ -173,14 +173,7 @@ def resolve_connection(
         model = model_from_env(required=False)
         if model:
             conn.model = model
-            for var in (
-                "LOVIA_MODEL",
-                "OPENAI_DEFAULT_MODEL",
-                "ANTHROPIC_DEFAULT_MODEL",
-            ):
-                if os.getenv(var):
-                    conn.model_source = env_sources.get(var, "env")
-                    break
+            conn.model_source = env_sources.get("LOVIA_MODEL", "env")
     if base_url_flag:
         conn.base_url, conn.base_url_source = base_url_flag.rstrip("/"), "flag"
     if api_key_flag:

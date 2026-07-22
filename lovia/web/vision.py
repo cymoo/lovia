@@ -27,6 +27,7 @@ from ..providers import Provider
 from ..runner import Runner
 from ..tools import Tool, tool
 from ..workspace.paths import resolve_path
+from .media import model_image_mime
 
 log = logging.getLogger(__name__)
 
@@ -38,17 +39,6 @@ VISION_INSTRUCTIONS = (
     "any important text verbatim. If the image does not answer the question, "
     "say so plainly."
 )
-
-# Suffix → mime for the formats ImagePart can inline. Kept explicit so an
-# unsupported file fails with a clear message the model can act on, rather than
-# a raw ValueError out of ImagePart.from_path.
-_IMAGE_MIME = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "gif": "image/gif",
-    "webp": "image/webp",
-}
 
 
 def make_see_image_tool(
@@ -88,7 +78,7 @@ def make_see_image_tool(
         abs_path = resolved.abs
         if not abs_path.is_file():
             return f"Error: no such image in the workspace: {resolved.display()}"
-        mime = _IMAGE_MIME.get(abs_path.suffix.lower().lstrip("."))
+        mime = model_image_mime(abs_path)
         if mime is None:
             return (
                 f"Error: {resolved.display()} is not a supported image type "

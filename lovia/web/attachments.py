@@ -25,13 +25,10 @@ from ..parts import ContentPart, ImagePart, TextPart
 from ..providers import supports_vision
 from ..workspace import LocalWorkspace
 from ..workspace.paths import resolve_path
+from .media import model_image_mime
 from .schemas import ChatRequest
 
 log = logging.getLogger(__name__)
-
-# Raster image mime types that are safe to inline (as ImagePart, and to serve
-# inline from /api/workspace/raw). Excludes SVG — it can carry scripts.
-INLINE_IMAGE_MIME = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
 
 def _workspace_root(agent: Agent[Any]) -> Path | None:
@@ -68,9 +65,12 @@ def build_user_input(req: ChatRequest, agent: Agent[Any]) -> str | list[Message]
             log.warning("dropping attachment outside workspace or missing: %r", att.path)
             continue
         rels.append(resolved.rel or att.path)
-        if can_see and att.kind == "image" and att.mime in INLINE_IMAGE_MIME:
+        # Whether to inline is decided from the saved file's extension, not the
+        # client-supplied kind/mime — the file on disk is the source of truth.
+        image_mime = model_image_mime(resolved.abs) if can_see else None
+        if image_mime:
             try:
-                parts.append(ImagePart.from_path(resolved.abs, mime_type=att.mime))
+                parts.append(ImagePart.from_path(resolved.abs, mime_type=image_mime))
             except (OSError, ValueError) as exc:  # pragma: no cover - defensive
                 log.warning("could not inline image %s: %s", resolved.rel, exc)
 

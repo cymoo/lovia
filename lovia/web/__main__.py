@@ -46,7 +46,12 @@ from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
 from ..plugins import Memory, Plugin, Skills, Todo
-from ..providers import ModelSettings, Provider, provider_from_string
+from ..providers import (
+    ModelSettings,
+    Provider,
+    provider_from_string,
+    supports_vision,
+)
 from ..reliability import RetryPolicy
 from ..tools import (
     Tool,
@@ -62,6 +67,7 @@ from .app import _default_db_path, serve
 from .auth import is_loopback
 from .scheduling import Scheduling
 from .store import ChatStore
+from .vision import make_see_image_tool
 
 log = logging.getLogger("lovia.web.cli")
 
@@ -407,6 +413,67 @@ def resolve_tools() -> list[Tool]:
     return tools
 
 
+def _env_bool(name: str) -> bool | None:
+    """Parse a boolean-ish env var: True/False for set values, None when unset.
+
+    Warns on a value that is neither truthy nor falsy — the likely mistake is
+    putting a model spec in a flag (``LOVIA_VISION=openai:...`` instead of
+    ``LOVIA_VISION_MODEL=openai:...``), which would otherwise silently read
+    false.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off", ""):
+        return False
+    log.warning("%s=%r is not a boolean (use 1 or 0); treating as false", name, raw)
+    return False
+
+
+def resolve_vision_tool(
+    provider: Provider, workspace: LocalWorkspace | None
+) -> Tool | None:
+    """The ``see_image`` tool, when a distinct vision model is configured.
+
+    Wired only when all three hold: ``LOVIA_VISION_MODEL`` is set; the agent
+    has a local workspace to read images from; and the *main* model can't see
+    images itself. A vision-capable main model gets images inline, so a
+    delegation tool would just be a redundant, slower second path — we log and
+    skip it. Same env-gated shape as ``web_search`` in :func:`resolve_tools`.
+
+    The vision model's endpoint and key default to the vendor env the spec
+    routes to (``OPENAI_*`` / ``ANTHROPIC_*``); ``LOVIA_VISION_BASE_URL`` and
+    ``LOVIA_VISION_API_KEY`` override them for a vision model that lives on a
+    different endpoint than the main model (the common case).
+    """
+    spec = os.getenv("LOVIA_VISION_MODEL")
+    if not spec:
+        return None
+    if workspace is None:
+        log.info("LOVIA_VISION_MODEL set but no workspace; see_image disabled.")
+        return None
+    if supports_vision(provider):
+        log.info(
+            "main model is vision-capable; ignoring LOVIA_VISION_MODEL "
+            "(images go inline as ImagePart)."
+        )
+        return None
+    try:
+        vision_provider = provider_from_string(
+            spec,
+            api_key=os.getenv("LOVIA_VISION_API_KEY"),
+            base_url=os.getenv("LOVIA_VISION_BASE_URL"),
+        )
+    except UserError as exc:
+        log.warning("LOVIA_VISION_MODEL=%r unusable; see_image disabled: %s", spec, exc)
+        return None
+    log.info("see_image enabled via vision model %r", spec)
+    return make_see_image_tool(vision_provider, workspace_root=workspace.root)
+
+
 def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
     if cli_text is not None:
         return cli_text
@@ -497,13 +564,17 @@ def build_default_agent(
     if memory is not None:
         plugins.append(memory)
     workspace = resolve_workspace(args.workspace, _mode_flag(args), args.no_workspace)
+    tools = resolve_tools()
+    vision_tool = resolve_vision_tool(provider, workspace)
+    if vision_tool is not None:
+        tools.append(vision_tool)
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
         model=provider,
         settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
         plugins=plugins,
-        tools=resolve_tools(),
+        tools=tools,
         workspace=workspace,
     )
     # Tell the model today's date up front so it searches the current year and
@@ -652,7 +723,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             assert conn.model is not None
             try:
                 provider = provider_from_string(
-                    conn.model, api_key=conn.api_key, base_url=conn.base_url
+                    conn.model,
+                    api_key=conn.api_key,
+                    base_url=conn.base_url,
+                    supports_vision=_env_bool("LOVIA_VISION"),
                 )
             except ValueError as exc:
                 # Eager construction also surfaces vendor-prefix typos at

@@ -347,3 +347,71 @@ def test_raw_size_cap(client: TestClient, ws_app) -> None:
         params={"agent": "bot", "path": "huge.bin", "download": 1},
     )
     assert r.status_code == 413
+
+
+# --------------------------------------------------------------- upload -
+
+
+def test_upload_writes_to_uploads_and_serves_back(client: TestClient, ws_app) -> None:
+    root = Path(ws_app.state.agents["bot"].workspace.root)
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("cat.png", PNG_BYTES, "image/png")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["path"] == "uploads/cat.png"
+    assert body["kind"] == "image"
+    assert body["mime"] == "image/png"
+    assert body["size"] == len(PNG_BYTES)
+    assert (root / body["path"]).is_file()
+    # Immediately servable via the existing raw endpoint (inline image).
+    raw = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": body["path"]}
+    )
+    assert raw.status_code == 200
+    assert raw.content == PNG_BYTES
+
+
+def test_upload_requires_a_workspace(client: TestClient) -> None:
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "plain"},
+        files={"file": ("x.txt", b"hi", "text/plain")},
+    )
+    assert r.status_code == 404
+
+
+def test_upload_sanitizes_filename_no_traversal(client: TestClient, ws_app) -> None:
+    root = Path(ws_app.state.agents["bot"].workspace.root)
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("../../evil.txt", b"data", "text/plain")},
+    )
+    assert r.status_code == 200
+    path = r.json()["path"]
+    assert path.startswith("uploads/") and ".." not in path
+    target = (root / path).resolve()
+    assert (root / "uploads").resolve() in target.parents
+
+
+def test_upload_dedupes_name_collisions(client: TestClient) -> None:
+    def send() -> str:
+        return client.post(
+            "/api/workspace/upload",
+            params={"agent": "bot"},
+            files={"file": ("dup.txt", b"data", "text/plain")},
+        ).json()["path"]
+
+    assert send() != send()
+
+
+def test_upload_rejects_empty_file(client: TestClient) -> None:
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+    assert r.status_code == 422

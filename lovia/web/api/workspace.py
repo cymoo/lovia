@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query, Request
+    from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
     from fastapi.responses import FileResponse, Response
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -40,7 +41,7 @@ from ...workspace import (
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
-from ..schemas import WorkspaceEntry, WorkspaceFile, WorkspaceInfo
+from ..schemas import UploadedFile, WorkspaceEntry, WorkspaceFile, WorkspaceInfo
 from .deps import RouterDeps
 
 
@@ -105,6 +106,37 @@ async def _sniff_binary(abs_path: Path) -> bool:
             return False
 
     return await asyncio.to_thread(_impl)
+
+
+# Composer/Files-panel uploads land here, under the workspace root, so they
+# are immediately servable via /api/workspace/raw and visible in the panel.
+_UPLOADS_SUBDIR = "uploads"
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MiB
+
+
+def _safe_upload_name(raw: str) -> str:
+    """A filesystem-safe basename: strip any directory, keep readable chars.
+
+    ``\\w`` is Unicode-aware, so CJK filenames survive; separators and control
+    characters collapse to ``_``. The result is always a plain basename, which
+    (together with writing only under ``uploads/``) prevents path traversal.
+    """
+    base = Path(raw).name.strip()
+    base = re.sub(r"[^\w.\- ]+", "_", base).strip(". ")
+    return (base or "upload")[:120]
+
+
+def _write_upload(uploads: Path, name: str, data: bytes) -> Path:
+    """Create ``uploads/`` and write ``data`` to a collision-free target."""
+    uploads.mkdir(parents=True, exist_ok=True)
+    target = uploads / name
+    if target.exists():
+        stem, suffix = target.stem, target.suffix
+        i = 1
+        while (target := uploads / f"{stem}-{i}{suffix}").exists():
+            i += 1
+    target.write_bytes(data)
+    return target
 
 
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
@@ -272,5 +304,41 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                     headers={"etag": etag, "cache-control": "no-cache"},
                 )
         return response
+
+    @router.post("/api/workspace/upload", response_model=UploadedFile)
+    async def upload_file(
+        file: UploadFile = File(...),
+        agent: str | None = Query(None),
+    ) -> UploadedFile:
+        """Save a composer/Files-panel upload under the workspace ``uploads/``.
+
+        Requires a local workspace (same 404 gate as the panel). Bytes are read
+        with a hard cap so a huge upload can't exhaust memory, then written to a
+        collision-free name; the saved file is immediately servable via
+        ``/api/workspace/raw`` and referenced from chat by its workspace path.
+        """
+        cfg = require_cfg(agent)
+        uploads = _root_of(cfg) / _UPLOADS_SUBDIR
+        data = bytearray()
+        while chunk := await file.read(1 << 20):
+            data.extend(chunk)
+            if len(data) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="file too large")
+        if not data:
+            raise HTTPException(status_code=422, detail="empty file")
+        name = _safe_upload_name(file.filename or "upload")
+        target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
+        mime = (
+            file.content_type
+            or mimetypes.guess_type(target.name)[0]
+            or "application/octet-stream"
+        )
+        return UploadedFile(
+            path=f"{_UPLOADS_SUBDIR}/{target.name}",
+            name=target.name,
+            mime=mime,
+            kind="image" if mime.startswith("image/") else "file",
+            size=len(data),
+        )
 
     return router

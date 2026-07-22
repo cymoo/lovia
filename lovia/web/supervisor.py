@@ -42,6 +42,7 @@ from ..transcript import (
     ToolResultEntry,
     TranscriptEntry,
     drop_dangling_tool_calls,
+    input_to_entries,
 )
 from .api.serialization import drop_system_entries, view_messages
 from .schemas import MessageOut
@@ -650,7 +651,7 @@ class RunSupervisor:
         *,
         session_id: str,
         agent: Agent[Any],
-        input: str,
+        input: str | list[Message],
         is_new: bool,
         title_message: str | None,
         autostart: bool = False,
@@ -662,9 +663,16 @@ class RunSupervisor:
             )
         if len(self._controllers) >= self.max_background_runs:
             raise HTTPException(status_code=429, detail="too many concurrent runs")
-        seed: list[TranscriptEntry] = (
-            [InputEntry(role="user", content=input)] if input else []
-        )
+        # ``input`` seeds the transcript for immediate display and is what the
+        # runner consumes. A plain string is the text-only path; a list[Message]
+        # (one ``user([...parts])``) carries composer attachments as content
+        # parts, which input_to_entries preserves into the InputEntry.
+        if isinstance(input, str):
+            seed: list[TranscriptEntry] = (
+                [InputEntry(role="user", content=input)] if input else []
+            )
+        else:
+            seed = input_to_entries(input) if input else []
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,

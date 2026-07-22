@@ -20,6 +20,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ...agent import Agent
 from ...runner import Runner
+from ..attachments import build_user_input
 from ..schemas import (
     ApprovalRequest,
     ChatRequest,
@@ -67,7 +68,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     async def chat(req: ChatRequest) -> ChatResponse:
         # Blocking, non-streaming turn — runs to completion inside the request
         # and is NOT supervised (not detachable).
-        if not req.message.strip():
+        if not req.message.strip() and not req.attachments:
             raise HTTPException(status_code=422, detail="empty message")
         sid = req.session_id or uuid.uuid4().hex
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
@@ -84,7 +85,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
         result = await Runner.run(
             agent,
-            req.message,
+            build_user_input(req, agent),
             session=session,
             session_id=sid,
             context_policy=deps.context_policy,
@@ -107,9 +108,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
-        # An empty message is only meaningful as a pure attach to a live run;
-        # rejecting it before the upsert avoids littering empty "New chat" rows.
-        if not req.message.strip() and deps.supervisor.get(sid) is None:
+        # An empty message is only meaningful as a pure attach to a live run,
+        # or a send that carries only attachments; rejecting it otherwise before
+        # the upsert avoids littering empty "New chat" rows.
+        if (
+            not req.message.strip()
+            and not req.attachments
+            and deps.supervisor.get(sid) is None
+        ):
             raise HTTPException(status_code=422, detail="empty message")
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
 
@@ -125,7 +131,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         live = deps.supervisor.get(sid)
         if live is not None:
             return attach(live)
-        if not req.message.strip():
+        if not req.message.strip() and not req.attachments:
             # The live run we would have attached to ended mid-request.
             raise HTTPException(status_code=422, detail="empty message")
 
@@ -140,7 +146,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             ctrl = await deps.supervisor.start(
                 session_id=sid,
                 agent=agent,
-                input=req.message,
+                input=build_user_input(req, agent),
                 is_new=is_new,
                 title_message=req.message,
             )

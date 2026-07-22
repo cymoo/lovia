@@ -23,7 +23,7 @@ from importlib.metadata import EntryPoint
 from typing import Callable, cast
 
 from ..exceptions import UserError
-from .base import ModelSettings, Provider
+from .base import ModelSettings, Provider, supports_vision
 from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
 
@@ -37,6 +37,7 @@ __all__ = [
     "model_from_env",
     "provider_from_string",
     "register_provider",
+    "supports_vision",
 ]
 
 
@@ -120,7 +121,11 @@ def _factory_from_entry_point(vendor: str) -> ProviderFactory | None:
 
 
 def provider_from_string(
-    spec: str, *, api_key: str | None = None, base_url: str | None = None
+    spec: str,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    supports_vision: bool | None = None,
 ) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
@@ -133,15 +138,18 @@ def provider_from_string(
     looks like an Anthropic model is almost certainly a missing ``anthropic:``
     prefix, so we log a warning rather than silently misroute it.
 
-    ``api_key``/``base_url`` override the provider's environment-derived
-    defaults; a third-party factory that doesn't accept them raises
-    :class:`~lovia.UserError` (only when an override is actually given).
+    ``api_key``/``base_url``/``supports_vision`` override the provider's
+    environment- or host-derived defaults; a third-party factory that doesn't
+    accept an override raises :class:`~lovia.UserError` (only when that
+    override is actually given).
     """
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, object] = {}
     if api_key is not None:
         kwargs["api_key"] = api_key
     if base_url is not None:
         kwargs["base_url"] = base_url
+    if supports_vision is not None:
+        kwargs["supports_vision"] = supports_vision
     if ":" not in spec:
         if spec.lower().startswith("claude"):
             logger.warning(
@@ -152,7 +160,12 @@ def provider_from_string(
             )
         # Passing None is identical to omitting: the constructor falls back
         # to the OPENAI_* environment variables.
-        return OpenAIChatProvider(model=spec, api_key=api_key, base_url=base_url)
+        return OpenAIChatProvider(
+            model=spec,
+            api_key=api_key,
+            base_url=base_url,
+            supports_vision=supports_vision,
+        )
     vendor, model = spec.split(":", 1)
     vendor = vendor.lower()
     # Explicit registrations win over builtins so applications can swap in
@@ -170,7 +183,7 @@ def provider_from_string(
         except TypeError as exc:
             raise UserError(
                 f"provider plugin {vendor!r} does not accept "
-                f"api_key/base_url overrides: {exc}"
+                f"api_key/base_url/supports_vision overrides: {exc}"
             ) from exc
     raise UserError(
         f"Unknown model spec: {spec!r}",

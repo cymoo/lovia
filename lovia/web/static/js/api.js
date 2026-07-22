@@ -174,6 +174,17 @@ export const api = {
   // Raw bytes URL — inline image preview, or any file with download=true.
   workspaceRawUrl: ({ agent, path, download } = {}) =>
     `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
+  // Upload a file into the workspace `uploads/` dir → { path, name, mime, kind,
+  // size }. Multipart; the browser sets the boundary, so we send no headers.
+  uploadFile: (file, { agent, signal } = {}) => {
+    const form = new FormData();
+    form.append('file', file);
+    return fetch(`/api/workspace/upload${qs({ agent })}`, {
+      method: 'POST',
+      body: form,
+      signal,
+    }).then(_jsonOrDetail);
+  },
 
   // ---- memory (the agent's editable Notes) ----
   getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_jsonOrDetail),

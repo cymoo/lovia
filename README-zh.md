@@ -426,7 +426,7 @@ Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
 
 ### Web UI
 
-一个轻量的 FastAPI 应用：SSE 流式输出、session、审批、定时任务、记忆编辑器等。
+一个轻量的 FastAPI 应用：SSE 流式输出、session、审批、定时任务、记忆编辑器、图片与文件上传等。
 浏览器断开后，未完成的对话仍会在服务端继续：
 
 ```python

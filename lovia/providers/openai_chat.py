@@ -219,6 +219,11 @@ class OpenAIChatProvider:
             A dialect is about request shape only: the API-key requirement
             and the ``/models`` probe follow the real host, so a keyless
             gateway keeps working with ``official_dialect=True``.
+        supports_vision: Whether this deployment's model accepts image inputs.
+            ``None`` (default) assumes vision only on the official OpenAI host —
+            compatible endpoints vary and it can't be inferred from the model
+            id. Pass True/False to declare it; the web CLI wires ``LOVIA_VISION``
+            here.
     """
 
     name = "openai-chat"
@@ -236,6 +241,7 @@ class OpenAIChatProvider:
         trust_env: bool | None = None,
         replay_reasoning: bool | None = None,
         official_dialect: bool | None = None,
+        supports_vision: bool | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -259,6 +265,7 @@ class OpenAIChatProvider:
         self._trust_env = resolve_trust_env(trust_env)
         self._replay_reasoning = replay_reasoning
         self._official_dialect = official_dialect
+        self._supports_vision = supports_vision
 
     @property
     def supports_json_schema(self) -> bool:
@@ -271,6 +278,19 @@ class OpenAIChatProvider:
         if self._supports_json_schema is not None:
             return self._supports_json_schema
         return self._speaks_official_dialect()
+
+    @property
+    def supports_vision(self) -> bool:
+        """True when the endpoint's model accepts image inputs (``image_url`` parts).
+
+        Vision support varies wildly across OpenAI-compatible endpoints and
+        cannot be inferred from the model id, so this defaults to True only for
+        the official OpenAI host and False elsewhere. Override via the
+        constructor parameter (the web CLI wires ``LOVIA_VISION`` to it).
+        """
+        if self._supports_vision is not None:
+            return self._supports_vision
+        return self._on_official_host()
 
     def _on_official_host(self) -> bool:
         """The endpoint literally is the official API (auth requirements)."""

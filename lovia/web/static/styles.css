@@ -2112,6 +2112,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .lightbox::backdrop {
   background: rgba(0, 0, 0, 0.72);
 }
+.lightbox-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
 .lightbox-img {
   display: block;
   max-width: 92vw;

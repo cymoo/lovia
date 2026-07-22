@@ -277,7 +277,18 @@ export async function copyToClipboard(text) {
 // backdrop, and focus handling come for free.
 export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
   const dialog = document.createElement('dialog');
+  // The app targets <dialog>-capable browsers (see showDialog above); if
+  // showModal is somehow unavailable, degrade to opening the image directly.
+  if (typeof dialog.showModal !== 'function') {
+    window.open(src, '_blank', 'noopener');
+    return;
+  }
   dialog.className = 'lightbox';
+
+  // A relative frame sizes to the image and anchors the action bar to its
+  // corner, instead of relying on the dialog's UA positioning.
+  const frame = document.createElement('div');
+  frame.className = 'lightbox-frame';
 
   const bar = document.createElement('div');
   bar.className = 'lightbox-bar';
@@ -299,15 +310,17 @@ export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
   close.innerHTML = icon('x', { size: 18 });
   close.addEventListener('click', () => dialog.close());
   bar.appendChild(close);
-  dialog.appendChild(bar);
 
   const img = document.createElement('img');
   img.className = 'lightbox-img';
   img.src = src;
   img.alt = alt;
-  dialog.appendChild(img);
 
-  // A click on the backdrop (the dialog box itself, outside image/bar) closes.
+  frame.appendChild(bar);
+  frame.appendChild(img);
+  dialog.appendChild(frame);
+
+  // A click on the backdrop (outside the image frame) closes.
   dialog.addEventListener('click', (e) => {
     if (e.target === dialog) dialog.close();
   });

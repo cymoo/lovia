@@ -31,16 +31,27 @@ MODEL_IMAGE_MIME_BY_EXT = {
 }
 MODEL_IMAGE_MIME = frozenset(MODEL_IMAGE_MIME_BY_EXT.values())
 
+# Image extensions a browser renders inline (thumbnails, /api/workspace/raw, the
+# Files panel). The JS side mirrors this EXACT set in static/js/files.js
+# (IMAGE_EXT) — keep the two in sync. SVG is excluded (it can carry scripts and
+# is never served inline); HEIC/TIFF are excluded (browsers don't render them
+# inline), so they are not marked previewable server-side either.
+PREVIEW_IMAGE_EXT = frozenset({"png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"})
+
+
+def _ext(name: str | Path) -> str:
+    return Path(str(name)).suffix.lower().lstrip(".")
+
 
 def model_image_mime(name: str | Path) -> str | None:
     """The vision-model mime for a filename (by extension), or ``None`` when the
     model can't ingest it directly — the gate for inlining and ``see_image``."""
-    return MODEL_IMAGE_MIME_BY_EXT.get(Path(str(name)).suffix.lower().lstrip("."))
+    return MODEL_IMAGE_MIME_BY_EXT.get(_ext(name))
 
 
-def is_preview_image(mime: str | None) -> bool:
-    """True when a browser renders this image inline (thumbnails, ``/raw``).
-
-    Any ``image/*`` except SVG, which can carry scripts and is never inlined.
-    """
-    return mime is not None and mime.startswith("image/") and mime != "image/svg+xml"
+def is_preview_image(name: str | Path) -> bool:
+    """True when a browser renders this image inline (thumbnails, ``/raw``, the
+    Files panel), decided by file extension against :data:`PREVIEW_IMAGE_EXT`
+    (which the UI's ``IMAGE_EXT`` mirrors). SVG is excluded — it can carry
+    scripts, so it is never served inline."""
+    return _ext(name) in PREVIEW_IMAGE_EXT

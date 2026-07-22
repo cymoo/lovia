@@ -324,10 +324,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if stat_result.st_size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
         media_type = mimetypes.guess_type(resolved.abs.name)[0]
-        # Inline only browser-renderable images. SVG is excluded (it can carry
-        # scripts — a crafted upload would be a stored-XSS vector); it stays
-        # reachable via download=1. See lovia/web/media.py for the shared set.
-        inline_ok = is_preview_image(media_type)
+        # Inline only browser-renderable images (by extension). SVG is excluded
+        # (it can carry scripts — a crafted upload would be a stored-XSS vector);
+        # it stays reachable via download=1. See lovia/web/media.py.
+        inline_ok = is_preview_image(resolved.abs.name)
         if not download and not inline_ok:
             raise HTTPException(status_code=415, detail="inline preview is images-only")
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
@@ -401,7 +401,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             path=f"{_UPLOADS_SUBDIR}/{target.name}",
             name=target.name,
             mime=mime,
-            kind="image" if is_preview_image(mime) else "file",
+            kind="image" if is_preview_image(target.name) else "file",
             size=len(data),
         )
 

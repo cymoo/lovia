@@ -1965,8 +1965,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   color: var(--muted);
   transition:
@@ -2065,12 +2065,17 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .msg-attach-image {
   display: inline-block;
   line-height: 0;
+  cursor: zoom-in;
 }
 .msg-attach-image img {
   max-width: 260px;
   max-height: 260px;
   border-radius: 10px;
   border: 1px solid var(--border);
+  transition: filter var(--t-fast);
+}
+.msg-attach-image:hover img {
+  filter: brightness(0.94);
 }
 .msg-attach-file {
   display: inline-flex;
@@ -2092,6 +2097,51 @@ body.sidebar-collapsed .sidebar-expand-btn {
 }
 .msg-attach-file:hover {
   background: var(--surface-3);
+}
+
+/* ---- Image lightbox (chat attachments) ---------------------------------------------- */
+.lightbox {
+  max-width: 92vw;
+  max-height: 92vh;
+  margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  overflow: visible;
+}
+.lightbox::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+.lightbox-img {
+  display: block;
+  max-width: 92vw;
+  max-height: 92vh;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+.lightbox-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 1;
+}
+.lightbox-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  transition: background var(--t-fast);
+}
+.lightbox-btn:hover {
+  background: rgba(0, 0, 0, 0.78);
 }
 
 /* ---- Buttons ------------------------------------------------------------------------- */

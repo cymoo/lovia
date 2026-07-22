@@ -197,31 +197,24 @@ def provider_from_string(
 def model_from_env(*, required: bool = True) -> str | None:
     """Return the model id configured in the environment.
 
-    Checks, in order: ``LOVIA_MODEL``, ``OPENAI_DEFAULT_MODEL``,
-    ``ANTHROPIC_DEFAULT_MODEL``. The value is whatever ``Agent(model=...)``
-    accepts — usually ``"vendor:model"``; a bare id from
-    ``OPENAI_DEFAULT_MODEL`` routes to the OpenAI-compatible provider, which
-    is the intended path for ``OPENAI_BASE_URL`` services (DeepSeek, Ollama,
-    vLLM, ...); a bare ``ANTHROPIC_DEFAULT_MODEL`` gets the ``anthropic:``
-    prefix so it routes to the right adapter.
+    Reads ``LOVIA_MODEL`` — the single knob for model selection. Its value is
+    whatever ``Agent(model=...)`` accepts — usually ``"vendor:model"``; a bare
+    id (no ``vendor:`` prefix) routes to the OpenAI-compatible provider, the
+    intended path for ``OPENAI_BASE_URL`` services (DeepSeek, Ollama, vLLM,
+    ...).
 
     With ``required=True`` (the default) a missing configuration raises
     :class:`~lovia.UserError` with a setup hint — the fail-loudly behavior
     scripts want. Pass ``required=False`` to get ``None`` instead and layer
     your own fallback (the web CLI does this to add its ``--model`` flag).
     """
-    value = os.getenv("LOVIA_MODEL") or os.getenv("OPENAI_DEFAULT_MODEL")
-    if not value:
-        anthropic = os.getenv("ANTHROPIC_DEFAULT_MODEL")
-        if anthropic:
-            value = anthropic if ":" in anthropic else f"anthropic:{anthropic}"
+    value = os.getenv("LOVIA_MODEL")
     if value:
         return value
     if required:
         raise UserError(
             "no model configured in the environment",
             hint='set LOVIA_MODEL (e.g. "openai:gpt-5.5" or '
-            '"anthropic:claude-opus-4-8"), or OPENAI_DEFAULT_MODEL / '
-            "ANTHROPIC_DEFAULT_MODEL",
+            '"anthropic:claude-opus-4-8")',
         )
     return None

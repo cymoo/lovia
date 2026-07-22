@@ -42,7 +42,7 @@ from ...workspace import (
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
-from ..attachments import INLINE_IMAGE_MIME
+from ..media import is_preview_image
 from ..schemas import UploadedFile, WorkspaceEntry, WorkspaceFile, WorkspaceInfo
 from .deps import RouterDeps
 
@@ -113,7 +113,45 @@ async def _sniff_binary(abs_path: Path) -> bool:
 # Composer/Files-panel uploads land here, under the workspace root, so they
 # are immediately servable via /api/workspace/raw and visible in the panel.
 _UPLOADS_SUBDIR = "uploads"
-_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MiB
+_DEFAULT_MAX_UPLOAD_MB = 25
+# Extensions accepted by default — images, documents, data, and text/code a
+# personal assistant routinely handles. Override with LOVIA_UPLOAD_ALLOWED_EXT
+# (comma/space separated, no dots); "*" accepts any type. Files with no
+# extension (READMEs, Makefiles, ...) are always allowed.
+_DEFAULT_ALLOWED_UPLOAD_EXT = frozenset(
+    "jpg jpeg png gif webp avif bmp ico svg heic heif tiff "
+    "pdf txt md markdown rst rtf csv tsv json jsonl ndjson yaml yml xml "
+    "toml ini cfg conf log "
+    "doc docx xls xlsx ppt pptx odt ods odp "
+    "py pyi js mjs cjs ts tsx jsx html htm css scss sass "
+    "sh bash zsh fish sql c h cpp hpp cc cxx java kt go rs rb php swift "
+    "lua r m scala clj ex exs vue svelte "
+    "zip tar gz tgz bz2 xz 7z parquet ipynb".split()
+)
+
+
+def _max_upload_bytes() -> int:
+    """Upload size cap in bytes (env ``LOVIA_MAX_UPLOAD_MB``, default 25)."""
+    raw = os.environ.get("LOVIA_MAX_UPLOAD_MB")
+    mb = _DEFAULT_MAX_UPLOAD_MB
+    if raw:
+        try:
+            mb = max(1, int(raw))
+        except ValueError:
+            pass
+    return mb * 1024 * 1024
+
+
+def _allowed_upload_ext() -> frozenset[str] | None:
+    """Allowed upload extensions (env ``LOVIA_UPLOAD_ALLOWED_EXT``); ``None``
+    means "any" (the var set to ``*`` or empty)."""
+    raw = os.environ.get("LOVIA_UPLOAD_ALLOWED_EXT")
+    if raw is None:
+        return _DEFAULT_ALLOWED_UPLOAD_EXT
+    raw = raw.strip()
+    if not raw or raw == "*":
+        return None
+    return frozenset(e.lower().lstrip(".") for e in re.split(r"[,\s]+", raw) if e)
 
 
 def _safe_upload_name(raw: str) -> str:
@@ -286,12 +324,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if stat_result.st_size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
         media_type = mimetypes.guess_type(resolved.abs.name)[0]
-        # Inline only raster images. SVG is an image type but can carry scripts,
-        # so it is never served inline (a crafted upload could otherwise be a
-        # stored-XSS vector); it stays reachable via download=1.
-        inline_ok = (media_type or "").startswith("image/") and (
-            media_type != "image/svg+xml"
-        )
+        # Inline only browser-renderable images. SVG is excluded (it can carry
+        # scripts — a crafted upload would be a stored-XSS vector); it stays
+        # reachable via download=1. See lovia/web/media.py for the shared set.
+        inline_ok = is_preview_image(media_type)
         if not download and not inline_ok:
             raise HTTPException(status_code=415, detail="inline preview is images-only")
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
@@ -329,35 +365,43 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     ) -> UploadedFile:
         """Save a composer/Files-panel upload under the workspace ``uploads/``.
 
-        Requires a local workspace (same 404 gate as the panel). Bytes are read
-        with a hard cap so a huge upload can't exhaust memory, then written to a
-        collision-free name; the saved file is immediately servable via
-        ``/api/workspace/raw`` and referenced from chat by its workspace path.
+        Requires a local workspace (same 404 gate as the panel). The file's
+        extension is checked against an allowlist (``LOVIA_UPLOAD_ALLOWED_EXT``)
+        and its size against a cap (``LOVIA_MAX_UPLOAD_MB``) enforced while
+        reading, so a disallowed or huge upload is rejected without exhausting
+        memory. The bytes are then written to a collision-free name, immediately
+        servable via ``/api/workspace/raw`` and referenced from chat by path.
         """
         cfg = require_cfg(agent)
+        name = _safe_upload_name(file.filename or "upload")
         uploads = _root_of(cfg) / _UPLOADS_SUBDIR
+        allowed = _allowed_upload_ext()
+        max_bytes = _max_upload_bytes()
+        ext = Path(name).suffix.lower().lstrip(".")
         try:
+            if allowed is not None and ext and ext not in allowed:
+                raise HTTPException(
+                    status_code=415, detail=f"file type '.{ext}' is not allowed"
+                )
             data = bytearray()
             while chunk := await file.read(1 << 20):
                 data.extend(chunk)
-                if len(data) > _MAX_UPLOAD_BYTES:
+                if len(data) > max_bytes:
                     raise HTTPException(status_code=413, detail="file too large")
             if not data:
                 raise HTTPException(status_code=422, detail="empty file")
-            name = _safe_upload_name(file.filename or "upload")
             target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
         finally:
             await file.close()
         # Type comes from the SAVED extension, never the client's Content-Type;
-        # kind="image" is limited to raster formats the raw endpoint will inline
-        # (SVG is excluded — it can carry scripts), so the composer previews only
-        # what is safe to render.
+        # kind="image" is the browser-previewable set (SVG excluded — it can
+        # carry scripts), so the composer previews only what is safe to render.
         mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return UploadedFile(
             path=f"{_UPLOADS_SUBDIR}/{target.name}",
             name=target.name,
             mime=mime,
-            kind="image" if mime in INLINE_IMAGE_MIME else "file",
+            kind="image" if is_preview_image(mime) else "file",
             size=len(data),
         )
 

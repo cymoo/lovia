@@ -77,11 +77,11 @@ class OpenAIEmbedder:
 
     Args:
         model: The embedding model identifier sent to the API.
-        api_key: API key. Defaults to ``$OPENAI_EMBEDDING_API_KEY``, then
+        api_key: API key. Defaults to ``$LOVIA_EMBEDDING_API_KEY``, then
             ``$OPENAI_API_KEY``.
         base_url: Override to target a compatible endpoint. Defaults to
-            ``$OPENAI_EMBEDDING_BASE_URL``, then ``$OPENAI_BASE_URL``, then the
-            official API — the ``EMBEDDING``-specific variables exist because
+            ``$LOVIA_EMBEDDING_BASE_URL``, then ``$OPENAI_BASE_URL``, then the
+            official API — the ``LOVIA_EMBEDDING_*`` variables exist because
             chat and embeddings often live on different hosts (e.g. chat on
             DeepSeek, which serves no embeddings).
         dimensions: Optional output dimensionality, for models that support
@@ -114,7 +114,7 @@ class OpenAIEmbedder:
         self.model = model
         self.base_url = (
             base_url
-            or os.environ.get("OPENAI_EMBEDDING_BASE_URL")
+            or os.environ.get("LOVIA_EMBEDDING_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
             or _DEFAULT_BASE_URL
         ).rstrip("/")
@@ -122,7 +122,7 @@ class OpenAIEmbedder:
         self.id = f"openai:{model}:{dimensions}" if dimensions else f"openai:{model}"
         self._api_key = (
             api_key
-            or os.environ.get("OPENAI_EMBEDDING_API_KEY")
+            or os.environ.get("LOVIA_EMBEDDING_API_KEY")
             or os.environ.get("OPENAI_API_KEY")
         )
         self._client = client
@@ -137,7 +137,7 @@ class OpenAIEmbedder:
             raise UserError(
                 "OpenAIEmbedder requires an API key for api.openai.com",
                 hint=(
-                    "Set OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY or pass "
+                    "Set LOVIA_EMBEDDING_API_KEY / OPENAI_API_KEY or pass "
                     "api_key=...; use base_url=... for compatible endpoints "
                     "that do not need one."
                 ),

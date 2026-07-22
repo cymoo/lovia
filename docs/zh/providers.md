@@ -29,10 +29,8 @@ agent = Agent(
 因为这几乎总是漏了 `anthropic:` 前缀。lovia 不设默认模型；没有模型就运行 agent
 会抛 `UserError`。
 
-为了避免在脚本里写死模型，`model_from_env()` 会依次读取 `LOVIA_MODEL`、
-`OPENAI_DEFAULT_MODEL`、`ANTHROPIC_DEFAULT_MODEL`；都没有时，会带设置提示抛错
-（`required=False` 时返回 `None`）。不带前缀的 `ANTHROPIC_DEFAULT_MODEL` 会自动加上
-`anthropic:` 前缀。
+为了避免在脚本里写死模型，`model_from_env()` 会读取 `LOVIA_MODEL`（唯一入口）；
+没有设置时会带设置提示抛错（`required=False` 时返回 `None`）。
 
 ## OpenAI Provider
 

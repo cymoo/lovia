@@ -15,29 +15,25 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
 
-def test_lovia_model_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reads_lovia_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-5.5")
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "other")
     assert model_from_env() == "openai:gpt-5.5"
 
 
-def test_openai_default_passes_through_bare(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Bare ids route to the OpenAI-compatible provider — the OPENAI_BASE_URL
-    # path (DeepSeek, Ollama, vLLM) — so no prefix is added.
-    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "deepseek-v4-pro")
+def test_bare_lovia_model_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A bare id (no vendor prefix) is returned unchanged; Agent() routes it to
+    # the OpenAI-compatible provider — the OPENAI_BASE_URL path (DeepSeek,
+    # Ollama, vLLM).
+    monkeypatch.setenv("LOVIA_MODEL", "deepseek-v4-pro")
     assert model_from_env() == "deepseek-v4-pro"
 
 
-def test_anthropic_default_gets_prefixed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_default_vars_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    # LOVIA_MODEL is the single knob; the old OPENAI_/ANTHROPIC_DEFAULT_MODEL
+    # fallbacks were removed.
+    monkeypatch.setenv("OPENAI_DEFAULT_MODEL", "deepseek-v4-pro")
     monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "claude-4-8-opus")
-    assert model_from_env() == "anthropic:claude-4-8-opus"
-
-
-def test_anthropic_default_keeps_existing_prefix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_MODEL", "anthropic:claude-4-8-opus")
-    assert model_from_env() == "anthropic:claude-4-8-opus"
+    assert model_from_env(required=False) is None
 
 
 def test_missing_raises_with_hint() -> None:

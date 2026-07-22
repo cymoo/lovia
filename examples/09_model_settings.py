@@ -61,7 +61,9 @@ async def main() -> None:
     api_key = os.environ.get("OPENAI_API_KEY")
     if base_url and api_key:
         provider = OpenAIChatProvider(
-            model=os.environ.get("OPENAI_DEFAULT_MODEL", "glm-5.2"),
+            # LOVIA_MODEL may carry a "vendor:" prefix; this provider takes the
+            # bare model id, so strip anything before the colon.
+            model=os.environ.get("LOVIA_MODEL", "glm-5.2").rpartition(":")[2],
             api_key=api_key,
             base_url=base_url,
         )

@@ -72,7 +72,7 @@ def _embeddings_transport(recorded: list[httpx.Request], *, dim: int = 3):
 
 
 async def test_embedder_payload_parsing_and_index_order(monkeypatch) -> None:
-    monkeypatch.delenv("OPENAI_EMBEDDING_BASE_URL", raising=False)
+    monkeypatch.delenv("LOVIA_EMBEDDING_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     requests: list[httpx.Request] = []
     emb = OpenAIEmbedder(
@@ -185,9 +185,9 @@ async def test_embedder_count_mismatch_is_provider_error() -> None:
 async def test_embedder_official_endpoint_requires_key(monkeypatch) -> None:
     for var in (
         "OPENAI_API_KEY",
-        "OPENAI_EMBEDDING_API_KEY",
+        "LOVIA_EMBEDDING_API_KEY",
         "OPENAI_BASE_URL",
-        "OPENAI_EMBEDDING_BASE_URL",
+        "LOVIA_EMBEDDING_BASE_URL",
     ):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(UserError, match="requires an API key"):
@@ -196,15 +196,15 @@ async def test_embedder_official_endpoint_requires_key(monkeypatch) -> None:
 
 def test_embedder_env_fallbacks(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_BASE_URL", "https://chat.example/v1")
-    monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://embed.example/v1/")
+    monkeypatch.setenv("LOVIA_EMBEDDING_BASE_URL", "https://embed.example/v1/")
     monkeypatch.setenv("OPENAI_API_KEY", "chat-key")
-    monkeypatch.setenv("OPENAI_EMBEDDING_API_KEY", "embed-key")
+    monkeypatch.setenv("LOVIA_EMBEDDING_API_KEY", "embed-key")
     emb = OpenAIEmbedder("m")
     # The EMBEDDING-specific variables win (chat and embeddings often live on
     # different hosts); trailing slash is trimmed.
     assert emb.base_url == "https://embed.example/v1"
     assert emb._headers()["Authorization"] == "Bearer embed-key"
-    monkeypatch.delenv("OPENAI_EMBEDDING_BASE_URL")
+    monkeypatch.delenv("LOVIA_EMBEDDING_BASE_URL")
     assert OpenAIEmbedder("m").base_url == "https://chat.example/v1"
 
 

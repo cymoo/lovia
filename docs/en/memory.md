@@ -104,7 +104,7 @@ OpenAIEmbedder(model="text-embedding-3-small", dimensions=None, batch_size=32)
 ```
 
 Chat and embeddings often live on different hosts, so the embedder reads
-`OPENAI_EMBEDDING_BASE_URL` / `OPENAI_EMBEDDING_API_KEY` first, falling
+`LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` first, falling
 back to the chat endpoint's `OPENAI_BASE_URL` / `OPENAI_API_KEY`. Changing
 embedders is safe: vectors are a recall cache keyed by embedder id — a
 mismatch wipes and re-accumulates rather than mixing spaces.

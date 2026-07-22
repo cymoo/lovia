@@ -334,13 +334,16 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         # constantly (and re-renders after every agent edit), so unchanged
         # files answer 304 from the ETag below instead of re-sending bytes —
         # and changed files show fresh without any query-string busting.
+        # `nosniff` stops a browser from MIME-sniffing a mislabeled file (e.g. a
+        # non-image named .png) and rendering it as HTML — defense in depth for
+        # serving user-uploaded bytes inline, on top of the images-only gate.
         response = FileResponse(
             resolved.abs,
             media_type=media_type or "application/octet-stream",
             stat_result=stat_result,
             filename=resolved.abs.name if download else None,
             content_disposition_type="attachment" if download else "inline",
-            headers={"cache-control": "no-cache"},
+            headers={"cache-control": "no-cache", "x-content-type-options": "nosniff"},
         )
         etag = response.headers.get("etag")
         if_none_match = request.headers.get("if-none-match")
@@ -354,7 +357,11 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             if "*" in candidates or etag.removeprefix("W/") in candidates:
                 return Response(
                     status_code=304,
-                    headers={"etag": etag, "cache-control": "no-cache"},
+                    headers={
+                        "etag": etag,
+                        "cache-control": "no-cache",
+                        "x-content-type-options": "nosniff",
+                    },
                 )
         return response
 

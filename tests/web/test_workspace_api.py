@@ -273,6 +273,8 @@ def test_raw_image_inline(client: TestClient) -> None:
     assert r.headers["content-type"] == "image/png"
     assert r.content == PNG_BYTES
     assert "attachment" not in r.headers.get("content-disposition", "")
+    # user-uploaded bytes served inline must not be MIME-sniffed
+    assert r.headers["x-content-type-options"] == "nosniff"
 
 
 def test_raw_non_image_inline_refused(client: TestClient) -> None:

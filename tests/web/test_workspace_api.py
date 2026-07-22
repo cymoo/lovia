@@ -415,3 +415,67 @@ def test_upload_rejects_empty_file(client: TestClient) -> None:
         files={"file": ("empty.txt", b"", "text/plain")},
     )
     assert r.status_code == 422
+
+
+def test_upload_svg_is_not_treated_as_inline_image(client: TestClient) -> None:
+    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+    r = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("diagram.svg", svg, "image/svg+xml")},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "file"  # svg is not an inline-safe raster image
+    path = body["path"]
+    # The raw endpoint refuses to serve it inline (would be stored XSS)...
+    assert (
+        client.get(
+            "/api/workspace/raw", params={"agent": "bot", "path": path}
+        ).status_code
+        == 415
+    )
+    # ...but it is still downloadable.
+    dl = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": path, "download": 1}
+    )
+    assert dl.status_code == 200
+
+
+# --------------------------------------------------- chat attachment guard -
+
+
+def test_chat_rejects_request_whose_attachments_are_all_invalid(
+    client: TestClient,
+) -> None:
+    # A traversal/missing attachment with no text must not bypass the empty
+    # guard and start a blank run.
+    for endpoint in ("/api/chat", "/api/chat/stream"):
+        r = client.post(
+            endpoint,
+            json={
+                "message": "",
+                "agent": "bot",
+                "attachments": [
+                    {"path": "../../etc/passwd", "mime": "image/png", "kind": "image"}
+                ],
+            },
+        )
+        assert r.status_code == 422, endpoint
+
+
+def test_chat_accepts_a_valid_attachment(client: TestClient, ws_app) -> None:
+    root = Path(ws_app.state.agents["bot"].workspace.root)
+    (root / "uploads").mkdir(exist_ok=True)
+    (root / "uploads" / "a.png").write_bytes(PNG_BYTES)
+    r = client.post(
+        "/api/chat",
+        json={
+            "message": "hi",
+            "agent": "bot",
+            "attachments": [
+                {"path": "uploads/a.png", "mime": "image/png", "kind": "image"}
+            ],
+        },
+    )
+    assert r.status_code == 200

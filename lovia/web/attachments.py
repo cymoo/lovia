@@ -29,10 +29,9 @@ from .schemas import ChatRequest
 
 log = logging.getLogger(__name__)
 
-# Image mime types ImagePart can inline (matches lovia.web.vision._IMAGE_MIME).
-_INLINE_IMAGE_MIME = frozenset(
-    {"image/jpeg", "image/png", "image/gif", "image/webp"}
-)
+# Raster image mime types that are safe to inline (as ImagePart, and to serve
+# inline from /api/workspace/raw). Excludes SVG — it can carry scripts.
+INLINE_IMAGE_MIME = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
 
 def _workspace_root(agent: Agent[Any]) -> Path | None:
@@ -69,7 +68,7 @@ def build_user_input(req: ChatRequest, agent: Agent[Any]) -> str | list[Message]
             log.warning("dropping attachment outside workspace or missing: %r", att.path)
             continue
         rels.append(resolved.rel or att.path)
-        if can_see and att.kind == "image" and att.mime in _INLINE_IMAGE_MIME:
+        if can_see and att.kind == "image" and att.mime in INLINE_IMAGE_MIME:
             try:
                 parts.append(ImagePart.from_path(resolved.abs, mime_type=att.mime))
             except (OSError, ValueError) as exc:  # pragma: no cover - defensive

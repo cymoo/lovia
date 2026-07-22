@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import mimetypes
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from ...workspace import (
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
+from ..attachments import INLINE_IMAGE_MIME
 from ..schemas import UploadedFile, WorkspaceEntry, WorkspaceFile, WorkspaceInfo
 from .deps import RouterDeps
 
@@ -127,16 +129,25 @@ def _safe_upload_name(raw: str) -> str:
 
 
 def _write_upload(uploads: Path, name: str, data: bytes) -> Path:
-    """Create ``uploads/`` and write ``data`` to a collision-free target."""
+    """Create ``uploads/`` and write ``data`` to a collision-free target.
+
+    Uses exclusive creation (``O_EXCL``) so two concurrent uploads that pick the
+    same name can't clobber each other — the loser just advances to the next
+    suffix instead of overwriting (no check-then-write TOCTOU window).
+    """
     uploads.mkdir(parents=True, exist_ok=True)
-    target = uploads / name
-    if target.exists():
-        stem, suffix = target.stem, target.suffix
-        i = 1
-        while (target := uploads / f"{stem}-{i}{suffix}").exists():
+    stem, suffix = Path(name).stem, Path(name).suffix
+    i = 0
+    while True:
+        target = uploads / (name if i == 0 else f"{stem}-{i}{suffix}")
+        try:
+            fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
             i += 1
-    target.write_bytes(data)
-    return target
+            continue
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return target
 
 
 def build_workspace_router(deps: RouterDeps) -> APIRouter:
@@ -275,7 +286,13 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         if stat_result.st_size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
         media_type = mimetypes.guess_type(resolved.abs.name)[0]
-        if not download and not (media_type or "").startswith("image/"):
+        # Inline only raster images. SVG is an image type but can carry scripts,
+        # so it is never served inline (a crafted upload could otherwise be a
+        # stored-XSS vector); it stays reachable via download=1.
+        inline_ok = (media_type or "").startswith("image/") and (
+            media_type != "image/svg+xml"
+        )
+        if not download and not inline_ok:
             raise HTTPException(status_code=415, detail="inline preview is images-only")
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
         # constantly (and re-renders after every agent edit), so unchanged
@@ -319,25 +336,28 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         """
         cfg = require_cfg(agent)
         uploads = _root_of(cfg) / _UPLOADS_SUBDIR
-        data = bytearray()
-        while chunk := await file.read(1 << 20):
-            data.extend(chunk)
-            if len(data) > _MAX_UPLOAD_BYTES:
-                raise HTTPException(status_code=413, detail="file too large")
-        if not data:
-            raise HTTPException(status_code=422, detail="empty file")
-        name = _safe_upload_name(file.filename or "upload")
-        target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
-        mime = (
-            file.content_type
-            or mimetypes.guess_type(target.name)[0]
-            or "application/octet-stream"
-        )
+        try:
+            data = bytearray()
+            while chunk := await file.read(1 << 20):
+                data.extend(chunk)
+                if len(data) > _MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="file too large")
+            if not data:
+                raise HTTPException(status_code=422, detail="empty file")
+            name = _safe_upload_name(file.filename or "upload")
+            target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
+        finally:
+            await file.close()
+        # Type comes from the SAVED extension, never the client's Content-Type;
+        # kind="image" is limited to raster formats the raw endpoint will inline
+        # (SVG is excluded — it can carry scripts), so the composer previews only
+        # what is safe to render.
+        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return UploadedFile(
             path=f"{_UPLOADS_SUBDIR}/{target.name}",
             name=target.name,
             mime=mime,
-            kind="image" if mime.startswith("image/") else "file",
+            kind="image" if mime in INLINE_IMAGE_MIME else "file",
             size=len(data),
         )
 

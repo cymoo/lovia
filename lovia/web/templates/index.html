@@ -138,7 +138,14 @@
   </div>
 
   <form id="composer" class="composer" autocomplete="off">
+    <!-- Pending uploads for the next send (thumbnails / file chips). -->
+    <div id="attach-tray" class="attach-tray" aria-label="Attachments" hidden></div>
     <div class="composer-inner">
+      <!-- Attach button: uploads to the workspace; hidden until the agent has
+           one (same switch as the Files panel). -->
+      <button id="attach" class="btn-attach" type="button" aria-label="Attach image or file" title="Attach image or file" hidden>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      </button>
       <label class="vh" for="prompt">message</label>
       <textarea id="prompt" name="prompt" rows="1" placeholder="Send a message…"></textarea>
       <!-- Context ring: how full the model's window is, once a turn reports

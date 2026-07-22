@@ -1894,7 +1894,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 28px;
-  padding: 10px 10px 10px 22px;
+  padding: 10px 10px 10px 12px;
   box-shadow: var(--shadow-md);
   transition:
     border-color var(--t-med) var(--ease),
@@ -1956,6 +1956,142 @@ body.sidebar-collapsed .sidebar-expand-btn {
   cursor: not-allowed;
   background: var(--surface-3);
   color: var(--muted-2);
+}
+
+/* ---- Composer attachments ------------------------------------------------------------ */
+/* The "+" button sits on the composer's left edge, mirroring .btn-send's slot. */
+.btn-attach {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--muted);
+  transition:
+    background var(--t-fast),
+    color var(--t-fast);
+}
+.btn-attach:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+.btn-attach:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-attach[hidden] {
+  display: none;
+}
+
+/* Pending-upload tray above the composer pill. */
+.attach-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: var(--content-w);
+  margin: 0 auto 8px;
+  padding: 0 4px;
+}
+.attach-tray[hidden] {
+  display: none;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.attach-chip.uploading {
+  opacity: 0.6;
+}
+.attach-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.attach-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.attach-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.attach-remove:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+/* Drag-drop highlight on the whole composer. */
+.composer.drag-over .composer-inner {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Attachments rendered inside a user message bubble. */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+.msg-attach-image {
+  display: inline-block;
+  line-height: 0;
+}
+.msg-attach-image img {
+  max-width: 260px;
+  max-height: 260px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.msg-attach-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.msg-attach-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-attach-file:hover {
+  background: var(--surface-3);
 }
 
 /* ---- Buttons ------------------------------------------------------------------------- */

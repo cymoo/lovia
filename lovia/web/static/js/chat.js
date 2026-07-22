@@ -440,17 +440,22 @@ function updateRegenButton() {
 }
 
 // ---- Render helpers ----------------------------------------------------
-export function appendUserTurn(text, { queued = false, before = null } = {}) {
+export function appendUserTurn(text, { queued = false, before = null, attachments = null } = {}) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return null;
   if (!before) maybeDateSeparator(transcriptEl, Date.now());
   const node = makeTurn('user');
   if (queued) node.classList.add('queued');
-  const body = document.createElement('div');
-  body.className = 'body';
-  body.textContent = text;
   const bubble = node.querySelector('.bubble');
-  appendBubbleContent(bubble, body);
+  if (text) {
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = text;
+    appendBubbleContent(bubble, body);
+  }
+  if (attachments && attachments.length) {
+    appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
+  }
   ensureFooter(bubble);
   if (!queued) {
     node.dataset.userTurn = String(_userTurnCount++);
@@ -1435,11 +1440,16 @@ function renderHistoryWindow({ stickBottom }) {
       }
       const turn = makeTurn('user', it.timestamp);
       turn.dataset.userTurn = String(userIdx++);
-      const body = document.createElement('div');
-      body.className = 'body';
-      body.textContent = contentText(it.content);
       const bubble = turn.querySelector('.bubble');
-      appendBubbleContent(bubble, body);
+      const bodyText = contentText(it.content);
+      if (bodyText) {
+        const body = document.createElement('div');
+        body.className = 'body';
+        body.textContent = bodyText;
+        appendBubbleContent(bubble, body);
+      }
+      const imgs = contentImageAttachments(it.content);
+      if (imgs.length) appendBubbleContent(bubble, makeAttachmentsBlock(imgs));
       ensureFooter(bubble);
       addCopyButton(bubble);
       addEditButton(turn);
@@ -1874,6 +1884,7 @@ let _streamAbortController = null;
 // for the next turn/run. The placeholder is what makes queuing discoverable.
 function enterStreamingUI() {
   store.streaming = true;
+  syncAttachButton();
   if (stopBtn) stopBtn.style.display = '';
   if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
@@ -1884,6 +1895,7 @@ function enterStreamingUI() {
 
 function exitStreamingUI() {
   store.streaming = false;
+  syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
     promptEl.placeholder = t('composer.placeholder');
@@ -1893,7 +1905,7 @@ function exitStreamingUI() {
   updateRegenButton();
 }
 
-export async function runStream(message) {
+export async function runStream(message, attachments = null) {
   store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
@@ -1907,7 +1919,12 @@ export async function runStream(message) {
 
   try {
     const res = await api.streamChat(
-      { message, agent: store.agent, session_id: store.sessionId },
+      {
+        message,
+        agent: store.agent,
+        session_id: store.sessionId,
+        attachments: attachments?.length ? attachments : undefined,
+      },
       { signal: _streamAbortController.signal }
     );
 
@@ -2103,14 +2120,220 @@ const autoresize = () => {
   promptEl.style.height = Math.min(promptEl.scrollHeight, window.innerHeight * 0.3) + 'px';
 };
 
+// ---- Attachments -------------------------------------------------------
+// The "+" button, paste, and drag-drop upload images/files to the agent's
+// workspace (POST /api/workspace/upload); they ride the next send as
+// ChatRequest.attachments. Gated on the agent having a workspace — the same
+// switch as the Files panel — and disabled mid-stream (attachments need a
+// fresh turn, not the inject/queue path).
+let _pendingAttachments = []; // uploaded { path, name, mime, kind, size } (+ uploading?)
+
+function attachEnabled() {
+  return !!store.agents.find((a) => a.name === store.agent)?.workspace;
+}
+
+function pendingReady() {
+  return _pendingAttachments.filter((a) => !a.uploading && a.path);
+}
+
+function updateSendEnabled() {
+  if (sendBtn) sendBtn.disabled = !(promptEl?.value.trim() || pendingReady().length);
+}
+
+function syncAttachButton() {
+  const btn = document.getElementById('attach');
+  if (!btn) return;
+  const ok = attachEnabled();
+  btn.hidden = !ok;
+  btn.disabled = !ok || store.streaming;
+  if (!ok && _pendingAttachments.length) {
+    _pendingAttachments = [];
+    renderAttachTray();
+    updateSendEnabled();
+  }
+}
+
+function renderAttachTray() {
+  const tray = document.getElementById('attach-tray');
+  if (!tray) return;
+  tray.replaceChildren();
+  if (!_pendingAttachments.length) {
+    tray.hidden = true;
+    return;
+  }
+  tray.hidden = false;
+  _pendingAttachments.forEach((att, i) => {
+    tray.appendChild(
+      makeAttachChip(att, () => {
+        _pendingAttachments.splice(i, 1);
+        renderAttachTray();
+        updateSendEnabled();
+      }),
+    );
+  });
+}
+
+function makeAttachChip(att, onRemove) {
+  const chip = document.createElement('div');
+  chip.className = 'attach-chip' + (att.uploading ? ' uploading' : '');
+  if (att.kind === 'image' && att.path) {
+    const img = document.createElement('img');
+    img.className = 'attach-thumb';
+    img.src = api.workspaceRawUrl({ agent: store.agent, path: att.path });
+    img.alt = att.name || '';
+    chip.appendChild(img);
+  } else {
+    const ic = document.createElement('span');
+    ic.className = 'attach-ic';
+    ic.innerHTML = icon(att.kind === 'image' ? 'image' : 'file-text', { size: 16 });
+    chip.appendChild(ic);
+  }
+  const name = document.createElement('span');
+  name.className = 'attach-name';
+  name.textContent = att.name || att.path || '';
+  name.title = name.textContent;
+  chip.appendChild(name);
+  const rm = document.createElement('button');
+  rm.type = 'button';
+  rm.className = 'attach-remove';
+  rm.setAttribute('aria-label', t('composer.removeAttachment'));
+  rm.innerHTML = icon('x', { size: 13 });
+  rm.addEventListener('click', onRemove);
+  chip.appendChild(rm);
+  return chip;
+}
+
+async function uploadFiles(files) {
+  if (!attachEnabled()) {
+    toast(t('composer.attachNoWorkspace'), { type: 'error' });
+    return;
+  }
+  for (const file of files) {
+    const chip = {
+      uploading: true,
+      name: file.name,
+      kind: file.type?.startsWith('image/') ? 'image' : 'file',
+    };
+    _pendingAttachments.push(chip);
+    renderAttachTray();
+    try {
+      Object.assign(chip, await api.uploadFile(file, { agent: store.agent }), {
+        uploading: false,
+      });
+    } catch {
+      const i = _pendingAttachments.indexOf(chip);
+      if (i >= 0) _pendingAttachments.splice(i, 1);
+      toast(t('composer.uploadFailed', { name: file.name }), { type: 'error' });
+    }
+    renderAttachTray();
+  }
+  updateSendEnabled();
+}
+
+// Attachment views inside a user bubble (live send + history replay).
+function makeAttachmentsBlock(attachments) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-attachments';
+  for (const att of attachments) wrap.appendChild(makeAttachmentView(att));
+  return wrap;
+}
+
+function makeAttachmentView(att) {
+  const url = att.path
+    ? api.workspaceRawUrl({ agent: store.agent, path: att.path })
+    : att.src || null;
+  if (att.kind === 'image' && url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.className = 'msg-attach-image';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = att.name || '';
+    img.loading = 'lazy';
+    a.appendChild(img);
+    return a;
+  }
+  const a = document.createElement('a');
+  a.className = 'msg-attach-file';
+  if (att.path) {
+    a.href = api.workspaceRawUrl({ agent: store.agent, path: att.path, download: true });
+  }
+  a.innerHTML = icon('file-text', { size: 15 });
+  const name = document.createElement('span');
+  name.textContent = att.name || att.path || 'file';
+  a.appendChild(name);
+  return a;
+}
+
+// Image parts persisted in a user turn (vision inline) → renderable views.
+function contentImageAttachments(content) {
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const p of content) {
+    if (p && p.type === 'image') {
+      const src = p.url || (p.data ? `data:${p.mime_type || 'image/png'};base64,${p.data}` : null);
+      if (src) out.push({ kind: 'image', src, name: '' });
+    }
+  }
+  return out;
+}
+
 export function initComposer() {
   initContextRing();
+
+  // Attachments: "+" opens a hidden picker; paste and drag-drop also upload.
+  const attachInput = document.createElement('input');
+  attachInput.type = 'file';
+  attachInput.multiple = true;
+  attachInput.style.display = 'none';
+  document.body.appendChild(attachInput);
+  attachInput.addEventListener('change', () => {
+    if (attachInput.files?.length) uploadFiles([...attachInput.files]);
+    attachInput.value = ''; // let the same file be picked again
+  });
+  document.getElementById('attach')?.addEventListener('click', () => {
+    if (!store.streaming && attachEnabled()) attachInput.click();
+  });
+  promptEl?.addEventListener('paste', (e) => {
+    if (store.streaming || !attachEnabled()) return;
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  });
+  if (composer) {
+    composer.addEventListener('dragover', (e) => {
+      if (store.streaming || !attachEnabled()) return;
+      if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+      e.preventDefault();
+      composer.classList.add('drag-over');
+    });
+    composer.addEventListener('dragleave', (e) => {
+      if (!composer.contains(e.relatedTarget)) composer.classList.remove('drag-over');
+    });
+    composer.addEventListener('drop', (e) => {
+      composer.classList.remove('drag-over');
+      if (store.streaming || !attachEnabled()) return;
+      const files = [...(e.dataTransfer?.files || [])];
+      if (files.length) {
+        e.preventDefault();
+        uploadFiles(files);
+      }
+    });
+  }
+  store.on('agents-loaded', syncAttachButton);
+  store.on('agent-changed', syncAttachButton);
+  syncAttachButton();
+
   // On touch devices Enter inserts a newline (there's no Shift key to combine
   // with) and the send button does the sending; on desktop Enter sends.
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
   promptEl?.addEventListener('input', () => {
     autoresize();
-    if (sendBtn) sendBtn.disabled = !promptEl.value.trim();
+    updateSendEnabled();
   });
   promptEl?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !coarsePointer) {
@@ -2133,13 +2356,14 @@ export function initComposer() {
   composer?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const message = promptEl.value.trim();
-    if (!message) return;
-    promptEl.value = '';
-    autoresize();
-    if (sendBtn) sendBtn.disabled = true;
-    _resumeAutoScroll();
 
     if (store.streaming) {
+      // Queue path — text only; attachments need a fresh turn, not inject.
+      if (!message) return;
+      promptEl.value = '';
+      autoresize();
+      updateSendEnabled();
+      _resumeAutoScroll();
       // Queue it: the server drains it at the next turn start, or seeds the
       // next run if this one ends first. Show a muted bubble (with a cancel
       // affordance) until the run confirms it or the user withdraws it.
@@ -2162,9 +2386,24 @@ export function initComposer() {
       return;
     }
 
+    const attachments = pendingReady();
+    if (!message && !attachments.length) return;
+    const payload = attachments.map((a) => ({
+      path: a.path,
+      mime: a.mime,
+      kind: a.kind,
+      name: a.name,
+    }));
+    promptEl.value = '';
+    autoresize();
+    _pendingAttachments = [];
+    renderAttachTray();
+    updateSendEnabled();
+    _resumeAutoScroll();
+
     document.getElementById('empty-state')?.remove();
-    appendUserTurn(message);
-    await runStream(message);
+    appendUserTurn(message, { attachments });
+    await runStream(message, payload);
   });
 
   stopBtn?.addEventListener('click', () => cancelStream());

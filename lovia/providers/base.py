@@ -159,3 +159,29 @@ async def discover_context_window(provider: object) -> int | None:
         result = await provider.discover_context_window()
         return int(result) if result is not None else None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Vision capability
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class VisionCapable(Protocol):
+    @property
+    def supports_vision(self) -> bool: ...
+
+
+def supports_vision(provider: object) -> bool:
+    """Whether ``provider``'s model accepts image content parts.
+
+    A capability probe in the same optional-protocol style as
+    :func:`context_window`: a provider that doesn't advertise the flag (no
+    ``supports_vision`` member) is treated as text-only. Serving layers use
+    this to choose between sending an image inline as an
+    :class:`~lovia.ImagePart` and degrading to a plain path reference, so a
+    conservative answer never hard-fails a run — it just skips inlining.
+    """
+    if isinstance(provider, VisionCapable):
+        return bool(provider.supports_vision)
+    return False

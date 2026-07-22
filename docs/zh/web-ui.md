@@ -1,8 +1,8 @@
 # Web UI
 
 浏览器 UI 可以把任意 lovia Agent 变成本地聊天应用，支持流式输出、Tool 调用记录、
-对话历史、编辑后重发、重新生成、对话标题、审批、定时任务、记忆编辑和只读 Workspace
-文件面板。
+对话历史、编辑后重发、重新生成、对话标题、审批、定时任务、记忆编辑、图片与文件上传，
+以及只读 Workspace 文件面板。
 所有前端资源都随软件包提供，不依赖 CDN 或外部字体。
 
 ## 一条命令启动
@@ -50,6 +50,26 @@ lovia web --app app:assistant
 
 `--app MODULE:ATTR` 可以指向一个 Agent，也可以指向 `{name: agent}` 映射。Python 部署和
 ASGI 集成详见 [Web 服务端](web-server.md)。
+
+## 上传图片与文件
+
+Composer 左侧的 **+** 按钮（也支持拖拽和粘贴）会把图片和文件上传到 Workspace 的
+`uploads/` 目录。每个附件都会以其 workspace 路径在消息中被引用，Agent 可以用自己的文件
+工具打开它——这对任何模型都有效，上传的文件也会出现在文件面板中。
+
+图片还会在模型支持视觉时**内联**发送：
+
+- **主模型支持视觉。** 官方 `api.openai.com` / `api.anthropic.com` 域名默认按多模态处理。
+  其他端点（Qwen-VL / DashScope、vLLM 部署，或可能后接纯文本模型的 Anthropic 兼容网关）
+  需用 `LOVIA_VISION=1` 显式声明，图片才会内联发送。
+- **主模型为纯文本。** 设置 `LOVIA_VISION_MODEL=<vendor>:<model>`（例如
+  `openai:qwen3.7-plus`）会注册一个 `see_image` 工具：主模型把"看这张图"委托给该视觉模型，
+  拿回一段文字答复，图片字节不会进入主对话历史。`vendor:` 前缀决定 API 方言（与 `LOVIA_MODEL`
+  一致：`openai:` 或无前缀为 OpenAI 兼容，`anthropic:` 为 Anthropic）。其端点与密钥默认复用
+  该前缀对应的 `OPENAI_*` / `ANTHROPIC_*`；当视觉模型与主模型不在同一端点时，用
+  `LOVIA_VISION_BASE_URL` / `LOVIA_VISION_API_KEY` 覆盖。
+
+上传依赖 Workspace（与文件面板同一开关），因此 `--no-workspace` 会隐藏 **+** 按钮。
 
 ## 常用 CLI 选项
 

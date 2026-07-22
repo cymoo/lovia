@@ -12,6 +12,7 @@ change the wire format.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, cast
 
 from ...messages import Message
@@ -70,13 +71,20 @@ def _tool_calls(m: Message) -> list[dict[str, Any]]:
 
 
 def _content(m: Message) -> Any:
-    """Content for JSON output: the flattened text, else the raw content.
+    """Content for JSON output.
 
-    ``Message.text`` collapses multimodal parts to a string; when it is empty we
-    fall back to the original ``content`` (a part list or ``None``) so multimodal
-    turns aren't silently dropped.
+    A turn carrying non-text parts (images/files) is returned as the full part
+    list — serialized to plain dicts (``{"type": "image", ...}``) — so the client
+    can render attachment thumbnails; ``Message.text`` would collapse them away.
+    Plain-text turns return the flattened string (the common case), falling back
+    to the raw content when text is empty.
     """
-    return m.text or m.content
+    content = m.content
+    if isinstance(content, list) and any(
+        getattr(p, "type", "text") != "text" for p in content
+    ):
+        return [asdict(p) for p in content]
+    return m.text or content
 
 
 def display_text(m: Message) -> str:

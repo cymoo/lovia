@@ -3,8 +3,8 @@
 The optional browser UI turns any lovia Agent into a local chat application.
 It includes streaming text and Tool activity, conversation history with
 edit-and-resend and regenerate, titles, approvals, schedules, a memory editor,
-and a read-only Workspace file panel. All browser assets are bundled, so the
-page works without a CDN or external font requests.
+image and file attachments, and a read-only Workspace file panel. All browser
+assets are bundled, so the page works without a CDN or external font requests.
 
 ## Start in one command
 
@@ -53,6 +53,32 @@ lovia web --app app:assistant
 
 `--app MODULE:ATTR` accepts one Agent or a `{name: agent}` mapping. For Python
 deployment and ASGI integration, see [Web server](web-server.md).
+
+## Attachments — images and files
+
+The composer's **+** button (also drag-drop or paste) uploads images and files
+into the Workspace's `uploads/` directory. Each upload is referenced from your
+message by its workspace path, so the Agent can open it with its file tools —
+this works with any model, and the uploads also appear in the Files panel.
+
+Images additionally go **inline** to models that can see them:
+
+- **Vision-capable main model.** Official `api.openai.com` / `api.anthropic.com`
+  hosts are assumed multimodal. For any other endpoint (a Qwen-VL / DashScope or
+  vLLM deployment, or an Anthropic-compatible gateway that may front a text-only
+  model), declare it with `LOVIA_VISION=1` so images are sent inline.
+- **Text-only main model.** Set `LOVIA_VISION_MODEL=<vendor>:<model>` (e.g.
+  `openai:qwen3.7-plus`) to register a `see_image` tool: the main model
+  delegates "look at this image" to that vision model and gets back a text
+  answer, so the image bytes never enter the main transcript. The `vendor:`
+  prefix picks the API dialect — same rule as `LOVIA_MODEL`: `openai:`/bare is
+  OpenAI-compatible, `anthropic:` is Anthropic. Its endpoint and key default to
+  the `OPENAI_*` / `ANTHROPIC_*` the prefix routes to; set
+  `LOVIA_VISION_BASE_URL` / `LOVIA_VISION_API_KEY` when the vision model lives on
+  a different endpoint than your main model.
+
+Attachments require a Workspace (the same switch as the Files panel), so
+`--no-workspace` hides the **+** button.
 
 ## Useful CLI options
 

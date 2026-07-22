@@ -77,6 +77,21 @@ class WorkspaceFile(BaseModel):
     binary: bool = False
 
 
+class UploadedFile(BaseModel):
+    """Result of a workspace upload (``POST /api/workspace/upload``).
+
+    The saved file's workspace-relative ``path`` (under ``uploads/``) plus
+    enough metadata for the composer to preview it and re-reference it on send.
+    ``kind`` is ``image`` for previewable image types, else ``file``.
+    """
+
+    path: str
+    name: str
+    mime: str
+    kind: Literal["image", "file"]
+    size: int
+
+
 class ServerInfo(BaseModel):
     """Server-level capabilities, for a custom UI to introspect on load."""
 
@@ -85,6 +100,20 @@ class ServerInfo(BaseModel):
     default_agent: str | None = None
     version: str | None = None
     features: dict[str, bool] = Field(default_factory=dict)
+
+
+class Attachment(BaseModel):
+    """A composer attachment already saved under the workspace.
+
+    The client echoes back what ``POST /api/workspace/upload`` returned; the
+    server re-validates ``path`` against the workspace root before reading it
+    (never trusts the client's path), so a traversal attempt is dropped.
+    """
+
+    path: str = Field(max_length=1024)
+    mime: str = Field(max_length=255)
+    kind: Literal["image", "file"]
+    name: str | None = Field(default=None, max_length=255)
 
 
 class ChatRequest(BaseModel):
@@ -99,6 +128,10 @@ class ChatRequest(BaseModel):
     # the agent it was created with (so a stale tab can't switch a chat's brain
     # mid-conversation), falling back to this when that agent is gone.
     agent: str | None = None
+    # Composer attachments for this turn (images/files already uploaded to the
+    # workspace). Empty/None is the plain text-only path. Capped to keep one
+    # turn's payload bounded.
+    attachments: list[Attachment] | None = Field(default=None, max_length=20)
 
 
 class InjectRequest(BaseModel):

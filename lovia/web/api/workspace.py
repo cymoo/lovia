@@ -42,7 +42,7 @@ from ...workspace import (
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
-from ..media import is_preview_image
+from ..media import is_preview_image, preview_image_mime
 from ..schemas import UploadedFile, WorkspaceEntry, WorkspaceFile, WorkspaceInfo
 from .deps import RouterDeps
 
@@ -323,7 +323,12 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             raise HTTPException(status_code=404, detail="no such file") from exc
         if stat_result.st_size > cfg.limits.max_file_read_bytes:
             raise HTTPException(status_code=413, detail="file too large")
-        media_type = mimetypes.guess_type(resolved.abs.name)[0]
+        # Prefer the explicit preview map so a nosniff'd inline image carries a
+        # correct, OS-stable Content-Type; fall back to mimetypes for non-images
+        # (only served via download=1 anyway).
+        media_type = preview_image_mime(resolved.abs.name) or mimetypes.guess_type(
+            resolved.abs.name
+        )[0]
         # Inline only browser-renderable images (by extension). SVG is excluded
         # (it can carry scripts — a crafted upload would be a stored-XSS vector);
         # it stays reachable via download=1. See lovia/web/media.py.
@@ -403,7 +408,11 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         # Type comes from the SAVED extension, never the client's Content-Type;
         # kind="image" is the browser-previewable set (SVG excluded — it can
         # carry scripts), so the composer previews only what is safe to render.
-        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        mime = (
+            preview_image_mime(target.name)
+            or mimetypes.guess_type(target.name)[0]
+            or "application/octet-stream"
+        )
         return UploadedFile(
             path=f"{_UPLOADS_SUBDIR}/{target.name}",
             name=target.name,

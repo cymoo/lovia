@@ -60,10 +60,13 @@ async def main() -> None:
     base_url = os.environ.get("OPENAI_BASE_URL")
     api_key = os.environ.get("OPENAI_API_KEY")
     if base_url and api_key:
+        # LOVIA_MODEL may carry a "vendor:" prefix; this section is
+        # OpenAI-compatible, so use its model id only for openai:/bare specs — an
+        # anthropic: spec would otherwise pass a Claude id to this provider.
+        spec = os.environ.get("LOVIA_MODEL", "glm-5.2")
+        vendor, _, bare = spec.rpartition(":")
         provider = OpenAIChatProvider(
-            # LOVIA_MODEL may carry a "vendor:" prefix; this provider takes the
-            # bare model id, so strip anything before the colon.
-            model=os.environ.get("LOVIA_MODEL", "glm-5.2").rpartition(":")[2],
+            model=bare if vendor in ("", "openai") else "glm-5.2",
             api_key=api_key,
             base_url=base_url,
         )

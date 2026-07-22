@@ -31,12 +31,26 @@ MODEL_IMAGE_MIME_BY_EXT = {
 }
 MODEL_IMAGE_MIME = frozenset(MODEL_IMAGE_MIME_BY_EXT.values())
 
-# Image extensions a browser renders inline (thumbnails, /api/workspace/raw, the
-# Files panel). The JS side mirrors this EXACT set in static/js/files.js
-# (IMAGE_EXT) — keep the two in sync. SVG is excluded (it can carry scripts and
-# is never served inline); HEIC/TIFF are excluded (browsers don't render them
-# inline), so they are not marked previewable server-side either.
-PREVIEW_IMAGE_EXT = frozenset({"png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"})
+# Extension → mime for images a browser renders inline (thumbnails,
+# /api/workspace/raw, the Files panel). Explicit rather than mimetypes.guess_type
+# so the served Content-Type is stable across OSes — important now that /raw
+# sends ``X-Content-Type-Options: nosniff``, which stops a browser from rendering
+# an image whose Content-Type came back as application/octet-stream (guess_type
+# doesn't know e.g. AVIF on every system). The JS side mirrors this EXACT key set
+# in static/js/files.js (IMAGE_EXT) — keep the two in sync. SVG is excluded (it
+# can carry scripts, never inlined); HEIC/TIFF are excluded (browsers don't
+# render them inline).
+PREVIEW_IMAGE_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "avif": "image/avif",
+    "bmp": "image/bmp",
+    "ico": "image/x-icon",
+}
+PREVIEW_IMAGE_EXT = frozenset(PREVIEW_IMAGE_MIME_BY_EXT)
 
 
 def _ext(name: str | Path) -> str:
@@ -49,9 +63,16 @@ def model_image_mime(name: str | Path) -> str | None:
     return MODEL_IMAGE_MIME_BY_EXT.get(_ext(name))
 
 
+def preview_image_mime(name: str | Path) -> str | None:
+    """The stable Content-Type for a browser-previewable image, or ``None`` when
+    the file isn't one. Prefer this over ``mimetypes.guess_type`` when serving a
+    preview inline, so a nosniff'd response carries a correct image mime."""
+    return PREVIEW_IMAGE_MIME_BY_EXT.get(_ext(name))
+
+
 def is_preview_image(name: str | Path) -> bool:
     """True when a browser renders this image inline (thumbnails, ``/raw``, the
     Files panel), decided by file extension against :data:`PREVIEW_IMAGE_EXT`
     (which the UI's ``IMAGE_EXT`` mirrors). SVG is excluded — it can carry
     scripts, so it is never served inline."""
-    return _ext(name) in PREVIEW_IMAGE_EXT
+    return _ext(name) in PREVIEW_IMAGE_MIME_BY_EXT

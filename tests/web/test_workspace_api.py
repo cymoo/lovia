@@ -277,6 +277,25 @@ def test_raw_image_inline(client: TestClient) -> None:
     assert r.headers["x-content-type-options"] == "nosniff"
 
 
+def test_raw_avif_uses_explicit_mime_not_os_guess(client: TestClient) -> None:
+    # AVIF isn't in every OS mime database; the explicit preview map must still
+    # send a correct image Content-Type, or the nosniff'd inline preview breaks.
+    up = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("pic.avif", b"\x00\x00\x00\x1cftypavif", "application/octet-stream")},
+    )
+    assert up.status_code == 200
+    assert up.json()["kind"] == "image"
+    assert up.json()["mime"] == "image/avif"
+    raw = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
+    )
+    assert raw.status_code == 200
+    assert raw.headers["content-type"] == "image/avif"
+    assert raw.headers["x-content-type-options"] == "nosniff"
+
+
 def test_raw_non_image_inline_refused(client: TestClient) -> None:
     r = client.get("/api/workspace/raw", params={"agent": "bot", "path": "report.csv"})
     assert r.status_code == 415

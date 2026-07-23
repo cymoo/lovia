@@ -18,11 +18,11 @@ Examples::
 
 First run: whatever required configuration is missing (the model; an API key
 when the endpoint is the official OpenAI/Anthropic API) is asked
-interactively, validated against the endpoint, and can be saved to ``./.env``
-so it is never retyped.
+interactively, validated against the endpoint, and can be saved to
+``.lovia/config.env`` (owner-only, git-ignored) so it is never retyped.
 
 Configuration precedence: command-line flag > environment variable >
-``./.env`` (or ``--env-file``). The model endpoint uses the provider's
+``.lovia/config.env`` (or ``--env-file``). The model endpoint uses the provider's
 standard variables — ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` or
 ``ANTHROPIC_*``, chosen by the model's vendor prefix — while everything else
 uses ``LOVIA_*``.
@@ -221,7 +221,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         action="append",
         metavar="FILE",
         help="load environment from FILE via python-dotenv; repeatable "
-        "(default ./.env if present)",
+        "(defaults: .lovia/config.env then ./.env, if present)",
     )
     p.add_argument(
         "--token",
@@ -284,15 +284,18 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
 
 def load_env_files(env_files: list[str] | None) -> dict[str, str]:
-    """Load the ``--env-file`` files (or ``./.env``); report the keys they added.
+    """Load the ``--env-file`` files (or the autoload defaults); report added keys.
 
-    The process environment always wins because files never override existing
-    variables (``override=False``). Returns ``{key: <file name>}`` for keys
-    the files introduced (``".env"`` for the default autoload) — the startup
-    summary shows it as each value's source.
+    Default autoload is ``.lovia/config.env`` (where the setup wizard saves),
+    then a legacy ``./.env`` for back-compat. The process environment always
+    wins because files never override existing variables (``override=False``),
+    and the canonical file wins over the legacy one (it loads first). Returns
+    ``{key: <file name>}`` for keys the files introduced — the startup summary
+    shows it as each value's source.
 
     A missing python-dotenv is fatal only when ``--env-file`` was given
-    explicitly; otherwise auto-loading is silently skipped.
+    explicitly; otherwise auto-loading is silently skipped. This lives in the
+    CLI only — the embeddable ``create_app`` / ``serve`` never loads env files.
     """
     sources: dict[str, str] = {}
     try:
@@ -320,9 +323,10 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
                 raise CliError(f"env file not found: {path}")
             load(path)
     else:
-        default = Path(".env")
-        if default.is_file():
-            load(default)
+        # Canonical first (wins on conflicts via override=False), then legacy.
+        for default in (setup.config_path(), Path(".env")):
+            if default.is_file():
+                load(default)
     return sources
 
 

@@ -541,7 +541,8 @@ def test_save_env_file_default_path_is_protected(
     assert path.read_text() == "OPENAI_API_KEY=sk-secret\n"
     assert (path.parent / ".gitignore").read_text().strip().splitlines()[-1] == "*"
     if os.name == "posix":
-        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.stat().st_mode & 0o777 == 0o600  # secret file: owner-only
+        assert path.parent.stat().st_mode & 0o777 == 0o700  # dir: owner-only too
 
 
 def test_save_env_file_appends_and_patches_missing_newline(tmp_path: Path) -> None:

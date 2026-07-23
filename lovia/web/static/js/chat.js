@@ -2303,6 +2303,9 @@ function splitAttachmentNote(text) {
   if (typeof text !== 'string') return { text: '', attachments: [] };
   const m = text.match(ATTACHMENT_NOTE_RE);
   if (!m) return { text, attachments: [] };
+  // ", " is an unambiguous separator here: composer uploads are sanitized
+  // server-side (_safe_upload_name replaces commas with "_"), so a stored name
+  // can hold a space but never a comma.
   const attachments = m[1]
     .split(', ')
     .map((p) => p.trim())

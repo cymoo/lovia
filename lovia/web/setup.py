@@ -41,7 +41,10 @@ from ..providers.openai_chat import _OFFICIAL_HOSTS as _OPENAI_HOSTS
 log = logging.getLogger("lovia.web.setup")
 
 # The non-interactive ways to configure a value — shown when there's no TTY.
-CONFIG_HINT = "pass --model and --api-key, or set LOVIA_MODEL and OPENAI_API_KEY"
+# Names both key vars since the required one follows the model's vendor prefix.
+CONFIG_HINT = (
+    "pass --model and --api-key, or set LOVIA_MODEL and OPENAI_API_KEY / ANTHROPIC_API_KEY"
+)
 
 # Saved config lives beside the chat DB under the CWD-relative .lovia/ dir — a
 # lovia-owned home, so it never collides with a generic ./.env another tool
@@ -266,9 +269,14 @@ def _adopt_reported_window(conn: Connection, response: httpx.Response) -> None:
 
 
 def _protect_config_dir(directory: Path) -> None:
-    """Create lovia's data dir and drop a ``*`` .gitignore so its contents —
-    saved secrets and the chat DB — are never committed inside someone's repo."""
+    """Create lovia's data dir, make it owner-only, and drop a ``*`` .gitignore.
+
+    The dir holds saved secrets and the chat DB, so it's ``0700`` where the OS
+    honours it (Windows ignores mode bits) and its whole contents are git-ignored
+    — never committed inside someone's repo."""
     directory.mkdir(parents=True, exist_ok=True)
+    with suppress(OSError):  # best-effort; Windows ignores mode bits
+        directory.chmod(0o700)
     gitignore = directory / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(

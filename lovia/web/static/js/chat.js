@@ -7,11 +7,13 @@ import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
+import { enterToSend } from './settings.js';
 import {
   escapeHtml,
   formatDateTime,
   formatTimeSmart,
   highlightIn,
+  isImagePath,
   renderMarkdown,
   toDate,
 } from './util.js';
@@ -1441,15 +1443,17 @@ function renderHistoryWindow({ stickBottom }) {
       const turn = makeTurn('user', it.timestamp);
       turn.dataset.userTurn = String(userIdx++);
       const bubble = turn.querySelector('.bubble');
-      const bodyText = contentText(it.content);
+      // A turn's attachments survive in stored history only as the note the
+      // server appends to the text (attachments.py `_attachment_note`); recover
+      // the previews from it and show the clean message — matching live send.
+      const { text: bodyText, attachments } = splitAttachmentNote(contentText(it.content));
       if (bodyText) {
         const body = document.createElement('div');
         body.className = 'body';
         body.textContent = bodyText;
         appendBubbleContent(bubble, body);
       }
-      const imgs = contentImageAttachments(it.content);
-      if (imgs.length) appendBubbleContent(bubble, makeAttachmentsBlock(imgs));
+      if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
       ensureFooter(bubble);
       addCopyButton(bubble);
       addEditButton(turn);
@@ -2285,17 +2289,30 @@ function makeAttachmentView(att) {
   return a;
 }
 
-// Image parts persisted in a user turn (vision inline) → renderable views.
-function contentImageAttachments(content) {
-  if (!Array.isArray(content)) return [];
-  const out = [];
-  for (const p of content) {
-    if (p && p.type === 'image') {
-      const src = p.url || (p.data ? `data:${p.mime_type || 'image/png'};base64,${p.data}` : null);
-      if (src) out.push({ kind: 'image', src, name: '' });
-    }
-  }
-  return out;
+// A turn's attachments survive in stored history only as the note the server
+// appends to the user text (mirrors `_attachment_note` in
+// lovia/web/attachments.py — keep in sync). Split that text back into the
+// visible message and renderable attachment views (image vs file inferred from
+// the extension, like the Files panel), so a reloaded turn shows previews
+// instead of the raw "[Attached in the workspace: …]" line. Works whether the
+// image round-tripped inline (vision) or the turn flattened to text.
+const ATTACHMENT_NOTE_RE =
+  /\n*\[Attached in the workspace: (.+?)\. Read with your file tools when relevant\.\]\s*$/;
+
+function splitAttachmentNote(text) {
+  if (typeof text !== 'string') return { text: '', attachments: [] };
+  const m = text.match(ATTACHMENT_NOTE_RE);
+  if (!m) return { text, attachments: [] };
+  const attachments = m[1]
+    .split(', ')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((path) => ({
+      path,
+      kind: isImagePath(path) ? 'image' : 'file',
+      name: path.split('/').pop() || path,
+    }));
+  return { text: text.slice(0, m.index).trimEnd(), attachments };
 }
 
 export function initComposer() {
@@ -2346,15 +2363,21 @@ export function initComposer() {
   store.on('agent-changed', syncAttachButton);
   syncAttachButton();
 
-  // On touch devices Enter inserts a newline (there's no Shift key to combine
-  // with) and the send button does the sending; on desktop Enter sends.
+  // On touch devices Enter always inserts a newline (there's no Shift key to
+  // combine with) and the send button does the sending. On desktop the "Enter
+  // key" preference decides: send-on-Enter (Shift+Enter = newline), or
+  // newline-on-Enter (⌘/Ctrl+Enter sends). `isComposing` guards an IME session
+  // so confirming CJK candidates with Enter never fires a send.
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
   promptEl?.addEventListener('input', () => {
     autoresize();
     updateSendEnabled();
   });
   promptEl?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !coarsePointer) {
+    if (e.key !== 'Enter' || e.isComposing || coarsePointer) return;
+    const withMod = e.metaKey || e.ctrlKey;
+    const send = enterToSend() ? !e.shiftKey && !withMod : withMod;
+    if (send) {
       e.preventDefault();
       composer?.requestSubmit();
     }

@@ -6,7 +6,7 @@ import { promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
-import { notificationsEnabled } from './settings.js';
+import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -109,6 +109,7 @@ function _notifyRunFinished(sid) {
   if (sid === store.sessionId && store.streaming) return;
   const title = store.sessions.find((s) => s.id === sid)?.title || t('toast.backgroundRun');
   toast(t('toast.runFinished', { title }), { type: 'success' });
+  playCompletionSound(); // no-op unless the sound preference is on
   if (document.hidden) {
     _unseenFinished += 1;
     document.title = `(${_unseenFinished}) ${_baseTitle}`;

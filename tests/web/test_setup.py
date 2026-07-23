@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -354,7 +355,7 @@ def test_first_run_asks_everything_and_saves(
     assert "✓ endpoint reachable" in output
     assert not input_fn.remaining and not getpass_fn.remaining  # type: ignore[attr-defined]
 
-    path = Path(".env")
+    path = setup.config_path()
     assert path.is_file()
     from dotenv import dotenv_values
 
@@ -365,8 +366,11 @@ def test_first_run_asks_everything_and_saves(
         "OPENAI_API_KEY": "sk-deep",
         "LOVIA_CONTEXT_WINDOW": "128000",
     }
-    # A key was saved -> the wizard nudges toward .gitignore.
-    assert ".gitignore" in output
+    # Secrets are protected structurally: owner-only file + a `*` .gitignore
+    # over the whole .lovia/ dir (which also holds the chat DB).
+    assert (path.parent / ".gitignore").read_text().strip().endswith("*")
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_wizard_asks_only_whats_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -493,13 +497,13 @@ def test_save_only_persists_prompt_sourced_values(
     del result
     from dotenv import dotenv_values
 
-    saved = dotenv_values(Path(".env"))
+    saved = dotenv_values(setup.config_path())
     assert "OPENAI_API_KEY" not in saved
     assert "LOVIA_MODEL" not in saved
     assert saved["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
     assert saved["LOVIA_CONTEXT_WINDOW"] == "77000"
-    # No key among the saved values -> no .gitignore nudge.
-    assert ".gitignore" not in output
+    # The .lovia/ dir is git-ignored regardless of which values were saved.
+    assert (setup.config_path().parent / ".gitignore").is_file()
 
 
 def test_decline_save_writes_nothing(
@@ -512,7 +516,7 @@ def test_decline_save_writes_nothing(
         keys=[""],
     )
     del result
-    assert not Path(".env").exists()
+    assert not setup.config_path().exists()
 
 
 # ------------------------------------------------------------ persistence -
@@ -523,6 +527,22 @@ def test_save_env_file_creates_the_file(tmp_path: Path) -> None:
         {"A_KEY": "value", "B_KEY": "x y"}, path=tmp_path / ".env"
     )
     assert path.read_text() == "A_KEY=value\nB_KEY=x y\n"
+    if os.name == "posix":  # secrets → owner-only
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_save_env_file_default_path_is_protected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No explicit path -> .lovia/config.env, owner-only, under a git-ignored dir."""
+    monkeypatch.chdir(tmp_path)
+    path = setup.save_env_file({"OPENAI_API_KEY": "sk-secret"})
+    assert path == setup.config_path()
+    assert path.read_text() == "OPENAI_API_KEY=sk-secret\n"
+    assert (path.parent / ".gitignore").read_text().strip().splitlines()[-1] == "*"
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600  # secret file: owner-only
+        assert path.parent.stat().st_mode & 0o777 == 0o700  # dir: owner-only too
 
 
 def test_save_env_file_appends_and_patches_missing_newline(tmp_path: Path) -> None:

@@ -440,7 +440,7 @@ lovia web --port 9000 --model glm-5.2      # python -m lovia.web 亦可
 lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
-缺失的必需配置（Base URL、API key、model name）首次运行时会交互式询问，并可保存到 `./.env`。配置优先级：命令行 flag > 环境变量 > `./.env`（或 `--env-file`）。
+缺失的必需配置（Base URL、API key、model name）首次运行时会交互式询问，并可保存到 `.lovia/config.env`（仅本人可读、已加入 .gitignore）。配置优先级：命令行 flag > 环境变量 > `.lovia/config.env`（或 `--env-file`）。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

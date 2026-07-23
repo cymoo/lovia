@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -958,12 +959,25 @@ def test_ui_false_serves_api_without_html() -> None:
 
 def test_ui_true_serves_bundled_page_and_static() -> None:
     c = TestClient(_app(_make_agent([text("hi")])))  # ui defaults to True
-    page = c.get("/").text
+    resp = c.get("/")
+    page = resp.text
     assert "<html" in page.lower()
     assert "mermaid" in page.lower()  # diagram rendering library is bundled in
-    assert c.get("/static/js/api.js").status_code == 200
-    assert 'href="http://testserver/static/favicon.svg"' in page
-    favicon = c.get("/static/favicon.svg")
+    # The shell must revalidate so a new build's version-stamped asset URLs are
+    # picked up right after an upgrade (see _asset_token in app.py).
+    assert resp.headers["cache-control"] == "no-cache"
+    # Static assets live under a version-stamped prefix (the cache-busting seam);
+    # the bare /static path no longer exists, so a heuristically-cached shell
+    # can't load stale bytes from it.
+    assert c.get("/static/js/api.js").status_code == 404
+    m = re.search(r'/static/([^/"]+)/js/main\.js', page)
+    assert m, "page should reference a versioned static prefix"
+    token = m.group(1)
+    api_js = c.get(f"/static/{token}/js/api.js")
+    assert api_js.status_code == 200
+    assert "immutable" in api_js.headers["cache-control"]  # cache forever
+    assert f'href="http://testserver/static/{token}/favicon.svg"' in page
+    favicon = c.get(f"/static/{token}/favicon.svg")
     assert favicon.status_code == 200
     assert favicon.headers["content-type"].startswith("image/svg+xml")
 

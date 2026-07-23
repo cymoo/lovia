@@ -3,9 +3,12 @@
 Resolves the model connection (model id, base URL, API key, context window)
 from flags and environment layers with per-value source tracking, prompts
 interactively for whatever is missing, validates freshly entered values
-against the endpoint, and offers to persist them to ``./.env`` in the
-current directory — auto-loaded on the next launch at the lowest
-precedence: flag > environment > ``./.env`` (or ``--env-file``).
+against the endpoint, and offers to persist them to ``.lovia/config.env``
+(owner-only, git-ignored) — auto-loaded on the next launch at the lowest
+precedence: flag > environment > ``.lovia/config.env`` (or a legacy ``./.env``).
+
+Everything here is CLI-only: the embeddable core (``create_app`` / ``serve``)
+never loads env files, so an app embedding lovia brings its own config.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import getpass as _getpass
 import logging
 import os
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, TextIO
@@ -36,12 +40,21 @@ from ..providers.openai_chat import _OFFICIAL_HOSTS as _OPENAI_HOSTS
 
 log = logging.getLogger("lovia.web.setup")
 
-# How a resolved value can be configured, in the order shown to the user.
+# The non-interactive ways to configure a value — shown when there's no TTY.
+# Names both key vars since the required one follows the model's vendor prefix.
 CONFIG_HINT = (
-    "pass --model / --base-url / --api-key, or set LOVIA_MODEL and "
-    "OPENAI_API_KEY (or ANTHROPIC_*) in the environment or ./.env; run in "
-    "a terminal for interactive setup"
+    "pass --model and --api-key, or set LOVIA_MODEL and OPENAI_API_KEY / ANTHROPIC_API_KEY"
 )
+
+# Saved config lives beside the chat DB under the CWD-relative .lovia/ dir — a
+# lovia-owned home, so it never collides with a generic ./.env another tool
+# might read, and (unlike a bare ~/.env) it stays tidy when launched from $HOME.
+CONFIG_DIR = Path(".lovia")
+
+
+def config_path() -> Path:
+    """Default path the wizard saves resolved config to (``.lovia/config.env``)."""
+    return CONFIG_DIR / "config.env"
 
 # Where a resolved value came from; shown in the startup summary and used to
 # decide what the interactive wizard still needs to ask and what to persist.
@@ -255,19 +268,45 @@ def _adopt_reported_window(conn: Connection, response: httpx.Response) -> None:
 # ------------------------------------------------------------ persistence -
 
 
+def _protect_config_dir(directory: Path) -> None:
+    """Create lovia's data dir, make it owner-only, and drop a ``*`` .gitignore.
+
+    The dir holds saved secrets and the chat DB, so it's ``0700`` where the OS
+    honours it (Windows ignores mode bits) and its whole contents are git-ignored
+    — never committed inside someone's repo."""
+    directory.mkdir(parents=True, exist_ok=True)
+    with suppress(OSError):  # best-effort; Windows ignores mode bits
+        directory.chmod(0o700)
+    gitignore = directory / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(
+            "# lovia data — secrets and chat history; never commit.\n*\n",
+            encoding="utf-8",
+        )
+
+
 def save_env_file(values: Mapping[str, str], path: Path | None = None) -> Path:
-    """Append plain ``KEY=value`` lines to ``./.env`` (created if missing).
+    """Append plain ``KEY=value`` lines to ``.lovia/config.env`` (created if missing).
 
     Deliberately append-only: no dedup or rewrite — python-dotenv's
     last-occurrence-wins parsing makes an appended value effective, and a key
-    already loaded from ``./.env`` is never offered for saving again.
+    already loaded is never offered for saving again. The file holds API keys,
+    so it's written owner-only (``0600``); when saving to the default location
+    the ``.lovia/`` dir is also git-ignored.
     """
-    path = path or Path(".env")
+    default = path is None
+    path = path or config_path()
+    if default:
+        _protect_config_dir(path.parent)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     # Patch a missing trailing newline so we never glue onto the last line.
     prefix = "" if not existing or existing.endswith("\n") else "\n"
     with path.open("a", encoding="utf-8") as fh:
         fh.write(prefix + "".join(f"{key}={value}\n" for key, value in values.items()))
+    with suppress(OSError):  # best-effort; Windows ignores mode bits
+        path.chmod(0o600)
     return path
 
 
@@ -318,7 +357,7 @@ def _run_wizard(
 
     say("")
     say("lovia needs a model endpoint to serve the web UI — answering here")
-    say("takes a few seconds, and can be saved to ./.env so you never retype it.")
+    say("takes a few seconds, and can be saved so you never retype it.")
     say(f"(non-interactive alternatives: {CONFIG_HINT})")
     say("")
 
@@ -469,15 +508,10 @@ def _offer_to_save(
         to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
     if not to_save:
         return
-    answer = input_fn("  Save to ./.env for next launches? [Y/n]: ").strip().lower()
-    if answer in ("", "y", "yes"):
-        save_env_file(to_save)
-        print("  saved — future launches in this directory read ./.env", file=out)
-        if any(key.endswith("_API_KEY") for key in to_save):
-            print(
-                "  tip: keep .env out of version control (add it to .gitignore)",
-                file=out,
-            )
+    answer = input_fn(f"  Save to {config_path()} for next launches? [Y/n]: ")
+    if answer.strip().lower() in ("", "y", "yes"):
+        saved = save_env_file(to_save)
+        print(f"  saved to {saved} — owner-only, git-ignored", file=out)
     else:
         print("  not saved; this configuration applies to this launch only", file=out)
 

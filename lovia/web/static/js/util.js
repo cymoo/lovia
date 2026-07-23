@@ -91,3 +91,14 @@ export function formatTimeSmart(ts) {
   if (d.getFullYear() === now.getFullYear()) return `${md} ${hm}`;
   return `${d.getFullYear()}-${md} ${hm}`;
 }
+
+// ---- Attachments -----------------------------------------------------------
+// Browser-renderable image extensions. Mirrors the server's PREVIEW_IMAGE_EXT
+// (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it can
+// carry scripts and is never served inline, so it's treated as a file here.
+export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico']);
+
+// True when a path's extension is a browser-renderable image (see IMAGE_EXT).
+export function isImagePath(path) {
+  return IMAGE_EXT.has((String(path).split('.').pop() || '').toLowerCase());
+}

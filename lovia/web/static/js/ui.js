@@ -164,6 +164,20 @@ export function showDialog({ body, actions, onClose, stack = false } = {}) {
     if (onClose) onClose(dialog.returnValue);
   });
 
+  // Click on the backdrop dismisses the dialog (Esc already does). The dialog
+  // box wraps its content exactly — padding lives on .dialog-content, the
+  // <dialog> has none — so a pointer event whose target is the <dialog> itself
+  // landed on the backdrop. Track the press origin so a text selection that
+  // begins inside an input and releases on the backdrop isn't read as a
+  // dismiss. Closing with no returnValue reads as cancel for prompt/confirm.
+  let pressedOnBackdrop = false;
+  dialog.addEventListener('pointerdown', (e) => {
+    pressedOnBackdrop = e.target === dialog;
+  });
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog && pressedOnBackdrop) dialog.close();
+  });
+
   dialog.showModal();
   return dialog;
 }

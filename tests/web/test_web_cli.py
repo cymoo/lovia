@@ -770,6 +770,31 @@ def test_load_env_files_source_map_and_precedence(
         os.environ.pop("LOVIA_TEST_B", None)
 
 
+def test_load_env_files_autoloads_lovia_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """.lovia/config.env is auto-loaded and wins over a legacy ./.env."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".lovia").mkdir()
+    (tmp_path / ".lovia" / "config.env").write_text(
+        "LOVIA_TEST_C=canonical\n", encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text(
+        "LOVIA_TEST_C=legacy\nLOVIA_TEST_D=legacy\n", encoding="utf-8"
+    )
+    monkeypatch.delenv("LOVIA_TEST_C", raising=False)
+    monkeypatch.delenv("LOVIA_TEST_D", raising=False)
+    try:
+        sources = cli.load_env_files(None)
+        assert os.getenv("LOVIA_TEST_C") == "canonical"  # canonical file wins
+        assert os.getenv("LOVIA_TEST_D") == "legacy"  # legacy ./.env still read
+        assert sources["LOVIA_TEST_C"] == "config.env"
+        assert sources["LOVIA_TEST_D"] == ".env"
+    finally:
+        os.environ.pop("LOVIA_TEST_C", None)
+        os.environ.pop("LOVIA_TEST_D", None)
+
+
 def test_main_reports_missing_api_key_when_not_a_tty(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -783,8 +808,8 @@ def test_main_reports_missing_api_key_when_not_a_tty(
     assert rc == 2
     err = capsys.readouterr().err
     assert "no API key configured" in err
-    # The hint names every configuration channel.
-    for channel in ("--api-key", "OPENAI_API_KEY", ".env"):
+    # The concise hint names the non-interactive channels (flags + env vars).
+    for channel in ("--api-key", "OPENAI_API_KEY"):
         assert channel in err
 
 

@@ -963,14 +963,16 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .turn .body {
   word-wrap: break-word;
   color: var(--ink);
-  font-size: 15px;
+  /* --chat-font-scale is the "Message text size" preference (settings.js);
+     unset it defaults to 1. */
+  font-size: calc(15px * var(--chat-font-scale, 1));
   line-height: 1.72;
 }
 .turn.user .body {
   white-space: pre-wrap;
   line-height: 1.6;
   color: var(--ink);
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--chat-font-scale, 1));
 }
 .turn .body > :first-child {
   margin-top: 0;
@@ -2429,6 +2431,12 @@ dialog.custom-dialog::backdrop {
 }
 .all-chats-more {
   align-self: center;
+}
+/* `.btn` sets display:inline-flex (author origin), which beats the UA
+   `[hidden]{display:none}` — so the JS `moreBtn.hidden = true` wouldn't hide it
+   without this. Same override the export menu / attach controls already use. */
+.all-chats-more[hidden] {
+  display: none;
 }
 
 /* ---- Schedules -------------------------------------------------------------------------- */

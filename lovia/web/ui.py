@@ -46,7 +46,7 @@ def build_ui_router(
             examples = [empty_examples]
         else:
             examples = list(empty_examples) if empty_examples else []
-        return _TEMPLATES.TemplateResponse(
+        response = _TEMPLATES.TemplateResponse(
             request,
             "index.html",
             {
@@ -61,5 +61,11 @@ def build_ui_router(
                 },
             },
         )
+        # The shell must always revalidate so a new build's version-stamped
+        # asset URLs (see `_asset_token` in app.py) are picked up right after an
+        # upgrade, instead of a heuristically-cached shell pointing at the old,
+        # now-404 prefix.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     return router

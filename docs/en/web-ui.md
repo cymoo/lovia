@@ -13,8 +13,9 @@ pip install "lovia[web]"
 lovia web
 ```
 
-Open `http://127.0.0.1:8000`. On first launch the CLI asks for missing model
-configuration, verifies it, and can save it to `./.env`.
+Open `http://127.0.0.1:8000`. On first launch the CLI asks for whatever model
+configuration is missing, checks it against the endpoint, and can save it to
+`.lovia/config.env` (owner-only, git-ignored) so it is never retyped.
 
 The default Agent includes `Todo`, optional Skills from `./skills`, Memory in
 `./.lovia/memory`, time and HTTP Tools, web search (Tavily when
@@ -54,43 +55,35 @@ lovia web --app app:assistant
 `--app MODULE:ATTR` accepts one Agent or a `{name: agent}` mapping. For Python
 deployment and ASGI integration, see [Web server](web-server.md).
 
-## Attachments — images and files
+## Images and files
 
-The composer's **+** button (also drag-drop or paste) uploads images and files
-into the Workspace's `uploads/` directory. Each upload is referenced from your
-message by its workspace path, so the Agent can open it with its file tools —
-this works with any model, and the uploads also appear in the Files panel.
-Clicking an attachment keeps you in the app: files open in the Files panel and
-images open in a lightbox, rather than a new browser tab or a download.
+Attachments (the composer's **+**, or drag-drop, or paste) are uploaded into the
+Workspace's `uploads/` directory and referenced from your message by path, so
+the Agent can open them with its file tools whatever model you run —
+`--no-workspace` therefore hides the button.
 
 Images additionally go **inline** to models that can see them:
 
 - **Vision-capable main model.** Official `api.openai.com` / `api.anthropic.com`
-  hosts are assumed multimodal. For any other endpoint (a Qwen-VL / DashScope or
-  vLLM deployment, or an Anthropic-compatible gateway that may front a text-only
-  model), declare it with `LOVIA_VISION=1` so images are sent inline.
-- **Text-only main model.** Set `LOVIA_VISION_MODEL=<vendor>:<model>` (e.g.
-  `openai:qwen3.7-plus`) to register a `see_image` tool: the main model
-  delegates "look at this image" to that vision model and gets back a text
-  answer, so the image bytes never enter the main transcript. The `vendor:`
-  prefix picks the API dialect — same rule as `LOVIA_MODEL`: `openai:`/bare is
-  OpenAI-compatible, `anthropic:` is Anthropic. Its endpoint and key default to
-  the `OPENAI_*` / `ANTHROPIC_*` the prefix routes to; set
-  `LOVIA_VISION_BASE_URL` / `LOVIA_VISION_API_KEY` when the vision model lives on
-  a different endpoint than your main model.
+  hosts are assumed multimodal. Declare any other endpoint (a Qwen-VL / DashScope
+  or vLLM deployment, or a gateway that may front a text-only model) with
+  `LOVIA_VISION=1`.
+- **Text-only main model.** `LOVIA_VISION_MODEL=<vendor>:<model>` (e.g.
+  `openai:qwen3.7-plus`) registers a `see_image` Tool: the main model delegates
+  "look at this image" and gets back a text answer, so the image bytes never
+  enter the main transcript. The `vendor:` prefix picks the API dialect exactly
+  as in `LOVIA_MODEL`, and the endpoint and key default to the `OPENAI_*` /
+  `ANTHROPIC_*` pair it routes to — override with `LOVIA_VISION_BASE_URL` /
+  `LOVIA_VISION_API_KEY` when the vision model lives elsewhere.
 
-Attachments require a Workspace (the same switch as the Files panel), so
-`--no-workspace` hides the **+** button.
-
-Uploads are capped at `LOVIA_MAX_UPLOAD_MB` MiB (default 25) and limited to a
-built-in allowlist of common image, document, data, and code extensions. Set
-`LOVIA_UPLOAD_ALLOWED_EXT` (comma/space-separated extensions, or `*` for any) to
-override it.
+Uploads are capped at 25 MiB (`LOVIA_MAX_UPLOAD_MB`) and limited to a built-in
+allowlist of common image, document, data, and code extensions
+(`LOVIA_UPLOAD_ALLOWED_EXT`, comma/space-separated, or `*` for any).
 
 ## Useful CLI options
 
 Every option resolves in this order: command-line flag, environment variable,
-`./.env` (or `--env-file`), then default.
+`.lovia/config.env`, `./.env` (or the `--env-file` files), then the default.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
@@ -101,13 +94,14 @@ Every option resolves in this order: command-line flag, environment variable,
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |
 | `--skills-dir` | `LOVIA_SKILLS_DIR` | `./skills` when present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
-| `--workspace` / `--readonly` / `--no-workspace` | `LOVIA_WORKSPACE` | `.` in coding mode |
+| `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--env-file` | — | `./.env` when present |
+| `--env-file` | — | `.lovia/config.env`, then `./.env` |
 
-Run `lovia web --help` for the full list, including TLS, Provider timeout,
-context-window, and proxy options.
+`lovia web --help` lists them all in four groups: model (including the context
+window), agent, server, and advanced — output tokens, Provider timeout and
+retries, proxy handling, and log level.
 
 ## Closing or refreshing the page
 

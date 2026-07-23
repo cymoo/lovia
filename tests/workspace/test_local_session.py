@@ -690,6 +690,68 @@ async def test_workspace_instructions_venv_guidance_follows_shell(tmp_path) -> N
     assert ".venv" not in Workspace.local(str(tmp_path), mode="readonly").instructions()
 
 
+async def test_workspace_instructions_default_to_pip_guidance(tmp_path) -> None:
+    # No lockfile/marker: the plain pip + 'python -m venv' story, and neither
+    # the uv nor the poetry guidance block.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "python -m venv" in text
+    assert "uv-managed" not in text
+    assert "poetry-managed" not in text
+
+
+async def test_workspace_instructions_ignore_lookalike_markers(tmp_path) -> None:
+    # A '[tool.uvicorn]' table and a commented mention of the marker must not be
+    # read as uv — detection is line-anchored on the real table header.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'x'\n\n"
+        "# we don't use [tool.uv] here\n"
+        "[tool.uvicorn]\nhost = '0.0.0.0'\n"
+    )
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "uv-managed" not in text
+    assert "python -m venv" in text
+
+
+async def test_workspace_instructions_detect_uv_subtable(tmp_path) -> None:
+    # Only a '[tool.uv.sources]' sub-table, no bare '[tool.uv]' — still uv.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'x'\n\n[tool.uv.sources]\nfoo = { path = '.' }\n"
+    )
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "uv pip install" in text
+
+
+async def test_workspace_instructions_detect_uv(tmp_path) -> None:
+    # A uv lockfile flips the guidance to uv's installers and warns off pip,
+    # which uv venvs omit — the whole point of the flavor split.
+    (tmp_path / "uv.lock").write_text("")
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "uv pip install" in text
+    assert "uv-managed" in text
+    # The pip/stdlib-venv story that would dead-end here must be gone.
+    assert "python -m venv" not in text
+    assert "poetry" not in text
+
+
+async def test_workspace_instructions_detect_uv_via_pyproject_marker(tmp_path) -> None:
+    # No lockfile yet, but a [tool.uv] table is enough to know the flavor.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'x'\n\n[tool.uv]\ndev-dependencies = []\n"
+    )
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "uv pip install" in text
+    assert "python -m venv" not in text
+
+
+async def test_workspace_instructions_detect_poetry(tmp_path) -> None:
+    (tmp_path / "poetry.lock").write_text("")
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "poetry-managed" in text
+    assert "poetry add" in text
+    assert "python -m venv" not in text
+    assert "uv pip install" not in text
+
+
 async def test_workspace_inherit_env_defaults_off(tmp_path) -> None:
     # Every mode defaults to the minimal allowlist; inheriting the host env is
     # opt-in (even for trusted) so host secrets never leak unless asked for.

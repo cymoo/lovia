@@ -692,6 +692,7 @@ function maybeReloadViewing(touchedPath) {
 }
 
 // ---- Init -----------------------------------------------------------------------
+/** Wire up the Files panel: open/close, Recent/Browse tabs, the viewer, and workspace-change listeners. */
 export function initFiles() {
   els.panel = document.getElementById('files-panel');
   els.btn = document.getElementById('files-btn');

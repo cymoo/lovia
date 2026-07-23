@@ -45,9 +45,9 @@ async function openMemoryDialog() {
       </div>
     </div>`;
 
-  const editor = panel.querySelector('.memory-editor');
+  const editor = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.memory-editor'));
   const meter = panel.querySelector('.memory-meter');
-  const saveBtn = panel.querySelector('.memory-save');
+  const saveBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.memory-save'));
   let budget = 0;
 
   const dialog = showDialog({ body: panel });
@@ -106,6 +106,7 @@ async function openMemoryDialog() {
   saveBtn.addEventListener('click', save);
 }
 
+/** Wire up the Memory editor button and keep its visibility in sync with the active agent. */
 export function initMemory() {
   btn = document.getElementById('memory-btn');
   if (!btn) return;

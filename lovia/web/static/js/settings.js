@@ -24,8 +24,11 @@ function textSizePref() {
   return v === 'sm' || v === 'lg' ? v : 'md';
 }
 
-// Apply the saved (or given) size to the document. Exported so boot can set it
-// before the first paint, alongside the theme.
+/**
+ * Apply the saved (or given) message text size to the document. Exported so boot
+ * can set it before the first paint, alongside the theme.
+ * @param {'sm' | 'md' | 'lg' | string} [size]
+ */
 export function applyTextSize(size = textSizePref()) {
   const root = document.documentElement;
   if (size === 'md') root.style.removeProperty('--chat-font-scale');
@@ -33,14 +36,17 @@ export function applyTextSize(size = textSizePref()) {
 }
 
 // ---- Enter-to-send --------------------------------------------------------
-// True (default): Enter sends, Shift+Enter inserts a newline. False: Enter
-// inserts a newline and ⌘/Ctrl+Enter sends — friendlier for multi-line drafts.
+/**
+ * True (default): Enter sends, Shift+Enter inserts a newline. False: Enter
+ * inserts a newline and ⌘/Ctrl+Enter sends — friendlier for multi-line drafts.
+ * @returns {boolean}
+ */
 export function enterToSend() {
   return localStorage.getItem(ENTER_KEY) !== '0';
 }
 
 // ---- Desktop notifications ------------------------------------------------
-// True when the user opted in AND the browser granted permission.
+/** @returns {boolean} True when the user opted in AND the browser granted permission. */
 export function notificationsEnabled() {
   return (
     localStorage.getItem(NOTIF_KEY) === '1' &&
@@ -50,13 +56,16 @@ export function notificationsEnabled() {
 }
 
 // ---- Completion sound -----------------------------------------------------
-// Off by default (like notifications). A short synthesized chime — no asset to
-// bundle — that degrades silently where Web Audio is unavailable or blocked.
+/** @returns {boolean} Whether the completion sound is enabled (off by default). */
 export function soundEnabled() {
   return localStorage.getItem(SOUND_KEY) === '1';
 }
 
 let _audioCtx = null;
+/**
+ * Play the completion chime, if enabled. A short synthesized sound — no bundled
+ * asset — that degrades silently where Web Audio is unavailable or blocked.
+ */
 export function playCompletionSound() {
   if (!soundEnabled()) return;
   try {

@@ -16,7 +16,12 @@ function container() {
   return el;
 }
 
-// type: 'info' | 'success' | 'error'. Click to dismiss; auto-dismisses after `timeout`.
+/**
+ * Show a transient notification. Click to dismiss; auto-dismisses after `timeout`.
+ * @param {string} message
+ * @param {{ type?: 'info' | 'success' | 'error', timeout?: number }} [opts]
+ * @returns {HTMLElement} The toast element.
+ */
 export function toast(message, { type = 'info', timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;

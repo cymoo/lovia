@@ -47,7 +47,13 @@ const PATHS = {
   code: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
 };
 
-// Return the markup for `name` as a sized <svg> string (innerHTML-ready).
+/**
+ * Return the markup for icon `name` as a sized `<svg>` string (innerHTML-ready).
+ * An unknown name yields an empty (invisible) glyph.
+ * @param {string} name Icon key (see ICONS / lucide names).
+ * @param {{ size?: number, stroke?: number, cls?: string }} [opts]
+ * @returns {string}
+ */
 export function icon(name, { size = 18, stroke = 2, cls = '' } = {}) {
   const inner = PATHS[name] || '';
   const klass = cls ? ` class="${cls}"` : '';

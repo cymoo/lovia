@@ -11,7 +11,9 @@ import { formatDateTime, formatTimeSmart } from './util.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const chatTitleEl = document.getElementById('chat-title');
-const sessionSearch = document.getElementById('session-search');
+const sessionSearch = /** @type {HTMLInputElement | null} */ (
+  document.getElementById('session-search')
+);
 const exportBtn = document.getElementById('export-btn');
 const exportWrap = document.getElementById('export-wrap');
 
@@ -132,9 +134,12 @@ function _schedulePoll() {
 }
 
 // ---- /api/events lifecycle stream ----------------------------------------
-// One EventSource replaces the poll loop. No replay semantics: every open
-// (first connect AND each auto-reconnect) refetches one snapshot, then the
-// stream keeps it current — a disconnect gap is closed by the next snapshot.
+/**
+ * Subscribe to the server's /api/events lifecycle stream — one EventSource that
+ * replaces the poll loop. No replay semantics: every open (first connect AND
+ * each auto-reconnect) refetches one snapshot, then the stream keeps it current
+ * — a disconnect gap is closed by the next snapshot.
+ */
 export function initEventStream() {
   if (typeof EventSource === 'undefined') return; // keep polling instead
   const refresh = () => loadSessions(sessionSearch?.value.trim() || '');
@@ -189,6 +194,7 @@ async function stopRun(sid) {
 }
 
 // ---- Load ----------------------------------------------------------------
+/** @param {string} [query] Filter substring; empty lists the most recent. */
 export async function loadSessions(query = '') {
   try {
     const [sessions, runs] = await Promise.all([
@@ -264,7 +270,7 @@ function renderSessions() {
     main.title = s.title || s.id;
     main.innerHTML = `<div class="session-title"></div><div class="session-meta"></div>`;
     main.querySelector('.session-title').textContent = s.title || t('session.newChat');
-    const meta = main.querySelector('.session-meta');
+    const meta = /** @type {HTMLElement} */ (main.querySelector('.session-meta'));
     meta.textContent = formatTimeSmart(s.updated_at);
     meta.title = formatDateTime(s.updated_at);
     // Which brain a chat belongs to — only worth pixels when there's a choice.
@@ -409,6 +415,7 @@ async function togglePin(s) {
   renderSessions();
 }
 
+/** @param {string} id */
 export async function deleteSession(id) {
   // Name what's about to disappear — a bare "this chat?" invites misclicks.
   // Untitled chats use the same display fallback the sidebar row shows.
@@ -433,6 +440,7 @@ export async function deleteSession(id) {
   await loadSessions();
 }
 
+/** @param {string} id */
 export async function switchSession(id) {
   if (store.sessionId === id) return;
   // Detach from any in-flight stream first — WITHOUT cancelling it. The run
@@ -449,7 +457,9 @@ export async function switchSession(id) {
   if (emptyState) emptyState.remove();
 
   transcript.replaceChildren(
-    document.getElementById('tmpl-skeleton').content.cloneNode(true),
+    /** @type {HTMLTemplateElement} */ (
+      document.getElementById('tmpl-skeleton')
+    ).content.cloneNode(true),
   );
   renderSessions();
 
@@ -482,6 +492,7 @@ export async function switchSession(id) {
   }
 }
 
+/** Clear the active session and show the empty new-chat state. */
 export function clearChat() {
   store.sessionId = null;
   store.syncURL(null);
@@ -507,7 +518,7 @@ function openAllSessionsDialog(query = '') {
     <div class="all-chats-list" role="list"></div>
     <button type="button" class="btn btn-ghost btn-sm all-chats-more" hidden>${t('nav.loadMore')}</button>`;
   const listEl = panel.querySelector('.all-chats-list');
-  const moreBtn = panel.querySelector('.all-chats-more');
+  const moreBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.all-chats-more'));
   let offset = 0;
   let loading = false;
 
@@ -567,6 +578,7 @@ function openAllSessionsDialog(query = '') {
 }
 
 // ---- Export --------------------------------------------------------------
+/** @param {'md' | 'html' | string} [format] */
 export async function exportSession(format = 'md') {
   if (!store.sessionId) return;
   const title = store.sessions.find((s) => s.id === store.sessionId)?.title || '';
@@ -605,14 +617,14 @@ function initExportMenu() {
     e.stopPropagation();
     menu.hidden ? open() : close();
   });
-  menu.querySelectorAll('.export-menu-item').forEach((it) => {
+  menu.querySelectorAll('.export-menu-item').forEach((/** @type {HTMLElement} */ it) => {
     it.addEventListener('click', () => {
       close();
       exportSession(it.dataset.format);
     });
   });
   document.addEventListener('click', (e) => {
-    if (!menu.hidden && !wrap.contains(e.target)) close();
+    if (!menu.hidden && !wrap.contains(/** @type {Node} */ (e.target))) close();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !menu.hidden) close();
@@ -621,6 +633,7 @@ function initExportMenu() {
 
 // ---- Search --------------------------------------------------------------
 let _searchTimer = null;
+/** Wire up the sidebar chat filter (debounced input → reload). */
 export function initSearch() {
   if (!sessionSearch) return;
   sessionSearch.addEventListener('input', () => {
@@ -630,6 +643,7 @@ export function initSearch() {
 }
 
 // ---- Init ----------------------------------------------------------------
+/** Boot the session sidebar: initial load, search, and background-run polling/notifications. */
 export function initSessions() {
   // Catch-up runs after the first session load so titles are resolvable.
   loadSessions().then(checkMissedRuns);

@@ -305,6 +305,7 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
   return item;
 }
 
+/** Open the Schedules dialog: create, edit, list, run, and delete scheduled runs. */
 export async function openSchedulesDialog() {
   const panel = document.createElement('div');
   panel.className = 'schedules-panel';
@@ -331,13 +332,13 @@ export async function openSchedulesDialog() {
     <div class="sched-list"></div>`;
 
   const form = panel.querySelector('.sched-form');
-  const input = panel.querySelector('.sched-input');
-  const agentSel = panel.querySelector('.sched-agent');
-  const kindSel = panel.querySelector('.sched-kind');
+  const input = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.sched-input'));
+  const agentSel = /** @type {HTMLSelectElement} */ (panel.querySelector('.sched-agent'));
+  const kindSel = /** @type {HTMLSelectElement} */ (panel.querySelector('.sched-kind'));
   const exprWrap = panel.querySelector('.sched-expr-wrap');
   const hintEl = panel.querySelector('.sched-hint');
   const submitBtn = panel.querySelector('.sched-form [type="submit"]');
-  const cancelEditBtn = panel.querySelector('.sched-cancel-edit');
+  const cancelEditBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.sched-cancel-edit'));
   const listEl = panel.querySelector('.sched-list');
   let editingId = null; // non-null → the form saves an existing schedule
 
@@ -460,6 +461,7 @@ export async function openSchedulesDialog() {
   refresh();
 }
 
+/** Wire up the Schedules button in the sidebar. */
 export function initSchedules() {
   document
     .getElementById('schedules-btn')

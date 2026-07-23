@@ -148,8 +148,14 @@ function flushRender(force = false) {
 }
 
 // ---- Templates ---------------------------------------------------------
+/**
+ * Deep-clone a `<template>`'s first element child.
+ * @param {string} id Template element id.
+ * @returns {HTMLElement}
+ */
 function cloneTemplate(id) {
-  return document.getElementById(id).content.firstElementChild.cloneNode(true);
+  const tmpl = /** @type {HTMLTemplateElement} */ (document.getElementById(id));
+  return /** @type {HTMLElement} */ (tmpl.content.firstElementChild.cloneNode(true));
 }
 
 function makeTurn(role, ts) {
@@ -425,7 +431,7 @@ function updateRegenButton() {
   const last = turns[turns.length - 1];
   if (!last || !last.classList.contains('assistant')) return;
   const users = transcriptEl.querySelectorAll('.turn.user[data-user-turn]');
-  const lastUser = users[users.length - 1];
+  const lastUser = /** @type {HTMLElement} */ (users[users.length - 1]);
   if (!lastUser) return;
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -442,6 +448,12 @@ function updateRegenButton() {
 }
 
 // ---- Render helpers ----------------------------------------------------
+/**
+ * Append (or insert) a user message turn in the transcript.
+ * @param {string} text
+ * @param {{ queued?: boolean, before?: HTMLElement | null, attachments?: any[] | null }} [opts]
+ * @returns {HTMLElement | null} The turn element, or null if the transcript is absent.
+ */
 export function appendUserTurn(text, { queued = false, before = null, attachments = null } = {}) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return null;
@@ -746,7 +758,7 @@ function setTodoCollapsed(collapsed) {
   const panel = document.getElementById('todo-panel');
   store.todoCollapsed = collapsed;
   panel?.classList.toggle('collapsed', collapsed);
-  const toggle = panel?.querySelector('.todo-toggle');
+  const toggle = /** @type {HTMLElement | null} */ (panel?.querySelector('.todo-toggle'));
   const icon = panel?.querySelector('.todo-toggle-icon');
   toggle?.setAttribute('aria-expanded', String(!collapsed));
   if (toggle) toggle.title = collapsed ? t('todo.show') : t('todo.hide');
@@ -938,7 +950,9 @@ function updateContextMeter(usage) {
   el.title = detail;
   el.setAttribute('aria-label', detail); // keep assistive tech in sync
   // pathLength="100" on the circle → the dash array speaks percentages.
-  el.querySelector('.context-ring-fill').style.strokeDasharray = `${pct ?? 0} 100`;
+  /** @type {SVGElement} */ (
+    el.querySelector('.context-ring-fill')
+  ).style.strokeDasharray = `${pct ?? 0} 100`;
   if (!document.getElementById('context-popover')?.hidden) fillContextPopover();
 }
 
@@ -997,6 +1011,7 @@ function toggleContextPopover(open) {
   ring.setAttribute('aria-expanded', String(show));
 }
 
+/** Wire up the context-usage ring in the top bar and its details popover. */
 export function initContextRing() {
   const ring = document.getElementById('context-ring');
   const pop = document.getElementById('context-popover');
@@ -1006,7 +1021,7 @@ export function initContextRing() {
     toggleContextPopover();
   });
   document.addEventListener('click', (e) => {
-    if (!pop.hidden && !pop.contains(e.target)) toggleContextPopover(false);
+    if (!pop.hidden && !pop.contains(/** @type {Node} */ (e.target))) toggleContextPopover(false);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !pop.hidden) toggleContextPopover(false);
@@ -1126,6 +1141,7 @@ function appendRetry() {
 // mean nothing to most users. Map the recognizable ones onto a sentence that
 // says what happened and what to do; the original text stays visible in
 // small print — friendly must never mean information destroyed.
+/** @type {Array<[RegExp, string]>} */
 const ERROR_HINTS = [
   // Before the provider-auth pattern: the server's own 401 mentions "server
   // token" precisely so it doesn't read as an API-key problem.
@@ -1364,6 +1380,10 @@ function alignHistoryStart(idx) {
   return idx;
 }
 
+/**
+ * Replace the transcript with a session's history entries (paged internally).
+ * @param {any[]} entries Transcript entries from the session API.
+ */
 export function renderHistory(entries) {
   _historyEntries = Array.isArray(entries) ? entries : [];
   _historyStart = alignHistoryStart(_historyEntries.length - HISTORY_PAGE);
@@ -1611,6 +1631,7 @@ scrollBtn?.addEventListener('click', () => {
   scrollDown();
 });
 
+/** Render the empty-state (welcome) view — title, description, example prompts — into the transcript. */
 export function renderEmptyState() {
   const transcript = document.getElementById('transcript');
   if (!transcript) return;
@@ -1879,8 +1900,8 @@ async function pollForTitle(sessionId) {
 
 // ---- Streaming ---------------------------------------------------------
 const stopBtn = document.getElementById('stop');
-const composer = document.getElementById('composer');
-const promptEl = document.getElementById('prompt');
+const composer = /** @type {HTMLFormElement | null} */ (document.getElementById('composer'));
+const promptEl = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('prompt'));
 let _streamAbortController = null;
 
 // Messages are sent with Enter, so there's no send button. While a run streams,
@@ -1909,6 +1930,13 @@ function exitStreamingUI() {
   updateRegenButton();
 }
 
+/**
+ * Send `message` (with optional attachments) and stream the assistant's reply
+ * into a new turn.
+ * @param {string} message
+ * @param {any[] | null} [attachments] Prepared attachment descriptors.
+ * @returns {Promise<void>}
+ */
 export async function runStream(message, attachments = null) {
   store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
@@ -2007,6 +2035,12 @@ export async function runStream(message, attachments = null) {
   }
 }
 
+/**
+ * Re-attach to an in-progress run for `sessionId` and stream its remaining
+ * output into a fresh assistant turn.
+ * @param {string} sessionId
+ * @returns {Promise<void>}
+ */
 export async function runReconnect(sessionId) {
   enterStreamingUI();
   startAssistantTurn();
@@ -2071,6 +2105,7 @@ export async function runReconnect(sessionId) {
   }
 }
 
+/** Reset the chat view to the empty new-session state; detaches from any live run (which keeps streaming server-side). */
 export function resetChatForNewSession() {
   detachStream(); // keep any live run going server-side; just disconnect from it
   resetChatView();
@@ -2079,13 +2114,15 @@ export function resetChatForNewSession() {
   _resumeAutoScroll(); // after the swap, so the reset's scroll event is a no-op
 }
 
-// Detach the client from the in-flight run WITHOUT cancelling it server-side.
-// The supervised run keeps streaming and stays reachable (its sidebar dot
-// persists), so clicking back into the session reconnects to it. Bumps the
-// epoch so the live runStream/runReconnect loop bails and its catch/finally
-// no-op — the view we're moving to now owns the DOM — aborts the SSE fetch (the
-// server treats the dropped connection as a detach), and returns the composer
-// to its idle state. Contrast cancelStream(), which tells the server to stop.
+/**
+ * Detach the client from the in-flight run WITHOUT cancelling it server-side.
+ * The supervised run keeps streaming and stays reachable (its sidebar dot
+ * persists), so clicking back into the session reconnects to it. Bumps the
+ * epoch so the live runStream/runReconnect loop bails and its catch/finally
+ * no-op — the view we're moving to now owns the DOM — aborts the SSE fetch (the
+ * server treats the dropped connection as a detach), and returns the composer
+ * to its idle state. Contrast cancelStream(), which tells the server to stop.
+ */
 export function detachStream() {
   store.chatEpoch += 1;
   if (_streamAbortController) {
@@ -2107,6 +2144,11 @@ export function detachStream() {
   if (store.streaming) exitStreamingUI();
 }
 
+/**
+ * Cancel the active run server-side (contrast detachStream, which only
+ * disconnects) and settle the streaming UI.
+ * @returns {Promise<void>}
+ */
 export async function cancelStream() {
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
@@ -2117,7 +2159,7 @@ export async function cancelStream() {
 }
 
 // ---- Composer ----------------------------------------------------------
-const sendBtn = document.getElementById('send');
+const sendBtn = /** @type {HTMLButtonElement | null} */ (document.getElementById('send'));
 const autoresize = () => {
   if (!promptEl) return;
   promptEl.style.height = 'auto';
@@ -2145,7 +2187,7 @@ function updateSendEnabled() {
 }
 
 function syncAttachButton() {
-  const btn = document.getElementById('attach');
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById('attach'));
   if (!btn) return;
   const ok = attachEnabled();
   btn.hidden = !ok;
@@ -2318,6 +2360,7 @@ function splitAttachmentNote(text) {
   return { text: text.slice(0, m.index).trimEnd(), attachments };
 }
 
+/** Wire up the composer: submit, Enter-to-send behavior, attachments, and drag-and-drop. */
 export function initComposer() {
   initContextRing();
 
@@ -2350,7 +2393,7 @@ export function initComposer() {
       composer.classList.add('drag-over');
     });
     composer.addEventListener('dragleave', (e) => {
-      if (!composer.contains(e.relatedTarget)) composer.classList.remove('drag-over');
+      if (!composer.contains(/** @type {Node} */ (e.relatedTarget))) composer.classList.remove('drag-over');
     });
     composer.addEventListener('drop', (e) => {
       composer.classList.remove('drag-over');
@@ -2389,7 +2432,7 @@ export function initComposer() {
   // Example prompts (server-rendered or renderEmptyState's) fill the
   // composer for editing — clicking must not fire a send behind your back.
   document.getElementById('transcript')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.empty-example');
+    const btn = e.target instanceof Element ? e.target.closest('.empty-example') : null;
     if (!btn || !promptEl) return;
     promptEl.value = btn.textContent;
     autoresize();

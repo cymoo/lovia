@@ -80,7 +80,9 @@ function syncAgentTooltip(select) {
 }
 
 async function loadAgents() {
-  const select = document.getElementById('agent-select');
+  const select = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById('agent-select')
+  );
   const switcher = document.getElementById('agent-switcher');
   try {
     store.agents = await api.listAgents();
@@ -126,7 +128,9 @@ store.on('sync-agent', (name) => {
   if (!name || name === store.agent) return;
   if (!store.agents.some((a) => a.name === name)) return; // no longer served
   store.agent = name;
-  const select = document.getElementById('agent-select');
+  const select = /** @type {HTMLSelectElement | null} */ (
+    document.getElementById('agent-select')
+  );
   if (select) {
     select.value = name;
     syncAgentTooltip(select);
@@ -138,10 +142,14 @@ store.on('sync-agent', (name) => {
 store.on('render-history', (entries) => renderHistory(entries));
 
 store.on('retry', () => {
-  const promptEl = document.getElementById('prompt');
+  const promptEl = /** @type {HTMLTextAreaElement | null} */ (
+    document.getElementById('prompt')
+  );
   if (store.lastMessage && promptEl) {
     promptEl.value = store.lastMessage;
-    document.getElementById('composer')?.requestSubmit();
+    /** @type {HTMLFormElement | null} */ (
+      document.getElementById('composer')
+    )?.requestSubmit();
   }
 });
 
@@ -211,7 +219,9 @@ function initKeyboardShortcuts() {
     const key = e.key.toLowerCase();
     if (key === 'k') {
       e.preventDefault(); // focus the chat filter
-      const search = document.getElementById('session-search');
+      const search = /** @type {HTMLInputElement | null} */ (
+        document.getElementById('session-search')
+      );
       search?.focus();
       search?.select();
     } else if (key === 'o' && e.shiftKey) {

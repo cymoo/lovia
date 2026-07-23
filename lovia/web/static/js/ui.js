@@ -11,6 +11,7 @@ import { icon } from './icons.js';
 const THEME_KEY = 'lovia-theme';
 const _dark = window.matchMedia('(prefers-color-scheme: dark)');
 
+/** @returns {'system' | 'light' | 'dark'} The stored theme preference. */
 export function themePref() {
   const saved = localStorage.getItem(THEME_KEY);
   return saved === 'light' || saved === 'dark' ? saved : 'system';
@@ -32,7 +33,9 @@ function syncThemeColor() {
   document
     .querySelectorAll('meta[name="theme-color"][media]')
     .forEach((m) => m.remove());
-  let meta = document.querySelector('meta[name="theme-color"]');
+  let meta = /** @type {HTMLMetaElement | null} */ (
+    document.querySelector('meta[name="theme-color"]')
+  );
   if (!meta) {
     meta = document.createElement('meta');
     meta.name = 'theme-color';
@@ -48,6 +51,10 @@ function applyResolved(theme) {
   syncThemeColor();
 }
 
+/**
+ * Persist a theme preference and apply the resolved light/dark theme live.
+ * @param {'system' | 'light' | 'dark' | string} pref
+ */
 export function setThemePref(pref) {
   localStorage.setItem(THEME_KEY, pref);
   applyResolved(resolveTheme(pref));
@@ -102,8 +109,11 @@ function setSidebarCollapsed(collapsed) {
   syncSidebar();
 }
 
-// The Files panel claims the sidebar's space while open on a tight viewport
-// and releases it on close.
+/**
+ * The Files panel claims the sidebar's space while open on a tight viewport
+ * and releases it on close.
+ * @param {boolean} claimed
+ */
 export function setSidebarAutoCollapsed(claimed) {
   sidebarAutoCollapsed = claimed;
   syncSidebar();
@@ -126,11 +136,27 @@ export function initSidebarToggle() {
 }
 
 // ---- Native Dialog -----------------------------------------------------
-// `stack: true` layers the dialog on top of an already-open one (a confirm
-// inside an editor) instead of replacing it.
+/**
+ * @typedef {object} DialogOptions
+ * @property {string | HTMLElement} [body] Dialog body — a string is inserted as
+ *   plain text, an element as-is (use an element when you need markup).
+ * @property {string | HTMLElement} [actions] Footer action row, same rule as `body`.
+ * @property {(returnValue: string) => void} [onClose] Called with the dialog's
+ *   `returnValue` after it closes.
+ * @property {boolean} [stack] Layer on top of an already-open dialog (a confirm
+ *   inside an editor) instead of replacing it.
+ */
+
+/**
+ * Open a modal `<dialog>`. Backdrop click and Esc both dismiss it.
+ * @param {DialogOptions} [opts]
+ * @returns {HTMLDialogElement} The live dialog; call `.close(returnValue)` to dismiss.
+ */
 export function showDialog({ body, actions, onClose, stack = false } = {}) {
   if (!stack) {
-    const existing = document.querySelector('dialog.custom-dialog');
+    const existing = /** @type {HTMLDialogElement | null} */ (
+      document.querySelector('dialog.custom-dialog')
+    );
     if (existing) existing.close();
   }
 
@@ -182,6 +208,11 @@ export function showDialog({ body, actions, onClose, stack = false } = {}) {
   return dialog;
 }
 
+/**
+ * A modal OK/Cancel confirm.
+ * @param {string} message
+ * @returns {Promise<boolean>} Resolves true on OK, false on Cancel/Esc/backdrop.
+ */
 export function confirmDialog(message) {
   return new Promise((resolve) => {
     const body = document.createElement('p');
@@ -213,11 +244,18 @@ export function confirmDialog(message) {
   });
 }
 
-// Resolves to the entered string on Save/Enter (possibly ''), or null on
-// Cancel/Esc — an empty submission is a real answer ("clear it"), so the two
-// must stay distinguishable. The sentinel returnValue carries the ok/cancel
-// bit; the value itself rides in `submitted` (returnValue coerces everything
-// to string, which would fold null and "null" together).
+/**
+ * A modal single-line text prompt.
+ *
+ * Resolves to the entered string on Save/Enter (possibly ''), or null on
+ * Cancel/Esc — an empty submission is a real answer ("clear it"), so the two
+ * must stay distinguishable. The sentinel returnValue carries the ok/cancel
+ * bit; the value itself rides in `submitted` (returnValue coerces everything
+ * to string, which would fold null and "null" together).
+ * @param {string} message Prompt shown above the input.
+ * @param {string} [defaultValue] Pre-filled input value.
+ * @returns {Promise<string | null>} Entered text, or null if cancelled.
+ */
 export function promptDialog(message, defaultValue = '') {
   return new Promise((resolve) => {
     const body = document.createElement('div');
@@ -268,6 +306,12 @@ export function promptDialog(message, defaultValue = '') {
 }
 
 // ---- Clipboard ---------------------------------------------------------
+/**
+ * Copy text to the clipboard, falling back to a hidden textarea + execCommand
+ * where the async Clipboard API is unavailable or blocked.
+ * @param {string} text
+ * @returns {Promise<boolean>} True once copied.
+ */
 export async function copyToClipboard(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -286,9 +330,13 @@ export async function copyToClipboard(text) {
 }
 
 // ---- Image lightbox ----------------------------------------------------
-// A focused, in-app viewer for chat-attached images: click a thumbnail to see
-// it large instead of leaving for a new tab. Built on <dialog> so Esc, the
-// backdrop, and focus handling come for free.
+/**
+ * A focused, in-app viewer for chat-attached images: click a thumbnail to see
+ * it large instead of leaving for a new tab. Built on `<dialog>` so Esc, the
+ * backdrop, and focus handling come for free.
+ * @param {string} src Image URL.
+ * @param {{ alt?: string, downloadHref?: string | null }} [opts]
+ */
 export function openImageLightbox(src, { alt = '', downloadHref = null } = {}) {
   const dialog = document.createElement('dialog');
   // The app targets <dialog>-capable browsers (see showDialog above); if

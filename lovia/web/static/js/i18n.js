@@ -514,21 +514,31 @@ function browserLang() {
   return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
+/** @returns {'auto' | 'en' | 'zh'} The stored language preference. */
 export function langPref() {
   const saved = localStorage.getItem(LANG_KEY);
   return saved === 'en' || saved === 'zh' || saved === 'auto' ? saved : 'auto';
 }
 
+/** @param {'auto' | 'en' | 'zh' | string} pref Persisted; applies on next reload. */
 export function setLangPref(pref) {
   localStorage.setItem(LANG_KEY, pref);
 }
 
-const _lang = langPref() === 'auto' ? browserLang() : langPref();
+const _lang = /** @type {'en' | 'zh'} */ (langPref() === 'auto' ? browserLang() : langPref());
 
+/** @returns {'en' | 'zh'} The active language (preference resolved vs. the browser). */
 export function currentLang() {
   return _lang;
 }
 
+/**
+ * Translate a message key for the active language, interpolating `{name}`
+ * placeholders. Falls back to English, then to the key itself.
+ * @param {string} key Dot-namespaced message key (e.g. 'toast.exported').
+ * @param {Record<string, string | number>} [params] Placeholder values.
+ * @returns {string}
+ */
 export function t(key, params) {
   let s = (_lang !== 'en' && MESSAGES[_lang]?.[key]) || EN[key] || key;
   if (params) {
@@ -574,17 +584,20 @@ const PLACEHOLDERS = [
   ['#prompt', 'composer.placeholder', null],
 ];
 
+/** Re-label the server-rendered (English) chrome for the active language. Runs once at boot. */
 export function applyStaticI18n() {
   if (_lang === 'en') return; // the HTML already is English
   for (const [sel, textKey, titleKey, ariaKey] of STATIC) {
-    for (const el of document.querySelectorAll(sel)) {
+    for (const el of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(sel))) {
       if (textKey) el.textContent = t(textKey);
       if (titleKey) el.title = t(titleKey);
       if (ariaKey) el.setAttribute('aria-label', t(ariaKey));
     }
   }
   for (const [sel, phKey, ariaKey] of PLACEHOLDERS) {
-    const el = document.querySelector(sel);
+    const el = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (
+      document.querySelector(sel)
+    );
     if (!el) continue;
     el.placeholder = t(phKey);
     if (ariaKey) el.setAttribute('aria-label', t(ariaKey));

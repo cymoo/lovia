@@ -37,6 +37,22 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
+  # Type-check the bundled web UI (lovia/web/static/js) with TypeScript's
+  # checkJs. No build step and no npm packages in the repo — a hand-written
+  # jsconfig.json + types.d.ts drive it, and tsc is pinned via npx so the check
+  # is reproducible. Deliberately lenient (not `strict`): it catches typos, wrong
+  # property names, bad argument counts, and refactor drift without demanding
+  # casts on every DOM access. See lovia/web/static/jsconfig.json.
+  typecheck-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Type-check (tsc --checkJs)
+        run: npx --yes --package typescript@7.0.2 tsc --noEmit -p lovia/web/static/jsconfig.json
+
   # Validate the docs build on pull requests so broken links and anchors are
   # caught before merge. No deployment here (that is the `docs` job below), so
   # this stays off the github-pages environment and its branch policy.

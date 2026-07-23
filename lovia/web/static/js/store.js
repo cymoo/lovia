@@ -50,6 +50,12 @@ export const store = {
       : "light";
   })(),
 
+  /**
+   * Subscribe to a store event.
+   * @param {string} event Event name (e.g. 'agent-changed', 'render-history').
+   * @param {(data: any) => void} fn Listener, called with the emitted payload.
+   * @returns {() => void} Unsubscribe function.
+   */
   on(event, fn) {
     if (!_listeners.has(event)) _listeners.set(event, []);
     _listeners.get(event).push(fn);
@@ -62,13 +68,23 @@ export const store = {
     };
   },
 
+  /**
+   * Emit a store event to every subscriber.
+   * @param {string} event Event name.
+   * @param {any} [data] Payload passed to each listener.
+   */
   emit(event, data) {
     const arr = _listeners.get(event);
     if (arr) arr.forEach(fn => fn(data));
   },
 
+  /**
+   * Reflect the active session in the URL query string (?session=…) without
+   * pushing a history entry.
+   * @param {string | null} sessionId Session id, or null/'' to drop the param.
+   */
   syncURL(sessionId) {
-    const url = new URL(window.location);
+    const url = new URL(window.location.href);
     if (sessionId) {
       url.searchParams.set('session', sessionId);
     } else {
@@ -77,6 +93,7 @@ export const store = {
     window.history.replaceState({}, '', url);
   },
 
+  /** @returns {string | null} The `session` id carried in the URL, if any. */
   readSessionFromURL() {
     const params = new URLSearchParams(window.location.search);
     return params.get('session');

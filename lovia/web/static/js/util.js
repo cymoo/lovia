@@ -1,6 +1,11 @@
 // util.js — tiny dependency-free helpers shared across modules.
 // (marked / DOMPurify / hljs are optional CDN globals — everything degrades.)
 
+/**
+ * Escape HTML metacharacters so `s` renders as literal text, never markup.
+ * @param {string} s
+ * @returns {string}
+ */
 export function escapeHtml(s) {
   return String(s).replace(
     /[&<>"']/g,
@@ -9,6 +14,12 @@ export function escapeHtml(s) {
 }
 
 // ---- Markdown ------------------------------------------------------------
+/**
+ * Render markdown to sanitized HTML. Degrades to escaped plain text when
+ * marked/DOMPurify aren't loaded (offline, blocked CDN, SRI failure).
+ * @param {string} text
+ * @returns {string} Sanitized HTML.
+ */
 export function renderMarkdown(text) {
   if (!text.trim()) return '';
   // Never emit unsanitized HTML: without either library, escaped plain text
@@ -26,11 +37,14 @@ export function renderMarkdown(text) {
 // once; repeat renders are an innerHTML assignment.
 const _hljsCache = new Map();
 
-// Pure highlight pass over every <pre><code> in `container` (no chrome —
-// callers add their own copy buttons etc.).
+/**
+ * Cached syntax-highlight pass over every `<pre><code>` in `container` (no
+ * chrome — callers add their own copy buttons etc.; mermaid blocks are skipped).
+ * @param {Element} container
+ */
 export function highlightIn(container) {
   if (typeof hljs === 'undefined') return;
-  container.querySelectorAll('pre code').forEach((el) => {
+  container.querySelectorAll('pre code').forEach((/** @type {HTMLElement} */ el) => {
     if (el.classList.contains('language-mermaid')) return; // rendered as a diagram instead
     if (el.dataset.highlighted) return;
     const key = `${el.className}\u0000${el.textContent}`;
@@ -48,6 +62,11 @@ export function highlightIn(container) {
 }
 
 // ---- Sizes -----------------------------------------------------------------
+/**
+ * Human-readable byte size, e.g. 2048 → "2.0 KB".
+ * @param {number | null | undefined} n
+ * @returns {string} Formatted size, or "" if not a finite number.
+ */
 export function formatBytes(n) {
   if (n == null || !Number.isFinite(n)) return '';
   if (n < 1024) return `${n} B`;
@@ -60,14 +79,24 @@ export function formatBytes(n) {
   return '';
 }
 
-// Timestamps arrive as epoch seconds (floats from the backend) or millis.
+/**
+ * Coerce a backend timestamp to a Date. Accepts epoch seconds (floats from the
+ * backend) or milliseconds.
+ * @param {number} ts
+ * @returns {Date}
+ */
 export function toDate(ts) {
   return new Date(ts > 1e12 ? ts : ts * 1000);
 }
 
 const pad = (n) => String(n).padStart(2, '0');
 
-// Full form: "2026-07-05 14:32" (+":07" with seconds). Tooltips, schedules.
+/**
+ * Full form: "2026-07-05 14:32" (+":07" with seconds). Tooltips, schedules.
+ * @param {number | null} ts
+ * @param {{ seconds?: boolean }} [opts]
+ * @returns {string}
+ */
 export function formatDateTime(ts, { seconds = false } = {}) {
   if (ts == null) return '';
   const d = toDate(ts);
@@ -78,8 +107,12 @@ export function formatDateTime(ts, { seconds = false } = {}) {
   return seconds ? `${base}:${pad(d.getSeconds())}` : base;
 }
 
-// Compact form for timelines: "14:32" today, "07-01 09:15" this year,
-// "2025-12-31 23:59" otherwise. Pair with formatDateTime in a tooltip.
+/**
+ * Compact timeline stamp: "14:32" today, "07-01 09:15" this year,
+ * "2025-12-31 23:59" otherwise. Pair with formatDateTime in a tooltip.
+ * @param {number | null} ts
+ * @returns {string}
+ */
 export function formatTimeSmart(ts) {
   if (ts == null) return '';
   const d = toDate(ts);
@@ -98,7 +131,11 @@ export function formatTimeSmart(ts) {
 // carry scripts and is never served inline, so it's treated as a file here.
 export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico']);
 
-// True when a path's extension is a browser-renderable image (see IMAGE_EXT).
+/**
+ * True when `path`'s extension is a browser-renderable image (see IMAGE_EXT).
+ * @param {string} path
+ * @returns {boolean}
+ */
 export function isImagePath(path) {
   return IMAGE_EXT.has((String(path).split('.').pop() || '').toLowerCase());
 }

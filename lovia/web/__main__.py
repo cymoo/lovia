@@ -1,31 +1,12 @@
 """``lovia web`` (or ``python -m lovia.web``) — launch the lovia chat UI.
 
-Builds a sensible default agent (a model, skills, long-term memory, a todo
-checklist, current-date awareness, model-driven scheduled runs, built-in tools
-— time, HTTP fetch, web search — and a workspace, all configurable via flags or
-``LOVIA_*`` environment variables) and serves it with the bundled web UI. Point ``--app
-module:attribute`` at your own ``Agent`` to serve that instead.
+Builds a ready-made agent (model, skills, long-term memory, a todo checklist,
+current-date awareness, model-driven scheduled runs, built-in tools — time,
+HTTP fetch, web search — and a workspace) and serves it with the bundled web
+UI. ``--app module:attribute`` serves your own ``Agent`` instead.
 
-Examples::
-
-    lovia web                                # default agent, ./skills, cwd workspace
-    lovia web --port 9000 --model openai:gpt-5.5
-    lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
-    lovia web --skills-dir ./skills --skills-dir ./team-skills
-    lovia web --memory-dir ./mem             # persist memory under ./mem
-    lovia web --no-memory                    # disable long-term memory
-    lovia web --app myagents:assistant       # serve your own agent
-
-First run: whatever required configuration is missing (the model; an API key
-when the endpoint is the official OpenAI/Anthropic API) is asked
-interactively, validated against the endpoint, and can be saved to
-``.lovia/config.env`` (owner-only, git-ignored) so it is never retyped.
-
-Configuration precedence: command-line flag > environment variable >
-``.lovia/config.env`` (or ``--env-file``). The model endpoint uses the provider's
-standard variables — ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` or
-``ANTHROPIC_*``, chosen by the model's vendor prefix — while everything else
-uses ``LOVIA_*``.
+The user-facing contract is the ``--help`` text: :data:`DESCRIPTION`,
+:data:`EPILOG` and the option groups in :func:`build_parser`.
 """
 
 from __future__ import annotations
@@ -33,11 +14,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import sys
 from collections.abc import Mapping
 from importlib import import_module
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, NoReturn, cast, get_args
 
 from .. import __version__
 from ..agent import Agent
@@ -63,7 +45,7 @@ from ..tools import (
 )
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from . import setup
-from .app import _default_db_path, serve
+from .app import _default_db_path, _display_host, serve
 from .auth import is_loopback
 from .scheduling import Scheduling
 from .store import ChatStore
@@ -88,6 +70,49 @@ GENERIC_INSTRUCTIONS = (
     "You are a helpful assistant running in the lovia web UI. "
     "Be concise and accurate, and use your tools and skills when they help."
 )
+
+DESCRIPTION = """\
+Launch the lovia chat UI in your browser.
+
+Serves a ready-made agent — skills, long-term memory, todos, web search,
+scheduled runs, and a workspace rooted at the current directory. Anything
+required but missing (the model, an API key) is asked on first run, checked
+against the endpoint, and can be saved so it is never retyped.
+"""
+
+EPILOG = """\
+examples:
+  lovia web                                # default agent, cwd workspace
+  lovia web --port 9000 --model openai:gpt-5.5
+  lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
+  lovia web --workspace ~/notes --readonly # let it read, not write
+  lovia web --app myagents:assistant       # serve your own agent
+
+configuration:
+  flag > environment > .lovia/config.env > ./.env (or --env-file)
+  The model's vendor prefix picks the endpoint variables: anthropic:/claude:
+  use ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY, anything else the OPENAI_* pair.
+  Every other setting uses the LOVIA_* name shown above.
+"""
+
+
+class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Verbatim description/epilog, aligned option column, capped line width."""
+
+    def __init__(self, prog: str) -> None:
+        width = min(shutil.get_terminal_size().columns - 2, 96)
+        super().__init__(prog, max_help_position=28, width=max(width, 50))
+
+
+class _Parser(argparse.ArgumentParser):
+    """Argparse that points at ``--help`` — the usage line lists no options."""
+
+    def error(self, message: str) -> NoReturn:
+        self.exit(
+            2,
+            f"{self.format_usage()}{self.prog}: error: {message}\n"
+            f"try '{self.prog} --help' for the option list\n",
+        )
 
 
 class CliError(UserError):
@@ -123,162 +148,166 @@ def _env_int_optional(name: str) -> int | None:
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog=prog or "python -m lovia.web",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+    prog = prog or "python -m lovia.web"
+    p = _Parser(
+        prog=prog,
+        usage=f"{prog} [options]",
+        description=DESCRIPTION,
+        epilog=EPILOG,
+        formatter_class=_HelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"lovia {__version__}")
-    p.add_argument("--host", help="bind address (env LOVIA_HOST, default 127.0.0.1)")
-    p.add_argument(
-        "--port", type=int, help="port to listen on (env LOVIA_PORT, default 8000)"
-    )
-    p.add_argument(
-        "--db",
-        metavar="FILE",
-        help="SQLite file for chat persistence "
-        "(env LOVIA_DB, default ./.lovia/<agent>.db)",
-    )
-    p.add_argument(
+
+    model = p.add_argument_group("model")
+    model.add_argument(
         "--model",
-        help="model id, e.g. openai:gpt-5.5 (env LOVIA_MODEL)",
+        help="model id, e.g. openai:gpt-5.5 or deepseek-v4-pro "
+        "(env LOVIA_MODEL; asked on first run)",
     )
-    p.add_argument(
+    model.add_argument(
         "--base-url",
         metavar="URL",
-        help="model API base URL for the provider chosen by the model's "
-        "vendor prefix (env OPENAI_BASE_URL / ANTHROPIC_BASE_URL)",
+        help="model API endpoint (env OPENAI_BASE_URL / ANTHROPIC_BASE_URL)",
     )
-    p.add_argument(
+    model.add_argument(
         "--api-key",
         metavar="KEY",
-        help="model API key for the provider chosen by the model's vendor "
-        "prefix (env OPENAI_API_KEY / ANTHROPIC_API_KEY; prefer the env or "
-        "the first-run prompt — flags are visible in the process list)",
+        help="model API key (env OPENAI_API_KEY / ANTHROPIC_API_KEY — preferred: "
+        "flags are visible in the process list)",
     )
-    p.add_argument(
+    model.add_argument(
+        "--context-window",
+        type=int,
+        metavar="N",
+        help="context window in tokens, used for compaction "
+        "(env LOVIA_CONTEXT_WINDOW; default: ask the provider)",
+    )
+
+    agent = p.add_argument_group(
+        "agent", "the default agent; --app serves your own instead, ignoring the rest"
+    )
+    agent.add_argument(
+        "--app",
+        metavar="MODULE:ATTR",
+        help="serve your own Agent (or mapping/factory) instead (env LOVIA_APP)",
+    )
+    agent.add_argument(
+        "--instructions-file",
+        metavar="FILE",
+        help="system prompt file (env LOVIA_INSTRUCTIONS_FILE; "
+        f"default: ./{'/'.join(INSTRUCTIONS_FILES)} if present)",
+    )
+    agent.add_argument(
+        "--instructions",
+        metavar="TEXT",
+        help="system prompt text, overriding --instructions-file",
+    )
+    agent.add_argument(
         "--skills-dir",
         action="append",
         metavar="DIR",
         help="skill directory; repeatable (env LOVIA_SKILLS_DIR; "
         f"default ./{DEFAULT_SKILLS_DIR} if present)",
     )
-    p.add_argument(
+    agent.add_argument(
         "--memory-dir",
         metavar="DIR",
-        help="directory for long-term memory (notes + searchable archive), "
-        f"created if missing (env LOVIA_MEMORY_DIR, default {DEFAULT_MEMORY_DIR})",
+        help="long-term memory directory, created if missing "
+        f"(env LOVIA_MEMORY_DIR, default {DEFAULT_MEMORY_DIR})",
     )
-    p.add_argument(
-        "--no-memory",
-        action="store_true",
-        help="disable the long-term memory plugin (on by default)",
+    agent.add_argument(
+        "--no-memory", action="store_true", help="disable long-term memory"
     )
-    p.add_argument(
+    agent.add_argument(
         "--workspace",
         metavar="DIR",
-        help="workspace root the agent can read/edit/run in "
-        "(env LOVIA_WORKSPACE, default .)",
+        help="root the agent can read/edit/run in (env LOVIA_WORKSPACE, default .); "
+        f"mode defaults to {DEFAULT_WORKSPACE_MODE} — writes inside the root, "
+        "shell asks first",
     )
-    ws = p.add_mutually_exclusive_group()
+    ws = agent.add_mutually_exclusive_group()
     ws.add_argument(
         "--readonly",
         action="store_true",
-        help="workspace can only read files inside its root — no writes, no "
-        f"shell (default mode: {DEFAULT_WORKSPACE_MODE} — writes in the root "
-        "allowed, shell asks first; env LOVIA_WORKSPACE_MODE)",
+        help="reads inside the root only — no writes, no shell "
+        "(LOVIA_WORKSPACE_MODE=readonly)",
     )
     ws.add_argument(
         "--trusted",
         action="store_true",
-        help="workspace runs shell commands and reads outside its root "
-        "without asking (env LOVIA_WORKSPACE_MODE)",
+        help="shell and reads outside the root, unprompted "
+        "(LOVIA_WORKSPACE_MODE=trusted)",
     )
     ws.add_argument(
-        "--no-workspace",
-        action="store_true",
-        help="give the agent no filesystem/shell workspace",
+        "--no-workspace", action="store_true", help="no filesystem/shell workspace"
     )
-    p.add_argument(
-        "--instructions",
-        metavar="TEXT",
-        help="system prompt text (overrides --instructions-file and auto-load)",
+
+    server = p.add_argument_group("server")
+    server.add_argument(
+        "--host", help="bind address (env LOVIA_HOST, default 127.0.0.1)"
     )
-    p.add_argument(
-        "--instructions-file",
+    server.add_argument(
+        "--port", type=int, help="port to listen on (env LOVIA_PORT, default 8000)"
+    )
+    server.add_argument(
+        "--token",
+        metavar="TOKEN",
+        help="API auth token; not needed on loopback, generated and printed "
+        "otherwise (env LOVIA_WEB_TOKEN — preferred: flags are visible in the "
+        "process list)",
+    )
+    server.add_argument("--title", help="page title (env LOVIA_TITLE, default lovia)")
+    server.add_argument(
+        "--db",
         metavar="FILE",
-        help="read the system prompt from FILE (env LOVIA_INSTRUCTIONS_FILE; "
-        f"else auto-loads {'/'.join(INSTRUCTIONS_FILES)} from cwd, else generic)",
+        help="SQLite file for chat history (env LOVIA_DB, default ./.lovia/<agent>.db)",
     )
-    p.add_argument(
-        "--app",
-        metavar="MODULE:ATTR",
-        help="serve your own Agent (or mapping/factory) instead of the default "
-        "agent; default-agent flags are then ignored (env LOVIA_APP)",
-    )
-    p.add_argument(
+
+    advanced = p.add_argument_group("advanced")
+    advanced.add_argument(
         "--env-file",
         action="append",
         metavar="FILE",
-        help="load environment from FILE via python-dotenv; repeatable "
-        "(defaults: .lovia/config.env then ./.env, if present)",
+        help="env file to load; repeatable (default: .lovia/config.env, then ./.env)",
     )
-    p.add_argument(
-        "--token",
-        metavar="TOKEN",
-        help="API auth token; loopback binds don't need one, non-loopback "
-        "binds get one generated and printed when omitted (env "
-        "LOVIA_WEB_TOKEN; prefer the env — flags are visible in the "
-        "process list)",
-    )
-    p.add_argument("--title", help="web UI title (env LOVIA_TITLE, default lovia)")
-    p.add_argument(
-        "--log-level",
-        metavar="LEVEL",
-        help="logging level: debug/info/warning/error (env LOVIA_LOG_LEVEL, "
-        "default info)",
-    )
-    p.add_argument(
-        "--max-retries",
-        type=int,
-        metavar="N",
-        help="provider retry attempts after the first on transient errors "
-        "(env LOVIA_MAX_RETRIES; default: the agent's retry posture, "
-        f"{DEFAULT_RETRIES} retries; 0 disables)",
-    )
-    p.add_argument(
-        "--provider-timeout",
-        type=float,
-        metavar="SECONDS",
-        help="per-request model provider timeout in seconds "
-        f"(env LOVIA_PROVIDER_TIMEOUT, default {DEFAULT_TIMEOUT:g})",
-    )
-    p.add_argument(
-        "--max-tokens",
-        type=int,
-        metavar="N",
-        help="max output tokens per model response "
-        "(env LOVIA_MAX_TOKENS, default: provider default)",
-    )
-    p.add_argument(
-        "--context-window",
-        type=int,
-        metavar="N",
-        help="model context window in tokens used for compaction "
-        "(env LOVIA_CONTEXT_WINDOW; default: ask the provider, reactive "
-        "overflow handling when unknown)",
-    )
-    p.add_argument(
+    advanced.add_argument(
         "--max-turns",
         type=int,
         metavar="N",
-        help="max agent turns per request (env LOVIA_MAX_TURNS, default 50)",
+        help="max agent turns per message (env LOVIA_MAX_TURNS, "
+        f"default {DEFAULT_MAX_TURNS})",
     )
-    p.add_argument(
+    advanced.add_argument(
+        "--max-tokens",
+        type=int,
+        metavar="N",
+        help="max output tokens per response (env LOVIA_MAX_TOKENS, "
+        "default: the provider's)",
+    )
+    advanced.add_argument(
+        "--max-retries",
+        type=int,
+        metavar="N",
+        help="attempts after the first on transient provider errors "
+        f"(env LOVIA_MAX_RETRIES, default {DEFAULT_RETRIES} retries; 0 disables)",
+    )
+    advanced.add_argument(
+        "--provider-timeout",
+        type=float,
+        metavar="SECS",
+        help="per-request model provider timeout "
+        f"(env LOVIA_PROVIDER_TIMEOUT, default {DEFAULT_TIMEOUT:g})",
+    )
+    advanced.add_argument(
         "--trust-env",
         action="store_true",
-        help="let model provider HTTP clients honor HTTP(S)_PROXY / NO_PROXY "
-        "env vars (env LOVIA_PROVIDER_TRUST_ENV)",
+        help="honor HTTP(S)_PROXY / NO_PROXY for provider calls "
+        "(env LOVIA_PROVIDER_TRUST_ENV)",
+    )
+    advanced.add_argument(
+        "--log-level",
+        metavar="LEVEL",
+        help="debug, info, warning, error (env LOVIA_LOG_LEVEL, default info)",
     )
     return p
 
@@ -679,6 +708,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         db_path = _first(args.db, os.getenv("LOVIA_DB"))
         # None on a non-loopback bind → serve() generates and prints one.
         token = _first(args.token, os.getenv("LOVIA_WEB_TOKEN"))
+        # A wildcard bind is not a browsable address: show one that is.
+        url = f"http://{_display_host(host)}:{port}"
 
         agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]]
         # For the default agent we build the store up front (rather than letting
@@ -704,8 +735,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 app_target=app_target,
                 # Without --db, create_app derives the file from the agent name.
                 db_desc=db_path or "(./.lovia/<agent>.db, from the agent's name)",
-                host=host,
-                port=port,
+                url=url,
             )
         else:
             db_desc = db_path or str(_default_db_path(DEFAULT_AGENT_NAME))
@@ -744,8 +774,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             summary = setup.format_summary(
                 conn,
                 version=__version__,
-                host=host,
-                port=port,
+                url=url,
                 workspace_desc=_workspace_desc(args, agent.workspace),
                 db_desc=db_desc,
             )

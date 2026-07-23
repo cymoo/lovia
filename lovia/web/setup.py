@@ -43,7 +43,8 @@ log = logging.getLogger("lovia.web.setup")
 # The non-interactive ways to configure a value — shown when there's no TTY.
 # Names both key vars since the required one follows the model's vendor prefix.
 CONFIG_HINT = (
-    "pass --model and --api-key, or set LOVIA_MODEL and OPENAI_API_KEY / ANTHROPIC_API_KEY"
+    "pass --model and --api-key, or set "
+    "LOVIA_MODEL and OPENAI_API_KEY / ANTHROPIC_API_KEY"
 )
 
 # Saved config lives beside the chat DB under the CWD-relative .lovia/ dir — a
@@ -55,6 +56,7 @@ CONFIG_DIR = Path(".lovia")
 def config_path() -> Path:
     """Default path the wizard saves resolved config to (``.lovia/config.env``)."""
     return CONFIG_DIR / "config.env"
+
 
 # Where a resolved value came from; shown in the startup summary and used to
 # decide what the interactive wizard still needs to ask and what to persist.
@@ -356,9 +358,7 @@ def _run_wizard(
         print(message, file=out)
 
     say("")
-    say("lovia needs a model endpoint to serve the web UI — answering here")
-    say("takes a few seconds, and can be saved so you never retype it.")
-    say(f"(non-interactive alternatives: {CONFIG_HINT})")
+    say("lovia needs a model endpoint — a few seconds now, saved for next time.")
     say("")
 
     if conn.model is None:
@@ -400,9 +400,9 @@ def _prompt_api_key(
 ) -> None:
     required = conn.needs_api_key() if required is None else required
     if required:
-        prompt = "  API key (input hidden; required for this endpoint): "
+        prompt = "  API key (hidden, required here): "
     else:
-        prompt = "  API key (input hidden; Enter to skip if the endpoint needs none): "
+        prompt = "  API key (hidden, Enter to skip): "
     while True:
         key = getpass_fn(prompt).strip()
         if key:
@@ -451,8 +451,8 @@ def _maybe_prompt_context_window(
     if known_context_window(conn) is not None:
         return
     print(
-        "  the provider does not report this model's context window; without"
-        " it, long chats fall back to reactive overflow handling",
+        "  this model's context window is unknown — set it for proactive"
+        " compaction, or let long chats fall back to overflow handling",
         file=out,
     )
     while True:
@@ -508,7 +508,7 @@ def _offer_to_save(
         to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
     if not to_save:
         return
-    answer = input_fn(f"  Save to {config_path()} for next launches? [Y/n]: ")
+    answer = input_fn(f"  Save to {config_path()}? [Y/n]: ")
     if answer.strip().lower() in ("", "y", "yes"):
         saved = save_env_file(to_save)
         print(f"  saved to {saved} — owner-only, git-ignored", file=out)
@@ -540,8 +540,7 @@ def format_summary(
     conn: Connection,
     *,
     version: str,
-    host: str,
-    port: int,
+    url: str,
     workspace_desc: str,
     db_desc: str,
 ) -> str:
@@ -560,18 +559,16 @@ def format_summary(
     ]
     lines = [f"lovia v{version}"]
     lines += [f"  {label:<16} {value}" for label, value in rows]
-    lines += ["", f"serving on http://{host}:{port}"]
+    lines += ["", f"serving on {url}"]
     return "\n".join(lines)
 
 
-def format_app_summary(
-    *, version: str, app_target: str, db_desc: str, host: str, port: int
-) -> str:
+def format_app_summary(*, version: str, app_target: str, db_desc: str, url: str) -> str:
     lines = [
         f"lovia v{version}",
         f"  app              {app_target}",
         f"  db               {db_desc}",
         "",
-        f"serving on http://{host}:{port}",
+        f"serving on {url}",
     ]
     return "\n".join(lines)

@@ -650,6 +650,29 @@ def test_help_defaults_render_from_core_constants() -> None:
     help_text = cli.build_parser().format_help()
     assert f"default {cli.DEFAULT_TIMEOUT:g}" in help_text
     assert f"{cli.DEFAULT_RETRIES} retries" in help_text
+    assert f"default {cli.DEFAULT_MAX_TURNS}" in help_text
+    assert cli.DEFAULT_WORKSPACE_MODE in help_text
+
+
+def test_help_is_grouped_and_plain_text() -> None:
+    """The help is the CLI's front door: grouped, and free of docstring markup."""
+    help_text = cli.build_parser("lovia web").format_help()
+    assert help_text.startswith("usage: lovia web [options]")
+    for group in ("model:", "agent:", "server:", "advanced:"):
+        assert f"\n{group}\n" in help_text
+    assert "``" not in help_text and "::" not in help_text
+    # The examples and the precedence chain live in the epilog.
+    assert "examples:" in help_text
+    assert "flag > environment > .lovia/config.env > ./.env" in help_text
+
+
+def test_parser_error_points_at_help(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser("lovia web").parse_args(["--nope"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "usage: lovia web [options]" in err
+    assert "try 'lovia web --help'" in err
 
 
 def test_build_default_agent_max_tokens(
@@ -833,6 +856,18 @@ def test_main_configured_run_prints_summary_and_skips_wizard(
     assert "https://api.openai.com/v1 (default)" in out
     assert "sk-…9876 (env)" in out
     assert "serving on http://127.0.0.1:8000" in out
+
+
+def test_main_summary_url_is_browsable_on_a_wildcard_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """0.0.0.0 is a bind, not an address you can open — print one you can."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    assert cli.main(["--host", "0.0.0.0", "--port", "9000"]) == 0
+    assert "serving on http://127.0.0.1:9000" in capsys.readouterr().out
 
 
 def test_main_app_warns_when_workspace_exposed(

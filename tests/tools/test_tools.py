@@ -247,6 +247,25 @@ async def test_tool_error_bypasses_custom_renderer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_less_tool_error_still_names_the_failure() -> None:
+    # Some libraries raise with no message at all (httpx/primp do it for a
+    # dropped connection). "Tool error: " alone tells the model nothing, so
+    # the class name stands in.
+    class ConnectError(Exception):
+        pass
+
+    @tool
+    async def broken() -> str:
+        raise ConnectError()
+
+    provider = ScriptedProvider([call("broken", {}), text("done")])
+    agent = Agent(name="a", model=provider, tools=[broken])
+    result = await Runner.run(agent, "go")
+    last_tool = next(m for m in reversed(result.messages) if m.role == "tool")
+    assert last_tool.content == "Tool error: ConnectError"
+
+
+@pytest.mark.asyncio
 async def test_tool_error_bypasses_agent_level_renderer() -> None:
     seen: list[Any] = []
 

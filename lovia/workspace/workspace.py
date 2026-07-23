@@ -41,6 +41,22 @@ if TYPE_CHECKING:
 __all__ = ["LocalWorkspace", "Workspace"]
 
 
+def _has_tool_table(text: str, tool: str) -> bool:
+    """True if ``pyproject.toml`` declares a ``[tool.<tool>]`` table (or a
+    sub-table like ``[tool.<tool>.sources]``).
+
+    Line-anchored on purpose: a real TOML header is the first non-space token
+    on its line, so this won't fire on the tool name buried in a comment or a
+    string value. ``[tool.uvicorn]`` doesn't match ``uv`` — the ']' / '.' after
+    the name is part of the compared prefix.
+    """
+    head, sub = f"[tool.{tool}]", f"[tool.{tool}."
+    return any(
+        (s := line.strip()).startswith(head) or s.startswith(sub)
+        for line in text.splitlines()
+    )
+
+
 def _python_pkg_flavor(root: Path) -> str:
     """Which Python package manager owns this workspace: 'uv', 'poetry', 'pip'.
 
@@ -52,9 +68,9 @@ def _python_pkg_flavor(root: Path) -> str:
     Lockfiles are the strongest signal; a ``[tool.<mgr>]`` table is the
     fallback for a project that hasn't locked yet.
     """
-    if (root / "uv.lock").exists():
+    if (root / "uv.lock").is_file():
         return "uv"
-    if (root / "poetry.lock").exists():
+    if (root / "poetry.lock").is_file():
         return "poetry"
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
@@ -62,9 +78,9 @@ def _python_pkg_flavor(root: Path) -> str:
             text = pyproject.read_text("utf-8", "ignore")
         except OSError:
             return "pip"
-        if "[tool.uv]" in text:
+        if _has_tool_table(text, "uv"):
             return "uv"
-        if "[tool.poetry]" in text:
+        if _has_tool_table(text, "poetry"):
             return "poetry"
     return "pip"
 

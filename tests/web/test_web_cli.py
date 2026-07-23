@@ -858,16 +858,30 @@ def test_main_configured_run_prints_summary_and_skips_wizard(
     assert "serving on http://127.0.0.1:8000" in out
 
 
-def test_main_summary_url_is_browsable_on_a_wildcard_bind(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        # 0.0.0.0 is a bind, not an address you can open — print one you can.
+        ("0.0.0.0", "http://127.0.0.1:9000"),
+        ("::", "http://127.0.0.1:9000"),
+        # An IPv6 literal without brackets would swallow the port.
+        ("::1", "http://[::1]:9000"),
+        ("127.0.0.1", "http://127.0.0.1:9000"),
+    ],
+)
+def test_main_summary_prints_a_browsable_url(
+    host: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """0.0.0.0 is a bind, not an address you can open — print one you can."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    assert cli.main(["--host", "0.0.0.0", "--port", "9000"]) == 0
-    assert "serving on http://127.0.0.1:9000" in capsys.readouterr().out
+    assert cli.main(["--host", host, "--port", "9000"]) == 0
+    assert f"serving on {expected}" in capsys.readouterr().out
 
 
 def test_main_app_warns_when_workspace_exposed(

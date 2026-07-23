@@ -108,7 +108,10 @@ def _clean_token(token: str | None) -> str | None:
 
 def _display_host(host: str) -> str:
     """A browsable form of ``host`` for printed URLs — wildcards aren't one."""
-    return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    if host in {"0.0.0.0", "::"}:
+        return "127.0.0.1"
+    # An IPv6 literal needs brackets, or the port reads as part of the address.
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
 def create_app(

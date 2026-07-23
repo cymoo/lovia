@@ -2432,7 +2432,7 @@ export function initComposer() {
   // Example prompts (server-rendered or renderEmptyState's) fill the
   // composer for editing — clicking must not fire a send behind your back.
   document.getElementById('transcript')?.addEventListener('click', (e) => {
-    const btn = /** @type {HTMLElement} */ (e.target).closest('.empty-example');
+    const btn = e.target instanceof Element ? e.target.closest('.empty-example') : null;
     if (!btn || !promptEl) return;
     promptEl.value = btn.textContent;
     autoresize();

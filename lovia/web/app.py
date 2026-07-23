@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -16,6 +17,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
+from .. import __version__
 from ..agent import Agent
 from ..context import ContextPolicy
 from ..providers import Provider
@@ -31,6 +33,49 @@ from .store import ChatStore
 from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
+
+# Long-cache directive for the versioned static mount. Safe *only* because the
+# mount path carries a build-specific token (see `_asset_token`): the bytes at
+# any given URL never change, so the browser may keep them forever and never
+# revalidate — a new build simply serves from a new URL prefix.
+_IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+
+class _ImmutableStaticFiles(StaticFiles):
+    """``StaticFiles`` that marks successful responses immutable.
+
+    Paired with the version-stamped mount path in :func:`create_app`, this gives
+    the bundled UI proper cache-busting: assets cache forever, and an upgrade
+    changes their URLs so the browser fetches the new module graph with no manual
+    cache clear. 404/405 responses are left alone.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        if getattr(response, "status_code", None) == 200:
+            response.headers["Cache-Control"] = _IMMUTABLE_CACHE
+        return response
+
+
+def _asset_token() -> str:
+    """A short cache-busting token for the static mount, stable within a run.
+
+    Hashes the package version plus each static file's ``(relpath, size, mtime)``
+    so the token changes on every upgrade (``pip`` rewrites mtimes) and on any
+    local edit across restarts — versioning the asset URL path so browsers pick
+    up the new module graph without a manual cache clear. Falls back to the bare
+    version if the tree can't be walked.
+    """
+    try:
+        h = hashlib.sha256(__version__.encode())
+        for p in sorted(_STATIC.rglob("*")):
+            if p.is_file():
+                st = p.stat()
+                h.update(p.relative_to(_STATIC).as_posix().encode())
+                h.update(f"\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+        return h.hexdigest()[:12]
+    except OSError:
+        return "".join(c for c in __version__ if c.isalnum()) or "static"
 
 
 def _normalise(
@@ -233,9 +278,13 @@ def create_app(
                 empty_examples=empty_examples,
             )
         )
+        # Version-stamp the static URL prefix so `url_for('static', …)` (and the
+        # relative ES-module imports resolved beneath it) change on every build —
+        # the cache-busting seam. Assets under it are served immutable; the HTML
+        # shell (ui.py) is no-cache so it always re-reads the current prefix.
         app.mount(
-            "/static",
-            StaticFiles(directory=str(_STATIC), check_dir=False),
+            f"/static/{_asset_token()}",
+            _ImmutableStaticFiles(directory=str(_STATIC), check_dir=False),
             name="static",
         )
 

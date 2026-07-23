@@ -61,14 +61,14 @@ def _openai_chat_model() -> str:
     _require_live()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY is not configured")
-    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.5")
+    return os.getenv("LOVIA_LIVE_OPENAI_MODEL", "gpt-5.5")
 
 
 def _anthropic_model() -> str:
     _require_live()
     if not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY is not configured")
-    return os.getenv("ANTHROPIC_DEFAULT_MODEL", "claude-haiku-4-5")
+    return os.getenv("LOVIA_LIVE_ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 
 def _env_host(name: str, default: str) -> str | None:

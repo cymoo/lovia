@@ -741,7 +741,7 @@ def _live_model() -> str:
     _load_env_file()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY is not configured")
-    return os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.5")
+    return os.getenv("LOVIA_LIVE_OPENAI_MODEL", "gpt-5.5")
 
 
 @pytest.mark.live_provider

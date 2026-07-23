@@ -116,7 +116,7 @@ def _endpoint() -> Endpoint:
     if not key:
         sys.exit("OPENAI_API_KEY is not configured")
     base = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    model = os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-v4-pro")
+    model = os.getenv("LOVIA_LIVE_OPENAI_MODEL", "deepseek-v4-pro")
     return Endpoint(base=base, key=key, model=model)
 
 

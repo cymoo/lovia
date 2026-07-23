@@ -45,7 +45,7 @@ def _endpoint() -> Endpoint:
     return Endpoint(
         base=base,
         key=os.environ["OPENAI_API_KEY"],
-        model=os.getenv("OPENAI_DEFAULT_MODEL", "deepseek-v4-pro"),
+        model=os.getenv("LOVIA_LIVE_OPENAI_MODEL", "deepseek-v4-pro"),
     )
 
 

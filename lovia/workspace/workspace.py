@@ -41,6 +41,34 @@ if TYPE_CHECKING:
 __all__ = ["LocalWorkspace", "Workspace"]
 
 
+def _python_pkg_flavor(root: Path) -> str:
+    """Which Python package manager owns this workspace: 'uv', 'poetry', 'pip'.
+
+    Read from lockfiles and ``pyproject.toml`` markers so the shell guidance
+    names the tool that actually works here. The stakes are highest for uv:
+    ``uv venv`` deliberately omits pip, so a generic "python/pip resolve to the
+    venv" story sends the model down three dead ends ('.venv/bin/pip' missing,
+    'python -m pip' with no pip module, host pip with a broken interpreter).
+    Lockfiles are the strongest signal; a ``[tool.<mgr>]`` table is the
+    fallback for a project that hasn't locked yet.
+    """
+    if (root / "uv.lock").exists():
+        return "uv"
+    if (root / "poetry.lock").exists():
+        return "poetry"
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            text = pyproject.read_text("utf-8", "ignore")
+        except OSError:
+            return "pip"
+        if "[tool.uv]" in text:
+            return "uv"
+        if "[tool.poetry]" in text:
+            return "poetry"
+    return "pip"
+
+
 @dataclass(frozen=True)
 class LocalWorkspace:
     """A local directory the agent's file/shell tools operate in.
@@ -110,7 +138,8 @@ class LocalWorkspace:
         enforced — it must never promise more than the session delivers.
         """
         policy = self.policy
-        root_name = Path(self.root).expanduser().resolve().name or str(self.root)
+        root = Path(self.root).expanduser().resolve()
+        root_name = root.name or str(self.root)
         lines = [
             "## Workspace",
             # The name is a label, never a path: presenting it path-like makes
@@ -167,13 +196,35 @@ class LocalWorkspace:
             lines.append(
                 "Python work stays in the workspace's own virtualenv: when a "
                 "real '.venv' (or 'venv') virtualenv exists at the root — one "
-                "with an interpreter inside, as 'python -m venv' creates, not "
-                "just a directory by that name — it is automatically on PATH "
-                "for shell commands, so python/pip already resolve to it, no "
-                "activation needed. To install packages when none exists, "
-                "create it first (e.g. 'python -m venv .venv'); never install "
-                "into the global environment."
+                "with an interpreter inside, not just a directory by that "
+                "name — it is automatically on PATH for shell commands "
+                "(VIRTUAL_ENV set), so 'python' already resolves to it, no "
+                "activation needed. Never install into the global environment."
             )
+            flavor = _python_pkg_flavor(root)
+            if flavor == "uv":
+                lines.append(
+                    "This project is uv-managed: install packages with "
+                    "'uv pip install <pkg>' (straight into the active venv) or "
+                    "'uv sync' to materialize the lockfile, and create the venv "
+                    "with 'uv venv' when none exists. uv venvs deliberately omit "
+                    "pip, so 'pip' and 'python -m pip' will fail — don't reach "
+                    "for them."
+                )
+            elif flavor == "poetry":
+                lines.append(
+                    "This project is poetry-managed: install with "
+                    "'poetry install' (from the lockfile) or 'poetry add <pkg>', "
+                    "and run code via 'poetry run ...' unless poetry's virtualenv "
+                    "is already active on PATH. Let poetry manage its virtualenv "
+                    "rather than building one by hand."
+                )
+            else:
+                lines.append(
+                    "python and pip already resolve to the venv. To install "
+                    "packages when none exists, create it first (e.g. "
+                    "'python -m venv .venv')."
+                )
         return "\n".join(lines)
 
 

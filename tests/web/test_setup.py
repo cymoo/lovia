@@ -582,8 +582,7 @@ def test_format_summary_shows_values_and_sources() -> None:
     text = setup.format_summary(
         conn,
         version="0.9.0",
-        host="127.0.0.1",
-        port=8000,
+        url="http://127.0.0.1:8000",
         workspace_desc="/work (trusted)",
         db_desc="lovia.db",
     )
@@ -600,8 +599,7 @@ def test_format_summary_keyless_gateway() -> None:
     text = setup.format_summary(
         conn,
         version="0.9.0",
-        host="0.0.0.0",
-        port=9000,
+        url="http://127.0.0.1:9000",
         workspace_desc="(none)",
         db_desc="x.db",
     )
@@ -614,8 +612,7 @@ def test_format_app_summary() -> None:
         version="0.9.0",
         app_target="myagents:assistant",
         db_desc="x.db",
-        host="127.0.0.1",
-        port=8000,
+        url="http://127.0.0.1:8000",
     )
     assert "myagents:assistant" in text
     assert text.endswith("serving on http://127.0.0.1:8000")

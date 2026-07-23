@@ -61,6 +61,10 @@ class WebSearch(Protocol):
     ) -> list[SearchResult]: ...
 
 
+# ddgs' message when no engine returned a hit; it raises rather than return [].
+_DDGS_NO_RESULTS = "no results found"
+
+
 class DuckDuckGoSearch:
     """Default backend using ``ddgs`` (install with ``lovia[ddg]``)."""
 
@@ -95,7 +99,15 @@ class DuckDuckGoSearch:
                     ddgs.text(query, max_results=max_results, timelimit=time_range)
                 )
 
-        rows = await asyncio.to_thread(_go)
+        try:
+            rows = await asyncio.to_thread(_go)
+        except Exception as exc:
+            # ddgs reports "every engine came back empty" by raising. That is
+            # an answer, not a failure — and retrying it would just repeat the
+            # same fruitless query.
+            if str(exc).strip().lower().startswith(_DDGS_NO_RESULTS):
+                return []
+            raise
         return [
             SearchResult(
                 title=r.get("title", ""),
@@ -129,14 +141,23 @@ class TavilySearch:
         if time_range is not None:
             # Tavily accepts 'd'/'w'/'m'/'y' directly (alongside 'day'/'week'/...).
             payload["time_range"] = time_range
-        async with httpx.AsyncClient(
-            timeout=self._timeout, verify=resolve_verify()
-        ) as client:
-            resp = await client.post(
-                _TAVILY_ENDPOINT,
-                json=payload,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-            )
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, verify=resolve_verify()
+            ) as client:
+                resp = await client.post(
+                    _TAVILY_ENDPOINT,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+        except httpx.TransportError as exc:
+            # The request never got an answer. httpx often has nothing to say
+            # about it either — a reset tunnel surfaces as a blank
+            # ``ConnectError`` — so name the host and the failure type.
+            raise ToolError(
+                f"could not reach api.tavily.com: {str(exc) or type(exc).__name__}",
+                hint="network or proxy problem, not a bad query.",
+            ) from exc
         if resp.status_code != 200:
             raise ToolError(
                 f"Tavily search failed (HTTP {resp.status_code}): "
@@ -213,7 +234,10 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     :func:`duckduckgo_search` for the bundled DuckDuckGo backend.
     """
 
-    @tool(name=name, result_renderer=_render_search_results)
+    # Search crosses the open internet: a dropped connection is a normal
+    # event, and retrying here costs a moment where letting it through costs
+    # the model a whole turn to notice and re-ask.
+    @tool(name=name, result_renderer=_render_search_results, retries=2)
     async def _search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Max results (1-20)."] = 5,

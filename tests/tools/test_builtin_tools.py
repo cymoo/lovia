@@ -381,6 +381,65 @@ async def test_duckduckgo_backend_maps_rows_and_forwards_args() -> None:
     assert rows == [SearchResult(title="T", url="https://x.example", snippet="B")]
 
 
+@pytest.mark.asyncio
+async def test_duckduckgo_no_results_is_an_empty_list_not_an_error() -> None:
+    """ddgs raises when every engine came back empty; that is still an answer."""
+    from lovia.tools.search import DuckDuckGoSearch
+
+    class EmptyDDGS:
+        def __enter__(self) -> "EmptyDDGS":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
+            raise RuntimeError("No results found.")
+
+    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
+    backend._ddgs_cls = EmptyDDGS
+    assert await backend.search("nothing matches this") == []
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_other_backend_errors_still_raise() -> None:
+    from lovia.tools.search import DuckDuckGoSearch
+
+    class BrokenDDGS:
+        def __enter__(self) -> "BrokenDDGS":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            pass
+
+        def text(self, query: str, max_results: int, timelimit: str | None):  # type: ignore[no-untyped-def]
+            raise RuntimeError("ConnectError: tls handshake eof")
+
+    backend = DuckDuckGoSearch.__new__(DuckDuckGoSearch)
+    backend._ddgs_cls = BrokenDDGS
+    with pytest.raises(RuntimeError, match="ConnectError"):
+        await backend.search("q")
+
+
+@pytest.mark.asyncio
+async def test_web_search_retries_a_dropped_connection() -> None:
+    """One blip must not cost a model turn: the tool retries in place."""
+    from lovia.tools import run_tool
+
+    attempts = {"n": 0}
+
+    class Flaky:
+        async def search(self, query: str, *, max_results: int = 5, time_range=None):  # type: ignore[no-untyped-def]
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise ConnectionResetError()  # message-less, like the real ones
+            return [SearchResult(title="t", url="https://x", snippet="s")]
+
+    out = await run_tool(web_search(Flaky()), {"query": "x"}, _ctx())
+    assert out == [{"title": "t", "url": "https://x", "snippet": "s"}]
+    assert attempts["n"] == 3
+
+
 def test_duckduckgo_friendly_error_without_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     # Force both ddgs and duckduckgo_search imports to fail.
     for mod in ("ddgs", "duckduckgo_search"):
@@ -481,6 +540,24 @@ async def test_tavily_http_error_surfaces_as_tool_error(
         await TavilySearch(api_key="bad").search("q")
     msg = str(exc_info.value)
     assert "401" in msg and "Unauthorized" in msg
+
+
+@pytest.mark.asyncio
+async def test_tavily_connection_failure_names_the_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reset tunnel arrives as a blank ConnectError; say what failed anyway."""
+    from lovia.tools.search import TavilySearch
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("")  # what a dropped proxy tunnel looks like
+
+    _mock_http(monkeypatch, handler, "lovia.tools.search.httpx.AsyncClient")
+    with pytest.raises(ToolError) as exc_info:
+        await TavilySearch(api_key="k").search("q")
+    message = str(exc_info.value)
+    assert "api.tavily.com" in message and "ConnectError" in message
+    assert "network or proxy" in message
 
 
 @pytest.mark.asyncio

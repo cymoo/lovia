@@ -340,7 +340,9 @@ class ToolCallProcessor:
             # execution.
             raise
         except Exception as exc:
-            result = f"Tool error: {exc}"
+            # Libraries do raise message-less exceptions (a bare ConnectError
+            # from a dropped connection); the class name beats "Tool error: ".
+            result = f"Tool error: {str(exc) or type(exc).__name__}"
             is_error = True
             logger.warning(
                 "tool.error: %s call_id=%s (%s: %s)",

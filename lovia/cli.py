@@ -16,9 +16,15 @@ _USAGE = """\
 usage: lovia <command> [options]
 
 commands:
-  web    launch the chat web UI (see: lovia web --help)
+  web           launch the chat web UI (lovia web --help for its options)
 
-Run 'lovia <command> --help' for command options.
+options:
+  -h, --help    show this help
+  --version     show the version
+
+examples:
+  lovia web                                # serve on http://127.0.0.1:8000
+  lovia web --port 9000 --model openai:gpt-5.5
 """
 
 

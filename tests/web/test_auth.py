@@ -162,6 +162,23 @@ def test_serve_generates_token_off_loopback(
     assert ok.status_code == 200
 
 
+def test_serve_token_link_brackets_an_ipv6_bind(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Unbracketed, the port would read as part of the address."""
+    from lovia.web import serve
+
+    _fake_uvicorn(monkeypatch)
+    serve(
+        _agent(),
+        host="fd00::1",
+        port=1234,
+        store=ChatStore.in_memory(),
+        generate_titles=False,
+    )
+    assert "http://[fd00::1]:1234/?token=" in capsys.readouterr().out
+
+
 def test_serve_blank_token_off_loopback_still_generates(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

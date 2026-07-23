@@ -9,9 +9,14 @@ import { api } from './api.js';
 import { toast } from './toast.js';
 import { escapeHtml } from './util.js';
 
-// Turn a session title into a safe download filename. Replaces characters that
-// are illegal on common filesystems, collapses whitespace, drops trailing dots
-// (Windows), and caps length.
+/**
+ * Turn a session title into a safe download filename — replaces filesystem-
+ * illegal characters, collapses whitespace, drops trailing dots (Windows), and
+ * caps length.
+ * @param {string} title
+ * @param {string} ext Extension without the dot (e.g. 'md', 'html').
+ * @returns {string}
+ */
 export function exportFilename(title, ext) {
   const base = String(title || '')
     .replace(/[\\/:*?"<>|]/g, ' ') // filesystem-illegal chars → space
@@ -84,9 +89,13 @@ function renderMessage(m, toolNames = {}) {
   return out.join('');
 }
 
-// Build a complete, self-contained HTML document from an export envelope
-// (`{ title, messages }`). `theme` is baked into the root so the file keeps the
-// look the user exported from.
+/**
+ * Build a complete, self-contained HTML document from an export envelope.
+ * `theme` is baked into the root so the file keeps the look it was exported from.
+ * @param {{ title?: string, messages?: any[] }} data Export envelope.
+ * @param {'light' | 'dark' | string} [theme]
+ * @returns {string} A full HTML document.
+ */
 export function buildExportDoc(data, theme = 'light') {
   const heading = data.title || 'Chat';
   const messages = data.messages || [];
@@ -123,6 +132,12 @@ export function buildExportDoc(data, theme = 'light') {
   );
 }
 
+/**
+ * Fetch a session's JSON export and download it as a self-contained HTML file.
+ * @param {string} sessionId
+ * @param {string} [title] Used for the filename and document heading.
+ * @returns {Promise<void>}
+ */
 export async function exportSessionHtml(sessionId, title) {
   if (!sessionId) return;
   try {

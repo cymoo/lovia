@@ -1,0 +1,29 @@
+{
+  // Type-check the bundled web UI with TypeScript's checkJs — no build step, no
+  // npm packages. Editors read this file automatically; CI runs
+  //   tsc --noEmit -p lovia/web/static/jsconfig.json
+  // and local dev can use a global `tsc` the same way.
+  //
+  // Deliberately NOT `strict`. The UI is guarded at runtime (optional chaining
+  // everywhere), and the goal is to catch the high-value mistakes — typos, wrong
+  // property names, wrong argument counts, references left stale by a refactor,
+  // JSDoc that drifts from reality — while staying readable and low-friction.
+  // strictNullChecks would flood DOM code (getElementById is nullable) with
+  // noise the runtime already handles; useUnknownInCatchVariables would force a
+  // cast in every catch block; noImplicitAny would demand an annotation on every
+  // private helper. Those three stay off; the "property does not exist" and
+  // argument checks — which do the real work — stay on.
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["js/**/*.js", "types.d.ts"]
+}

@@ -42,6 +42,11 @@ export const api = {
       body: JSON.stringify(body),
     }).then(_json),
   // Streaming turn → Response (consume with `readSSE`). `body` as above.
+  /**
+   * @param {object} body Chat request: `{ message, agent?, session_id? }`.
+   * @param {{ signal?: AbortSignal }} [opts]
+   * @returns {Promise<Response>} SSE stream — consume with `readSSE`.
+   */
   streamChat: (body, { signal } = {}) =>
     fetch('/api/chat/stream', {
       method: 'POST',
@@ -50,6 +55,11 @@ export const api = {
       signal,
     }),
   // Resume an interrupted run → Response (consume with `readSSE`).
+  /**
+   * @param {string} sessionId
+   * @param {{ signal?: AbortSignal }} [opts]
+   * @returns {Promise<Response>} SSE stream — consume with `readSSE`.
+   */
   reconnect: (sessionId, { signal } = {}) =>
     fetch(`/api/chat/reconnect${qs({ session_id: sessionId })}`, {
       method: 'POST',
@@ -81,6 +91,7 @@ export const api = {
     }).then(_json),
 
   // ---- sessions ----
+  /** @param {{ q?: string, limit?: number, offset?: number }} [opts] */
   listSessions: ({ q = '', limit, offset } = {}) =>
     fetch(`/api/sessions${qs({ q, limit, offset })}`).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
@@ -88,6 +99,7 @@ export const api = {
   // Persisted run records, newest first. `since` keeps only runs finished
   // after that timestamp — the missed-completion catch-up on page load.
   // `session_id` scopes to one chat — the context-ring restore on reload.
+  /** @param {{ session_id?: string, since?: number, limit?: number }} [opts] */
   runHistory: ({ session_id, since, limit } = {}) =>
     fetch(`/api/runs/history${qs({ session_id, since, limit })}`).then(_json),
   getSession: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
@@ -154,28 +166,35 @@ export const api = {
     ),
   // A schedule's fire history, newest first: [{ run_id, session_id, status,
   // error, started_at, finished_at, usage }].
+  /** @param {string} id @param {{ limit?: number }} [opts] */
   scheduleRuns: (id, { limit } = {}) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}/runs${qs({ limit })}`).then(
       _json,
     ),
 
   // ---- workspace (Files panel; read-only) ----
+  /** @param {{ agent?: string }} [opts] */
   workspaceInfo: ({ agent } = {}) =>
     fetch(`/api/workspace${qs({ agent })}`).then(_jsonOrDetail),
   // One directory level, dirs first. `path` is workspace-relative.
+  /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
     fetch(`/api/workspace/files${qs({ agent, path })}`).then(_jsonOrDetail),
   // Whole-workspace flat list, newest first.
+  /** @param {{ agent?: string, limit?: number }} [opts] */
   workspaceRecent: ({ agent, limit } = {}) =>
     fetch(`/api/workspace/recent${qs({ agent, limit })}`).then(_jsonOrDetail),
   // Paginated text content; `binary: true` means "don't render me".
+  /** @param {{ agent?: string, path?: string, start?: number }} [opts] */
   workspaceFile: ({ agent, path, start } = {}) =>
     fetch(`/api/workspace/file${qs({ agent, path, start })}`).then(_jsonOrDetail),
   // Raw bytes URL — inline image preview, or any file with download=true.
+  /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
   workspaceRawUrl: ({ agent, path, download } = {}) =>
     `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
   // Upload a file into the workspace `uploads/` dir → { path, name, mime, kind,
   // size }. Multipart; the browser sets the boundary, so we send no headers.
+  /** @param {File} file @param {{ agent?: string, signal?: AbortSignal }} [opts] */
   uploadFile: (file, { agent, signal } = {}) => {
     const form = new FormData();
     form.append('file', file);
@@ -187,6 +206,7 @@ export const api = {
   },
 
   // ---- memory (the agent's editable Notes) ----
+  /** @param {{ agent?: string }} [opts] */
   getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_jsonOrDetail),
   // Replaces the notes wholesale; returns the canonical stored form.
   putMemory: ({ agent, content }) =>
@@ -223,8 +243,12 @@ function parseSSE(chunk) {
   catch { return { event, data }; }
 }
 
-// Async-iterate the SSE events of a fetch Response:
-//   for await (const { event, data } of readSSE(res)) { ... }
+/**
+ * Async-iterate the SSE events of a fetch Response:
+ *   for await (const { event, data } of readSSE(res)) { ... }
+ * @param {Response} response Streaming response (from `streamChat`/`reconnect`).
+ * @returns {AsyncGenerator<{ event: string, data: any }>}
+ */
 export async function* readSSE(response) {
   const reader = response.body.getReader();
   const dec = new TextDecoder();

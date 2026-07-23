@@ -66,9 +66,12 @@ function swapDiagram(pre, svg) {
   pre.replaceWith(fig);
 }
 
-// Replace every ```mermaid block inside `container` with a rendered diagram.
-// Safe to call repeatedly (e.g. on each streaming flush): the cache makes a
-// known diagram swap in synchronously, and an incomplete block is left as-is.
+/**
+ * Replace every ```mermaid code block inside `container` with a rendered diagram.
+ * Safe to call repeatedly (e.g. on each streaming flush): a known diagram swaps
+ * in synchronously from cache, and an incomplete block is left as-is.
+ * @param {Element} container
+ */
 export function renderMermaid(container) {
   if (!ensureMermaid()) return;
   container.querySelectorAll('pre > code.language-mermaid').forEach((code) => {

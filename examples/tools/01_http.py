@@ -12,7 +12,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
-from lovia.tools.http import http_fetch
+from lovia.tools.http import http_request
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
@@ -21,9 +21,9 @@ MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 async def main() -> None:
     agent = Agent(
         name="Fetcher",
-        instructions="Use http_fetch to retrieve URLs; summarise what you find.",
+        instructions="Use http_request to retrieve URLs; summarise what you find.",
         model=MODEL,
-        tools=[http_fetch],
+        tools=[http_request],
     )
     handle = Runner.stream(
         agent, "Fetch https://httpbin.org/json and tell me what's inside."

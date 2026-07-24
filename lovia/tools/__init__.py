@@ -22,7 +22,7 @@ from .base import (
     truncate_tool_output,
     tool,
 )
-from .http import http_fetch
+from .http import http_request, writes_need_approval
 from .human import HumanChannel, HumanQuestion, ask_human
 from .recall import make_recall_tool
 from .search import (
@@ -53,7 +53,7 @@ __all__ = [
     "current_date",
     "default_result_renderer",
     "duckduckgo_search",
-    "http_fetch",
+    "http_request",
     "make_recall_tool",
     "now",
     "render_tool_result",
@@ -63,4 +63,5 @@ __all__ = [
     "tavily_search",
     "tool",
     "web_search",
+    "writes_need_approval",
 ]

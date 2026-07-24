@@ -129,9 +129,13 @@ async def fetch_raw(
 ) -> RawResponse:
     """Perform one redirect-following request, reading at most ``max_bytes``."""
     validate_url(url)
-    request_headers = {"User-Agent": user_agent} if user_agent else {}
     # Caller-supplied headers win, so a model can override the default UA.
-    request_headers.update(headers or {})
+    # The check is case-insensitive: HTTP header names are, but a dict is not,
+    # and keeping both "User-Agent" and "user-agent" would put two of them on
+    # the wire with no rule for which the server honors.
+    request_headers = dict(headers or {})
+    if user_agent and not any(name.lower() == "user-agent" for name in request_headers):
+        request_headers["User-Agent"] = user_agent
 
     async with httpx.AsyncClient(
         timeout=timeout, follow_redirects=True, verify=resolve_verify()

@@ -183,6 +183,9 @@ async def test_http_request_lets_caller_override_user_agent(
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["user-agent"] = request.headers.get("user-agent")
+        seen["ua_count"] = sum(
+            1 for name, _ in request.headers.raw if name.lower() == b"user-agent"
+        )
         return httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
 
     _mock_http(monkeypatch, handler)
@@ -190,6 +193,14 @@ async def test_http_request_lets_caller_override_user_agent(
         {"url": "https://example.com", "headers": {"User-Agent": "mine/1"}}, _ctx()
     )
     assert seen["user-agent"] == "mine/1"
+
+    # HTTP header names are case-insensitive but a dict is not: a lowercase
+    # override must replace the default, not add a second User-Agent header.
+    await http_request.invoke(
+        {"url": "https://example.com", "headers": {"user-agent": "lower/2"}}, _ctx()
+    )
+    assert seen["user-agent"] == "lower/2"
+    assert seen["ua_count"] == 1
 
 
 @pytest.mark.asyncio

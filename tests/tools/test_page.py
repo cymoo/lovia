@@ -125,6 +125,55 @@ def test_markdown_drops_bullets_that_never_got_content() -> None:
     )
 
 
+def test_markdown_escapes_text_interpolated_into_syntax() -> None:
+    # A bracket in link text or alt text does not merely look wrong: it ends
+    # the construct early and swallows the rest.
+    base = "https://e.com/"
+    assert (
+        html_to_markdown("<a href='/x'>see [1] here</a>", base_url=base)
+        == r"[see \[1\] here](https://e.com/x)"
+    )
+    assert (
+        html_to_markdown("<img src='i.png' alt='Figure [2]'>", base_url=base)
+        == r"![Figure \[2\]](https://e.com/i.png)"
+    )
+    # A pipe would otherwise add a phantom column.
+    assert html_to_markdown("<table><tr><td>a|b</td></tr></table>") == r"| a\|b |"
+    # Prose is left alone — "[1]" with no destination after it is not a link,
+    # and escaping every page would just cost tokens.
+    assert html_to_markdown("<p>see [1] in prose</p>") == "see [1] in prose"
+    # Nor is a link that will be dropped anyway worth escaping: Wikipedia
+    # footnotes are [9] behind a fragment href, and there are hundreds a page.
+    assert (
+        html_to_markdown('<sup><a href="#cite-9">[9]</a></sup> text', base_url=base)
+        == "[9] text"
+    )
+
+
+def test_markdown_escaping_does_not_break_nested_constructs() -> None:
+    # The escape happens as text arrives, so Markdown this converter emitted
+    # itself — here an image inside a link — passes through untouched.
+    assert (
+        html_to_markdown(
+            "<a href='/p'><img src='i.png' alt='I'></a>", base_url="https://e.com/"
+        )
+        == "[![I](https://e.com/i.png)](https://e.com/p)"
+    )
+
+
+def test_markdown_url_with_parentheses_stays_one_link() -> None:
+    # Wikipedia-style disambiguation URLs are everywhere.
+    assert (
+        html_to_markdown("<a href='/wiki/Foo_(bar)'>Foo</a>", base_url="https://e.com/")
+        == "[Foo](<https://e.com/wiki/Foo_(bar)>)"
+    )
+
+
+def test_markdown_code_span_fence_grows_past_its_content() -> None:
+    assert html_to_markdown("<p><code>a `b` c</code></p>") == "``a `b` c``"
+    assert html_to_markdown("<p><code>`x`</code></p>") == "`` `x` ``"
+
+
 def test_markdown_survives_malformed_markup() -> None:
     assert html_to_markdown("<p>ok<div") == "ok"
     assert html_to_markdown("plain text") == "plain text"

@@ -150,6 +150,33 @@ _CLIP_BACKTRACK = 200
 
 _SRCSET_SPLIT_RE = re.compile(r"\s*,\s*")
 _INTERIOR_SPACE_RE = re.compile(r"[ \t]+")
+# Page text is interpolated into Markdown syntax in three places — link text,
+# image alt, table cells — and an unbalanced bracket or pipe there does not
+# merely look wrong, it silently ends the construct early and swallows content.
+_LINK_TEXT_ESCAPE_RE = re.compile(r"([\\\[\]])")
+_BACKTICK_RUN_RE = re.compile(r"`+")
+# A Markdown destination only tolerates balanced parentheses and no spaces;
+# <...> form accepts both.
+_URL_NEEDS_BRACKETS_RE = re.compile(r"[()\s]")
+
+
+def _escape_link_text(text: str) -> str:
+    return _LINK_TEXT_ESCAPE_RE.sub(r"\\\1", text)
+
+
+def _markdown_url(url: str) -> str:
+    """Render ``url`` as a Markdown destination, bracketing it when needed."""
+    if not _URL_NEEDS_BRACKETS_RE.search(url):
+        return url
+    return "<" + url.replace("<", "%3C").replace(">", "%3E") + ">"
+
+
+def _code_span(inner: str) -> str:
+    """Wrap ``inner`` in a backtick fence long enough to contain it."""
+    longest = max((len(run) for run in _BACKTICK_RUN_RE.findall(inner)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if inner.startswith("`") or inner.endswith("`") else ""
+    return f"{fence}{pad}{inner}{pad}{fence}"
 
 
 class _MarkdownExtractor(HTMLParser):
@@ -169,13 +196,15 @@ class _MarkdownExtractor(HTMLParser):
         self._pre_depth = 0
         self._in_title = False
         self._title: list[str] = []
-        # (start index in _out, closing renderer) for inline wrappers.
+        # Open inline wrappers: (start index in _out, resolved URL, tag).
+        # The URL is empty for <code> and for links whose href is unusable.
         self._wraps: list[tuple[int, str, str]] = []
         # [ordered, next number] per open list, innermost last.
         self._lists: list[list[Any]] = []
         self._images: dict[str, PageImage] = {}
         self._row_cells = 0
         self._row_is_header = False
+        self._in_cell = False
         # Index in _out of the list marker awaiting content, if any.
         self._marker_at: int | None = None
 
@@ -251,7 +280,13 @@ class _MarkdownExtractor(HTMLParser):
             self._start_list_item()
             return
         if tag == "a":
-            self._wraps.append((len(self._out), values.get("href", ""), "a"))
+            # Resolve now, not at the closing tag: knowing whether this will
+            # actually become a link decides whether its text needs escaping,
+            # and a footnote marker like [9] behind a fragment href would
+            # otherwise be escaped for a link that never gets emitted.
+            self._wraps.append(
+                (len(self._out), self._absolute(values.get("href", "")), "a")
+            )
             return
         if tag == "code" and not self._pre_depth:
             self._wraps.append((len(self._out), "", "code"))
@@ -260,11 +295,13 @@ class _MarkdownExtractor(HTMLParser):
             self._break()
             self._row_cells = 0
             self._row_is_header = False
+            self._in_cell = False
             return
         if tag in ("td", "th"):
             self._emit("| " if self._at_line_start() else " | ")
             self._row_cells += 1
             self._row_is_header = self._row_is_header or tag == "th"
+            self._in_cell = True
             return
         if tag in _BLOCK_ELEMENTS:
             self._blank_line()
@@ -297,7 +334,11 @@ class _MarkdownExtractor(HTMLParser):
             self._drop_empty_marker()
             self._break()
             return
+        if tag in ("td", "th"):
+            self._in_cell = False
+            return
         if tag == "tr":
+            self._in_cell = False
             self._close_table_row()
             return
         if tag in _HEADINGS or tag in _BLOCK_ELEMENTS:
@@ -319,7 +360,15 @@ class _MarkdownExtractor(HTMLParser):
             return
         lead = " " if data[:1].isspace() and not self._at_line_start() else ""
         trail = " " if data[-1:].isspace() else ""
-        self._emit(f"{lead}{' '.join(data.split())}{trail}")
+        text = " ".join(data.split())
+        # Escape here rather than when the construct closes: by then the buffer
+        # may also hold Markdown this class emitted itself (a link wrapping an
+        # image), and escaping that would break it.
+        if any(wrap[2] == "a" and wrap[1] for wrap in self._wraps):
+            text = _escape_link_text(text)
+        if self._in_cell:
+            text = text.replace("|", "\\|")
+        self._emit(f"{lead}{text}{trail}")
 
     # ---- element helpers ----
 
@@ -364,7 +413,7 @@ class _MarkdownExtractor(HTMLParser):
     def _close_wrap(self, tag: str) -> None:
         for index in range(len(self._wraps) - 1, -1, -1):
             if self._wraps[index][2] == tag:
-                start, href, _ = self._wraps.pop(index)
+                start, url, _ = self._wraps.pop(index)
                 break
         else:
             return  # stray close tag
@@ -373,9 +422,9 @@ class _MarkdownExtractor(HTMLParser):
         if not inner:
             return
         if tag == "code":
-            self._emit(f"`{inner}`")
-        elif href and (url := self._absolute(href)):
-            self._emit(f"[{inner}]({url})")
+            self._emit(_code_span(inner))
+        elif url:
+            self._emit(f"[{inner}]({_markdown_url(url)})")
         else:
             self._emit(inner)
 
@@ -387,9 +436,11 @@ class _MarkdownExtractor(HTMLParser):
     def _handle_img(self, values: dict[str, str]) -> None:
         src = values.get("src") or self._pick_srcset(values.get("srcset", ""))
         alt = " ".join(values.get("alt", "").split())[:_MAX_ALT_CHARS]
+        # The structured PageImage keeps the alt text as written; only the
+        # Markdown copy needs escaping.
         url = self._record_image(src, alt)
         if url:
-            self._emit(f"![{alt}]({url})")
+            self._emit(f"![{_escape_link_text(alt)}]({_markdown_url(url)})")
 
     def _pick_srcset(self, srcset: str) -> str:
         """The largest candidate in a ``srcset``, by width or pixel density."""

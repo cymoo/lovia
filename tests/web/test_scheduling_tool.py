@@ -21,10 +21,16 @@ from lovia import Agent  # noqa: E402
 from lovia.run_context import RunContext  # noqa: E402
 from lovia.web import ChatStore, create_app  # noqa: E402
 from lovia.web.scheduler import Scheduler  # noqa: E402
-from lovia.web.scheduling import Scheduling, _make_tool, _to_epoch  # noqa: E402
+from lovia.web.scheduling import (  # noqa: E402
+    Scheduling,
+    _make_cancel_tool,
+    _make_list_tool,
+    _make_tool,
+    _to_epoch,
+)
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
-from .test_scheduler import _drain_runs  # noqa: E402
+from .test_scheduler import _drain_runs, _wait_outcome  # noqa: E402
 from .test_supervisor import _client, _spawn, _wait_run  # noqa: E402
 
 
@@ -75,6 +81,15 @@ def test_to_epoch_rejects_garbage() -> None:
 
 def test_tool_requires_approval() -> None:
     assert _make_tool(ChatStore.in_memory()).needs_approval is True
+
+
+def test_management_tools_skip_approval() -> None:
+    # The self-cancel of a stop condition happens inside a clientless
+    # scheduled run, where an approval request would be auto-denied — and
+    # cancelling only deactivates (reversible), so no gate on these two.
+    store = ChatStore.in_memory()
+    assert _make_cancel_tool(store).needs_approval is False
+    assert _make_list_tool(store).needs_approval is False
 
 
 @pytest.mark.asyncio
@@ -220,10 +235,170 @@ async def test_empty_instruction_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plugin_contributes_tool_and_instructions() -> None:
+async def test_plugin_contributes_tools_and_instructions() -> None:
     inst = await Scheduling(ChatStore.in_memory()).setup()
-    assert {t.name for t in inst.tools} == {"schedule_run"}
+    assert {t.name for t in inst.tools} == {
+        "schedule_run",
+        "list_schedules",
+        "cancel_schedule",
+    }
     assert inst.instructions  # non-empty guidance steers the model
+
+
+# --------------------------------------------------------------------------- #
+# unit: stop conditions (until + safety nets)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_until_with_safety_nets_persists() -> None:
+    store = ChatStore.in_memory()
+    out = await _invoke(
+        store,
+        {
+            "instruction": "check the log",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "until": "it says ready",
+            "max_fires": 120,
+            "expires_at": "2033-05-18T03:33",
+        },
+    )
+    (row,) = await store.list_schedules()
+    assert row.until == "it says ready"
+    assert row.max_fires == 120
+    assert row.expires_at is not None and row.expires_at > 1_900_000_000
+    assert "stops when" in out
+
+
+@pytest.mark.asyncio
+async def test_until_requires_a_safety_net() -> None:
+    store = ChatStore.in_memory()
+    out = await _invoke(
+        store,
+        {
+            "instruction": "check",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "until": "log says ready",
+        },
+    )
+    assert "safety net" in out.lower()
+    assert len(await store.list_schedules()) == 0
+
+
+@pytest.mark.asyncio
+async def test_until_rejected_for_one_shot() -> None:
+    store = ChatStore.in_memory()
+    out = await _invoke(
+        store,
+        {
+            "instruction": "x",
+            "trigger_kind": "at",
+            "trigger_expr": "2000000000",
+            "until": "y",
+            "max_fires": 3,
+        },
+    )
+    assert "repeating" in out.lower()
+    assert len(await store.list_schedules()) == 0
+
+
+@pytest.mark.asyncio
+async def test_bad_max_fires_refused() -> None:
+    store = ChatStore.in_memory()
+    out = await _invoke(
+        store,
+        {
+            "instruction": "x",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "max_fires": 0,
+        },
+    )
+    assert "max_fires" in out
+    assert len(await store.list_schedules()) == 0
+
+
+@pytest.mark.asyncio
+async def test_bad_expires_at_refused() -> None:
+    store = ChatStore.in_memory()
+    out = await _invoke(
+        store,
+        {
+            "instruction": "x",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "expires_at": "whenever",
+        },
+    )
+    assert "expires_at" in out
+    assert len(await store.list_schedules()) == 0
+
+
+# --------------------------------------------------------------------------- #
+# unit: list_schedules / cancel_schedule
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_cancel_schedule_deactivates_with_reason() -> None:
+    store = ChatStore.in_memory()
+    await _invoke(
+        store,
+        {"instruction": "water", "trigger_kind": "every", "trigger_expr": "300"},
+    )
+    (row,) = await store.list_schedules()
+
+    out = await _make_cancel_tool(store).invoke(
+        {"schedule_id": row.id, "reason": "user asked"}, _ctx()
+    )
+    assert "stopped" in out
+    after = await store.get_schedule(row.id)
+    assert after is not None and not after.active
+    assert after.finished_reason == "user asked"
+
+    # A second cancel reports already-inactive instead of overwriting.
+    again = await _make_cancel_tool(store).invoke(
+        {"schedule_id": row.id, "reason": "again"}, _ctx()
+    )
+    assert "already inactive" in again
+    after = await store.get_schedule(row.id)
+    assert after is not None and after.finished_reason == "user asked"
+
+
+@pytest.mark.asyncio
+async def test_cancel_unknown_id_points_at_list() -> None:
+    store = ChatStore.in_memory()
+    out = await _make_cancel_tool(store).invoke(
+        {"schedule_id": "nope", "reason": "x"}, _ctx()
+    )
+    assert "list_schedules" in out
+
+
+@pytest.mark.asyncio
+async def test_list_schedules_reports_status_and_condition() -> None:
+    store = ChatStore.in_memory()
+    assert "No schedules" in await _make_list_tool(store).invoke({}, _ctx())
+
+    await _invoke(
+        store,
+        {
+            "instruction": "check the log",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "until": "ready",
+            "max_fires": 5,
+        },
+    )
+    (row,) = await store.list_schedules()
+    await store.set_schedule_active(row.id, active=False, finished_reason="expired")
+
+    out = await _make_list_tool(store).invoke({}, _ctx())
+    assert row.id in out
+    assert "until: ready" in out
+    assert "0/5" in out
+    assert "done (expired)" in out
 
 
 # --------------------------------------------------------------------------- #
@@ -318,3 +493,49 @@ async def test_tool_created_row_fires_via_scheduler() -> None:
     assert row.active is False  # one-shot deactivated after firing
     assert row.last_session_id is not None  # it fired into a fresh session
     assert provider.calls  # the scheduled agent actually ran
+
+
+@pytest.mark.asyncio
+async def test_fired_run_cancels_its_own_schedule_without_approval() -> None:
+    """The full stop-condition loop: a fired run sees the protocol block,
+    calls ``cancel_schedule`` on its own schedule, and the clientless run
+    completes without parking on an approval."""
+    store = ChatStore.in_memory()
+    await _invoke(
+        store,
+        {
+            "instruction": "check the log",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "until": "it says ready",
+            "max_fires": 10,
+            "continue_session": False,
+        },
+    )
+    (row,) = await store.list_schedules()
+    await store.set_schedule_active(row.id, active=True, next_fire=time.time() - 1)
+
+    provider = ScriptedProvider(
+        [
+            call(
+                "cancel_schedule",
+                {"schedule_id": row.id, "reason": "log says ready"},
+                call_id="c1",
+            ),
+            text("condition met — schedule stopped"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Scheduling(store)])
+    app = create_app(agent, store=store, generate_titles=False)
+    deps = app.state.deps
+
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+
+    after = await store.get_schedule(row.id)
+    assert after is not None
+    assert not after.active  # the run stopped its own schedule…
+    assert after.finished_reason == "log says ready"
+    # …and the advancing mark_fired didn't resurrect it (see store.mark_fired).
+    rec = await _wait_outcome(store, f"schedule:{row.id}")
+    assert rec.status == "completed"  # no approval parking, no failure

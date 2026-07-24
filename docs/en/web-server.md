@@ -115,6 +115,16 @@ Tool call. `continue_session=True` appends results to the same chat; otherwise
 each fire starts a new Session. Delivery is at-most-once and coalesced: a fire
 is skipped while the previous one is still running.
 
+A repeating schedule can carry a stop condition (`until`, natural language):
+each fire is then told to evaluate it after doing the task and cancel the
+schedule once it is met — "check the log every minute until it says ready".
+Deterministic safety nets (`max_fires`, `expires_at`) deactivate the schedule
+even if the condition is never met; the tool requires one when `until` is set.
+The plugin also contributes `list_schedules` and `cancel_schedule`, which need
+no approval: cancelling only deactivates (resume or delete from the panel),
+and the self-cancel must work inside a clientless scheduled run, where an
+approval request would be auto-denied.
+
 ## Security checklist
 
 - Keep `host="127.0.0.1"` for personal use; non-loopback binds are

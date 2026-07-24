@@ -42,13 +42,13 @@ _META_COLS = "id, title, agent, created_at, updated_at, pinned"
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
-    "next_fire, active, last_session_id, created_at, updated_at"
+    "next_fire, active, last_session_id, created_at, updated_at, "
+    "until, max_fires, expires_at, fire_count, finished_reason"
 )
 
 # Column order shared by every ``RunRow`` SELECT (and ``from_row``).
 _RUN_COLS = (
-    "id, session_id, agent, source, status, error, "
-    "started_at, finished_at, usage_json"
+    "id, session_id, agent, source, status, error, started_at, finished_at, usage_json"
 )
 
 
@@ -75,7 +75,12 @@ CREATE TABLE IF NOT EXISTS chat_schedules (
     active INTEGER NOT NULL DEFAULT 1,
     last_session_id TEXT,
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    until TEXT,
+    max_fires INTEGER,
+    expires_at REAL,
+    fire_count INTEGER NOT NULL DEFAULT 0,
+    finished_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_schedules_due
     ON chat_schedules(active, next_fire);
@@ -139,6 +144,17 @@ class ScheduleRow:
     last_session_id: str | None  # session of the last fire (overlap check)
     created_at: float
     updated_at: float
+    # Stop condition, evaluated by each fired run itself (see scheduler.fire_input).
+    until: str | None = None
+    # Safety nets, enforced deterministically by the scheduler. ``fire_count``
+    # counts fire *attempts* (skipped slots included) — a bounded lifetime even
+    # when fires never deliver, not an exact delivery quota.
+    max_fires: int | None = None
+    expires_at: float | None = None
+    fire_count: int = 0
+    # Why the scheduler/agent deactivated it; NULL on a plain user pause, so
+    # ``active=0 AND finished_reason IS NOT NULL`` reads as "done".
+    finished_reason: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -154,6 +170,11 @@ class ScheduleRow:
             last_session_id=row[8],
             created_at=row[9],
             updated_at=row[10],
+            until=row[11],
+            max_fires=row[12],
+            expires_at=row[13],
+            fire_count=row[14],
+            finished_reason=row[15],
         )
 
     def to_dict(self) -> JsonObject:
@@ -169,6 +190,11 @@ class ScheduleRow:
             "last_session_id": self.last_session_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "until": self.until,
+            "max_fires": self.max_fires,
+            "expires_at": self.expires_at,
+            "fire_count": self.fire_count,
+            "finished_reason": self.finished_reason,
         }
 
 
@@ -283,29 +309,19 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
             )
-            # DBs from before the chat_ prefix (lovia <= 0.8.26) name the
-            # schedule table ``schedules``. The base schema (already ensured)
-            # created the empty ``chat_schedules``; fold the legacy rows in and
-            # drop the old table. Naming _SCHED_COLS explicitly also sheds the
-            # dead ``last_status``/``last_error`` columns some legacy DBs carry
-            # (retired by the run-records table) — they vanish with the DROP.
-            legacy = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name='schedules'"
-            ).fetchone()
-            if legacy is not None:
-                try:
-                    conn.execute(
-                        f"INSERT OR IGNORE INTO chat_schedules ({_SCHED_COLS}) "
-                        f"SELECT {_SCHED_COLS} FROM schedules"
-                    )
-                except sqlite3.OperationalError as exc:
-                    # Another worker folded and dropped the table between our
-                    # check and this read (concurrent multi-worker startup) —
-                    # same tolerance as add_column above.
-                    if "no such table" not in str(exc).lower():
-                        raise
-                conn.execute("DROP TABLE IF EXISTS schedules")
+            # Stop-condition columns (0.8.34). NOTE: the pre-chat_-prefix
+            # ``schedules`` table fold (lovia <= 0.8.26) was retired here —
+            # those legacy rows are no longer migrated.
+            scols = {r[1] for r in conn.execute("PRAGMA table_info(chat_schedules)")}
+            for column_def in (
+                "until TEXT",
+                "max_fires INTEGER",
+                "expires_at REAL",
+                "fire_count INTEGER NOT NULL DEFAULT 0",
+                "finished_reason TEXT",
+            ):
+                if column_def.split(" ", 1)[0] not in scols:
+                    add_column(conn, "chat_schedules", column_def)
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.
@@ -451,9 +467,7 @@ class ChatStore:
         await self._drop_checkpoint(session_id)
         await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-        await self._write(
-            "DELETE FROM chat_runs WHERE session_id = ?", (session_id,)
-        )
+        await self._write("DELETE FROM chat_runs WHERE session_id = ?", (session_id,))
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
@@ -534,7 +548,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -547,6 +561,11 @@ class ChatStore:
                 row.last_session_id,
                 row.created_at,
                 row.updated_at,
+                row.until,
+                row.max_fires,
+                row.expires_at,
+                row.fire_count,
+                row.finished_reason,
             ),
         )
 
@@ -565,11 +584,17 @@ class ChatStore:
         )
 
     async def update_schedule(self, row: ScheduleRow) -> None:
-        """Overwrite every mutable column of the schedule (keyed by ``row.id``)."""
+        """Overwrite every mutable column of the schedule (keyed by ``row.id``).
+
+        ``fire_count`` is deliberately not written — it is scheduler-owned
+        bookkeeping (see :meth:`mark_fired`), so an edit racing a fire can't
+        rewind it.
+        """
         await self._write(
             "UPDATE chat_schedules SET agent = ?, input = ?, session_id = ?, "
             "trigger_kind = ?, trigger_expr = ?, next_fire = ?, active = ?, "
-            "last_session_id = ?, updated_at = ? WHERE id = ?",
+            "last_session_id = ?, updated_at = ?, until = ?, max_fires = ?, "
+            "expires_at = ?, finished_reason = ? WHERE id = ?",
             (
                 row.agent,
                 row.input,
@@ -580,6 +605,10 @@ class ChatStore:
                 int(row.active),
                 row.last_session_id,
                 row.updated_at,
+                row.until,
+                row.max_fires,
+                row.expires_at,
+                row.finished_reason,
                 row.id,
             ),
         )
@@ -609,28 +638,60 @@ class ChatStore:
         next_fire: float,
         active: bool,
         last_session_id: str | None,
+        finished_reason: str | None = None,
     ) -> None:
-        """Advance a schedule after a fire (or deactivate a one-shot)."""
+        """Advance a schedule after a fire (or deactivate a one-shot).
+
+        Every call counts one fire attempt (``fire_count``); pass
+        ``finished_reason`` when this fire deactivates the schedule for good
+        (e.g. its ``max_fires`` safety net tripped).
+
+        This write races the run the fire just launched, which may have
+        already ``cancel_schedule``d itself — so it is monotone: ``active``
+        only ever decreases (``active * ?``) and a ``finished_reason`` that is
+        already set is never erased (``COALESCE``). Advancing must not
+        resurrect a schedule its own run just stopped.
+        """
         await self._write(
-            "UPDATE chat_schedules SET next_fire = ?, active = ?, "
-            "last_session_id = ?, updated_at = ? WHERE id = ?",
-            (next_fire, int(active), last_session_id, time.time(), schedule_id),
+            "UPDATE chat_schedules SET next_fire = ?, active = active * ?, "
+            "last_session_id = ?, fire_count = fire_count + 1, "
+            "finished_reason = COALESCE(finished_reason, ?), updated_at = ? "
+            "WHERE id = ?",
+            (
+                next_fire,
+                int(active),
+                last_session_id,
+                finished_reason,
+                time.time(),
+                schedule_id,
+            ),
         )
 
     async def set_schedule_active(
-        self, schedule_id: str, *, active: bool, next_fire: float | None = None
+        self,
+        schedule_id: str,
+        *,
+        active: bool,
+        next_fire: float | None = None,
+        finished_reason: str | None = None,
     ) -> None:
-        """Pause/resume a schedule (resume passes a freshly-computed next_fire)."""
+        """Pause/resume a schedule (resume passes a freshly-computed next_fire).
+
+        ``finished_reason`` is written verbatim: deactivation with a reason
+        marks the schedule "done" (condition met / expired), while the default
+        ``None`` keeps a plain pause — and clears the reason on resume.
+        """
         if next_fire is None:
             await self._write(
-                "UPDATE chat_schedules SET active = ?, updated_at = ? WHERE id = ?",
-                (int(active), time.time(), schedule_id),
+                "UPDATE chat_schedules SET active = ?, finished_reason = ?, "
+                "updated_at = ? WHERE id = ?",
+                (int(active), finished_reason, time.time(), schedule_id),
             )
         else:
             await self._write(
-                "UPDATE chat_schedules SET active = ?, next_fire = ?, updated_at = ? "
-                "WHERE id = ?",
-                (int(active), next_fire, time.time(), schedule_id),
+                "UPDATE chat_schedules SET active = ?, next_fire = ?, "
+                "finished_reason = ?, updated_at = ? WHERE id = ?",
+                (int(active), next_fire, finished_reason, time.time(), schedule_id),
             )
 
     # ---- run records -----------------------------------------------------

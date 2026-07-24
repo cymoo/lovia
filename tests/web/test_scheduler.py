@@ -23,6 +23,7 @@ from lovia.web import create_app  # noqa: E402
 from lovia.web.scheduler import (  # noqa: E402
     Scheduler,
     advance_next_fire,
+    fire_input,
     initial_next_fire,
     validate_trigger,
 )
@@ -141,6 +142,19 @@ def test_next_fire_cron_is_wired() -> None:
     assert n2 - n1 == 300  # successive slots are one interval apart
 
 
+def test_fire_input_plain_without_until() -> None:
+    assert fire_input(_row(input="just do it")) == "just do it"
+
+
+def test_fire_input_appends_protocol_with_until() -> None:
+    out = fire_input(_row(id="abc123", input="check the log", until="it says ready"))
+    assert out.startswith("check the log")
+    # The protocol block names the schedule, the condition, and the tool.
+    assert "abc123" in out
+    assert "it says ready" in out
+    assert "cancel_schedule" in out
+
+
 # --------------------------------------------------------------------------- #
 # ScheduleStore
 # --------------------------------------------------------------------------- #
@@ -186,6 +200,45 @@ async def test_schedule_store_mark_fired_and_pause_resume() -> None:
     await store.set_schedule_active("a", active=True, next_fire=now + 5)
     resumed = await store.get_schedule("a")
     assert resumed is not None and resumed.active and resumed.next_fire == now + 5
+
+
+async def test_schedule_store_stop_condition_fields() -> None:
+    store = ChatStore.in_memory()
+    now = 1000.0
+    await store.add_schedule(
+        _row(id="a", now=now, until="done", max_fires=3, expires_at=now + 60)
+    )
+    r = await store.get_schedule("a")
+    assert r is not None
+    assert r.until == "done" and r.max_fires == 3 and r.expires_at == now + 60
+    assert r.fire_count == 0 and r.finished_reason is None
+
+    # Each mark_fired counts one attempt; a tripped net writes the reason.
+    await store.mark_fired("a", next_fire=now + 60, active=True, last_session_id="s1")
+    r = await store.get_schedule("a")
+    assert r is not None and r.fire_count == 1 and r.finished_reason is None
+    await store.mark_fired(
+        "a",
+        next_fire=now + 120,
+        active=False,
+        last_session_id="s2",
+        finished_reason="max fires reached",
+    )
+    r = await store.get_schedule("a")
+    assert r is not None and r.fire_count == 2 and not r.active
+    assert r.finished_reason == "max fires reached"
+
+    # Resume clears the reason — the schedule is live again, not "done".
+    await store.set_schedule_active("a", active=True, next_fire=now + 5)
+    r = await store.get_schedule("a")
+    assert r is not None and r.active and r.finished_reason is None
+
+    # mark_fired races the run it launched: it must never resurrect a row the
+    # run just cancelled, nor erase the cancel reason.
+    await store.set_schedule_active("a", active=False, finished_reason="condition met")
+    await store.mark_fired("a", next_fire=now + 180, active=True, last_session_id="s3")
+    r = await store.get_schedule("a")
+    assert r is not None and not r.active and r.finished_reason == "condition met"
 
 
 # --------------------------------------------------------------------------- #
@@ -322,6 +375,87 @@ async def test_scheduler_injects_into_live_session() -> None:
     finally:
         release.set()
         await _drain_runs(deps)
+
+
+async def test_scheduler_deactivates_expired_schedule_without_firing() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("never")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(id="s", next_fire=now - 1, now=now, expires_at=now - 0.5)
+    )
+
+    await Scheduler(deps).run_due()
+
+    assert not deps.supervisor._controllers  # nothing fired
+    after = await store.get_schedule("s")
+    assert after is not None
+    assert not after.active
+    assert after.finished_reason == "expired"
+    assert after.fire_count == 0
+    assert await store.latest_run_for("schedule:s") is None
+
+
+async def test_scheduler_max_fires_deactivates_after_last_fire() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("one"), text("two")]), store)
+    deps = app.state.deps
+    sched = Scheduler(deps)
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now - 1, now=now, max_fires=2))
+
+    await sched.run_due()
+    await _drain_runs(deps)
+    mid = await store.get_schedule("s")
+    assert mid is not None and mid.active and mid.fire_count == 1
+
+    # Force the second (and per max_fires last) fire.
+    await store.set_schedule_active("s", active=True, next_fire=time.time() - 1)
+    await sched.run_due()
+    await _drain_runs(deps)
+
+    after = await store.get_schedule("s")
+    assert after is not None
+    assert not after.active  # the Nth fire still ran, then the net tripped
+    assert after.fire_count == 2
+    assert after.finished_reason == "max fires reached"
+
+    # Inactive rows are never due — a further tick fires nothing.
+    await sched.run_due()
+    assert not deps.supervisor._controllers
+
+
+async def test_fire_delivers_until_protocol_block() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("checked")]), store)
+    deps = app.state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(
+            id="s",
+            input="check the log",
+            until="it says ready",
+            max_fires=10,
+            next_fire=now - 1,
+            now=now,
+        )
+    )
+
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+
+    after = await store.get_schedule("s")
+    assert after is not None and after.last_session_id is not None
+    entries = await store.session.load(after.last_session_id)
+    contents = [getattr(e, "content", None) or "" for e in entries]
+    proto = next(c for c in contents if "cancel_schedule" in c)
+    assert proto.startswith("check the log")
+    assert "schedule s" in proto and "it says ready" in proto
+    # The protocol boilerplate stays out of the session title.
+    meta = await store.get(after.last_session_id)
+    assert meta is not None and meta.title is not None
+    assert "cancel_schedule" not in meta.title
 
 
 async def test_scheduler_advances_past_unavailable_agent() -> None:
@@ -584,6 +718,68 @@ def test_api_patch_edits_fields_and_recomputes_next_fire() -> None:
     assert c.get(f"/api/schedules/{sid}").json()["input"] == "still pong"
 
 
+def test_api_stop_condition_fields_roundtrip() -> None:
+    app = _app(_agent([text("hi")]), ChatStore.in_memory())
+    c = TestClient(app)
+    created = c.post(
+        "/api/schedules",
+        json={
+            "input": "check log",
+            "trigger_kind": "every",
+            "trigger_expr": "60",
+            "until": "it says ready",
+            "max_fires": 10,
+            "expires_at": 2_000_000_000,
+        },
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    sid = body["id"]
+    assert body["until"] == "it says ready"
+    assert body["max_fires"] == 10
+    assert body["expires_at"] == 2_000_000_000
+    assert body["fire_count"] == 0 and body["finished_reason"] is None
+
+    # Explicit null clears a field; the others are untouched.
+    r = c.patch(f"/api/schedules/{sid}", json={"until": None})
+    assert r.json()["until"] is None and r.json()["max_fires"] == 10
+
+    # max_fires is validated (ge=1) on both create and patch.
+    assert c.patch(f"/api/schedules/{sid}", json={"max_fires": 0}).status_code == 422
+    assert (
+        c.post(
+            "/api/schedules",
+            json={
+                "input": "x",
+                "trigger_kind": "every",
+                "trigger_expr": "60",
+                "max_fires": 0,
+            },
+        ).status_code
+        == 422
+    )
+
+
+async def test_api_resume_clears_finished_reason() -> None:
+    import httpx
+
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("hi")]), store)
+    now = time.time()
+    await store.add_schedule(_row(id="s", next_fire=now + 60, now=now))
+    await store.set_schedule_active("s", active=False, finished_reason="expired")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        row = (await ac.get("/api/schedules/s")).json()
+        assert row["active"] is False and row["finished_reason"] == "expired"
+
+        resumed = (await ac.patch("/api/schedules/s", json={"active": True})).json()
+        assert resumed["active"] is True
+        assert resumed["finished_reason"] is None  # live again, not "done"
+
+
 @pytest.mark.asyncio
 async def test_run_now_fires_and_advances_without_unpausing() -> None:
     store = ChatStore.in_memory()
@@ -833,18 +1029,19 @@ async def test_schedule_info_derives_status_and_history_from_records() -> None:
         assert [r["run_id"] for r in by_source] == [r["run_id"] for r in history]
 
 
-async def test_legacy_db_with_dropped_status_columns_still_works(tmp_path) -> None:
-    """A 0.8.x DB whose ``schedules`` table still carries last_status/last_error
-    opens cleanly: the rows fold into ``chat_schedules`` (shedding the dead
-    columns) and the run-records table appears."""
+async def test_pre_0_8_34_db_gains_stop_condition_columns(tmp_path) -> None:
+    """A pre-0.8.34 DB whose ``chat_schedules`` lacks the stop-condition
+    columns opens cleanly: the migration adds them and old rows read back with
+    defaults. (The pre-0.8.27 ``schedules``-table fold was retired in 0.8.34 —
+    such a legacy table is simply left alone.)"""
     import sqlite3
     from pathlib import Path
 
-    path = Path(tmp_path) / "legacy.db"
+    path = Path(tmp_path) / "old.db"
     conn = sqlite3.connect(path)
     conn.executescript(
         """
-        CREATE TABLE schedules (
+        CREATE TABLE chat_schedules (
             id TEXT PRIMARY KEY,
             agent TEXT,
             input TEXT NOT NULL,
@@ -854,16 +1051,14 @@ async def test_legacy_db_with_dropped_status_columns_still_works(tmp_path) -> No
             next_fire REAL NOT NULL,
             active INTEGER NOT NULL DEFAULT 1,
             last_session_id TEXT,
-            last_status TEXT,
-            last_error TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
         """
     )
     conn.execute(
-        "INSERT INTO schedules VALUES "
-        "('s', 'bot', 'x', NULL, 'every', '3600', 1.0, 1, NULL, 'ok', NULL, 1.0, 1.0)"
+        "INSERT INTO chat_schedules VALUES "
+        "('s', 'bot', 'x', NULL, 'every', '3600', 1.0, 1, NULL, 1.0, 1.0)"
     )
     conn.commit()
     conn.close()
@@ -871,9 +1066,13 @@ async def test_legacy_db_with_dropped_status_columns_still_works(tmp_path) -> No
     store = ChatStore.sqlite(path)
     row = await store.get_schedule("s")
     assert row is not None and row.input == "x"
-    await store.add_schedule(_row(id="s2", now=2.0, next_fire=2.0))
-    assert {r.id for r in await store.list_schedules()} == {"s", "s2"}
-    assert await store.latest_run_for("schedule:s") is None  # runs table exists
+    assert row.until is None and row.max_fires is None and row.expires_at is None
+    assert row.fire_count == 0 and row.finished_reason is None
+    await store.add_schedule(
+        _row(id="s2", now=2.0, next_fire=2.0, until="done", max_fires=1)
+    )
+    got = await store.get_schedule("s2")
+    assert got is not None and got.until == "done" and got.max_fires == 1
 
 
 async def test_cancelled_fire_records_cancelled_status() -> None:

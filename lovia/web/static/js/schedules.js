@@ -207,11 +207,29 @@ function rowEl(s, { onChange, onEdit, onOpenSession }) {
   prompt.title = s.input;
   const meta = document.createElement('div');
   meta.className = 'sched-item-meta';
+  const clip = (txt, n) => (txt.length > n ? txt.slice(0, n - 1) + '…' : txt);
+  // A schedule that deactivated itself (stop condition met, expired, max
+  // fires) reads as done-with-a-reason; a plain user pause stays "paused".
+  const finishedReason = !s.active && s.finished_reason ? s.finished_reason : null;
   meta.textContent = s.active
     ? `${describeTrigger(s)} · ${t('sched.next', { time: formatDateTime(s.next_fire) })}`
-    : `${describeTrigger(s)} · ${done ? t('sched.done') : t('sched.paused')}`;
-  // The humanized trigger keeps the raw expression one hover away.
-  meta.title = `${s.trigger_kind} ${s.trigger_expr}`;
+    : `${describeTrigger(s)} · ${
+        finishedReason
+          ? `${t('sched.done')} — ${clip(finishedReason, 60)}`
+          : done
+            ? t('sched.done')
+            : t('sched.paused')
+      }`;
+  if (s.until && !finishedReason) {
+    meta.append(` · ${t('sched.until', { cond: clip(s.until, 40) })}`);
+  }
+  // The humanized trigger keeps the raw expression one hover away — plus the
+  // full stop condition, fire budget, and finish reason when present.
+  let hover = `${s.trigger_kind} ${s.trigger_expr}`;
+  if (s.until) hover += `\n${t('sched.until', { cond: s.until })}`;
+  if (s.max_fires) hover += `\nfires ${s.fire_count}/${s.max_fires}`;
+  if (finishedReason) hover += `\n${finishedReason}`;
+  meta.title = hover;
   // Outcome of the most recent fire (None until it first completes).
   if (s.last_status) {
     const status = document.createElement('span');
@@ -316,6 +334,7 @@ export async function openSchedulesDialog() {
     </div>
     <form class="sched-form">
       <textarea class="dialog-input sched-input" rows="2" placeholder="${t('sched.promptPlaceholder')}" required></textarea>
+      <input type="text" class="dialog-input sched-until" maxlength="2000" placeholder="${t('sched.untilPlaceholder')}" />
       <div class="sched-row">
         <select class="dialog-input sched-agent" aria-label="${t('sched.agentLabel')}" hidden></select>
         <select class="dialog-input sched-kind" aria-label="${t('sched.triggerKind')}">
@@ -333,6 +352,7 @@ export async function openSchedulesDialog() {
 
   const form = panel.querySelector('.sched-form');
   const input = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.sched-input'));
+  const untilInput = /** @type {HTMLInputElement} */ (panel.querySelector('.sched-until'));
   const agentSel = /** @type {HTMLSelectElement} */ (panel.querySelector('.sched-agent'));
   const kindSel = /** @type {HTMLSelectElement} */ (panel.querySelector('.sched-kind'));
   const exprWrap = panel.querySelector('.sched-expr-wrap');
@@ -382,6 +402,7 @@ export async function openSchedulesDialog() {
   function exitEditMode() {
     editingId = null;
     input.value = '';
+    untilInput.value = '';
     submitBtn.textContent = t('sched.add');
     cancelEditBtn.hidden = true;
   }
@@ -390,6 +411,7 @@ export async function openSchedulesDialog() {
   function enterEditMode(s) {
     editingId = s.id;
     input.value = s.input;
+    untilInput.value = s.until || '';
     if (store.agents.length > 1 && s.agent) agentSel.value = s.agent;
     kindSel.value = s.trigger_kind;
     exprInput = attachExpr(buildExprInput(s.trigger_kind));
@@ -441,6 +463,9 @@ export async function openSchedulesDialog() {
     }
     const body = { input: message, trigger_kind: kindSel.value, trigger_expr };
     if (store.agents.length > 1) body.agent = agentSel.value;
+    const until = untilInput.value.trim();
+    if (until) body.until = until;
+    else if (editingId) body.until = null; // clearing the field clears the condition
     try {
       if (editingId) {
         await api.updateSchedule(editingId, body);
@@ -448,6 +473,7 @@ export async function openSchedulesDialog() {
       } else {
         await api.createSchedule(body);
         input.value = '';
+        untilInput.value = '';
       }
       await refresh();
     } catch (err) {

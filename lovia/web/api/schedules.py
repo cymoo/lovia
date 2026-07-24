@@ -52,6 +52,11 @@ def _info(row: ScheduleRow, last: RunRow | None = None) -> ScheduleInfo:
         last_error=last_error,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        until=row.until,
+        max_fires=row.max_fires,
+        expires_at=row.expires_at,
+        fire_count=row.fire_count,
+        finished_reason=row.finished_reason,
     )
 
 
@@ -131,6 +136,9 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             last_session_id=None,
             created_at=now,
             updated_at=now,
+            until=spec.until.strip() or None if spec.until else None,
+            max_fires=spec.max_fires,
+            expires_at=spec.expires_at,
         )
         await store.add_schedule(row)
         return _info(row)
@@ -159,6 +167,12 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
         if "session_id" in provided:
             # Explicit null detaches (fresh session per fire); omitted keeps.
             changes["session_id"] = patch.session_id
+        if "until" in provided:
+            changes["until"] = patch.until.strip() or None if patch.until else None
+        if "max_fires" in provided:
+            changes["max_fires"] = patch.max_fires
+        if "expires_at" in provided:
+            changes["expires_at"] = patch.expires_at
 
         kind = patch.trigger_kind or row.trigger_kind
         expr = (
@@ -172,6 +186,9 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             # A new trigger starts from now; a resume also recomputes so the
             # schedule doesn't immediately fire slots that lapsed while paused.
             changes["next_fire"] = _validated_next_fire(kind, expr)
+        if resuming:
+            # Live again — shed the "done" marker (condition met / expired).
+            changes["finished_reason"] = None
         if patch.active is not None:
             changes["active"] = patch.active
 

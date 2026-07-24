@@ -18,6 +18,13 @@ comes from the :class:`~lovia.run_context.RunContext` (the active agent, the
 session id). So the plugin closes the tool over the store — the same idiom
 :class:`~lovia.plugins.Todo` uses for its list — and no run-path plumbing is
 required.
+
+The plugin also exposes ``list_schedules`` and ``cancel_schedule``, which —
+unlike ``schedule_run`` — need **no** approval: cancelling only *deactivates*
+a schedule (the user can resume or delete it in the panel; hard delete stays
+user-only), and the self-cancel path of a stop condition (``until``) must work
+inside a clientless scheduled run, where an approval request would park until
+the timeout auto-denies it (see ``RunSupervisor._await_approval``).
 """
 
 from __future__ import annotations
@@ -58,7 +65,16 @@ _INSTRUCTIONS = (
     "so the user sees results inline; set `continue_session=false` only if the "
     "user asks for it to run in a separate chat. "
     "Don't schedule something you could just do now — and note that creating a "
-    "schedule asks the user to approve it first."
+    "schedule asks the user to approve it first.\n"
+    'For "keep doing X until Y" requests, set `until` to the stop condition '
+    "and ALWAYS add a safety net — `max_fires` or `expires_at` — sized "
+    "generously from the user's intent (e.g. every 60s until a log line "
+    "appears → max_fires=120). Each fire is automatically told to evaluate "
+    "the condition and cancel the schedule once met. You can also inspect and "
+    "stop schedules yourself with `list_schedules` and "
+    "`cancel_schedule(schedule_id, reason)` — stopping only deactivates (the "
+    "user can resume or delete it in the Scheduled-runs panel), so it needs "
+    "no approval; deleting outright is the user's call, via the panel."
 )
 
 
@@ -94,6 +110,13 @@ def _describe(kind: str, expr: str) -> str:
     return "one-time"
 
 
+def _iso_minutes(epoch: float) -> str:
+    """Local ISO-8601 time at minutes precision. astimezone() stamps the
+    server's offset so the resolved absolute time is explicit (helps catch a
+    timezone the model got wrong)."""
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="minutes")
+
+
 def _make_tool(store: ChatStore) -> Tool:
     @tool(name="schedule_run", description=_DESCRIPTION, needs_approval=True)
     async def schedule_run(
@@ -122,6 +145,23 @@ def _make_tool(store: ChatStore) -> Tool:
             "results land inline here. Set false ONLY when the user explicitly "
             "asks for the scheduled task to run in a separate / new chat.",
         ] = True,
+        until: Annotated[
+            str | None,
+            "Optional stop condition in natural language (e.g. 'the log "
+            'contains "ready"\'). Each fire evaluates it after doing the task '
+            "and cancels the schedule once it is met. Repeating triggers only; "
+            "requires max_fires or expires_at as a safety net.",
+        ] = None,
+        max_fires: Annotated[
+            int | None,
+            "Safety net: deactivate the schedule after this many fires, even "
+            "if `until` is never met.",
+        ] = None,
+        expires_at: Annotated[
+            str | None,
+            "Safety net: deactivate the schedule at this time (same formats "
+            "as an 'at' trigger).",
+        ] = None,
     ) -> str:
         text = instruction.strip()
         if not text:
@@ -144,6 +184,31 @@ def _make_tool(store: ChatStore) -> Tool:
             # RuntimeError = croniter not installed (cron triggers are opt-in).
             return f"Couldn't schedule that: {exc}"
 
+        until_text = until.strip() if until else None
+        if until_text and trigger_kind == "at":
+            return (
+                "A stop condition only makes sense for a repeating trigger "
+                "('every' or 'cron') — a one-time 'at' run already stops itself."
+            )
+        if max_fires is not None and max_fires < 1:
+            return "max_fires must be >= 1."
+        expires_epoch: float | None = None
+        if expires_at is not None and expires_at.strip():
+            try:
+                expires_epoch = float(_to_epoch(expires_at.strip()))
+            except ValueError:
+                return (
+                    "Couldn't parse expires_at — give an ISO-8601 datetime like "
+                    "2026-06-29T09:00 (call the `now` tool first to anchor "
+                    "relative times)."
+                )
+        if until_text and max_fires is None and expires_epoch is None:
+            return (
+                "A stop condition needs a safety net: also set max_fires or "
+                "expires_at so the schedule can't run forever if the condition "
+                "is never met."
+            )
+
         # Continue this chat by default so the user sees results inline; the
         # model only opts out (a fresh session per fire) when the user asks.
         # Falls back to a fresh session if this run has no session to continue.
@@ -163,31 +228,122 @@ def _make_tool(store: ChatStore) -> Tool:
             last_session_id=None,
             created_at=now,
             updated_at=now,
+            until=until_text,
+            max_fires=max_fires,
+            expires_at=expires_epoch,
         )
         await store.add_schedule(row)
 
-        # astimezone() stamps the server's offset so the resolved absolute time
-        # is explicit (helps catch a timezone the model got wrong).
-        when = (
-            datetime.fromtimestamp(next_fire).astimezone().isoformat(timespec="minutes")
-        )
+        when = _iso_minutes(next_fire)
         scope = "continuing this conversation" if session_id else "as a new chat"
+        notes = []
+        if until_text:
+            notes.append(f"stops when: {until_text}")
+        if max_fires is not None:
+            notes.append(f"max {max_fires} fires")
+        if expires_epoch is not None:
+            notes.append(f"expires {_iso_minutes(expires_epoch)}")
+        extra = f"; {'; '.join(notes)}" if notes else ""
         return (
             f"Scheduled — first run at {when} ({_describe(trigger_kind, expr)}), "
-            f"running {scope}. The user can manage it in the Scheduled-runs panel."
+            f"running {scope}{extra}. The user can manage it in the "
+            "Scheduled-runs panel."
         )
 
     return schedule_run
 
 
+_LIST_DESCRIPTION = (
+    "List the user's scheduled runs: each one's id, instruction, trigger and "
+    "status (active / paused / done), plus any stop condition and safety "
+    "nets. Call this first when the user refers to a schedule by description "
+    "rather than id."
+)
+
+
+def _make_list_tool(store: ChatStore) -> Tool:
+    @tool(name="list_schedules", description=_LIST_DESCRIPTION)
+    async def list_schedules(ctx: RunContext[Any]) -> str:
+        rows = await store.list_schedules()
+        if not rows:
+            return "No schedules exist."
+        lines = []
+        for r in rows:
+            if r.active:
+                status = "active"
+            elif r.finished_reason:
+                status = f"done ({r.finished_reason})"
+            else:
+                status = "paused"
+            summary = r.input if len(r.input) <= 80 else r.input[:77] + "…"
+            line = (
+                f"- {r.id}: {summary} — "
+                f"{_describe(r.trigger_kind, r.trigger_expr)}, {status}"
+            )
+            if r.until:
+                line += f"; until: {r.until}"
+            if r.max_fires is not None:
+                line += f"; fires: {r.fire_count}/{r.max_fires}"
+            if r.expires_at is not None:
+                line += f"; expires: {_iso_minutes(r.expires_at)}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    return list_schedules
+
+
+_CANCEL_DESCRIPTION = (
+    "Stop a scheduled run. This only deactivates it — the user can resume or "
+    "delete it in the Scheduled-runs panel — so no approval is needed. Use it "
+    "when a schedule's stop condition is met, or when the user asks for a "
+    "schedule to be stopped."
+)
+
+
+def _make_cancel_tool(store: ChatStore) -> Tool:
+    @tool(name="cancel_schedule", description=_CANCEL_DESCRIPTION)
+    async def cancel_schedule(
+        ctx: RunContext[Any],
+        schedule_id: Annotated[
+            str,
+            "The schedule's id — list_schedules shows ids, and a scheduled "
+            "run is told its own in its instruction.",
+        ],
+        reason: Annotated[
+            str,
+            "One line: why it is being stopped — e.g. the observed stop "
+            "condition, or the user's request.",
+        ],
+    ) -> str:
+        row = await store.get_schedule(schedule_id.strip())
+        if row is None:
+            return (
+                f"No schedule with id {schedule_id!r} — call list_schedules "
+                "to see current ids."
+            )
+        if not row.active:
+            return f"Schedule {row.id} is already inactive."
+        why = reason.strip() or "cancelled by agent"
+        await store.set_schedule_active(row.id, active=False, finished_reason=why)
+        return (
+            f"Schedule {row.id} stopped: {why}. It is deactivated, not "
+            "deleted — the user can resume or delete it in the "
+            "Scheduled-runs panel."
+        )
+
+    return cancel_schedule
+
+
 @dataclass
 class Scheduling:
-    """Plugin: a ``schedule_run`` tool that lets the model create Scheduled runs.
+    """Plugin: tools that let the model create and manage Scheduled runs.
 
     Construct it with the same :class:`~lovia.web.store.ChatStore` the web app
-    uses; the tool writes :class:`~lovia.web.store.ScheduleRow`s the
-    :class:`~lovia.web.scheduler.Scheduler` polls. The tool is gated by approval
-    (``needs_approval=True``).
+    uses; ``schedule_run`` writes :class:`~lovia.web.store.ScheduleRow`s the
+    :class:`~lovia.web.scheduler.Scheduler` polls, and
+    ``list_schedules``/``cancel_schedule`` read and deactivate them. Only
+    ``schedule_run`` is gated by approval (see the module docstring for why
+    the other two must not be).
     """
 
     store: ChatStore
@@ -196,7 +352,11 @@ class Scheduling:
 
     async def setup(self) -> PluginInstance:
         return PluginInstance(
-            tools=[_make_tool(self.store)],
+            tools=[
+                _make_tool(self.store),
+                _make_list_tool(self.store),
+                _make_cancel_tool(self.store),
+            ],
             instructions=self.instructions,
         )
 

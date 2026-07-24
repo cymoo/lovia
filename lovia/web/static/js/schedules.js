@@ -317,6 +317,7 @@ export async function openSchedulesDialog() {
       sw.setAttribute('role', 'switch');
       sw.setAttribute('aria-checked', String(s.active));
       sw.title = s.active ? t('sched.pause') : t('sched.resume');
+      sw.setAttribute('aria-label', sw.title);
       sw.append(el('span', 'sched-switch-knob'));
       sw.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -393,7 +394,7 @@ export async function openSchedulesDialog() {
       nets.push(t('sched.expiresAt', { time: formatDateTime(s.expires_at) }));
     }
     if (nets.length) fact(t('sched.safetyNet'), nets.join(' · '));
-    if (store.agents.length > 1 && s.agent) fact('Agent', s.agent);
+    if (store.agents.length > 1 && s.agent) fact(t('sched.agentLabel'), s.agent);
 
     const actions = el('div', 'sched-detail-actions');
     const act = (label, iconName, fn, cls = '') => {

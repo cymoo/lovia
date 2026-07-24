@@ -107,6 +107,34 @@ def test_index_renders_example_prompts() -> None:
     assert "empty_examples" in res.text
 
 
+def test_shell_assets_get_executable_content_types(monkeypatch) -> None:
+    """Shell assets keep an executable MIME type even on a hostile platform DB.
+
+    On Windows the registry commonly maps ``.js`` -> ``text/plain``; served that
+    way, the browser refuses our ES-module entry point ("Expected a
+    JavaScript-or-Wasm module script...") and the UI never boots. Poison the
+    global ``mimetypes`` table, re-run our startup pin, and confirm the served
+    module/stylesheet come back with types the browser will execute.
+    """
+    import mimetypes
+
+    from lovia.web.app import _register_web_mimetypes
+
+    for ext in (".js", ".mjs", ".css"):
+        monkeypatch.setitem(mimetypes.types_map, ext, "text/plain")
+    _register_web_mimetypes()  # our import-time registration must win
+
+    app = _app(_make_agent([text("hi")]))
+    c = TestClient(app)
+    for path, expected in (
+        ("js/main.js", "text/javascript"),
+        ("styles.css", "text/css"),
+    ):
+        res = c.get(app.url_path_for("static", path=path))
+        assert res.status_code == 200, path
+        assert res.headers["content-type"].split(";")[0].strip() == expected, path
+
+
 def test_list_agents_single() -> None:
     agent = Agent(
         name="writer",

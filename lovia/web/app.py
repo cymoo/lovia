@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import mimetypes
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -39,6 +40,28 @@ _STATIC = Path(__file__).parent / "static"
 # any given URL never change, so the browser may keep them forever and never
 # revalidate — a new build simply serves from a new URL prefix.
 _IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+
+
+def _register_web_mimetypes() -> None:
+    """Pin the content types of the shell assets we serve.
+
+    ``StaticFiles`` types every file through ``mimetypes.guess_type``, which
+    Python seeds from platform sources — ``/etc/*mime.types``, Homebrew's
+    ``/usr/local/etc/mime.types``, and on **Windows** the registry
+    (``HKEY_CLASSES_ROOT\\.js``). Those ``.js`` mappings vary by machine and are
+    infamously ``text/plain`` on Windows, where the browser then refuses our
+    ES-module entry point ("Expected a JavaScript-or-Wasm module script but the
+    server responded with a MIME type of 'text/plain'") and the UI never boots.
+    Registering these makes the served types deterministic on every platform.
+    """
+    mimetypes.add_type("text/javascript", ".js")
+    mimetypes.add_type("text/javascript", ".mjs")
+    mimetypes.add_type("text/css", ".css")
+
+
+# Run at import: `add_type` seeds `mimetypes` after its lazy `init()`, so our
+# entries win over whatever the platform database resolved for these extensions.
+_register_web_mimetypes()
 
 
 class _ImmutableStaticFiles(StaticFiles):

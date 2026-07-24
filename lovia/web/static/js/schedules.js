@@ -216,6 +216,7 @@ function runLine(r, onOpenSession) {
     const link = el('button', 'sched-last-run', '↗');
     link.type = 'button';
     link.title = t('sched.lastRunTitle');
+    link.setAttribute('aria-label', t('sched.lastRunTitle'));
     link.addEventListener('click', () => onOpenSession(r.session_id));
     tail.append(link);
   }
@@ -623,8 +624,16 @@ export async function openSchedulesDialog() {
       if (until) body.until = until;
       else if (editing) body.until = null; // clearing the field clears the condition
       const maxFires = maxFiresInput.value.trim();
-      if (maxFires) body.max_fires = Number(maxFires);
-      else if (editing) body.max_fires = null;
+      if (maxFires) {
+        const n = Number(maxFires);
+        if (!Number.isInteger(n) || n < 1) {
+          maxFiresInput.reportValidity(); // the input's own min/step message
+          return;
+        }
+        body.max_fires = n;
+      } else if (editing) {
+        body.max_fires = null;
+      }
       if (expiresInput.value) {
         const epoch = Math.floor(new Date(expiresInput.value).getTime() / 1000);
         if (!Number.isFinite(epoch)) {

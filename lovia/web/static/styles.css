@@ -2743,21 +2743,35 @@ dialog.custom-dialog::backdrop {
 .sched-history {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  max-height: 180px;
+  max-height: 220px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .sched-run {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
-  font-size: 11.5px;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0; /* a max-height flex column would otherwise squash rows into each other */
+  padding: 6px 2px;
+  font-size: 12px;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
+}
+.sched-run + .sched-run {
+  border-top: 1px solid var(--border);
+}
+.sched-run-status {
+  min-width: 64px;
+  flex-shrink: 0;
+}
+.sched-run-tail {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
 }
 .sched-run-status.completed {
   color: var(--ok);
@@ -2804,6 +2818,27 @@ dialog.custom-dialog::backdrop {
   resize: vertical;
   min-height: 110px;
   font-family: var(--sans);
+}
+.sched-nets {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sched-net-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.sched-net-field > span {
+  font-size: 12px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+.sched-net-field .dialog-input {
+  flex: 1;
+  min-width: 0;
 }
 .sched-row {
   display: flex;

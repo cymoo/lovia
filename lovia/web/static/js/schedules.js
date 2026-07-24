@@ -187,10 +187,11 @@ function el(tag, cls = '', text) {
   return n;
 }
 
-// One line of a schedule's fire history (a persisted run record).
+// One line of a schedule's fire history (a persisted run record):
+// time · outcome on the left, duration/tokens/open-chat on the right.
 function runLine(r, onOpenSession) {
   const line = el('div', 'sched-run');
-  const when = el('span', '', formatDateTime(r.started_at));
+  const when = el('span', 'sched-run-when', formatDateTime(r.started_at));
   const status = el('span', `sched-run-status ${r.status}`);
   status.textContent =
     {
@@ -201,23 +202,24 @@ function runLine(r, onOpenSession) {
       running: t('sched.stRunning'),
     }[r.status] || r.status;
   if (r.error) status.title = r.error;
-  line.append(when, status);
+  const tail = el('span', 'sched-run-tail');
   if (r.finished_at && r.finished_at > r.started_at) {
     const secs = r.finished_at - r.started_at;
-    line.append(
+    tail.append(
       el('span', '', secs >= 90 ? `${Math.round(secs / 60)}m` : `${Math.round(secs)}s`),
     );
   }
   if (r.usage?.total_tokens) {
-    line.append(el('span', '', `${r.usage.total_tokens.toLocaleString()} tok`));
+    tail.append(el('span', '', `${r.usage.total_tokens.toLocaleString()} tok`));
   }
   if (r.session_id) {
     const link = el('button', 'sched-last-run', '↗');
     link.type = 'button';
     link.title = t('sched.lastRunTitle');
     link.addEventListener('click', () => onOpenSession(r.session_id));
-    line.append(link);
+    tail.append(link);
   }
+  line.append(when, status, tail);
   return line;
 }
 
@@ -492,6 +494,30 @@ export async function openSchedulesDialog() {
     untilInput.maxLength = 2000;
     untilInput.placeholder = t('sched.untilPlaceholder');
 
+    // Safety nets, both optional (empty = unbounded). Editing these is the
+    // release valve for a schedule whose max_fires ran out — resuming alone
+    // would re-trip after one fire (fire_count never rewinds).
+    const nets = el('div', 'sched-nets');
+    const netField = (labelText, input) => {
+      const label = el('label', 'sched-net-field');
+      label.append(el('span', '', labelText), input);
+      nets.append(label);
+      return input;
+    };
+    const maxFiresInput = /** @type {HTMLInputElement} */ (
+      el('input', 'dialog-input sched-max-fires')
+    );
+    maxFiresInput.type = 'number';
+    maxFiresInput.min = '1';
+    maxFiresInput.step = '1';
+    maxFiresInput.placeholder = t('sched.unlimited');
+    netField(t('sched.maxFires'), maxFiresInput);
+    const expiresInput = /** @type {HTMLInputElement} */ (
+      el('input', 'dialog-input sched-expires')
+    );
+    expiresInput.type = 'datetime-local';
+    netField(t('sched.expires'), expiresInput);
+
     const row = el('div', 'sched-row');
     const agentSel = /** @type {HTMLSelectElement} */ (
       el('select', 'dialog-input sched-agent')
@@ -566,6 +592,9 @@ export async function openSchedulesDialog() {
     if (editing) {
       input.value = editing.input;
       untilInput.value = editing.until || '';
+      maxFiresInput.value = editing.max_fires != null ? String(editing.max_fires) : '';
+      expiresInput.value =
+        editing.expires_at != null ? epochToLocalInput(String(editing.expires_at)) : '';
       if (store.agents.length > 1 && editing.agent) agentSel.value = editing.agent;
       kindSel.value = editing.trigger_kind;
       exprInput = attachExpr(buildExprInput(editing.trigger_kind));
@@ -593,6 +622,19 @@ export async function openSchedulesDialog() {
       const until = untilInput.value.trim();
       if (until) body.until = until;
       else if (editing) body.until = null; // clearing the field clears the condition
+      const maxFires = maxFiresInput.value.trim();
+      if (maxFires) body.max_fires = Number(maxFires);
+      else if (editing) body.max_fires = null;
+      if (expiresInput.value) {
+        const epoch = Math.floor(new Date(expiresInput.value).getTime() / 1000);
+        if (!Number.isFinite(epoch)) {
+          toast(t('sched.invalidDate'), { type: 'error' });
+          return;
+        }
+        body.expires_at = epoch;
+      } else if (editing) {
+        body.expires_at = null;
+      }
       try {
         if (editing) {
           await api.updateSchedule(editing.id, body);
@@ -607,7 +649,7 @@ export async function openSchedulesDialog() {
       }
     });
 
-    form.append(input, untilInput, row, hintEl, foot);
+    form.append(input, untilInput, nets, row, hintEl, foot);
     return form;
   }
 

@@ -136,7 +136,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             last_session_id=None,
             created_at=now,
             updated_at=now,
-            until=spec.until.strip() or None if spec.until else None,
+            until=(spec.until.strip() or None) if spec.until else None,
             max_fires=spec.max_fires,
             expires_at=spec.expires_at,
         )
@@ -168,7 +168,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             # Explicit null detaches (fresh session per fire); omitted keeps.
             changes["session_id"] = patch.session_id
         if "until" in provided:
-            changes["until"] = patch.until.strip() or None if patch.until else None
+            changes["until"] = (patch.until.strip() or None) if patch.until else None
         if "max_fires" in provided:
             changes["max_fires"] = patch.max_fires
         if "expires_at" in provided:

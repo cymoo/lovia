@@ -117,6 +117,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 agent=deps.name_of(c.agent),  # registry key, same as AgentInfo
                 status=c.status,
                 turns=c.turns,
+                source=c.source,
             )
             for sid, c in deps.supervisor
         ]

@@ -1,4 +1,8 @@
-"""HTTP fetch — drop a single ``Tool`` into the agent and ask for a URL.
+"""Fetching the web — two tools, because they are two different jobs.
+
+``read_page`` reads a page for its content: HTML becomes Markdown, so headings,
+links and images survive. ``http_request`` is a plain HTTP client for REST
+endpoints: it returns status, headers and the body untouched.
 
 Run::
 
@@ -12,7 +16,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
-from lovia.tools.http import http_request
+from lovia.tools import http_request, read_page
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
@@ -21,12 +25,17 @@ MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset
 async def main() -> None:
     agent = Agent(
         name="Fetcher",
-        instructions="Use http_request to retrieve URLs; summarise what you find.",
+        instructions=(
+            "Use read_page for web pages and http_request for JSON APIs. "
+            "Summarise what you find."
+        ),
         model=MODEL,
-        tools=[http_request],
+        tools=[read_page, http_request],
     )
     handle = Runner.stream(
-        agent, "Fetch https://httpbin.org/json and tell me what's inside."
+        agent,
+        "Read https://example.com and list every image it references, then "
+        "fetch https://httpbin.org/json and tell me what's inside.",
     )
     async for ev in handle:
         if isinstance(ev, events.TextDelta):

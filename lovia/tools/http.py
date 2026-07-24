@@ -45,6 +45,7 @@ __all__ = [
     "fetch_raw",
     "http_request",
     "looks_textual",
+    "render_payload",
     "validate_url",
     "writes_need_approval",
 ]
@@ -227,7 +228,7 @@ def _render_headers(headers: dict[str, str]) -> str:
     return text
 
 
-def _render_payload(raw: RawResponse) -> str:
+def render_payload(raw: RawResponse) -> str:
     """Turn a response body into the text the model sees."""
     if "json" in raw.media_type:
         return compact_json(decode_body(raw.body, raw.charset))
@@ -286,7 +287,7 @@ async def http_request(
         timeout=timeout,
         user_agent=default_user_agent(),
     )
-    rendered, char_capped = clip_text(_render_payload(raw), max_chars, hint="")
+    rendered, char_capped = clip_text(render_payload(raw), max_chars, hint="")
 
     size_note = f"{len(rendered)} chars"
     if raw.size_capped:

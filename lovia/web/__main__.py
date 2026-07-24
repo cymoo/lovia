@@ -41,6 +41,7 @@ from ..tools import (
     duckduckgo_search,
     http_request,
     now,
+    read_page,
     tavily_search,
 )
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
@@ -425,13 +426,13 @@ def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
 def resolve_tools() -> list[Tool]:
     """The always-on built-in tools for the default agent.
 
-    ``now`` (current time) and ``http_request`` have no extra dependencies. Web
+    ``now``, ``read_page`` and ``http_request`` have no extra dependencies. Web
     search prefers the Tavily backend when ``TAVILY_API_KEY`` is set; otherwise
     it falls back to the keyless ``ddgs`` backend (bundled with the
     ``web``/``ddg`` extras). When neither is available we load the rest and log
     how to enable it rather than failing.
     """
-    tools: list[Tool] = [now, http_request]
+    tools: list[Tool] = [now, read_page, http_request]
     if os.environ.get("TAVILY_API_KEY"):
         tools.append(tavily_search())
     else:

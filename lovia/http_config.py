@@ -1,12 +1,12 @@
 """Environment-driven configuration for lovia's outbound ``httpx`` clients.
 
-The model providers and the ``http_fetch`` tool all make HTTPS requests through
-``httpx``. This module centralizes how their outbound behavior is resolved from
-the environment (handy behind an intranet CA or proxy). TLS trust
-(:func:`resolve_verify`) is shared by the providers and ``http_fetch``; the
-request-timeout (:func:`resolve_timeout`) and proxy/``trust_env``
-(:func:`resolve_trust_env`) knobs are provider-scoped — ``http_fetch`` keeps its
-own per-call timeout and httpx's default proxy handling.
+The model providers and the fetching tools (``http_request``, ``read_page``)
+all make HTTPS requests through ``httpx``. This module centralizes how their
+outbound behavior is resolved from the environment (handy behind an intranet CA
+or proxy). TLS trust (:func:`resolve_verify`) is shared by the providers and the
+tools; the request-timeout (:func:`resolve_timeout`) and proxy/``trust_env``
+(:func:`resolve_trust_env`) knobs are provider-scoped — the tools keep their own
+timeouts and httpx's default proxy handling.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def resolve_verify() -> ssl.SSLContext | bool:
       already trusts) works with zero configuration. Handy on an intranet.
     * otherwise certifi's bundle is used.
 
-    Applies to both the model providers and the ``http_fetch`` tool. Returns an
+    Applies to both the model providers and the fetching tools. Returns an
     :class:`ssl.SSLContext` (httpx deprecates ``verify=<path string>``) or
     ``False`` to disable verification.
     """

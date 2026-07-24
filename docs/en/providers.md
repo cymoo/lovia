@@ -280,7 +280,7 @@ Constructor arguments (`timeout=`, `trust_env=`) win over the environment.
 TLS verification resolves in order: `LOVIA_HTTP_INSECURE` → the CA bundle →
 the OS trust store when the optional `truststore` package is installed
 (bundled with `lovia[web]`) → `certifi`. The same resolution covers the
-[`http_fetch` tool](built-in-tools.md#http-fetch), so one intranet-CA
+[fetching tools](built-in-tools.md#reading-web-pages), so one intranet-CA
 setting fixes every outbound request.
 
 **Error classification** feeds the [retry machinery](retries.md):

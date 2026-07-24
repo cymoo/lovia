@@ -22,8 +22,17 @@ from .base import (
     truncate_tool_output,
     tool,
 )
-from .http import http_fetch
+from .http import http_request, writes_need_approval
 from .human import HumanChannel, HumanQuestion, ask_human
+from .page import (
+    HttpReader,
+    Page,
+    PageImage,
+    PageReader,
+    html_to_markdown,
+    page_reader,
+    read_page,
+)
 from .recall import make_recall_tool
 from .search import (
     DuckDuckGoSearch,
@@ -39,8 +48,12 @@ from .time import current_date, now, sleep
 __all__ = [
     "ApprovalPredicate",
     "DuckDuckGoSearch",
+    "HttpReader",
     "HumanChannel",
     "HumanQuestion",
+    "Page",
+    "PageImage",
+    "PageReader",
     "SearchResult",
     "TavilySearch",
     "Tool",
@@ -53,9 +66,12 @@ __all__ = [
     "current_date",
     "default_result_renderer",
     "duckduckgo_search",
-    "http_fetch",
+    "html_to_markdown",
+    "http_request",
     "make_recall_tool",
     "now",
+    "page_reader",
+    "read_page",
     "render_tool_result",
     "truncate_tool_output",
     "run_tool",
@@ -63,4 +79,5 @@ __all__ = [
     "tavily_search",
     "tool",
     "web_search",
+    "writes_need_approval",
 ]

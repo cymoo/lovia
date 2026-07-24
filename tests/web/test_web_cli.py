@@ -115,7 +115,7 @@ def test_resolve_memory_path_is_file(tmp_path: Path) -> None:
 
 def test_resolve_tools_includes_builtins() -> None:
     names = {t.name for t in cli.resolve_tools()}
-    assert {"now", "http_fetch"} <= names
+    assert {"now", "read_page", "http_request"} <= names
 
 
 def test_resolve_tools_includes_search_when_available() -> None:
@@ -134,7 +134,7 @@ def test_resolve_tools_skips_search_when_backend_missing(
     monkeypatch.setattr(cli, "duckduckgo_search", _missing)
     # The missing optional backend must degrade gracefully, not crash.
     names = {t.name for t in cli.resolve_tools()}
-    assert names == {"now", "http_fetch"}
+    assert names == {"now", "read_page", "http_request"}
 
 
 def test_resolve_tools_prefers_tavily_when_key_set(
@@ -146,7 +146,7 @@ def test_resolve_tools_prefers_tavily_when_key_set(
     monkeypatch.setenv("TAVILY_API_KEY", "k")
     monkeypatch.setattr(cli, "duckduckgo_search", _boom)
     names = {t.name for t in cli.resolve_tools()}
-    assert names == {"now", "http_fetch", "web_search"}
+    assert names == {"now", "read_page", "http_request", "web_search"}
 
 
 # ---------------------------------------------------------- instructions -
@@ -388,7 +388,7 @@ def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         "Memory",
     }
     # Always-on built-in tools (web_search only when its backend is installed).
-    assert {"now", "http_fetch"} <= {t.name for t in agent.tools}
+    assert {"now", "read_page", "http_request"} <= {t.name for t in agent.tools}
     assert agent.workspace is not None
 
 

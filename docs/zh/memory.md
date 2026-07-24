@@ -86,10 +86,10 @@ OpenAI 兼容 `/embeddings` 端点：
 OpenAIEmbedder(model="text-embedding-3-small", dimensions=None, batch_size=32)
 ```
 
-Chat 和 embeddings 常常在不同端点上，所以 embedder 会优先读取
-`LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY`，再退回聊天端点的
-`OPENAI_BASE_URL` / `OPENAI_API_KEY`。更换 embedder 是安全的：向量只是按 embedder id
-分区的召回缓存；id 不匹配会清空并重新积累，而不是混用向量空间。
+聊天模型和嵌入模型服务常常部署在不同端点，因此 embedder 会优先读取
+`LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY`，未设置时再回退到聊天端点的
+`OPENAI_BASE_URL` / `OPENAI_API_KEY`。不同 embedder 生成的向量会按 id 分区存储；
+id 改变后，旧缓存会清空并重新建立，不会混用不同的向量空间。
 
 **`index=`** 完全替换检索层。`Index` 围绕普通文档提供三个方法：`add` / `remove` /
 `search`，按 `Doc.id` upsert。你可以基于 Elasticsearch、pgvector 或任何系统实现：

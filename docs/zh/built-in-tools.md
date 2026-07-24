@@ -14,25 +14,25 @@ agent = Agent(
 )
 ```
 
-文件和 Shell Tool 来自[工作区](workspace.md)。操作员输入 Tool 见下方[询问人工](#询问人工)。
+文件和 Shell 工具来自[工作区](workspace.md)。需要人工输入时，可使用下方的
+[询问人工](#询问人工)工具。
 
 ## 读取网页
 
-`lovia.tools.read_page` 读取网页的**内容**：HTML 会转成 Markdown，标题层级、列表、
-代码块、表格、链接和图片都会保留下来。结果里的
-`[the guide](https://example.com/guide)` 是模型下一步可以直接访问的真实 URL —— 而这
-正是把网页压平成纯文本会丢掉的东西。
+`lovia.tools.read_page` 用于读取网页正文。它会把 HTML 转成 Markdown，保留标题层级、
+列表、代码块、表格、链接和图片等结构。与只提取纯文本相比，Markdown 中的
+`[the guide](https://example.com/guide)` 仍是可访问的 URL，模型可以据此继续浏览。
 
-模型看到三个参数：
+`read_page` 向模型公开三个参数：
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `url` | 必填 | 只允许绝对 `http://` / `https://` URL |
-| `images` | `False` | 同时返回页面引用的所有图片 |
+| `images` | `False` | 同时返回去重后的图片清单 |
 | `offset` | `0` | 从这个字符偏移处继续读一个长页面 |
 
-其余都是运维层面的决定，因此放在 `page_reader()` 工厂上，而不是每次调用都让模型
-为这些参数的 schema 付 token：
+超时、下载上限和缓存时间等配置由调用方决定，因此放在 `page_reader()` 工厂上，
+不会出现在模型每次调用所见的 JSON Schema 中：
 
 ```python
 from lovia.tools import HttpReader, page_reader
@@ -43,7 +43,7 @@ tool = page_reader(                     # 或直接用现成的 read_page
 )
 ```
 
-### 模型看到的结果
+### 返回结果
 
 ```
 Title: Example Domain
@@ -62,30 +62,30 @@ Images (2):
 2. https://example.com/social.png
 ```
 
-截断说明里直接带上了续读的 offset，所以长页面不再是死路。`read_page` 返回的是
-`Page` dataclass（最终 URL、状态码、标题、Markdown 正文、图片列表）；上面这段是它的
-结果渲染器给模型和 Web UI 看到的文本。
+页面过长时，截断提示会给出下一次应传入的 `offset`，便于分段续读。`read_page`
+返回 `Page` 数据类，其中包含最终 URL、状态码、标题、Markdown 正文和图片列表；
+上例是结果渲染器提供给模型和 Web UI 的文本。
 
 ### 图片
 
-内联 Markdown 本身已经带上了每个 `<img src>`。`images=True` 额外给出一份去重、
-绝对化的清单，并覆盖 Markdown 表达不了的来源：`srcset` 中最大的候选、
-`<picture><source>` 以及 `og:image`。相对 URL 会依据 `<base href>` 和重定向后的
-URL 解析；`data:`、`javascript:` 和纯锚点会被丢弃 —— 一张内联 base64 图片能在单个
-属性里塞进 100 KB，而模型对它也无能为力。
+Markdown 正文已经包含可用的 `<img src>`。设置 `images=True` 后，结果还会附上一份
+去重并转换为绝对 URL 的图片清单，其中也包括 Markdown 无法完整表达的来源：
+仅提供 `srcset` 时尺寸最大的候选、`<picture><source>` 和 `og:image`。相对 URL 会以
+`<base href>` 和重定向后的 URL 为基准解析；`data:`、`javascript:` 和页内锚点会被忽略，
+以免大段内联 base64 数据占用结果空间。
 
-### 不执行 JavaScript —— 换后端即可
+### 需要 JavaScript 时更换后端
 
-`HttpReader` 只发一次普通 HTTP 请求，用标准库解析。它不做客户端渲染，所以纯前端
-渲染的单页应用可能几乎返回空白。`PageReader` 就是扩展点（形状与 `WebSearch`
-协议一致）：
+`HttpReader` 通过普通 HTTP 请求获取页面，并使用标准库解析 HTML，不执行客户端
+JavaScript。因此，纯前端渲染的单页应用可能只返回一个空壳。需要浏览器渲染或托管
+抽取服务时，实现 `PageReader` 协议即可；它的接口形式与 `WebSearch` 一致：
 
 ```python
 class PageReader(Protocol):
     async def read(self, url: str, *, images: bool = False) -> Page: ...
 ```
 
-接入一个托管的抽取服务只需要一个短类 —— 这里是直接返回 Markdown 的 Jina Reader：
+下面以直接返回 Markdown 的 Jina Reader 为例：
 
 ```python
 import httpx
@@ -108,41 +108,43 @@ class JinaReader:
 agent = Agent(name="x", model="<model>", tools=[page_reader(JinaReader())])
 ```
 
-按字符预算裁剪始终是工具层的职责，所以后端应当返回完整正文。
+字符数限制由工具统一处理，因此后端应返回完整正文。
 
 ### 缓存与上限
 
-响应按 URL 缓存 `cache_ttl` 秒（默认 300，最多保留 `cache_size` 条）。这主要是为了
-正确性：否则用 `offset` 续读会重新下载页面，可能把两个不同版本拼在一起。下载有
-1 MB 硬上限；触顶时会设置 `size_capped` 并在结果里说明，因为任何 `offset` 都到不了
-那段从未下载的尾部。`4xx`/`5xx` 的正文限制在 500 字符 —— 一个错误页模板不值一整份
-预算。
+响应按 URL 缓存 `cache_ttl` 秒（默认 300，最多保留 `cache_size` 条）。缓存不只是为了
+加速：如果续读时重新下载，`offset` 前后可能来自网页的两个不同版本。单次下载上限为
+1 MB；达到上限时，`size_capped` 会设为 `True`，结果中也会说明尾部尚未下载，继续增大
+`offset` 无法读取这部分内容。`4xx`/`5xx` 响应的正文最多保留 500 个字符，避免错误页
+占满结果空间。
 
 ## HTTP 请求
 
-`lovia.tools.http_request` 是给 REST API 和非 HTML 端点用的诚实 HTTP 客户端。它不解释
-HTML —— 那是 `read_page` 的职责。
+`lovia.tools.http_request` 适合调用 REST API 和其他非 HTML 端点。它会原样返回 HTML，
+不会像 `read_page` 那样提取网页正文。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `url` | 必填 | 只允许绝对 `http://` / `https://` URL |
 | `method` | `"GET"` | 任意 HTTP 方法 |
 | `headers` | `None` | 可选请求头（要覆盖默认 UA 也在这里） |
-| `body` | `None` | 对 POST/PUT/PATCH 以 JSON 发送 |
+| `body` | `None` | 作为 JSON 请求体发送，通常用于 POST/PUT/PATCH |
 | `timeout` | `30.0` | 秒，范围 1–120 |
 | `max_chars` | `20_000` | 结果上限，100–200,000 |
 
-结果由状态行、响应头和正文组成：JSON 紧凑地重新序列化，文本原样通过，二进制只返回
-元数据。响应头会带上，因为限流信息和 `Link:` 分页往往正是调用它的目的 —— 但
-`set-cookie` 会被隐去，否则会把会话令牌写进转录。下载有 1 MB 上限，正文按
-`max_chars` 剪裁并带明确说明。工具会跟随重定向，最终 URL 与请求的不同时会报出来。
-TLS 遵守 [`LOVIA_HTTP_*` 设置](providers.md#网络超时代理tls)。
+结果由状态行、响应头和正文组成。JSON 会压缩后返回，文本保持原样，二进制响应只返回
+元数据。响应头可用于读取限流信息和 `Link:` 分页；`set-cookie` 会被隐藏，以免会话令牌
+写入运行记录（transcript）。单次下载上限为 1 MB，正文超过 `max_chars` 时会截断并给出提示。
+工具会跟随重定向；如果最终 URL 与请求 URL 不同，结果中会明确列出。TLS 设置见
+[`LOVIA_HTTP_*` 配置](providers.md#网络超时代理tls)。
 
-> **没有 SSRF 过滤。** 两个工具都会请求主机能访问到的任何地址，包括私有和内网地址；
-> 重定向也可能跳到那里。当模型会接触不可信输入时，请给工具加门禁或隔离网络。
+> **不会过滤 SSRF 风险。** `read_page` 和 `http_request` 可以访问当前主机能够访问的
+> 任何地址，包括内网地址；重定向也可能跳转到内网。如果 Agent 可能处理不可信内容，
+> 请为工具启用审批或隔离网络。
 
-如果只想给可能造成改动的请求加审批，传入内置的谓词。它不是默认值，因为审批是
-失败即拒绝的：没有配置审批处理器的 `Runner.run` 调用方会让每个 POST 都被拒掉。
+如果只想审批可能修改服务端状态的请求，可以使用内置谓词。该谓词不会默认启用，因为
+审批采用“无人处理即拒绝”的策略：使用 `Runner.run()` 且未配置审批处理器时，POST 等
+请求都会被拒绝。
 
 ```python
 import dataclasses
@@ -172,9 +174,9 @@ tools = [web_search(MySearchBackend())]  # 或你自己的后端
 
 工具默认名为 `web_search`（可用 `name=` 覆盖），接收 `query`、`max_results`
 （1–20，默认 5）和可选的时间范围过滤 `time_range`（`"d"` / `"w"` / `"m"` /
-`"y"`）。结果会渲染成可读的标题/URL/snippet 块，而不是未包装的 JSON。
+`"y"`）。结果会整理为标题、URL 和摘要，而不是直接返回 JSON。
 
-自定义后端只需要实现一个方法，也就是 `WebSearch` protocol：
+自定义后端只需实现 `WebSearch` 协议中的 `search()` 方法：
 
 ```python
 class WebSearch(Protocol):
@@ -193,7 +195,7 @@ class WebSearch(Protocol):
 - **`now`**（工具）：当前系统时钟时间，ISO-8601 格式；可选 `tz` 接收 IANA
   名称（如 `"Asia/Shanghai"`）。默认使用服务器本地时区。（Windows 上 IANA 名称需要
   `pip install tzdata`。）
-- **`sleep`**（工具）：最多 sleep 60 秒，适合简单的“等一下再检查”流程。
+- **`sleep`**（工具）：最多等待 60 秒，适合简单的“等一下再检查”流程。
 - **`current_date(tz=None)`**：**不是工具**，而是返回
   [指令片段](agents.md#指令)的工厂，将当天日期写入系统提示词：
 
@@ -208,8 +210,8 @@ class WebSearch(Protocol):
 
 ## 询问人工
 
-`lovia.tools.human.ask_human(channel)`：让**模型**在运行中请求操作员输入
-（和审批相反，审批是 **runner** 问“能不能做”）：
+`lovia.tools.human.ask_human(channel)` 让**模型**在运行中请求操作员输入。它与审批的
+方向相反：审批由 **Runner** 询问“是否允许执行”。
 
 ```python
 from lovia import Agent
@@ -223,18 +225,18 @@ async for q in channel.questions():   # channel.close() 后结束
     channel.answer(q.id, "使用选项 A。")
 ```
 
-Tool 调用会阻塞，直到答案到达、问题被取消，或 Channel 关闭。
+工具调用会等待，直到收到答案、问题被取消或 Channel 关闭。
 
 | API | 效果 |
 | --- | --- |
 | `questions()` | 异步迭代已经排队的问题；只允许一个消费者 |
 | `pending` | 用于轮询的未回答问题快照 |
-| `answer(id, text)` | 回答问题；Tool 返回 `text` |
+| `answer(id, text)` | 回答问题；工具返回 `text` |
 | `cancel(id, reason=...)` | 用模型可见的 `ToolError` 取消一个问题 |
 | `close(reason=...)` | 取消所有未回答问题、结束迭代，并拒绝后续提问 |
 
-取消和关闭会成为 Tool 错误结果，因此模型可以在没有答案时继续。操作员可能离线时，应为
-Tool 增加超时。从其他线程回答时，先切回事件循环线程，例如使用
+取消和关闭会成为工具错误结果，因此模型可以在没有答案时继续。操作员可能离线时，应为
+工具设置超时。从其他线程回答时，先切回事件循环线程，例如使用
 `loop.call_soon_threadsafe(channel.answer, qid, text)`。
 
 如果问题是“是否允许执行”，并且答案为允许或拒绝，应使用审批；如果模型需要向人询问信息，
@@ -242,8 +244,6 @@ Tool 增加超时。从其他线程回答时，先切回事件循环线程，例
 
 ## 注意事项
 
-- **谨慎开放 `read_page` 和 `http_request`。** 模型受到不可信输入影响时，攻击者可能
-  借此发起 SSRF 请求。对外提供服务前，应为工具启用审批，或隔离其网络环境。
 - **`read_page` 默认缓存响应 5 分钟。** 变化比这更快的页面需要
   `page_reader(HttpReader(cache_ttl=0))`。
 - **`duckduckgo_search()` / `tavily_search()` 会立即创建后端。** 缺少 `ddgs` 包或

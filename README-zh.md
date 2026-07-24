@@ -426,7 +426,8 @@ Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
 
 ### Web UI
 
-一个轻量的 FastAPI 应用：SSE 流式输出、session、审批、定时任务、记忆编辑器、图片与文件上传等。
+一个轻量的 FastAPI 应用，提供 SSE 流式输出、会话管理、审批、定时任务、记忆编辑、
+图片与文件上传等功能。
 浏览器断开后，未完成的对话仍会在服务端继续：
 
 ```python
@@ -440,7 +441,9 @@ lovia web --port 9000 --model glm-5.2      # python -m lovia.web 亦可
 lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
-缺失的必需配置（Base URL、API key、model name）首次运行时会交互式询问，并可保存到 `.lovia/config.env`（仅本人可读、已加入 .gitignore）。配置优先级：命令行 flag > 环境变量 > `.lovia/config.env`（或 `--env-file`）。
+首次配置模型时，CLI 会引导填写模型名称、端点（Base URL）和 API 密钥，验证连接后还可将配置
+保存到 `.lovia/config.env`。默认的配置优先级为：命令行参数 > 环境变量 >
+`.lovia/config.env` > `./.env`；显式传入 `--env-file` 时，则改为读取指定文件。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

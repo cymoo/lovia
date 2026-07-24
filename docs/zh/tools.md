@@ -227,10 +227,10 @@ async def search_docs(query: str) -> list[str]: ...
 ## 程序化构建工具
 
 `@tool` 是 `Tool` dataclass 的便利封装。`Tool` 包含 `name`、`description`、
-`parameters`、`invoke`，以及上面提到的 policy 字段。闭包里带配置的工厂可以直接返回
-`Tool` 值；内置的 `web_search(impl)`、`page_reader(impl)` 和 `ask_human(channel)`
-就是例子。如果工具还要
-带提示词或生命周期，请用[插件](plugins.md)打包。
+`parameters`、`invoke`，以及上面提到的 policy 字段。工具需要携带配置时，可以写一个
+工厂函数直接返回 `Tool`；内置的 `web_search(impl)`、`page_reader(impl)` 和
+`ask_human(channel)` 都采用这种方式。如果还要附带提示词或生命周期，请用
+[插件](plugins.md)打包。
 
 ## 注意事项
 

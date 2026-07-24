@@ -436,14 +436,13 @@ async def test_delete_schedule_drops_its_run_records() -> None:
     assert [r.id for r in await store.list_runs()] == ["b"]
 
 
-async def test_migration_folds_legacy_schedules_into_chat_schedules(
+async def test_pre_chat_prefix_schedules_table_is_left_alone(
     tmp_path: Path,
 ) -> None:
     # DBs from before the chat_ prefix (lovia <= 0.8.26) name the table
-    # ``schedules`` (some with the retired last_status/last_error columns).
-    # Opening one moves the rows to ``chat_schedules`` and drops the old
-    # table — dead columns and all. Idempotent: reopening must not duplicate
-    # or fail.
+    # ``schedules``. The fold into ``chat_schedules`` was retired in 0.8.34:
+    # opening such a DB must still work — the legacy table is simply ignored
+    # (its rows are not migrated) and the current schema appears alongside it.
     import sqlite3
 
     path = tmp_path / "legacy.db"
@@ -463,15 +462,14 @@ async def test_migration_folds_legacy_schedules_into_chat_schedules(
     conn.commit()
     conn.close()
 
-    for _ in range(2):
+    for _ in range(2):  # idempotent: reopening must not fail
         store = ChatStore.sqlite(path)
-        row = await store.get_schedule("x")
-        assert row is not None and row.input == "go" and row.active
-        assert len(await store.list_schedules()) == 1
+        assert await store.get_schedule("x") is None  # not folded
+        assert await store.list_schedules() == []
 
     conn = sqlite3.connect(path)
     names = {
         r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     conn.close()
-    assert "chat_schedules" in names and "schedules" not in names
+    assert "chat_schedules" in names and "schedules" in names

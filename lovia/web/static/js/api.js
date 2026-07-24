@@ -134,7 +134,8 @@ export const api = {
   // ---- schedules ----
   listSchedules: () => fetch('/api/schedules').then(_json),
   // Create a scheduled run. `body`: { input, agent?, session_id?, trigger_kind,
-  // trigger_expr }. Surfaces the server's validation `detail` on 4xx.
+  // trigger_expr, until?, max_fires?, expires_at? }. Surfaces the server's
+  // validation `detail` on 4xx.
   createSchedule: (body) =>
     fetch('/api/schedules', {
       method: 'POST',
@@ -146,7 +147,8 @@ export const api = {
       _jsonOrDetail,
     ),
   // Partial update: any subset of { input, agent, session_id, trigger_kind,
-  // trigger_expr, active } — the server revalidates and recomputes next_fire.
+  // trigger_expr, active, until, max_fires, expires_at } — the server
+  // revalidates and recomputes next_fire; explicit null clears a field.
   updateSchedule: (id, body) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',

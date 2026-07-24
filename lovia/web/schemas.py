@@ -233,15 +233,23 @@ class ScheduleSpec(BaseModel):
     session_id: str | None = None
     trigger_kind: Literal["cron", "every", "at"]
     trigger_expr: str = Field(max_length=200)
+    # Stop condition: natural language, evaluated by each fired run itself
+    # (the scheduler appends a cancel-yourself protocol to the fire's input).
+    until: str | None = Field(default=None, max_length=2000)
+    # Safety nets, enforced deterministically by the scheduler loop.
+    max_fires: int | None = Field(default=None, ge=1)
+    expires_at: float | None = None  # epoch seconds
 
 
 class SchedulePatch(BaseModel):
     """Partial update for a schedule — any subset of fields.
 
     Changing the trigger revalidates it and recomputes ``next_fire``; resuming
-    (``active: true``) also recomputes it so stale slots don't fire. Passing
-    ``session_id: null`` explicitly detaches the schedule (fresh session per
-    fire); omitting the field keeps the current binding.
+    (``active: true``) also recomputes it so stale slots don't fire, and
+    clears ``finished_reason`` (the schedule is live again, not "done").
+    Passing ``session_id: null`` explicitly detaches the schedule (fresh
+    session per fire); the same explicit-null-clears rule applies to
+    ``until``, ``max_fires`` and ``expires_at``; omitting a field keeps it.
     """
 
     input: str | None = Field(default=None, max_length=10_000_000)
@@ -250,6 +258,9 @@ class SchedulePatch(BaseModel):
     trigger_kind: Literal["cron", "every", "at"] | None = None
     trigger_expr: str | None = Field(default=None, max_length=200)
     active: bool | None = None
+    until: str | None = Field(default=None, max_length=2000)
+    max_fires: int | None = Field(default=None, ge=1)
+    expires_at: float | None = None
 
 
 class ScheduleInfo(BaseModel):
@@ -270,6 +281,14 @@ class ScheduleInfo(BaseModel):
     last_error: str | None = None
     created_at: float
     updated_at: float
+    # Stop condition + safety nets (see ScheduleSpec). ``fire_count`` counts
+    # fire attempts; ``finished_reason`` is set when the schedule deactivated
+    # itself (condition met / expired / max fires) — NULL on a plain pause.
+    until: str | None = None
+    max_fires: int | None = None
+    expires_at: float | None = None
+    fire_count: int = 0
+    finished_reason: str | None = None
 
 
 class RewindRequest(BaseModel):

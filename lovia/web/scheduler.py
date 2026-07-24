@@ -10,6 +10,11 @@ Delivery is **at-most-once, coalesced**: an overdue schedule fires once
 crash mid-fire won't re-fire the slot), and a fire is skipped if that
 schedule's previous run is still live. Restart recovery is automatic — the
 loop simply reads the durable store on boot.
+
+A schedule may carry a stop condition (``until``) — each fire's instruction
+then ends with a protocol block (:func:`fire_input`) telling the run to
+evaluate it and ``cancel_schedule`` itself when met — plus deterministic
+safety nets (``max_fires``, ``expires_at``) the loop enforces regardless.
 """
 
 from __future__ import annotations
@@ -103,6 +108,29 @@ def advance_next_fire(kind: str, expr: str, *, now: float) -> float | None:
     raise ValueError(f"unknown trigger kind {kind!r}")
 
 
+def fire_input(sched: ScheduleRow) -> str:
+    """The instruction a fire delivers: the schedule's input, plus a
+    stop-condition protocol block when ``until`` is set.
+
+    The block asks the fired run itself to evaluate the condition — it just
+    did the task, so it is the one holding the evidence — and to stop the
+    schedule via ``cancel_schedule``. That tool comes with the Scheduling
+    plugin; an agent without it will report the missing tool, and the
+    schedule's safety nets (``max_fires``/``expires_at``) still bound it.
+    """
+    if not sched.until:
+        return sched.input
+    return (
+        f"{sched.input}\n\n"
+        f"[Fired by schedule {sched.id}.] After the task above, evaluate this "
+        f"stop condition: {sched.until}\n"
+        f"If it is met, call cancel_schedule(schedule_id='{sched.id}', "
+        f"reason=<one line: what you observed>) and state clearly that the "
+        f"schedule is now stopped. If it is not met, do not call "
+        f"cancel_schedule and don't mention the condition."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Scheduler
 # --------------------------------------------------------------------------- #
@@ -137,9 +165,22 @@ class Scheduler:
             await asyncio.sleep(self._poll)
 
     async def run_due(self) -> None:
-        """Fire every schedule that is due. Public so tests can drive it."""
+        """Fire every schedule that is due. Public so tests can drive it.
+
+        A due schedule whose ``expires_at`` has passed is deactivated instead
+        of fired. The check is lazy — it runs at the schedule's next due slot,
+        not at the moment of expiry — and lives here rather than in ``_fire``
+        so the run-now endpoint deliberately bypasses it (matching how run-now
+        already fires paused schedules).
+        """
         now = time.time()
         for sched in await self.store.due_schedules(now):
+            if sched.expires_at is not None and now >= sched.expires_at:
+                log.info("schedule %s expired; deactivating", sched.id)
+                await self.store.set_schedule_active(
+                    sched.id, active=False, finished_reason="expired"
+                )
+                continue
             await self._fire(sched, now)
 
     async def fire_now(self, sched: ScheduleRow) -> str | None:
@@ -199,7 +240,7 @@ class Scheduler:
             target = sched.session_id
             live = self.deps.supervisor.get(target)
             if live is not None:
-                live.inject(sched.input)
+                live.inject(fire_input(sched))
                 await self._advance(sched, now, last_session_id=target)
                 # Delivered into a live run — that run's outcome is its own
                 # (and recorded under the run's own source), so no record here.
@@ -226,7 +267,7 @@ class Scheduler:
             await self.deps.supervisor.start(
                 session_id=target,
                 agent=agent,
-                input=sched.input,
+                input=fire_input(sched),
                 is_new=is_new,
                 title_message=sched.input,
                 autostart=True,  # clientless: begin the run with no subscriber
@@ -259,11 +300,17 @@ class Scheduler:
         self, sched: ScheduleRow, now: float, *, last_session_id: str | None
     ) -> None:
         nxt = advance_next_fire(sched.trigger_kind, sched.trigger_expr, now=now)
+        # This attempt is the Nth (mark_fired itself increments fire_count):
+        # the max_fires safety net lets it run, then deactivates for good.
+        tripped = (
+            sched.max_fires is not None and sched.fire_count + 1 >= sched.max_fires
+        )
         await self.store.mark_fired(
             sched.id,
             next_fire=nxt if nxt is not None else now,  # one-shot: unused once inactive
             # ``and sched.active`` keeps a manually-fired paused schedule paused
             # (the polling loop only ever fires active rows, where it's a no-op).
-            active=nxt is not None and sched.active,
+            active=nxt is not None and sched.active and not tripped,
             last_session_id=last_session_id,
+            finished_reason="max fires reached" if tripped else None,
         )

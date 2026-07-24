@@ -2440,68 +2440,313 @@ dialog.custom-dialog::backdrop {
 }
 
 /* ---- Schedules -------------------------------------------------------------------------- */
+/* A master-detail modal: list → detail (actions + history) → create/edit form.
+   One view at a time; the head carries back/title/new. */
 .custom-dialog.dialog-wide {
   max-width: 580px;
 }
 .schedules-panel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 .schedules-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
-.schedules-head h3 {
+.schedules-head-lead,
+.schedules-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sched-title {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
-.sched-form {
+.sched-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* The head buttons toggle with [hidden], which the display rules above (and
+   .btn-icon's) would otherwise override. */
+.schedules-head button[hidden] {
+  display: none;
+}
+.sched-view {
+  min-height: 220px;
   display: flex;
   flex-direction: column;
+}
+.sched-view > * {
+  animation: sched-view-in 0.16s ease;
+}
+@keyframes sched-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sched-view > * {
+    animation: none;
+  }
+}
+
+/* -- list view -- */
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 400px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sched-empty {
+  color: var(--muted-2);
+  font-size: 13.5px;
+  text-align: center;
+  padding: 42px 0;
+}
+.sched-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+[data-theme="dark"] .sched-item {
+  background: var(--surface-2);
+}
+.sched-item:hover,
+.sched-item:focus-visible {
+  border-color: var(--border-strong);
+}
+.sched-item.paused .sched-item-prompt,
+.sched-item.done .sched-item-prompt {
+  color: var(--muted);
+}
+.sched-item-main {
+  min-width: 0;
+}
+.sched-item-prompt {
+  font-size: 13.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sched-item-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sched-item-side {
+  display: flex;
+  align-items: center;
   gap: 9px;
 }
-.sched-form .dialog-input {
-  margin-top: 0;
+.sched-chevron {
+  display: inline-flex;
+  color: var(--muted-2);
+  transition: color var(--t-fast);
 }
-.sched-hint {
+.sched-item:hover .sched-chevron {
+  color: var(--ink-2);
+}
+
+/* -- status dot: one glanceable lifecycle signal per row -- */
+.sched-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sched-dot.active {
+  background: var(--ok);
+}
+.sched-dot.running {
+  background: var(--accent);
+  animation: sched-pulse 1.6s ease-out infinite;
+}
+.sched-dot.paused {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--muted-2);
+}
+.sched-dot.done {
+  background: var(--border-strong);
+}
+@keyframes sched-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  75% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sched-dot.running {
+    animation: none;
+  }
+}
+
+/* -- pause/resume switch (the one inline row action) -- */
+.sched-switch {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  transition: background var(--t-fast), box-shadow var(--t-fast);
+}
+.sched-switch[aria-checked="true"] {
+  background: var(--accent);
+  box-shadow: none;
+}
+.sched-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform var(--t-fast);
+}
+.sched-switch[aria-checked="true"] .sched-switch-knob {
+  transform: translateX(12px);
+}
+
+/* -- detail view -- */
+.sched-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sched-detail-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sched-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--surface-3);
+  color: var(--muted);
+}
+.sched-badge.active,
+.sched-badge.running {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+[data-theme="dark"] .sched-badge.active,
+[data-theme="dark"] .sched-badge.running {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.sched-finished-reason {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sched-detail-prompt {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 132px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.sched-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 18px;
+  row-gap: 5px;
+  padding: 0 2px;
+}
+.sched-facts dt {
   font-size: 12px;
   color: var(--muted-2);
-  line-height: 1.5;
-  padding-left: 2px;
+  white-space: nowrap;
 }
-.sched-last-run {
-  padding: 0;
-  font-size: inherit;
-  font-family: var(--sans);
-  color: var(--accent-text);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
-  text-underline-offset: 2px;
+.sched-facts dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  min-width: 0;
+  word-break: break-word;
 }
-.sched-last-run:hover {
-  color: var(--accent);
-  text-decoration-color: currentColor;
+.sched-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-/* Outcome of the most recent fire. */
-.sched-status.ok {
-  color: var(--ok);
+.sched-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.sched-status.error {
+.sched-act.danger {
   color: var(--danger);
-  cursor: help; /* the tooltip carries last_error */
+  margin-left: auto;
 }
-/* Fire history (persisted run records), folded under the row. */
+.sched-act.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger-hover);
+}
+.sched-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
 .sched-history {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
   display: flex;
   flex-direction: column;
   gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .sched-run {
   display: flex;
@@ -2532,9 +2777,32 @@ dialog.custom-dialog::backdrop {
   font-size: 12px;
   color: var(--muted-2);
 }
+.sched-last-run {
+  padding: 0;
+  font-size: inherit;
+  font-family: var(--sans);
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.sched-last-run:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+/* -- form view -- */
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.sched-form .dialog-input {
+  margin-top: 0;
+}
 .sched-input {
   resize: vertical;
-  min-height: 44px;
+  min-height: 110px;
   font-family: var(--sans);
 }
 .sched-row {
@@ -2555,96 +2823,17 @@ dialog.custom-dialog::backdrop {
 .sched-expr-wrap > * {
   width: 100%;
 }
-.sched-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: 320px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.sched-empty {
+.sched-hint {
+  font-size: 12px;
   color: var(--muted-2);
-  font-size: 13.5px;
-  text-align: center;
-  padding: 18px 0;
+  line-height: 1.5;
+  padding-left: 2px;
 }
-.sched-item {
+.sched-form-foot {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  transition:
-    border-color var(--t-fast),
-    opacity var(--t-fast);
-}
-[data-theme="dark"] .sched-item {
-  background: var(--surface-2);
-}
-.sched-item:hover {
-  border-color: var(--border-strong);
-}
-.sched-item.paused {
-  opacity: 0.6;
-}
-.sched-item.paused:hover {
-  opacity: 0.9;
-}
-.sched-item-main {
-  flex: 1;
-  min-width: 0;
-}
-.sched-item-prompt {
-  font-size: 13.5px;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sched-item-meta {
-  font-size: 11.5px;
-  color: var(--muted);
+  justify-content: flex-end;
+  gap: 8px;
   margin-top: 2px;
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sched-item-actions {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.sched-item-actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-xs);
-  color: var(--muted);
-  transition:
-    background var(--t-fast),
-    color var(--t-fast),
-    opacity var(--t-fast);
-}
-.sched-item-actions button:hover {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-/* keep rows calm: actions surface on hover where hover exists */
-@media (hover: hover) {
-  .sched-item .sched-item-actions {
-    opacity: 0;
-  }
-  .sched-item:hover .sched-item-actions,
-  .sched-item:focus-within .sched-item-actions {
-    opacity: 1;
-  }
 }
 
 /* ---- Memory editor ------------------------------------------------------

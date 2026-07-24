@@ -201,6 +201,9 @@ class RunInfo(BaseModel):
     agent: str
     status: Literal["running", "blocked_on_approval"]
     turns: int
+    # What started the run: "user" | "schedule:<id>" — lets a UI tie a live
+    # run back to the schedule that fired it.
+    source: str = "user"
 
 
 class RunRecordInfo(BaseModel):

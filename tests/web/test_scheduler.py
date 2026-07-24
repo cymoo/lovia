@@ -836,6 +836,12 @@ async def test_run_now_endpoint_409s_while_previous_fire_is_live() -> None:
         assert first.status_code == 200, first.text
         target = first.json()["session_id"]
         assert app.state.deps.supervisor.get(target) is not None
+        # The live-runs surface ties the run back to its schedule (the UI's
+        # "running" badge keys off this).
+        live = next(
+            r for r in (await ac.get("/api/runs")).json() if r["session_id"] == target
+        )
+        assert live["source"] == f"schedule:{sid}"
 
         # The previous fire is still running: run-now must refuse, not pile up.
         second = await ac.post(f"/api/schedules/{sid}/run")

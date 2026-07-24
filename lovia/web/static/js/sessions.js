@@ -159,13 +159,37 @@ export function initEventStream() {
       _schedulePoll();
     }
   };
-  es.addEventListener('run_started', refresh);
+  es.addEventListener('run_started', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      // A background run began on the chat we're looking at (e.g. a schedule
+      // fired into it) — attach to its live stream so it plays out on screen
+      // instead of appearing only after a manual refresh.
+      if (d.session_id === store.sessionId && !store.streaming) {
+        store.emit('reconnect', d.session_id);
+      }
+    } catch { /* malformed payload — the sidebar refresh below still runs */ }
+    store.emit('runs-changed');
+    refresh();
+  });
   es.addEventListener('run_finished', (e) => {
     try {
       const d = JSON.parse(e.data);
       // "interrupted" is a server shutdown/resumable pause, not an outcome.
       if (d.status !== 'interrupted') _notifyRunFinished(d.session_id);
+      // A scheduled fire finished on the open chat before this tab attached
+      // to it (a fast run wins the race against the reconnect above): reload
+      // the transcript so its results appear. User-sourced runs never reload
+      // here — this client just rendered its own stream.
+      if (
+        d.session_id === store.sessionId &&
+        !store.streaming &&
+        String(d.source || '').startsWith('schedule:')
+      ) {
+        refreshTranscript();
+      }
     } catch { /* malformed payload — the refresh below still fixes the UI */ }
+    store.emit('runs-changed');
     refresh();
   });
   es.addEventListener('session_created', refresh);
@@ -175,6 +199,22 @@ export function initEventStream() {
       updateSessionInSidebar(d.session_id, d.title);
     } catch { /* ignore */ }
   });
+}
+
+/**
+ * Re-fetch the open session's transcript and re-render it in place — used when
+ * a background run landed new turns in the chat we're looking at.
+ */
+async function refreshTranscript() {
+  const id = store.sessionId;
+  if (!id || store.streaming) return;
+  try {
+    const data = await api.getSession(id);
+    if (store.sessionId !== id || store.streaming) return; // superseded
+    if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
+    store.emit('render-history', data.entries || []);
+    if (data.active_run_id) store.emit('reconnect', id);
+  } catch { /* transient — the next event or a manual switch repaints */ }
 }
 
 async function stopRun(sid) {

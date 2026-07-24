@@ -238,7 +238,7 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 
 构造器参数（`timeout=`、`trust_env=`）优先于环境变量。TLS 校验按顺序解析：
 `LOVIA_HTTP_INSECURE` → CA bundle → 安装了可选 `truststore` 包时使用 OS trust store
-（`lovia[web]` 会带上）→ `certifi`。同一套解析也覆盖 [`http_fetch` 工具](built-in-tools.md#http-请求)，
+（`lovia[web]` 会带上）→ `certifi`。同一套解析也覆盖[抓取类工具](built-in-tools.md#读取网页)，
 所以一个内网 CA 设置可以修复所有出站请求。
 
 **错误分类**会进入[重试机制](retries.md)：HTTP 408/429/5xx 以及传输层超时/断连是

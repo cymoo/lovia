@@ -228,7 +228,8 @@ async def search_docs(query: str) -> list[str]: ...
 
 `@tool` 是 `Tool` dataclass 的便利封装。`Tool` 包含 `name`、`description`、
 `parameters`、`invoke`，以及上面提到的 policy 字段。闭包里带配置的工厂可以直接返回
-`Tool` 值；内置的 `web_search(impl)` 和 `ask_human(channel)` 就是例子。如果工具还要
+`Tool` 值；内置的 `web_search(impl)`、`page_reader(impl)` 和 `ask_human(channel)`
+就是例子。如果工具还要
 带提示词或生命周期，请用[插件](plugins.md)打包。
 
 ## 注意事项

@@ -107,6 +107,24 @@ def test_markdown_indents_nested_lists() -> None:
     assert "  - inner" in out
 
 
+def test_markdown_drops_bullets_that_never_got_content() -> None:
+    # A <li> holding only a nested list (very common in a table of contents)
+    # would otherwise leave a lone "-" on its own line.
+    assert html_to_markdown("<ul><li><ul><li>x</li></ul></li></ul>") == "- x"
+    assert html_to_markdown("<ul><li>a</li><li></li></ul>") == "- a"
+    # But content that merely looks like a marker is content: deciding at emit
+    # time, not by matching the finished text, is what keeps these apart.
+    assert html_to_markdown("<p>-</p><p>next</p>") == "-\n\nnext"
+    assert html_to_markdown("<ul><li>-</li><li>b</li></ul>") == "- -\n- b"
+    # An image is content even though it contributes no words.
+    assert (
+        html_to_markdown(
+            "<ul><li><img src='i.png' alt='I'></li></ul>", base_url="https://e.com/"
+        )
+        == "- ![I](https://e.com/i.png)"
+    )
+
+
 def test_markdown_survives_malformed_markup() -> None:
     assert html_to_markdown("<p>ok<div") == "ok"
     assert html_to_markdown("plain text") == "plain text"

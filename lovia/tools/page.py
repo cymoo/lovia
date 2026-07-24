@@ -176,6 +176,8 @@ class _MarkdownExtractor(HTMLParser):
         self._images: dict[str, PageImage] = {}
         self._row_cells = 0
         self._row_is_header = False
+        # Index in _out of the list marker awaiting content, if any.
+        self._marker_at: int | None = None
 
     # ---- output primitives ----
 
@@ -241,6 +243,7 @@ class _MarkdownExtractor(HTMLParser):
             self._emit("#" * level + " ")
             return
         if tag in ("ul", "ol"):
+            self._drop_empty_marker()
             self._blank_line()
             self._lists.append([tag == "ol", 1])
             return
@@ -285,11 +288,13 @@ class _MarkdownExtractor(HTMLParser):
             self._close_wrap(tag)
             return
         if tag in ("ul", "ol"):
+            self._drop_empty_marker()
             if self._lists:
                 self._lists.pop()
             self._blank_line()
             return
         if tag == "li":
+            self._drop_empty_marker()
             self._break()
             return
         if tag == "tr":
@@ -319,17 +324,33 @@ class _MarkdownExtractor(HTMLParser):
     # ---- element helpers ----
 
     def _start_list_item(self) -> None:
+        self._drop_empty_marker()
         self._break()
         if not self._lists:  # <li> outside any list — treat it as a bullet
             self._emit("- ")
-            return
-        ordered, number = self._lists[-1]
-        self._emit(_LIST_INDENT * (len(self._lists) - 1))
-        if ordered:
-            self._emit(f"{number}. ")
-            self._lists[-1][1] = number + 1
         else:
-            self._emit("- ")
+            ordered, number = self._lists[-1]
+            self._emit(_LIST_INDENT * (len(self._lists) - 1))
+            if ordered:
+                self._emit(f"{number}. ")
+                self._lists[-1][1] = number + 1
+            else:
+                self._emit("- ")
+        self._marker_at = len(self._out) - 1
+
+    def _drop_empty_marker(self) -> None:
+        """Remove a bullet that never received content.
+
+        An ``<li>`` holding only a nested list, or nothing at all, would
+        otherwise leave a lone ``-`` on its own line. Decided here rather than
+        by pattern-matching the finished text, where a paragraph that really
+        does consist of one hyphen is indistinguishable.
+        """
+        index, self._marker_at = self._marker_at, None
+        if index is None or index >= len(self._out):
+            return
+        if not "".join(self._out[index + 1 :]).strip():
+            del self._out[index:]
 
     def _close_table_row(self) -> None:
         if not self._row_cells:

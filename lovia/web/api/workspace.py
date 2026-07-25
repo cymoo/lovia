@@ -326,15 +326,21 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         # Prefer the explicit preview map so a nosniff'd inline image carries a
         # correct, OS-stable Content-Type; fall back to mimetypes for non-images
         # (only served via download=1 anyway).
-        media_type = preview_image_mime(resolved.abs.name) or mimetypes.guess_type(
-            resolved.abs.name
-        )[0]
-        # Inline only browser-renderable images (by extension). SVG is excluded
+        is_pdf = resolved.abs.suffix.lower() == ".pdf"
+        media_type = (
+            "application/pdf"
+            if is_pdf
+            else preview_image_mime(resolved.abs.name)
+            or mimetypes.guess_type(resolved.abs.name)[0]
+        )
+        # Inline only browser-renderable images (by extension) plus PDF, whose
+        # in-browser viewer is sandboxed away from the page's origin (no DOM or
+        # cookie access — the Files panel embeds it for preview). SVG is excluded
         # (it can carry scripts — a crafted upload would be a stored-XSS vector);
         # it stays reachable via download=1. See lovia/web/media.py.
-        inline_ok = is_preview_image(resolved.abs.name)
+        inline_ok = is_preview_image(resolved.abs.name) or is_pdf
         if not download and not inline_ok:
-            raise HTTPException(status_code=415, detail="inline preview is images-only")
+            raise HTTPException(status_code=415, detail="inline preview is images/pdf-only")
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
         # constantly (and re-renders after every agent edit), so unchanged
         # files answer 304 from the ETag below instead of re-sending bytes —

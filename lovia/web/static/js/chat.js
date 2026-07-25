@@ -2806,6 +2806,23 @@ export function initComposer() {
   store.on('agent-changed', syncAttachButton);
   syncAttachButton();
 
+  // Files panel → composer: reference an existing workspace file on the next
+  // message. No upload — the file is already under the workspace root; the
+  // server re-derives kind/mime from the file on disk anyway.
+  store.on('attach-workspace-file', ({ path, name, kind }) => {
+    if (!attachEnabled()) return;
+    if (store.streaming) {
+      toast(t('files.attachBusy'), { type: 'error' });
+      return;
+    }
+    if (!_pendingAttachments.some((a) => a.path === path)) {
+      _pendingAttachments.push({ path, name, kind, mime: 'application/octet-stream' });
+      renderAttachTray();
+      updateSendEnabled();
+    }
+    promptEl?.focus();
+  });
+
   // On touch devices Enter always inserts a newline (there's no Shift key to
   // combine with) and the send button does the sending. On desktop the "Enter
   // key" preference decides: send-on-Enter (Shift+Enter = newline), or

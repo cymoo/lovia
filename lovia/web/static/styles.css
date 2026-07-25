@@ -3269,6 +3269,55 @@ body.files-splitting {
   border: 1px solid var(--border);
   background: var(--diagram-paper);
 }
+/* Sandboxed HTML preview and the browser's PDF viewer fill the pane. A white
+   backdrop regardless of theme: generated documents assume paper. */
+.files-viewer-body .files-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+/* Recent's "this chat / other files" split. */
+.files-group-label {
+  padding: 8px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+/* Drop target feedback while dragging files over the panel. */
+.files-panel.drag-over::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  opacity: 0.5;
+}
+/* "n files written since you last looked" on the Files button. */
+#files-btn {
+  position: relative;
+}
+.files-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
 .files-note {
   display: flex;
   align-items: center;

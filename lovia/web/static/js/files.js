@@ -21,6 +21,7 @@ import { formatBytes, formatTimeSmart, highlightIn, IMAGE_EXT, renderMarkdown } 
 // PREVIEW_IMAGE_EXT) is shared from util.js — the chat transcript needs it too.
 const MD_EXT = new Set(['md', 'markdown']);
 const CSV_EXT = new Set(['csv', 'tsv']);
+const HTML_EXT = new Set(['html', 'htm']);
 const CSV_MAX_ROWS = 500;
 
 const els = {};
@@ -36,6 +37,7 @@ const state = {
   // HTTP cache (revalidated via the server's ETag/no-cache) does its job.
   revs: new Map(),
   stale: false, // a shell run may have changed files
+  unseen: 0, // live-run writes since the panel was last open (the button badge)
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
@@ -271,7 +273,29 @@ function setOpen(open, { persist = true } = {}) {
   els.btn?.setAttribute('aria-expanded', String(state.open));
   if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   claimSpace();
-  if (state.open) refresh();
+  if (state.open) {
+    setUnseen(0); // the badge's job is done — the user is looking
+    refresh();
+  }
+}
+
+// "n files written since you last looked" — a small count on the Files button.
+// Counts only live-run writes: history replay re-emits every past touch on
+// each chat open, which would inflate a naive counter.
+function setUnseen(n) {
+  state.unseen = n;
+  let badge = els.btn?.querySelector('.files-badge');
+  if (!n) {
+    badge?.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'files-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    els.btn?.appendChild(badge);
+  }
+  badge.textContent = n > 9 ? '9+' : String(n);
 }
 
 function updateVisibility() {
@@ -357,9 +381,58 @@ function renderCrumbs() {
 function rowIcon(entry) {
   if (entry.is_dir) return icon('folder', { size: 15 });
   const e = ext(entry.path);
-  if (IMAGE_EXT.has(e)) return icon('image', { size: 15 });
-  if (MD_EXT.has(e) || e === 'txt') return icon('file-text', { size: 15 });
+  if (IMAGE_EXT.has(e) || e === 'svg') return icon('image', { size: 15 });
+  if (HTML_EXT.has(e)) return icon('code', { size: 15 });
+  if (MD_EXT.has(e) || e === 'txt' || e === 'pdf') return icon('file-text', { size: 15 });
   return icon('file', { size: 15 });
+}
+
+function rowFor(entry) {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.className = 'file-row';
+  if (!entry.is_dir && isTouched(entry.path)) row.classList.add('touched');
+  if (state.viewing?.path === entry.path) row.classList.add('active');
+
+  const ic = document.createElement('span');
+  ic.className = 'file-row-icon';
+  ic.innerHTML = rowIcon(entry);
+
+  const main = document.createElement('span');
+  main.className = 'file-row-main';
+  const name = document.createElement('span');
+  name.className = 'file-row-name';
+  name.textContent = basename(entry.path);
+  const sub = document.createElement('span');
+  sub.className = 'file-row-sub';
+  const bits = [];
+  if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
+  if (entry.is_dir) bits.push(t('files.folder'));
+  else if (entry.size != null) bits.push(formatBytes(entry.size));
+  if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
+  if (entry.symlink_target) bits.push('→ ' + entry.symlink_target);
+  sub.textContent = bits.join(' · ');
+  main.append(name, sub);
+
+  row.append(ic, main);
+  row.title = entry.path;
+  row.addEventListener('click', () => {
+    if (entry.is_dir) {
+      state.mode === 'browse' || setMode('browse');
+      state.browsePath = entry.path;
+      refresh();
+    } else {
+      openFile(entry.path);
+    }
+  });
+  return row;
+}
+
+function groupLabel(text) {
+  const div = document.createElement('div');
+  div.className = 'files-group-label';
+  div.textContent = text;
+  return div;
 }
 
 function renderList() {
@@ -379,55 +452,46 @@ function renderList() {
       ),
     );
   }
-  for (const entry of entries) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'file-row';
-    if (!entry.is_dir && isTouched(entry.path)) row.classList.add('touched');
-    if (state.viewing?.path === entry.path) row.classList.add('active');
-
-    const ic = document.createElement('span');
-    ic.className = 'file-row-icon';
-    ic.innerHTML = rowIcon(entry);
-
-    const main = document.createElement('span');
-    main.className = 'file-row-main';
-    const name = document.createElement('span');
-    name.className = 'file-row-name';
-    name.textContent = basename(entry.path);
-    const sub = document.createElement('span');
-    sub.className = 'file-row-sub';
-    const bits = [];
-    if (state.mode === 'recent' && dirname(entry.path)) bits.push(dirname(entry.path));
-    if (entry.is_dir) bits.push(t('files.folder'));
-    else if (entry.size != null) bits.push(formatBytes(entry.size));
-    if (entry.mtime) bits.push(formatTimeSmart(entry.mtime));
-    if (entry.symlink_target) bits.push('→ ' + entry.symlink_target);
-    sub.textContent = bits.join(' · ');
-    main.append(name, sub);
-
-    row.append(ic, main);
-    row.title = entry.path;
-    row.addEventListener('click', () => {
-      if (entry.is_dir) {
-        state.mode === 'browse' || setMode('browse');
-        state.browsePath = entry.path;
-        refresh();
-      } else {
-        openFile(entry.path);
-      }
-    });
-    frag.appendChild(row);
+  // Recent leads with what THIS chat produced — the panel's whole reason to
+  // exist for most visits. The split disappears when it wouldn't inform
+  // (nothing touched, or everything touched).
+  const touched =
+    state.mode === 'recent'
+      ? entries.filter((e) => !e.is_dir && isTouched(e.path))
+      : [];
+  if (touched.length && touched.length < entries.length) {
+    const inTouched = new Set(touched);
+    frag.appendChild(groupLabel(t('files.thisChat')));
+    for (const entry of touched) frag.appendChild(rowFor(entry));
+    frag.appendChild(groupLabel(t('files.otherFiles')));
+    for (const entry of entries) {
+      if (!inTouched.has(entry)) frag.appendChild(rowFor(entry));
+    }
+  } else {
+    for (const entry of entries) frag.appendChild(rowFor(entry));
   }
   els.list.replaceChildren(frag);
 }
 
 // ---- Viewer -------------------------------------------------------------------
+// One live object URL at a time (the SVG preview) — swap-and-revoke so a
+// browsing session doesn't accumulate blobs.
+let _blobUrl = null;
+function holdBlobUrl(blob) {
+  if (_blobUrl) URL.revokeObjectURL(_blobUrl);
+  _blobUrl = URL.createObjectURL(blob);
+  return _blobUrl;
+}
+
 function closeViewer() {
   state.viewing = null;
   els.viewer.classList.add('hidden');
   els.split?.classList.add('hidden');
   els.viewerBody.replaceChildren();
+  if (_blobUrl) {
+    URL.revokeObjectURL(_blobUrl);
+    _blobUrl = null;
+  }
   renderList(); // drop the active highlight
 }
 
@@ -514,7 +578,9 @@ function renderText(content, path) {
   const pre = document.createElement('pre');
   const code = document.createElement('code');
   const e = ext(path);
-  if (e && /^[a-z0-9]+$/.test(e)) code.className = `language-${e}`;
+  // No language class → highlightIn skips it. Paginated text never gets this
+  // big, but the HTML source view arrives unpaginated via /raw.
+  if (content.length <= 200_000 && e && /^[a-z0-9]+$/.test(e)) code.className = `language-${e}`;
   code.textContent = content;
   pre.appendChild(code);
   // highlightIn queries `pre code` within a container — use a throwaway one.
@@ -540,13 +606,20 @@ async function openFile(path, { silent = false } = {}) {
   els.mdToggle.classList.add('hidden');
   els.wrapToggle?.classList.add('hidden'); // renderViewerContent re-shows for text
 
-  const kind = IMAGE_EXT.has(ext(path))
+  const e = ext(path);
+  const kind = IMAGE_EXT.has(e)
     ? 'image'
-    : MD_EXT.has(ext(path))
-      ? 'md'
-      : CSV_EXT.has(ext(path))
-        ? 'csv'
-        : 'text';
+    : e === 'pdf'
+      ? 'pdf'
+      : e === 'svg'
+        ? 'svg'
+        : HTML_EXT.has(e)
+          ? 'html'
+          : MD_EXT.has(e)
+            ? 'md'
+            : CSV_EXT.has(e)
+              ? 'csv'
+              : 'text';
   const keepRaw = silent && state.viewing?.path === path ? state.viewing.raw : false;
   state.viewing = { path, kind, name, raw: keepRaw };
   if (!silent) renderList();
@@ -559,6 +632,64 @@ async function openFile(path, { silent = false } = {}) {
     img.src =
       api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(img);
+    return true;
+  }
+
+  if (kind === 'pdf') {
+    // The browser's PDF viewer renders in its own sandbox; /raw serves PDFs
+    // inline for exactly this embed (older servers answer 415 — the header's
+    // download link still works).
+    const embed = document.createElement('embed');
+    embed.className = 'files-frame';
+    embed.type = 'application/pdf';
+    const rev = revOf(path);
+    embed.src =
+      api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
+    els.viewerBody.replaceChildren(embed);
+    return true;
+  }
+
+  if (kind === 'svg') {
+    // The server never serves SVG inline (it can carry scripts). An <img> is
+    // the script-inert way to render one: fetch the text, view it through a
+    // Blob URL — nothing executes in an image context.
+    let text;
+    try {
+      const res = await fetch(
+        api.workspaceRawUrl({ agent: store.agent, path, download: true }),
+      );
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      text = await res.text();
+    } catch (err) {
+      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+      return false;
+    }
+    if (state.viewing?.path !== path) return true;
+    const img = document.createElement('img');
+    img.className = 'files-img';
+    img.alt = name;
+    img.src = holdBlobUrl(new Blob([text], { type: 'image/svg+xml' }));
+    els.viewerBody.replaceChildren(img);
+    return true;
+  }
+
+  if (kind === 'html') {
+    // The whole document, unpaginated — the sandboxed preview needs it in one
+    // piece (fetch ignores the download Content-Disposition).
+    let text;
+    try {
+      const res = await fetch(
+        api.workspaceRawUrl({ agent: store.agent, path, download: true }),
+      );
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      text = await res.text();
+    } catch (err) {
+      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+      return false;
+    }
+    if (state.viewing?.path !== path) return true;
+    state.viewing.content = text;
+    renderViewerContent();
     return true;
   }
 
@@ -623,7 +754,10 @@ function renderViewerContent() {
   els.viewerBody.replaceChildren();
   els.viewerBody.classList.toggle('nowrap', !state.wrap);
   // Wrap toggling only means something for plain text / raw views.
-  const textual = v.kind === 'text' || (v.kind === 'md' && v.raw) || v.kind === 'csv';
+  const textual =
+    v.kind === 'text' ||
+    v.kind === 'csv' ||
+    ((v.kind === 'md' || v.kind === 'html') && v.raw);
   els.wrapToggle.classList.toggle('hidden', !textual);
 
   if (v.truncated) {
@@ -637,17 +771,29 @@ function renderViewerContent() {
     );
   }
 
-  if (v.kind === 'md') {
+  if (v.kind === 'md' || v.kind === 'html') {
     els.mdToggle.classList.remove('hidden');
     els.mdToggle.innerHTML = icon(v.raw ? 'file-text' : 'code', { size: 15 });
     els.mdToggle.title = v.raw ? t('files.rendered') : t('files.raw');
-    if (!v.raw) {
-      const { turn, body } = bodyWrapper();
-      body.innerHTML = renderMarkdown(v.content);
-      highlightIn(body);
-      els.viewerBody.appendChild(turn);
-      return;
-    }
+  }
+  if (v.kind === 'md' && !v.raw) {
+    const { turn, body } = bodyWrapper();
+    body.innerHTML = renderMarkdown(v.content);
+    highlightIn(body);
+    els.viewerBody.appendChild(turn);
+    return;
+  }
+  if (v.kind === 'html' && !v.raw) {
+    const frame = document.createElement('iframe');
+    frame.className = 'files-frame files-frame--html';
+    // allow-scripts WITHOUT allow-same-origin: the document runs in an opaque
+    // origin — its scripts can't touch the parent DOM, the token cookie, or
+    // localStorage. That's what makes rendering agent-authored HTML safe here.
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('title', v.name);
+    frame.srcdoc = v.content;
+    els.viewerBody.appendChild(frame);
+    return;
   }
   if (v.kind === 'csv' && !v.truncated) {
     const table = renderCsv(v.content, ext(v.path) === 'tsv' ? '\t' : ',');
@@ -676,6 +822,63 @@ async function loadMore() {
   } catch (err) {
     toast(err.message || t('files.loadFailed'), { type: 'error' });
   }
+}
+
+// ---- Upload into the workspace ---------------------------------------------
+// The panel is where "put a file where the agent can reach it" naturally
+// lives; the composer's attach flow stays the path for "send WITH the next
+// message". Same endpoint (uploads land under uploads/), same allowlist.
+async function uploadToWorkspace(files) {
+  if (!state.available || !files.length) return;
+  let ok = 0;
+  for (const file of files) {
+    try {
+      await api.uploadFile(file, { agent: store.agent });
+      ok += 1;
+    } catch {
+      toast(t('composer.uploadFailed', { name: file.name }), { type: 'error' });
+    }
+  }
+  if (ok) {
+    toast(t('files.uploaded', { n: ok }));
+    if (state.mode !== 'recent') setMode('recent'); // that's where they surface
+    else refresh();
+  }
+}
+
+function initUpload() {
+  if (!els.upload) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('change', () => {
+    if (input.files?.length) uploadToWorkspace([...input.files]);
+    input.value = ''; // let the same file be picked again
+  });
+  els.upload.addEventListener('click', () => input.click());
+
+  els.panel.addEventListener('dragover', (e) => {
+    if (!state.available) return;
+    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+    e.preventDefault();
+    els.panel.classList.add('drag-over');
+  });
+  els.panel.addEventListener('dragleave', (e) => {
+    if (!els.panel.contains(/** @type {Node} */ (e.relatedTarget))) {
+      els.panel.classList.remove('drag-over');
+    }
+  });
+  els.panel.addEventListener('drop', (e) => {
+    els.panel.classList.remove('drag-over');
+    if (!state.available) return;
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) {
+      e.preventDefault();
+      uploadToWorkspace(files);
+    }
+  });
 }
 
 // A touched file that's on screen refreshes quietly, debounced — an agent
@@ -709,20 +912,25 @@ export function initFiles() {
   els.filter = document.getElementById('files-filter');
   els.wrapToggle = document.getElementById('files-wrap-toggle');
   els.mdToggle = document.getElementById('files-md-toggle');
+  els.attach = document.getElementById('files-attach');
   els.copyPath = document.getElementById('files-copy-path');
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
   els.split = document.getElementById('files-split');
+  els.upload = document.getElementById('files-upload');
 
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   els.close.innerHTML = icon('x', { size: 16 });
+  els.attach.innerHTML = icon('paperclip', { size: 14 });
   els.copyPath.innerHTML = icon('copy', { size: 14 });
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
+  if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
 
   if (els.resizer) initResizer();
   if (els.split) initSplit();
+  initUpload();
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
   els.close.addEventListener('click', () => setOpen(false));
@@ -752,6 +960,17 @@ export function initFiles() {
     if (!state.viewing) return;
     if (await copyToClipboard(state.viewing.path)) toast(t('toast.pathCopied'));
   });
+  // The reverse of the tool card's "open in Files panel": put the viewed file
+  // on the next message. chat.js owns the composer tray and answers.
+  els.attach.addEventListener('click', () => {
+    const v = state.viewing;
+    if (!v) return;
+    store.emit('attach-workspace-file', {
+      path: v.path,
+      name: v.name,
+      kind: IMAGE_EXT.has(ext(v.path)) ? 'image' : 'file',
+    });
+  });
   els.viewerBody.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
     if (!a || !els.viewerBody.contains(a)) return;
@@ -778,6 +997,7 @@ export function initFiles() {
     state.browsePath = '';
     state.filter = '';
     if (els.filter) els.filter.value = '';
+    setUnseen(0);
     closeViewer();
     updateVisibility();
     if (state.open) refresh();
@@ -786,14 +1006,18 @@ export function initFiles() {
   store.on('session-switched', () => {
     state.touched.clear();
     state.revs.clear();
+    setUnseen(0);
   });
   store.on('reset-chat-view', () => {
     state.touched.clear();
     state.revs.clear();
+    setUnseen(0);
   });
   store.on('workspace-file-touched', ({ path }) => {
     state.touched.add(path);
     state.revs.set(path, (state.revs.get(path) || 0) + 1);
+    // Badge only live-run writes — replayed history re-emits old touches.
+    if (!state.open && store.streaming) setUnseen(state.unseen + 1);
     if (state.open) refresh();
     maybeReloadViewing(path);
   });

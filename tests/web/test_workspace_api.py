@@ -301,6 +301,38 @@ def test_raw_non_image_inline_refused(client: TestClient) -> None:
     assert r.status_code == 415
 
 
+def test_raw_pdf_inline(client: TestClient) -> None:
+    # PDF joins images in the inline set (the Files panel embeds the browser's
+    # sandboxed PDF viewer); the explicit media type keeps nosniff happy.
+    up = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("doc.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+    assert up.status_code == 200
+    r = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "attachment" not in r.headers.get("content-disposition", "")
+
+
+def test_raw_svg_inline_still_refused(client: TestClient) -> None:
+    # SVG can carry scripts — the PDF exception must not widen to it.
+    up = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("pic.svg", b"<svg xmlns='...'/>", "image/svg+xml")},
+    )
+    assert up.status_code == 200
+    r = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": up.json()["path"]}
+    )
+    assert r.status_code == 415
+
+
 def test_raw_download_any_file(client: TestClient) -> None:
     r = client.get(
         "/api/workspace/raw",

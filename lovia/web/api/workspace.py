@@ -304,9 +304,9 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         path: str = Query(..., max_length=4096),
         download: bool = Query(False),
     ) -> Response:
-        """Raw bytes: inline for images (viewer preview), attachment for any
-        file when ``download=1`` — "take the file the assistant made" is a
-        first-class action for an assistant UI."""
+        """Raw bytes: inline for images and PDFs (viewer preview), attachment
+        for any file when ``download=1`` — "take the file the assistant made"
+        is a first-class action for an assistant UI."""
         cfg = require_cfg(agent)
         try:
             async with _view_session(cfg) as session:
@@ -340,7 +340,9 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         # it stays reachable via download=1. See lovia/web/media.py.
         inline_ok = is_preview_image(resolved.abs.name) or is_pdf
         if not download and not inline_ok:
-            raise HTTPException(status_code=415, detail="inline preview is images/pdf-only")
+            raise HTTPException(
+                status_code=415, detail="inline preview is images and PDFs only"
+            )
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
         # constantly (and re-renders after every agent edit), so unchanged
         # files answer 304 from the ETag below instead of re-sending bytes —

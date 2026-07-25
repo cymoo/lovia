@@ -4037,7 +4037,13 @@ body.files-splitting {
   margin-top: 18px;
   max-width: 560px;
 }
-.empty-example {
+/* The clickable-question pill — purely visual, worn by both kinds of question
+   button. Keep behaviour off this class. `.empty-example` is a *dispatch*
+   selector: the delegated handler on #transcript matches it to fill the
+   composer without sending. A follow-up binds its own click listener and
+   sends, so it must never wear `.empty-example` — wearing both ran both
+   handlers, which is what shipped broken in 0.9.1. */
+.chip {
   padding: 7px 14px;
   font-size: 13px;
   color: var(--ink-2);
@@ -4050,16 +4056,17 @@ body.files-splitting {
     color var(--t-fast),
     border-color var(--t-fast);
 }
-.empty-example:hover {
+.chip:hover {
   color: var(--ink);
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
 
 /* ---- Follow-up chips ------------------------------------------------------------------------------- */
-/* Suggested next questions after a reply. Same pill as .empty-example, but
-   left-aligned in the message column instead of centred, and pulled up under
-   the reply it belongs to (the turn above owns 30px of bottom margin). */
+/* Suggested next questions after a reply. Same `.chip` pill as the empty
+   state's starter prompts, but left-aligned in the message column instead of
+   centred, and pulled up under the reply it belongs to (the turn above owns
+   30px of bottom margin). */
 .followups {
   display: flex;
   flex-wrap: wrap;

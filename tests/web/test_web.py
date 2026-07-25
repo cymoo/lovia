@@ -103,7 +103,10 @@ def test_index_renders_example_prompts() -> None:
     # Rendered as clickable chips AND carried in the app-config blob so the
     # client-side empty-state re-render shows them too.
     assert res.text.count("Summarize my inbox") == 2
-    assert 'class="empty-example"' in res.text
+    # `chip` is the shared pill look; `empty-example` is the behaviour the
+    # delegated click handler keys off (fill the composer, don't send). Both
+    # matter — a follow-up chip wears `chip` but must NOT wear `empty-example`.
+    assert 'class="chip empty-example"' in res.text
     assert "empty_examples" in res.text
 
 

@@ -1662,7 +1662,7 @@ export function renderEmptyState() {
     for (const example of store.emptyExamples) {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'empty-example';
+      btn.className = 'chip empty-example';
       btn.textContent = example;
       wrap.appendChild(btn);
     }
@@ -1935,9 +1935,10 @@ function renderFollowups(items) {
   for (const text of items) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    // Same pill as the empty state's starter prompts — one visual language for
-    // "a question you can click".
-    btn.className = 'empty-example followup';
+    // `.chip` is the shared pill *look*; the behaviour class must NOT be
+    // `.empty-example`, whose delegated handler on #transcript fills the
+    // composer — a follow-up sends instead, and wearing both fired both.
+    btn.className = 'chip followup';
     btn.textContent = text;
     btn.addEventListener('click', () => {
       // Unlike a starter prompt (which only fills the composer), a follow-up

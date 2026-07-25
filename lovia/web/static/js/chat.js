@@ -1680,6 +1680,11 @@ let _currentTurn = 0; // the pill shows "Turn N · <current tool>…"
 // is followed by more events, which reset this.
 let _lastEventWasError = false;
 
+// True once this stream produced at least one `done` (an auto-chaining run
+// emits one per leg). Read in the stream's finally to tell "the run answered"
+// from "cancelled or died", which is what gates the follow-up chips.
+let _sawDone = false;
+
 async function handleEvent({ event, data }) {
   _lastEventWasError = event === 'error';
   switch (event) {
@@ -1838,6 +1843,7 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'done': {
+      _sawDone = true;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
@@ -1898,6 +1904,81 @@ async function pollForTitle(sessionId) {
   schedule(_TITLE_POLL_BACKOFF_MS[attempt++]);
 }
 
+// ---- Follow-up chips ---------------------------------------------------
+// Questions the user might ask next, offered once a run settles. Fetched from
+// the stream's finally rather than on the `done` event: an auto-chaining run
+// emits one `done` per leg inside a single stream, and we want one suggestion
+// call per stream, not per leg.
+//
+// The chips live at the tail of the transcript, outside any turn, so sending
+// anything simply removes them (see runStream) and a history re-render drops
+// them with the rest of the DOM.
+let _followupController = null;
+
+function clearFollowups() {
+  _followupController?.abort();
+  _followupController = null;
+  document.getElementById('followups')?.remove();
+}
+
+function renderFollowups(items) {
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl || !items?.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'followups';
+  wrap.id = 'followups';
+  wrap.setAttribute('aria-label', t('chat.followups'));
+  for (const text of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    // Same pill as the empty state's starter prompts — one visual language for
+    // "a question you can click".
+    btn.className = 'empty-example followup';
+    btn.textContent = text;
+    btn.addEventListener('click', () => {
+      // Unlike a starter prompt (which only fills the composer), a follow-up
+      // sends: one click is the whole point of the affordance.
+      document.getElementById('empty-state')?.remove();
+      appendUserTurn(text);
+      runStream(text); // fire-and-forget; clearFollowups runs at its head
+    });
+    wrap.appendChild(btn);
+  }
+  transcriptEl.appendChild(wrap);
+  scrollDown();
+}
+
+/**
+ * Ask the server what the user might want next and render the chips.
+ * Silent on every failure — no chips is the neutral outcome.
+ * @param {string} sessionId
+ */
+async function fetchFollowups(sessionId) {
+  if (!store.canSuggest || !sessionId) return;
+  clearFollowups();
+  const epoch = store.chatEpoch;
+  const controller = new AbortController();
+  _followupController = controller;
+  try {
+    const data = await api.getFollowups(sessionId, { signal: controller.signal });
+    // The suggester thinks for a second or two — long enough for the user to
+    // switch chats or start the next turn. Those chips belong to a view that
+    // has moved on.
+    if (
+      store.chatEpoch !== epoch ||
+      store.sessionId !== sessionId ||
+      store.streaming
+    ) {
+      return;
+    }
+    renderFollowups(data?.followups);
+  } catch {
+    /* aborted, offline, or the suggester declined — show nothing */
+  } finally {
+    if (_followupController === controller) _followupController = null;
+  }
+}
+
 // ---- Streaming ---------------------------------------------------------
 const stopBtn = document.getElementById('stop');
 const composer = /** @type {HTMLFormElement | null} */ (document.getElementById('composer'));
@@ -1941,10 +2022,12 @@ export async function runStream(message, attachments = null) {
   store.lastMessage = message;
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
+  clearFollowups(); // the previous turn's suggestions are answered or abandoned
   enterStreamingUI();
   startAssistantTurn();
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
+  _sawDone = false;
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2030,6 +2113,10 @@ export async function runStream(message, attachments = null) {
       // fresh run now that the stream has fully settled.
       if (_pendingResend.length) {
         runStream(_pendingResend.splice(0).join('\n\n'));
+      } else if (_sawDone && !_lastEventWasError) {
+        // Only after a run that actually answered: a cancel or a terminal
+        // failure has nothing to follow up on.
+        fetchFollowups(store.sessionId);
       }
     }
   }
@@ -2046,6 +2133,7 @@ export async function runReconnect(sessionId) {
   startAssistantTurn();
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
+  _sawDone = false;
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2100,6 +2188,8 @@ export async function runReconnect(sessionId) {
       loadSessions();
       if (_pendingResend.length) {
         runStream(_pendingResend.splice(0).join('\n\n'));
+      } else if (_sawDone && !_lastEventWasError) {
+        fetchFollowups(sessionId);
       }
     }
   }
@@ -2136,11 +2226,13 @@ export function detachStream() {
   //    or resends a raced message into the wrong chat (accepted injects still
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
   //  - the turn-progress pill (un-hidden by turn_started);
-  //  - the todo panel (only renderHistory rebuilds it — a failed switch won't).
+  //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
+  //  - any in-flight follow-up request, whose chips would land in the new view.
   _queuedTurns = [];
   _pendingResend = [];
   if (turnProgressEl) turnProgressEl.classList.add('hidden');
   clearTodoPanel();
+  clearFollowups();
   if (store.streaming) exitStreamingUI();
 }
 

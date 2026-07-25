@@ -82,6 +82,7 @@ const MESSAGES = {
     // ---- auth
     'auth.tokenPrompt': '此服务器需要访问令牌（见服务器启动日志）：',
     // ---- chat body
+    'chat.followups': '建议的后续问题',
     'chat.thinking': '思考中…',
     'chat.thought': '思考了 {s} 秒',
     'chat.cancelled': '_已取消。_',
@@ -349,6 +350,7 @@ const EN = {
   'toast.unauthorized': 'Unauthorized — reload and enter the server token',
   'auth.tokenPrompt':
     'This server requires an access token (see the server startup log):',
+  'chat.followups': 'Suggested follow-ups',
   'chat.thinking': 'Thinking…',
   'chat.thought': 'Thought for {s}s',
   'chat.cancelled': '_Cancelled._',

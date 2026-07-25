@@ -4056,6 +4056,23 @@ body.files-splitting {
   border-color: var(--border-strong);
 }
 
+/* ---- Follow-up chips ------------------------------------------------------------------------------- */
+/* Suggested next questions after a reply. Same pill as .empty-example, but
+   left-aligned in the message column instead of centred, and pulled up under
+   the reply it belongs to (the turn above owns 30px of bottom margin). */
+.followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--content-w);
+  margin: -18px auto 30px;
+  animation: turn-in var(--t-med) var(--ease);
+}
+.followup {
+  text-align: left;
+}
+
 /* ---- Files panel: filter + wrap toggle -------------------------------------------------------------- */
 .files-search {
   padding: 0 10px 8px;

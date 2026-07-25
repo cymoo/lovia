@@ -1072,3 +1072,65 @@ def test_main_default_db_lands_under_dot_lovia(
     assert rc == 0
     assert (tmp_path / ".lovia" / "lovia.db").is_file()
     assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")
+
+
+# ------------------------------------------------------------- followups -
+
+
+def test_resolve_followups_on_by_default() -> None:
+    """The CLI is a finished chat app; the library default is the opposite."""
+    assert cli.resolve_followups(False) is True
+
+
+def test_resolve_followups_flag_disables() -> None:
+    assert cli.resolve_followups(True) is False
+
+
+def test_resolve_followups_env_disables(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_FOLLOWUPS", "0")
+    assert cli.resolve_followups(False) is False
+
+
+def test_resolve_followups_flag_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOVIA_FOLLOWUPS", "1")
+    assert cli.resolve_followups(True) is False
+
+
+def test_resolve_followup_model_unset() -> None:
+    assert cli.resolve_followup_model() is None
+
+
+def test_resolve_followup_model_builds_a_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOVIA_FOLLOWUP_MODEL", "openai:gpt-small")
+    monkeypatch.setenv("LOVIA_FOLLOWUP_API_KEY", "sk-small")
+    provider = cli.resolve_followup_model()
+    assert provider is not None
+    assert provider.model == "gpt-small"
+
+
+def test_resolve_followup_model_bad_spec_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unusable spec must not take the whole server down with it."""
+    monkeypatch.setenv("LOVIA_FOLLOWUP_MODEL", "no-such-vendor:whatever")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert cli.resolve_followup_model() is None
+
+
+def test_main_passes_followups_to_serve(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
+    assert cli.main([]) == 0
+    assert seen["followups"] is True
+    assert seen["followup_model"] is None
+
+    seen.clear()
+    assert cli.main(["--no-followups"]) == 0
+    assert seen["followups"] is False

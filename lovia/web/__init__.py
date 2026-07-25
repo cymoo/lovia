@@ -35,6 +35,7 @@ try:
     from .api import RouterDeps, build_api_router
     from .app import create_app, serve
     from .auth import generate_token, is_loopback, token_dependency
+    from .followups import FollowupFn, FollowupRequest, generate_followups
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .ui import SURFACE_NOTE
@@ -46,11 +47,14 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 __all__ = [
     "ChatMeta",
     "ChatStore",
+    "FollowupFn",
+    "FollowupRequest",
     "RouterDeps",
     "SURFACE_NOTE",
     "Scheduling",
     "build_api_router",
     "create_app",
+    "generate_followups",
     "generate_token",
     "is_loopback",
     "serve",

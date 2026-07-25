@@ -15,8 +15,10 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ...plugins import todos_from_entries
 from ...transcript import InputEntry, entries_to_messages
+from ..followups import FollowupRequest
 from ..schemas import (
     ChatSessionInfo,
+    FollowupsResponse,
     MessageOut,
     RewindRequest,
     RewindResponse,
@@ -279,6 +281,27 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 for t in todos
             ]
         )
+
+    @router.post(
+        "/api/sessions/{session_id}/followups", response_model=FollowupsResponse
+    )
+    async def suggest_followups(session_id: str) -> FollowupsResponse:
+        """Questions the user might ask next, for the UI's follow-up chips.
+
+        POST rather than GET like the sibling read-only routes: this spends
+        model tokens, so it must not look safe to prefetch or auto-retry.
+        Empty whenever the feature is off, no turn has been answered yet, or
+        the suggester declined — the UI then renders nothing.
+        """
+        meta = await store.get(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail=f"unknown session {session_id}")
+        request = FollowupRequest(
+            session_id=session_id,
+            agent=meta.agent or deps.default_agent or "",
+            messages=entries_to_messages(await session.load(session_id)),
+        )
+        return FollowupsResponse(followups=await deps.suggest_followups(request))
 
     @router.get("/api/sessions/{session_id}/export")
     async def export_session(

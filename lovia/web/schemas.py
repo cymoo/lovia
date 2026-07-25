@@ -324,3 +324,10 @@ class TodoItemOut(BaseModel):
 
 class TodosResponse(BaseModel):
     todos: list[TodoItemOut] = Field(default_factory=list)
+
+
+class FollowupsResponse(BaseModel):
+    """Suggested next questions. Empty whenever nothing fits — a disabled
+    feature, a conversation that reached its end, or a failed suggester."""
+
+    followups: list[str] = Field(default_factory=list)

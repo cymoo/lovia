@@ -71,6 +71,7 @@ Provider 认证失败。
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
+| `POST /api/sessions/{id}/followups` | `{followups: [...]}`：用户可能想继续问的问题；功能关闭或无合适建议时为 `[]`。用 POST 是因为它会消耗模型 token |
 | `POST /api/sessions/{id}/rewind` | 从索引为 `user_turn` 的用户消息起删除后续内容，索引从 0 开始；运行中返回 409，不支持 `rewind` 时返回 501 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |

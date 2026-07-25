@@ -120,6 +120,14 @@ export const api = {
   deleteAllSessions: () => fetch('/api/sessions', { method: 'DELETE' }),
   getTodos: (id) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}/todos`).then(_json),
+  // Questions the user might ask next → { followups: string[] }. POST because
+  // it spends model tokens; `[]` whenever the server has nothing to suggest.
+  /** @param {string} id @param {{ signal?: AbortSignal }} [opts] */
+  getFollowups: (id, { signal } = {}) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}/followups`, {
+      method: 'POST',
+      signal,
+    }).then(_json),
   // Rewind to just before the userTurn-th user message (edit / regenerate);
   // resolves to { removed, entries } — the authoritative post-rewind view.
   rewindSession: (id, userTurn) =>

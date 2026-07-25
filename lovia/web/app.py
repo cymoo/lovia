@@ -29,6 +29,7 @@ from .api import RouterDeps, build_api_router
 from .api.memory import memory_plugin
 from .approvals import ApprovalRegistry
 from .auth import generate_token, is_loopback, token_dependency
+from .followups import FollowupFn
 from .scheduler import Scheduler
 from .store import ChatStore
 from .ui import build_ui_router
@@ -146,6 +147,8 @@ def create_app(
     context_policy: ContextPolicy | None = None,
     title_model: str | Provider | None = None,
     generate_titles: bool = True,
+    followups: bool | FollowupFn = False,
+    followup_model: str | Provider | None = None,
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
@@ -173,6 +176,13 @@ def create_app(
 
     ``title_model`` overrides the model used to generate chat titles; defaults
     to the first agent's own ``model``.
+
+    ``followups`` offers suggested next questions as clickable chips once a
+    turn finishes: ``False`` (default) is off, ``True`` uses the built-in
+    suggester, and any ``async def f(FollowupRequest) -> Sequence[str]``
+    replaces it wholesale (see :mod:`lovia.web.followups`). Off by default
+    because — unlike a title — it costs one model call per *run*;
+    ``followup_model`` points that call at a cheaper model than the agent's.
 
     ``context_policy`` is a server-level override applied to every served
     agent; ``None`` (default) lets each agent's own ``context_policy`` — or
@@ -238,6 +248,8 @@ def create_app(
         context_policy=context_policy,
         title_model=title_model,
         generate_titles=generate_titles,
+        followups=followups,
+        followup_model=followup_model,
         max_turns=max_turns,
         budget=budget,
         retry=retry,
@@ -336,6 +348,8 @@ def serve(
     context_policy: ContextPolicy | None = None,
     title_model: str | Provider | None = None,
     generate_titles: bool = True,
+    followups: bool | FollowupFn = False,
+    followup_model: str | Provider | None = None,
     title: str = "lovia",
     max_turns: int = 50,
     budget: RunBudget | None = None,
@@ -393,6 +407,8 @@ def serve(
         context_policy=context_policy,
         title_model=title_model,
         generate_titles=generate_titles,
+        followups=followups,
+        followup_model=followup_model,
         title=title,
         max_turns=max_turns,
         budget=budget,

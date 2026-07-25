@@ -260,6 +260,12 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     server.add_argument("--title", help="page title (env LOVIA_TITLE, default lovia)")
     server.add_argument(
+        "--no-followups",
+        action="store_true",
+        help="don't suggest follow-up questions after a reply "
+        "(env LOVIA_FOLLOWUPS=0; model via LOVIA_FOLLOWUP_MODEL)",
+    )
+    server.add_argument(
         "--db",
         metavar="FILE",
         help="SQLite file for chat history (env LOVIA_DB, default ./.lovia/<agent>.db)",
@@ -465,6 +471,46 @@ def _env_bool(name: str) -> bool | None:
         return False
     log.warning("%s=%r is not a boolean (use 1 or 0); treating as false", name, raw)
     return False
+
+
+def resolve_followups(cli_off: bool) -> bool:
+    """Follow-up chips: on unless ``--no-followups`` or ``LOVIA_FOLLOWUPS=0``.
+
+    The opposite of the library default (``create_app(followups=False)``), on
+    purpose: an embedder must never silently gain a model call per run, while
+    the bundled CLI is a finished chat app where the chips are part of it.
+    """
+    if cli_off:
+        return False
+    env = _env_bool("LOVIA_FOLLOWUPS")
+    return True if env is None else env
+
+
+def resolve_followup_model() -> Provider | None:
+    """A cheaper model for follow-up suggestions (env ``LOVIA_FOLLOWUP_MODEL``).
+
+    ``None`` falls back to the agent's own model. Same env-gated shape as
+    ``LOVIA_VISION_MODEL``: ``LOVIA_FOLLOWUP_BASE_URL`` /
+    ``LOVIA_FOLLOWUP_API_KEY`` override the endpoint for a small model that
+    lives somewhere other than the main one.
+    """
+    spec = os.getenv("LOVIA_FOLLOWUP_MODEL")
+    if not spec:
+        return None
+    try:
+        return provider_from_string(
+            spec,
+            api_key=os.getenv("LOVIA_FOLLOWUP_API_KEY"),
+            base_url=os.getenv("LOVIA_FOLLOWUP_BASE_URL"),
+        )
+    except (UserError, ValueError) as exc:
+        log.warning(
+            "LOVIA_FOLLOWUP_MODEL=%r unusable; falling back to the agent's "
+            "own model: %s",
+            spec,
+            exc,
+        )
+        return None
 
 
 def resolve_vision_tool(
@@ -802,6 +848,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             max_turns=resolve_max_turns(args.max_turns),
             retry=retry,
             token=token,
+            followups=resolve_followups(args.no_followups),
+            followup_model=resolve_followup_model(),
             log_level=level.lower(),
         )
     except UserError as exc:

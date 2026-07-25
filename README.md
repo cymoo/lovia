@@ -447,9 +447,9 @@ Memory("./memory", index=None)                 # notes only, no archive
 
 ### Web UI
 
-A lightweight FastAPI app — SSE streaming, sessions with titles, approvals,
-schedules, a memory editor, image & file attachments — whose runs survive
-browser disconnects:
+A lightweight FastAPI app — SSE streaming, sessions with titles, follow-up
+suggestions, approvals, schedules, a memory editor, image & file attachments —
+whose runs survive browser disconnects:
 
 ```python
 from lovia.web import serve

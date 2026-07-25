@@ -1,8 +1,8 @@
 # Web UI
 
 浏览器 UI 可以把任意 lovia Agent 变成本地聊天应用。它支持流式输出、Tool 调用记录、
-对话历史、编辑后重发、重新生成、对话标题、审批、定时任务、记忆编辑、图片与文件上传，
-并提供只读的 Workspace 文件面板。
+对话历史、编辑后重发、重新生成、对话标题、追问建议、审批、定时任务、记忆编辑、
+图片与文件上传，并提供只读的 Workspace 文件面板。
 所有前端资源都随软件包分发，不依赖 CDN 或外部字体。
 
 ## 一条命令启动
@@ -111,11 +111,25 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
+| `--no-followups` | `LOVIA_FOLLOWUPS`、`LOVIA_FOLLOWUP_MODEL` | 开启建议，使用 Agent 自身的模型 |
 | `--env-file` | — | 未指定时依次读取 `.lovia/config.env`、`./.env` |
 
 完整选项见 `lovia web --help`。帮助信息分为 model、agent、server 和 advanced 四组；
 上下文窗口位于 model 组，输出 token 上限、Provider 超时与重试、代理和日志级别位于
 advanced 组。
+
+## 追问建议
+
+回答结束后，UI 会在答案下方给出几个你可能想继续问的问题，点击即发送。它们来自一次
+独立的小模型调用，因此不会进入对话本身；并且只在真正产出了回答的 Run 之后出现——
+中途停止或报错都不会。发送任何消息都会清除它们。
+
+提示词允许模型「不给建议」：对话已经自然收尾时，宁可不显示，也不硬凑三条。
+**设置 →「回答结束后建议追问」** 可以只为你自己关闭，无需重启服务——这个判断在
+发请求之前，关掉就不会产生任何开销。要在服务端整体关闭，用 `--no-followups`；
+用 `LOVIA_FOLLOWUP_MODEL` 把这次调用指向更便宜的模型。通过
+`create_app()` 托管自定义 Agent 时，该功能默认关闭，需要显式开启——见
+[Web 服务](web-server.md#追问建议)。
 
 ## 关闭或刷新页面
 

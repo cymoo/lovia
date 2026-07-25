@@ -2,9 +2,10 @@
 
 The optional browser UI turns any lovia Agent into a local chat application.
 It includes streaming text and Tool activity, conversation history with
-edit-and-resend and regenerate, titles, approvals, schedules, a memory editor,
-image and file attachments, and a read-only Workspace file panel. All browser
-assets are bundled, so the page works without a CDN or external font requests.
+edit-and-resend and regenerate, titles, follow-up suggestions, approvals,
+schedules, a memory editor, image and file attachments, and a read-only
+Workspace file panel. All browser assets are bundled, so the page works without
+a CDN or external font requests.
 
 ## Start in one command
 
@@ -113,11 +114,29 @@ Every option resolves in this order: command-line flag, environment variable,
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
+| `--no-followups` | `LOVIA_FOLLOWUPS`, `LOVIA_FOLLOWUP_MODEL` | Suggestions on, using the Agent's model |
 | `--env-file` | — | `.lovia/config.env`, then `./.env` |
 
 `lovia web --help` lists them all in four groups: model (including the context
 window), agent, server, and advanced — output tokens, Provider timeout and
 retries, proxy handling, and log level.
+
+## Follow-up suggestions
+
+After a reply lands, the UI offers a few questions you might want to ask next
+as chips below the answer; clicking one sends it. They come from a separate
+small model call, so they never enter the conversation itself, and they appear
+only after a Run that actually answered — not after a stop or an error. Sending
+anything clears them.
+
+The model is told it may decline: a chat that reached a natural end gets no
+chips rather than three invented ones. **Settings → "Suggest follow-up
+questions after a reply"** turns them off for you alone, without a server
+restart — the check runs before the request, so opting out spends nothing.
+Server-wide, use `--no-followups`, and point the call at a cheaper model with
+`LOVIA_FOLLOWUP_MODEL`.
+For a custom Agent served through `create_app()`, this is opt-in — see
+[Web server](web-server.md#follow-up-suggestions).
 
 ## Closing or refreshing the page
 

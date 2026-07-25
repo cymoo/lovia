@@ -82,6 +82,7 @@ const MESSAGES = {
     // ---- auth
     'auth.tokenPrompt': '此服务器需要访问令牌（见服务器启动日志）：',
     // ---- chat body
+    'chat.followups': '建议的后续问题',
     'chat.thinking': '思考中…',
     'chat.thought': '思考了 {s} 秒',
     'chat.cancelled': '_已取消。_',
@@ -283,6 +284,7 @@ const MESSAGES = {
     'settings.notifications': '后台任务完成时发送桌面通知',
     'settings.notifDenied': '浏览器已拒绝通知权限——请在浏览器设置中开启',
     'settings.sound': '任务完成时播放提示音',
+    'settings.followups': '回答结束后建议追问',
     'settings.reloadNote': '语言更改将在刷新后生效。',
   },
 };
@@ -349,6 +351,7 @@ const EN = {
   'toast.unauthorized': 'Unauthorized — reload and enter the server token',
   'auth.tokenPrompt':
     'This server requires an access token (see the server startup log):',
+  'chat.followups': 'Suggested follow-ups',
   'chat.thinking': 'Thinking…',
   'chat.thought': 'Thought for {s}s',
   'chat.cancelled': '_Cancelled._',
@@ -543,6 +546,7 @@ const EN = {
   'settings.notifDenied':
     'The browser has blocked notifications — enable them in browser settings',
   'settings.sound': 'Play a sound when a run finishes',
+  'settings.followups': 'Suggest follow-up questions after a reply',
   'settings.reloadNote': 'Language changes apply after a reload.',
 };
 

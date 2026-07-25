@@ -16,6 +16,10 @@ export const store = {
   // Both bundled stores support rewind — assume yes until /api/info says no
   // (custom Session backends may lack it).
   canRewind: true,
+  // Follow-up chips after a reply. Off until /api/info says the server can
+  // produce them — the opposite default to canRewind, since asking a server
+  // that has the feature disabled burns a request per run for nothing.
+  canSuggest: false,
   sidebarCollapsed: localStorage.getItem("lovia-sidebar-collapsed") === "1",
   streaming: false,
   turnNode: null,

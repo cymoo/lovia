@@ -75,6 +75,7 @@ FastAPI app rather than this router and remain public by default.
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete |
 | `GET /api/sessions/{id}/todos` | current [Todo list](todo.md), rebuilt from the Transcript |
+| `POST /api/sessions/{id}/followups` | `{followups: [...]}` — questions the user might ask next; `[]` when the feature is off or nothing fits. POST because it spends model tokens |
 | `POST /api/sessions/{id}/rewind` | drop everything from the user-message index `user_turn` onward (zero-based); 409 while a run is live, 501 if the store lacks `rewind` |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |

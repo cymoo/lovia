@@ -30,6 +30,7 @@ application without starting a process.
 | `max_turns` / `budget` / `retry` / `context_policy` | — | Settings applied to every served Run |
 | `tracer` | `None` | Span recorder for served Runs |
 | `generate_titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
+| `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
 | `approval_timeout` | `None` | Auto-deny unresolved approvals after N seconds |
 | `max_background_runs` (`create_app()` only) | `8` | Concurrent supervised Runs; excess starts return 429 |
 | `ui` | `True` | Set `False` for API-only serving |
@@ -43,6 +44,42 @@ application without starting a process.
 
 For endpoint contracts and the `ChatStore` interface, see
 [HTTP API](http-api.md).
+
+## Follow-up suggestions
+
+Once a turn finishes, the UI can offer a few questions the user might want to
+ask next, rendered as clickable chips (clicking one sends it). They come from a
+separate, tiny model call — the main Transcript never sees the request — made
+only after a run that actually answered.
+
+```python
+create_app(agent, followups=True, followup_model="<small-model>")
+```
+
+Off by default: unlike a title, this costs one model call per *run*, so the
+serving layer doesn't presume it. `followup_model` points that call at a
+cheaper model than the Agent's own. The bundled `lovia web` CLI opts in on its
+own behalf — disable it with `--no-followups` or `LOVIA_FOLLOWUPS=0`, and point
+it at a small model with `LOVIA_FOLLOWUP_MODEL`.
+
+Pass a callable to replace the built-in suggester entirely — back it with a
+curated FAQ, a vector store, or the same generator under a different prompt:
+
+```python
+from lovia.web import FollowupRequest, create_app, generate_followups
+
+async def pricing_only(request: FollowupRequest) -> list[str]:
+    return await generate_followups(
+        request, model="<model>", instructions="Ask only about pricing."
+    )
+
+create_app(agent, followups=pricing_only)
+```
+
+A suggester receives the session's conversation (`session_id`, `agent`, and the
+chat-shaped `messages`) and returns any number of strings. Returning `[]` shows
+nothing, which is also what a raising suggester degrades to — the chips are
+never load-bearing.
 
 ## Authentication
 

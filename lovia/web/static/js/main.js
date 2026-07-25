@@ -258,6 +258,7 @@ function initKeyboardShortcuts() {
     document.getElementById('schedules-btn')?.classList.remove('hidden');
   }
   if (info) store.canRewind = !!info.features?.rewind;
+  if (info) store.canSuggest = !!info.features?.followups;
   // Push instead of poll: the lifecycle stream replaces the sidebar's run
   // polling wherever the server (and browser) support it.
   if (info?.features?.events) initEventStream();

@@ -31,6 +31,12 @@ from ...session import Session
 from ...steering import Mailbox
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
+from ..followups import (
+    FollowupFn,
+    FollowupRequest,
+    coerce_suggestions,
+    generate_followups,
+)
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
 
@@ -57,6 +63,12 @@ class RouterDeps:
     context_policy: ContextPolicy | None = None
     title_model: str | Provider | None = None
     generate_titles: bool = True
+    # Suggested follow-up questions after a turn. ``False`` (default) is off,
+    # ``True`` uses the built-in LLM suggester, or pass your own ``FollowupFn``.
+    # Unlike titles this costs a call per *run*, so the serving layer doesn't
+    # presume it — the bundled ``lovia web`` CLI opts in on its own behalf.
+    followups: bool | FollowupFn = False
+    followup_model: str | Provider | None = None
     max_turns: int = 50
     # Per-run limits. Used as a template: ``fresh_budget`` copies it per run so a
     # ``RunBudget``'s wall-clock/tool-call state never bleeds across runs.
@@ -208,3 +220,31 @@ class RouterDeps:
                 self.emit("session_retitled", session_id=session_id, title=meta.title)
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("title generation for %s failed: %s", session_id, exc)
+
+    async def suggest_followups(self, request: FollowupRequest) -> list[str]:
+        """Run the configured suggester; ``[]`` when off or on any failure.
+
+        Awaited inline rather than fire-and-forget like titles: the client
+        asked for these and is waiting to render them. A suggester that raises
+        degrades to no chips, never to a failed request.
+        """
+        fn = self.followups
+        if not fn:
+            return []
+        try:
+            if callable(fn):
+                # Arbitrary user code: coerce before the response model sees it,
+                # or a stray non-string turns "no chips" into a 500.
+                return coerce_suggestions(await fn(request))
+            model = self.followup_model or self.agents[request.agent].model
+            if model is None:  # pragma: no cover - a served agent has a model
+                log.warning(
+                    "follow-ups for %s skipped: agent %r has no model",
+                    request.session_id,
+                    request.agent,
+                )
+                return []
+            return await generate_followups(request, model=model)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("follow-ups for %s failed: %s", request.session_id, exc)
+            return []

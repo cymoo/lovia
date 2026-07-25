@@ -54,6 +54,21 @@ lovia web --app app:assistant
 `--app MODULE:ATTR` 可以指向一个 Agent，也可以指向 `{name: agent}` 映射。Python 部署和
 ASGI 集成详见 [Web 服务端](web-server.md)。
 
+聊天界面按 GitHub 风格 Markdown 渲染回复——表格、代码高亮、`mermaid` 图表、内嵌图片。
+默认 Agent 的系统提示词中已声明这一点；自定义 Agent 则没有，而不了解显示面的模型会假设
+纯文本环境，遇到图片请求时回答"我无法在聊天中显示图片"。把 `SURFACE_NOTE` 拼进
+instructions 即可声明显示面：
+
+```python
+from lovia.web import SURFACE_NOTE
+
+assistant = Agent(
+    name="assistant",
+    instructions="清晰回答。\n\n" + SURFACE_NOTE,
+    model="<model>",
+)
+```
+
 ## 图片与文件
 
 通过输入框旁的 **+** 按钮、拖拽或粘贴添加附件后，文件会上传到 Workspace 的

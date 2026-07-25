@@ -420,6 +420,25 @@ def test_build_default_agent_injects_current_date(
     assert datetime.now().astimezone().strftime("%Y-%m-%d") in system_prompt
 
 
+def test_build_default_agent_declares_render_surface(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The default agent only ever runs in the bundled UI — its system prompt
+    # says so, or the model assumes plain text and refuses to embed images.
+    import asyncio
+
+    from lovia.run_context import RunContext
+    from lovia.web import SURFACE_NOTE
+
+    monkeypatch.chdir(tmp_path)
+    args = cli.build_parser().parse_args([])
+    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+
+    ctx = RunContext(context=None, entries=[], agent=agent)
+    system_prompt = asyncio.run(agent.render_system_prompt(ctx))
+    assert SURFACE_NOTE in system_prompt
+
+
 # ----------------------------------------------------------------- main -
 
 

@@ -50,6 +50,7 @@ from .app import _default_db_path, _display_host, serve
 from .auth import is_loopback
 from .scheduling import Scheduling
 from .store import ChatStore
+from .ui import SURFACE_NOTE
 from .vision import make_see_image_tool
 
 log = logging.getLogger("lovia.web.cli")
@@ -610,6 +611,10 @@ def build_default_agent(
         tools=tools,
         workspace=workspace,
     )
+    # This agent only ever runs in the bundled UI, so declare what it renders —
+    # untold, models assume plain text and refuse to embed images. Static, so
+    # it precedes the fragment that changes daily.
+    agent.instruction(lambda _ctx: SURFACE_NOTE)
     # Tell the model today's date up front so it searches the current year and
     # skips the now->web_search round-trip. Date only (server-local tz): stable
     # within a prompt-cache window; precise time stays the `now` tool's job.

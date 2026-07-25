@@ -55,6 +55,22 @@ lovia web --app app:assistant
 `--app MODULE:ATTR` accepts one Agent or a `{name: agent}` mapping. For Python
 deployment and ASGI integration, see [Web server](web-server.md).
 
+The UI renders GitHub-flavored Markdown — tables, highlighted code, `mermaid`
+diagrams, inline images. The default agent is told so in its system prompt; a
+custom agent is not, and a model that doesn't know its surface assumes plain
+text and answers image requests with "I cannot display images here". Append
+`SURFACE_NOTE` to your instructions to declare the surface:
+
+```python
+from lovia.web import SURFACE_NOTE
+
+assistant = Agent(
+    name="assistant",
+    instructions="Answer clearly.\n\n" + SURFACE_NOTE,
+    model="<model>",
+)
+```
+
 ## Images and files
 
 Attachments (the composer's **+**, or drag-drop, or paste) are uploaded into the

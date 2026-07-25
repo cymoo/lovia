@@ -37,6 +37,7 @@ try:
     from .auth import generate_token, is_loopback, token_dependency
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
+    from .ui import SURFACE_NOTE
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
@@ -46,6 +47,7 @@ __all__ = [
     "ChatMeta",
     "ChatStore",
     "RouterDeps",
+    "SURFACE_NOTE",
     "Scheduling",
     "build_api_router",
     "create_app",

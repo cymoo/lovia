@@ -19,6 +19,24 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
+SURFACE_NOTE = (
+    "Replies render as GitHub-flavored Markdown in the chat UI, including "
+    "```mermaid diagrams and inline images — ![alt](url) displays the image "
+    "itself, so embed images directly instead of saying they cannot be shown."
+)
+r"""What the bundled chat UI renders — tell the model, or it assumes plain text.
+
+An untold model answers image requests with "I cannot display images here".
+The ``lovia web`` default agent carries this note automatically; agents served
+via ``--app`` or :func:`~lovia.web.serve` opt in::
+
+    from lovia.web import SURFACE_NOTE
+
+    agent = Agent(name="x", instructions="Be helpful.\n\n" + SURFACE_NOTE)
+
+Defined next to the UI it describes so the two change together.
+"""
+
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 

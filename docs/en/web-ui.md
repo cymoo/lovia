@@ -130,8 +130,11 @@ only after a Run that actually answered — not after a stop or an error. Sendin
 anything clears them.
 
 The model is told it may decline: a chat that reached a natural end gets no
-chips rather than three invented ones. Turn the feature off with
-`--no-followups`, and point it at a cheaper model with `LOVIA_FOLLOWUP_MODEL`.
+chips rather than three invented ones. **Settings → "Suggest follow-up
+questions after a reply"** turns them off for you alone, without a server
+restart — the check runs before the request, so opting out spends nothing.
+Server-wide, use `--no-followups`, and point the call at a cheaper model with
+`LOVIA_FOLLOWUP_MODEL`.
 For a custom Agent served through `create_app()`, this is opt-in — see
 [Web server](web-server.md#follow-up-suggestions).
 

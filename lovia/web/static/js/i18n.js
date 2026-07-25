@@ -284,6 +284,7 @@ const MESSAGES = {
     'settings.notifications': '后台任务完成时发送桌面通知',
     'settings.notifDenied': '浏览器已拒绝通知权限——请在浏览器设置中开启',
     'settings.sound': '任务完成时播放提示音',
+    'settings.followups': '回答结束后建议追问',
     'settings.reloadNote': '语言更改将在刷新后生效。',
   },
 };
@@ -545,6 +546,7 @@ const EN = {
   'settings.notifDenied':
     'The browser has blocked notifications — enable them in browser settings',
   'settings.sound': 'Play a sound when a run finishes',
+  'settings.followups': 'Suggest follow-up questions after a reply',
   'settings.reloadNote': 'Language changes apply after a reload.',
 };
 

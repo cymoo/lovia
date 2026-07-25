@@ -7,7 +7,7 @@ import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
-import { enterToSend } from './settings.js';
+import { enterToSend, followupsEnabled } from './settings.js';
 import {
   escapeHtml,
   formatDateTime,
@@ -1954,7 +1954,9 @@ function renderFollowups(items) {
  * @param {string} sessionId
  */
 async function fetchFollowups(sessionId) {
-  if (!store.canSuggest || !sessionId) return;
+  // Capability (does this server produce them) AND preference (does this user
+  // want them). Checked before the fetch, so opting out spends nothing.
+  if (!store.canSuggest || !followupsEnabled() || !sessionId) return;
   clearFollowups();
   const epoch = store.chatEpoch;
   const controller = new AbortController();

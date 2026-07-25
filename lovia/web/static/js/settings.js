@@ -8,11 +8,13 @@
 import { showDialog, setThemePref, themePref } from './ui.js';
 import { t, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
+import { store } from './store.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
 const ENTER_KEY = 'lovia-enter-send';
 const TEXT_SIZE_KEY = 'lovia-text-size';
+const FOLLOWUPS_KEY = 'lovia-followups';
 
 // ---- Message text size ----------------------------------------------------
 // Scales the transcript's prose via the --chat-font-scale CSS var (styles.css
@@ -59,6 +61,18 @@ export function notificationsEnabled() {
 /** @returns {boolean} Whether the completion sound is enabled (off by default). */
 export function soundEnabled() {
   return localStorage.getItem(SOUND_KEY) === '1';
+}
+
+// ---- Follow-up suggestions ------------------------------------------------
+/**
+ * Whether to ask the server for follow-up chips after a reply (on by default,
+ * matching the server's willingness). This is the *preference* half of the
+ * feature — `store.canSuggest` is the capability half, and both must hold. Read
+ * before the request goes out, so turning it off costs the user nothing.
+ * @returns {boolean}
+ */
+export function followupsEnabled() {
+  return localStorage.getItem(FOLLOWUPS_KEY) !== '0';
 }
 
 let _audioCtx = null;
@@ -211,6 +225,20 @@ function openSettingsDialog() {
   const soundRow = field(t('settings.sound'), sound);
   soundRow.classList.add('settings-check');
   panel.appendChild(soundRow);
+
+  // Follow-up chips — only offered when the server can actually produce them,
+  // so this is never a switch that does nothing (same guard as notifications).
+  if (store.canSuggest) {
+    const followups = document.createElement('input');
+    followups.type = 'checkbox';
+    followups.checked = followupsEnabled();
+    followups.addEventListener('change', () => {
+      localStorage.setItem(FOLLOWUPS_KEY, followups.checked ? '1' : '0');
+    });
+    const followupsRow = field(t('settings.followups'), followups);
+    followupsRow.classList.add('settings-check');
+    panel.appendChild(followupsRow);
+  }
 
   const note = document.createElement('p');
   note.className = 'settings-note';

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,6 +150,31 @@ def parse_followups(raw: str, *, limit: int = 3) -> list[str]:
             continue
         seen.add(key)
         out.append(cleaned)
+    return out
+
+
+def coerce_suggestions(items: object) -> list[str]:
+    """Normalise a custom suggester's return value into chip-safe strings.
+
+    A :data:`FollowupFn` is arbitrary user code, and the response model demands
+    ``list[str]``: a non-string element would raise while *building* the
+    response — inside the route, past the point where a failure still degrades
+    to no chips — and surface as a 500. Coerce here so that contract holds.
+
+    Count and length stay the suggester's own call; only the built-in one caps
+    those, because only it wrote the prompt that asked for three.
+    """
+    if isinstance(items, (str, bytes)):
+        # A bare string is one suggestion, not an iterable of characters —
+        # the same trap ``empty_examples`` guards against in :mod:`lovia.web.ui`.
+        items = [items]
+    if not isinstance(items, Iterable):
+        return []
+    out = []
+    for item in items:
+        text = (item if isinstance(item, str) else str(item)).strip()
+        if text:
+            out.append(text)
     return out
 
 

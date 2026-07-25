@@ -1927,6 +1927,10 @@ function renderFollowups(items) {
   const wrap = document.createElement('div');
   wrap.className = 'followups';
   wrap.id = 'followups';
+  // A plain <div> has no implicit role, so an aria-label on it has nothing to
+  // attach to and most screen readers drop it. `group` gives the label
+  // somewhere to land and announces the chips as one region of controls.
+  wrap.setAttribute('role', 'group');
   wrap.setAttribute('aria-label', t('chat.followups'));
   for (const text of items) {
     const btn = document.createElement('button');

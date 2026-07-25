@@ -12,6 +12,7 @@ from lovia.web import create_app  # noqa: E402
 from lovia.web.followups import (  # noqa: E402
     FollowupRequest,
     _last_exchange,
+    coerce_suggestions,
     generate_followups,
     parse_followups,
 )
@@ -54,6 +55,24 @@ def test_parse_followups_truncates_a_runaway_line() -> None:
     out = parse_followups("x" * 500)
     assert len(out) == 1
     assert len(out[0]) == 120
+
+
+@pytest.mark.parametrize(
+    "items,expected",
+    [
+        (["A?", "B?"], ["A?", "B?"]),
+        (("A?", "B?"), ["A?", "B?"]),  # any iterable, not just list
+        (["  A?  ", "", "   "], ["A?"]),  # stripped; blanks dropped
+        # A bare string is one suggestion, not an iterable of characters.
+        ("A?", ["A?"]),
+        # Non-strings are coerced, never allowed through to the response model.
+        ([1, 2], ["1", "2"]),
+        (None, []),
+        (123, []),
+    ],
+)
+def test_coerce_suggestions(items: object, expected: list[str]) -> None:
+    assert coerce_suggestions(items) == expected
 
 
 def test_last_exchange_picks_the_final_pair() -> None:
@@ -219,6 +238,45 @@ def test_followups_from_a_failing_suggester_degrade_to_none() -> None:
     res = c.post(f"/api/sessions/{sid}/followups")
     assert res.status_code == 200
     assert res.json() == {"followups": []}
+
+
+def test_followups_from_a_sloppy_suggester_do_not_500() -> None:
+    """A suggester returning non-strings must not break the response model.
+
+    The docstring promises the chips are never load-bearing; building
+    ``FollowupsResponse`` from a non-``str`` would raise *inside* the route and
+    surface as a 500, so the coercion has to happen before that.
+    """
+
+    async def sloppy(request: FollowupRequest) -> list[str]:
+        return [1, None, "  real question?  ", ""]  # type: ignore[list-item]
+
+    provider = ScriptedProvider([text("Paris.")])
+    c = TestClient(_app(provider, followups=sloppy))
+    sid = c.post("/api/chat", json={"message": "capital of France?"}).json()[
+        "session_id"
+    ]
+
+    res = c.post(f"/api/sessions/{sid}/followups")
+    assert res.status_code == 200
+    assert res.json()["followups"] == ["1", "None", "real question?"]
+
+
+def test_followups_from_a_suggester_returning_a_bare_string() -> None:
+    """One string is one chip — not a row of single-character chips."""
+
+    async def one(request: FollowupRequest) -> str:  # type: ignore[misc]
+        return "Tell me more"
+
+    provider = ScriptedProvider([text("Paris.")])
+    c = TestClient(_app(provider, followups=one))
+    sid = c.post("/api/chat", json={"message": "capital of France?"}).json()[
+        "session_id"
+    ]
+
+    assert c.post(f"/api/sessions/{sid}/followups").json()["followups"] == [
+        "Tell me more"
+    ]
 
 
 def test_followups_for_an_unknown_session_are_404() -> None:

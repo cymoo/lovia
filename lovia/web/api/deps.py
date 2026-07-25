@@ -31,7 +31,12 @@ from ...session import Session
 from ...steering import Mailbox
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
-from ..followups import FollowupFn, FollowupRequest, generate_followups
+from ..followups import (
+    FollowupFn,
+    FollowupRequest,
+    coerce_suggestions,
+    generate_followups,
+)
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
 
@@ -228,7 +233,9 @@ class RouterDeps:
             return []
         try:
             if callable(fn):
-                return list(await fn(request))
+                # Arbitrary user code: coerce before the response model sees it,
+                # or a stray non-string turns "no chips" into a 500.
+                return coerce_suggestions(await fn(request))
             model = self.followup_model or self.agents[request.agent].model
             if model is None:  # pragma: no cover - a served agent has a model
                 log.warning(

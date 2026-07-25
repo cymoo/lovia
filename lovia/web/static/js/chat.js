@@ -893,6 +893,26 @@ function appendApproval(call) {
   store.body = null;
   store.rawText = '';
   scrollDown();
+  // The run is now blocked on the user — say so past the aria-busy transcript,
+  // and put the keyboard on the decision unless it's busy typing elsewhere.
+  announce(t('a11y.approvalNeeded', { name: call.name }), { assertive: true });
+  focusApprovalCard(node);
+}
+
+// Focus the Approve button so keyboard and screen-reader users land on the
+// decision — but never yank focus out of text the user is mid-writing.
+function focusApprovalCard(node) {
+  if (document.querySelector('dialog[open]')) return;
+  const ae = document.activeElement;
+  const editing =
+    ae instanceof HTMLElement &&
+    (ae.isContentEditable ||
+      ((ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement) &&
+        ae.value.trim() !== ''));
+  if (editing) return;
+  /** @type {HTMLElement | null} */ (node.querySelector('.approve'))?.focus({
+    preventScroll: true, // scrollDown() already owns the viewport
+  });
 }
 
 function appendHandoff(from, to) {
@@ -1134,6 +1154,19 @@ function appendRetry() {
   btn.textContent = t('chat.retry');
   btn.addEventListener('click', () => store.emit('retry'));
   appendBubbleContent(store.bubble, node);
+  announce(t('a11y.runFailed'), { assertive: true });
+}
+
+// ---- Screen-reader announcements ----------------------------------------
+// The transcript carries aria-busy while streaming (so 60 ms re-renders don't
+// spam screen readers), which also mutes anything appended inside it — a
+// pending approval or a finished reply would go unnoticed. These two live
+// regions sit OUTSIDE the transcript for exactly that reason (index.html).
+function announce(text, { assertive = false } = {}) {
+  const el = document.getElementById(assertive ? 'sr-alert' : 'sr-status');
+  if (!el) return;
+  el.textContent = ''; // clear first so repeating the same text re-announces
+  setTimeout(() => { el.textContent = text; }, 30);
 }
 
 // ---- Error humanizing ---------------------------------------------------
@@ -1268,7 +1301,7 @@ function addCopyButton(bubble) {
 
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------
 let _queuedTurns = [];   // FIFO of muted user-turn nodes (one per pending inject)
-let _pendingResend = []; // messages that raced a run's end; resent next (see runStream)
+let _pendingResend = []; // { message, node } pairs that raced a run's end (see runStream)
 
 // True when an assistant turn carries no rendered content yet (just opened, or
 // only an empty footer). Avoids stranding an empty bubble between two messages
@@ -1360,6 +1393,46 @@ async function withdrawQueued(node) {
 function flushQueuedTurns() {
   for (const node of _queuedTurns) confirmQueuedTurn(node);
   _queuedTurns = [];
+}
+
+// Re-inject messages that raced the previous run's end into the now-live run —
+// as separate turns, in order. Joining them into one message would fuse
+// distinct turns server-side while the transcript shows several, skewing the
+// user-turn ordinals rewind depends on.
+async function drainPendingResend() {
+  if (!_pendingResend.length || !store.sessionId) return;
+  const items = _pendingResend.splice(0);
+  for (const it of items) {
+    let res = null;
+    try {
+      res = await api.inject({ session_id: store.sessionId, message: it.message });
+    } catch { /* network error — treat as raced again */ }
+    if (res?.accepted) {
+      // A snapshot re-render may have wiped the muted bubble — recreate it.
+      if (!it.node?.isConnected) it.node = appendUserTurn(it.message, { queued: true });
+      if (it.node) {
+        _queuedTurns.push(it.node);
+        addWithdrawButton(it.node, res.id);
+      }
+    } else {
+      _pendingResend.push(it); // still no live run — the next finally retries
+    }
+  }
+}
+
+// Seed a fresh run with the oldest raced message; the rest re-enter the queue
+// once that run's stream opens (drainPendingResend). Returns true when a
+// resend was started.
+function resumePendingResend() {
+  const next = _pendingResend.shift();
+  if (!next) return false;
+  if (next.node?.isConnected) {
+    confirmQueuedTurn(next.node);
+  } else {
+    appendUserTurn(next.message);
+  }
+  runStream(next.message);
+  return true;
 }
 
 // ---- History rendering --------------------------------------------------
@@ -1844,6 +1917,7 @@ async function handleEvent({ event, data }) {
 
     case 'done': {
       _sawDone = true;
+      _dropRecoveries = 0; // the connection proved healthy — re-arm recovery
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
@@ -1992,14 +2066,77 @@ const composer = /** @type {HTMLFormElement | null} */ (document.getElementById(
 const promptEl = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('prompt'));
 let _streamAbortController = null;
 
-// Messages are sent with Enter, so there's no send button. While a run streams,
-// the composer stays usable: Stop appears, and pressing Enter queues the text
-// for the next turn/run. The placeholder is what makes queuing discoverable.
+// ---- Dropped-stream recovery ---------------------------------------------
+// A clean SSE EOF without a `done` (and no error event) means the connection
+// died mid-run — a proxy idle timeout, a network blip — NOT that the run
+// finished. The supervised run usually survives server-side, so re-attach to
+// it; if it ended while we were disconnected, reload the transcript so the
+// missing tail appears instead of silently showing a truncated reply.
+let _dropRecoveries = 0; // consecutive recoveries; `done` resets it
+const DROP_RECOVERY_MAX = 3;
+const DROP_RECOVERY_DELAY_MS = [400, 1500, 4000];
+
+async function recoverDroppedStream(sessionId) {
+  if (_dropRecoveries >= DROP_RECOVERY_MAX) {
+    toast(t('chat.reconnectFailed'), { type: 'error' });
+    appendReconnectRow(sessionId);
+    return;
+  }
+  const delay = DROP_RECOVERY_DELAY_MS[_dropRecoveries];
+  _dropRecoveries += 1;
+  if (_dropRecoveries === 1) toast(t('chat.reconnecting'));
+  const epoch = store.chatEpoch;
+  await new Promise((r) => setTimeout(r, delay));
+  if (store.chatEpoch !== epoch || store.streaming || store.sessionId !== sessionId) return;
+  const outcome = await runReconnect(sessionId);
+  if (outcome === 'attached') return; // its own finally decides what's next
+  if (outcome === 'error') {
+    recoverDroppedStream(sessionId); // still unreachable — bounded retry
+    return;
+  }
+  // 'norun': the run ended while we were away — fetch the authoritative tail.
+  try {
+    const data = await api.getSession(sessionId);
+    if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
+    store.emit('render-history', data.entries || []);
+    _dropRecoveries = 0;
+    resumePendingResend();
+  } catch {
+    recoverDroppedStream(sessionId);
+  }
+}
+
+// The give-up affordance: a manual "Reconnect" at the transcript tail.
+function appendReconnectRow(sessionId) {
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl || document.getElementById('reconnect-row')) return;
+  const node = cloneTemplate('tmpl-retry');
+  node.id = 'reconnect-row';
+  const btn = node.querySelector('.retry-btn');
+  btn.textContent = t('chat.reconnect');
+  btn.addEventListener('click', () => {
+    node.remove();
+    _dropRecoveries = 0;
+    recoverDroppedStream(sessionId);
+  });
+  transcriptEl.appendChild(node);
+  scrollDown();
+}
+
+// While a run streams, Stop takes the Send circle's place; Send comes back —
+// as a queue control — the moment there's text to queue (updateSendEnabled),
+// and pressing Enter queues it for the next turn/run. The placeholder is what
+// makes queuing discoverable.
 function enterStreamingUI() {
   store.streaming = true;
   syncAttachButton();
-  if (stopBtn) stopBtn.style.display = '';
+  document.getElementById('reconnect-row')?.remove(); // superseded by a live stream
+  if (stopBtn) {
+    stopBtn.style.display = '';
+    stopBtn.title = t('composer.stopTip');
+  }
   if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
+  updateSendEnabled();
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
   // they pick the transcript back up once the turn settles.
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
@@ -2014,6 +2151,7 @@ function exitStreamingUI() {
     promptEl.placeholder = t('composer.placeholder');
     promptEl.focus();
   }
+  updateSendEnabled();
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
 }
@@ -2030,11 +2168,15 @@ export async function runStream(message, attachments = null) {
   store.titlePending = false; // set true by the `session` event for new chats
   stopTitlePolling();
   clearFollowups(); // the previous turn's suggestions are answered or abandoned
+  _dropRecoveries = 0; // a fresh user action re-arms auto-recovery
   enterStreamingUI();
   startAssistantTurn();
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  // Set on every path that already surfaced a failure (or a deliberate abort),
+  // so the finally's dropped-connection check doesn't fire on top of it.
+  let terminal = false;
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2051,6 +2193,7 @@ export async function runStream(message, attachments = null) {
     );
 
     if (!res.ok || !res.body) {
+      terminal = true;
       // Prefer the server's {detail} (e.g. "too many concurrent runs") over
       // a bare status line.
       let detail = `${res.status} ${res.statusText}`;
@@ -2066,6 +2209,10 @@ export async function runStream(message, attachments = null) {
       return;
     }
 
+    // The run is registered — messages that raced the previous run's end can
+    // re-enter the queue now (each as its own turn).
+    drainPendingResend();
+
     for await (const ev of readSSE(res)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
@@ -2077,6 +2224,7 @@ export async function runStream(message, attachments = null) {
     // A session switch / new chat detaches by bumping the epoch and aborting
     // the fetch — not an error, and the view we left is gone. Leave it alone.
     if (store.chatEpoch !== streamEpoch) return;
+    terminal = true;
     if (err.name === 'AbortError') {
       ensureBody();
       if (!store.rawText) store.rawText = t('chat.cancelled');
@@ -2101,6 +2249,14 @@ export async function runStream(message, attachments = null) {
       // Stream ended right after an `error` event → the failure was terminal
       // (a recovered tool error is followed by more events). Offer a Retry.
       if (_lastEventWasError && store.bubble) appendRetry();
+      // Clean EOF with no `done` and no surfaced failure: the connection
+      // dropped mid-run and the reply on screen may be missing its tail.
+      const dropped = !terminal && !_lastEventWasError && !_sawDone;
+      if (dropped && !store.sessionId && store.bubble) {
+        // Nothing persisted to reconnect to — surface it as a failure.
+        appendErrorNotice(t('chat.connectionLost'));
+        appendRetry();
+      }
       finalizeCurrentAssistantTurn();
       // Un-mute any queued bubbles the server dropped (an errored/cancelled run
       // doesn't auto-chain) so they read as sent — the user can resend.
@@ -2116,13 +2272,12 @@ export async function runStream(message, attachments = null) {
       } else {
         loadSessions();
       }
-      // A message that raced this run's end (inject → accepted:false) starts a
-      // fresh run now that the stream has fully settled.
-      if (_pendingResend.length) {
-        runStream(_pendingResend.splice(0).join('\n\n'));
-      } else if (_sawDone && !_lastEventWasError) {
+      if (dropped && store.sessionId) {
+        recoverDroppedStream(store.sessionId);
+      } else if (!resumePendingResend() && _sawDone && !_lastEventWasError) {
         // Only after a run that actually answered: a cancel or a terminal
         // failure has nothing to follow up on.
+        announce(t('a11y.replyDone'));
         fetchFollowups(store.sessionId);
       }
     }
@@ -2133,7 +2288,9 @@ export async function runStream(message, attachments = null) {
  * Re-attach to an in-progress run for `sessionId` and stream its remaining
  * output into a fresh assistant turn.
  * @param {string} sessionId
- * @returns {Promise<void>}
+ * @returns {Promise<'attached' | 'norun' | 'error'>} 'attached' once the stream
+ *   was consumed (however it ended), 'norun' when there was nothing to attach
+ *   to, 'error' when the attach request itself failed.
  */
 export async function runReconnect(sessionId) {
   enterStreamingUI();
@@ -2141,6 +2298,8 @@ export async function runReconnect(sessionId) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  let terminal = false; // see runStream — gates the dropped-connection check
+  let outcome = /** @type {'attached' | 'norun' | 'error'} */ ('attached');
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2149,26 +2308,31 @@ export async function runReconnect(sessionId) {
     const res = await api.reconnect(sessionId, {
       signal: _streamAbortController.signal,
     });
-    if (store.chatEpoch !== streamEpoch) return; // switched away mid-request
+    if (store.chatEpoch !== streamEpoch) return 'attached'; // switched away mid-request
 
     if (!res.ok || !res.body) {
+      terminal = true;
       // 404 = nothing to reconnect, 409 = already running or agent gone.
       // Either way: silently remove the empty placeholder and let the user
       // see the already-rendered history without an error message.
       store.turnNode?.remove();
       store.turnNode = null;
-      return;
+      return 'norun';
     }
+
+    drainPendingResend(); // same re-queue point as runStream
 
     for await (const ev of readSSE(res)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
-        return;
+        return 'attached';
       }
       await handleEvent(ev);
     }
   } catch (err) {
-    if (store.chatEpoch !== streamEpoch) return; // detached by a switch — not an error
+    if (store.chatEpoch !== streamEpoch) return 'attached'; // detached by a switch — not an error
+    terminal = true;
+    outcome = 'error';
     if (err.name !== 'AbortError') {
       ensureBody();
       const raw = err.message ?? String(err);
@@ -2187,19 +2351,22 @@ export async function runReconnect(sessionId) {
       // Retry re-sends store.lastMessage — only offer it when there is one
       // (a reconnect after a page refresh has nothing to re-send).
       if (_lastEventWasError && store.bubble && store.lastMessage) appendRetry();
+      const dropped = !terminal && !_lastEventWasError && !_sawDone;
       finalizeCurrentAssistantTurn();
       flushQueuedTurns();
       exitStreamingUI();
       _streamAbortController = null;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       loadSessions();
-      if (_pendingResend.length) {
-        runStream(_pendingResend.splice(0).join('\n\n'));
-      } else if (_sawDone && !_lastEventWasError) {
+      if (dropped) {
+        recoverDroppedStream(sessionId);
+      } else if (!resumePendingResend() && _sawDone && !_lastEventWasError) {
+        announce(t('a11y.replyDone'));
         fetchFollowups(sessionId);
       }
     }
   }
+  return outcome;
 }
 
 /** Reset the chat view to the empty new-session state; detaches from any live run (which keeps streaming server-side). */
@@ -2265,6 +2432,96 @@ const autoresize = () => {
   promptEl.style.height = Math.min(promptEl.scrollHeight, window.innerHeight * 0.3) + 'px';
 };
 
+// ---- Drafts --------------------------------------------------------------
+// The composer's unsent text survives reloads and follows its chat: one
+// localStorage slot per session (plus one for the new-chat state), written on
+// a short debounce and cleared the moment the text is actually sent/queued.
+const DRAFT_PREFIX = 'lovia-draft:';
+const DRAFT_TTL_MS = 14 * 24 * 3600 * 1000; // drafts this stale get pruned at boot
+const DRAFT_DEBOUNCE_MS = 250;
+
+const draftKey = () => DRAFT_PREFIX + (store.sessionId || 'new');
+let _draftTimer = null;
+let _draftPendingKey = null; // captured at typing time — a switch must not retarget it
+
+function saveDraftSoon() {
+  _draftPendingKey = draftKey();
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(flushDraft, DRAFT_DEBOUNCE_MS);
+}
+
+function flushDraft() {
+  clearTimeout(_draftTimer);
+  _draftTimer = null;
+  const key = _draftPendingKey;
+  _draftPendingKey = null;
+  if (!key) return;
+  const text = promptEl?.value ?? '';
+  try {
+    if (text.trim()) {
+      localStorage.setItem(key, JSON.stringify({ text, ts: Date.now() }));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch { /* storage unavailable — drafts degrade off */ }
+}
+
+// After a send: the pending timer must not resurrect the just-sent text.
+function clearDraft() {
+  clearTimeout(_draftTimer);
+  _draftTimer = null;
+  _draftPendingKey = null;
+  try {
+    localStorage.removeItem(draftKey());
+  } catch { /* ignore */ }
+}
+
+function restoreDraft() {
+  if (!promptEl) return;
+  let text = '';
+  try {
+    const raw = localStorage.getItem(draftKey());
+    if (raw) text = JSON.parse(raw).text || '';
+  } catch { /* corrupt or unavailable — start blank */ }
+  promptEl.value = text;
+  autoresize();
+  updateSendEnabled();
+}
+
+function pruneDrafts() {
+  try {
+    const cutoff = Date.now() - DRAFT_TTL_MS;
+    const stale = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(DRAFT_PREFIX)) continue;
+      try {
+        const { ts } = JSON.parse(localStorage.getItem(key) || '{}');
+        if (!ts || ts < cutoff) stale.push(key);
+      } catch {
+        stale.push(key);
+      }
+    }
+    stale.forEach((k) => localStorage.removeItem(k));
+  } catch { /* storage unavailable */ }
+}
+
+// Save under the chat being left (the pending key points there), then load
+// the one being entered. Registered here, next to the state it manages.
+store.on('session-switched', () => {
+  flushDraft();
+  restoreDraft();
+});
+store.on('reset-chat-view', () => {
+  flushDraft();
+  restoreDraft();
+});
+store.on('session-deleted', (id) => {
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + id);
+  } catch { /* ignore */ }
+});
+
 // ---- Attachments -------------------------------------------------------
 // The "+" button, paste, and drag-drop upload images/files to the agent's
 // workspace (POST /api/workspace/upload); they ride the next send as
@@ -2277,12 +2534,39 @@ function attachEnabled() {
   return !!store.agents.find((a) => a.name === store.agent)?.workspace;
 }
 
+// Past this size a paste stops being a message and starts being a document.
+const PASTE_ATTACH_CHARS = 4000;
+const PASTE_ATTACH_LINES = 60;
+
+function pastedTextFile(text) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp =
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+    `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return new File([text], `pasted-${stamp}.txt`, { type: 'text/plain' });
+}
+
 function pendingReady() {
   return _pendingAttachments.filter((a) => !a.uploading && a.path);
 }
 
 function updateSendEnabled() {
-  if (sendBtn) sendBtn.disabled = !(promptEl?.value.trim() || pendingReady().length);
+  if (!sendBtn) return;
+  const hasText = !!promptEl?.value.trim();
+  if (store.streaming) {
+    // Stop owns the slot; Send reappears only once there's text to queue —
+    // a greyed Send next to Stop reads as two competing controls.
+    sendBtn.hidden = !hasText;
+    sendBtn.disabled = !hasText;
+    sendBtn.title = t('composer.queueTip');
+    sendBtn.setAttribute('aria-label', t('composer.queueSend'));
+  } else {
+    sendBtn.hidden = false;
+    sendBtn.disabled = !(hasText || pendingReady().length);
+    sendBtn.title = t('composer.sendTip');
+    sendBtn.setAttribute('aria-label', t('composer.send'));
+  }
 }
 
 function syncAttachButton() {
@@ -2482,6 +2766,18 @@ export function initComposer() {
     if (files.length) {
       e.preventDefault();
       uploadFiles(files);
+      return;
+    }
+    // A paste the size of a document would drown the composer — hand it to
+    // the attachment pipeline as a text file instead (the agent reads it from
+    // the workspace), leaving whatever was already typed intact.
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (
+      text.length > PASTE_ATTACH_CHARS ||
+      text.split('\n').length > PASTE_ATTACH_LINES
+    ) {
+      e.preventDefault();
+      uploadFiles([pastedTextFile(text)]);
     }
   });
   if (composer) {
@@ -2517,7 +2813,10 @@ export function initComposer() {
   promptEl?.addEventListener('input', () => {
     autoresize();
     updateSendEnabled();
+    saveDraftSoon();
   });
+  pruneDrafts();
+  restoreDraft(); // the new-chat draft; a URL-restored session re-restores on switch
   promptEl?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing || coarsePointer) return;
     const withMod = e.metaKey || e.ctrlKey;
@@ -2535,7 +2834,8 @@ export function initComposer() {
     if (!btn || !promptEl) return;
     promptEl.value = btn.textContent;
     autoresize();
-    if (sendBtn) sendBtn.disabled = false;
+    updateSendEnabled();
+    saveDraftSoon();
     promptEl.focus();
   });
 
@@ -2549,6 +2849,7 @@ export function initComposer() {
       promptEl.value = '';
       autoresize();
       updateSendEnabled();
+      clearDraft();
       _resumeAutoScroll();
       // Queue it: the server drains it at the next turn start, or seeds the
       // next run if this one ends first. Show a muted bubble (with a cancel
@@ -2562,12 +2863,12 @@ export function initComposer() {
       if (res?.accepted) {
         if (node) addWithdrawButton(node, res.id);
       } else {
-        // Raced the run's end: confirm the bubble and deliver it as a fresh run
-        // once the current stream settles (see runStream's finally).
+        // Raced the run's end: keep the bubble muted and deliver the message
+        // as its own turn once the stream settles — the next run re-injects it
+        // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
         const i = _queuedTurns.indexOf(node);
         if (i >= 0) _queuedTurns.splice(i, 1);
-        confirmQueuedTurn(node);
-        _pendingResend.push(message);
+        _pendingResend.push({ message, node });
       }
       return;
     }
@@ -2585,6 +2886,7 @@ export function initComposer() {
     _pendingAttachments = [];
     renderAttachTray();
     updateSendEnabled();
+    clearDraft();
     _resumeAutoScroll();
 
     document.getElementById('empty-state')?.remove();

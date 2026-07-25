@@ -1959,6 +1959,11 @@ body.sidebar-collapsed .sidebar-expand-btn {
   background: var(--surface-3);
   color: var(--muted-2);
 }
+/* While a run streams, Stop owns the slot (chat.js hides Send until there's
+   text to queue) — the explicit display wins over the [hidden] default. */
+.btn-send[hidden] {
+  display: none;
+}
 
 /* ---- Composer attachments ------------------------------------------------------------ */
 /* The "+" button sits on the composer's left edge, mirroring .btn-send's slot. */

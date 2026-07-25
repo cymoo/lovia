@@ -4037,7 +4037,10 @@ body.files-splitting {
   margin-top: 18px;
   max-width: 560px;
 }
-.empty-example {
+/* The clickable-question pill. Purely visual: `.empty-example` (starter prompt,
+   fills the composer) and `.followup` (suggestion, sends) both wear it, and the
+   click handlers key off those, never off `.chip`. */
+.chip {
   padding: 7px 14px;
   font-size: 13px;
   color: var(--ink-2);
@@ -4050,7 +4053,7 @@ body.files-splitting {
     color var(--t-fast),
     border-color var(--t-fast);
 }
-.empty-example:hover {
+.chip:hover {
   color: var(--ink);
   background: var(--surface-2);
   border-color: var(--border-strong);

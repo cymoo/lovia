@@ -900,16 +900,18 @@ function appendApproval(call) {
 }
 
 // Focus the Approve button so keyboard and screen-reader users land on the
-// decision — but never yank focus out of text the user is mid-writing.
+// decision — but only from neutral ground: the page body, or the composer
+// while it's empty (where Enter currently does nothing and the approval is
+// the one thing waiting on the user). Any other focus — a search box, a
+// dialog, a composer holding a draft — is somebody's work in progress.
 function focusApprovalCard(node) {
   if (document.querySelector('dialog[open]')) return;
   const ae = document.activeElement;
-  const editing =
-    ae instanceof HTMLElement &&
-    (ae.isContentEditable ||
-      ((ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement) &&
-        ae.value.trim() !== ''));
-  if (editing) return;
+  const neutral =
+    !ae ||
+    ae === document.body ||
+    (ae === promptEl && !promptEl.value.trim());
+  if (!neutral) return;
   /** @type {HTMLElement | null} */ (node.querySelector('.approve'))?.focus({
     preventScroll: true, // scrollDown() already owns the viewport
   });
@@ -2091,19 +2093,19 @@ async function recoverDroppedStream(sessionId) {
   const outcome = await runReconnect(sessionId);
   if (outcome === 'attached') return; // its own finally decides what's next
   if (outcome === 'error') {
-    recoverDroppedStream(sessionId); // still unreachable — bounded retry
-    return;
+    return recoverDroppedStream(sessionId); // still unreachable — bounded retry
   }
   // 'norun': the run ended while we were away — fetch the authoritative tail.
+  let data;
   try {
-    const data = await api.getSession(sessionId);
-    if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
-    store.emit('render-history', data.entries || []);
-    _dropRecoveries = 0;
-    resumePendingResend();
+    data = await api.getSession(sessionId);
   } catch {
-    recoverDroppedStream(sessionId);
+    return recoverDroppedStream(sessionId);
   }
+  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
+  store.emit('render-history', data.entries || []);
+  _dropRecoveries = 0;
+  resumePendingResend();
 }
 
 // The give-up affordance: a manual "Reconnect" at the transcript tail.

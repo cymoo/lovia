@@ -205,6 +205,12 @@
 </aside>
 </main>
 
+<!-- Screen-reader live regions. They live OUTSIDE #transcript because the
+     transcript carries aria-busy while streaming, which would mute anything
+     announced from within it (pending approvals, the finished reply). -->
+<div id="sr-status" class="vh" role="status"></div>
+<div id="sr-alert" class="vh" role="alert"></div>
+
 <!-- Templates -->
 <template id="tmpl-turn">
   <article class="turn">

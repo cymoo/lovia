@@ -3,7 +3,14 @@ import { applyStaticI18n, t } from './i18n.js';
 import { store } from './store.js';
 import { api } from './api.js';
 import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
-import { initComposer, detachStream, renderHistory, resetChatForNewSession, runReconnect } from './chat.js';
+import {
+  cancelStream,
+  detachStream,
+  initComposer,
+  renderHistory,
+  resetChatForNewSession,
+  runReconnect,
+} from './chat.js';
 import {
   initSessions,
   initEventStream,
@@ -207,6 +214,33 @@ function isTyping(target) {
 }
 
 function initKeyboardShortcuts() {
+  // Esc stops the current run. Registered in the CAPTURE phase so anything an
+  // existing bubble-phase Esc handler is about to close (context popover,
+  // export menu, mobile sidebar, files preview) is still visibly open here and
+  // wins the keypress — the run stops on the next, unclaimed Esc.
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Escape' || e.isComposing || !store.streaming) return;
+      if (document.querySelector('dialog[open]')) return;
+      if (document.getElementById('context-popover')?.hidden === false) return;
+      if (document.getElementById('export-menu')?.hidden === false) return;
+      if (document.getElementById('sidebar')?.classList.contains('open')) return;
+      const filesOpen = document
+        .getElementById('files-panel')
+        ?.classList.contains('open');
+      const viewerOpen = !document
+        .getElementById('files-viewer')
+        ?.classList.contains('hidden');
+      const phone = window.matchMedia('(max-width: 720px)').matches;
+      // files.js consumes Esc for these: closing the preview, or (on phones)
+      // the panel drawer itself.
+      if (filesOpen && (viewerOpen || phone)) return;
+      cancelStream();
+    },
+    true,
+  );
+
   document.addEventListener('keydown', (e) => {
     // `?` opens the shortcut help — but never while typing a message.
     if (e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey) {

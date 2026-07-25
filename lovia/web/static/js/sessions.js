@@ -473,6 +473,7 @@ export async function deleteSession(id) {
     toast(t('toast.deleteFailed'), { type: 'error' });
     return; // leave the view untouched if the delete didn't land
   }
+  store.emit('session-deleted', id); // e.g. drop the chat's saved draft
   if (store.sessionId === id) {
     store.sessionId = null;
     store.emit('clear-chat');

@@ -364,13 +364,27 @@ class _MarkdownExtractor(HTMLParser):
         # Escape here rather than when the construct closes: by then the buffer
         # may also hold Markdown this class emitted itself (a link wrapping an
         # image), and escaping that would break it.
-        if any(wrap[2] == "a" and wrap[1] for wrap in self._wraps):
+        if self._needs_link_escape():
             text = _escape_link_text(text)
         if self._in_cell:
             text = text.replace("|", "\\|")
         self._emit(f"{lead}{text}{trail}")
 
     # ---- element helpers ----
+
+    def _needs_link_escape(self) -> bool:
+        """Whether text arriving now will sit unprotected in link text.
+
+        Innermost relevant wrap decides. A code span binds tighter than link
+        brackets, so text inside an open <code> needs no escaping — and a
+        backslash there would render literally, not as an escape.
+        """
+        for _, url, tag in reversed(self._wraps):
+            if tag == "code":
+                return False
+            if url:
+                return True
+        return False
 
     def _start_list_item(self) -> None:
         self._drop_empty_marker()

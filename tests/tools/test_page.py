@@ -174,6 +174,17 @@ def test_markdown_code_span_fence_grows_past_its_content() -> None:
     assert html_to_markdown("<p><code>`x`</code></p>") == "`` `x` ``"
 
 
+def test_markdown_code_inside_link_is_not_escaped() -> None:
+    # A code span binds tighter than link brackets, so its content needs no
+    # escaping — a backslash there would show up literally in the rendering.
+    assert (
+        html_to_markdown(
+            "<a href='/d'><code>a[0]</code> docs</a>", base_url="https://e.com/"
+        )
+        == "[`a[0]` docs](https://e.com/d)"
+    )
+
+
 def test_markdown_survives_malformed_markup() -> None:
     assert html_to_markdown("<p>ok<div") == "ok"
     assert html_to_markdown("plain text") == "plain text"

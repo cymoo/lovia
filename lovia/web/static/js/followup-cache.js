@@ -17,7 +17,17 @@ function readAll() {
   try {
     const raw = localStorage.getItem(KEY);
     const map = raw ? JSON.parse(raw) : null;
-    return map && typeof map === 'object' ? map : {};
+    if (!map || typeof map !== 'object') return {};
+    // Keep only well-formed records. A corrupted or older-format entry — a
+    // sessionId mapping to null, say — must never break eviction (which reads
+    // `.ts`) or a lookup; drop it here so every consumer sees a clean shape.
+    const clean = {};
+    for (const [id, rec] of Object.entries(map)) {
+      if (rec && typeof rec === 'object' && typeof rec.sig === 'string' && Array.isArray(rec.items)) {
+        clean[id] = rec;
+      }
+    }
+    return clean;
   } catch {
     return {};
   }

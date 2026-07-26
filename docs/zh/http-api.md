@@ -71,12 +71,13 @@ Provider 认证失败。
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除 |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
-| `POST /api/sessions/{id}/followups` | `{followups: [...]}`：用户可能想继续问的问题；功能关闭或无合适建议时为 `[]`。用 POST 是因为它会消耗模型 token |
+| `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从索引为 `user_turn` 的用户消息起删除后续内容，索引从 0 开始；运行中返回 409，不支持 `rewind` 时返回 501 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件 |
+| `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory notes](memory.md#记忆如何写入)（`{content, used, budget}`） |
 
 ### 生命周期事件
@@ -92,9 +93,10 @@ Provider 认证失败。
 - 某个聊天流正在占用 Session 时，`/api/chat` 返回 409。
 - 同一 Session 中已有 Run 正在执行时，再次发起聊天流会连接到现有 Run，而不是另起 Run
   或报错。
-- Workspace 路由始终以只读模式访问工作区，不受 Agent 自身模式影响，并沿用 Agent 的
-  `denied_paths`。接口还会过滤 `__pycache__`、`*.pyc`、`venv`、`node_modules` 等可重新
-  生成的文件；隐藏文件也不会显示，使 `/recent` 只列出用户文件。
+- Workspace 的浏览和读取路由始终以只读方式访问工作区，不受 Agent 自身模式影响，并沿用
+  Agent 的 `denied_paths`。`POST /api/workspace/upload` 是唯一的写入例外，只能在
+  `uploads/` 目录中新建文件，并会检查扩展名和大小。文件列表会过滤 `__pycache__`、
+  `*.pyc`、`venv`、`node_modules` 等可重新生成的内容，也不会显示隐藏文件。
 
 ## 聊天 SSE 流
 

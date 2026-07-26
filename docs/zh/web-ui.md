@@ -1,8 +1,8 @@
 # Web UI
 
-浏览器 UI 可以把任意 lovia Agent 变成本地聊天应用。它支持流式输出、Tool 调用记录、
+浏览器 UI 可以把任意 lovia Agent 变成本地聊天应用。它支持流式输出、工具调用记录、
 对话历史、编辑后重发、重新生成、对话标题、追问建议、审批、定时任务、记忆编辑、
-图片与文件上传，并提供只读的 Workspace 文件面板。
+图片与文件上传，以及 Workspace 文件浏览和预览。
 所有前端资源都随软件包分发，不依赖 CDN 或外部字体。
 
 ## 一条命令启动
@@ -54,10 +54,13 @@ lovia web --app app:assistant
 `--app MODULE:ATTR` 可以指向一个 Agent，也可以指向 `{name: agent}` 映射。Python 部署和
 ASGI 集成详见 [Web 服务端](web-server.md)。
 
-聊天界面按 GitHub 风格 Markdown 渲染回复——表格、代码高亮、`mermaid` 图表、内嵌图片。
-默认 Agent 的系统提示词中已声明这一点；自定义 Agent 则没有，而不了解显示面的模型会假设
-纯文本环境，遇到图片请求时回答"我无法在聊天中显示图片"。把 `SURFACE_NOTE` 拼进
-instructions 即可声明显示面：
+## 回复的渲染格式
+
+聊天界面使用 GitHub 风格 Markdown 渲染回复，支持表格、代码高亮、Mermaid 图表和
+内嵌图片。`lovia web` 创建的默认 Agent 已在系统提示词中说明这些能力；通过 `--app`、
+`serve()` 或 `create_app()` 加载的自定义 Agent 不会自动获得这段说明。
+
+如果希望模型主动使用这些格式，可将 `SURFACE_NOTE` 加入 `instructions`：
 
 ```python
 from lovia.web import SURFACE_NOTE
@@ -92,6 +95,16 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 常见图片、文档、数据和代码类型白名单；无扩展名的文件默认允许。可通过
 `LOVIA_UPLOAD_ALLOWED_EXT` 自定义白名单，多个扩展名用逗号或空格分隔，`*` 表示不限。
 
+## 文件面板
+
+文件面板提供“最近”和“浏览”两种视图。“最近”按修改时间排列，并优先列出当前对话中由
+文件工具写入或编辑的文件。面板可以预览图片、SVG、PDF、Markdown、HTML、CSV/TSV、
+代码和普通文本；HTML 会在隔离的沙箱中渲染，无法预览的二进制文件仍可下载。
+
+从文件面板上传时，文件只会保存到 Workspace，不会自动随消息发送。打开文件后点击
+“添加为对话附件”，可将其加入下一条消息；面板还支持复制路径和下载。它不会编辑或删除
+已有文件。
+
 ## 常用 CLI 选项
 
 配置按以下优先级解析：命令行参数 > 当前进程的环境变量 > 配置文件 > 默认值。未指定
@@ -111,7 +124,8 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--no-followups` | `LOVIA_FOLLOWUPS`、`LOVIA_FOLLOWUP_MODEL` | 开启建议，使用 Agent 自身的模型 |
+| `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启 |
+| — | `LOVIA_FOLLOWUP_MODEL` | Agent 自身的模型 |
 | `--env-file` | — | 未指定时依次读取 `.lovia/config.env`、`./.env` |
 
 完整选项见 `lovia web --help`。帮助信息分为 model、agent、server 和 advanced 四组；
@@ -120,22 +134,33 @@ advanced 组。
 
 ## 追问建议
 
-回答结束后，UI 会在答案下方给出几个你可能想继续问的问题，点击即发送。它们来自一次
-独立的小模型调用，因此不会进入对话本身；并且只在真正产出了回答的 Run 之后出现——
-中途停止或报错都不会。发送任何消息都会清除它们。
+Run 成功产出回答后，UI 会在答案下方显示几个可直接点击发送的追问。建议由一次独立的
+模型调用生成，不会写入当前对话；Run 中途停止、执行报错或没有合适建议时均不显示。
+发送新消息后，已有建议会清除。
 
-提示词允许模型「不给建议」：对话已经自然收尾时，宁可不显示，也不硬凑三条。
-**设置 →「回答结束后建议追问」** 可以只为你自己关闭，无需重启服务——这个判断在
-发请求之前，关掉就不会产生任何开销。要在服务端整体关闭，用 `--no-followups`；
-用 `LOVIA_FOLLOWUP_MODEL` 把这次调用指向更便宜的模型。通过
-`create_app()` 托管自定义 Agent 时，该功能默认关闭，需要显式开启——见
-[Web 服务](web-server.md#追问建议)。
+在 **设置 →「回答结束后建议追问」** 中关闭后，当前浏览器不会再发起生成请求，因此不会
+产生额外模型开销，也不需要重启服务。服务端可用 `--no-followups` 整体关闭，或通过
+`LOVIA_FOLLOWUP_MODEL` 改用更便宜的模型。使用 `create_app()` 托管自定义 Agent 时，
+该功能默认关闭，需要显式开启。如果追问模型位于独立端点，可另设
+`LOVIA_FOLLOWUP_BASE_URL` 和 `LOVIA_FOLLOWUP_API_KEY`。详见
+[Web 服务端](web-server.md#追问建议)。
+
+## 运行中继续发送消息
+
+Run 尚未结束时仍可发送纯文本消息。UI 会将它显示为排队状态，并作为下一轮追加指令交给
+当前 Run；在进入下一轮处理前，可以点击消息上的取消按钮将其撤回。如果消息恰好赶上
+当前 Run 结束，UI 会按原顺序将它转入后续 Run。
+
+附件不能在 Run 执行期间排队，需要等当前 Run 结束后再发送。
 
 ## 关闭或刷新页面
 
 Run 由服务端托管，关闭或刷新页面不会中断运行。重新打开对话后，UI 会恢复当前进度并继续
-显示实时输出。只有点击停止按钮才会取消运行；已经完成的 Turn 仍会保留在 Session 中。
-正在运行的会话会在侧栏显示状态，也可以直接从侧栏停止。
+显示实时输出。流式连接意外中断时，UI 会自动尝试重新连接并补齐缺失内容；多次失败后会
+显示手动“重新连接”按钮。
+
+只有点击停止按钮才会取消运行；已经完成的 Turn 仍会保留在 Session 中。正在运行的会话会
+在侧栏显示状态，也可以直接从侧栏停止。
 
 ## 延伸阅读
 

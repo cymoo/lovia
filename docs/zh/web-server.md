@@ -28,7 +28,7 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `max_turns` / `budget` / `retry` / `context_policy` | — | 应用于每个托管 Run 的设置 |
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
 | `generate_titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
-| `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后建议追问（见下文） |
+| `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
 | `approval_timeout` | `None` | 超过指定秒数后自动拒绝未处理的审批 |
 | `max_background_runs`（仅 `create_app()`） | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API |
@@ -44,21 +44,22 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 ## 追问建议
 
-一轮回答结束后，UI 可以给出几个用户可能想继续问的问题，渲染成可点击的胶囊按钮
-（点击即发送）。它们来自一次独立的小模型调用——主 Transcript 完全不会看到这个
-请求——并且只在真正产出了回答的 Run 之后才发起。
+UI 可以在回答下方显示几个可直接点击发送的追问。内置建议器会在 Run 成功产出回答后，
+单独调用一次模型；这次请求不会写入主对话的 Transcript，也不会延迟原回答的显示。
+建议器只会把最近一组用户问题和模型回答发给追问模型，过长内容会先截断。
 
 ```python
 create_app(agent, followups=True, followup_model="<small-model>")
 ```
 
-默认关闭：与标题不同，它的代价是每个 **Run** 一次模型调用，所以服务层不替你预设。
-`followup_model` 可以把这次调用指向比 Agent 本身更便宜的模型。自带的 `lovia web`
-CLI 会为自己开启该功能——用 `--no-followups` 或 `LOVIA_FOLLOWUPS=0` 关掉，用
-`LOVIA_FOLLOWUP_MODEL` 指向小模型。
+`create_app()` 默认关闭该功能，因为每次生成建议都可能增加一次模型调用。
+`followup_model` 可改用比 Agent 主模型更便宜的模型；不设置时沿用 Agent 的模型。
+`lovia web` CLI 默认开启，可通过 `--no-followups` 或 `LOVIA_FOLLOWUPS=0` 关闭，
+也可通过 `LOVIA_FOLLOWUP_MODEL` 指定其他模型。该模型位于独立端点时，再设置
+`LOVIA_FOLLOWUP_BASE_URL` 和 `LOVIA_FOLLOWUP_API_KEY`。
 
-传入一个可调用对象即可整体替换内置建议器——背后可以是精选 FAQ、向量库，或换一套
-提示词的同一个生成函数：
+如果建议来自 FAQ、向量库或自定义提示词，可以把异步函数直接传给 `followups`，
+替换内置建议器：
 
 ```python
 from lovia.web import FollowupRequest, create_app, generate_followups
@@ -71,9 +72,9 @@ async def pricing_only(request: FollowupRequest) -> list[str]:
 create_app(agent, followups=pricing_only)
 ```
 
-建议器拿到该会话的对话内容（`session_id`、`agent`，以及聊天形态的 `messages`），
-返回任意数量的字符串。返回 `[]` 表示不显示任何内容；抛异常也会退化成同样的结果
-——这些胶囊按钮永远不是关键路径。
+自定义建议器会收到 `FollowupRequest`，其中包含 `session_id`、Agent 的注册名称，以及由
+Transcript 转换而来的聊天消息列表 `messages`。返回字符串序列即可；返回 `[]` 时不显示
+建议。建议器抛出异常时，服务端会记录日志并返回空列表，不影响正常对话。
 
 ## 认证
 

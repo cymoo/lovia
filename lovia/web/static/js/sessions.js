@@ -519,6 +519,10 @@ export async function switchSession(id) {
     // already-rendered checkpoint history.
     if (data.active_run_id && !store.streaming) {
       store.emit('reconnect', id);
+    } else {
+      // Settled history — repaint cached follow-up chips if they still fit the
+      // tail. Skipped while a run is live: its own completion produces fresh ones.
+      store.emit('maybe-followups', data.entries || []);
     }
   } catch (err) {
     if (store.sessionId !== id) return; // superseded; don't clobber the new view

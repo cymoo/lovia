@@ -8,6 +8,7 @@ import { loadSessions } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled } from './settings.js';
+import { readFollowups, writeFollowups, dropFollowups } from './followup-cache.js';
 import {
   escapeHtml,
   formatDateTime,
@@ -1988,8 +1989,61 @@ async function pollForTitle(sessionId) {
 //
 // The chips live at the tail of the transcript, outside any turn, so sending
 // anything simply removes them (see runStream) and a history re-render drops
-// them with the rest of the DOM.
+// them with the rest of the DOM. A successful fetch also caches them per
+// session (followup-cache.js) so a refresh or a switch away can repaint the
+// same chips without spending another call — see maybeRestoreFollowups.
 let _followupController = null;
+
+// Longest reply prefix folded into the cache signature. The server derives its
+// suggestions from only the first ~1200 chars of the reply (followups.py
+// `_MAX_REPLY`), so a wider window could never change the outcome — and a
+// bounded hash keeps the cost fixed no matter how large the reply is.
+const _SIG_MAX = 4096;
+
+// FNV-1a over a bounded reply prefix → a short, stable signature string.
+function hashReply(text) {
+  let h = 0x811c9dc5;
+  const n = Math.min(text.length, _SIG_MAX);
+  for (let i = 0; i < n; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * Signature of a transcript's final exchange — what the follow-up cache keys
+ * on. Mirrors the server's `_last_exchange`: the reply is the last non-empty
+ * assistant message. Returns null when the tail isn't a settled reply — a
+ * trailing unanswered user turn, or no reply at all — so cached chips are never
+ * restored where the server itself would have produced none.
+ * @param {any[]} entries
+ * @returns {string | null}
+ */
+function tailSig(entries) {
+  if (!Array.isArray(entries)) return null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const text = contentText(entries[i].content).trim();
+    if (!text) continue; // tool traffic / empty turns carry no exchange
+    if (entries[i].role === 'assistant') return hashReply(text);
+    if (entries[i].role === 'user') return null; // an unanswered turn trails
+  }
+  return null;
+}
+
+/**
+ * Repaint cached follow-up chips for the current session if they still match
+ * its tail. Silent on every miss (no cache, stale signature, or feature off),
+ * which shows nothing — exactly the pre-cache behaviour.
+ * @param {any[]} entries The session's transcript, as just loaded.
+ */
+function maybeRestoreFollowups(entries) {
+  if (!store.canSuggest || !followupsEnabled()) return;
+  const sig = tailSig(entries);
+  if (!sig) return;
+  const items = readFollowups(store.sessionId, sig);
+  if (items) renderFollowups(items);
+}
 
 function clearFollowups() {
   _followupController?.abort();
@@ -2030,11 +2084,13 @@ function renderFollowups(items) {
 }
 
 /**
- * Ask the server what the user might want next and render the chips.
- * Silent on every failure — no chips is the neutral outcome.
+ * Ask the server what the user might want next, render the chips, and cache
+ * them against the reply they answer. Silent on every failure — no chips is
+ * the neutral outcome.
  * @param {string} sessionId
+ * @param {string} [replyText] The reply just produced, for the cache signature.
  */
-async function fetchFollowups(sessionId) {
+async function fetchFollowups(sessionId, replyText = '') {
   // Capability (does this server produce them) AND preference (does this user
   // want them). Checked before the fetch, so opting out spends nothing.
   if (!store.canSuggest || !followupsEnabled() || !sessionId) return;
@@ -2055,12 +2111,24 @@ async function fetchFollowups(sessionId) {
       return;
     }
     renderFollowups(data?.followups);
+    // Persist so a refresh or a trip through another session repaints these
+    // without another call. Keyed by the (trimmed) reply, matching what
+    // maybeRestoreFollowups recomputes from stored history — a later turn
+    // changes the tail, misses, and regenerates.
+    const reply = replyText.trim();
+    if (reply && data?.followups?.length) {
+      writeFollowups(sessionId, hashReply(reply), data.followups);
+    }
   } catch {
     /* aborted, offline, or the suggester declined — show nothing */
   } finally {
     if (_followupController === controller) _followupController = null;
   }
 }
+
+// switchSession asks us to repaint cached chips once it has settled history in
+// place (and isn't about to reconnect to a live run, which produces its own).
+store.on('maybe-followups', (entries) => maybeRestoreFollowups(entries || []));
 
 // ---- Streaming ---------------------------------------------------------
 const stopBtn = document.getElementById('stop');
@@ -2104,6 +2172,9 @@ async function recoverDroppedStream(sessionId) {
   }
   if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
   store.emit('render-history', data.entries || []);
+  // The run settled server-side while we were away; its chips (if any) were
+  // cached by whichever client saw it finish — repaint them if the tail matches.
+  maybeRestoreFollowups(data.entries || []);
   _dropRecoveries = 0;
   resumePendingResend();
 }
@@ -2244,6 +2315,9 @@ export async function runStream(message, attachments = null) {
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
+      // Capture the reply now: finalizeCurrentAssistantTurn below clears
+      // store.rawText, and fetchFollowups keys its cache on this text.
+      const replyText = store.rawText;
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText; // store raw markdown for copy
         flushRender(true);
@@ -2280,7 +2354,7 @@ export async function runStream(message, attachments = null) {
         // Only after a run that actually answered: a cancel or a terminal
         // failure has nothing to follow up on.
         announce(t('a11y.replyDone'));
-        fetchFollowups(store.sessionId);
+        fetchFollowups(store.sessionId, replyText);
       }
     }
   }
@@ -2346,6 +2420,7 @@ export async function runReconnect(sessionId) {
     clearTimeout(_renderTimer);
     // A switch superseded this reconnect: its DOM/UI belong to another view now.
     if (store.chatEpoch === streamEpoch) {
+      const replyText = store.rawText; // before finalize clears it (see runStream)
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText;
         flushRender(true);
@@ -2364,7 +2439,7 @@ export async function runReconnect(sessionId) {
         recoverDroppedStream(sessionId);
       } else if (!resumePendingResend() && _sawDone && !_lastEventWasError) {
         announce(t('a11y.replyDone'));
-        fetchFollowups(sessionId);
+        fetchFollowups(sessionId, replyText);
       }
     }
   }
@@ -2522,6 +2597,7 @@ store.on('session-deleted', (id) => {
   try {
     localStorage.removeItem(DRAFT_PREFIX + id);
   } catch { /* ignore */ }
+  dropFollowups(id);
 });
 
 // ---- Attachments -------------------------------------------------------

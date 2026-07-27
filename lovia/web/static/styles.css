@@ -202,9 +202,12 @@ textarea {
   border-radius: 2px;
 }
 
+/* Translucent, so selection darkens whatever it lands on rather than replacing
+   it with one flat colour. An opaque --accent-soft was invisible over inline
+   code, which paints that exact background — selecting a `code` span changed
+   nothing at all. Leaving `color` alone keeps syntax highlighting readable. */
 ::selection {
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* ---- Scrollbars --------------------------------------------------------- */

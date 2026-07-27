@@ -1327,8 +1327,12 @@ body.sidebar-collapsed .sidebar-expand-btn {
   font-variant-numeric: tabular-nums;
 }
 
-/* streaming caret */
-.turn.assistant.streaming .body::after {
+/* Streaming caret — only where text is actually being written, i.e. a .body
+   with nothing but the footer after it. A run's bubble accumulates one .body
+   per text segment (every tool call closes the current one, and a resumed run
+   adopts a snapshot-rendered bubble that already holds several), so an
+   unscoped selector blinked a caret after every past segment too. */
+.turn.assistant.streaming .body:not(:has(~ *:not(.turn-footer)))::after {
   content: "";
   display: inline-block;
   width: 2.5px;

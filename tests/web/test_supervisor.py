@@ -305,11 +305,77 @@ async def test_restart_reconnect_resumes_from_checkpoint() -> None:
     assert (
         "".join(d["delta"] for (e, d) in evs if e == "text_delta") == "resumed-answer"
     )
+    # A resume opens with a snapshot, exactly like a re-attach: session history
+    # spliced with the checkpoint's own entries, which is the same view
+    # ``_session_view`` just served. Without it the client had nothing to anchor
+    # the continuation to and started a second bubble for one run.
+    snaps = [d for (e, d) in evs if e == "snapshot"]
+    assert kinds[1] == "snapshot", kinds  # after `session`, before any run event
+    assert [(m["role"], m["content"]) for m in snaps[0]["entries"]] == [
+        ("user", "q1"),
+        ("assistant", "a1"),
+        ("user", "q2"),
+    ]
     # The record is keyed by the snapshot's run_id (via resolved_run_id), so the
     # resumed run finalizes ONE row under the original id — no duplicate.
     rec = await _wait_record(store, "run-1")
     assert rec.status == "completed"
     assert [r.id for r in await store.list_runs(session_id=sid)] == ["run-1"]
+
+
+@pytest.mark.asyncio
+async def test_resume_snapshot_carries_the_pending_tool_call() -> None:
+    """The snapshot must include the call the resumed run is about to drain.
+
+    ``_drain_pending_calls`` re-announces those calls over ``tool_call``, and
+    the client reconciles them against cards it has already drawn. If the
+    snapshot omitted the call, the client would draw a second card for it and
+    strand the replayed one without a result forever.
+    """
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+    from lovia.transcript import InputEntry, ToolCallEntry
+
+    store = ChatStore.in_memory()
+    sid = "s1"
+    await store.upsert(sid, agent="bot")
+    # Interrupted *inside* the tool phase: the call is persisted, its result is
+    # not — exactly what a kill during tool execution leaves behind.
+    await store.checkpointer.append(
+        "run-1",
+        [
+            InputEntry(role="user", content="go"),
+            ToolCallEntry(call_id="c1", name="ping", arguments="{}"),
+        ],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id(sid, "run-1")
+
+    @tool
+    async def ping() -> str:
+        """Answer."""
+        return "pong"
+
+    provider = ScriptedProvider([text("all done")])
+    app = _app(Agent(name="bot", model=provider, tools=[ping]), store=store)
+    async with _client(app) as ac:
+        lines: list[str] = []
+        async with ac.stream(
+            "POST", "/api/chat/reconnect", params={"session_id": sid}
+        ) as res:
+            async for line in res.aiter_lines():
+                lines.append(line)
+    evs = _parse_sse("\n".join(lines))
+    snaps = [d for (e, d) in evs if e == "snapshot"]
+    assert len(snaps) == 1, [e for e, _ in evs]
+    # The pending call rides in the snapshot...
+    assert [
+        c["id"] for m in snaps[0]["entries"] for c in (m.get("tool_calls") or [])
+    ] == ["c1"]
+    # ...and the drain re-announces the SAME id, so the client can match them up
+    # rather than draw a second card.
+    assert [d["id"] for (e, d) in evs if e == "tool_call"] == ["c1"]
+    assert [d["result"] for (e, d) in evs if e == "tool_result"] == ["pong"]
 
 
 @pytest.mark.asyncio

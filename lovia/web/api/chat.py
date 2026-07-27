@@ -259,6 +259,17 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 detail=f"agent {snapshot.agent_name!r} is no longer registered",
             )
 
+        # Built BEFORE start_resume: that call registers the controller, and
+        # nothing may await between registration and the subscribe that begins
+        # its task. An await there could be cancelled (client disconnect) or
+        # raise, stranding a registered controller that never starts — later
+        # reconnects would attach to a hub that publishes nothing and hang.
+        #
+        # Same splice `_session_view` used to build the view the client is
+        # looking at right now (session history + the checkpoint's entries), so
+        # the snapshot it re-renders matches rather than fights it.
+        entries = await session.load(session_id) + list(snapshot.entries)
+
         try:
             ctrl = await deps.supervisor.start_resume(
                 session_id=session_id,
@@ -278,7 +289,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 )
             raise
         return EventSourceResponse(
-            forward(ctrl.subscribe_live(), sid=session_id, emit_session=True)
+            forward(ctrl.subscribe_resume(entries), sid=session_id, emit_session=True)
         )
 
     return router

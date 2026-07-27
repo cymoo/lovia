@@ -1,11 +1,15 @@
 /* ==========================================================================
    lovia — chat UI
    --------------------------------------------------------------------------
-   Design language, in one breath: a quiet warm-paper canvas; assistant turns
+   Design language, in one breath: a quiet cool-slate canvas; assistant turns
    are open typography on the canvas (no card chrome), user turns are compact
-   cool-tinted bubbles on the right; structure comes from a glass topbar the
+   accent-tinted bubbles on the right; structure comes from a glass topbar the
    content scrolls beneath and a floating composer pill; activity (reasoning,
    tools, context events) shares one quiet-card vocabulary.
+
+   One hue family throughout: both themes are cool slate, and the accent is the
+   only colour that carries meaning — status, focus, inline code, the user's
+   bubble. Nothing else introduces a hue of its own.
 
    Contracts: every class name here is load-bearing for static/js/* — rename
    nothing without updating the JS. Tokens first; components in DOM order.
@@ -41,11 +45,13 @@
   --accent-soft: #e7f3ee;
   --accent-text: #1c6b54;
 
-  /* the user's voice — a cool blue tint, a step more saturated than the
-     neutral slate surfaces so it still reads as its own color */
-  --user-surface: #eaf1f9;
-  --user-border: #d3e0ef;
-  --user-shadow: 0 1px 2px rgba(38, 74, 110, 0.06);
+  /* the user's voice — the slate surface carrying a trace of the accent, so
+     the bubble belongs to the brand's hue family instead of introducing a
+     second one. Deliberately weaker than --accent-soft: that token is the
+     inline-code chip, and a bubble wearing it would read as a giant chip. */
+  --user-surface: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+  --user-border: color-mix(in srgb, var(--accent) 20%, var(--border-strong));
+  --user-shadow: 0 1px 2px rgba(20, 24, 33, 0.05);
 
   /* status */
   --warn: #b06413;
@@ -113,10 +119,10 @@
   --accent-soft: #13271e;
   --accent-text: #53d19c;
 
-  /* the user's voice — a saturated blue that stays distinct from the
-     neutral slate surfaces (which are only faintly blue-tinted) */
-  --user-surface: #1b2942;
-  --user-border: #2d4166;
+  /* the user's voice — same recipe as light, a touch stronger: the accent
+     needs more presence to separate from the dark slate card surface */
+  --user-surface: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+  --user-border: color-mix(in srgb, var(--accent) 22%, var(--border-strong));
   --user-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 
   --warn: #e2a54e;

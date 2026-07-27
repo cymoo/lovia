@@ -347,6 +347,30 @@ async function rewindTo(userTurn, message) {
   return true;
 }
 
+/**
+ * Put the edit affordance on the LAST user turn, and nowhere else.
+ *
+ * Editing rewinds to just before the message and drops everything after it —
+ * destructively, in the store. On the tail that is exactly "regenerate, but
+ * with changes": it costs the one reply you are looking at. On an older
+ * message the same hover icon silently discards every turn since, and the
+ * tool calls it discards have already touched the workspace, so the surviving
+ * transcript no longer describes what happened. Non-destructive editing of
+ * arbitrary history needs branching (issue #150), not a confirm dialog.
+ *
+ * Mirrors updateRegenButton: same target turn, same lifecycle.
+ */
+function updateEditButton() {
+  document.querySelectorAll('.btn-edit').forEach((b) => b.remove());
+  if (!store.canRewind || store.streaming || !store.sessionId) return;
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl) return;
+  // Confirmed turns only: a queued bubble has no ordinal to rewind to yet.
+  const users = transcriptEl.querySelectorAll('.turn.user[data-user-turn]');
+  const last = /** @type {HTMLElement | undefined} */ (users[users.length - 1]);
+  if (last) addEditButton(last);
+}
+
 function addEditButton(node) {
   if (!store.canRewind) return;
   const bubble = node.querySelector('.bubble');
@@ -475,7 +499,8 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   if (!queued) {
     node.dataset.userTurn = String(_userTurnCount++);
     addCopyButton(bubble); // queued bubbles get their copy button on confirm
-    addEditButton(node);
+    // No edit button here: it belongs to whichever turn ends up last, which
+    // updateEditButton decides once the run settles.
   }
   if (before && before.parentNode === transcriptEl) {
     transcriptEl.insertBefore(node, before);
@@ -1419,7 +1444,8 @@ function confirmQueuedTurn(node) {
   // Confirmation order matches the server's drain order — number it now.
   node.dataset.userTurn = String(_userTurnCount++);
   addCopyButton(node.querySelector('.bubble'));
-  addEditButton(node);
+  // No edit button: this runs mid-run, and the pencil belongs to the tail turn
+  // once the run settles (updateEditButton, called from exitStreamingUI).
 }
 
 // Add a cancel affordance to a queued bubble once its server token is known, so
@@ -1616,7 +1642,6 @@ function renderHistoryWindow({ stickBottom }) {
       if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
       ensureFooter(bubble);
       addCopyButton(bubble);
-      addEditButton(turn);
       transcriptEl.appendChild(turn);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
@@ -1688,6 +1713,7 @@ function renderHistoryWindow({ stickBottom }) {
   }
   requestAnimationFrame(() => { _programmaticScroll = false; });
   updateRegenButton();
+  updateEditButton();
 }
 
 // ---- Scroll ------------------------------------------------------------
@@ -2293,6 +2319,7 @@ function enterStreamingUI() {
   // they pick the transcript back up once the turn settles.
   document.getElementById('transcript')?.setAttribute('aria-busy', 'true');
   updateRegenButton(); // streaming: no regen affordance until the run settles
+  updateEditButton(); // …and no edit either: rewind is refused during a live run
 }
 
 function exitStreamingUI() {
@@ -2306,6 +2333,7 @@ function exitStreamingUI() {
   updateSendEnabled();
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
+  updateEditButton();
 }
 
 /**

@@ -4192,8 +4192,16 @@ body.files-splitting {
 /* ---- Long-transcript performance -------------------------------------------------------------------- */
 /* Skip layout/paint for off-screen turns; the intrinsic-size hint keeps the
    scrollbar stable enough for anchoring. Most of a virtual list's win, zero
-   of its bookkeeping. */
-.turn {
+   of its bookkeeping.
+
+   Assistant turns only. `content-visibility` implies paint containment, which
+   clips a turn's descendants to its own box — and the user bubble deliberately
+   hangs two things outside it: the hover action row (copy + edit-and-resend,
+   absolute below the bubble) and a queued bubble's withdraw button. Under the
+   unscoped rule those were laid out and lit up on hover, yet never painted and
+   never hit-tested. Nothing is lost by exempting user turns: the weight this
+   skips is the assistant's markdown, highlighting and tool cards. */
+.turn.assistant {
   content-visibility: auto;
   contain-intrinsic-size: auto 180px;
 }

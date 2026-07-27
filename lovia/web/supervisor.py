@@ -250,10 +250,37 @@ class RunController:
             self.task = asyncio.create_task(self._run())
 
     def subscribe_live(self) -> _Subscription:
-        """Subscribe to a fresh run (START/resume) and begin it. No snapshot."""
+        """Subscribe to a fresh run (START) and begin it. No snapshot — a first
+        turn has no history-so-far, and the client already drew the user's own
+        message."""
         sub = self.hub.subscribe()
         self._ensure_begun()
         return sub
+
+    def subscribe_resume(self, entries: list[TranscriptEntry]) -> _Attachment:
+        """Subscribe to a resumed run, opening with ``entries`` as its snapshot.
+
+        A resume differs from a START in having a past: the interrupted turn is
+        already on screen, and the run is about to re-announce the tool calls it
+        drains (``_drain_pending_calls``). Sending the snapshot lets the client
+        treat this exactly like a re-attach — continue the run's own bubble, and
+        recognise the replayed calls instead of drawing them twice.
+
+        ``entries`` comes from the caller (session history + the checkpoint's
+        own), NOT from ``history_baseline``/``completed_mirror``: those are
+        task-private by design and still empty here, since the task has not
+        begun. Subscribe first, then begin, so no early event is missed.
+        """
+        sub = self.hub.subscribe()
+        now = time.time()
+        attachment = _Attachment(
+            snapshot=view_messages(entries, created_at=now, updated_at=now),
+            buffered=[],  # nothing has been published yet — the tail IS the run
+            subscription=sub,
+            status=self.status,
+        )
+        self._ensure_begun()
+        return attachment
 
     def attach(self, *, with_snapshot: bool) -> _Attachment:
         """Re-attach to a live run: authoritative snapshot + current-turn replay

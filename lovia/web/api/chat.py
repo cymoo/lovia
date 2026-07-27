@@ -277,8 +277,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     )
                 )
             raise
+        # Same splice `_session_view` used to build the view the client is
+        # looking at right now (session history + the checkpoint's entries), so
+        # the snapshot it re-renders matches rather than fights it.
+        entries = await session.load(session_id) + list(snapshot.entries)
         return EventSourceResponse(
-            forward(ctrl.subscribe_live(), sid=session_id, emit_session=True)
+            forward(ctrl.subscribe_resume(entries), sid=session_id, emit_session=True)
         )
 
     return router

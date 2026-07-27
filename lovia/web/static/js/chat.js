@@ -505,6 +505,45 @@ function startAssistantTurn(ts) {
   return { node, bubble: store.bubble };
 }
 
+/**
+ * Re-open the transcript's trailing assistant turn for live writing.
+ *
+ * A re-attach renders the run's history-so-far and then has to put the live
+ * continuation somewhere. Opening a fresh turn split one run into two bubbles
+ * on screen — same run, two different renderings depending on whether the user
+ * ever refreshed — and left the first half without the copy/regenerate actions
+ * (which need a body to copy, and only ever land on the last turn). Continue
+ * the run's own bubble instead.
+ *
+ * The snapshot only ever holds turns the server considers finished, so nothing
+ * in the adopted bubble is still awaiting a live event; the in-flight turn
+ * arrives as replayed events and renders through the normal live path.
+ *
+ * @returns {boolean} False when the tail isn't an assistant turn — a run whose
+ *   current turn is its first. Callers fall back to `startAssistantTurn`.
+ */
+function resumeTailAssistantTurn() {
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl) return false;
+  const turns = transcriptEl.querySelectorAll('.turn');
+  const node = /** @type {HTMLElement | undefined} */ (turns[turns.length - 1]);
+  if (!node?.classList.contains('assistant')) return false;
+  node.classList.add('streaming');
+  store.turnNode = node;
+  store.bubble = node.querySelector('.bubble');
+  // The rest starts clean: what's in the bubble is finished history, and the
+  // continuation is a fresh model turn — its first delta opens a new body, its
+  // thinking a new <details>, exactly as they render when nobody reconnected.
+  store.body = null;
+  store.rawText = '';
+  store.reasoningText = '';
+  store.reasoningNode = null;
+  store.reasoningStart = 0;
+  store.reasoningEnd = 0;
+  scrollDown();
+  return true;
+}
+
 function ensureBody() {
   if (!store.body && store.bubble) {
     store.body = document.createElement('div');
@@ -584,6 +623,9 @@ function buildToolNode(call) {
   // The result renderer only needs the name and the path — stash those
   // instead of the full arguments (write_file args can be megabytes).
   node.dataset.toolName = call.name;
+  // Identity, so a card already on screen can be recognised rather than drawn
+  // twice — see appendTool.
+  if (call.id) node.dataset.callId = call.id;
   const path = toolPath(call.arguments);
   if (path && PATH_TOOLS.has(call.name)) {
     node.dataset.toolPath = path;
@@ -602,12 +644,34 @@ function buildToolNode(call) {
 
 function appendTool(call) {
   if (!store.bubble) return;
-  const node = buildToolNode(call);
-  appendBubbleContent(store.bubble, node);
+  // A resumed run re-announces the calls it is about to drain (loop.py
+  // `_drain_pending_calls`), and the session view already replayed those same
+  // calls from the checkpoint — so the card can already be on screen. Adopt it
+  // instead of drawing a second one, which left the replayed copy stranded
+  // without a result forever. Rightly the run's job to re-announce: a consumer
+  // attaching fresh has no prior state, so reconciling is this client's job.
+  const existing = call.id ? findToolNode(call.id) : null;
+  const node = existing || buildToolNode(call);
+  if (!existing) appendBubbleContent(store.bubble, node);
   store.toolNodes.set(call.id, node);
   store.body = null;
   store.rawText = '';
   scrollDown();
+}
+
+/**
+ * The tool card for `id` anywhere in the transcript — the live registry first,
+ * then the DOM, which is where a card replayed by the history render lives.
+ * @param {string} id Tool call id.
+ * @returns {HTMLElement | null}
+ */
+function findToolNode(id) {
+  const known = store.toolNodes.get(id);
+  if (known?.isConnected) return known;
+  const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
+  return /** @type {HTMLElement | null} */ (
+    document.querySelector(`#transcript .tool[data-call-id="${escaped}"]`)
+  );
 }
 
 // Language for a highlighted result: read_file content only — shell output is
@@ -1761,6 +1825,15 @@ let _lastEventWasError = false;
 // from "cancelled or died", which is what gates the follow-up chips.
 let _sawDone = false;
 
+// This stream's last assistant text, for the follow-up cache signature. It
+// can't be read off store.rawText in the finally: `message_completed` clears
+// that as each model turn lands, long before `done` — so the finally always
+// saw '' and every cache write was silently skipped. Taken from the event
+// payload instead, which is the same joined turn text the server persists
+// (sse.py `_entries_to_dict` / transcript.py `entries_to_messages`), so this
+// signature matches the one `tailSig` recomputes from reloaded history.
+let _lastReply = '';
+
 async function handleEvent({ event, data }) {
   _lastEventWasError = event === 'error';
   switch (event) {
@@ -1779,9 +1852,12 @@ async function handleEvent({ event, data }) {
 
     case 'snapshot':
       // Authoritative re-attach snapshot: replace the transcript with the run's
-      // history-so-far, then open a bubble for the live tail that follows.
+      // history-so-far, then keep writing into its tail assistant turn so the
+      // live continuation joins the run it belongs to (see
+      // resumeTailAssistantTurn). Only a run with no assistant turn yet opens
+      // a bubble of its own.
       renderHistory(data.entries || []);
-      startAssistantTurn();
+      if (!resumeTailAssistantTurn()) startAssistantTurn();
       break;
 
     case 'text_delta':
@@ -1826,6 +1902,9 @@ async function handleEvent({ event, data }) {
       if (store.body && store.rawText) flushRender(true);
       store.body = null;
       store.rawText = '';
+      // Remember the answer before it's gone — a tool-call-only turn carries no
+      // text, so keep the last turn that actually said something.
+      if (data.message?.content) _lastReply = data.message.content;
       if (!store.reasoningNode && data.message?.reasoning && store.bubble) {
         ensureReasoning();
         store.reasoningText = data.message.reasoning;
@@ -2247,6 +2326,7 @@ export async function runStream(message, attachments = null) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastReply = '';
   // Set on every path that already surfaced a failure (or a deliberate abort),
   // so the finally's dropped-connection check doesn't fire on top of it.
   let terminal = false;
@@ -2315,9 +2395,6 @@ export async function runStream(message, attachments = null) {
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
-      // Capture the reply now: finalizeCurrentAssistantTurn below clears
-      // store.rawText, and fetchFollowups keys its cache on this text.
-      const replyText = store.rawText;
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText; // store raw markdown for copy
         flushRender(true);
@@ -2354,7 +2431,7 @@ export async function runStream(message, attachments = null) {
         // Only after a run that actually answered: a cancel or a terminal
         // failure has nothing to follow up on.
         announce(t('a11y.replyDone'));
-        fetchFollowups(store.sessionId, replyText);
+        fetchFollowups(store.sessionId, _lastReply);
       }
     }
   }
@@ -2374,6 +2451,7 @@ export async function runReconnect(sessionId) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastReply = '';
   let terminal = false; // see runStream — gates the dropped-connection check
   let outcome = /** @type {'attached' | 'norun' | 'error'} */ ('attached');
 
@@ -2420,7 +2498,6 @@ export async function runReconnect(sessionId) {
     clearTimeout(_renderTimer);
     // A switch superseded this reconnect: its DOM/UI belong to another view now.
     if (store.chatEpoch === streamEpoch) {
-      const replyText = store.rawText; // before finalize clears it (see runStream)
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText;
         flushRender(true);
@@ -2439,7 +2516,7 @@ export async function runReconnect(sessionId) {
         recoverDroppedStream(sessionId);
       } else if (!resumePendingResend() && _sawDone && !_lastEventWasError) {
         announce(t('a11y.replyDone'));
-        fetchFollowups(sessionId, replyText);
+        fetchFollowups(sessionId, _lastReply);
       }
     }
   }

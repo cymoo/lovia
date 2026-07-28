@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -63,14 +64,17 @@ class SkillSource(Protocol):
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
 
-# Both delimiters must be a "---" on its own line (trailing whitespace
-# tolerated). For the opening this keeps a frontmatter-less body that starts
-# with a Markdown thematic break (`----`) or stray text (`---junk`) intact
-# instead of being mis-parsed as frontmatter. For the closing, column 0 is
-# the only robust boundary: YAML block scalars are always indented, so a
-# column-0 "---" can never occur inside one.
+# Both delimiters must be a "---" at column 0 on its own line (trailing
+# whitespace tolerated). For the opening this keeps a frontmatter-less body
+# that starts with a thematic break (`----`), stray text (`---junk`), or an
+# indented `---` intact instead of being mis-parsed as frontmatter. For the
+# closing, column 0 is the only robust boundary: YAML block scalars are
+# always indented, so a column-0 "---" can never occur inside one.
 _OPENING_FM = re.compile(r"---[ \t\r]*\n")
 _CLOSING_FM = re.compile(r"\n---[ \t\r]*(?:\n|$)")
+# Blank (possibly whitespace-only) lines tolerated before the opening
+# delimiter.
+_LEADING_BLANK_LINES = re.compile(r"(?:[ \t]*\r?\n)+")
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -79,15 +83,20 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     Returns ``(metadata_dict, body_text)``. When no frontmatter is present
     returns ``({}, text)``.
 
-    Tolerates leading blank lines and trailing whitespace on the ``---``
-    delimiters. If there is no closing delimiter the file has no valid
-    frontmatter, so it is treated entirely as body — guessing with a naive
-    substring search would truncate any value that contains "---". Malformed
-    YAML (or YAML that is not a mapping) yields ``{}`` so the caller's
-    name/description validation produces the actual error.
+    Tolerates a UTF-8 BOM, leading blank lines, and trailing whitespace on
+    the ``---`` delimiters. If there is no closing delimiter the file has no
+    valid frontmatter, so it is treated entirely as body — guessing with a
+    naive substring search would truncate any value that contains "---".
+    Malformed YAML (or YAML that is not a mapping) yields ``{}`` so the
+    caller's name/description validation produces the actual error.
     """
 
-    trimmed = text.lstrip()
+    # Skip only a BOM and blank lines; indentation stays. An indented "---"
+    # is not a valid opening delimiter (the same column-0 rule the closing
+    # delimiter enforces).
+    stripped = text.lstrip("\ufeff")
+    blank = _LEADING_BLANK_LINES.match(stripped)
+    trimmed = stripped[blank.end() :] if blank else stripped
     opening = _OPENING_FM.match(trimmed)
     if not opening:
         return {}, text
@@ -148,6 +157,9 @@ class DirectorySkillSource:
         # readers on other threads see a consistent snapshot.
         self._by_name: dict[str, tuple[SkillMetadata, Path]] = {}
         self._warned: set[str] = set()
+        # Scans/loads run on worker threads; the lock keeps _warn_once's
+        # check-then-add atomic so "once per process" holds under concurrency.
+        self._warn_lock = threading.Lock()
 
     # -- SkillSource -------------------------------------------------------- #
 
@@ -268,6 +280,8 @@ class DirectorySkillSource:
         The live source re-scans on every run; without deduplication a
         broken skill directory would spam the log once per run.
         """
-        if key not in self._warned:
+        with self._warn_lock:
+            if key in self._warned:
+                return
             self._warned.add(key)
-            logger.warning(msg, *args)
+        logger.warning(msg, *args)

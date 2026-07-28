@@ -210,9 +210,13 @@ class SkillCatalog:
                 return str(exc)
             # The on-disk path lets the model execute bundled scripts (e.g. via
             # a workspace shell tool). resolve() keeps the hint unambiguous even
-            # for custom sources that return relative paths.
+            # for custom sources that return relative paths. The header line is
+            # outside the frame, so the path — a directory name is arbitrary
+            # bytes — is collapsed to one line first (the name is validated).
             location = (
-                f"  path: {skill.path.resolve()}" if skill.path is not None else ""
+                f"  path: {_one_line(str(skill.path.resolve()), _HEADER_MAX_CHARS)}"
+                if skill.path is not None
+                else ""
             )
             return f"[skill: {skill.name}{location}]\n{_frame(skill.body)}"
 
@@ -234,7 +238,10 @@ class SkillCatalog:
                 content = await asyncio.to_thread(skill.read_file, relpath)
             except SkillsError as exc:
                 return str(exc)
-            return f"[skill: {skill.name}  file: {relpath}]\n{_frame(content)}"
+            # relpath is tool input echoed outside the frame — collapse it to
+            # one line so it cannot fake framed content.
+            shown = _one_line(relpath, _HEADER_MAX_CHARS)
+            return f"[skill: {skill.name}  file: {shown}]\n{_frame(content)}"
 
         return [load_skill, read_skill_file]
 
@@ -251,6 +258,9 @@ _MAX_CONTENT_CHARS = 100_000
 # Cap on the rendered extra-frontmatter suffix of one index line. Unlike
 # descriptions, extra values are not validated at scan time.
 _EXTRA_MAX_CHARS = 256
+
+# Cap on paths/relpaths echoed in the tool-result header line.
+_HEADER_MAX_CHARS = 500
 
 # Skill content is author-supplied and therefore untrusted. The markers frame
 # it as reference *data*; the rule that content between them must not override

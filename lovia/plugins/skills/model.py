@@ -209,7 +209,7 @@ class Skill:
             ) from None
         if not target.is_file():
             raise SkillsError(
-                f"Skill file not found: {relpath}",
+                f"Skill file not found: {relpath!r}",
                 skill_name=self.name,
                 path=relpath,
             )

@@ -248,6 +248,16 @@ class TestSkill:
             with pytest.raises(SkillsError, match="not found"):
                 skill.read_file("nonexistent.md")
 
+    def test_read_file_not_found_error_is_single_line(self) -> None:
+        """relpath is repr()'d in the message: a newline in it cannot spread
+        the (unframed) tool error across lines."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = Skill(name="test", description="desc", body="body", path=root)
+            with pytest.raises(SkillsError) as exc_info:
+                skill.read_file("no\nsuch.md")
+            assert "\n" not in str(exc_info.value)
+
     def test_read_file_binary_raises_skills_error(self) -> None:
         """A binary file raises SkillsError, not a raw UnicodeDecodeError."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,6 +361,30 @@ class TestParseFrontmatter:
         meta, body = _parse_frontmatter(text)
         assert meta == {}
         assert body == text
+
+    def test_indented_opening_delimiter_not_recognized(self) -> None:
+        """An indented '---' is not a valid opening delimiter (same column-0
+        rule as the closing one); leading indentation is body content, not
+        noise to strip."""
+        text = "   ---\nname: indented\ndescription: desc\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta == {}
+        assert body == text
+
+    def test_whitespace_only_blank_lines_before_opening(self) -> None:
+        """Blank lines before the delimiter may contain spaces/tabs."""
+        text = "  \n\t\n---\nname: ws2\ndescription: desc\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "ws2"
+        assert body == "body"
+
+    def test_utf8_bom_tolerated(self) -> None:
+        """A BOM left behind by read_text(encoding='utf-8') must not hide
+        the frontmatter."""
+        text = "\ufeff---\nname: bom\ndescription: desc\n---\nbody"
+        meta, body = _parse_frontmatter(text)
+        assert meta["name"] == "bom"
+        assert body == "body"
 
     def test_indented_closing_delimiter_not_recognized(self) -> None:
         """An indented '---' is NOT a valid document separator, so it is not
@@ -1101,6 +1135,25 @@ class TestToolFraming:
             begin = result.index(_SKILL_BEGIN) + len(_SKILL_BEGIN) + 1
             end = result.rindex(_SKILL_END) - 1
             assert result[begin:end] == script
+
+    async def test_read_skill_file_header_collapses_weird_relpath(self) -> None:
+        """relpath is echoed outside the frame: a newline in it (POSIX file
+        names may contain one) must not fake framed content — the header
+        stays a single line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_dir = _add_skill(root, "s")
+            (skill_dir / "refs").mkdir()
+            (skill_dir / "refs" / "a\nb.md").write_text("weird but real")
+            catalog = SkillCatalog.from_dir(root)
+            read_tool = next(t for t in catalog.tools() if t.name == "read_skill_file")
+            result = await read_tool.invoke(
+                {"name": "s", "relpath": "refs/a\nb.md"}, _make_ctx()
+            )
+            lines = result.splitlines()
+            assert lines[0] == "[skill: s  file: refs/a b.md]"
+            assert lines[1] == _SKILL_BEGIN
+            assert lines[2] == "weird but real"
 
     async def test_read_skill_file_no_path_in_memory_skill(self) -> None:
         """A custom source whose skills have no on-disk path returns a clean

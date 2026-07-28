@@ -423,10 +423,14 @@ function startEditUserTurn(node) {
     const text = ta.value.trim();
     if (!text) return;
     sendBtn.disabled = true;
+    // Stopping a run is cooperative, so a rewind right after Esc waits for
+    // whatever tool was mid-flight — say so rather than looking hung.
+    sendBtn.textContent = t('chat.stopping');
     // On success the whole transcript re-renders (editor included); only a
     // failure leaves this editor alive — re-enable it for another try.
     if (!(await rewindTo(Number(node.dataset.userTurn), text))) {
       sendBtn.disabled = false;
+      sendBtn.textContent = t('chat.send');
     }
   };
   cancelBtn.addEventListener('click', restore);

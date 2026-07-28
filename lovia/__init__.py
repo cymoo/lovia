@@ -86,6 +86,7 @@ from .plugins import (
     OpenAIEmbedder,
     Plugin,
     PluginInstance,
+    SkillNotFoundError,
     Skills,
     SkillsError,
     Todo,
@@ -142,6 +143,7 @@ __all__ = [
     "SQLiteSession",
     "Segment",
     "Session",
+    "SkillNotFoundError",
     "Skills",
     "SkillsError",
     "TextPart",
@@ -159,4 +161,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.9.11"
+__version__ = "0.9.12"

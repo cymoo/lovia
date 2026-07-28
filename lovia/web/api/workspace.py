@@ -66,7 +66,15 @@ def workspace_cfg(agent: Agent[Any]) -> LocalWorkspace | None:
 # build *outputs* (dist/ etc.) stay visible: "take the file the assistant
 # made" is the panel's job. Same pattern language as ``denied_paths``: a bare
 # name matches the file or directory (and everything beneath it) at any depth.
-_PANEL_IGNORES: tuple[str, ...] = ("__pycache__", "*.pyc", "venv", "node_modules")
+# "tmp" is the scratch dir the workspace instructions point the agent at —
+# instructed intermediates, not deliverables, so they don't crowd Recent.
+_PANEL_IGNORES: tuple[str, ...] = (
+    "__pycache__",
+    "*.pyc",
+    "venv",
+    "node_modules",
+    "tmp",
+)
 
 
 def _view_session(cfg: LocalWorkspace) -> LocalWorkspaceSession:

@@ -45,6 +45,10 @@ def _seed(root: Path) -> None:
     (root / "venv" / "bin" / "site.py").write_text("# fake venv content\n")
     (root / "node_modules" / "pkg").mkdir(parents=True)
     (root / "node_modules" / "pkg" / "index.js").write_text("module.exports = 1\n")
+    # The instructed scratch dir (workspace instructions send intermediates
+    # here) — hidden like junk, deliverables only in the panel.
+    (root / "tmp").mkdir()
+    (root / "tmp" / "scratch.txt").write_text("half-done work\n")
     # Deterministic recency order: report.csv is the newest file. The junk is
     # made newer still, so if the panel filter broke it would visibly take
     # over the top of Recent.
@@ -60,6 +64,7 @@ def _seed(root: Path) -> None:
             "orphan.pyc",
             "venv/bin/site.py",
             "node_modules/pkg/index.js",
+            "tmp/scratch.txt",
         ]
     ):
         import os
@@ -166,13 +171,14 @@ def test_recent_hides_environment_junk(client: TestClient) -> None:
     assert "report.csv" in paths  # real files still there
     for path in paths:
         assert not path.endswith(".pyc")
-        assert not path.startswith(("venv/", "node_modules/", "__pycache__/"))
+        assert not path.startswith(("venv/", "node_modules/", "__pycache__/", "tmp/"))
 
 
 def test_browse_hides_junk_dirs(client: TestClient) -> None:
     entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
     paths = {e["path"] for e in entries}
-    assert paths.isdisjoint({"__pycache__", "venv", "node_modules", "orphan.pyc"})
+    junk = {"__pycache__", "venv", "node_modules", "orphan.pyc", "tmp"}
+    assert paths.isdisjoint(junk)
 
 
 def test_junk_paths_refused_like_denied_ones(client: TestClient) -> None:
@@ -180,6 +186,7 @@ def test_junk_paths_refused_like_denied_ones(client: TestClient) -> None:
         ("/api/workspace/files", {"path": "__pycache__"}),
         ("/api/workspace/file", {"path": "__pycache__/app.cpython-312.pyc"}),
         ("/api/workspace/raw", {"path": "orphan.pyc", "download": 1}),
+        ("/api/workspace/file", {"path": "tmp/scratch.txt"}),
     ):
         r = client.get(ep, params={"agent": "bot", **params})
         assert r.status_code == 403, (ep, params, r.status_code)

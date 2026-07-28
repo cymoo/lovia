@@ -181,6 +181,30 @@ class LocalWorkspace:
                 "Writes inside the workspace require user approval; batch "
                 "related edits rather than asking one line at a time."
             )
+        if policy.write != "deny":
+            # Layout, not just permission: 'tmp/' is the one fixed name
+            # (intermediates are junk in any workspace), while deliverable
+            # placement follows what the root is — a git repo brings its own
+            # conventions (.git may be a worktree's *file*, hence exists()).
+            lines.append(
+                "Keep the workspace tidy: scratch and intermediate files go "
+                "under 'tmp/' (disposable — it may be cleaned at any time), "
+                "and never write files nobody asked for — put the answer in "
+                "your reply unless a file is the actual deliverable."
+            )
+            if (root / ".git").exists():
+                lines.append(
+                    "The workspace is a git repository: follow its layout "
+                    "and conventions, keep the tree clean, and never commit "
+                    "anything under 'tmp/'."
+                )
+            else:
+                lines.append(
+                    "Follow the existing directory structure when placing "
+                    "new files; when a task produces several related files, "
+                    "group them in a topical subdirectory rather than "
+                    "scattering the workspace root."
+                )
         outside = _describe_outside_access(policy.read_outside, policy.write_outside)
         if outside:
             lines.append(outside)

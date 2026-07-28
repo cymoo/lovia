@@ -213,6 +213,19 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 status_code=409,
                 detail="a run is active for this session; stop it first",
             )
+        # A run the user just stopped is evicted from the supervisor at once,
+        # but its task is still winding down — and that task's `finally` is
+        # what folds the interrupted turn into the Session. Rewinding across
+        # that window is the edit-and-resend bug: the ordinal is mapped over a
+        # transcript still missing its last user turn (404 for a message the
+        # user can plainly see), and the late persist would append that turn
+        # back after the cut. Cancellation is cooperative, so this waits out
+        # whatever tool was mid-flight.
+        if not await deps.supervisor.drain(session_id):
+            raise HTTPException(
+                status_code=409,
+                detail="a run is still stopping for this session; try again shortly",
+            )
         rewind = getattr(session, "rewind", None)
         if rewind is None:
             raise HTTPException(

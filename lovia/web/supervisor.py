@@ -651,6 +651,15 @@ class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
         self._controllers: dict[str, RunController] = {}
+        # Cancelled runs whose task is still winding down. Cancellation is
+        # cooperative — the run only stops at its next safe point, which for a
+        # mid-flight tool is after that tool returns — while ``cancel`` evicts
+        # the controller immediately so the next message starts a fresh run.
+        # Anything that must not race the wind-down's terminal persist waits
+        # here; see :meth:`drain`. A *set* per session, not one controller: a
+        # session whose replacement run is stopped just as fast has two runs
+        # winding down at once, and both can still write.
+        self._draining: dict[str, set[RunController]] = {}
 
     @property
     def max_background_runs(self) -> int:
@@ -774,13 +783,56 @@ class RunSupervisor:
         # Evict synchronously so an immediate follow-up /stream starts fresh;
         # the task winds down + deletes its checkpoint in the background.
         self._controllers.pop(session_id, None)
+        if ctrl.task is not None:
+            self._draining.setdefault(session_id, set()).add(ctrl)
         ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
 
+    async def drain(self, session_id: str, *, timeout: float = 60.0) -> bool:
+        """Wait for this session's cancelled runs to wind down. ``False`` on timeout.
+
+        Returns once each stopped task's ``finally`` has folded its interrupted
+        turn into the Session (and dropped its checkpoint) — the point after
+        which the durable transcript matches what the client is looking at.
+        Callers that rewrite history must go through here first, or they both
+        read a transcript missing its last user turn and get that turn appended
+        back underneath them a moment later.
+        """
+        deadline = time.monotonic() + timeout
+        # Re-read ``_draining`` after every wait: nothing stops a client from
+        # starting a replacement run (the session is free the moment its
+        # predecessor is cancelled) and stopping that one too while we sit
+        # here, and its tail can write just as late. Tracked by task so an
+        # already-awaited one is never waited on twice — the loop consumes new
+        # arrivals rather than spinning on settled ones.
+        awaited: set[asyncio.Task[None]] = set()
+        while True:
+            tasks = [
+                c.task
+                for c in self._draining.get(session_id, ())
+                if c.task is not None and c.task not in awaited
+            ]
+            if not tasks:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            # asyncio.wait never cancels what it waits on (unlike wait_for), so
+            # a timeout here leaves the run winding down instead of killing it.
+            _done, pending = await asyncio.wait(tasks, timeout=remaining)
+            if pending:
+                return False
+            awaited.update(tasks)
+
     def _evict(self, session_id: str, ctrl: RunController) -> None:
         if self._controllers.get(session_id) is ctrl:
             self._controllers.pop(session_id, None)
+        draining = self._draining.get(session_id)
+        if draining is not None:
+            draining.discard(ctrl)
+            if not draining:
+                self._draining.pop(session_id, None)
 
     async def shutdown(self, *, grace: float = 10.0) -> None:
         ctrls = list(self._controllers.values())

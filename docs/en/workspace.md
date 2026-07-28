@@ -125,6 +125,15 @@ doesn't). An explicit `env={"PATH": ...}` still wins. The workspace's
 system-prompt fragment tells the model to create `.venv` before installing
 Python packages rather than installing globally.
 
+For writable workspaces the fragment also sets layout conventions: scratch
+and intermediates go under `tmp/` (treated as disposable), files nobody
+asked for are not written at all, and deliverable placement follows the
+root's own shape — in a git repository the repo's layout and conventions
+rule (and `tmp/` is never committed); anywhere else new files extend the
+existing structure rather than scattering the root. The `lovia web` Files
+panel matches the convention from the other side: `tmp/` is hidden along
+with environment junk, so Recent shows deliverables only.
+
 ## The command guard
 
 Static command rules can't see paths, so the session also **lexically**

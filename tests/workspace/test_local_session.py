@@ -683,6 +683,30 @@ async def test_workspace_instructions_reflect_policy(tmp_path) -> None:
     assert "without approval" in trusted.instructions()
 
 
+async def test_workspace_instructions_layout_needs_writes(tmp_path) -> None:
+    # Writable workspaces carry the tidiness convention (scratch under tmp/,
+    # no unsolicited files); read-only ones have nothing to keep tidy.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "'tmp/'" in text
+    assert "nobody asked for" in text
+    readonly = Workspace.local(str(tmp_path), mode="readonly").instructions()
+    assert "'tmp/'" not in readonly
+
+
+async def test_workspace_instructions_layout_follows_root_kind(tmp_path) -> None:
+    # Non-repo roots get the generic placement rule; a .git entry — a dir, or
+    # a *file* as in worktrees — switches to the repo's own conventions.
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "topical subdirectory" in text
+    assert "git repository" not in text
+
+    (tmp_path / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n")
+    text = Workspace.local(str(tmp_path), mode="coding").instructions()
+    assert "git repository" in text
+    assert "never commit" in text
+    assert "topical subdirectory" not in text
+
+
 async def test_workspace_instructions_venv_guidance_follows_shell(tmp_path) -> None:
     # The venv convention only matters where commands can run: present with a
     # shell, absent for readonly (which has none — nothing to install with).

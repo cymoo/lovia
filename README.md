@@ -463,9 +463,11 @@ lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
 Anything required but missing (Base URL, API key, model name) is asked
-interactively on first run and can be saved to `.lovia/config.env`
-(owner-only, git-ignored). Configuration precedence: flag > environment >
-`.lovia/config.env` (or `--env-file`).
+interactively on first run and can be saved to `~/.lovia/config.env`
+(owner-only, git-ignored) — one setup, every directory. Change it later with
+`lovia web --setup`, diagnose with `lovia web --check`. Configuration
+precedence: flag > environment > `./.lovia/config.env` >
+`~/.lovia/config.env` (or `--env-file`).
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST
 API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or

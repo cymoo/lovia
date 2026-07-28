@@ -442,8 +442,9 @@ lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
 ```
 
 首次配置模型时，CLI 会引导填写模型名称、端点（Base URL）和 API 密钥，验证连接后还可将配置
-保存到 `.lovia/config.env`。默认的配置优先级为：命令行参数 > 环境变量 >
-`.lovia/config.env` > `./.env`；显式传入 `--env-file` 时，则改为读取指定文件。
+保存到 `~/.lovia/config.env`——一次配置、任意目录可用。之后用 `lovia web --setup` 修改、
+`lovia web --check` 诊断。默认的配置优先级为：命令行参数 > 环境变量 >
+`./.lovia/config.env` > `~/.lovia/config.env`；显式传入 `--env-file` 时，则改为读取指定文件。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

@@ -85,16 +85,18 @@ against the endpoint, and can be saved so it is never retyped.
 EPILOG = """\
 examples:
   lovia web                                # default agent, cwd workspace
+  lovia web --setup                        # change the saved model/key
   lovia web --port 9000 --model openai:gpt-5.5
   lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
   lovia web --workspace ~/notes --readonly # let it read, not write
   lovia web --app myagents:assistant       # serve your own agent
 
 configuration:
-  flag > environment > .lovia/config.env > ./.env (or --env-file)
+  flag > environment > ./.lovia/config.env > ~/.lovia/config.env (or --env-file)
   The model's vendor prefix picks the endpoint variables: anthropic:/claude:
   use ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY, anything else the OPENAI_* pair.
-  Every other setting uses the LOVIA_* name shown above.
+  Every other setting uses the LOVIA_* name shown above. Reconfigure anytime
+  with --setup; inspect what would win (and why) with --check.
 """
 
 
@@ -183,6 +185,18 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         metavar="N",
         help="context window in tokens, used for compaction "
         "(env LOVIA_CONTEXT_WINDOW; default: ask the provider)",
+    )
+    model.add_argument(
+        "--setup",
+        action="store_true",
+        help="rerun the connection wizard — change the saved model, endpoint "
+        "or key (Enter keeps a value) — then launch",
+    )
+    model.add_argument(
+        "--check",
+        action="store_true",
+        help="print the resolved connection with each value's source, probe "
+        "the endpoint, and exit (0 reachable, 2 not)",
     )
 
     agent = p.add_argument_group(
@@ -276,7 +290,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--env-file",
         action="append",
         metavar="FILE",
-        help="env file to load; repeatable (default: .lovia/config.env, then ./.env)",
+        help="env file to load; repeatable "
+        "(default: ./.lovia/config.env, then ~/.lovia/config.env)",
     )
     advanced.add_argument(
         "--max-turns",
@@ -323,12 +338,14 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 def load_env_files(env_files: list[str] | None) -> dict[str, str]:
     """Load the ``--env-file`` files (or the autoload defaults); report added keys.
 
-    Default autoload is ``.lovia/config.env`` (where the setup wizard saves),
-    then a legacy ``./.env`` for back-compat. The process environment always
-    wins because files never override existing variables (``override=False``),
-    and the canonical file wins over the legacy one (it loads first). Returns
-    ``{key: <file name>}`` for keys the files introduced — the startup summary
-    shows it as each value's source.
+    Default autoload is the project ``./.lovia/config.env``, then the user
+    ``~/.lovia/config.env`` (both written by the setup wizard). The process
+    environment always wins because files never override existing variables
+    (``override=False``), and the project file wins over the user one (it
+    loads first). A generic ``./.env`` is no longer read (dropped in 0.9.10):
+    silently adopting another tool's env file surprised more than it helped.
+    Returns ``{key: <source label>}`` for keys the files introduced — the
+    startup summary shows it as each value's source.
 
     A missing python-dotenv is fatal only when ``--env-file`` was given
     explicitly; otherwise auto-loading is silently skipped. This lives in the
@@ -343,27 +360,43 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
                 "--env-file requires python-dotenv, which is not installed.",
                 hint="Install it with: pip install python-dotenv",
             )
-        log.debug("python-dotenv not installed; skipping .env autoload")
+        log.debug("python-dotenv not installed; skipping config autoload")
         return sources
 
-    def load(path: Path) -> None:
+    def load(path: Path, label: str) -> None:
         before = set(os.environ)
         load_dotenv(path, override=False)
         for key in os.environ.keys() - before:
-            sources[key] = path.name
+            sources[key] = label
         log.debug("loaded env file %s", path)
 
     if env_files:
+        # An explicit --env-file that IS one of the scope files keeps its
+        # canonical label, so scope-aware behavior (the --setup save default,
+        # shadow warnings) recognizes it.
+        scope_labels = {
+            setup.config_path().expanduser().resolve(): setup.PROJECT_CONFIG_LABEL,
+            setup.user_config_path().expanduser().resolve(): setup.USER_CONFIG_LABEL,
+        }
         for raw in env_files:
             path = Path(raw)
             if not path.is_file():
                 raise CliError(f"env file not found: {path}")
-            load(path)
+            label = scope_labels.get(path.expanduser().resolve(), path.name)
+            load(path, label)
     else:
-        # Canonical first (wins on conflicts via override=False), then legacy.
-        for default in (setup.config_path(), Path(".env")):
-            if default.is_file():
-                load(default)
+        # Project scope first (wins on conflicts via override=False), then
+        # user scope; one load when they resolve to the same file (cwd == ~).
+        seen: set[Path] = set()
+        for path, label in (
+            (setup.config_path(), setup.PROJECT_CONFIG_LABEL),
+            (setup.user_config_path(), setup.USER_CONFIG_LABEL),
+        ):
+            resolved = path.expanduser().resolve()
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
+            load(path, label)
     return sources
 
 
@@ -773,6 +806,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         context_policy: ContextPolicy | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
+            for flag, given in (("--setup", args.setup), ("--check", args.check)):
+                if given:
+                    raise CliError(
+                        f"{flag} works on the default agent's model connection; "
+                        "a custom --app brings its own"
+                    )
             _warn_ignored_agent_flags(args)
             agent_or_agents = load_app_target(app_target)
             custom_agents = (
@@ -798,13 +837,21 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 context_window_flag=args.context_window,
                 env_sources=env_sources,
             )
-            if conn.missing():
+            if args.check:
+                # Read-only diagnosis: report, probe, exit — never the wizard.
+                return setup.run_check(conn, version=__version__)
+            if conn.missing() or args.setup:
                 if not sys.stdin.isatty():
-                    raise CliError(
-                        f"no {' or '.join(conn.missing())} configured",
-                        hint=setup.CONFIG_HINT,
-                    )
-                conn = setup.interactive_setup(conn, env_sources=env_sources)
+                    missing = conn.missing()
+                    if missing:
+                        raise CliError(
+                            f"no {' or '.join(missing)} configured",
+                            hint=setup.CONFIG_HINT,
+                        )
+                    raise CliError("--setup needs an interactive terminal")
+                conn = setup.interactive_setup(
+                    conn, env_sources=env_sources, reconfigure=args.setup
+                )
             assert conn.model is not None
             try:
                 provider = provider_from_string(

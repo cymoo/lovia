@@ -3,9 +3,14 @@
 Resolves the model connection (model id, base URL, API key, context window)
 from flags and environment layers with per-value source tracking, prompts
 interactively for whatever is missing, validates freshly entered values
-against the endpoint, and offers to persist them to ``.lovia/config.env``
-(owner-only, git-ignored) — auto-loaded on the next launch at the lowest
-precedence: flag > environment > ``.lovia/config.env`` (or a legacy ``./.env``).
+against the endpoint, and offers to persist them (owner-only, git-ignored) —
+to ``~/.lovia/config.env`` by default so one setup works from any directory,
+or to the project-local ``./.lovia/config.env``. Both auto-load on later
+launches at the lowest precedence:
+flag > environment > ``./.lovia/config.env`` > ``~/.lovia/config.env``.
+``interactive_setup(reconfigure=True)`` (the ``--setup`` flag) re-runs the
+wizard over a complete configuration, and :func:`run_check` (``--check``) is
+the read-only diagnosis of the same resolution.
 
 Everything here is CLI-only: the embeddable core (``create_app`` / ``serve``)
 never loads env files, so an app embedding lovia brings its own config.
@@ -13,10 +18,12 @@ never loads env files, so an app embedding lovia brings its own config.
 
 from __future__ import annotations
 
+import difflib
 import enum
 import getpass as _getpass
 import logging
 import os
+import re
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
@@ -54,8 +61,19 @@ CONFIG_DIR = Path(".lovia")
 
 
 def config_path() -> Path:
-    """Default path the wizard saves resolved config to (``.lovia/config.env``)."""
+    """Project-scope config (``./.lovia/config.env``) — this directory only."""
     return CONFIG_DIR / "config.env"
+
+
+def user_config_path() -> Path:
+    """User-scope config (``~/.lovia/config.env``) — used from any directory."""
+    return Path("~/.lovia/config.env").expanduser()
+
+
+# Display labels for the two auto-loaded scopes: the provenance names shown in
+# the startup summary, and how a reconfigure save picks its default target.
+PROJECT_CONFIG_LABEL = ".lovia/config.env"
+USER_CONFIG_LABEL = "~/.lovia/config.env"
 
 
 # Where a resolved value came from; shown in the startup summary and used to
@@ -111,6 +129,9 @@ class Connection:
     api_key_source: Source = _UNSET
     context_window: int | None = None
     context_window_source: Source = _UNSET
+    # Runtime probe data, never persisted: the model ids a successful
+    # ``/models`` probe listed (None until then, or when the shape is foreign).
+    available_models: list[str] | None = None
 
     @property
     def flavor(self) -> ProviderFlavor | None:
@@ -250,8 +271,26 @@ def validate_connection(
         return ValidationOutcome.AUTH_FAILED, f"HTTP {response.status_code}"
     if response.is_success:
         _adopt_reported_window(conn, response)
+        conn.available_models = _listed_model_ids(response)
         return ValidationOutcome.OK, f"HTTP {response.status_code}"
     return ValidationOutcome.UNVERIFIABLE, f"HTTP {response.status_code}"
+
+
+def _listed_model_ids(response: httpx.Response) -> list[str] | None:
+    """Model ids from a ``/models`` body; None when the shape is foreign."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return None
+    ids = [
+        entry["id"]
+        for entry in data
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    ]
+    return ids or None
 
 
 def _adopt_reported_window(conn: Connection, response: httpx.Response) -> None:
@@ -287,29 +326,58 @@ def _protect_config_dir(directory: Path) -> None:
         )
 
 
-def save_env_file(values: Mapping[str, str], path: Path | None = None) -> Path:
-    """Append plain ``KEY=value`` lines to ``.lovia/config.env`` (created if missing).
+_CONFIG_HEADER = (
+    "# lovia config — KEY=value, loaded at launch; the process environment\n"
+    "# overrides values here. Managed by `lovia web --setup`; hand edits and\n"
+    "# comments are preserved.\n"
+)
 
-    Deliberately append-only: no dedup or rewrite — python-dotenv's
-    last-occurrence-wins parsing makes an appended value effective, and a key
-    already loaded is never offered for saving again. The file holds API keys,
-    so it's written owner-only (``0600``); when saving to the default location
-    the ``.lovia/`` dir is also git-ignored.
+_ENV_LINE = re.compile(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def save_env_file(values: Mapping[str, str], path: Path | None = None) -> Path:
+    """Upsert plain ``KEY=value`` lines into a config file (created if missing).
+
+    Hand edits survive: unknown keys, comments and ordering are preserved
+    verbatim (line endings normalized to ``\n``), a saved key replaces its
+    first occurrence in place, and later duplicates of that key (the
+    pre-0.9.10 append-only format) are dropped. New keys are appended; a
+    fresh file starts with a short header.
+    The file holds API keys, so it's written owner-only (``0600``); a
+    ``.lovia/`` target dir (either scope) is made ``0700`` and git-ignored.
     """
-    default = path is None
     path = path or config_path()
-    if default:
+    if path.parent.name == CONFIG_DIR.name:
         _protect_config_dir(path.parent)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    # Patch a missing trailing newline so we never glue onto the last line.
-    prefix = "" if not existing or existing.endswith("\n") else "\n"
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(prefix + "".join(f"{key}={value}\n" for key, value in values.items()))
+    if path.exists():
+        content = _upsert(path.read_text(encoding="utf-8"), values)
+    else:
+        content = _CONFIG_HEADER + "".join(f"{k}={v}\n" for k, v in values.items())
+    path.write_text(content, encoding="utf-8")
     with suppress(OSError):  # best-effort; Windows ignores mode bits
         path.chmod(0o600)
     return path
+
+
+def _upsert(existing: str, values: Mapping[str, str]) -> str:
+    """Replace each key's first occurrence in place; keep everything else."""
+    pending = dict(values)
+    replaced: set[str] = set()
+    out: list[str] = []
+    for line in existing.splitlines():
+        match = _ENV_LINE.match(line)
+        key = match.group(1) if match else None
+        if key is not None and key in replaced:
+            continue  # append-only-era duplicate of a key just rewritten
+        if key is not None and key in pending:
+            out.append(f"{key}={pending.pop(key)}")
+            replaced.add(key)
+        else:
+            out.append(line)
+    out.extend(f"{key}={value}" for key, value in pending.items())
+    return "\n".join(out) + "\n"
 
 
 # ------------------------------------------------------------ interaction -
@@ -323,12 +391,15 @@ def interactive_setup(
     getpass_fn: Callable[[str], str] = _getpass.getpass,
     transport: httpx.BaseTransport | None = None,
     out: TextIO = sys.stdout,
+    reconfigure: bool = False,
 ) -> Connection:
     """Ask for the missing connection values, validate, offer to persist.
 
-    Only items no configuration channel supplied are asked. Raises
-    :class:`UserError` when stdin closes mid-prompt; ``KeyboardInterrupt``
-    propagates so the CLI's existing handler can exit with 130.
+    Only items no configuration channel supplied are asked — unless
+    ``reconfigure`` (the ``--setup`` flag), which revisits every value with
+    the current one as the Enter-keeps default. Raises :class:`UserError`
+    when stdin closes mid-prompt; ``KeyboardInterrupt`` propagates so the
+    CLI's existing handler can exit with 130.
     """
     try:
         return _run_wizard(
@@ -338,6 +409,7 @@ def interactive_setup(
             getpass_fn=getpass_fn,
             transport=transport,
             out=out,
+            reconfigure=reconfigure,
         )
     except EOFError as exc:
         raise UserError(
@@ -353,12 +425,16 @@ def _run_wizard(
     getpass_fn: Callable[[str], str],
     transport: httpx.BaseTransport | None,
     out: TextIO,
+    reconfigure: bool = False,
 ) -> Connection:
     def say(message: str) -> None:
         print(message, file=out)
 
     say("")
-    say("lovia needs a model endpoint — a few seconds now, saved for next time.")
+    if reconfigure:
+        say("reconfigure the model endpoint — Enter keeps the current value.")
+    else:
+        say("lovia needs a model endpoint — a few seconds now, saved for next time.")
     say("")
 
     if conn.model is None:
@@ -367,14 +443,27 @@ def _run_wizard(
         while not conn.model:
             conn.model = input_fn("  Model: ").strip() or None
         conn.model_source = "prompt"
-        # The flavor is known only now: pull in its env defaults before
-        # deciding what else to ask.
-        _derive_endpoint(conn, env_sources)
+    elif reconfigure:
+        answer = input_fn(f"  Model [{conn.model}]: ").strip()
+        if answer and answer != conn.model:
+            old_flavor = conn.flavor
+            conn.model, conn.model_source = answer, "prompt"
+            # The window is a property of the model: a stale one must not
+            # survive a model change (the probe/table re-supply it below).
+            conn.context_window, conn.context_window_source = None, _UNSET
+            if conn.flavor is not old_flavor:
+                # New vendor prefix: the old flavor's endpoint and key are
+                # meaningless — re-derive from the new flavor's env/defaults.
+                conn.base_url, conn.base_url_source = None, _UNSET
+                conn.api_key, conn.api_key_source = None, _UNSET
+    # The flavor may be known only now: pull in its env defaults before
+    # deciding what else to ask.
+    _derive_endpoint(conn, env_sources)
 
     flavor = conn.flavor
     assert flavor is not None
 
-    if conn.base_url_source == "default":
+    if conn.base_url_source == "default" or reconfigure:
         answer = input_fn(f"  Base URL [{conn.base_url}]: ").strip()
         if answer:
             conn.base_url = answer.rstrip("/")
@@ -382,12 +471,24 @@ def _run_wizard(
 
     if conn.api_key is None:
         _prompt_api_key(conn, getpass_fn=getpass_fn, out=out)
+    elif reconfigure:
+        key = getpass_fn(f"  API key [{mask_key(conn.api_key)}, Enter keeps]: ").strip()
+        if key:
+            conn.api_key, conn.api_key_source = key, "prompt"
 
     _validation_loop(
         conn, input_fn=input_fn, getpass_fn=getpass_fn, transport=transport, out=out
     )
     _maybe_prompt_context_window(conn, input_fn=input_fn, out=out)
-    _offer_to_save(conn, input_fn=input_fn, out=out)
+    _offer_to_save(
+        conn,
+        input_fn=input_fn,
+        out=out,
+        env_sources=env_sources,
+        reconfigure=reconfigure,
+    )
+    if not reconfigure:
+        say("  change anytime: lovia web --setup")
     return conn
 
 
@@ -428,6 +529,7 @@ def _validation_loop(
         outcome, detail = validate_connection(conn, transport=transport)
         if outcome is ValidationOutcome.OK:
             say(f"  ✓ endpoint reachable ({conn.base_url})")
+            _warn_unlisted_model(conn, out)
             return
         if outcome is ValidationOutcome.UNVERIFIABLE:
             say(f"  note: could not verify the endpoint ({detail}); continuing")
@@ -492,28 +594,139 @@ def build_provider(conn: Connection) -> Provider | None:
         return None
 
 
+def _warn_unlisted_model(conn: Connection, out: TextIO) -> None:
+    """One warn-only line when the endpoint's ``/models`` omits the model.
+
+    Soft on purpose: gateways often list only part of what they serve (or
+    nothing), so an absent id is a hint, not an error — but it catches the
+    typo that would otherwise surface as a failure on the first chat message.
+    """
+    ids = conn.available_models
+    if not ids or conn.model is None:
+        return
+    bare = conn.model.split(":", 1)[-1]
+    if conn.model in ids or bare in ids:
+        return
+    close = difflib.get_close_matches(bare, ids, n=3, cutoff=0.6)
+    hint = f" — close: {', '.join(close)}" if close else ""
+    print(
+        f"  note: the endpoint does not list {bare!r}{hint} (gateways don't "
+        "always list every model; continuing)",
+        file=out,
+    )
+
+
 def _offer_to_save(
-    conn: Connection, *, input_fn: Callable[[str], str], out: TextIO
+    conn: Connection,
+    *,
+    input_fn: Callable[[str], str],
+    out: TextIO,
+    env_sources: Mapping[str, str] | None = None,
+    reconfigure: bool = False,
 ) -> None:
     flavor = conn.flavor
     assert flavor is not None
+    env_sources = env_sources or {}
     to_save: dict[str, str] = {}
-    if conn.model_source == "prompt" and conn.model:
-        to_save["LOVIA_MODEL"] = conn.model
-    if conn.base_url_source == "prompt" and conn.base_url:
-        to_save[f"{flavor.env_prefix}_BASE_URL"] = conn.base_url
-    if conn.api_key_source == "prompt" and conn.api_key:
-        to_save[f"{flavor.env_prefix}_API_KEY"] = conn.api_key
-    if conn.context_window_source == "prompt" and conn.context_window:
-        to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
+    if reconfigure:
+        # Reconfigure persists the connection as one unit — base URL and key
+        # are a pair; saving them piecemeal would assemble mismatched
+        # endpoints. The flavor's default base URL is not pinned, and an
+        # endpoint-reported window is never persisted (it would go on lying
+        # after the deployment is resized).
+        if conn.model:
+            to_save["LOVIA_MODEL"] = conn.model
+        if conn.base_url and conn.base_url != flavor.default_base_url.rstrip("/"):
+            to_save[f"{flavor.env_prefix}_BASE_URL"] = conn.base_url
+        if conn.api_key:
+            to_save[f"{flavor.env_prefix}_API_KEY"] = conn.api_key
+        if conn.context_window and conn.context_window_source != "endpoint":
+            to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
+    else:
+        if conn.model_source == "prompt" and conn.model:
+            to_save["LOVIA_MODEL"] = conn.model
+        if conn.base_url_source == "prompt" and conn.base_url:
+            to_save[f"{flavor.env_prefix}_BASE_URL"] = conn.base_url
+        if conn.api_key_source == "prompt" and conn.api_key:
+            to_save[f"{flavor.env_prefix}_API_KEY"] = conn.api_key
+        if conn.context_window_source == "prompt" and conn.context_window:
+            to_save["LOVIA_CONTEXT_WINDOW"] = str(conn.context_window)
     if not to_save:
         return
-    answer = input_fn(f"  Save to {config_path()}? [Y/n]: ")
-    if answer.strip().lower() in ("", "y", "yes"):
-        saved = save_env_file(to_save)
-        print(f"  saved to {saved} — owner-only, git-ignored", file=out)
+    if reconfigure:
+        # Default to the layer the connection currently lives in: saving
+        # user-level under a live project override would look like the
+        # change silently didn't take.
+        default = (
+            "p"
+            if any(env_sources.get(k) == PROJECT_CONFIG_LABEL for k in to_save)
+            else "u"
+        )
+        answer = (
+            input_fn(
+                f"  Save to [u] {USER_CONFIG_LABEL} (any directory) · "
+                f"[p] ./{PROJECT_CONFIG_LABEL} (this directory) · "
+                f"[n] don't save [{default}]: "
+            )
+            .strip()
+            .lower()
+            or default
+        )
+        if answer.startswith("n"):
+            print(
+                "  not saved; this configuration applies to this launch only",
+                file=out,
+            )
+            return
+        user_scope = not answer.startswith("p")
     else:
-        print("  not saved; this configuration applies to this launch only", file=out)
+        answer = input_fn(
+            f"  Save to {USER_CONFIG_LABEL} (used from any directory)? [Y/n]: "
+        )
+        if answer.strip().lower() not in ("", "y", "yes"):
+            print(
+                "  not saved; this configuration applies to this launch only",
+                file=out,
+            )
+            return
+        user_scope = True
+    save_env_file(to_save, path=user_config_path() if user_scope else config_path())
+    label = USER_CONFIG_LABEL if user_scope else f"./{PROJECT_CONFIG_LABEL}"
+    print(f"  saved to {label} — owner-only, git-ignored", file=out)
+    _warn_shadowed(
+        to_save,
+        target_label=USER_CONFIG_LABEL if user_scope else PROJECT_CONFIG_LABEL,
+        env_sources=env_sources,
+        out=out,
+    )
+
+
+def _warn_shadowed(
+    saved: Mapping[str, str],
+    *,
+    target_label: str,
+    env_sources: Mapping[str, str],
+    out: TextIO,
+) -> None:
+    """Point out layers that keep beating what was just written.
+
+    Files never override the process environment, and the project file beats
+    the user file — a save landing under a live override would otherwise
+    look like it silently didn't take.
+    """
+    for key, value in saved.items():
+        current = os.environ.get(key)
+        if current is None or current == value:
+            continue
+        source = env_sources.get(key)  # None -> plain process environment
+        if source == target_label:
+            continue  # that layer is the one just rewritten
+        where = source or "the process environment"
+        print(
+            f"  note: {key} is currently overridden by {where}; the override "
+            "keeps winning until removed",
+            file=out,
+        )
 
 
 # ---------------------------------------------------------------- summary -
@@ -525,6 +738,70 @@ def mask_key(key: str | None) -> str:
     if len(key) > 10:
         return f"{key[:3]}…{key[-4:]}"
     return "…"
+
+
+def _connection_rows(conn: Connection) -> list[tuple[str, str]]:
+    """The four connection values with their sources, for summary and check."""
+    if conn.api_key:
+        key_cell = f"{mask_key(conn.api_key)} ({conn.api_key_source})"
+    else:
+        key_cell = "(none — endpoint does not require one)"
+    return [
+        ("model", f"{conn.model} ({conn.model_source})"),
+        ("base URL", f"{conn.base_url} ({conn.base_url_source})"),
+        ("api key", key_cell),
+        ("context window", _context_window_cell(conn)),
+    ]
+
+
+def run_check(
+    conn: Connection,
+    *,
+    version: str,
+    out: TextIO | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> int:
+    """``lovia web --check``: report the resolved connection, probe it, exit.
+
+    Read-only diagnosis — never prompts (no wizard) and never writes. Exit 0
+    when the endpoint answered (or can't be verified, which is normal for
+    gateways without ``/models``), 2 when configuration is missing or the
+    probe failed hard — so CI and containers can assert on it.
+    """
+
+    # Resolved at call time, not at import: sys.stdout may be redirected.
+    out = out or sys.stdout
+
+    def say(message: str) -> None:
+        print(message, file=out)
+
+    say(f"lovia v{version} — configuration check")
+    if conn.model is not None:
+        for label, value in _connection_rows(conn):
+            say(f"  {label:<16} {value}")
+    scopes = " · ".join(
+        f"{label} ({'present' if path.is_file() else 'absent'})"
+        for label, path in (
+            (f"./{PROJECT_CONFIG_LABEL}", config_path()),
+            (USER_CONFIG_LABEL, user_config_path()),
+        )
+    )
+    say(f"  {'config files':<16} {scopes}")
+    missing = conn.missing()
+    if missing:
+        say(f"  missing: {', '.join(missing)} — {CONFIG_HINT}")
+        return 2
+    outcome, detail = validate_connection(conn, transport=transport)
+    marks = {
+        ValidationOutcome.OK: "✓ endpoint reachable",
+        ValidationOutcome.AUTH_FAILED: "✗ authentication failed",
+        ValidationOutcome.UNREACHABLE: "✗ endpoint unreachable",
+        ValidationOutcome.UNVERIFIABLE: "? could not verify the endpoint",
+    }
+    say(f"  {'probe':<16} {marks[outcome]} ({detail})")
+    _warn_unlisted_model(conn, out)
+    ok = outcome in (ValidationOutcome.OK, ValidationOutcome.UNVERIFIABLE)
+    return 0 if ok else 2
 
 
 def _context_window_cell(conn: Connection) -> str:
@@ -545,15 +822,7 @@ def format_summary(
     db_desc: str,
 ) -> str:
     """The startup block: what configuration won, and where it came from."""
-    if conn.api_key:
-        key_cell = f"{mask_key(conn.api_key)} ({conn.api_key_source})"
-    else:
-        key_cell = "(none — endpoint does not require one)"
-    rows = [
-        ("model", f"{conn.model} ({conn.model_source})"),
-        ("base URL", f"{conn.base_url} ({conn.base_url_source})"),
-        ("api key", key_cell),
-        ("context window", _context_window_cell(conn)),
+    rows = _connection_rows(conn) + [
         ("workspace", workspace_desc),
         ("db", db_desc),
     ]

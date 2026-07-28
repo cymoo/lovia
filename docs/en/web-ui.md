@@ -15,8 +15,13 @@ lovia web
 ```
 
 Open `http://127.0.0.1:8000`. On first launch the CLI asks for whatever model
-configuration is missing, checks it against the endpoint, and can save it to
-`.lovia/config.env` (owner-only, git-ignored) so it is never retyped.
+configuration is missing, checks it against the endpoint, and can save it
+(owner-only, git-ignored) to `~/.lovia/config.env` — one setup works from any
+directory — so it is never retyped. Change it later with `lovia web --setup`:
+the wizard revisits every value (Enter keeps the current one) and asks whether
+to save user-wide or to the project-local `./.lovia/config.env`. To see what
+configuration would win and whether the endpoint answers, run
+`lovia web --check`.
 
 The default Agent includes `Todo`, optional Skills from `./skills`, Memory in
 `./.lovia/memory`, time and HTTP Tools, web search (Tavily when
@@ -100,7 +105,9 @@ allowlist of common image, document, data, and code extensions
 ## Useful CLI options
 
 Every option resolves in this order: command-line flag, environment variable,
-`.lovia/config.env`, `./.env` (or the `--env-file` files), then the default.
+`./.lovia/config.env`, `~/.lovia/config.env` (or the `--env-file` files),
+then the default. The startup summary names each value's source; `--check`
+prints the same and probes the endpoint without serving.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
@@ -115,7 +122,8 @@ Every option resolves in this order: command-line flag, environment variable,
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--no-followups` | `LOVIA_FOLLOWUPS`, `LOVIA_FOLLOWUP_MODEL` | Suggestions on, using the Agent's model |
-| `--env-file` | — | `.lovia/config.env`, then `./.env` |
+| `--setup` / `--check` | — | Rerun the wizard / probe and exit |
+| `--env-file` | — | `./.lovia/config.env`, then `~/.lovia/config.env` |
 
 `lovia web --help` lists them all in four groups: model (including the context
 window), agent, server, and advanced — output tokens, Provider timeout and

@@ -318,6 +318,7 @@ def run_wizard(
     keys: list[str] | None = None,
     transport: httpx.BaseTransport | None = None,
     env_sources: dict[str, str] | None = None,
+    reconfigure: bool = False,
 ) -> tuple[setup.Connection, str, Callable[[str], str], Callable[[str], str]]:
     out = io.StringIO()
     input_fn = scripted(inputs)
@@ -329,6 +330,7 @@ def run_wizard(
         getpass_fn=getpass_fn,
         transport=transport or ok_transport(),
         out=out,
+        reconfigure=reconfigure,
     )
     return result, out.getvalue(), input_fn, getpass_fn
 
@@ -353,10 +355,13 @@ def test_first_run_asks_everything_and_saves(
     assert (conn.api_key, conn.api_key_source) == ("sk-deep", "prompt")
     assert (conn.context_window, conn.context_window_source) == (128000, "prompt")
     assert "✓ endpoint reachable" in output
+    assert "change anytime: lovia web --setup" in output
     assert not input_fn.remaining and not getpass_fn.remaining  # type: ignore[attr-defined]
 
-    path = setup.config_path()
+    # First-run saves land in the user scope: one setup, every directory.
+    path = setup.user_config_path()
     assert path.is_file()
+    assert not setup.config_path().exists()
     from dotenv import dotenv_values
 
     saved = dotenv_values(path)
@@ -497,13 +502,13 @@ def test_save_only_persists_prompt_sourced_values(
     del result
     from dotenv import dotenv_values
 
-    saved = dotenv_values(setup.config_path())
+    saved = dotenv_values(setup.user_config_path())
     assert "OPENAI_API_KEY" not in saved
     assert "LOVIA_MODEL" not in saved
     assert saved["OPENAI_BASE_URL"] == "https://api.openai.com/v1"
     assert saved["LOVIA_CONTEXT_WINDOW"] == "77000"
     # The .lovia/ dir is git-ignored regardless of which values were saved.
-    assert (setup.config_path().parent / ".gitignore").is_file()
+    assert (setup.user_config_path().parent / ".gitignore").is_file()
 
 
 def test_decline_save_writes_nothing(
@@ -517,6 +522,201 @@ def test_decline_save_writes_nothing(
     )
     del result
     assert not setup.config_path().exists()
+    assert not setup.user_config_path().exists()
+
+
+# ---------------------------------------------------------- reconfigure -
+
+
+def _configured_conn(**overrides: object) -> setup.Connection:
+    """A fully resolved openai connection, as a configured launch would hold."""
+    conn = setup.Connection(
+        model="openai:gpt-5.5",
+        model_source="env",
+        api_key="sk-abcdefghijkl1234",
+        api_key_source="env",
+    )
+    setup._derive_endpoint(conn, {})
+    for key, value in overrides.items():
+        setattr(conn, key, value)
+    return conn
+
+
+def test_reconfigure_enter_keeps_everything() -> None:
+    conn = _configured_conn()
+    # model, base URL, save scope [n]; the key prompt keeps on Enter.
+    result, output, input_fn, getpass_fn = run_wizard(
+        conn, inputs=["", "", "n"], keys=[""], reconfigure=True
+    )
+    assert result.model == "openai:gpt-5.5"
+    assert result.base_url == "https://api.openai.com/v1"
+    assert result.api_key == "sk-abcdefghijkl1234"
+    assert "Enter keeps the current value" in output
+    # --setup users already know the entry point; no first-run hint.
+    assert "change anytime" not in output
+    assert not input_fn.remaining and not getpass_fn.remaining  # type: ignore[attr-defined]
+
+
+def test_reconfigure_model_change_resets_window_and_saves_user_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    conn = _configured_conn(context_window=100_000, context_window_source="env")
+    result, output, *_ = run_wizard(
+        conn,
+        # new model (same flavor), keep base URL, re-enter the reset window,
+        # accept the save (default scope: user).
+        inputs=["openai:mystery-model", "", "128000", ""],
+        keys=[""],
+        reconfigure=True,
+    )
+    assert result.context_window == 128_000  # the stale window did not survive
+    from dotenv import dotenv_values
+
+    saved = dotenv_values(setup.user_config_path())
+    # The whole connection is saved as one unit; the flavor's default base
+    # URL is not pinned.
+    assert saved == {
+        "LOVIA_MODEL": "openai:mystery-model",
+        "OPENAI_API_KEY": "sk-abcdefghijkl1234",
+        "LOVIA_CONTEXT_WINDOW": "128000",
+    }
+    assert not setup.config_path().exists()
+
+
+def test_reconfigure_flavor_change_resets_endpoint_and_key() -> None:
+    conn = _configured_conn()
+    result, output, *_ = run_wizard(
+        conn,
+        # anthropic model: old endpoint/key are meaningless — the base URL
+        # falls back to the new flavor's default and the key is re-asked
+        # (required on the official host).
+        inputs=["anthropic:claude-sonnet-4-5", "", "n"],
+        keys=["sk-ant-secret1234"],
+        reconfigure=True,
+    )
+    default = setup.ANTHROPIC_FLAVOR.default_base_url.rstrip("/")
+    assert result.base_url == default
+    assert result.api_key == "sk-ant-secret1234"
+
+
+def test_reconfigure_save_defaults_to_the_layer_the_value_lives_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    conn = _configured_conn(model_source=setup.PROJECT_CONFIG_LABEL)
+    run_wizard(
+        conn,
+        inputs=["", "", ""],  # keep everything; Enter takes the default scope
+        keys=[""],
+        reconfigure=True,
+        env_sources={"LOVIA_MODEL": setup.PROJECT_CONFIG_LABEL},
+    )
+    # The model lives in the project file, so the default target is the
+    # project file — saving user-level under it would look like a no-op.
+    assert setup.config_path().is_file()
+    assert not setup.user_config_path().exists()
+
+
+def test_save_warns_when_a_higher_layer_shadows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "old-model")  # plain process env
+    conn = setup.Connection(
+        model="old-model",
+        model_source="env",
+        base_url="http://gw/v1",
+        base_url_source="env",
+    )
+    _, output, *_ = run_wizard(
+        conn,
+        # new model, keep base URL, skip key, skip window, accept save (user).
+        inputs=["new-model", "", "", ""],
+        keys=[""],
+        reconfigure=True,
+    )
+    assert "LOVIA_MODEL is currently overridden by the process environment" in output
+
+
+# ------------------------------------------------------- unlisted models -
+
+
+def _listing_transport(*ids: str) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"data": [{"id": i} for i in ids]})
+    )
+
+
+def test_wizard_warns_when_endpoint_does_not_list_the_model() -> None:
+    conn = _resolve(model_flag="openai:gpt-5.6")
+    _, output, *_ = run_wizard(
+        conn,
+        inputs=["", "", "n"],  # base URL, context window (unknown model), save
+        keys=["sk-x"],
+        transport=_listing_transport("gpt-5.5", "gpt-5.5-mini"),
+    )
+    # Warn-only: the typo is surfaced now (with suggestions) instead of on
+    # the first chat message, but a partial gateway listing never blocks.
+    assert "does not list 'gpt-5.6'" in output
+    assert "close: gpt-5.5" in output
+
+
+def test_wizard_stays_silent_when_the_model_is_listed() -> None:
+    conn = _resolve(model_flag="openai:gpt-5.5")
+    _, output, *_ = run_wizard(
+        conn,
+        inputs=["", "n"],
+        keys=["sk-x"],
+        transport=_listing_transport("gpt-5.5"),
+    )
+    assert "does not list" not in output
+
+
+# ------------------------------------------------------------- run_check -
+
+
+def test_run_check_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    out = io.StringIO()
+    rc = setup.run_check(
+        _conn(model="openai:gpt-5.5", api_key="sk-abcdefghijkl1234"),
+        version="1.0",
+        out=out,
+        transport=_listing_transport("gpt-5.5"),
+    )
+    assert rc == 0
+    text = out.getvalue()
+    assert "configuration check" in text
+    assert "✓ endpoint reachable" in text
+    assert "config files" in text and "(absent)" in text
+
+
+def test_run_check_auth_failure_is_exit_2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    out = io.StringIO()
+    rc = setup.run_check(
+        _conn(model="openai:gpt-5.5", api_key="sk-bad"),
+        version="1.0",
+        out=out,
+        transport=httpx.MockTransport(lambda request: httpx.Response(401)),
+    )
+    assert rc == 2
+    assert "✗ authentication failed" in out.getvalue()
+
+
+def test_run_check_missing_config_is_exit_2_without_probing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    out = io.StringIO()
+    rc = setup.run_check(setup.Connection(), version="1.0", out=out)
+    assert rc == 2
+    text = out.getvalue()
+    assert "missing: model" in text
+    assert "--model" in text  # the non-interactive hint rides along
 
 
 # ------------------------------------------------------------ persistence -
@@ -526,7 +726,9 @@ def test_save_env_file_creates_the_file(tmp_path: Path) -> None:
     path = setup.save_env_file(
         {"A_KEY": "value", "B_KEY": "x y"}, path=tmp_path / ".env"
     )
-    assert path.read_text() == "A_KEY=value\nB_KEY=x y\n"
+    # A fresh file opens with the header comment; values follow verbatim.
+    assert path.read_text().startswith("# lovia config")
+    assert path.read_text().endswith("A_KEY=value\nB_KEY=x y\n")
     if os.name == "posix":  # secrets → owner-only
         assert path.stat().st_mode & 0o777 == 0o600
 
@@ -538,7 +740,7 @@ def test_save_env_file_default_path_is_protected(
     monkeypatch.chdir(tmp_path)
     path = setup.save_env_file({"OPENAI_API_KEY": "sk-secret"})
     assert path == setup.config_path()
-    assert path.read_text() == "OPENAI_API_KEY=sk-secret\n"
+    assert path.read_text().endswith("OPENAI_API_KEY=sk-secret\n")
     assert (path.parent / ".gitignore").read_text().strip().splitlines()[-1] == "*"
     if os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600  # secret file: owner-only
@@ -552,15 +754,24 @@ def test_save_env_file_appends_and_patches_missing_newline(tmp_path: Path) -> No
     assert path.read_text() == "# my note\nOTHER_KEY=1\nOPENAI_API_KEY=sk-new\n"
 
 
-def test_save_env_file_appended_duplicate_wins(tmp_path: Path) -> None:
-    # Append-only by design: python-dotenv's last-occurrence-wins parsing
-    # makes the newer value effective without any rewrite machinery.
+def test_save_env_file_upserts_in_place(tmp_path: Path) -> None:
+    # A saved key replaces its first occurrence where it stands; everything
+    # else — comments, unknown keys, ordering — survives verbatim, and no
+    # header is injected into a pre-existing file.
     path = tmp_path / ".env"
-    path.write_text("OPENAI_API_KEY=old\n")
-    setup.save_env_file({"OPENAI_API_KEY": "new"}, path=path)
-    from dotenv import dotenv_values
+    path.write_text("# endpoint\nOPENAI_API_KEY=old\nOTHER=1\n")
+    setup.save_env_file({"OPENAI_API_KEY": "sk-new", "NEW_KEY": "2"}, path=path)
+    assert path.read_text() == "# endpoint\nOPENAI_API_KEY=sk-new\nOTHER=1\nNEW_KEY=2\n"
 
-    assert dotenv_values(path) == {"OPENAI_API_KEY": "new"}
+
+def test_save_env_file_drops_append_only_era_duplicates(tmp_path: Path) -> None:
+    # Files written by the pre-0.9.10 append-only saver may hold the same key
+    # several times (last one effective); an upsert of that key normalizes the
+    # file to a single occurrence, at the first position.
+    path = tmp_path / ".env"
+    path.write_text("K=1\n# note\nK=2\nexport K=3\n")
+    setup.save_env_file({"K": "4"}, path=path)
+    assert path.read_text() == "K=4\n# note\n"
 
 
 # ---------------------------------------------------------------- summary -

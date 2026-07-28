@@ -328,6 +328,26 @@ def test_load_env_file_existing_env_wins(
     assert os.getenv("LOVIA_TEST_VAR2") == "fromenv"
 
 
+def test_load_env_file_explicit_scope_path_keeps_canonical_label(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--env-file pointing at a scope file labels it as that scope, so
+    scope-aware behavior (--setup save default, shadow warnings) still
+    recognizes the source."""
+    pytest.importorskip("dotenv")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".lovia").mkdir()
+    (tmp_path / ".lovia" / "config.env").write_text(
+        "LOVIA_TEST_SCOPED=x\n", encoding="utf-8"
+    )
+    monkeypatch.delenv("LOVIA_TEST_SCOPED", raising=False)
+    try:
+        sources = cli.load_env_files([".lovia/config.env"])
+        assert sources["LOVIA_TEST_SCOPED"] == ".lovia/config.env"
+    finally:
+        os.environ.pop("LOVIA_TEST_SCOPED", None)
+
+
 def test_load_env_file_missing_errors() -> None:
     pytest.importorskip("dotenv")
     with pytest.raises(UserError, match="env file not found"):

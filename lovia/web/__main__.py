@@ -371,11 +371,19 @@ def load_env_files(env_files: list[str] | None) -> dict[str, str]:
         log.debug("loaded env file %s", path)
 
     if env_files:
+        # An explicit --env-file that IS one of the scope files keeps its
+        # canonical label, so scope-aware behavior (the --setup save default,
+        # shadow warnings) recognizes it.
+        scope_labels = {
+            setup.config_path().expanduser().resolve(): setup.PROJECT_CONFIG_LABEL,
+            setup.user_config_path().expanduser().resolve(): setup.USER_CONFIG_LABEL,
+        }
         for raw in env_files:
             path = Path(raw)
             if not path.is_file():
                 raise CliError(f"env file not found: {path}")
-            load(path, path.name)
+            label = scope_labels.get(path.expanduser().resolve(), path.name)
+            load(path, label)
     else:
         # Project scope first (wins on conflicts via override=False), then
         # user scope; one load when they resolve to the same file (cwd == ~).

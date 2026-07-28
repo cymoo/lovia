@@ -339,9 +339,10 @@ def save_env_file(values: Mapping[str, str], path: Path | None = None) -> Path:
     """Upsert plain ``KEY=value`` lines into a config file (created if missing).
 
     Hand edits survive: unknown keys, comments and ordering are preserved
-    byte-for-byte, a saved key replaces its first occurrence in place, and
-    later duplicates of that key (the pre-0.9.10 append-only format) are
-    dropped. New keys are appended; a fresh file starts with a short header.
+    verbatim (line endings normalized to ``\n``), a saved key replaces its
+    first occurrence in place, and later duplicates of that key (the
+    pre-0.9.10 append-only format) are dropped. New keys are appended; a
+    fresh file starts with a short header.
     The file holds API keys, so it's written owner-only (``0600``); a
     ``.lovia/`` target dir (either scope) is made ``0700`` and git-ignored.
     """

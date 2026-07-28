@@ -756,8 +756,8 @@ def test_save_env_file_appends_and_patches_missing_newline(tmp_path: Path) -> No
 
 def test_save_env_file_upserts_in_place(tmp_path: Path) -> None:
     # A saved key replaces its first occurrence where it stands; everything
-    # else — comments, unknown keys, ordering — survives byte-for-byte, and
-    # no header is injected into a pre-existing file.
+    # else — comments, unknown keys, ordering — survives verbatim, and no
+    # header is injected into a pre-existing file.
     path = tmp_path / ".env"
     path.write_text("# endpoint\nOPENAI_API_KEY=old\nOTHER=1\n")
     setup.save_env_file({"OPENAI_API_KEY": "sk-new", "NEW_KEY": "2"}, path=path)

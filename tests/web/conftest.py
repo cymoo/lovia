@@ -2,14 +2,16 @@
 
 The CLI reads the provider credential env vars, so a developer's real
 configuration must never leak into (or be touched by) tests. Tests that
-exercise the wizard's ``./.env`` save isolate the filesystem with
-``monkeypatch.chdir(tmp_path)`` themselves.
+exercise the wizard's project-scope save isolate the filesystem with
+``monkeypatch.chdir(tmp_path)`` themselves; ``~`` is redirected for every
+test below, since the CLI reads and writes ``~/.lovia/config.env``.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,20 @@ _LEAKY_VARS = (
 def _isolate_user_config(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in _LEAKY_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> Path:
+    """Point ``~`` at a fresh per-test dir — never the developer's real one.
+
+    Deliberately *outside* ``tmp_path`` (many tests chdir there and use it as
+    a workspace root), so the project scope (``./.lovia``), the user scope
+    (``~/.lovia``) and workspace listings never bleed into each other.
+    """
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows expanduser
+    return home
 
 
 @pytest.fixture(autouse=True)

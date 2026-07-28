@@ -318,8 +318,10 @@ def test_load_env_file_existing_env_wins(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     pytest.importorskip("dotenv")
-    env = tmp_path / ".env"
-    env.write_text("LOVIA_TEST_VAR2=fromfile\n", encoding="utf-8")
+    (tmp_path / ".lovia").mkdir()
+    (tmp_path / ".lovia" / "config.env").write_text(
+        "LOVIA_TEST_VAR2=fromfile\n", encoding="utf-8"
+    )
     monkeypatch.setenv("LOVIA_TEST_VAR2", "fromenv")
     monkeypatch.chdir(tmp_path)
     cli.load_env_files(None)
@@ -682,7 +684,7 @@ def test_help_is_grouped_and_plain_text() -> None:
     assert "``" not in help_text and "::" not in help_text
     # The examples and the precedence chain live in the epilog.
     assert "examples:" in help_text
-    assert "flag > environment > .lovia/config.env > ./.env" in help_text
+    assert "flag > environment > ./.lovia/config.env > ~/.lovia/config.env" in help_text
 
 
 def test_parser_error_points_at_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -796,45 +798,51 @@ def test_load_env_files_source_map_and_precedence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env").write_text(
-        "LOVIA_TEST_A=dotenv\nLOVIA_TEST_B=dotenv\n", encoding="utf-8"
+    (tmp_path / ".lovia").mkdir()
+    (tmp_path / ".lovia" / "config.env").write_text(
+        "LOVIA_TEST_A=file\nLOVIA_TEST_B=file\n", encoding="utf-8"
     )
     monkeypatch.setenv("LOVIA_TEST_A", "process")
     monkeypatch.delenv("LOVIA_TEST_B", raising=False)
     try:
         sources = cli.load_env_files(None)
-        # Process env beats ./.env.
+        # Process env beats every file layer.
         assert os.getenv("LOVIA_TEST_A") == "process"
-        assert os.getenv("LOVIA_TEST_B") == "dotenv"
+        assert os.getenv("LOVIA_TEST_B") == "file"
         assert "LOVIA_TEST_A" not in sources  # pre-existing -> plain env
-        assert sources["LOVIA_TEST_B"] == ".env"
+        assert sources["LOVIA_TEST_B"] == ".lovia/config.env"
     finally:
         os.environ.pop("LOVIA_TEST_B", None)
 
 
-def test_load_env_files_autoloads_lovia_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_load_env_files_project_beats_user_and_legacy_env_is_dead(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
 ) -> None:
-    """.lovia/config.env is auto-loaded and wins over a legacy ./.env."""
+    """Layering: ./.lovia wins over ~/.lovia; a generic ./.env is ignored."""
     monkeypatch.chdir(tmp_path)
+    (fake_home / ".lovia").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".lovia" / "config.env").write_text(
+        "LOVIA_TEST_C=user\nLOVIA_TEST_D=user\n", encoding="utf-8"
+    )
     (tmp_path / ".lovia").mkdir()
     (tmp_path / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_C=canonical\n", encoding="utf-8"
+        "LOVIA_TEST_C=project\n", encoding="utf-8"
     )
-    (tmp_path / ".env").write_text(
-        "LOVIA_TEST_C=legacy\nLOVIA_TEST_D=legacy\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("LOVIA_TEST_C", raising=False)
-    monkeypatch.delenv("LOVIA_TEST_D", raising=False)
+    (tmp_path / ".env").write_text("LOVIA_TEST_E=legacy\n", encoding="utf-8")
+    for var in ("LOVIA_TEST_C", "LOVIA_TEST_D", "LOVIA_TEST_E"):
+        monkeypatch.delenv(var, raising=False)
     try:
         sources = cli.load_env_files(None)
-        assert os.getenv("LOVIA_TEST_C") == "canonical"  # canonical file wins
-        assert os.getenv("LOVIA_TEST_D") == "legacy"  # legacy ./.env still read
-        assert sources["LOVIA_TEST_C"] == "config.env"
-        assert sources["LOVIA_TEST_D"] == ".env"
+        assert os.getenv("LOVIA_TEST_C") == "project"  # project layer wins
+        assert os.getenv("LOVIA_TEST_D") == "user"  # user layer fills the rest
+        assert os.getenv("LOVIA_TEST_E") is None  # ./.env no longer read
+        # Sources carry scope-distinct labels for the startup summary.
+        assert sources["LOVIA_TEST_C"] == ".lovia/config.env"
+        assert sources["LOVIA_TEST_D"] == "~/.lovia/config.env"
+        assert "LOVIA_TEST_E" not in sources
     finally:
-        os.environ.pop("LOVIA_TEST_C", None)
-        os.environ.pop("LOVIA_TEST_D", None)
+        for var in ("LOVIA_TEST_C", "LOVIA_TEST_D"):
+            os.environ.pop(var, None)
 
 
 def test_main_reports_missing_api_key_when_not_a_tty(
@@ -853,6 +861,76 @@ def test_main_reports_missing_api_key_when_not_a_tty(
     # The concise hint names the non-interactive channels (flags + env vars).
     for channel in ("--api-key", "OPENAI_API_KEY"):
         assert channel in err
+
+
+def test_main_setup_needs_a_tty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import io
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    monkeypatch.setattr(sys, "stdin", io.StringIO())
+    rc = cli.main(["--setup"])
+    assert rc == 2
+    assert "--setup needs an interactive terminal" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ["--setup", "--check"])
+def test_main_setup_and_check_reject_custom_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    # Guarded before the app target is even imported: the bogus module is fine.
+    rc = cli.main(["--app", "nosuchmod:agent", flag])
+    assert rc == 2
+    assert flag in capsys.readouterr().err
+
+
+def test_main_check_reports_and_exits_without_serving(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    monkeypatch.setattr(
+        cli.setup,
+        "validate_connection",
+        lambda conn, transport=None: (cli.setup.ValidationOutcome.OK, "HTTP 200"),
+    )
+
+    def _no_serve(*a: object, **k: object) -> None:
+        raise AssertionError("--check must exit before serving")
+
+    monkeypatch.setattr(cli, "serve", _no_serve)
+    rc = cli.main(["--check"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "configuration check" in out
+    assert "openai:gpt-x (env)" in out
+    assert "✓ endpoint reachable" in out
+    # Both config scopes are reported with presence.
+    assert "./.lovia/config.env (absent)" in out
+    assert "~/.lovia/config.env (absent)" in out
+
+
+def test_main_check_missing_config_is_exit_2_not_a_wizard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def _no_wizard(*a: object, **k: object) -> None:
+        raise AssertionError("--check must never prompt")
+
+    monkeypatch.setattr(cli.setup, "interactive_setup", _no_wizard)
+    rc = cli.main(["--check"])
+    assert rc == 2
+    assert "missing: model" in capsys.readouterr().out
 
 
 def test_main_configured_run_prints_summary_and_skips_wizard(

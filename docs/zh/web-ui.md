@@ -13,9 +13,12 @@ lovia web
 ```
 
 打开 `http://127.0.0.1:8000`。首次启动时，如果模型配置不完整，CLI 会逐项提示并验证
-端点。确认后可将配置保存到 `.lovia/config.env`，下次启动时自动读取；在支持 Unix
-权限的平台上，该文件仅限当前用户读写。CLI 还会在 `.lovia/` 中创建 `.gitignore`，
-避免配置和聊天数据被提交。
+端点。确认后可将配置保存到 `~/.lovia/config.env`——一次配置、任意目录可用，下次启动
+自动读取；在支持 Unix 权限的平台上，该文件仅限当前用户读写，所在的 `.lovia/` 目录也会
+写入 `.gitignore`，避免配置和聊天数据被提交。之后想改配置，运行 `lovia web --setup`：
+向导带着当前值重新过一遍（回车保留），保存时可选用户级或项目级
+（`./.lovia/config.env`）。想知道当前生效的配置来自哪里、端点是否可达，运行
+`lovia web --check`。
 
 CLI 创建的默认 Agent 会启用 `Todo`、`./.lovia/memory` 中的 Memory、时间与 HTTP 工具、
 Web 搜索、定时任务，以及以当前目录为根、采用 `coding` 模式的 Workspace。如果
@@ -108,9 +111,10 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 ## 常用 CLI 选项
 
 配置按以下优先级解析：命令行参数 > 当前进程的环境变量 > 配置文件 > 默认值。未指定
-`--env-file` 时，CLI 会依次加载 `.lovia/config.env` 和 `./.env`，前者在同名变量冲突时
-优先。显式指定 `--env-file` 后，只加载指定文件；该选项可重复使用，越先加载的文件
-优先级越高。
+`--env-file` 时，CLI 依次加载项目级 `./.lovia/config.env` 和用户级 `~/.lovia/config.env`，
+前者在同名变量冲突时优先（0.9.10 起不再读取通用的 `./.env`）。显式指定 `--env-file`
+后，只加载指定文件；该选项可重复使用，越先加载的文件优先级越高。启动摘要会标注每个值
+的来源；`--check` 打印同样的信息并探测端点，不启动服务。
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
@@ -126,7 +130,8 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启 |
 | — | `LOVIA_FOLLOWUP_MODEL` | Agent 自身的模型 |
-| `--env-file` | — | 未指定时依次读取 `.lovia/config.env`、`./.env` |
+| `--setup` / `--check` | — | 重跑配置向导 / 探测端点后退出 |
+| `--env-file` | — | 未指定时依次读取 `./.lovia/config.env`、`~/.lovia/config.env` |
 
 完整选项见 `lovia web --help`。帮助信息分为 model、agent、server 和 advanced 四组；
 上下文窗口位于 model 组，输出 token 上限、Provider 超时与重试、代理和日志级别位于

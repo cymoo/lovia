@@ -50,7 +50,8 @@ lovia/
     base.py         #   Plugin protocol (async setup + aclose) + PluginInstance
                     #   (tools/instructions/view_injectors/hooks/guardrails)
     todo.py         #   Todo plugin: todo_write + per-turn reminder injector
-    skills.py       #   Skills plugin + SkillCategory/SkillSource (SKILL.md disclosure)
+    skills/         #   Skills plugin + SkillCatalog/SkillSource (SKILL.md disclosure;
+                    #   live async sources — no reload seam, directory source re-scans)
     mcp.py          #   MCP plugin + MCP client (lazy; requires mcp package)
   eval/             # Declarative evals: Case + checks → evaluate() → Report
     checks.py       #   Check protocol (any (RunResult) -> CheckResult | bool)

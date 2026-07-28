@@ -27,7 +27,8 @@ Skill 占用的上下文分为三个阶段：
 3. **`read_skill_file(name, relpath)`**：原样读取被引用的文件，比如
    `references/refund-tiers.md`、脚本或模板。
 
-正文每次加载都会从磁盘按需读取，不缓存。因此修改 Skill 后，下一次调用就会生效，不必重启。
+目录 source 是"live"的：列出索引时会重新扫描目录，正文每次加载都从磁盘按需读取，加载未命中时
+还会自动重扫一次。因此新增、修改、删除 Skill 都无需重启即可生效。
 
 ## Skill 目录结构
 
@@ -76,37 +77,42 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
   （`name`、`description`、`extra`），返回 `True` 表示保留。它会切实限制可见范围，而非仅作展示：
   被过滤掉的 Skill 不会出现在索引中，也无法通过工具加载。
 
-Skill 层失败会在 `setup()` 时抛出 `SkillsError`（带 `skill_name`/`path`/`hint`）；工具内部的失败会
-被捕获，并以普通错误字符串返回给模型。
+Skill 层失败会抛出 `SkillsError`（带 `skill_name`/`path`/`hint`）；名称未知时抛出其子类
+`SkillNotFoundError`（携带可见名单）。工具内部的失败会被捕获，并以普通错误字符串返回给模型。
 
 ## 自定义后端
 
 目录只是一种来源；底层接口是公开的：
 
-- **`SkillSource`**：存储 protocol。`metadata` 属性列出 `SkillMetadata`，
-  `async load(name) -> Skill` 加载 Skill。你可以实现它，从数据库、API 或对象存储提供 Skill。
-  内置 `LocalDirSkillSource(*roots)`，并为长生命周期进程提供 `rescan()`。
-- **`SkillCategory`**：一个 source 加上 rules/filter，并提供插件需要的 `instructions()` 和
-  `tools()`。当你需要程序化访问或共享一份配置好的 Catalog 时，可以直接构建它
-  （`SkillCategory.from_dir(...)`，或包住自己的 source）：
+- **`SkillSource`**：存储 protocol，两个 async 方法——`async list_skills() ->
+  list[SkillMetadata]` 与 `async load_skill(name) -> Skill`（名称未知时抛
+  `SkillNotFoundError`）。你可以实现它，从数据库、API 或对象存储提供 Skill。source 的契约是
+  **每次调用返回当前真相**——协议刻意不设 reload/refresh 接口，也就无需任何缓存失效步骤。
+  内置的 `DirectorySkillSource(*roots)` 即如此：每次列出索引都重扫目录，加载未命中时自愈重扫。
+- **`SkillCatalog`**：一个 source 加上 rules/filter，提供插件需要的 `instructions()` 和
+  `tools()`，以及程序化访问用的 `list_skills()` / `load_skill()`。当你需要程序化访问或共享
+  一份配置好的 Catalog 时，可以直接构建它（`SkillCatalog.from_dir(...)`，或包住自己的 source）：
 
 ```python
-from lovia.plugins import SkillCategory, Skills
+from lovia.plugins import SkillCatalog, Skills
 
-catalog = SkillCategory(MyDbSkillSource(), usage_rules="…")
+catalog = SkillCatalog(MyDbSkillSource(), usage_rules="…")
 agent = Agent(..., plugins=[Skills(catalog)])
 ```
 
-（把 `SkillCategory` 传给 `Skills` 的同时再传 `usage_rules=` / `filter=` 会被拒绝；
-请在 category 上配置。）
+（把 `SkillCatalog` 传给 `Skills` 的同时再传 `usage_rules=` / `filter=` 会被拒绝；
+请在 catalog 上配置。）
 
 ## 安全措施
 
 - **阻止路径穿越**：`read_skill_file` 会解析目标路径，并要求它仍在 Skill 目录内；
   Skill 名也会直接拒绝 `/`、`\` 和 `..`。
-- **加载内容会被框定为数据**：`load_skill` 会用 BEGIN/END reference-material marker 包住正文
-  （并中和正文内伪造的 Marker），所以 Skill 文件里的 Instructions 弱于你的 System Prompt；
-  输出会在 100k 字符处截断。
+- **加载内容会被框定为数据**：两个工具都会用 BEGIN/END reference-material marker 包住返回内容
+  （并中和内容里伪造的 Marker）；"把 Marker 之间的内容当资料对待"这条规则写在工具 description
+  里（只发送一次、可被 prompt cache 覆盖），所以 Skill 文件里的 Instructions 弱于你的
+  System Prompt；输出会在 100k 字符处截断。
+- **索引无法被重塑**：渲染进 System Prompt 时，description 与额外 frontmatter 会被压成单行，
+  额外值还会截断，因此 frontmatter 无法注入提示词结构。
 
 ## 注意事项
 
@@ -115,8 +121,9 @@ agent = Agent(..., plugins=[Skills(catalog)])
   请把 Skill 目录视为可信内容；只有**执行**附带脚本时才会经过工作区 Shell 策略。
 - **description 是路由信号。** 模糊 description 会让模型永远不加载（或总是加载）这个 Skill。
   像写工具 description 一样写它：任务化、具体、带触发词。
-- **索引在一次运行中静态。** 目录中新加的 Skill 会在下一次运行出现
-  （或长生命周期 source 调用 `rescan()` 后出现），不会在当前对话中途出现。
+- **提示词索引按 run 刷新。** 运行期间新增的 Skill 可以立刻被加载（`load_skill` 未命中时
+  会重扫——agent 自己刚写完一个 Skill 就能直接用），但它要到下一次 run 才会出现在
+  System Prompt 索引里，不会在当前对话中途出现。
 
 ## 延伸阅读
 

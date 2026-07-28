@@ -28,8 +28,10 @@ Skills cost context in three deliberate steps:
 3. **`read_skill_file(name, relpath)`** — reads a referenced file
    (`references/refund-tiers.md`, a script, a template) verbatim.
 
-Bodies are read lazily from disk on every load — never cached — so editing
-a skill takes effect on the next call without restarting anything.
+The directory source is live: listings re-scan the roots, bodies are read
+lazily on every load, and a load for a just-created skill re-scans on the
+miss — so adding, editing, or removing skills takes effect without
+restarting anything.
 
 ## Anatomy of a skill
 
@@ -84,43 +86,53 @@ Skills("./skills", filter=lambda meta: "internal" not in meta.extra.get("tags", 
   keep it. It is a real boundary, not cosmetics: a filtered-out skill is
   invisible in the index *and* unloadable by the tools.
 
-Skill-layer failures raise `SkillsError` (with `skill_name`/`path`/`hint`)
-at setup time; inside the tools they are caught and returned to the model
+Skill-layer failures raise `SkillsError` (with `skill_name`/`path`/`hint`);
+unknown names raise its `SkillNotFoundError` subclass, which carries the
+visible names. Inside the tools both are caught and returned to the model
 as plain error strings instead.
 
 ## Custom backends
 
 Directories are one source; the seams underneath are public:
 
-- **`SkillSource`** — the storage protocol: a `metadata` property listing
-  `SkillMetadata`, and `async load(name) -> Skill`. Implement it to serve
-  skills from a database, an API, or an object store.
-  `LocalDirSkillSource(*roots)` is the built-in one (with a `rescan()` for
-  long-lived processes).
-- **`SkillCategory`** — a source plus its rules/filter, with the
-  `instructions()` and `tools()` the plugin uses. Build one directly
-  (`SkillCategory.from_dir(...)`, or wrap your source) when you want
-  programmatic access or to share a configured catalog:
+- **`SkillSource`** — the storage protocol: `async list_skills() ->
+  list[SkillMetadata]` plus `async load_skill(name) -> Skill` (raising
+  `SkillNotFoundError` for unknown names). Implement it to serve skills
+  from a database, an API, or an object store. Sources are expected to
+  return *current* truth on every call — there is deliberately no
+  reload/refresh seam to implement or invalidate.
+  `DirectorySkillSource(*roots)` is the built-in one: it re-scans its
+  directories per listing and self-heals on a load miss.
+- **`SkillCatalog`** — a source plus its rules/filter, with the
+  `instructions()` and `tools()` the plugin uses, and
+  `list_skills()`/`load_skill()` for programmatic access. Build one
+  directly (`SkillCatalog.from_dir(...)`, or wrap your source) when you
+  want that access or to share a configured catalog:
 
 ```python
-from lovia.plugins import SkillCategory, Skills
+from lovia.plugins import SkillCatalog, Skills
 
-catalog = SkillCategory(MyDbSkillSource(), usage_rules="…")
+catalog = SkillCatalog(MyDbSkillSource(), usage_rules="…")
 agent = Agent(..., plugins=[Skills(catalog)])
 ```
 
-(Passing a `SkillCategory` together with `usage_rules=`/`filter=` on
-`Skills` is rejected — configure them on the category.)
+(Passing a `SkillCatalog` together with `usage_rules=`/`filter=` on
+`Skills` is rejected — configure them on the catalog.)
 
 ## Safety measures
 
 - **Path traversal is blocked**: `read_skill_file` resolves the target and
   requires it to stay inside the skill's directory; skill names reject `/`,
   `\`, and `..` outright.
-- **Loaded content is framed as data**: `load_skill` wraps the body in
-  BEGIN/END reference-material markers (with body-embedded fakes
-  neutralized) so instructions in a skill file are weaker than your system
-  prompt, and output is truncated at 100k chars.
+- **Loaded content is framed as data**: both tools wrap what they return
+  in BEGIN/END reference-material markers (with embedded fakes
+  neutralized), and the tool descriptions — sent once, prompt-cacheable —
+  tell the model to treat that content as reference material. Instructions
+  in a skill file are therefore weaker than your system prompt, and output
+  is truncated at 100k chars.
+- **The index cannot be reshaped**: when rendered into the system prompt,
+  descriptions and extra frontmatter are collapsed to a single line and
+  extra values are capped, so frontmatter cannot inject prompt structure.
 
 ## Sharp edges
 
@@ -132,9 +144,10 @@ agent = Agent(..., plugins=[Skills(catalog)])
 - **Descriptions are the routing surface.** A vague description means the
   model loads the skill never (or always). Write it like a tool
   description: task-shaped, concrete, with trigger words.
-- **The index is static per run.** New skills added to a directory appear
-  on the next run (or after `rescan()` on a long-lived source), not
-  mid-conversation.
+- **The prompt index refreshes per run.** A skill added at runtime is
+  loadable immediately (`load_skill` re-scans on a miss — handy when the
+  agent just wrote the skill itself), but it appears in the system-prompt
+  index on the next run, not mid-conversation.
 
 ## See also
 

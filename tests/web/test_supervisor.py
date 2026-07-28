@@ -723,6 +723,67 @@ async def test_rewind_waits_out_every_run_still_winding_down() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rewind_waits_out_a_run_stopped_while_it_was_waiting() -> None:
+    """A tail that appears *during* the wait must extend it, not slip under it.
+
+    Draining is not a one-shot snapshot: the session is free the moment its
+    run is cancelled, so a second client can start — and stop — a replacement
+    while the rewind is still parked on the first one.
+    """
+    release_a, release_b = asyncio.Event(), asyncio.Event()
+
+    @tool
+    async def block_a() -> str:
+        """Block until the test releases it."""
+        await release_a.wait()
+        return "a"
+
+    @tool
+    async def block_b() -> str:
+        """Block until the test releases it."""
+        await release_b.wait()
+        return "b"
+
+    provider = ScriptedProvider(
+        [call("block_a", {}, call_id="c1"), call("block_b", {}, call_id="c2")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[block_a, block_b])
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store)
+    async with _client(app) as ac:
+        first, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "one", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 1)
+        await _kill(first)
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+
+        rewind = asyncio.create_task(
+            ac.post("/api/sessions/s1/rewind", json={"user_turn": 0})
+        )
+        await asyncio.sleep(0.1)
+        assert not rewind.done()  # parked on the first run
+
+        # Another tab sends and stops while the rewind is still waiting.
+        second, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "two", "session_id": "s1"}
+        )
+        await _wait_calls(provider, 2)
+        await _kill(second)
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+
+        release_a.set()  # what the rewind was originally waiting for
+        await asyncio.sleep(0.1)
+        assert not rewind.done()  # …but the newcomer can still write too
+        release_b.set()
+        res = await asyncio.wait_for(rewind, timeout=5)
+
+    assert res.status_code == 200, res.text
+    assert res.json()["entries"] == []
+    assert await store.session.load("s1") == []
+
+
+@pytest.mark.asyncio
 async def test_rewind_refuses_when_the_wind_down_outlasts_the_drain() -> None:
     """A tool that never returns must not hold the rewind request open forever.
 

@@ -799,13 +799,31 @@ class RunSupervisor:
         read a transcript missing its last user turn and get that turn appended
         back underneath them a moment later.
         """
-        tasks = [c.task for c in self._draining.get(session_id, ()) if c.task]
-        if not tasks:
-            return True
-        # asyncio.wait never cancels what it waits on (unlike wait_for), so a
-        # timeout here leaves the run winding down instead of killing it.
-        _done, pending = await asyncio.wait(tasks, timeout=timeout)
-        return not pending
+        deadline = time.monotonic() + timeout
+        # Re-read ``_draining`` after every wait: nothing stops a client from
+        # starting a replacement run (the session is free the moment its
+        # predecessor is cancelled) and stopping that one too while we sit
+        # here, and its tail can write just as late. Tracked by task so an
+        # already-awaited one is never waited on twice — the loop consumes new
+        # arrivals rather than spinning on settled ones.
+        awaited: set[asyncio.Task[None]] = set()
+        while True:
+            tasks = [
+                c.task
+                for c in self._draining.get(session_id, ())
+                if c.task is not None and c.task not in awaited
+            ]
+            if not tasks:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            # asyncio.wait never cancels what it waits on (unlike wait_for), so
+            # a timeout here leaves the run winding down instead of killing it.
+            _done, pending = await asyncio.wait(tasks, timeout=remaining)
+            if pending:
+                return False
+            awaited.update(tasks)
 
     def _evict(self, session_id: str, ctrl: RunController) -> None:
         if self._controllers.get(session_id) is ctrl:

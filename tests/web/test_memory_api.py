@@ -9,7 +9,6 @@ the 404 shape for agents without the plugin.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -85,23 +84,28 @@ def test_get_empty_notes(client: TestClient, mem: Memory) -> None:
     }
 
 
-async def test_get_reflects_plugin_writes(client: TestClient, mem: Memory) -> None:
+async def test_get_reflects_plugin_writes(
+    client: TestClient, mem: Memory, monkeypatch
+) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     await mem.remember("likes jazz")
-    line = f"- [{time.strftime('%Y-%m')}] likes jazz"
+    line = "- [2026-01] likes jazz"
     data = client.get("/api/memory", params={"agent": "bot"}).json()
     assert data["content"] == line
     assert data["used"] == len(line)
 
 
-def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> None:
+def test_put_normalizes_and_round_trips(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     body = "- uses  vim   daily\nstray prose line\n- USES VIM DAILY\n- speaks French\n"
     r = client.put("/api/memory", params={"agent": "bot"}, json={"content": body})
     assert r.status_code == 200
     data = r.json()
     # Canonical form: bullets only, whitespace collapsed, keyed dedup, and a
     # [YYYY-MM] stamp on lines the editor added without one.
-    month = time.strftime("%Y-%m")
-    assert data["content"] == f"- [{month}] uses vim daily\n- [{month}] speaks French"
+    assert data["content"] == "- [2026-01] uses vim daily\n- [2026-01] speaks French"
     assert data["used"] == len(data["content"])
 
     again = client.get("/api/memory", params={"agent": "bot"}).json()
@@ -160,6 +164,7 @@ def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> Non
         return plugin_mod._RunDigest(facts=["survives shutdown"], summary="")
 
     monkeypatch.setattr(plugin_mod, "_digest", slow_digest)
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
     bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])
     app = create_app({"bot": bot}, store=ChatStore.in_memory(), generate_titles=False)
@@ -167,4 +172,4 @@ def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> Non
     with TestClient(app) as client:  # the context manager runs the lifespan
         assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
     body = (tmp_path / "mem" / "MEMORY.md").read_text()
-    assert body == f"- [{time.strftime('%Y-%m')}] survives shutdown"
+    assert body == "- [2026-01] survives shutdown"

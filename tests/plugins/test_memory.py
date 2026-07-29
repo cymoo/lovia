@@ -128,14 +128,14 @@ def test_drop_fact_ignores_date_prefix() -> None:
     assert _drop_fact(["[2026-01] x"], "[2026-02]") == ["[2026-01] x"]
 
 
-def test_strip_date_fact_key_and_stamp() -> None:
+def test_strip_date_fact_key_and_stamp(monkeypatch) -> None:
     assert _strip_date("[2026-07] likes jazz") == "likes jazz"
     assert _strip_date("no date here") == "no date here"
     assert _strip_date("[199-07] malformed stays") == "[199-07] malformed stays"
     assert _fact_key("[2026-07]  Likes   Jazz ") == "likes jazz"
     assert _fact_key("[2026-07]") == ""
-    month = time.strftime("%Y-%m")
-    assert _stamp("likes jazz") == f"[{month}] likes jazz"
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
+    assert _stamp("likes jazz") == "[2026-01] likes jazz"
     assert _stamp("[2025-01] likes jazz") == "[2025-01] likes jazz"  # kept
 
 
@@ -174,7 +174,8 @@ async def test_notes_store_tolerates_hand_edits(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_add_facts_normalizes_and_dedups(tmp_path) -> None:
+async def test_add_facts_normalizes_and_dedups(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     mem = Memory(tmp_path / "mem", index=None)
     assert await mem._add_facts(["I prefer tabs.  "]) == 1
     assert await mem._add_facts(["  I prefer   tabs. "]) == 0  # whitespace dup
@@ -183,9 +184,8 @@ async def test_add_facts_normalizes_and_dedups(tmp_path) -> None:
     assert await mem._add_facts(["   "]) == 0  # blank → ignored
     facts = await mem._notes_store().load()
     assert _bare(facts) == ["I prefer tabs.", "My name is Alice"]
-    # Everything written got the current month's stamp.
-    month = time.strftime("%Y-%m")
-    assert all(f.startswith(f"[{month}] ") for f in facts)
+    # Everything written got stamped with the (frozen) current month.
+    assert all(f.startswith("[2026-01] ") for f in facts)
 
 
 async def test_add_facts_stamps_and_dedups_across_months(tmp_path) -> None:
@@ -221,14 +221,14 @@ async def test_public_remember_and_forget(tmp_path) -> None:
     assert await mem._notes_store().load() == []
 
 
-async def test_notes_body_and_replace_notes(tmp_path) -> None:
+async def test_notes_body_and_replace_notes(tmp_path, monkeypatch) -> None:
     # The editor seam: read the canonical body, replace it wholesale with the
     # same normalization/dedup policy every other Notes write applies.
     mem = Memory(tmp_path / "mem", index=None)
-    month = time.strftime("%Y-%m")
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     assert await mem.notes_body() == ""
     await mem.remember("likes jazz")
-    assert await mem.notes_body() == f"- [{month}] likes jazz"
+    assert await mem.notes_body() == "- [2026-01] likes jazz"
 
     stored = await mem.replace_notes(
         "# a heading, ignored\n"
@@ -239,7 +239,7 @@ async def test_notes_body_and_replace_notes(tmp_path) -> None:
         "- \n"  # empty fact → ignored
         "- [2025-03] speaks French\n"  # already dated → stamp kept
     )
-    assert stored == f"- [{month}] uses vim daily\n- [2025-03] speaks French"
+    assert stored == "- [2026-01] uses vim daily\n- [2025-03] speaks French"
     assert await mem.notes_body() == stored
     assert _bare(await mem._notes_store().load()) == ["uses vim daily", "speaks French"]
 
@@ -650,6 +650,32 @@ async def test_apply_digest_is_one_save(tmp_path) -> None:
     assert (dropped, added) == (1, 1)
     assert notes.saves == 1
     assert _bare(notes.facts) == ["user prefers uv"]
+
+
+async def test_apply_digest_stale_survives_duplicate_lines(tmp_path) -> None:
+    # Hand-edited Notes can hold identical duplicate lines (_parse_facts does
+    # not dedup); retiring one of them must drop a single copy, not derail
+    # the whole application.
+    class ListNotes:
+        def __init__(self) -> None:
+            self.facts = [
+                "[2026-01] user prefers pip",
+                "[2026-01] user prefers pip",
+            ]
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.facts = list(facts)
+
+    notes = ListNotes()
+    mem = Memory(tmp_path / "mem", notes=notes, index=None)
+    dropped, added = await mem._apply_digest(
+        _RunDigest(facts=["user prefers uv"], stale=["user prefers pip"])
+    )
+    assert (dropped, added) == (1, 1)
+    assert _bare(notes.facts) == ["user prefers pip", "user prefers uv"]
 
 
 async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> None:

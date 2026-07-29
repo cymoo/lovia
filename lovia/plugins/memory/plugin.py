@@ -125,11 +125,16 @@ def _fact_key(fact: str) -> str:
     return _normalize_fact(_strip_date(fact)).lower()
 
 
+def _current_month() -> str:
+    """Today as ``YYYY-MM`` — the one seam tests freeze for date-stable asserts."""
+    return time.strftime("%Y-%m")
+
+
 def _stamp(fact: str) -> str:
     """Prefix ``fact`` with the current ``[YYYY-MM]`` unless it carries one."""
     if _DATE_PREFIX.match(fact):
         return fact
-    return f"[{time.strftime('%Y-%m')}] {fact}"
+    return f"[{_current_month()}] {fact}"
 
 
 def _parse_facts(body: str) -> list[str]:
@@ -453,7 +458,7 @@ async def _dream(
     # Today's date anchors newer-wins and lets undated legacy lines get
     # stamped; this is a one-shot side-query, so no prompt-cache concerns.
     prompt = (
-        f"Today is {time.strftime('%Y-%m')}. Rewrite these notes to fit "
+        f"Today is {_current_month()}. Rewrite these notes to fit "
         f"within roughly {max_chars} characters total.\n\n{body}"
     )
     result = await Runner.run(agent, prompt)
@@ -720,7 +725,11 @@ class Memory:
                 kept = _drop_fact(facts, target)
                 if len(kept) == len(facts):
                     continue
-                gone = next(f for f in facts if f not in kept)
+                # kept is facts minus one element with order preserved, so the
+                # dropped one sits at the first divergence (or at the tail).
+                # A membership scan would be wrong here: hand-edited Notes may
+                # hold identical duplicate lines.
+                gone = next((f for f, k in zip(facts, kept) if f != k), facts[-1])
                 logger.info("memory: dropped stale note: %s", gone)
                 facts = kept
                 dropped += 1

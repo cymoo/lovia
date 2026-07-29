@@ -82,6 +82,7 @@ const MESSAGES = {
     'toast.backgroundRun': '后台任务',
     'toast.pathCopied': '已复制路径',
     'toast.memorySaved': '记忆已保存',
+    'toast.memoryDreamed': '记忆已整理：{before} → {after} 条',
     'toast.unauthorized': '未授权——请刷新页面并输入服务器令牌',
     // ---- auth
     'auth.tokenPrompt': '此服务器需要访问令牌（见服务器启动日志）：',
@@ -191,6 +192,10 @@ const MESSAGES = {
     'memory.editorLabel': '记忆内容',
     'memory.placeholder': '- 用户偏好 …',
     'memory.saveFailed': '无法保存记忆',
+    'memory.dream': '整理',
+    'memory.dreaming': '整理中…',
+    'memory.dreamedAt': '上次整理 {when}',
+    'memory.dreamFailed': '整理失败',
     // ---- schedules
     'sched.title': '定时任务',
     'sched.promptPlaceholder': '按计划运行的 prompt…',
@@ -371,6 +376,7 @@ const EN = {
   'toast.backgroundRun': 'Background run',
   'toast.pathCopied': 'Path copied',
   'toast.memorySaved': 'Memory saved',
+  'toast.memoryDreamed': 'Memory tidied: {before} → {after} notes',
   'toast.unauthorized': 'Unauthorized — reload and enter the server token',
   'auth.tokenPrompt':
     'This server requires an access token (see the server startup log):',
@@ -475,6 +481,10 @@ const EN = {
   'memory.editorLabel': 'Memory notes',
   'memory.placeholder': '- The user prefers …',
   'memory.saveFailed': 'Couldn’t save memory',
+  'memory.dream': 'Tidy up',
+  'memory.dreaming': 'Tidying…',
+  'memory.dreamedAt': 'last tidied {when}',
+  'memory.dreamFailed': 'Couldn’t tidy memory',
   'sched.title': 'Scheduled runs',
   'sched.promptPlaceholder': 'Prompt to run on schedule…',
   'sched.every': 'Every',

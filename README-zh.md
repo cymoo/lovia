@@ -408,7 +408,8 @@ agent = Agent(
 ### 记忆
 
 跨对话的长期记忆：常驻提示词的 **Notes** 加可检索的 **Archive**。零配置可用，
-也可以一次加一个参数逐步升级：
+自带整理能力（周期性的 **dream** 会合并重复、清理过期事实），也可以一次加一个
+参数逐步升级：
 
 ```python
 from lovia import Agent, Memory

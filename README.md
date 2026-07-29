@@ -429,7 +429,9 @@ contributions.
 ### Memory
 
 Long-term memory across conversations — always-in-prompt **Notes** plus a
-searchable **Archive**, zero-config, upgradeable one argument at a time:
+searchable **Archive**, zero-config, self-tidying (a periodic **dream**
+pass merges duplicates and prunes stale facts), upgradeable one argument
+at a time:
 
 ```python
 from lovia import Agent, Memory

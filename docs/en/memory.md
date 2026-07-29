@@ -29,7 +29,9 @@ covers the lexical gaps (below).
 
 ```
 .lovia/memory/
-├── MEMORY.md      # hot tier: one `- fact` per line — human-editable
+├── MEMORY.md      # hot tier: one `- [YYYY-MM] fact` per line — human-editable
+├── MEMORY.md.bak  # the previous Notes, written before each dream (one-level undo)
+├── .dreamed       # mtime marker: when the last dream ran
 ├── archive.db     # cold tier: keyword index of past conversations
 └── vectors.db     # cold tier: vector arm (only with embedder=)
 ```
@@ -48,13 +50,16 @@ Three paths, from automatic to manual:
 
 1. **Auto-curation** (`auto_curate=True`, default). At each run's end
    (`RunCompleted`), one digest call over the complete transcript promotes
-   the few durable facts into Notes and writes a self-contained episode
-   summary into the archive — where it searches far better than raw chat
-   fragments. Raw user/assistant messages are indexed too; document ids are
-   deterministic (`run_id:seq`), so a replayed run upserts instead of
-   duplicating.
-2. **The model, mid-run** — `remember` / `forget` tools, guided by injected
-   instructions ("save durable facts proactively").
+   the few durable facts into Notes — date-stamped `[YYYY-MM]`, admission
+   is deliberately strict (no re-derivable state, no one-off task details,
+   most runs yield nothing) — retires existing notes the conversation
+   disproved, and writes a self-contained episode summary into the archive,
+   where it searches far better than raw chat fragments. Raw user/assistant
+   messages are indexed too; document ids are deterministic (`run_id:seq`),
+   so a replayed run upserts instead of duplicating.
+2. **The model, mid-run** — `remember` / `forget` tools, reserved for
+   explicit asks and corrections ("remember that I…"); everything else
+   rides the run-end digest. Detail lives in the archive, not in Notes.
 3. **Your code** — the same verbs are public methods, no model in the loop:
 
    ```python
@@ -68,9 +73,30 @@ Three paths, from automatic to manual:
    The web UI's sidebar Memory editor (`GET`/`PUT /api/memory`) is built on
    that last pair.
 
-Notes stay within `notes_budget` (default 5000 chars — a meter is shown to
-the model): when the budget overflows after a digest, one consolidation
-call merges and rewrites the list to fit.
+## Dreaming
+
+Any always-append memory bloats: near-duplicates pile up, corrections
+coexist with what they corrected, one-off details fossilize. So the plugin
+periodically **dreams** — one model call rewrites the whole list: merging
+near-duplicates into one well-phrased note, resolving contradictions
+(newer wins, by the `[YYYY-MM]` stamps), dropping event-like or expired
+entries — while never inventing a fact and never dropping your explicit
+rules and preferences.
+
+Three triggers:
+
+- **Cadence** — every `dream_every_days` (default 3), checked at run end
+  and skipped while Notes haven't changed since the last dream. The state
+  is just the mtime of the `.dreamed` marker.
+- **Budget overflow** — Notes past `notes_budget` (default 5000 chars; the
+  model sees a meter) dream immediately.
+- **On demand** — `await mem.dream()` returns `(before, after)` note
+  counts. Wire it to a cleanup button, or run it once to tidy a bloated
+  legacy file.
+
+Before each rewrite the previous body lands in `MEMORY.md.bak` — a
+one-level undo. Deeper history is what git and the archive are for: the
+archive keeps the conversations every note came from.
 
 By default curation runs **inline** — when `Runner.run` returns, memory is
 settled. A long-lived host passes `curate_in_background=True` so the run's
@@ -139,15 +165,16 @@ a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
 | `notes` | `None` → `MEMORY.md` file store | hot-tier backend |
 | `index` | default keyword index | cold-tier backend; `None` disables the tier and the `recall` tool |
 | `embedder` | `None` | adds the vector arm to the default index |
-| `auto_curate` | `True` | run-end digest: facts → Notes, episode summary → archive; consolidates over-budget Notes |
+| `auto_curate` | `True` | run-end digest: facts → Notes (disproved notes retired), episode summary → archive |
 | `curate_in_background` | `False` | don't hold the run's completion for curation; pair with `drain()` |
 | `expand_query` | `"auto"` | LLM query expansion; auto = only for the lexical-only default index |
 | `summarize_recall` | `True` | `recall` returns a model-written summary of the hits |
 | `recall_k` | `5` | hits retrieved per recall |
-| `notes_budget` | `5000` | char budget for Notes — the prompt meter and consolidation trigger |
+| `notes_budget` | `5000` | char budget for Notes — the prompt meter and the dream's overflow trigger |
+| `dream_every_days` | `3` | cadence for the periodic dream; `None` keeps only the overflow trigger |
 | `model` | host agent's model | model for the curation/recall side-queries |
 
-The side-queries (digest, consolidation, expansion, summarization) dogfood
+The side-queries (digest, dream, expansion, summarization) dogfood
 `Runner.run` with a tool-less, plugin-less sub-agent at temperature 0 — so
 they reuse your provider chain and **cannot recurse** (the sub-agent has no
 Memory plugin). Because lovia's transcript is durable and
@@ -160,9 +187,12 @@ Memory plugin). Because lovia's transcript is durable and
   They must be safe for concurrent use, and the plugin never closes them;
   their lifecycle belongs to whoever created them. (Notes read-modify-write
   is serialized by an internal lock; SQLite stores serialize internally.)
-- **Curation costs a model call per run** (two when Notes overflow). On
+- **Curation costs a model call per run** (two when a dream is due). On
   high-volume, low-value traffic, set `auto_curate=False` and rely on the
   `remember` tool, or point `model=` at a cheaper model.
+- **Dream state lives under `root`** — the `.dreamed` cadence marker and
+  the `MEMORY.md.bak` backup are plain files there, even when `notes=` is
+  a custom store (the backup then holds an export of the store's facts).
 - **Background curation is best-effort.** A process that exits without
   `drain()` can lose the last run's curation — acceptable by design (the
   transcript is still in the session), but surprising if you expected

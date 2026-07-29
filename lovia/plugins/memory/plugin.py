@@ -3,11 +3,14 @@
 ``Memory`` gives an agent a long-term memory that survives across runs and
 sessions, built from two tiers and three verbs the model already understands:
 
-* **Notes** (the *hot* tier) — a tiny, char-budgeted list of facts that is
-  **always injected** into the system prompt: the user's stable preferences,
-  durable facts, important context. The model curates it with
+* **Notes** (the *hot* tier) — a tiny, char-budgeted list of date-stamped
+  facts that is **always injected** into the system prompt: the user's stable
+  preferences, durable facts, important context. The model curates it with
   ``remember(fact)`` / ``forget(fact)``, and (when ``auto_curate``) the plugin
-  promotes durable facts into it automatically at the end of each run.
+  promotes durable facts into it — and retires disproved ones — automatically
+  at the end of each run. A periodic *dream* pass (:meth:`Memory.dream`)
+  merges near-duplicates, resolves contradictions (newer wins), and prunes
+  stale entries, so Notes stay small and current instead of only growing.
 * **Archive** (the *cold* tier) — a searchable index of past conversations,
   pulled in on demand via ``recall(query)``.
 
@@ -48,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -86,6 +90,9 @@ _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
 _VECTORS_FILENAME = "vectors.db"
 _DEFAULT_NOTES_BUDGET = 5000
+_DEFAULT_DREAM_EVERY_DAYS = 3.0
+_DREAMED_FILENAME = ".dreamed"
+_BACKUP_FILENAME = "MEMORY.md.bak"
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +102,39 @@ _DEFAULT_NOTES_BUDGET = 5000
 # ---------------------------------------------------------------------------
 
 
+_DATE_PREFIX = re.compile(r"^\[\d{4}-\d{2}\]\s*")
+
+
 def _normalize_fact(fact: str) -> str:
     """Collapse a fact to a single trimmed line (notes are one fact per line)."""
     return " ".join(fact.split())
+
+
+def _strip_date(fact: str) -> str:
+    """The fact without its ``[YYYY-MM]`` prefix (if any)."""
+    return _DATE_PREFIX.sub("", fact)
+
+
+def _fact_key(fact: str) -> str:
+    """Comparison key for dedup and matching: date-stripped, normalized, lowered.
+
+    Keyed comparison is what makes date stamps free: a replayed digest or a
+    hand-pasted note never duplicates an existing fact just because the
+    month moved on.
+    """
+    return _normalize_fact(_strip_date(fact)).lower()
+
+
+def _current_month() -> str:
+    """Today as ``YYYY-MM`` — the one seam tests freeze for date-stable asserts."""
+    return time.strftime("%Y-%m")
+
+
+def _stamp(fact: str) -> str:
+    """Prefix ``fact`` with the current ``[YYYY-MM]`` unless it carries one."""
+    if _DATE_PREFIX.match(fact):
+        return fact
+    return f"[{_current_month()}] {fact}"
 
 
 def _parse_facts(body: str) -> list[str]:
@@ -118,20 +155,45 @@ def _format_facts(facts: list[str]) -> str:
 
 
 def _drop_fact(facts: list[str], target: str) -> list[str]:
-    """Remove the best match for ``target`` (exact → case-insensitive → substring)."""
+    """Remove the best match for ``target`` (exact → keyed → substring).
+
+    All fuzzy tiers compare via :func:`_fact_key`, so a date prefix on either
+    side never blocks a match.
+    """
     if target in facts:
         out = list(facts)
         out.remove(target)
         return out
-    low = target.lower()
+    key = _fact_key(target)
+    if not key:
+        return list(facts)
     for i, f in enumerate(facts):
-        if f.lower() == low:
+        if _fact_key(f) == key:
             return facts[:i] + facts[i + 1 :]
     for i, f in enumerate(facts):
-        fl = f.lower()
-        if low in fl or fl in low:
+        fk = _fact_key(f)
+        if fk and (key in fk or fk in key):
             return facts[:i] + facts[i + 1 :]
     return list(facts)
+
+
+def _merge_new(facts: list[str], new: list[str]) -> int:
+    """Append the facts from ``new`` not already in ``facts``, stamped; in place.
+
+    The shared write policy: normalize, drop blanks and keyed duplicates,
+    date-stamp anything undated. Returns the number appended.
+    """
+    seen = {_fact_key(f) for f in facts}
+    added = 0
+    for fact in new:
+        norm = _normalize_fact(fact)
+        key = _fact_key(norm)
+        if not key or key in seen:
+            continue
+        facts.append(_stamp(norm))
+        seen.add(key)
+        added += 1
+    return added
 
 
 def _meter(used: int, total: int) -> str:
@@ -239,9 +301,16 @@ class _RunDigest(BaseModel):
     facts: list[str] = Field(
         default_factory=list,
         description=(
-            "New durable facts worth remembering long-term (stable preferences, "
-            "corrections, lasting details about the user or project). Empty if "
-            "there is nothing new worth keeping."
+            "New durable facts worth keeping long-term: stable preferences, "
+            "standing rules, corrections, lasting details about the user or "
+            "their projects. Most runs have none — prefer empty over marginal."
+        ),
+    )
+    stale: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Existing notes this conversation revealed to be wrong, obsolete, "
+            "or superseded — quoted closely enough to match. Usually empty."
         ),
     )
     summary: str = Field(
@@ -254,10 +323,10 @@ class _RunDigest(BaseModel):
     )
 
 
-class _ConsolidatedNotes(BaseModel):
+class _DreamedNotes(BaseModel):
     facts: list[str] = Field(
         default_factory=list,
-        description="The rewritten, deduplicated, shorter set of notes.",
+        description="The full rewritten notes: merged, tidied, dated lines.",
     )
 
 
@@ -269,27 +338,50 @@ class _ExpandedQuery(BaseModel):
 
 
 _DIGEST_INSTRUCTIONS = (
-    "You curate an agent's long-term memory. From a conversation, produce two "
-    "things.\n"
-    "1. facts: only facts that will still matter in future, unrelated sessions "
-    "— the user's stable preferences, corrections they made, and durable facts "
-    "about them or their project. Ignore transient task details, one-off "
-    "requests, and anything already covered by the current notes. Each fact is "
-    "one short, self-contained line in the conversation's dominant language. "
-    "If nothing qualifies, return an empty list.\n"
-    "2. summary: a few sentences capturing what the conversation was about — "
+    "You curate an agent's long-term memory. From a conversation, produce "
+    "three things.\n"
+    "1. facts: new durable facts that will still matter in future, unrelated "
+    "sessions — the user's stable preferences and standing rules, corrections "
+    "they made, and lasting details about them, their environment, or their "
+    'projects. Record the conclusion, not the event ("user prefers X", not '
+    '"user did X today"). The test: would this change the agent\'s behavior '
+    "in a fresh session a month from now? Never record: state re-derivable "
+    "from files or a quick command (directory listings, config values, "
+    "versions); one-off task outputs and their details (logs, counts, sizes); "
+    "open questions or things to verify later; permissions granted for the "
+    "task at hand; sensitive personal details (health, relationships, "
+    "finances) unless the user explicitly asked to remember them. Most "
+    "conversations yield nothing — prefer an empty list over a marginal fact, "
+    "and more than three facts is almost never right. Each fact is one short, "
+    "self-contained line in the conversation's dominant language.\n"
+    "2. stale: existing notes that this conversation showed to be wrong, "
+    "obsolete, or superseded by a new fact — quoted from the current notes "
+    "closely enough to identify them. Empty otherwise.\n"
+    "3. summary: a few sentences capturing what the conversation was about — "
     "topics, decisions, and outcomes — written to be found and understood on "
     "its own later, in the conversation's dominant language. Quote names, "
-    "numbers, and identifiers exactly as they appeared. Empty if the "
-    "conversation is trivial (greetings, tests, nothing worth recalling)."
+    "numbers, and identifiers exactly as they appeared: detail belongs here, "
+    "not in facts. Empty if the conversation is trivial (greetings, tests, "
+    "nothing worth recalling)."
 )
 
-_CONSOLIDATE_INSTRUCTIONS = (
-    "You compress an agent's long-term notes. Merge duplicates and near-"
-    "duplicates, drop the least important entries, and keep durable preferences "
-    "and facts. Preserve meaning and keep each note in its original language; "
-    "be concise. Return the rewritten notes as a list of short, self-contained "
-    "lines that fit the requested budget."
+_DREAM_INSTRUCTIONS = (
+    "You maintain an agent's long-term notes while it sleeps. Merge "
+    "duplicates and near-duplicates into one well-phrased note each; when "
+    "two notes conflict, keep the newer one — notes carry [YYYY-MM] dates, "
+    "and a merged note keeps the newest date (stamp today's on any undated "
+    "line you keep). Drop notes that record one-off events, task logs, or "
+    "agent-produced deliverables (a plan, a report, a schedule); state "
+    "better re-derived than remembered (directory contents, install "
+    "details); permissions that were scoped to a single task; incidental "
+    "personal observations the user never asked to keep (health, mood); "
+    "open questions and unconfirmed leads parked as notes; and "
+    "notes that have plainly expired. Rewrite the survivors at the right "
+    "altitude: the lasting conclusion, not the play-by-play. Never invent a "
+    "fact that is not in the notes, and never drop the user's explicit rules "
+    "and preferences, however old. Keep each note one short, self-contained, "
+    "dated line in its original language. Return the full rewritten list, "
+    "fitting the requested budget."
 )
 
 _EXPAND_INSTRUCTIONS = (
@@ -333,17 +425,21 @@ async def _digest(
         settings=ModelSettings(temperature=0),
     )
     prompt = (
-        f"## Current notes (do NOT repeat these in facts)\n"
+        f"## Current notes (the source for stale; do NOT repeat them in facts)\n"
         f"{current_notes or '(empty)'}\n\n"
         f"## Conversation\n{convo}"
     )
     result = await Runner.run(agent, prompt)
     digest = cast(_RunDigest, result.output)
-    digest.facts = [n for f in digest.facts if (n := _normalize_fact(f))]
+    # Stamping is the code's job: a model echoing a date it saw in the
+    # current notes would mislabel a *new* fact as old and skew the dream's
+    # newer-wins. Stale entries keep their quotes — matching strips anyway.
+    digest.facts = [n for f in digest.facts if (n := _normalize_fact(_strip_date(f)))]
+    digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
     return digest
 
 
-async def _consolidate(
+async def _dream(
     body: str,
     max_chars: int,
     model: "str | Provider",
@@ -353,15 +449,17 @@ async def _consolidate(
     from ...runner import Runner
 
     agent: Agent[Any] = Agent(
-        name="memory-consolidator",
+        name="memory-dream",
         model=model,
-        instructions=_CONSOLIDATE_INSTRUCTIONS,
-        output_type=_ConsolidatedNotes,
+        instructions=_DREAM_INSTRUCTIONS,
+        output_type=_DreamedNotes,
         settings=ModelSettings(temperature=0),
     )
+    # Today's date anchors newer-wins and lets undated legacy lines get
+    # stamped; this is a one-shot side-query, so no prompt-cache concerns.
     prompt = (
-        f"Rewrite these notes to fit within roughly {max_chars} characters "
-        f"total.\n\n{body}"
+        f"Today is {_current_month()}. Rewrite these notes to fit "
+        f"within roughly {max_chars} characters total.\n\n{body}"
     )
     result = await Runner.run(agent, prompt)
     facts = getattr(result.output, "facts", []) or []
@@ -450,8 +548,9 @@ def _build_instructions(has_index: bool) -> str:
             "refers to something earlier or you need context not in your notes."
         )
     parts.append(
-        "Save durable facts proactively, but don't record transient task "
-        "details or things that won't matter later."
+        "When the user asks you to remember something, or corrects a wrong "
+        "assumption, call `remember` immediately; everything else is curated "
+        "automatically when the run ends — never record transient task details."
     )
     return "\n".join(parts)
 
@@ -493,9 +592,9 @@ class Memory:
 
     auto_curate: bool = True
     """When ``True`` (default), one model call at run end promotes durable
-    facts into Notes and writes an episode summary into the archive (plus a
-    consolidation call when Notes outgrow their budget). ``False`` = purely
-    manual memory."""
+    facts into Notes (dropping notes the run disproved) and writes an episode
+    summary into the archive. ``False`` = purely manual memory. The dream
+    pass is independent of this flag."""
 
     curate_in_background: bool = False
     """Run the end-of-run curation as a background task instead of inline.
@@ -521,8 +620,15 @@ class Memory:
     """Number of hits ``recall`` retrieves."""
 
     notes_budget: int = _DEFAULT_NOTES_BUDGET
-    """Char budget for Notes; exceeding it triggers consolidation and is
-    what the meter in the prompt reports."""
+    """Char budget for Notes; overflowing it triggers an immediate dream and
+    is what the meter in the prompt reports."""
+
+    dream_every_days: float | None = _DEFAULT_DREAM_EVERY_DAYS
+    """Cadence for the periodic dream — the maintenance pass that merges
+    near-duplicates, resolves contradictions (newer wins, by date stamp), and
+    drops stale or event-like notes. Between cadences a budget overflow still
+    dreams immediately; ``None`` keeps only that overflow trigger. Cadence
+    state is the mtime of a ``.dreamed`` marker file under ``root``."""
 
     model: "str | Provider | None" = None
     """Model for the curation side-queries. ``None`` (default) reuses the
@@ -595,22 +701,42 @@ class Memory:
         return f"NOTES {meter}\n{body}"
 
     async def _add_facts(self, new: list[str]) -> int:
-        """Merge normalized facts into Notes (case-insensitive dedup)."""
+        """Merge normalized facts into Notes (date-stamped, keyed dedup)."""
         notes = self._notes_store()
         async with self._notes_lock:
             facts = await notes.load()
-            seen = {f.lower() for f in facts}
-            added = 0
-            for fact in new:
-                norm = _normalize_fact(fact)
-                if not norm or norm.lower() in seen:
-                    continue
-                facts.append(norm)
-                seen.add(norm.lower())
-                added += 1
+            added = _merge_new(facts, new)
             if added:
                 await notes.save(facts)
         return added
+
+    async def _apply_digest(self, digest: _RunDigest) -> tuple[int, int]:
+        """Apply a run digest to Notes atomically: drop stale, then add facts.
+
+        One lock cycle, one save — a supersession (stale old + new fact) can
+        never be torn apart by a concurrent write landing in between.
+        Returns ``(dropped, added)``.
+        """
+        notes = self._notes_store()
+        async with self._notes_lock:
+            facts = await notes.load()
+            dropped = 0
+            for target in digest.stale:
+                kept = _drop_fact(facts, target)
+                if len(kept) == len(facts):
+                    continue
+                # kept is facts minus one element with order preserved, so the
+                # dropped one sits at the first divergence (or at the tail).
+                # A membership scan would be wrong here: hand-edited Notes may
+                # hold identical duplicate lines.
+                gone = next((f for f, k in zip(facts, kept) if f != k), facts[-1])
+                logger.info("memory: dropped stale note: %s", gone)
+                facts = kept
+                dropped += 1
+            added = _merge_new(facts, digest.facts)
+            if dropped or added:
+                await notes.save(facts)
+        return dropped, added
 
     async def remember(self, fact: str) -> bool:
         """Add one durable fact to Notes; ``False`` if it was already there.
@@ -652,16 +778,12 @@ class Memory:
         The bulk counterpart to :meth:`remember` / :meth:`forget`, for editor
         flows (the web UI, imports): ``body`` uses the same ``- fact`` per line
         form :meth:`notes_body` returns. Non-bullet lines are ignored, facts
-        are normalized and case-insensitively deduplicated — the same policy
-        every other Notes write applies. Returns the canonical body stored.
+        are normalized, deduplicated by key, and date-stamped when undated —
+        the same policy every other Notes write applies. Returns the
+        canonical body stored.
         """
         facts: list[str] = []
-        seen: set[str] = set()
-        for fact in _parse_facts(body):
-            norm = _normalize_fact(fact)
-            if norm and norm.lower() not in seen:
-                facts.append(norm)
-                seen.add(norm.lower())
+        _merge_new(facts, _parse_facts(body))
         async with self._notes_lock:
             await self._notes_store().save(facts)
         return _format_facts(facts)
@@ -805,12 +927,17 @@ class Memory:
             except Exception:
                 logger.warning("memory: archive ingest failed", exc_info=True)
 
-        if digest and digest.facts:
+        if digest and (digest.facts or digest.stale):
             try:
-                await self._add_facts(digest.facts)
-                await self._consolidate_if_over_budget(ctx)
+                await self._apply_digest(digest)
             except Exception:
                 logger.warning("memory: notes curation failed", exc_info=True)
+        # Outside the digest guard on purpose: manual remember/forget traffic
+        # and hand edits deserve maintenance too, auto_curate or not.
+        try:
+            await self._dream_if_due(ctx)
+        except Exception:
+            logger.warning("memory: dream failed", exc_info=True)
 
     def _run_docs(
         self,
@@ -849,21 +976,107 @@ class Memory:
             )
         return docs
 
-    async def _consolidate_if_over_budget(self, ctx: RunContext[Any]) -> None:
-        notes = self._notes_store()
-        # Hold the lock across the model call: consolidation rewrites the whole
-        # list, so a remember/forget landing between read and save would be
-        # silently overwritten. The contention is fine — consolidation is rare
-        # (budget breach at run end) and a blocked tool just waits it out.
-        async with self._notes_lock:
-            body = _format_facts(await notes.load())
-            if len(body) <= self.notes_budget:
-                return
-            facts = await _consolidate(
-                body, self.notes_budget, self._resolve_model(ctx)
+    # -- dreaming: periodic notes maintenance --------------------------------
+
+    async def dream(self, model: "str | Provider | None" = None) -> tuple[int, int]:
+        """Tidy Notes now; returns ``(before, after)`` note counts.
+
+        The dream pass merges near-duplicates into one well-phrased note,
+        resolves contradictions (newer wins, by date stamp), drops event-like
+        or expired notes, and rewrites the survivors within ``notes_budget``.
+        It runs by itself on the ``dream_every_days`` cadence and immediately
+        when Notes overflow their budget; call it directly for on-demand
+        tidying (a cleanup button, a one-off migration). ``model`` falls back
+        to ``Memory(model=...)``.
+        """
+        resolved = model if model is not None else self.model
+        if resolved is None:
+            raise UserError(
+                "Memory.dream() has no model to run on",
+                hint="pass dream(model=...) or construct Memory(model=...)",
             )
-            if facts:
-                await notes.save(facts)
+        return await self._run_dream(resolved)
+
+    async def _dream_if_due(self, ctx: RunContext[Any]) -> None:
+        body = _format_facts(await self._notes_store().load())
+        over = len(body) > self.notes_budget
+        if not over and not await asyncio.to_thread(self._dream_due):
+            return
+        await self._run_dream(self._resolve_model(ctx))
+
+    async def _run_dream(self, model: "str | Provider") -> tuple[int, int]:
+        notes = self._notes_store()
+        # Hold the lock across the model call: the dream rewrites the whole
+        # list, so a remember/forget landing between read and save would be
+        # silently overwritten. The contention is fine — dreams are rare and
+        # a blocked tool just waits one out.
+        async with self._notes_lock:
+            facts = await notes.load()
+            before = len(facts)
+            if not facts:
+                await asyncio.to_thread(self._touch_marker)
+                return (0, 0)
+            body = _format_facts(facts)
+            rewritten = await _dream(body, self.notes_budget, model)
+            after = before
+            if rewritten:
+                # One-generation undo for the only wholesale-rewrite path.
+                # Deeper history belongs to git and to the archive, which
+                # keeps the conversations every note came from.
+                await asyncio.to_thread(self._write_backup, body)
+                await notes.save(rewritten)
+                after = len(rewritten)
+            await asyncio.to_thread(self._touch_marker)
+        logger.info("memory: dream rewrote notes, %d → %d", before, after)
+        return (before, after)
+
+    def dreamed_at(self) -> float | None:
+        """Epoch mtime of the last dream, or ``None`` before the first one.
+
+        Reads the ``.dreamed`` marker; the web UI shows this next to its
+        tidy-up button.
+        """
+        try:
+            return self._marker().stat().st_mtime
+        except FileNotFoundError:
+            return None
+
+    def _marker(self) -> Path:
+        return Path(self.root) / _DREAMED_FILENAME
+
+    def _dream_due(self) -> bool:
+        """Cadence check: ``dream_every_days`` elapsed and Notes changed since."""
+        if self.dream_every_days is None:
+            return False
+        last = self.dreamed_at()
+        if last is None:
+            # First contact starts the clock; don't dream over a newborn file.
+            self._touch_marker()
+            return False
+        if time.time() - last < self.dream_every_days * 86400.0:
+            return False
+        return self._notes_changed_since(last)
+
+    def _notes_changed_since(self, when: float) -> bool:
+        notes = self.notes
+        if isinstance(notes, FileNotesStore):
+            try:
+                return notes._path.stat().st_mtime > when
+            except FileNotFoundError:
+                return False
+        # A custom store has no cheap change signal — the cadence alone
+        # decides, at worst re-dreaming an unchanged list.
+        return True
+
+    def _touch_marker(self) -> None:
+        marker = self._marker()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+
+    def _write_backup(self, body: str) -> None:
+        bak = Path(self.root) / _BACKUP_FILENAME
+        bak.parent.mkdir(parents=True, exist_ok=True)
+        bak.write_text(body, encoding="utf-8")
 
 
 __all__ = [

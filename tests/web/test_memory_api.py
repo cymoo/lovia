@@ -76,23 +76,36 @@ def test_agent_without_memory_404s(client: TestClient) -> None:
 
 def test_get_empty_notes(client: TestClient, mem: Memory) -> None:
     data = client.get("/api/memory", params={"agent": "bot"}).json()
-    assert data == {"content": "", "used": 0, "budget": mem.notes_budget}
+    assert data == {
+        "content": "",
+        "used": 0,
+        "budget": mem.notes_budget,
+        "dreamed_at": None,
+    }
 
 
-async def test_get_reflects_plugin_writes(client: TestClient, mem: Memory) -> None:
+async def test_get_reflects_plugin_writes(
+    client: TestClient, mem: Memory, monkeypatch
+) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     await mem.remember("likes jazz")
+    line = "- [2026-01] likes jazz"
     data = client.get("/api/memory", params={"agent": "bot"}).json()
-    assert data["content"] == "- likes jazz"
-    assert data["used"] == len("- likes jazz")
+    assert data["content"] == line
+    assert data["used"] == len(line)
 
 
-def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> None:
+def test_put_normalizes_and_round_trips(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     body = "- uses  vim   daily\nstray prose line\n- USES VIM DAILY\n- speaks French\n"
     r = client.put("/api/memory", params={"agent": "bot"}, json={"content": body})
     assert r.status_code == 200
     data = r.json()
-    # Canonical form: bullets only, whitespace collapsed, case-insensitive dedup.
-    assert data["content"] == "- uses vim daily\n- speaks French"
+    # Canonical form: bullets only, whitespace collapsed, keyed dedup, and a
+    # [YYYY-MM] stamp on lines the editor added without one.
+    assert data["content"] == "- [2026-01] uses vim daily\n- [2026-01] speaks French"
     assert data["used"] == len(data["content"])
 
     again = client.get("/api/memory", params={"agent": "bot"}).json()
@@ -108,6 +121,37 @@ def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> N
     assert wiped["content"] == "" and wiped["used"] == 0
 
 
+# ----------------------------------------------------------------- dream -
+
+
+async def test_dream_endpoint_tidies_and_reports(
+    client: TestClient, mem: Memory, monkeypatch
+) -> None:
+    async def fake_dream(body, max_chars, model):
+        return ["[2026-01] merged note"]
+
+    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
+    await mem.remember("fact one")
+    await mem.remember("fact two")
+
+    data = client.post("/api/memory/dream", params={"agent": "bot"}).json()
+    assert (data["before"], data["after"]) == (2, 1)
+    assert data["content"] == "- [2026-01] merged note"
+    assert data["used"] == len(data["content"])
+    assert data["dreamed_at"] is not None
+
+    # The editor's follow-up GET sees the tidied notes and the timestamp.
+    again = client.get("/api/memory", params={"agent": "bot"}).json()
+    assert again["content"] == data["content"]
+    assert again["dreamed_at"] == data["dreamed_at"]
+
+
+def test_dream_endpoint_404s_without_memory(client: TestClient) -> None:
+    assert (
+        client.post("/api/memory/dream", params={"agent": "plain"}).status_code == 404
+    )
+
+
 # ------------------------------------------------------------- shutdown -
 
 
@@ -120,10 +164,12 @@ def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> Non
         return plugin_mod._RunDigest(facts=["survives shutdown"], summary="")
 
     monkeypatch.setattr(plugin_mod, "_digest", slow_digest)
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
     bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])
     app = create_app({"bot": bot}, store=ChatStore.in_memory(), generate_titles=False)
 
     with TestClient(app) as client:  # the context manager runs the lifespan
         assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
-    assert (tmp_path / "mem" / "MEMORY.md").read_text() == "- survives shutdown"
+    body = (tmp_path / "mem" / "MEMORY.md").read_text()
+    assert body == "- [2026-01] survives shutdown"

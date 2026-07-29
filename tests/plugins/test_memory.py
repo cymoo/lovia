@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,12 +25,15 @@ from lovia.plugins.memory.plugin import (
     FileNotesStore,
     Memory,
     _drop_fact,
+    _fact_key,
     _format_facts,
     _hit_line,
     _meter,
     _normalize_fact,
     _parse_facts,
     _RunDigest,
+    _stamp,
+    _strip_date,
 )
 from lovia.plugins.memory.vector import VectorIndex
 from lovia.transcript import (
@@ -40,6 +44,11 @@ from lovia.transcript import (
 )
 
 from ..scripted_provider import ScriptedProvider, call, text
+
+
+def _bare(facts: list[str]) -> list[str]:
+    """The facts without their ``[YYYY-MM]`` stamps, for content assertions."""
+    return [_strip_date(f) for f in facts]
 
 
 def _msgs(*pairs: tuple[str, str]) -> list:
@@ -110,6 +119,26 @@ def test_drop_fact_strategies() -> None:
     assert _drop_fact(["x"], "nope") == ["x"]  # no match → unchanged
 
 
+def test_drop_fact_ignores_date_prefix() -> None:
+    # Dates never block a match: stamped note, bare target and vice versa.
+    assert _drop_fact(["[2026-01] user likes vim"], "user likes vim") == []
+    assert _drop_fact(["[2026-01] user likes vim"], "[2026-06] USER LIKES VIM") == []
+    assert _drop_fact(["user likes vim"], "[2026-06] likes vim") == []  # substring
+    # A date-only target matches nothing (its key is empty).
+    assert _drop_fact(["[2026-01] x"], "[2026-02]") == ["[2026-01] x"]
+
+
+def test_strip_date_fact_key_and_stamp(monkeypatch) -> None:
+    assert _strip_date("[2026-07] likes jazz") == "likes jazz"
+    assert _strip_date("no date here") == "no date here"
+    assert _strip_date("[199-07] malformed stays") == "[199-07] malformed stays"
+    assert _fact_key("[2026-07]  Likes   Jazz ") == "likes jazz"
+    assert _fact_key("[2026-07]") == ""
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
+    assert _stamp("likes jazz") == "[2026-01] likes jazz"
+    assert _stamp("[2025-01] likes jazz") == "[2025-01] likes jazz"  # kept
+
+
 def test_hit_line_renders_date() -> None:
     hit = Hit(doc=Doc(id="a", text="saw Rex", when=86400.0 * 365 * 30), score=1.0)
     line = _hit_line(hit)
@@ -145,14 +174,31 @@ async def test_notes_store_tolerates_hand_edits(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_add_facts_normalizes_and_dedups(tmp_path) -> None:
+async def test_add_facts_normalizes_and_dedups(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     mem = Memory(tmp_path / "mem", index=None)
     assert await mem._add_facts(["I prefer tabs.  "]) == 1
     assert await mem._add_facts(["  I prefer   tabs. "]) == 0  # whitespace dup
     assert await mem._add_facts(["I PREFER TABS."]) == 0  # case-insensitive dup
     assert await mem._add_facts(["My name is\nAlice"]) == 1  # multi-line → one line
     assert await mem._add_facts(["   "]) == 0  # blank → ignored
-    assert await mem._notes_store().load() == ["I prefer tabs.", "My name is Alice"]
+    facts = await mem._notes_store().load()
+    assert _bare(facts) == ["I prefer tabs.", "My name is Alice"]
+    # Everything written got stamped with the (frozen) current month.
+    assert all(f.startswith("[2026-01] ") for f in facts)
+
+
+async def test_add_facts_stamps_and_dedups_across_months(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["likes jazz"])
+    # The same fact arriving under an older stamp (a replayed digest, a
+    # hand-pasted note) is a duplicate, not a new fact.
+    assert await mem._add_facts(["[2025-12] likes jazz"]) == 0
+    # An incoming fact that already carries a stamp keeps it.
+    assert await mem._add_facts(["[2025-11] drinks tea"]) == 1
+    assert "[2025-11] drinks tea" in await mem._notes_store().load()
+    # A date-only line is as good as blank.
+    assert await mem._add_facts(["[2025-10]"]) == 0
 
 
 async def test_concurrent_adds_are_serialized(tmp_path) -> None:
@@ -160,7 +206,7 @@ async def test_concurrent_adds_are_serialized(tmp_path) -> None:
     await asyncio.gather(*(mem._add_facts([f"fact number {i}"]) for i in range(50)))
     facts = await mem._notes_store().load()
     assert len(facts) == 50
-    assert set(facts) == {f"fact number {i}" for i in range(50)}
+    assert set(_bare(facts)) == {f"fact number {i}" for i in range(50)}
 
 
 async def test_public_remember_and_forget(tmp_path) -> None:
@@ -175,13 +221,14 @@ async def test_public_remember_and_forget(tmp_path) -> None:
     assert await mem._notes_store().load() == []
 
 
-async def test_notes_body_and_replace_notes(tmp_path) -> None:
+async def test_notes_body_and_replace_notes(tmp_path, monkeypatch) -> None:
     # The editor seam: read the canonical body, replace it wholesale with the
     # same normalization/dedup policy every other Notes write applies.
     mem = Memory(tmp_path / "mem", index=None)
+    monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     assert await mem.notes_body() == ""
     await mem.remember("likes jazz")
-    assert await mem.notes_body() == "- likes jazz"
+    assert await mem.notes_body() == "- [2026-01] likes jazz"
 
     stored = await mem.replace_notes(
         "# a heading, ignored\n"
@@ -190,11 +237,11 @@ async def test_notes_body_and_replace_notes(tmp_path) -> None:
         "- USES VIM DAILY\n"  # case-insensitive dup of the one above
         "-not a bullet either (no space)\n"
         "- \n"  # empty fact → ignored
-        "- speaks French\n"
+        "- [2025-03] speaks French\n"  # already dated → stamp kept
     )
-    assert stored == "- uses vim daily\n- speaks French"
+    assert stored == "- [2026-01] uses vim daily\n- [2025-03] speaks French"
     assert await mem.notes_body() == stored
-    assert await mem._notes_store().load() == ["uses vim daily", "speaks French"]
+    assert _bare(await mem._notes_store().load()) == ["uses vim daily", "speaks French"]
 
     # Replacing with an empty body clears the notes.
     assert await mem.replace_notes("") == ""
@@ -318,7 +365,7 @@ async def test_remember_tool_persists_via_run(tmp_path) -> None:
     mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "remember that I like vim")
-    assert "user likes vim" in await mem._notes_store().load()
+    assert "user likes vim" in _bare(await mem._notes_store().load())
     tool_results = [e for e in result.entries if e.type == "tool_result"]
     assert any("Remembered" in r.output for r in tool_results)
 
@@ -524,7 +571,7 @@ async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     await Runner.run(agent, "ahoy there sailor", session_id="s1")
 
     # The digest fact was promoted into Notes (with the empty current passed).
-    assert "the user is a pirate" in await mem._notes_store().load()
+    assert "the user is a pirate" in _bare(await mem._notes_store().load())
     assert captured["current"] == ""
     # Both messages and the episode summary landed in the index.
     kinds = [d.meta["kind"] for d in index.added]
@@ -535,6 +582,100 @@ async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     assert summary_doc.meta["session_id"] == "s1"
     assert summary_doc.id.endswith(":summary")
     assert all(d.when > 0 for d in index.added)
+
+
+async def test_digest_stale_supersedes_existing_note(tmp_path, monkeypatch) -> None:
+    # A correction arrives as a (stale old, new fact) pair; the old note is
+    # dropped even though the model quoted it with a different stamp and case.
+    async def fake_digest(entries, current, model):
+        return _RunDigest(
+            facts=["user now prefers uv"],
+            stale=["[2020-01] User Prefers Pip"],
+            summary="",
+        )
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["user prefers pip"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "I switched from pip to uv")
+    assert _bare(await mem._notes_store().load()) == ["user now prefers uv"]
+
+
+async def test_digest_stale_only_still_applies(tmp_path, monkeypatch) -> None:
+    # No new facts, one retraction: the write path must still run.
+    async def fake_digest(entries, current, model):
+        return _RunDigest(stale=["user prefers pip"])
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["user prefers pip", "likes jazz"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "actually forget the pip thing")
+    assert _bare(await mem._notes_store().load()) == ["likes jazz"]
+
+
+async def test_digest_stale_no_match_is_noop(tmp_path, monkeypatch) -> None:
+    async def fake_digest(entries, current, model):
+        return _RunDigest(facts=["new fact"], stale=["never existed"])
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["likes jazz"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "go")
+    assert _bare(await mem._notes_store().load()) == ["likes jazz", "new fact"]
+
+
+async def test_apply_digest_is_one_save(tmp_path) -> None:
+    # Supersession is atomic: stale drop + fact add land in a single save, so
+    # no reader can observe the in-between state (old gone, new missing).
+    class SpyNotes:
+        def __init__(self) -> None:
+            self.facts: list[str] = ["[2026-01] user prefers pip"]
+            self.saves = 0
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.saves += 1
+            self.facts = list(facts)
+
+    notes = SpyNotes()
+    mem = Memory(tmp_path / "mem", notes=notes, index=None)
+    dropped, added = await mem._apply_digest(
+        _RunDigest(facts=["user prefers uv"], stale=["user prefers pip"])
+    )
+    assert (dropped, added) == (1, 1)
+    assert notes.saves == 1
+    assert _bare(notes.facts) == ["user prefers uv"]
+
+
+async def test_apply_digest_stale_survives_duplicate_lines(tmp_path) -> None:
+    # Hand-edited Notes can hold identical duplicate lines (_parse_facts does
+    # not dedup); retiring one of them must drop a single copy, not derail
+    # the whole application.
+    class ListNotes:
+        def __init__(self) -> None:
+            self.facts = [
+                "[2026-01] user prefers pip",
+                "[2026-01] user prefers pip",
+            ]
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.facts = list(facts)
+
+    notes = ListNotes()
+    mem = Memory(tmp_path / "mem", notes=notes, index=None)
+    dropped, added = await mem._apply_digest(
+        _RunDigest(facts=["user prefers uv"], stale=["user prefers pip"])
+    )
+    assert (dropped, added) == (1, 1)
+    assert _bare(notes.facts) == ["user prefers pip", "user prefers uv"]
 
 
 async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> None:
@@ -556,7 +697,7 @@ async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> 
     gate.set()
     await mem.drain()
     assert not mem._curation_tasks
-    assert "works at Dawn Café" in await mem._notes_store().load()
+    assert "works at Dawn Café" in _bare(await mem._notes_store().load())
 
 
 async def test_auto_curate_false_ingests_messages_only(tmp_path, monkeypatch) -> None:
@@ -609,49 +750,188 @@ async def test_ingest_failure_still_curates_notes(tmp_path, monkeypatch) -> None
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "hello")
     assert result.output == "ok"
-    assert "a durable fact" in await mem._notes_store().load()
+    assert "a durable fact" in _bare(await mem._notes_store().load())
 
 
-async def test_consolidation_triggers_over_budget(tmp_path, monkeypatch) -> None:
+async def test_dream_triggers_over_budget(tmp_path, monkeypatch) -> None:
     async def fake_digest(entries, current, model):
         return _RunDigest(facts=["a very long fact that blows the tiny budget open"])
 
-    async def fake_consolidate(body, max_chars, model):
+    async def fake_dream(body, max_chars, model):
         assert len(body) > max_chars
         return ["compact fact"]
 
     monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
-    monkeypatch.setattr(plugin_mod, "_consolidate", fake_consolidate)
+    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
 
     mem = Memory(tmp_path / "mem", index=None, notes_budget=20)
     provider = ScriptedProvider([text("ok")])
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "go")
     assert await mem._notes_store().load() == ["compact fact"]
+    # The rewrite left its one-generation backup and refreshed the marker.
+    bak = (tmp_path / "mem" / "MEMORY.md.bak").read_text()
+    assert "blows the tiny budget" in bak
+    assert (tmp_path / "mem" / ".dreamed").exists()
 
 
-async def test_remember_during_consolidation_is_not_lost(tmp_path, monkeypatch) -> None:
-    # Consolidation rewrites the whole fact list around a slow model call; a
-    # remember() landing mid-flight must block on the lock and survive, not be
-    # overwritten by the consolidated save.
+async def test_remember_during_dream_is_not_lost(tmp_path, monkeypatch) -> None:
+    # The dream rewrites the whole fact list around a slow model call; a
+    # remember() landing mid-flight must block on the lock and survive, not
+    # be overwritten by the rewritten save.
     started = asyncio.Event()
 
-    async def slow_consolidate(body, max_chars, model):
+    async def slow_dream(body, max_chars, model):
         started.set()
         await asyncio.sleep(0.05)
         return ["compact fact"]
 
-    monkeypatch.setattr(plugin_mod, "_consolidate", slow_consolidate)
+    monkeypatch.setattr(plugin_mod, "_dream", slow_dream)
     mem = Memory(tmp_path / "mem", index=None, notes_budget=10)
     await mem._add_facts(["a very long fact exceeding the tiny budget"])
 
-    task = asyncio.create_task(mem._consolidate_if_over_budget(_ctx()))
+    task = asyncio.create_task(mem._dream_if_due(_ctx()))
     await started.wait()
     await mem.remember("landed mid-flight")
     await task
     facts = await mem._notes_store().load()
     assert "compact fact" in facts
-    assert "landed mid-flight" in facts
+    assert "landed mid-flight" in _bare(facts)
+
+
+# ---------------------------------------------------------------------------
+# Dream cadence and the manual dream()
+# ---------------------------------------------------------------------------
+
+
+def _fake_dream(counter: dict, result: list[str]):
+    async def fake(body, max_chars, model):
+        counter["n"] += 1
+        return result
+
+    return fake
+
+
+async def test_dream_first_contact_starts_clock_without_dreaming(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["a fact"])
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0  # marker was just created — nothing due yet
+    assert (tmp_path / "mem" / ".dreamed").exists()
+
+
+async def test_dream_cadence_fires_when_aged_and_changed(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)  # dream_every_days default: 3
+    await mem._add_facts(["a fact"])  # notes mtime: now
+    mem._touch_marker()
+    marker = tmp_path / "mem" / ".dreamed"
+    old = time.time() - 4 * 86400
+    os.utime(marker, (old, old))  # last dream: 4 days ago
+
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 1
+    assert await mem._notes_store().load() == ["tidy"]
+    # The dream refreshed the marker: immediately after, nothing is due.
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 1
+
+
+async def test_dream_cadence_skips_unchanged_notes(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["a fact"])
+    mem._touch_marker()
+    # Notes untouched since before the last dream → nothing to tidy.
+    os.utime(tmp_path / "mem" / "MEMORY.md", (time.time() - 5 * 86400,) * 2)
+    os.utime(tmp_path / "mem" / ".dreamed", (time.time() - 4 * 86400,) * 2)
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0
+
+
+async def test_dream_cadence_none_keeps_only_budget_trigger(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None, dream_every_days=None)
+    await mem._add_facts(["a fact"])
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0  # no marker games, no cadence — and under budget
+    assert not (tmp_path / "mem" / ".dreamed").exists()
+
+    mem2 = Memory(tmp_path / "mem2", index=None, dream_every_days=None, notes_budget=10)
+    await mem2._add_facts(["a fact far beyond ten characters"])
+    await mem2._dream_if_due(_ctx())
+    assert calls["n"] == 1  # overflow still dreams
+
+
+async def test_dream_custom_store_falls_back_to_cadence_alone(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+
+    class ListNotes:
+        def __init__(self) -> None:
+            self.facts = ["[2026-01] a fact"]
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.facts = list(facts)
+
+    mem = Memory(tmp_path / "mem", notes=ListNotes(), index=None)
+    mem._touch_marker()
+    os.utime(tmp_path / "mem" / ".dreamed", (time.time() - 4 * 86400,) * 2)
+    await mem._dream_if_due(_ctx())  # no change signal → cadence decides
+    assert calls["n"] == 1
+
+
+async def test_manual_dream_returns_counts_and_backs_up(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["[2026-01] merged"]))
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    await mem._add_facts(["fact one", "fact two"])
+    assert await mem.dream() == (2, 1)
+    assert await mem._notes_store().load() == ["[2026-01] merged"]
+    assert "fact one" in (tmp_path / "mem" / "MEMORY.md.bak").read_text()
+    assert (tmp_path / "mem" / ".dreamed").exists()
+    # An explicit model= overrides the configured one; still one call each.
+    assert await mem.dream(model="other-model") == (1, 1)
+    assert calls["n"] == 2
+
+
+async def test_manual_dream_without_model_errors(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    with pytest.raises(UserError, match="no model"):
+        await mem.dream()
+
+
+async def test_manual_dream_empty_notes_skips_model(tmp_path, monkeypatch) -> None:
+    async def boom(*a, **k):
+        raise AssertionError("must not be called on empty notes")
+
+    monkeypatch.setattr(plugin_mod, "_dream", boom)
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    assert await mem.dream() == (0, 0)
+
+
+async def test_dream_empty_rewrite_keeps_notes(tmp_path, monkeypatch) -> None:
+    # A model that returns nothing must never wipe the notes.
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream({"n": 0}, []))
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    await mem._add_facts(["precious fact"])
+    assert await mem.dream() == (1, 1)
+    assert _bare(await mem._notes_store().load()) == ["precious fact"]
+    assert not (tmp_path / "mem" / "MEMORY.md.bak").exists()
 
 
 async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:

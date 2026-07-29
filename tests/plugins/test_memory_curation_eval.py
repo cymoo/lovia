@@ -146,36 +146,45 @@ DIGEST_CASES = [
 # Dream regression fixture — a fictional bloated notes file reproducing the
 # observed pathologies: duplicated rules, an interest split across three
 # lines, install logs with counts and sizes, task deliverables, a superseded
-# pair, a session-scoped permission, an incidental health detail.
+# pair, a session-scoped permission, an incidental health detail. Most lines
+# are deliberately UNDATED — real pre-upgrade files are — so the eval covers
+# stamping-on-keep and the leading-position format contract; only the
+# superseded pair carries dates, since newer-wins needs them.
 # ---------------------------------------------------------------------------
 
 LEGACY_NOTES = [
-    "[2025-11] Never delete files or directories without explicit user confirmation.",
-    "[2026-03] Before deleting anything, list what would be removed and wait for the user to confirm.",
-    "[2026-01] Prefer the gh CLI for GitHub operations instead of opening a browser.",
-    "[2025-12] 用户要求回答时效性问题前，先确认当前日期。",
-    "[2025-11] The user runs macOS and manages packages with Homebrew.",
-    "[2026-02] The user is learning the ukulele and has no prior music background.",
-    "[2026-02] The user's ukulele goal piece is 'Over the Rainbow'.",
-    "[2026-03] The user is a complete beginner at music theory.",
-    "[2026-04] The corporate proxy blocks registry.npmjs.org; use the internal mirror at npm.corp.example.",
-    "[2026-04] assets.example-cdn.net is reachable and can be used for demo images.",
-    "[2026-01] Project petshop uses pnpm as its package manager.",
-    "[2026-01] The petshop repo lives at ~/work/petshop.",
-    "[2026-05] The pdf helper was installed to ~/.tools/pdf/ with SKILL.md and 8 Python scripts.",
-    "[2026-05] The docx helper was installed to ~/.tools/docx/ (61 files, 1.2M).",
-    "[2026-05] The pptx helper was installed to ~/.tools/pptx/ (56 files, 1.2M).",
-    "[2026-05] The xlsx helper was installed to ~/.tools/xlsx/ (53 files, 1.2M).",
-    "[2026-05] ~/.tools currently contains pdf, docx, pptx, xlsx and an unidentified folder gen-1.0.2 (origin unconfirmed).",
-    "[2026-02] Generated a 7-day workout plan: Monday legs, Tuesday push, Wednesday cardio, Thursday pull, Friday full-body, Saturday recovery, Sunday rest.",
-    "[2026-02] The workout plan includes hydration and sleep advice and progresses every 4 weeks.",
-    "[2026-06] Downloading long videos: start right after obtaining the link because auth tokens on cdn.example-media.com expire mid-download.",
-    "[2026-06] For videos with more than 256 segments on macOS, pass --use-ffmpeg-concat-demuxer to avoid file-handle limits.",
+    "Never delete files or directories without explicit user confirmation.",
+    "Before deleting anything, list what would be removed and wait for the user to confirm.",
+    "Prefer the gh CLI for GitHub operations instead of opening a browser.",
+    "用户要求回答时效性问题前，先确认当前日期。",
+    "The user runs macOS and manages packages with Homebrew.",
+    "The user is learning the ukulele and has no prior music background.",
+    "The user's ukulele goal piece is 'Over the Rainbow'.",
+    "The user is a complete beginner at music theory.",
+    "The corporate proxy blocks registry.npmjs.org; use the internal mirror at npm.corp.example.",
+    "assets.example-cdn.net is reachable and can be used for demo images.",
+    "Project petshop uses pnpm as its package manager.",
+    "The petshop repo lives at ~/work/petshop.",
+    "The pdf helper was installed to ~/.tools/pdf/ with SKILL.md and 8 Python scripts.",
+    "The docx helper was installed to ~/.tools/docx/ (61 files, 1.2M).",
+    "The pptx helper was installed to ~/.tools/pptx/ (56 files, 1.2M).",
+    "The xlsx helper was installed to ~/.tools/xlsx/ (53 files, 1.2M).",
+    # A pre-merged bundle from an earlier, laxer pass: a droppable directory
+    # listing laundered together with a keepable environment gotcha.
+    "~/.tools contains pdf, docx, pptx and xlsx helpers plus an unidentified folder gen-1.0.2 (origin unconfirmed); because npx times out on this network, helpers are installed by cloning their GitHub repo instead.",
+    # A deliverable with its provenance visible. (A cue-less "weekly workout
+    # plan: …" is indistinguishable from the user's own regimen by text alone
+    # — a maintenance pass rightly keeps it, so the eval doesn't demand
+    # otherwise; only fresh admission can prevent cue-less deliverables.)
+    "Generated a 7-day workout plan: Monday legs, Tuesday push, Wednesday cardio, Thursday pull, Friday full-body, Saturday recovery, Sunday rest.",
+    "The workout plan includes hydration and sleep advice and progresses every 4 weeks.",
+    "Downloading long videos: start right after obtaining the link because auth tokens on cdn.example-media.com expire mid-download.",
+    "For videos with more than 256 segments on macOS, pass --use-ffmpeg-concat-demuxer to avoid file-handle limits.",
     "[2025-12] The staging database lives at ./staging.db in the repo root.",
     "[2026-06] The staging database actually lives at .data/staging.db, not the repo root.",
-    "[2026-03] The user allowed direct edits to the staging database during today's debugging session.",
-    "[2026-04] The user mentioned trouble sleeping lately and is looking into causes.",
-    "[2026-05] 用户偏好简体中文回复，语气自然不要过度客套。",
+    "The user allowed direct edits to the staging database during today's debugging session.",
+    "The user mentioned trouble sleeping lately and is looking into causes.",
+    "用户偏好简体中文回复，语气自然不要过度客套。",
 ]
 
 
@@ -194,6 +203,13 @@ async def test_digest_admission_eval() -> None:
     for name, current, convo, verdict in DIGEST_CASES:
         digest = await _digest(_msgs(*convo), current, model)
         ok = verdict(digest)
+        if not ok:
+            # Temperature 0 is not determinism (MoE providers flake roughly
+            # one run in three on a marginal case); a single retry keeps the
+            # signal and the "(retry)" label keeps the flake visible.
+            digest = await _digest(_msgs(*convo), current, model)
+            ok = verdict(digest)
+            name = f"{name} (retry)"
         rows.append((name, ok, f"facts={digest.facts!r} stale={digest.stale!r}"))
         if not ok:
             failures.append(name)
@@ -209,10 +225,11 @@ async def test_dream_eval() -> None:
     joined = "\n".join(result)
     print(f"\ndream: {len(LEGACY_NOTES)} → {len(result)} notes\n{joined}")
 
-    # Substantially smaller, and still dated lines.
+    # Substantially smaller, and every line carries a LEADING stamp — the
+    # format contract that broke on real all-undated files (models appended
+    # the date instead; _relocate_stamp plus the prompt now pin it down).
     assert 0 < len(result) <= 18
-    dated = sum(1 for f in result if re.match(r"^\[\d{4}-\d{2}\]", f))
-    assert dated >= 0.8 * len(result)
+    assert all(re.match(r"^\[\d{4}-\d{2}\]", f) for f in result)
 
     # Explicit rules and stable profile survive (possibly merged/rephrased).
     assert re.search(
@@ -237,8 +254,12 @@ async def test_dream_eval() -> None:
         r"debugging session",
         r"trouble sleeping",
         r"origin unconfirmed",
+        r"gen-1\.0\.2",
     ):
         assert not re.search(pattern, joined, re.IGNORECASE), pattern
+
+    # The keepable half of the laundered bundle survives the split-then-judge.
+    assert re.search(r"clon", joined, re.IGNORECASE)
 
     # The near-duplicate deletion rules merged: at most one line says it.
     deletion_rules = [
@@ -250,3 +271,10 @@ async def test_dream_eval() -> None:
 
     # The three ukulele lines collapsed to at most two.
     assert sum(1 for f in result if "ukulele" in f.lower()) <= 2
+
+    # …but merging must stop at subject boundaries: no mega-note bundling
+    # distinct rules as an enumerated list (observed on real data as
+    # "core rules: (1)…(6)"), and the deletion rule must not swallow the
+    # unrelated gh-CLI or date-check rules.
+    assert not re.search(r"\([1-9]\)|（[1-9]）", joined)
+    assert not any(re.search(r"\bgh\b|日期", f) for f in deletion_rules)

@@ -89,7 +89,7 @@ _DEFAULT_ROOT = "./.lovia/memory"
 _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
 _VECTORS_FILENAME = "vectors.db"
-_DEFAULT_NOTES_BUDGET = 5000
+_DEFAULT_NOTES_BUDGET = 8000
 _DEFAULT_DREAM_EVERY_DAYS = 3.0
 _DREAMED_FILENAME = ".dreamed"
 _BACKUP_FILENAME = "MEMORY.md.bak"
@@ -135,6 +135,34 @@ def _stamp(fact: str) -> str:
     if _DATE_PREFIX.match(fact):
         return fact
     return f"[{_current_month()}] {fact}"
+
+
+_DATE_SUFFIX = re.compile(r"\s*\[(\d{4}-\d{2})\]\s*$")
+
+
+def _relocate_stamp(fact: str) -> str:
+    """Move a trailing ``[YYYY-MM]`` to the front when no leading one exists.
+
+    Models asked to date their lines sometimes append the stamp instead
+    (observed with undated legacy input); the leading form is the one every
+    parser, key, and reader relies on.
+    """
+    if _DATE_PREFIX.match(fact):
+        return fact
+    m = _DATE_SUFFIX.search(fact)
+    if not m:
+        return fact
+    return f"[{m.group(1)}] {fact[: m.start()].rstrip()}"
+
+
+def _shed_stamps(fact: str) -> str:
+    """Normalize with any leading *and* trailing stamp removed.
+
+    The digest path wants bare facts — dates there are model echoes, wherever
+    they landed. The dream path uses :func:`_relocate_stamp` instead, since
+    its dates carry meaning and must be kept, just in the leading position.
+    """
+    return _normalize_fact(_DATE_SUFFIX.sub("", _strip_date(fact)))
 
 
 def _parse_facts(body: str) -> list[str]:
@@ -366,22 +394,34 @@ _DIGEST_INSTRUCTIONS = (
 )
 
 _DREAM_INSTRUCTIONS = (
-    "You maintain an agent's long-term notes while it sleeps. Merge "
-    "duplicates and near-duplicates into one well-phrased note each; when "
-    "two notes conflict, keep the newer one — notes carry [YYYY-MM] dates, "
-    "and a merged note keeps the newest date (stamp today's on any undated "
-    "line you keep). Drop notes that record one-off events, task logs, or "
-    "agent-produced deliverables (a plan, a report, a schedule); state "
-    "better re-derived than remembered (directory contents, install "
-    "details); permissions that were scoped to a single task; incidental "
-    "personal observations the user never asked to keep (health, mood); "
-    "open questions and unconfirmed leads parked as notes; and "
-    "notes that have plainly expired. Rewrite the survivors at the right "
-    "altitude: the lasting conclusion, not the play-by-play. Never invent a "
-    "fact that is not in the notes, and never drop the user's explicit rules "
-    "and preferences, however old. Keep each note one short, self-contained, "
-    "dated line in its original language. Return the full rewritten list, "
-    "fitting the requested budget."
+    "You maintain an agent's long-term notes while it sleeps. A note is one "
+    "fact on one line that BEGINS with its [YYYY-MM] stamp — every line you "
+    "return starts with a stamp: keep an existing one, stamp today's month "
+    "on undated lines you keep, and give a merged note the newest of its "
+    "dates.\n"
+    "Merge only restatements of the same fact, or fragments about the same "
+    "subject. Never bundle distinct facts that merely share a category — a "
+    "numbered list inside a note means you merged too much. Split any note "
+    "that bundles several facts into separate lines. When two notes "
+    "conflict, keep the newer one.\n"
+    "Drop: one-off events and task logs; deliverables the agent produced "
+    "for the user (a plan, a report, a schedule — the archive keeps their "
+    "content); state better re-derived than remembered (what a directory "
+    "contains, what got installed with its file counts and sizes, config "
+    "values, API signatures); permissions that were scoped to a single "
+    "task; incidental personal observations the user never asked to keep "
+    "(health, mood); open questions and unconfirmed leads; and notes that "
+    "have plainly expired. Dropping beats merging: a line that qualifies "
+    "for dropping is dropped, never folded into a surviving note. After "
+    "splitting a bundled note, judge each piece against this list on its "
+    "own. Not every user-related fact is a protected preference: profile "
+    "trivia, past reflections, and plans the user once discussed are "
+    "droppable when they match the list.\n"
+    "Rewrite the survivors at the right altitude: the lasting conclusion, "
+    "not the play-by-play. Never invent a fact that is not in the notes, "
+    "and never drop the user's explicit rules and preferences, however old. "
+    "Keep each note short, self-contained, and in its original language. "
+    "Return the full rewritten list, fitting the requested budget."
 )
 
 _EXPAND_INSTRUCTIONS = (
@@ -434,7 +474,7 @@ async def _digest(
     # Stamping is the code's job: a model echoing a date it saw in the
     # current notes would mislabel a *new* fact as old and skew the dream's
     # newer-wins. Stale entries keep their quotes — matching strips anyway.
-    digest.facts = [n for f in digest.facts if (n := _normalize_fact(_strip_date(f)))]
+    digest.facts = [n for f in digest.facts if (n := _shed_stamps(f))]
     digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
     return digest
 
@@ -463,7 +503,7 @@ async def _dream(
     )
     result = await Runner.run(agent, prompt)
     facts = getattr(result.output, "facts", []) or []
-    return [n for f in facts if (n := _normalize_fact(f))]
+    return [_relocate_stamp(n) for f in facts if (n := _normalize_fact(f))]
 
 
 async def _expand(

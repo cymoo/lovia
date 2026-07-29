@@ -88,7 +88,7 @@ Three triggers:
 - **Cadence** — every `dream_every_days` (default 3), checked at run end
   and skipped while Notes haven't changed since the last dream. The state
   is just the mtime of the `.dreamed` marker.
-- **Budget overflow** — Notes past `notes_budget` (default 5000 chars; the
+- **Budget overflow** — Notes past `notes_budget` (default 8000 chars; the
   model sees a meter) dream immediately.
 - **On demand** — `await mem.dream()` returns `(before, after)` note
   counts. Wire it to a cleanup button, or run it once to tidy a bloated
@@ -170,7 +170,7 @@ a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
 | `expand_query` | `"auto"` | LLM query expansion; auto = only for the lexical-only default index |
 | `summarize_recall` | `True` | `recall` returns a model-written summary of the hits |
 | `recall_k` | `5` | hits retrieved per recall |
-| `notes_budget` | `5000` | char budget for Notes — the prompt meter and the dream's overflow trigger |
+| `notes_budget` | `8000` | char budget for Notes — the prompt meter and the dream's overflow trigger |
 | `dream_every_days` | `3` | cadence for the periodic dream; `None` keeps only the overflow trigger |
 | `model` | host agent's model | model for the curation/recall side-queries |
 

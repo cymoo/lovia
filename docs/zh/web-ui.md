@@ -23,8 +23,9 @@ lovia web
 
 CLI 创建的默认 Agent 会启用 `Todo`、`./.lovia/memory` 中的 Memory、时间与 HTTP 工具、
 Web 搜索、定时任务，以及以当前目录为根、采用 `coding` 模式的 Workspace。如果
-`./.agents/skills` 目录存在，还会加载其中的 Skills（这是跨 Agent 的通用约定，可与
-Claude Code、Codex 等共享）。设置 `TAVILY_API_KEY` 后，Web 搜索使用
+`./.agents/skills` 目录存在，还会自动加载其中的 Skills。这个目录遵循跨 Agent 的通用约定，
+可以与 Claude Code、Codex 等工具共用。0.9.13 起，旧的 `./skills` 不再自动加载；可以将其
+移到新位置，或显式传入 `--skills-dir skills`。设置 `TAVILY_API_KEY` 后，Web 搜索使用
 Tavily；否则尝试使用可选的 DuckDuckGo 后端。如果当前目录存在 `AGENTS.md`，其内容会
 作为 Agent 的 instructions。
 

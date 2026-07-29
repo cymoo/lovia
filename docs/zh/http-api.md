@@ -78,7 +78,8 @@ Provider 认证失败。
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件 |
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
-| `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory notes](memory.md#记忆如何写入)（`{content, used, budget}`） |
+| `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
+| `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
 
 ### 生命周期事件
 

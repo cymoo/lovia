@@ -140,6 +140,16 @@ def test_strip_date_fact_key_and_stamp(monkeypatch) -> None:
     assert _stamp("[2025-01] likes jazz") == "[2025-01] likes jazz"  # kept
 
 
+def test_shed_stamps() -> None:
+    # Digest facts are bare: stamps are shed wherever the model echoed them.
+    shed = plugin_mod._shed_stamps
+    assert shed("[2026-07] foo") == "foo"
+    assert shed("foo [2026-07]") == "foo"
+    assert shed("[2026-07] foo [2026-07]") == "foo"  # both ends echoed
+    assert shed("plain fact") == "plain fact"
+    assert shed("[2026-07]") == ""
+
+
 def test_relocate_stamp() -> None:
     # A trailing stamp (some models append it) moves to the canonical front.
     assert (

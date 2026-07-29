@@ -155,6 +155,16 @@ def _relocate_stamp(fact: str) -> str:
     return f"[{m.group(1)}] {fact[: m.start()].rstrip()}"
 
 
+def _shed_stamps(fact: str) -> str:
+    """Normalize with any leading *and* trailing stamp removed.
+
+    The digest path wants bare facts — dates there are model echoes, wherever
+    they landed. The dream path uses :func:`_relocate_stamp` instead, since
+    its dates carry meaning and must be kept, just in the leading position.
+    """
+    return _normalize_fact(_DATE_SUFFIX.sub("", _strip_date(fact)))
+
+
 def _parse_facts(body: str) -> list[str]:
     """Parse a notes body (``- fact`` per line) into its facts."""
     facts: list[str] = []
@@ -459,13 +469,8 @@ async def _digest(
     digest = cast(_RunDigest, result.output)
     # Stamping is the code's job: a model echoing a date it saw in the
     # current notes would mislabel a *new* fact as old and skew the dream's
-    # newer-wins. Relocate first so trailing echoes are stripped too. Stale
-    # entries keep their quotes — matching strips anyway.
-    digest.facts = [
-        n
-        for f in digest.facts
-        if (n := _normalize_fact(_strip_date(_relocate_stamp(f))))
-    ]
+    # newer-wins. Stale entries keep their quotes — matching strips anyway.
+    digest.facts = [n for f in digest.facts if (n := _shed_stamps(f))]
     digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
     return digest
 

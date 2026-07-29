@@ -87,6 +87,9 @@ _NOTES_FILENAME = "MEMORY.md"
 _ARCHIVE_FILENAME = "archive.db"
 _VECTORS_FILENAME = "vectors.db"
 _DEFAULT_NOTES_BUDGET = 5000
+_DEFAULT_DREAM_EVERY_DAYS = 3.0
+_DREAMED_FILENAME = ".dreamed"
+_BACKUP_FILENAME = "MEMORY.md.bak"
 
 
 # ---------------------------------------------------------------------------
@@ -312,10 +315,10 @@ class _RunDigest(BaseModel):
     )
 
 
-class _ConsolidatedNotes(BaseModel):
+class _DreamedNotes(BaseModel):
     facts: list[str] = Field(
         default_factory=list,
-        description="The rewritten, deduplicated, shorter set of notes.",
+        description="The full rewritten notes: merged, tidied, dated lines.",
     )
 
 
@@ -354,12 +357,19 @@ _DIGEST_INSTRUCTIONS = (
     "nothing worth recalling)."
 )
 
-_CONSOLIDATE_INSTRUCTIONS = (
-    "You compress an agent's long-term notes. Merge duplicates and near-"
-    "duplicates, drop the least important entries, and keep durable preferences "
-    "and facts. Preserve meaning and keep each note in its original language; "
-    "be concise. Return the rewritten notes as a list of short, self-contained "
-    "lines that fit the requested budget."
+_DREAM_INSTRUCTIONS = (
+    "You maintain an agent's long-term notes while it sleeps. Merge "
+    "duplicates and near-duplicates into one well-phrased note each; when "
+    "two notes conflict, keep the newer one — notes carry [YYYY-MM] dates, "
+    "and a merged note keeps the newest date (stamp today's on any undated "
+    "line you keep). Drop notes that record one-off events, task logs, or "
+    "state better re-derived than remembered (directory contents, install "
+    "details), and notes that have plainly expired. Rewrite the survivors at "
+    "the right altitude: the lasting conclusion, not the play-by-play. Never "
+    "invent a fact that is not in the notes, and never drop the user's "
+    "explicit rules and preferences, however old. Keep each note one short, "
+    "self-contained, dated line in its original language. Return the full "
+    "rewritten list, fitting the requested budget."
 )
 
 _EXPAND_INSTRUCTIONS = (
@@ -414,7 +424,7 @@ async def _digest(
     return digest
 
 
-async def _consolidate(
+async def _dream(
     body: str,
     max_chars: int,
     model: "str | Provider",
@@ -424,15 +434,17 @@ async def _consolidate(
     from ...runner import Runner
 
     agent: Agent[Any] = Agent(
-        name="memory-consolidator",
+        name="memory-dream",
         model=model,
-        instructions=_CONSOLIDATE_INSTRUCTIONS,
-        output_type=_ConsolidatedNotes,
+        instructions=_DREAM_INSTRUCTIONS,
+        output_type=_DreamedNotes,
         settings=ModelSettings(temperature=0),
     )
+    # Today's date anchors newer-wins and lets undated legacy lines get
+    # stamped; this is a one-shot side-query, so no prompt-cache concerns.
     prompt = (
-        f"Rewrite these notes to fit within roughly {max_chars} characters "
-        f"total.\n\n{body}"
+        f"Today is {time.strftime('%Y-%m')}. Rewrite these notes to fit "
+        f"within roughly {max_chars} characters total.\n\n{body}"
     )
     result = await Runner.run(agent, prompt)
     facts = getattr(result.output, "facts", []) or []
@@ -565,9 +577,9 @@ class Memory:
 
     auto_curate: bool = True
     """When ``True`` (default), one model call at run end promotes durable
-    facts into Notes and writes an episode summary into the archive (plus a
-    consolidation call when Notes outgrow their budget). ``False`` = purely
-    manual memory."""
+    facts into Notes (dropping notes the run disproved) and writes an episode
+    summary into the archive. ``False`` = purely manual memory. The dream
+    pass is independent of this flag."""
 
     curate_in_background: bool = False
     """Run the end-of-run curation as a background task instead of inline.
@@ -593,8 +605,15 @@ class Memory:
     """Number of hits ``recall`` retrieves."""
 
     notes_budget: int = _DEFAULT_NOTES_BUDGET
-    """Char budget for Notes; exceeding it triggers consolidation and is
-    what the meter in the prompt reports."""
+    """Char budget for Notes; overflowing it triggers an immediate dream and
+    is what the meter in the prompt reports."""
+
+    dream_every_days: float | None = _DEFAULT_DREAM_EVERY_DAYS
+    """Cadence for the periodic dream — the maintenance pass that merges
+    near-duplicates, resolves contradictions (newer wins, by date stamp), and
+    drops stale or event-like notes. Between cadences a budget overflow still
+    dreams immediately; ``None`` keeps only that overflow trigger. Cadence
+    state is the mtime of a ``.dreamed`` marker file under ``root``."""
 
     model: "str | Provider | None" = None
     """Model for the curation side-queries. ``None`` (default) reuses the
@@ -894,10 +913,12 @@ class Memory:
                 await self._apply_digest(digest)
             except Exception:
                 logger.warning("memory: notes curation failed", exc_info=True)
+        # Outside the digest guard on purpose: manual remember/forget traffic
+        # and hand edits deserve maintenance too, auto_curate or not.
         try:
-            await self._consolidate_if_over_budget(ctx)
+            await self._dream_if_due(ctx)
         except Exception:
-            logger.warning("memory: notes consolidation failed", exc_info=True)
+            logger.warning("memory: dream failed", exc_info=True)
 
     def _run_docs(
         self,
@@ -936,21 +957,95 @@ class Memory:
             )
         return docs
 
-    async def _consolidate_if_over_budget(self, ctx: RunContext[Any]) -> None:
-        notes = self._notes_store()
-        # Hold the lock across the model call: consolidation rewrites the whole
-        # list, so a remember/forget landing between read and save would be
-        # silently overwritten. The contention is fine — consolidation is rare
-        # (budget breach at run end) and a blocked tool just waits it out.
-        async with self._notes_lock:
-            body = _format_facts(await notes.load())
-            if len(body) <= self.notes_budget:
-                return
-            facts = await _consolidate(
-                body, self.notes_budget, self._resolve_model(ctx)
+    # -- dreaming: periodic notes maintenance --------------------------------
+
+    async def dream(self, model: "str | Provider | None" = None) -> tuple[int, int]:
+        """Tidy Notes now; returns ``(before, after)`` note counts.
+
+        The dream pass merges near-duplicates into one well-phrased note,
+        resolves contradictions (newer wins, by date stamp), drops event-like
+        or expired notes, and rewrites the survivors within ``notes_budget``.
+        It runs by itself on the ``dream_every_days`` cadence and immediately
+        when Notes overflow their budget; call it directly for on-demand
+        tidying (a cleanup button, a one-off migration). ``model`` falls back
+        to ``Memory(model=...)``.
+        """
+        resolved = model if model is not None else self.model
+        if resolved is None:
+            raise UserError(
+                "Memory.dream() has no model to run on",
+                hint="pass dream(model=...) or construct Memory(model=...)",
             )
-            if facts:
-                await notes.save(facts)
+        return await self._run_dream(resolved)
+
+    async def _dream_if_due(self, ctx: RunContext[Any]) -> None:
+        body = _format_facts(await self._notes_store().load())
+        over = len(body) > self.notes_budget
+        if not over and not await asyncio.to_thread(self._dream_due):
+            return
+        await self._run_dream(self._resolve_model(ctx))
+
+    async def _run_dream(self, model: "str | Provider") -> tuple[int, int]:
+        notes = self._notes_store()
+        # Hold the lock across the model call: the dream rewrites the whole
+        # list, so a remember/forget landing between read and save would be
+        # silently overwritten. The contention is fine — dreams are rare and
+        # a blocked tool just waits one out.
+        async with self._notes_lock:
+            facts = await notes.load()
+            before = len(facts)
+            if not facts:
+                await asyncio.to_thread(self._touch_marker)
+                return (0, 0)
+            body = _format_facts(facts)
+            rewritten = await _dream(body, self.notes_budget, model)
+            after = before
+            if rewritten:
+                # One-generation undo for the only wholesale-rewrite path.
+                # Deeper history belongs to git and to the archive, which
+                # keeps the conversations every note came from.
+                await asyncio.to_thread(self._write_backup, body)
+                await notes.save(rewritten)
+                after = len(rewritten)
+            await asyncio.to_thread(self._touch_marker)
+        logger.info("memory: dream rewrote notes, %d → %d", before, after)
+        return (before, after)
+
+    def _dream_due(self) -> bool:
+        """Cadence check: ``dream_every_days`` elapsed and Notes changed since."""
+        if self.dream_every_days is None:
+            return False
+        marker = Path(self.root) / _DREAMED_FILENAME
+        try:
+            last = marker.stat().st_mtime
+        except FileNotFoundError:
+            # First contact starts the clock; don't dream over a newborn file.
+            self._touch_marker()
+            return False
+        if time.time() - last < self.dream_every_days * 86400.0:
+            return False
+        return self._notes_changed_since(last)
+
+    def _notes_changed_since(self, when: float) -> bool:
+        notes = self.notes
+        if isinstance(notes, FileNotesStore):
+            try:
+                return notes._path.stat().st_mtime > when
+            except FileNotFoundError:
+                return False
+        # A custom store has no cheap change signal — the cadence alone
+        # decides, at worst re-dreaming an unchanged list.
+        return True
+
+    def _touch_marker(self) -> None:
+        marker = Path(self.root) / _DREAMED_FILENAME
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+
+    def _write_backup(self, body: str) -> None:
+        bak = Path(self.root) / _BACKUP_FILENAME
+        bak.parent.mkdir(parents=True, exist_ok=True)
+        bak.write_text(body, encoding="utf-8")
 
 
 __all__ = [

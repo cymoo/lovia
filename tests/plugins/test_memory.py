@@ -727,46 +727,185 @@ async def test_ingest_failure_still_curates_notes(tmp_path, monkeypatch) -> None
     assert "a durable fact" in _bare(await mem._notes_store().load())
 
 
-async def test_consolidation_triggers_over_budget(tmp_path, monkeypatch) -> None:
+async def test_dream_triggers_over_budget(tmp_path, monkeypatch) -> None:
     async def fake_digest(entries, current, model):
         return _RunDigest(facts=["a very long fact that blows the tiny budget open"])
 
-    async def fake_consolidate(body, max_chars, model):
+    async def fake_dream(body, max_chars, model):
         assert len(body) > max_chars
         return ["compact fact"]
 
     monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
-    monkeypatch.setattr(plugin_mod, "_consolidate", fake_consolidate)
+    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
 
     mem = Memory(tmp_path / "mem", index=None, notes_budget=20)
     provider = ScriptedProvider([text("ok")])
     agent = Agent(name="a", model=provider, plugins=[mem])
     await Runner.run(agent, "go")
     assert await mem._notes_store().load() == ["compact fact"]
+    # The rewrite left its one-generation backup and refreshed the marker.
+    bak = (tmp_path / "mem" / "MEMORY.md.bak").read_text()
+    assert "blows the tiny budget" in bak
+    assert (tmp_path / "mem" / ".dreamed").exists()
 
 
-async def test_remember_during_consolidation_is_not_lost(tmp_path, monkeypatch) -> None:
-    # Consolidation rewrites the whole fact list around a slow model call; a
-    # remember() landing mid-flight must block on the lock and survive, not be
-    # overwritten by the consolidated save.
+async def test_remember_during_dream_is_not_lost(tmp_path, monkeypatch) -> None:
+    # The dream rewrites the whole fact list around a slow model call; a
+    # remember() landing mid-flight must block on the lock and survive, not
+    # be overwritten by the rewritten save.
     started = asyncio.Event()
 
-    async def slow_consolidate(body, max_chars, model):
+    async def slow_dream(body, max_chars, model):
         started.set()
         await asyncio.sleep(0.05)
         return ["compact fact"]
 
-    monkeypatch.setattr(plugin_mod, "_consolidate", slow_consolidate)
+    monkeypatch.setattr(plugin_mod, "_dream", slow_dream)
     mem = Memory(tmp_path / "mem", index=None, notes_budget=10)
     await mem._add_facts(["a very long fact exceeding the tiny budget"])
 
-    task = asyncio.create_task(mem._consolidate_if_over_budget(_ctx()))
+    task = asyncio.create_task(mem._dream_if_due(_ctx()))
     await started.wait()
     await mem.remember("landed mid-flight")
     await task
     facts = await mem._notes_store().load()
     assert "compact fact" in facts
     assert "landed mid-flight" in _bare(facts)
+
+
+# ---------------------------------------------------------------------------
+# Dream cadence and the manual dream()
+# ---------------------------------------------------------------------------
+
+
+def _fake_dream(counter: dict, result: list[str]):
+    async def fake(body, max_chars, model):
+        counter["n"] += 1
+        return result
+
+    return fake
+
+
+async def test_dream_first_contact_starts_clock_without_dreaming(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["a fact"])
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0  # marker was just created — nothing due yet
+    assert (tmp_path / "mem" / ".dreamed").exists()
+
+
+async def test_dream_cadence_fires_when_aged_and_changed(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)  # dream_every_days default: 3
+    await mem._add_facts(["a fact"])  # notes mtime: now
+    mem._touch_marker()
+    marker = tmp_path / "mem" / ".dreamed"
+    old = time.time() - 4 * 86400
+    os.utime(marker, (old, old))  # last dream: 4 days ago
+
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 1
+    assert await mem._notes_store().load() == ["tidy"]
+    # The dream refreshed the marker: immediately after, nothing is due.
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 1
+
+
+async def test_dream_cadence_skips_unchanged_notes(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["a fact"])
+    mem._touch_marker()
+    # Notes untouched since before the last dream → nothing to tidy.
+    os.utime(tmp_path / "mem" / "MEMORY.md", (time.time() - 5 * 86400,) * 2)
+    os.utime(tmp_path / "mem" / ".dreamed", (time.time() - 4 * 86400,) * 2)
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0
+
+
+async def test_dream_cadence_none_keeps_only_budget_trigger(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+    mem = Memory(tmp_path / "mem", index=None, dream_every_days=None)
+    await mem._add_facts(["a fact"])
+    await mem._dream_if_due(_ctx())
+    assert calls["n"] == 0  # no marker games, no cadence — and under budget
+    assert not (tmp_path / "mem" / ".dreamed").exists()
+
+    mem2 = Memory(tmp_path / "mem2", index=None, dream_every_days=None, notes_budget=10)
+    await mem2._add_facts(["a fact far beyond ten characters"])
+    await mem2._dream_if_due(_ctx())
+    assert calls["n"] == 1  # overflow still dreams
+
+
+async def test_dream_custom_store_falls_back_to_cadence_alone(
+    tmp_path, monkeypatch
+) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["tidy"]))
+
+    class ListNotes:
+        def __init__(self) -> None:
+            self.facts = ["[2026-01] a fact"]
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.facts = list(facts)
+
+    mem = Memory(tmp_path / "mem", notes=ListNotes(), index=None)
+    mem._touch_marker()
+    os.utime(tmp_path / "mem" / ".dreamed", (time.time() - 4 * 86400,) * 2)
+    await mem._dream_if_due(_ctx())  # no change signal → cadence decides
+    assert calls["n"] == 1
+
+
+async def test_manual_dream_returns_counts_and_backs_up(tmp_path, monkeypatch) -> None:
+    calls = {"n": 0}
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream(calls, ["[2026-01] merged"]))
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    await mem._add_facts(["fact one", "fact two"])
+    assert await mem.dream() == (2, 1)
+    assert await mem._notes_store().load() == ["[2026-01] merged"]
+    assert "fact one" in (tmp_path / "mem" / "MEMORY.md.bak").read_text()
+    assert (tmp_path / "mem" / ".dreamed").exists()
+    # An explicit model= overrides the configured one; still one call each.
+    assert await mem.dream(model="other-model") == (1, 1)
+    assert calls["n"] == 2
+
+
+async def test_manual_dream_without_model_errors(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    with pytest.raises(UserError, match="no model"):
+        await mem.dream()
+
+
+async def test_manual_dream_empty_notes_skips_model(tmp_path, monkeypatch) -> None:
+    async def boom(*a, **k):
+        raise AssertionError("must not be called on empty notes")
+
+    monkeypatch.setattr(plugin_mod, "_dream", boom)
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    assert await mem.dream() == (0, 0)
+
+
+async def test_dream_empty_rewrite_keeps_notes(tmp_path, monkeypatch) -> None:
+    # A model that returns nothing must never wipe the notes.
+    monkeypatch.setattr(plugin_mod, "_dream", _fake_dream({"n": 0}, []))
+    mem = Memory(tmp_path / "mem", index=None, model="test-model")
+    await mem._add_facts(["precious fact"])
+    assert await mem.dream() == (1, 1)
+    assert _bare(await mem._notes_store().load()) == ["precious fact"]
+    assert not (tmp_path / "mem" / "MEMORY.md.bak").exists()
 
 
 async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:

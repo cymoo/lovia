@@ -366,13 +366,17 @@ _DREAM_INSTRUCTIONS = (
     "two notes conflict, keep the newer one — notes carry [YYYY-MM] dates, "
     "and a merged note keeps the newest date (stamp today's on any undated "
     "line you keep). Drop notes that record one-off events, task logs, or "
-    "state better re-derived than remembered (directory contents, install "
-    "details), and notes that have plainly expired. Rewrite the survivors at "
-    "the right altitude: the lasting conclusion, not the play-by-play. Never "
-    "invent a fact that is not in the notes, and never drop the user's "
-    "explicit rules and preferences, however old. Keep each note one short, "
-    "self-contained, dated line in its original language. Return the full "
-    "rewritten list, fitting the requested budget."
+    "agent-produced deliverables (a plan, a report, a schedule); state "
+    "better re-derived than remembered (directory contents, install "
+    "details); permissions that were scoped to a single task; incidental "
+    "personal observations the user never asked to keep (health, mood); "
+    "open questions and unconfirmed leads parked as notes; and "
+    "notes that have plainly expired. Rewrite the survivors at the right "
+    "altitude: the lasting conclusion, not the play-by-play. Never invent a "
+    "fact that is not in the notes, and never drop the user's explicit rules "
+    "and preferences, however old. Keep each note one short, self-contained, "
+    "dated line in its original language. Return the full rewritten list, "
+    "fitting the requested budget."
 )
 
 _EXPAND_INSTRUCTIONS = (
@@ -422,7 +426,10 @@ async def _digest(
     )
     result = await Runner.run(agent, prompt)
     digest = cast(_RunDigest, result.output)
-    digest.facts = [n for f in digest.facts if (n := _normalize_fact(f))]
+    # Stamping is the code's job: a model echoing a date it saw in the
+    # current notes would mislabel a *new* fact as old and skew the dream's
+    # newer-wins. Stale entries keep their quotes — matching strips anyway.
+    digest.facts = [n for f in digest.facts if (n := _normalize_fact(_strip_date(f)))]
     digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
     return digest
 

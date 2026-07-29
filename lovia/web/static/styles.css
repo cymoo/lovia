@@ -2934,7 +2934,10 @@ dialog.custom-dialog::backdrop {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
+  /* When space runs out the meter and the button row wrap as whole blocks —
+     never letter-wrap inside a button or mid-timestamp. */
+  flex-wrap: wrap;
 }
 .memory-meter {
   font-size: 11.5px;
@@ -2948,6 +2951,11 @@ dialog.custom-dialog::backdrop {
 .memory-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.memory-actions .btn {
+  white-space: nowrap;
 }
 
 /* ---- Files panel ---------------------------------------------------------

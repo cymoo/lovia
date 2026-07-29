@@ -31,6 +31,7 @@ from lovia.plugins.memory.plugin import (
     _meter,
     _normalize_fact,
     _parse_facts,
+    _relocate_stamp,
     _RunDigest,
     _stamp,
     _strip_date,
@@ -137,6 +138,20 @@ def test_strip_date_fact_key_and_stamp(monkeypatch) -> None:
     monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     assert _stamp("likes jazz") == "[2026-01] likes jazz"
     assert _stamp("[2025-01] likes jazz") == "[2025-01] likes jazz"  # kept
+
+
+def test_relocate_stamp() -> None:
+    # A trailing stamp (some models append it) moves to the canonical front.
+    assert (
+        _relocate_stamp("用户的中文名是乐薇娅。[2026-07]")
+        == "[2026-07] 用户的中文名是乐薇娅。"
+    )
+    assert _relocate_stamp("fact text [2026-07]") == "[2026-07] fact text"
+    # Leading form is already canonical — trailing echoes stay as content.
+    assert _relocate_stamp("[2026-07] already leading") == "[2026-07] already leading"
+    assert _relocate_stamp("[2026-06] both [2026-07]") == "[2026-06] both [2026-07]"
+    assert _relocate_stamp("no stamps at all") == "no stamps at all"
+    assert _relocate_stamp("[2026-07]") == "[2026-07]"
 
 
 def test_hit_line_renders_date() -> None:

@@ -73,7 +73,7 @@ agent = Agent(
 
 - **周期**：每 `dream_every_days` 天（默认 3），在运行结束时检查；Notes 自上次 dream 后
   没有变化就跳过。状态就是 `.dreamed` 标记文件的 mtime。
-- **超预算**：Notes 超过 `notes_budget`（默认 5000 字符，模型会看到 meter）时立即 dream。
+- **超预算**：Notes 超过 `notes_budget`（默认 8000 字符，模型会看到 meter）时立即 dream。
 - **手动**：`await mem.dream()`，返回 `(before, after)` 条数。可以接一个「整理」按钮，
   或对膨胀的存量文件一次性清理。
 
@@ -142,7 +142,7 @@ RRF 融合的 `HybridIndex`。读取失败时会放行（坏掉的分支会跳�
 | `expand_query` | `"auto"` | LLM 查询扩展；auto = 只在默认纯词面索引时启用 |
 | `summarize_recall` | `True` | `recall` 返回模型写出的命中 summary |
 | `recall_k` | `5` | 每次 recall 取回的命中数 |
-| `notes_budget` | `5000` | Notes 字符预算，也是 prompt meter 和 dream 的超预算触发点 |
+| `notes_budget` | `8000` | Notes 字符预算，也是 prompt meter 和 dream 的超预算触发点 |
 | `dream_every_days` | `3` | 周期性 dream 的间隔；`None` 只保留超预算触发 |
 | `model` | 宿主 agent 的模型 | curation/recall 辅助查询使用的模型 |
 

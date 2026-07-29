@@ -41,7 +41,7 @@ async function openMemoryDialog() {
       <span class="memory-meter">${t('memory.loading')}</span>
       <div class="memory-actions">
         <button type="button" class="btn btn-ghost memory-dream" disabled
-          title="${t('memory.dream')}">${icon('moon', { size: 14 })} ${t('memory.dream')}</button>
+          title="${t('memory.dream')}">${icon('sparkles', { size: 14 })} ${t('memory.dream')}</button>
         <button type="button" class="btn btn-ghost memory-cancel">${t('dialog.cancel')}</button>
         <button type="button" class="btn btn-primary memory-save" disabled>${t('dialog.save')}</button>
       </div>
@@ -70,7 +70,7 @@ async function openMemoryDialog() {
     ];
     if (dropped) bits.push(t('memory.dropped', { n: dropped }));
     if (dreamedAt)
-      bits.push(t('memory.dreamedAt', { when: new Date(dreamedAt * 1000).toLocaleString() }));
+      bits.push(t('memory.dreamedAt', { when: new Date(dreamedAt * 1000).toLocaleDateString() }));
     meter.textContent = bits.join(' · ');
     meter.classList.toggle('warn', dropped > 0 || used > budget);
   };

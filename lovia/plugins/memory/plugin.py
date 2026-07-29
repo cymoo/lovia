@@ -290,9 +290,16 @@ class _RunDigest(BaseModel):
     facts: list[str] = Field(
         default_factory=list,
         description=(
-            "New durable facts worth remembering long-term (stable preferences, "
-            "corrections, lasting details about the user or project). Empty if "
-            "there is nothing new worth keeping."
+            "New durable facts worth keeping long-term: stable preferences, "
+            "standing rules, corrections, lasting details about the user or "
+            "their projects. Most runs have none — prefer empty over marginal."
+        ),
+    )
+    stale: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Existing notes this conversation revealed to be wrong, obsolete, "
+            "or superseded — quoted closely enough to match. Usually empty."
         ),
     )
     summary: str = Field(
@@ -320,19 +327,31 @@ class _ExpandedQuery(BaseModel):
 
 
 _DIGEST_INSTRUCTIONS = (
-    "You curate an agent's long-term memory. From a conversation, produce two "
-    "things.\n"
-    "1. facts: only facts that will still matter in future, unrelated sessions "
-    "— the user's stable preferences, corrections they made, and durable facts "
-    "about them or their project. Ignore transient task details, one-off "
-    "requests, and anything already covered by the current notes. Each fact is "
-    "one short, self-contained line in the conversation's dominant language. "
-    "If nothing qualifies, return an empty list.\n"
-    "2. summary: a few sentences capturing what the conversation was about — "
+    "You curate an agent's long-term memory. From a conversation, produce "
+    "three things.\n"
+    "1. facts: new durable facts that will still matter in future, unrelated "
+    "sessions — the user's stable preferences and standing rules, corrections "
+    "they made, and lasting details about them, their environment, or their "
+    'projects. Record the conclusion, not the event ("user prefers X", not '
+    '"user did X today"). The test: would this change the agent\'s behavior '
+    "in a fresh session a month from now? Never record: state re-derivable "
+    "from files or a quick command (directory listings, config values, "
+    "versions); one-off task outputs and their details (logs, counts, sizes); "
+    "open questions or things to verify later; permissions granted for the "
+    "task at hand; sensitive personal details (health, relationships, "
+    "finances) unless the user explicitly asked to remember them. Most "
+    "conversations yield nothing — prefer an empty list over a marginal fact, "
+    "and more than three facts is almost never right. Each fact is one short, "
+    "self-contained line in the conversation's dominant language.\n"
+    "2. stale: existing notes that this conversation showed to be wrong, "
+    "obsolete, or superseded by a new fact — quoted from the current notes "
+    "closely enough to identify them. Empty otherwise.\n"
+    "3. summary: a few sentences capturing what the conversation was about — "
     "topics, decisions, and outcomes — written to be found and understood on "
     "its own later, in the conversation's dominant language. Quote names, "
-    "numbers, and identifiers exactly as they appeared. Empty if the "
-    "conversation is trivial (greetings, tests, nothing worth recalling)."
+    "numbers, and identifiers exactly as they appeared: detail belongs here, "
+    "not in facts. Empty if the conversation is trivial (greetings, tests, "
+    "nothing worth recalling)."
 )
 
 _CONSOLIDATE_INSTRUCTIONS = (
@@ -384,13 +403,14 @@ async def _digest(
         settings=ModelSettings(temperature=0),
     )
     prompt = (
-        f"## Current notes (do NOT repeat these in facts)\n"
+        f"## Current notes (the source for stale; do NOT repeat them in facts)\n"
         f"{current_notes or '(empty)'}\n\n"
         f"## Conversation\n{convo}"
     )
     result = await Runner.run(agent, prompt)
     digest = cast(_RunDigest, result.output)
     digest.facts = [n for f in digest.facts if (n := _normalize_fact(f))]
+    digest.stale = [n for f in digest.stale if (n := _normalize_fact(f))]
     return digest
 
 
@@ -501,8 +521,9 @@ def _build_instructions(has_index: bool) -> str:
             "refers to something earlier or you need context not in your notes."
         )
     parts.append(
-        "Save durable facts proactively, but don't record transient task "
-        "details or things that won't matter later."
+        "When the user asks you to remember something, or corrects a wrong "
+        "assumption, call `remember` immediately; everything else is curated "
+        "automatically when the run ends — never record transient task details."
     )
     return "\n".join(parts)
 
@@ -654,6 +675,30 @@ class Memory:
             if added:
                 await notes.save(facts)
         return added
+
+    async def _apply_digest(self, digest: _RunDigest) -> tuple[int, int]:
+        """Apply a run digest to Notes atomically: drop stale, then add facts.
+
+        One lock cycle, one save — a supersession (stale old + new fact) can
+        never be torn apart by a concurrent write landing in between.
+        Returns ``(dropped, added)``.
+        """
+        notes = self._notes_store()
+        async with self._notes_lock:
+            facts = await notes.load()
+            dropped = 0
+            for target in digest.stale:
+                kept = _drop_fact(facts, target)
+                if len(kept) == len(facts):
+                    continue
+                gone = next(f for f in facts if f not in kept)
+                logger.info("memory: dropped stale note: %s", gone)
+                facts = kept
+                dropped += 1
+            added = _merge_new(facts, digest.facts)
+            if dropped or added:
+                await notes.save(facts)
+        return dropped, added
 
     async def remember(self, fact: str) -> bool:
         """Add one durable fact to Notes; ``False`` if it was already there.
@@ -844,12 +889,15 @@ class Memory:
             except Exception:
                 logger.warning("memory: archive ingest failed", exc_info=True)
 
-        if digest and digest.facts:
+        if digest and (digest.facts or digest.stale):
             try:
-                await self._add_facts(digest.facts)
-                await self._consolidate_if_over_budget(ctx)
+                await self._apply_digest(digest)
             except Exception:
                 logger.warning("memory: notes curation failed", exc_info=True)
+        try:
+            await self._consolidate_if_over_budget(ctx)
+        except Exception:
+            logger.warning("memory: notes consolidation failed", exc_info=True)
 
     def _run_docs(
         self,

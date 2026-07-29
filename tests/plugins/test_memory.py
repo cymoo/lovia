@@ -584,6 +584,74 @@ async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     assert all(d.when > 0 for d in index.added)
 
 
+async def test_digest_stale_supersedes_existing_note(tmp_path, monkeypatch) -> None:
+    # A correction arrives as a (stale old, new fact) pair; the old note is
+    # dropped even though the model quoted it with a different stamp and case.
+    async def fake_digest(entries, current, model):
+        return _RunDigest(
+            facts=["user now prefers uv"],
+            stale=["[2020-01] User Prefers Pip"],
+            summary="",
+        )
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["user prefers pip"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "I switched from pip to uv")
+    assert _bare(await mem._notes_store().load()) == ["user now prefers uv"]
+
+
+async def test_digest_stale_only_still_applies(tmp_path, monkeypatch) -> None:
+    # No new facts, one retraction: the write path must still run.
+    async def fake_digest(entries, current, model):
+        return _RunDigest(stale=["user prefers pip"])
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["user prefers pip", "likes jazz"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "actually forget the pip thing")
+    assert _bare(await mem._notes_store().load()) == ["likes jazz"]
+
+
+async def test_digest_stale_no_match_is_noop(tmp_path, monkeypatch) -> None:
+    async def fake_digest(entries, current, model):
+        return _RunDigest(facts=["new fact"], stale=["never existed"])
+
+    monkeypatch.setattr(plugin_mod, "_digest", fake_digest)
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["likes jazz"])
+    agent = Agent(name="a", model=ScriptedProvider([text("ok")]), plugins=[mem])
+    await Runner.run(agent, "go")
+    assert _bare(await mem._notes_store().load()) == ["likes jazz", "new fact"]
+
+
+async def test_apply_digest_is_one_save(tmp_path) -> None:
+    # Supersession is atomic: stale drop + fact add land in a single save, so
+    # no reader can observe the in-between state (old gone, new missing).
+    class SpyNotes:
+        def __init__(self) -> None:
+            self.facts: list[str] = ["[2026-01] user prefers pip"]
+            self.saves = 0
+
+        async def load(self) -> list[str]:
+            return list(self.facts)
+
+        async def save(self, facts: list[str]) -> None:
+            self.saves += 1
+            self.facts = list(facts)
+
+    notes = SpyNotes()
+    mem = Memory(tmp_path / "mem", notes=notes, index=None)
+    dropped, added = await mem._apply_digest(
+        _RunDigest(facts=["user prefers uv"], stale=["user prefers pip"])
+    )
+    assert (dropped, added) == (1, 1)
+    assert notes.saves == 1
+    assert _bare(notes.facts) == ["user prefers uv"]
+
+
 async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> None:
     # With curate_in_background the run returns while the digest is still
     # parked on the gate (inline mode would deadlock here); drain() settles it.

@@ -3,11 +3,14 @@
 ``Memory`` gives an agent a long-term memory that survives across runs and
 sessions, built from two tiers and three verbs the model already understands:
 
-* **Notes** (the *hot* tier) — a tiny, char-budgeted list of facts that is
-  **always injected** into the system prompt: the user's stable preferences,
-  durable facts, important context. The model curates it with
+* **Notes** (the *hot* tier) — a tiny, char-budgeted list of date-stamped
+  facts that is **always injected** into the system prompt: the user's stable
+  preferences, durable facts, important context. The model curates it with
   ``remember(fact)`` / ``forget(fact)``, and (when ``auto_curate``) the plugin
-  promotes durable facts into it automatically at the end of each run.
+  promotes durable facts into it — and retires disproved ones — automatically
+  at the end of each run. A periodic *dream* pass (:meth:`Memory.dream`)
+  merges near-duplicates, resolves contradictions (newer wins), and prunes
+  stale entries, so Notes stay small and current instead of only growing.
 * **Archive** (the *cold* tier) — a searchable index of past conversations,
   pulled in on demand via ``recall(query)``.
 

@@ -58,7 +58,7 @@ log = logging.getLogger("lovia.web.cli")
 WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
-DEFAULT_SKILLS_DIR = "skills"
+DEFAULT_SKILLS_DIR = ".agents/skills"
 DEFAULT_MEMORY_DIR = "./.lovia/memory"
 DEFAULT_AGENT_NAME = "lovia"
 DEFAULT_MAX_TURNS = 50
@@ -429,6 +429,14 @@ def resolve_max_tokens(cli: int | None) -> int | None:
 
 
 def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
+    """Skill directories: ``--skills-dir`` > ``LOVIA_SKILLS_DIR`` > the default.
+
+    The default is ``./.agents/skills`` when present — the cross-agent
+    convention (shared with Claude Code, Codex, OpenCode), pairing with the
+    ``AGENTS.md`` instructions default. A bare ``./skills`` was the default
+    before 0.9.13; it is no longer auto-loaded (the generic name collides
+    with non-skill directories), so we point at the move once at startup.
+    """
     if cli_dirs:
         dirs = [Path(d) for d in cli_dirs]
         for d in dirs:
@@ -442,7 +450,15 @@ def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
             raise CliError(f"skills directory not found (LOVIA_SKILLS_DIR): {d}")
         return [d]
     default = Path(DEFAULT_SKILLS_DIR)
-    return [default] if default.is_dir() else []
+    if default.is_dir():
+        return [default]
+    if Path("skills").is_dir():
+        log.warning(
+            "./skills is no longer auto-loaded; move it to ./%s "
+            "or pass --skills-dir skills",
+            DEFAULT_SKILLS_DIR,
+        )
+    return []
 
 
 def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:

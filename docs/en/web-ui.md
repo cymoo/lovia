@@ -23,7 +23,8 @@ to save user-wide or to the project-local `./.lovia/config.env`. To see what
 configuration would win and whether the endpoint answers, run
 `lovia web --check`.
 
-The default Agent includes `Todo`, optional Skills from `./skills`, Memory in
+The default Agent includes `Todo`, optional Skills from `./.agents/skills`
+(the cross-agent convention, shared with e.g. Claude Code and Codex), Memory in
 `./.lovia/memory`, time and HTTP Tools, web search (Tavily when
 `TAVILY_API_KEY` is set, else optional DuckDuckGo), scheduling, and a
 coding-mode Workspace rooted at the current directory. If `AGENTS.md` exists,
@@ -116,7 +117,7 @@ prints the same and probes the endpoint without serving.
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--model` | `LOVIA_MODEL` | Asked on first run |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |
-| `--skills-dir` | `LOVIA_SKILLS_DIR` | `./skills` when present |
+| `--skills-dir` | `LOVIA_SKILLS_DIR` | `./.agents/skills` when present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |

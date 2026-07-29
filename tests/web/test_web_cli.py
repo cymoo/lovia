@@ -44,8 +44,22 @@ def test_resolve_skills_default_present(
 ) -> None:
     monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    assert cli.resolve_skills_dirs(None) == [Path(".agents/skills")]
+
+
+def test_resolve_skills_legacy_dir_ignored_with_hint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Pre-0.9.13 default: a bare ./skills is no longer auto-loaded.
+    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     (tmp_path / "skills").mkdir()
-    assert cli.resolve_skills_dirs(None) == [Path("skills")]
+    with caplog.at_level("WARNING", logger="lovia.web.cli"):
+        assert cli.resolve_skills_dirs(None) == []
+    assert "no longer auto-loaded" in caplog.text
 
 
 def test_resolve_skills_default_absent(
@@ -395,14 +409,15 @@ def _provider(model: str = "test-model") -> object:
 def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
-    (tmp_path / "skills").mkdir()
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
     args = cli.build_parser().parse_args([])
     provider = _provider()
     agent = cli.build_default_agent(args, ChatStore.in_memory(), provider)
     assert agent.name == "lovia"
     assert agent.model is provider
     assert agent.instructions == cli.GENERIC_INSTRUCTIONS
-    # ./skills -> Skills, plus the on-by-default Todo + Scheduling + Memory plugins.
+    # ./.agents/skills -> Skills, plus the on-by-default Todo + Scheduling +
+    # Memory plugins.
     assert {type(p).__name__ for p in agent.plugins} == {
         "Skills",
         "Todo",

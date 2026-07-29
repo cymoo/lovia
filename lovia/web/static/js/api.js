@@ -225,6 +225,10 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ content }),
     }).then(_jsonOrDetail),
+  // Runs the dream pass (merge duplicates, resolve conflicts, prune stale);
+  // returns {before, after} counts plus the fresh canonical body.
+  dreamMemory: ({ agent } = {}) =>
+    fetch(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_jsonOrDetail),
 };
 
 // Like `_json`, but raises the server's `{detail}` message (422/404) so the

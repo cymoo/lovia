@@ -21,8 +21,9 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
+from ...exceptions import UserError
 from ...plugins.memory import Memory
-from ..schemas import MemoryNotes, MemoryUpdate
+from ..schemas import MemoryDreamResult, MemoryNotes, MemoryUpdate
 from .deps import RouterDeps
 
 
@@ -37,18 +38,24 @@ def memory_plugin(agent: Agent[Any]) -> Memory | None:
 def build_memory_router(deps: RouterDeps) -> APIRouter:
     router = APIRouter()
 
-    def require_memory(agent_name: str | None) -> Memory:
-        plugin = memory_plugin(deps.pick(agent_name))
+    def require_memory(agent_name: str | None) -> tuple[Agent[Any], Memory]:
+        host = deps.pick(agent_name)
+        plugin = memory_plugin(host)
         if plugin is None:
             raise HTTPException(status_code=404, detail="agent has no memory")
-        return plugin
+        return host, plugin
 
     def notes_out(plugin: Memory, body: str) -> MemoryNotes:
-        return MemoryNotes(content=body, used=len(body), budget=plugin.notes_budget)
+        return MemoryNotes(
+            content=body,
+            used=len(body),
+            budget=plugin.notes_budget,
+            dreamed_at=plugin.dreamed_at(),
+        )
 
     @router.get("/api/memory", response_model=MemoryNotes)
     async def get_memory(agent: str | None = Query(None)) -> MemoryNotes:
-        plugin = require_memory(agent)
+        _, plugin = require_memory(agent)
         return notes_out(plugin, await plugin.notes_body())
 
     @router.put("/api/memory", response_model=MemoryNotes)
@@ -56,7 +63,24 @@ def build_memory_router(deps: RouterDeps) -> APIRouter:
         payload: MemoryUpdate, agent: str | None = Query(None)
     ) -> MemoryNotes:
         """Replace the Notes; returns the canonical form actually stored."""
-        plugin = require_memory(agent)
+        _, plugin = require_memory(agent)
         return notes_out(plugin, await plugin.replace_notes(payload.content))
+
+    @router.post("/api/memory/dream", response_model=MemoryDreamResult)
+    async def dream_memory(agent: str | None = Query(None)) -> MemoryDreamResult:
+        """Run the dream pass now; returns counts plus the fresh body.
+
+        The editor's tidy-up button. The plugin's own model wins when
+        configured; otherwise the host agent's model runs the rewrite —
+        same resolution curation uses at run end.
+        """
+        host, plugin = require_memory(agent)
+        try:
+            before, after = await plugin.dream(model=plugin.model or host.model)
+        except UserError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        body = await plugin.notes_body()
+        base = notes_out(plugin, body)
+        return MemoryDreamResult(**base.model_dump(), before=before, after=after)
 
     return router

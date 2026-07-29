@@ -40,6 +40,8 @@ async function openMemoryDialog() {
     <div class="memory-foot">
       <span class="memory-meter">${t('memory.loading')}</span>
       <div class="memory-actions">
+        <button type="button" class="btn btn-ghost memory-dream" disabled
+          title="${t('memory.dream')}">${icon('moon', { size: 14 })} ${t('memory.dream')}</button>
         <button type="button" class="btn btn-ghost memory-cancel">${t('dialog.cancel')}</button>
         <button type="button" class="btn btn-primary memory-save" disabled>${t('dialog.save')}</button>
       </div>
@@ -48,7 +50,9 @@ async function openMemoryDialog() {
   const editor = /** @type {HTMLTextAreaElement} */ (panel.querySelector('.memory-editor'));
   const meter = panel.querySelector('.memory-meter');
   const saveBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.memory-save'));
+  const dreamBtn = /** @type {HTMLButtonElement} */ (panel.querySelector('.memory-dream'));
   let budget = 0;
+  let dreamedAt = null;
 
   const dialog = showDialog({ body: panel });
   dialog.classList.add('dialog-wide');
@@ -65,6 +69,8 @@ async function openMemoryDialog() {
       }),
     ];
     if (dropped) bits.push(t('memory.dropped', { n: dropped }));
+    if (dreamedAt)
+      bits.push(t('memory.dreamedAt', { when: new Date(dreamedAt * 1000).toLocaleString() }));
     meter.textContent = bits.join(' · ');
     meter.classList.toggle('warn', dropped > 0 || used > budget);
   };
@@ -81,12 +87,37 @@ async function openMemoryDialog() {
     }
   }
 
+  // The dream pass rewrites the whole list server-side (the previous body
+  // lands in MEMORY.md.bak); the editor refreshes to the tidied result.
+  async function dreamNow() {
+    dreamBtn.disabled = true;
+    saveBtn.disabled = true;
+    editor.disabled = true;
+    meter.textContent = t('memory.dreaming');
+    try {
+      const data = await api.dreamMemory({ agent: store.agent });
+      budget = data.budget;
+      dreamedAt = data.dreamed_at;
+      editor.value = data.content;
+      toast(t('toast.memoryDreamed', { before: data.before, after: data.after }));
+    } catch (err) {
+      toast(err.message || t('memory.dreamFailed'), { type: 'error' });
+    } finally {
+      editor.disabled = false;
+      saveBtn.disabled = false;
+      dreamBtn.disabled = false;
+      syncMeter();
+    }
+  }
+
   try {
     const data = await api.getMemory({ agent: store.agent });
     budget = data.budget;
+    dreamedAt = data.dreamed_at;
     editor.value = data.content;
     editor.disabled = false;
     saveBtn.disabled = false;
+    dreamBtn.disabled = false;
     syncMeter();
     editor.focus();
     editor.setSelectionRange(editor.value.length, editor.value.length);
@@ -96,6 +127,7 @@ async function openMemoryDialog() {
     return;
   }
 
+  dreamBtn.addEventListener('click', dreamNow);
   editor.addEventListener('input', syncMeter);
   editor.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {

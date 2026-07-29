@@ -77,7 +77,12 @@ def test_agent_without_memory_404s(client: TestClient) -> None:
 
 def test_get_empty_notes(client: TestClient, mem: Memory) -> None:
     data = client.get("/api/memory", params={"agent": "bot"}).json()
-    assert data == {"content": "", "used": 0, "budget": mem.notes_budget}
+    assert data == {
+        "content": "",
+        "used": 0,
+        "budget": mem.notes_budget,
+        "dreamed_at": None,
+    }
 
 
 async def test_get_reflects_plugin_writes(client: TestClient, mem: Memory) -> None:
@@ -110,6 +115,37 @@ def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> N
         "/api/memory", params={"agent": "bot"}, json={"content": ""}
     ).json()
     assert wiped["content"] == "" and wiped["used"] == 0
+
+
+# ----------------------------------------------------------------- dream -
+
+
+async def test_dream_endpoint_tidies_and_reports(
+    client: TestClient, mem: Memory, monkeypatch
+) -> None:
+    async def fake_dream(body, max_chars, model):
+        return ["[2026-01] merged note"]
+
+    monkeypatch.setattr(plugin_mod, "_dream", fake_dream)
+    await mem.remember("fact one")
+    await mem.remember("fact two")
+
+    data = client.post("/api/memory/dream", params={"agent": "bot"}).json()
+    assert (data["before"], data["after"]) == (2, 1)
+    assert data["content"] == "- [2026-01] merged note"
+    assert data["used"] == len(data["content"])
+    assert data["dreamed_at"] is not None
+
+    # The editor's follow-up GET sees the tidied notes and the timestamp.
+    again = client.get("/api/memory", params={"agent": "bot"}).json()
+    assert again["content"] == data["content"]
+    assert again["dreamed_at"] == data["dreamed_at"]
+
+
+def test_dream_endpoint_404s_without_memory(client: TestClient) -> None:
+    assert (
+        client.post("/api/memory/dream", params={"agent": "plain"}).status_code == 404
+    )
 
 
 # ------------------------------------------------------------- shutdown -

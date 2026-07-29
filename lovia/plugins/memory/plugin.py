@@ -1021,14 +1021,26 @@ class Memory:
         logger.info("memory: dream rewrote notes, %d → %d", before, after)
         return (before, after)
 
+    def dreamed_at(self) -> float | None:
+        """Epoch mtime of the last dream, or ``None`` before the first one.
+
+        Reads the ``.dreamed`` marker; the web UI shows this next to its
+        tidy-up button.
+        """
+        try:
+            return self._marker().stat().st_mtime
+        except FileNotFoundError:
+            return None
+
+    def _marker(self) -> Path:
+        return Path(self.root) / _DREAMED_FILENAME
+
     def _dream_due(self) -> bool:
         """Cadence check: ``dream_every_days`` elapsed and Notes changed since."""
         if self.dream_every_days is None:
             return False
-        marker = Path(self.root) / _DREAMED_FILENAME
-        try:
-            last = marker.stat().st_mtime
-        except FileNotFoundError:
+        last = self.dreamed_at()
+        if last is None:
             # First contact starts the clock; don't dream over a newborn file.
             self._touch_marker()
             return False
@@ -1048,7 +1060,7 @@ class Memory:
         return True
 
     def _touch_marker(self) -> None:
-        marker = Path(self.root) / _DREAMED_FILENAME
+        marker = self._marker()
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
 

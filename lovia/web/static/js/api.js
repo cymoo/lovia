@@ -227,6 +227,7 @@ export const api = {
     }).then(_jsonOrDetail),
   // Runs the dream pass (merge duplicates, resolve conflicts, prune stale);
   // returns {before, after} counts plus the fresh canonical body.
+  /** @param {{ agent?: string }} [opts] */
   dreamMemory: ({ agent } = {}) =>
     fetch(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_jsonOrDetail),
 };

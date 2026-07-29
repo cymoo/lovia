@@ -9,6 +9,7 @@ the 404 shape for agents without the plugin.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -81,9 +82,10 @@ def test_get_empty_notes(client: TestClient, mem: Memory) -> None:
 
 async def test_get_reflects_plugin_writes(client: TestClient, mem: Memory) -> None:
     await mem.remember("likes jazz")
+    line = f"- [{time.strftime('%Y-%m')}] likes jazz"
     data = client.get("/api/memory", params={"agent": "bot"}).json()
-    assert data["content"] == "- likes jazz"
-    assert data["used"] == len("- likes jazz")
+    assert data["content"] == line
+    assert data["used"] == len(line)
 
 
 def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> None:
@@ -91,8 +93,10 @@ def test_put_normalizes_and_round_trips(client: TestClient, tmp_path: Path) -> N
     r = client.put("/api/memory", params={"agent": "bot"}, json={"content": body})
     assert r.status_code == 200
     data = r.json()
-    # Canonical form: bullets only, whitespace collapsed, case-insensitive dedup.
-    assert data["content"] == "- uses vim daily\n- speaks French"
+    # Canonical form: bullets only, whitespace collapsed, keyed dedup, and a
+    # [YYYY-MM] stamp on lines the editor added without one.
+    month = time.strftime("%Y-%m")
+    assert data["content"] == f"- [{month}] uses vim daily\n- [{month}] speaks French"
     assert data["used"] == len(data["content"])
 
     again = client.get("/api/memory", params={"agent": "bot"}).json()
@@ -126,4 +130,5 @@ def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> Non
 
     with TestClient(app) as client:  # the context manager runs the lifespan
         assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
-    assert (tmp_path / "mem" / "MEMORY.md").read_text() == "- survives shutdown"
+    body = (tmp_path / "mem" / "MEMORY.md").read_text()
+    assert body == f"- [{time.strftime('%Y-%m')}] survives shutdown"

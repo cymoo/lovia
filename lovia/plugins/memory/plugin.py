@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -95,9 +96,34 @@ _DEFAULT_NOTES_BUDGET = 5000
 # ---------------------------------------------------------------------------
 
 
+_DATE_PREFIX = re.compile(r"^\[\d{4}-\d{2}\]\s*")
+
+
 def _normalize_fact(fact: str) -> str:
     """Collapse a fact to a single trimmed line (notes are one fact per line)."""
     return " ".join(fact.split())
+
+
+def _strip_date(fact: str) -> str:
+    """The fact without its ``[YYYY-MM]`` prefix (if any)."""
+    return _DATE_PREFIX.sub("", fact)
+
+
+def _fact_key(fact: str) -> str:
+    """Comparison key for dedup and matching: date-stripped, normalized, lowered.
+
+    Keyed comparison is what makes date stamps free: a replayed digest or a
+    hand-pasted note never duplicates an existing fact just because the
+    month moved on.
+    """
+    return _normalize_fact(_strip_date(fact)).lower()
+
+
+def _stamp(fact: str) -> str:
+    """Prefix ``fact`` with the current ``[YYYY-MM]`` unless it carries one."""
+    if _DATE_PREFIX.match(fact):
+        return fact
+    return f"[{time.strftime('%Y-%m')}] {fact}"
 
 
 def _parse_facts(body: str) -> list[str]:
@@ -118,20 +144,45 @@ def _format_facts(facts: list[str]) -> str:
 
 
 def _drop_fact(facts: list[str], target: str) -> list[str]:
-    """Remove the best match for ``target`` (exact → case-insensitive → substring)."""
+    """Remove the best match for ``target`` (exact → keyed → substring).
+
+    All fuzzy tiers compare via :func:`_fact_key`, so a date prefix on either
+    side never blocks a match.
+    """
     if target in facts:
         out = list(facts)
         out.remove(target)
         return out
-    low = target.lower()
+    key = _fact_key(target)
+    if not key:
+        return list(facts)
     for i, f in enumerate(facts):
-        if f.lower() == low:
+        if _fact_key(f) == key:
             return facts[:i] + facts[i + 1 :]
     for i, f in enumerate(facts):
-        fl = f.lower()
-        if low in fl or fl in low:
+        fk = _fact_key(f)
+        if fk and (key in fk or fk in key):
             return facts[:i] + facts[i + 1 :]
     return list(facts)
+
+
+def _merge_new(facts: list[str], new: list[str]) -> int:
+    """Append the facts from ``new`` not already in ``facts``, stamped; in place.
+
+    The shared write policy: normalize, drop blanks and keyed duplicates,
+    date-stamp anything undated. Returns the number appended.
+    """
+    seen = {_fact_key(f) for f in facts}
+    added = 0
+    for fact in new:
+        norm = _normalize_fact(fact)
+        key = _fact_key(norm)
+        if not key or key in seen:
+            continue
+        facts.append(_stamp(norm))
+        seen.add(key)
+        added += 1
+    return added
 
 
 def _meter(used: int, total: int) -> str:
@@ -595,19 +646,11 @@ class Memory:
         return f"NOTES {meter}\n{body}"
 
     async def _add_facts(self, new: list[str]) -> int:
-        """Merge normalized facts into Notes (case-insensitive dedup)."""
+        """Merge normalized facts into Notes (date-stamped, keyed dedup)."""
         notes = self._notes_store()
         async with self._notes_lock:
             facts = await notes.load()
-            seen = {f.lower() for f in facts}
-            added = 0
-            for fact in new:
-                norm = _normalize_fact(fact)
-                if not norm or norm.lower() in seen:
-                    continue
-                facts.append(norm)
-                seen.add(norm.lower())
-                added += 1
+            added = _merge_new(facts, new)
             if added:
                 await notes.save(facts)
         return added
@@ -652,16 +695,12 @@ class Memory:
         The bulk counterpart to :meth:`remember` / :meth:`forget`, for editor
         flows (the web UI, imports): ``body`` uses the same ``- fact`` per line
         form :meth:`notes_body` returns. Non-bullet lines are ignored, facts
-        are normalized and case-insensitively deduplicated — the same policy
-        every other Notes write applies. Returns the canonical body stored.
+        are normalized, deduplicated by key, and date-stamped when undated —
+        the same policy every other Notes write applies. Returns the
+        canonical body stored.
         """
         facts: list[str] = []
-        seen: set[str] = set()
-        for fact in _parse_facts(body):
-            norm = _normalize_fact(fact)
-            if norm and norm.lower() not in seen:
-                facts.append(norm)
-                seen.add(norm.lower())
+        _merge_new(facts, _parse_facts(body))
         async with self._notes_lock:
             await self._notes_store().save(facts)
         return _format_facts(facts)

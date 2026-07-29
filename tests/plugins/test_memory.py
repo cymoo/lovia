@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,12 +25,15 @@ from lovia.plugins.memory.plugin import (
     FileNotesStore,
     Memory,
     _drop_fact,
+    _fact_key,
     _format_facts,
     _hit_line,
     _meter,
     _normalize_fact,
     _parse_facts,
     _RunDigest,
+    _stamp,
+    _strip_date,
 )
 from lovia.plugins.memory.vector import VectorIndex
 from lovia.transcript import (
@@ -40,6 +44,11 @@ from lovia.transcript import (
 )
 
 from ..scripted_provider import ScriptedProvider, call, text
+
+
+def _bare(facts: list[str]) -> list[str]:
+    """The facts without their ``[YYYY-MM]`` stamps, for content assertions."""
+    return [_strip_date(f) for f in facts]
 
 
 def _msgs(*pairs: tuple[str, str]) -> list:
@@ -110,6 +119,26 @@ def test_drop_fact_strategies() -> None:
     assert _drop_fact(["x"], "nope") == ["x"]  # no match → unchanged
 
 
+def test_drop_fact_ignores_date_prefix() -> None:
+    # Dates never block a match: stamped note, bare target and vice versa.
+    assert _drop_fact(["[2026-01] user likes vim"], "user likes vim") == []
+    assert _drop_fact(["[2026-01] user likes vim"], "[2026-06] USER LIKES VIM") == []
+    assert _drop_fact(["user likes vim"], "[2026-06] likes vim") == []  # substring
+    # A date-only target matches nothing (its key is empty).
+    assert _drop_fact(["[2026-01] x"], "[2026-02]") == ["[2026-01] x"]
+
+
+def test_strip_date_fact_key_and_stamp() -> None:
+    assert _strip_date("[2026-07] likes jazz") == "likes jazz"
+    assert _strip_date("no date here") == "no date here"
+    assert _strip_date("[199-07] malformed stays") == "[199-07] malformed stays"
+    assert _fact_key("[2026-07]  Likes   Jazz ") == "likes jazz"
+    assert _fact_key("[2026-07]") == ""
+    month = time.strftime("%Y-%m")
+    assert _stamp("likes jazz") == f"[{month}] likes jazz"
+    assert _stamp("[2025-01] likes jazz") == "[2025-01] likes jazz"  # kept
+
+
 def test_hit_line_renders_date() -> None:
     hit = Hit(doc=Doc(id="a", text="saw Rex", when=86400.0 * 365 * 30), score=1.0)
     line = _hit_line(hit)
@@ -152,7 +181,24 @@ async def test_add_facts_normalizes_and_dedups(tmp_path) -> None:
     assert await mem._add_facts(["I PREFER TABS."]) == 0  # case-insensitive dup
     assert await mem._add_facts(["My name is\nAlice"]) == 1  # multi-line → one line
     assert await mem._add_facts(["   "]) == 0  # blank → ignored
-    assert await mem._notes_store().load() == ["I prefer tabs.", "My name is Alice"]
+    facts = await mem._notes_store().load()
+    assert _bare(facts) == ["I prefer tabs.", "My name is Alice"]
+    # Everything written got the current month's stamp.
+    month = time.strftime("%Y-%m")
+    assert all(f.startswith(f"[{month}] ") for f in facts)
+
+
+async def test_add_facts_stamps_and_dedups_across_months(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None)
+    await mem._add_facts(["likes jazz"])
+    # The same fact arriving under an older stamp (a replayed digest, a
+    # hand-pasted note) is a duplicate, not a new fact.
+    assert await mem._add_facts(["[2025-12] likes jazz"]) == 0
+    # An incoming fact that already carries a stamp keeps it.
+    assert await mem._add_facts(["[2025-11] drinks tea"]) == 1
+    assert "[2025-11] drinks tea" in await mem._notes_store().load()
+    # A date-only line is as good as blank.
+    assert await mem._add_facts(["[2025-10]"]) == 0
 
 
 async def test_concurrent_adds_are_serialized(tmp_path) -> None:
@@ -160,7 +206,7 @@ async def test_concurrent_adds_are_serialized(tmp_path) -> None:
     await asyncio.gather(*(mem._add_facts([f"fact number {i}"]) for i in range(50)))
     facts = await mem._notes_store().load()
     assert len(facts) == 50
-    assert set(facts) == {f"fact number {i}" for i in range(50)}
+    assert set(_bare(facts)) == {f"fact number {i}" for i in range(50)}
 
 
 async def test_public_remember_and_forget(tmp_path) -> None:
@@ -179,9 +225,10 @@ async def test_notes_body_and_replace_notes(tmp_path) -> None:
     # The editor seam: read the canonical body, replace it wholesale with the
     # same normalization/dedup policy every other Notes write applies.
     mem = Memory(tmp_path / "mem", index=None)
+    month = time.strftime("%Y-%m")
     assert await mem.notes_body() == ""
     await mem.remember("likes jazz")
-    assert await mem.notes_body() == "- likes jazz"
+    assert await mem.notes_body() == f"- [{month}] likes jazz"
 
     stored = await mem.replace_notes(
         "# a heading, ignored\n"
@@ -190,11 +237,11 @@ async def test_notes_body_and_replace_notes(tmp_path) -> None:
         "- USES VIM DAILY\n"  # case-insensitive dup of the one above
         "-not a bullet either (no space)\n"
         "- \n"  # empty fact → ignored
-        "- speaks French\n"
+        "- [2025-03] speaks French\n"  # already dated → stamp kept
     )
-    assert stored == "- uses vim daily\n- speaks French"
+    assert stored == f"- [{month}] uses vim daily\n- [2025-03] speaks French"
     assert await mem.notes_body() == stored
-    assert await mem._notes_store().load() == ["uses vim daily", "speaks French"]
+    assert _bare(await mem._notes_store().load()) == ["uses vim daily", "speaks French"]
 
     # Replacing with an empty body clears the notes.
     assert await mem.replace_notes("") == ""
@@ -318,7 +365,7 @@ async def test_remember_tool_persists_via_run(tmp_path) -> None:
     mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "remember that I like vim")
-    assert "user likes vim" in await mem._notes_store().load()
+    assert "user likes vim" in _bare(await mem._notes_store().load())
     tool_results = [e for e in result.entries if e.type == "tool_result"]
     assert any("Remembered" in r.output for r in tool_results)
 
@@ -524,7 +571,7 @@ async def test_run_completed_digests_and_ingests(tmp_path, monkeypatch) -> None:
     await Runner.run(agent, "ahoy there sailor", session_id="s1")
 
     # The digest fact was promoted into Notes (with the empty current passed).
-    assert "the user is a pirate" in await mem._notes_store().load()
+    assert "the user is a pirate" in _bare(await mem._notes_store().load())
     assert captured["current"] == ""
     # Both messages and the episode summary landed in the index.
     kinds = [d.meta["kind"] for d in index.added]
@@ -556,7 +603,7 @@ async def test_curate_in_background_defers_and_drains(tmp_path, monkeypatch) -> 
     gate.set()
     await mem.drain()
     assert not mem._curation_tasks
-    assert "works at Dawn Café" in await mem._notes_store().load()
+    assert "works at Dawn Café" in _bare(await mem._notes_store().load())
 
 
 async def test_auto_curate_false_ingests_messages_only(tmp_path, monkeypatch) -> None:
@@ -609,7 +656,7 @@ async def test_ingest_failure_still_curates_notes(tmp_path, monkeypatch) -> None
     agent = Agent(name="a", model=provider, plugins=[mem])
     result = await Runner.run(agent, "hello")
     assert result.output == "ok"
-    assert "a durable fact" in await mem._notes_store().load()
+    assert "a durable fact" in _bare(await mem._notes_store().load())
 
 
 async def test_consolidation_triggers_over_budget(tmp_path, monkeypatch) -> None:
@@ -651,7 +698,7 @@ async def test_remember_during_consolidation_is_not_lost(tmp_path, monkeypatch) 
     await task
     facts = await mem._notes_store().load()
     assert "compact fact" in facts
-    assert "landed mid-flight" in facts
+    assert "landed mid-flight" in _bare(facts)
 
 
 async def test_model_override_used_for_curation(tmp_path, monkeypatch) -> None:

@@ -29,6 +29,7 @@ too).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from typing import TYPE_CHECKING
@@ -187,7 +188,11 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         try:
             await ctrl.task
         finally:
+            # Cancel *and* join (the Scheduler.stop() idiom) so no pending
+            # watcher outlives run_child.
             watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         if ctrl.final_status == "completed":
             return RunResult(
                 output=ctrl.final_output,

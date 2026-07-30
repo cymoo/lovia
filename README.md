@@ -254,6 +254,9 @@ manager = Agent(
 ```python
 from lovia import Subagents
 
+researcher = Agent(name="researcher", instructions="Research a topic and report back.",
+                   model="glm-5.2")
+
 assistant = Agent(
     name="assistant",
     model="deepseek-v4-flash",

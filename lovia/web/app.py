@@ -157,6 +157,7 @@ def create_app(
     max_background_runs: int = 8,
     approval_timeout: float | None = None,
     scheduler_poll: float = 1.0,
+    wire_subagents: bool = True,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
@@ -300,6 +301,14 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    # Adapt any served Subagents plugin still on core defaults to this app:
+    # supervised child sessions + inject-or-start report delivery. Attaching
+    # the plugin was the user's choice; this only fits it to the serving
+    # context (like tool approvals route through the web channel).
+    if wire_subagents:
+        from .subagents import _wire
+
+        _wire(deps)
     # Auth guards the API router only: static assets and the UI shell carry no
     # data, and serving them lets the UI collect the token client-side.
     guard = auth if auth is not None else (token_dependency(token) if token else None)
@@ -356,6 +365,7 @@ def serve(
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     approval_timeout: float | None = None,
+    wire_subagents: bool = True,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
@@ -415,6 +425,7 @@ def serve(
         retry=retry,
         tracer=tracer,
         approval_timeout=approval_timeout,
+        wire_subagents=wire_subagents,
         ui=ui,
         cors_origins=cors_origins,
         token=token,

@@ -69,13 +69,24 @@ async def _none(value: Any) -> bool:
     return value is None
 
 
-def test_wire_subagents_sets_deliver_once() -> None:
+def test_create_app_auto_wires_and_manual_wire_is_idempotent() -> None:
     plugin = Subagents()
     app = _app(Agent(name="bot", model=None, plugins=[plugin]))
-    assert wire_subagents(app) == 1
+    # create_app adapted the plugin: supervised children + web delivery.
     assert plugin.deliver is not None
-    # Idempotent: already-wired (or custom) delivers are left untouched.
-    assert wire_subagents(app) == 0
+    assert plugin.run_child is not None
+    assert wire_subagents(app) == 0  # already wired — left untouched
+
+    # Opting out keeps core (bounded, in-process) semantics.
+    plugin2 = Subagents()
+    app2 = create_app(
+        Agent(name="bot", model=None, plugins=[plugin2]),
+        store=ChatStore.in_memory(),
+        generate_titles=False,
+        wire_subagents=False,
+    )
+    assert plugin2.deliver is None and plugin2.run_child is None
+    assert wire_subagents(app2) == 1  # the manual helper still works
 
 
 async def test_deliver_injects_into_live_run_and_autochain_consumes() -> None:
@@ -144,8 +155,9 @@ async def test_deliver_drops_when_session_is_gone() -> None:
 
 
 async def test_wired_plugin_delivers_end_to_end() -> None:
-    """The whole detached path under the web app: spawn -> parent run ends ->
-    child finishes -> report starts a clientless run in the same session."""
+    """The whole supervised detached path: spawn -> child runs in its own
+    task session -> parent run ends -> child finishes -> report starts a
+    clientless run back in the parent session."""
     child_gate = asyncio.Event()
     child = Agent(
         name="researcher",
@@ -161,8 +173,7 @@ async def test_wired_plugin_delivers_end_to_end() -> None:
     )
     agent = Agent(name="bot", model=provider, plugins=[plugin])
     app = _app(agent)
-    deps = app.state.deps
-    assert wire_subagents(app) == 1
+    deps = app.state.deps  # auto-wired by create_app
 
     await deps.store.upsert("s3", agent="bot", title="chat")
     await deps.supervisor.start(
@@ -175,6 +186,16 @@ async def test_wired_plugin_delivers_end_to_end() -> None:
         source="user",
     )
     await _poll(lambda: _none(deps.supervisor.get("s3")))  # parent run over
+
+    # The spawn became a task session: parent_id set, [t1]-prefixed title,
+    # its own supervised run record.
+    task_rows = [r for r in await deps.store.list() if r.parent_id == "s3"]
+    assert len(task_rows) == 1
+    task = task_rows[0]
+    assert task.title is not None and task.title.startswith("[t1]")
+    assert task.agent == "bot"  # follow-ups in the task chat use a served key
+    child_run = await deps.store.latest_run_for(f"subagent:{task.id}")
+    assert child_run is not None and child_run.session_id == task.id
 
     child_gate.set()
 
@@ -190,3 +211,123 @@ async def test_wired_plugin_delivers_end_to_end() -> None:
         if isinstance(e, InputEntry) and isinstance(e.content, str)
     ]
     assert any("late findings" in t for t in texts)
+    # The child's own transcript persisted in its task session too.
+    child_entries = await deps.session.load(task.id)
+    assert any(isinstance(e, InputEntry) and e.content == "dig" for e in child_entries)
+
+
+async def test_cancel_subagent_cancels_supervised_child() -> None:
+    gate = asyncio.Event()  # never set: the child stays parked
+    child = Agent(name="slow", model=GatedProvider(ScriptedProvider([text("x")]), gate))
+    provider = ScriptedProvider(
+        [
+            call("spawn_subagent", {"prompt": "dig"}),
+            call("cancel_subagent", {"id": "t1"}),
+            text("bye"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s4", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s4",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await _poll(lambda: _none(deps.supervisor.get("s4")))
+    (task,) = [r for r in await deps.store.list() if r.parent_id == "s4"]
+
+    async def _cancelled() -> bool:
+        run = await deps.store.latest_run_for(f"subagent:{task.id}")
+        return run is not None and run.status == "cancelled"
+
+    await _poll(_cancelled)  # the token watcher routed through supervisor.cancel
+    # A cancelled child delivers no report: no clientless delivery run starts.
+    await asyncio.sleep(0.1)
+    assert await deps.store.latest_run_for("subagent:t1") is None
+
+
+async def test_failed_child_delivers_failure_report() -> None:
+    child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
+    provider = ScriptedProvider(
+        [
+            call("spawn_subagent", {"prompt": "fail"}),
+            text("bye"),
+            text("noted"),  # the delivery run's reaction to the failure report
+        ]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child, max_turns=1)])
+    app = _app(agent)
+    deps = app.state.deps
+    await deps.store.upsert("s5", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s5",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+
+    async def _delivered() -> bool:
+        run = await deps.store.latest_run_for("subagent:t1")
+        return run is not None and run.status == "completed"
+
+    await _poll(_delivered)
+    entries = await deps.session.load("s5")
+    texts = [
+        e.content
+        for e in entries
+        if isinstance(e, InputEntry) and isinstance(e.content, str)
+    ]
+    assert any("[subagent t1: failed]" in t for t in texts)
+
+
+def test_sessions_api_exposes_parent_id() -> None:
+    """Regression: the list endpoint's projection must carry parent_id — the
+    sidebar's Tasks grouping reads it off GET /api/sessions, not the store."""
+    from fastapi.testclient import TestClient
+
+    agent = Agent(name="bot", model=ScriptedProvider([]))
+    app = _app(agent)
+    deps = app.state.deps
+
+    async def seed() -> None:
+        await deps.store.upsert("chat", agent="bot", title="chat")
+        await deps.store.upsert("task", agent="bot", title="[t1] x", parent_id="chat")
+
+    asyncio.run(seed())
+    rows = {r["id"]: r for r in TestClient(app).get("/api/sessions").json()}
+    assert rows["chat"]["parent_id"] is None
+    assert rows["task"]["parent_id"] == "chat"
+
+
+async def test_store_parent_id_roundtrip_and_legacy_migration(tmp_path) -> None:
+    import sqlite3
+
+    # A pre-0.9.17 database: chat_sessions without the parent_id column.
+    db = tmp_path / "legacy.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE chat_sessions ("
+            "id TEXT PRIMARY KEY, title TEXT, agent TEXT, "
+            "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+            "active_run_id TEXT, pinned INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "INSERT INTO chat_sessions VALUES ('old', 'Old chat', 'bot', 1, 1, NULL, 0)"
+        )
+    store = ChatStore.sqlite(db)
+    old = await store.get("old")
+    assert old is not None and old.parent_id is None  # migration added the column
+    await store.upsert("kid", agent="bot", title="task", parent_id="old")
+    kid = await store.get("kid")
+    assert kid is not None and kid.parent_id == "old"
+    listed = {r.id: r.parent_id for r in await store.list()}
+    assert listed == {"old": None, "kid": "old"}

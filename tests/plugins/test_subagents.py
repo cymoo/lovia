@@ -472,6 +472,72 @@ async def test_detached_child_outlives_run_and_delivers() -> None:
     assert "may finish your reply" in system
 
 
+async def test_run_child_override_replaces_execution() -> None:
+    from lovia.messages import Usage
+    from lovia.plugins.subagents import ChildSpec
+    from lovia.runtime.result import RunResult
+
+    specs: list[ChildSpec] = []
+
+    async def run_child(spec: ChildSpec) -> RunResult:
+        specs.append(spec)
+        return RunResult(
+            output="from override",
+            entries=[],
+            final_agent=spec.agent,
+            usage=Usage(),
+            turns=1,
+        )
+
+    child = _child([])  # never reaches its provider: the override runs instead
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                batch(
+                    ("spawn_subagent", {"prompt": "delegated"}, "c_spawn"),
+                    ("wait_subagents", {}, "c_wait"),
+                ),
+                text("done"),
+            ]
+        ),
+        plugins=[Subagents(child, run_child=run_child, max_turns=7)],
+    )
+    result = await Runner.run(parent, "go", session=InMemorySession(), session_id="sx")
+    wait_out = _tool_result(result.entries, "c_wait")
+    assert "from override" in wait_out
+    (spec,) = specs
+    assert spec.id == "t1"
+    assert spec.prompt == "delegated"
+    assert spec.agent is child
+    assert spec.parent_session_id == "sx"
+    assert spec.max_turns == 7
+
+
+async def test_run_child_override_cancelled_outcome_is_silent() -> None:
+    from lovia.exceptions import RunCancelled
+    from lovia.plugins.subagents import ChildSpec
+
+    async def run_child(spec: ChildSpec) -> object:
+        raise RunCancelled("stopped externally")
+
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                batch(
+                    ("spawn_subagent", {"prompt": "p"}, "c_spawn"),
+                    ("wait_subagents", {}, "c_wait"),
+                ),
+                text("done"),
+            ]
+        ),
+        plugins=[Subagents(_child([]), run_child=run_child)],
+    )
+    result = await Runner.run(parent, "go")
+    assert "t1 was cancelled; no report" in _tool_result(result.entries, "c_wait")
+
+
 async def test_empty_prompt_spawns_nothing() -> None:
     parent = Agent(
         name="parent",

@@ -417,12 +417,13 @@ def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert agent.model is provider
     assert agent.instructions == cli.GENERIC_INSTRUCTIONS
     # ./.agents/skills -> Skills, plus the on-by-default Todo + Scheduling +
-    # Memory plugins.
+    # Memory + Subagents plugins.
     assert {type(p).__name__ for p in agent.plugins} == {
         "Skills",
         "Todo",
         "Scheduling",
         "Memory",
+        "Subagents",
     }
     # Always-on built-in tools (web_search only when its backend is installed).
     assert {"now", "read_page", "http_request"} <= {t.name for t in agent.tools}
@@ -436,6 +437,36 @@ def test_build_default_agent_no_memory(
     args = cli.build_parser().parse_args(["--no-memory"])
     agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
     assert all(not isinstance(p, Memory) for p in agent.plugins)
+
+
+def test_build_default_agent_subagents_child_composition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lovia import Subagents
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    args = cli.build_parser().parse_args([])
+    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
+    (child,) = plugin._catalog.values()
+    # The child keeps the basic capabilities (Skills, Todo) and sheds the
+    # ones that must not ride along (Subagents, Scheduling, Memory).
+    assert {type(p).__name__ for p in child.plugins} == {"Skills", "Todo"}
+    assert child.workspace is agent.workspace
+    assert child.tools == agent.tools
+
+
+def test_build_default_agent_no_subagents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lovia import Subagents
+
+    monkeypatch.chdir(tmp_path)
+    args = cli.build_parser().parse_args(["--no-subagents"])
+    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
 def test_build_default_agent_injects_current_date(

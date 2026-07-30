@@ -263,8 +263,9 @@ assistant = Agent(
     plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
 )
 # The model spawns researchers in the background, keeps working, and their
-# reports arrive as messages; in the web UI, `wire_subagents(app)` lets them
-# outlive the run and deliver into the chat whenever they finish.
+# reports arrive as messages. Under the web UI each spawn runs as a watchable
+# task session (sidebar "Tasks" group) and reports back into the chat — wired
+# automatically; `lovia web` has this on by default.
 ```
 
 → [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)

@@ -37,7 +37,7 @@ __all__ = ["ChatMeta", "ChatStore", "RunRow", "ScheduleRow"]
 _T = TypeVar("_T")
 
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
-_META_COLS = "id, title, agent, created_at, updated_at, pinned"
+_META_COLS = "id, title, agent, created_at, updated_at, pinned, parent_id"
 
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     active_run_id TEXT,
-    pinned INTEGER NOT NULL DEFAULT 0
+    pinned INTEGER NOT NULL DEFAULT 0,
+    parent_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
@@ -112,11 +113,14 @@ class ChatMeta:
     created_at: float
     updated_at: float
     pinned: bool = False
+    parent_id: str | None = None
+    """Set on a subagent task session: the chat that spawned it. The UI
+    groups such sessions under a Tasks section instead of the chat list."""
 
     @classmethod
     def from_row(cls, row: Any) -> "ChatMeta":
         """Build from a ``_META_COLS`` row."""
-        return cls(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
+        return cls(row[0], row[1], row[2], row[3], row[4], bool(row[5]), row[6])
 
     def to_dict(self) -> JsonObject:
         return {
@@ -126,6 +130,7 @@ class ChatMeta:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "pinned": self.pinned,
+            "parent_id": self.parent_id,
         }
 
 
@@ -305,6 +310,10 @@ class ChatStore:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
             if "pinned" not in cols:
                 add_column(conn, "chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0")
+            # Subagent child sessions (0.9.17): a task session points at the
+            # chat that spawned it, so the UI can group tasks out of the list.
+            if "parent_id" not in cols:
+                add_column(conn, "chat_sessions", "parent_id TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
                 "ON chat_sessions(pinned DESC, updated_at DESC)"
@@ -390,23 +399,33 @@ class ChatStore:
         *,
         agent: str | None = None,
         title: str | None = None,
+        parent_id: str | None = None,
     ) -> None:
         """Insert a row if missing, otherwise bump ``updated_at``.
 
         ``title`` is applied only on insert (a provisional title for a brand-new
         session); on conflict the existing title is left untouched so a
-        background-generated title is never clobbered.
+        background-generated title is never clobbered. ``parent_id`` likewise
+        sticks from the insert — a session's task-ness never changes later.
         """
         now = time.time()
         await self._write(
             """
-            INSERT INTO chat_sessions (id, title, agent, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO chat_sessions (id, title, agent, created_at, updated_at,
+                                       parent_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 agent = COALESCE(chat_sessions.agent, excluded.agent)
             """,
-            (session_id, (title.strip()[:120] if title else None), agent, now, now),
+            (
+                session_id,
+                (title.strip()[:120] if title else None),
+                agent,
+                now,
+                now,
+                parent_id,
+            ),
         )
 
     async def set_title(self, session_id: str, title: str) -> None:

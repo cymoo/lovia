@@ -180,9 +180,16 @@ budget=None, max_result_chars=16_000, instructions=None)`:
   ([web delivery](web-ui.md)).
 - Children run headless: an approval request nobody resolves is **denied by
   default**, so give children approval-free toolsets for unattended work.
+  (Under the web UI, children become observable task sessions where a human
+  *can* answer approvals — see [web delivery](web-ui.md#background-subagents).)
 - `Subagents()` with no catalog spawns a clone of the current agent with
   `plugins` and `handoffs` stripped — no recursive spawning, no shared
   plugin state; model, instructions, tools, and workspace carry over.
+- `run_child` (advanced) swaps *how* a child executes: an override receives a
+  `ChildSpec` and returns the child's `RunResult` — this is the seam the web
+  layer uses to route children through its run supervisor. Pair it with
+  `deliver`; on its own, bounded-mode teardown would orphan the children it
+  cannot cancel.
 
 ## Choosing between them
 

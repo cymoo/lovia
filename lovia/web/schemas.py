@@ -200,6 +200,9 @@ class ChatSessionInfo(BaseModel):
     created_at: float
     updated_at: float
     pinned: bool = False
+    # Set on a subagent task session: the chat that spawned it. The UI groups
+    # such sessions under a Tasks section instead of the chat list.
+    parent_id: str | None = None
 
 
 class RunInfo(BaseModel):

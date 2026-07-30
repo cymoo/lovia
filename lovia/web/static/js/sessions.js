@@ -273,6 +273,7 @@ function sessionsSignature() {
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
+      s.parent_id ?? '',
     ]),
   ]);
 }
@@ -292,16 +293,29 @@ function renderSessions() {
     return;
   }
 
+  // Subagent task sessions (parent_id set) group under their own label at
+  // the bottom, out of the chat list proper.
+  const chats = store.sessions.filter((s) => !s.parent_id);
+  const tasks = store.sessions.filter((s) => s.parent_id);
   let prevPinned = false;
-  for (const s of store.sessions) {
+  let tasksLabeled = false;
+  for (const s of [...chats, ...tasks]) {
+    if (s.parent_id && !tasksLabeled) {
+      tasksLabeled = true;
+      const label = document.createElement('div');
+      label.className = 'sidebar-section-label sessions-tasks-label';
+      label.textContent = t('nav.tasks');
+      sessionsList.appendChild(label);
+    }
     const item = document.createElement('div');
     item.className = 'session-item';
+    if (s.parent_id) item.classList.add('task');
     if (s.id === store.sessionId) item.classList.add('active');
     if (store.activeRuns?.has(s.id)) item.classList.add('running');
     if (s.pinned) item.classList.add('pinned');
-    // Visually separate the pinned group from the rest.
-    if (!s.pinned && prevPinned) item.classList.add('pin-divider');
-    prevPinned = !!s.pinned;
+    // Visually separate the pinned group from the rest (chat rows only).
+    if (!s.parent_id && !s.pinned && prevPinned) item.classList.add('pin-divider');
+    prevPinned = !s.parent_id && !!s.pinned;
     item.dataset.id = s.id;
 
     const main = document.createElement('button');

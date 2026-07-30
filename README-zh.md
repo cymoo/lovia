@@ -243,9 +243,9 @@ assistant = Agent(
     model="deepseek-v4-flash",
     plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
 )
-# 模型把调研派给后台子 agent、自己继续干活，报告以消息形式送达；
-# 在 Web UI 里用 `wire_subagents(app)` 让子 agent 活过本次运行、
-# 完成后随时投递回对话。
+# 模型把调研派给后台子 agent、自己继续干活，报告以消息形式送达。
+# 在 Web UI 下每次 spawn 都是一个可观察的任务会话（侧栏"任务"分组），
+# 完成后自动投递回对话——自动接线；`lovia web` 默认开启。
 ```
 
 → [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)

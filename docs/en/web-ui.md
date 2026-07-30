@@ -149,30 +149,34 @@ For a custom Agent served through `create_app()`, this is opt-in — see
 
 ## Background subagents
 
-An agent that carries the [`Subagents` plugin](multi-agent.md#background-subagents)
-works in the web UI out of the box with core semantics: children live and die
-with the run that spawned them. One explicit call flips them into the
-chat-native mode instead — children keep running after the model answers, and
-each report lands in the conversation whenever it is ready:
+`lovia web` ships with [background subagents](multi-agent.md#background-subagents)
+on by default (`--no-subagents` disables): the assistant can delegate
+self-contained work to a sub-assistant that keeps the basic capabilities
+(Skills, Todo, tools, workspace) while shedding Scheduling, Memory, and
+recursive spawning. For a custom agent, attach the `Subagents` plugin
+yourself — `create_app` automatically adapts it to the serving context
+(opt out with `create_app(..., wire_subagents=False)`; apps that mount
+`build_api_router` directly call `wire_subagents(app)` once instead).
 
-```python
-from lovia.web import create_app, wire_subagents
+**Every spawn is a real session.** A wired child runs as a supervised run in
+its own *task session* — it appears under a **Tasks** group at the bottom of
+the sidebar, marked while running. Click it to watch the child work token by
+token (the ordinary session view: streaming, reconnect, stop button, delete
+all work), including any tool approval it is waiting on — you can approve or
+deny right there; unanswered approvals auto-deny after the server's
+`approval_timeout` (`lovia web` sets 10 minutes) so a task can never hold a
+run slot forever. Each task leaves a run record (status, token usage) under
+source `subagent:<session>`.
 
-app = create_app(agent, db_path="lovia.db")
-wire_subagents(app)   # detach: reports deliver into the chat when done
-```
+**Reports deliver into the parent chat.** When a child finishes, its report
+lands in the spawning conversation — injected into the live run if one is
+going, otherwise a clientless run starts with the report as its input so the
+model reacts to it and the exchange persists. At the concurrency cap,
+delivery retries with backoff before giving up with a warning.
 
-Delivery reuses the scheduler's pattern: a session with a live run gets the
-report injected as the next user-side message; an idle session gets a
-clientless run started with the report as its input (recorded under source
-`subagent:<id>`), so the model reacts to it and the exchange persists. If the
-supervisor is at its concurrency cap, delivery retries with backoff before
-giving up with a warning.
-
-Two semantic notes: wired children survive the Stop button (the model can
-still `cancel_subagent` them), and a child that finishes after its parent
-run's record was written contributes its token usage to the parent's
-in-memory total only — not to that run's stored usage row.
+Wired children keep running after the parent's Stop button (stop them from
+their task session, or let the model `cancel_subagent`); a server restart
+does not resume in-flight tasks.
 
 ## Closing or refreshing the page
 

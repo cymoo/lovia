@@ -27,7 +27,7 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
-from ..plugins import Memory, Plugin, Skills, Todo
+from ..plugins import Memory, Plugin, Skills, Subagents, Todo
 from ..providers import (
     ModelSettings,
     Provider,
@@ -233,6 +233,11 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     agent.add_argument(
         "--no-memory", action="store_true", help="disable long-term memory"
+    )
+    agent.add_argument(
+        "--no-subagents",
+        action="store_true",
+        help="disable background subagents (spawn_subagent etc.)",
     )
     agent.add_argument(
         "--workspace",
@@ -697,6 +702,25 @@ def build_default_agent(
     vision_tool = resolve_vision_tool(provider, workspace)
     if vision_tool is not None:
         tools.append(vision_tool)
+    if not args.no_subagents:
+        # Background subagents, on by default. The child is the same
+        # assistant minus the plugins that must not ride along: Subagents
+        # itself (no recursive spawning), Scheduling (a child schedules
+        # nothing), and Memory (a task transcript is not user memory) —
+        # Skills and Todo are basic capabilities a delegated task needs.
+        child: Agent[Any] = Agent(
+            name=f"{DEFAULT_AGENT_NAME}-sub",
+            instructions=instructions,
+            model=provider,
+            settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
+            plugins=[p for p in plugins if isinstance(p, (Skills, Todo))],
+            tools=tools,
+            workspace=workspace,
+        )
+        child.instruction(current_date())
+        # Cap below max_background_runs (8): parent + children + scheduler
+        # fires must all fit without starving each other.
+        plugins.append(Subagents([child], max_concurrent=3))
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
@@ -725,6 +749,7 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("--skills-dir", bool(args.skills_dir)),
         ("--memory-dir", args.memory_dir is not None),
         ("--no-memory", args.no_memory),
+        ("--no-subagents", args.no_subagents),
         ("--workspace", args.workspace is not None),
         ("--readonly", args.readonly),
         ("--trusted", args.trusted),
@@ -913,6 +938,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             token=token,
             followups=resolve_followups(args.no_followups),
             followup_model=resolve_followup_model(),
+            # Deny an unanswered tool approval after 10 minutes. Without it a
+            # clientless run (a scheduled fire, a subagent task) parked on an
+            # approval holds one of the concurrency slots forever; for a chat
+            # the user is watching, ten idle minutes means the answer is no.
+            approval_timeout=600,
             log_level=level.lower(),
         )
     except UserError as exc:

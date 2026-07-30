@@ -147,6 +147,33 @@ Server-wide, use `--no-followups`, and point the call at a cheaper model with
 For a custom Agent served through `create_app()`, this is opt-in — see
 [Web server](web-server.md#follow-up-suggestions).
 
+## Background subagents
+
+An agent that carries the [`Subagents` plugin](multi-agent.md#background-subagents)
+works in the web UI out of the box with core semantics: children live and die
+with the run that spawned them. One explicit call flips them into the
+chat-native mode instead — children keep running after the model answers, and
+each report lands in the conversation whenever it is ready:
+
+```python
+from lovia.web import create_app, wire_subagents
+
+app = create_app(agent, db_path="lovia.db")
+wire_subagents(app)   # detach: reports deliver into the chat when done
+```
+
+Delivery reuses the scheduler's pattern: a session with a live run gets the
+report injected as the next user-side message; an idle session gets a
+clientless run started with the report as its input (recorded under source
+`subagent:<id>`), so the model reacts to it and the exchange persists. If the
+supervisor is at its concurrency cap, delivery retries with backoff before
+giving up with a warning.
+
+Two semantic notes: wired children survive the Stop button (the model can
+still `cancel_subagent` them), and a child that finishes after its parent
+run's record was written contributes its token usage to the parent's
+in-memory total only — not to that run's stored usage row.
+
 ## Closing or refreshing the page
 
 Runs are managed by the server, so closing or refreshing the page does not stop

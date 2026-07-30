@@ -164,6 +164,28 @@ Run 尚未结束时仍可发送纯文本消息。UI 会将它显示为排队状�
 
 附件不能在 Run 执行期间排队，需要等当前 Run 结束后再发送。
 
+## 后台子 Agent
+
+携带 [`Subagents` 插件](multi-agent.md#后台子-agentsubagents)的 agent 在 Web UI 中
+开箱即用，语义与 core 一致：子 Agent 随派生它的 Run 一同结束。显式调用一行即可切换
+到更适合聊天的模式——模型答复后子 Agent 继续运行，报告完成时随时落入对话：
+
+```python
+from lovia.web import create_app, wire_subagents
+
+app = create_app(agent, db_path="lovia.db")
+wire_subagents(app)   # detach：报告完成后投递回对话
+```
+
+投递复用调度器的模式：目标会话有活跃 Run 时，报告作为下一条用户侧消息注入；会话
+空闲时则以报告为输入启动一次无客户端 Run（记录 source 为 `subagent:<id>`），模型
+对报告做出反应，往来内容持久化到会话中。若达到并发上限，投递会带退避重试，最终
+失败则记录警告。
+
+两点语义说明：接线后的子 Agent 不受停止按钮影响（模型仍可用 `cancel_subagent`
+停掉它们）；父 Run 记录落库之后才完成的子 Agent，其 Token 用量只计入内存中的
+父用量合计，不会补进该 Run 已存储的用量行。
+
 ## 关闭或刷新页面
 
 Run 由服务端托管，关闭或刷新页面不会中断运行。重新打开对话后，UI 会恢复当前进度并继续

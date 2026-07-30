@@ -1,10 +1,12 @@
 # Multi-agent
 
-Multi-agent composition in lovia is deliberately atomic: two primitives, both
-implemented as ordinary tools, and no orchestration DSL. **Handoff**
+Multi-agent composition in lovia is deliberately atomic: three primitives,
+all implemented as ordinary tools, and no orchestration DSL. **Handoff**
 transfers control — the specialist continues the same conversation.
-**Agent-as-tool** delegates — a sub-agent answers a bounded question and the
-parent carries on. Everything larger is composed from these in plain Python.
+**Agent-as-tool** delegates — a sub-agent answers a bounded question while
+the parent waits. **Subagents** delegates *without* waiting — background
+children run concurrently and report back later. Everything larger is
+composed from these in plain Python.
 
 ## Handoff
 
@@ -129,6 +131,59 @@ retry=None, context_policy=None)`:
   parent can react to — a recoverable delegation failure, not a run-ending
   one ([error semantics](tools.md#error-semantics)).
 
+## Background subagents
+
+The `Subagents` plugin is the asynchronous sibling of agent-as-tool:
+`spawn_subagent` returns immediately with a task id, the child runs
+concurrently on the event loop while the parent keeps working, and the
+child's report re-enters the conversation later — as a user-side message at
+a turn boundary, never as a late tool result:
+
+```python
+from lovia import Agent, Runner, Subagents
+
+researcher = Agent(name="researcher", instructions="Research and report.",
+                   model="<model>", tools=[...])
+
+agent = Agent(
+    name="assistant",
+    model="<model>",
+    plugins=[Subagents([researcher])],   # or Subagents(): clone the current
+                                         # agent (minus plugins/handoffs)
+)
+result = await Runner.run(agent, "Research X and Y, then compare them.")
+```
+
+The model gets three tools and a per-turn status reminder:
+
+- `spawn_subagent(prompt, agent=...)` — start a child on a self-contained
+  prompt (the child sees nothing else). Declines beyond `max_concurrent`.
+- `wait_subagents(ids=None, timeout_seconds=60)` — block until a targeted
+  child finishes (or the timeout passes) and collect its report. A report
+  whose automatic mailbox push has not been seen yet is *withdrawn* and
+  returned directly, so nothing arrives twice.
+- `cancel_subagent(id)` — cooperative stop, no report.
+
+`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
+budget=None, max_result_chars=16_000, instructions=None)`:
+
+- Children inherit the parent's `context` (deps) and tracer, and their token
+  usage folds into the parent's `usage` — like `as_tool` sub-runs. Each child
+  gets its **own** cancel token (that is what `cancel_subagent` trips) and a
+  fresh copy of `budget` per spawn.
+- **Lifecycle is keyed on `deliver`.** With the default (`deliver=None`,
+  *bounded*), reports push into the run's mailbox and anything still running
+  when the run ends is cancelled — children never outlive the run, and the
+  built-in instructions tell the model to `wait_subagents` or cancel before
+  finishing. With a callback (*detached*), every report goes through it
+  instead and children may outlive the run — that is the serving-layer mode
+  ([web delivery](web-ui.md)).
+- Children run headless: an approval request nobody resolves is **denied by
+  default**, so give children approval-free toolsets for unattended work.
+- `Subagents()` with no catalog spawns a clone of the current agent with
+  `plugins` and `handoffs` stripped — no recursive spawning, no shared
+  plugin state; model, instructions, tools, and workspace carry over.
+
 ## Choosing between them
 
 | You want... | Use |
@@ -136,9 +191,10 @@ retry=None, context_policy=None)`:
 | The user to *continue talking* to a specialist | handoff |
 | An answer to a bounded subtask, then carry on | agent-as-tool |
 | The specialist to see the full conversation | handoff |
-| Isolation — the child must not see parent history | agent-as-tool |
+| Isolation — the child must not see parent history | agent-as-tool / subagents |
 | The final answer attributed to the specialist (`result.final_agent`) | handoff |
-| Several delegations, possibly in parallel turns | agent-as-tool |
+| The parent to keep working while the child runs | subagents |
+| Fire-and-forget research that reports back later | subagents |
 
 Larger patterns — chaining, routing, parallelization,
 orchestrator-workers, evaluator loops — need no framework support: they are
@@ -167,4 +223,5 @@ of Anthropic's *Building effective agents* patterns in a page of code.
 - [Sessions & checkpoints](sessions-and-checkpoints.md) — resume across handoffs
 - Examples: [`07_handoff.py`](../../examples/07_handoff.py),
   [`08_agent_as_tool.py`](../../examples/08_agent_as_tool.py),
+  [`30_subagents.py`](../../examples/30_subagents.py),
   [`workflows/`](../../examples/workflows/)

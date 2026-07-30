@@ -1,9 +1,10 @@
 # 多 Agent
 
-lovia 刻意将多 Agent 协作保持得简单清晰：只提供两个原语，底层均以普通工具实现，
+lovia 刻意将多 Agent 协作保持得简单清晰：只提供三个原语，底层均以普通工具实现，
 不引入编排 DSL。**Handoff** 用于移交控制权，由专家 Agent 接手当前对话；
-**Agent-as-tool** 用于委派任务，由子 Agent 回答一个边界明确的问题，再交还给父 Agent 继续处理。
-更复杂的模式可以直接用普通 Python 组合这两个原语。
+**Agent-as-tool** 用于委派任务，父 Agent 等待子 Agent 回答一个边界明确的问题；
+**Subagents** 用于不等待的委派——后台子 Agent 并发运行，稍后汇报结果。
+更复杂的模式可以直接用普通 Python 组合这些原语。
 
 ## Handoff
 
@@ -112,6 +113,53 @@ retry=None, context_policy=None)`：
 - 子运行耗尽自己的预算时，会作为工具错误结果反馈给父 agent，让父 agent 处理。这是可恢复
   的委派失败，不是结束父运行的失败（见[错误语义](tools.md#错误语义)）。
 
+## 后台子 Agent（Subagents）
+
+`Subagents` 插件是 agent-as-tool 的异步版本：`spawn_subagent` 立即返回任务 id，
+子 Agent 在事件循环上并发运行，父 Agent 继续干自己的活；子 Agent 的报告稍后
+以用户侧消息的形式在轮次边界进入对话——绝不会以"迟到的工具结果"出现：
+
+```python
+from lovia import Agent, Runner, Subagents
+
+researcher = Agent(name="researcher", instructions="调研并输出报告。",
+                   model="<model>", tools=[...])
+
+agent = Agent(
+    name="assistant",
+    model="<model>",
+    plugins=[Subagents([researcher])],   # 或 Subagents()：克隆当前 agent
+                                         # （剥离 plugins/handoffs）
+)
+result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
+```
+
+模型获得三个工具和一条每轮重现的状态提醒：
+
+- `spawn_subagent(prompt, agent=...)`：用一段自包含 prompt 启动子 Agent
+  （子 Agent 只能看到这段 prompt）。超过 `max_concurrent` 时拒绝。
+- `wait_subagents(ids=None, timeout_seconds=60)`：阻塞至目标子 Agent 完成
+  （或超时）并收取报告。尚未被看到的自动投递会被*撤回*并直接返回，
+  报告绝不重复出现。
+- `cancel_subagent(id)`：协作式停止，不产生报告。
+
+`Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
+budget=None, max_result_chars=16_000, instructions=None)`：
+
+- 子运行继承父运行的 `context`（deps）与 Tracer，Token 用量计入父运行的
+  `usage`——与 `as_tool` 子运行一致。每个子 Agent 有**自己的**取消令牌
+  （`cancel_subagent` 触发的就是它），`budget` 每次 spawn 复制一份。
+- **生命周期由 `deliver` 决定。** 默认（`deliver=None`，*bounded*）：报告
+  推入本次运行的 mailbox，运行结束时仍在跑的子 Agent 会被取消——子 Agent
+  不会活过运行本身；内置指令会要求模型在收尾前 `wait_subagents` 或取消。
+  传入回调（*detached*）：所有报告改走回调，子 Agent 可以活过运行——这是
+  服务层模式（见 [Web 投递](web-ui.md)）。
+- 子 Agent 无人值守运行：无人裁决的审批请求会被**默认拒绝**，因此请给
+  子 Agent 配置无需审批的工具集。
+- `Subagents()` 不带目录时，会克隆当前 agent 并剥离 `plugins` 与
+  `handoffs`——不会递归 spawn、不共享插件状态；模型、指令、工具和
+  workspace 原样继承。
+
 ## 如何选择协作方式
 
 | 你想要 | 使用 |
@@ -119,9 +167,10 @@ retry=None, context_policy=None)`：
 | 用户接下来继续和专家对话 | handoff |
 | 只要一个有边界子任务的答案，然后继续 | agent-as-tool |
 | 专家看到完整对话 | handoff |
-| 隔离：子 agent 不应看到父历史 | agent-as-tool |
+| 隔离：子 agent 不应看到父历史 | agent-as-tool / subagents |
 | 最终答案归属专家（`result.final_agent`） | handoff |
-| 多个委派，甚至并发委派 | agent-as-tool |
+| 子 Agent 运行时父 Agent 继续干活 | subagents |
+| 发射后不管、稍后回报的调研任务 | subagents |
 
 更大的模式，如链式调用、路由、并行化、orchestrator-worker、evaluator loop，都不需要框架
 支持：在 `Runner.run` 外层用普通 Python 写即可。
@@ -146,4 +195,5 @@ retry=None, context_policy=None)`：
 - [Session 与 Checkpoint](sessions-and-checkpoints.md)：跨 handoff 恢复
 - 示例：[`07_handoff.py`](../../examples/07_handoff.py)，
   [`08_agent_as_tool.py`](../../examples/08_agent_as_tool.py)，
+  [`30_subagents.py`](../../examples/30_subagents.py)，
   [`workflows/`](../../examples/workflows/)

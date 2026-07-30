@@ -50,6 +50,8 @@ lovia/
     base.py         #   Plugin protocol (async setup + aclose) + PluginInstance
                     #   (tools/instructions/view_injectors/hooks/guardrails)
     todo.py         #   Todo plugin: todo_write + per-turn reminder injector
+    subagents.py    #   Subagents plugin: background children (spawn/wait/cancel);
+                    #   reports re-enter via mailbox or a deliver callback
     skills/         #   Skills plugin + SkillCatalog/SkillSource (SKILL.md disclosure;
                     #   live async sources — no reload seam, directory source re-scans)
     mcp.py          #   MCP plugin + MCP client (lazy; requires mcp package)
@@ -130,6 +132,8 @@ One three-valued ACL (`allow`/`ask`/`deny`) governs both files and shell. The sp
 A `Plugin` (`plugins/base.py`) is the framework's one extension axis for bundled capabilities — `MCP`, `Skills`, and `Todo` are all built-in plugins under `plugins/`. `RunLoop._activate_plugins()` `await`s `plugin.setup()` **once per run** (and once per agent on a handoff), so run-scoped state (and async resources like MCP connections) built inside `setup` is fresh and concurrency-safe; each instance's `aclose` is registered for LIFO teardown when the run ends. The returned `PluginInstance` contributes across fixed loop slots: `tools` (merged above), `instructions` (folded into `_system_prompt`), `view_injectors` (per-turn, below), `hooks` (dispatched alongside `agent.hooks` in `_emit`; each handler is called `handler(event, ctx)` with the live `RunContext`, like guardrails/view-injectors), and `input_guardrails`/`output_guardrails` (run at the loop's existing checkpoints, merged with the agent's own — the loop keeps the abort). Plugins hold no control flow of their own.
 
 `ViewInjector`s are the one **per-turn** seam: `RunLoop._augment_view()` runs them after `_build_view()` in `_model_phase` and appends their transient entries to the tail of the per-call view **only** — never to `state.transcript` or the `Session`. So the injected content (e.g. the todo reminder) neither accumulates as turns grow nor changes the cached system-prompt prefix. Injectors are fail-open: a raising injector is logged and skipped, never aborting the run. The todo plugin (`plugins/todos/`) is the first consumer; the same seam is the primitive for ephemeral message insertion generally.
+
+`Subagents` (`plugins/subagents.py`) is deliberately loop-invisible: children are plain `Runner.run` coroutines on `asyncio` tasks, reports re-enter through existing seams only (`ctx.mailbox` push at turn boundaries, or withdrawal via `Mailbox.remove` when `wait_subagents` collects first) — never as a late tool result, which would break call/result pairing. Bounded mode cancels leftover children in the instance's `aclose`; detached mode (`deliver=` set) parks strong task refs on the plugin *object* (the Memory curation idiom) so children survive run teardown. Child approval requests rely on the runner's default-deny, so headless children cannot hang a run.
 
 ## Handoff mechanism
 

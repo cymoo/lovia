@@ -197,9 +197,10 @@ agent = Agent(
 
 ### 多 Agent
 
-两个原语，底层都是普通工具。**Handoff** 会移交对话：子 agent 带着完整历史接管并
-直接回答用户。**Agent-as-tool** 则委派一个有边界的子任务：子 agent 只看到交给
-它的提示词，结果作为工具结果返回。
+三个原语，底层都是普通工具。**Handoff** 会移交对话：子 agent 带着完整历史接管并
+直接回答用户。**Agent-as-tool** 委派一个有边界的子任务：子 agent 只看到交给
+它的提示词，结果作为工具结果返回。**Subagents** 是不等待的委派：后台子 agent
+并发运行，父 agent 继续干活，报告稍后送达。
 
 ```python
 from lovia import Agent, Runner
@@ -229,6 +230,22 @@ manager = Agent(
     model="deepseek-v4-flash",
     tools=[summarizer.as_tool(description="总结一段文本。")],  # 委派子任务
 )
+```
+
+```python
+from lovia import Subagents
+
+researcher = Agent(name="researcher", instructions="调研主题并输出报告。",
+                   model="glm-5.2")
+
+assistant = Agent(
+    name="assistant",
+    model="deepseek-v4-flash",
+    plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
+)
+# 模型把调研派给后台子 agent、自己继续干活，报告以消息形式送达；
+# 在 Web UI 里用 `wire_subagents(app)` 让子 agent 活过本次运行、
+# 完成后随时投递回对话。
 ```
 
 → [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)

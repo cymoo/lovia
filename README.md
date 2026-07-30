@@ -217,10 +217,12 @@ agent = Agent(
 
 ### Multi-agent
 
-Two primitives, both ordinary tools underneath. **Handoff** transfers the
+Three primitives, all ordinary tools underneath. **Handoff** transfers the
 conversation — the specialist continues with the full history and answers
 the user. **Agent-as-tool** delegates a bounded subtask — the child sees
-only the prompt and its answer comes back as a tool result:
+only the prompt and its answer comes back as a tool result. **Subagents**
+delegates without waiting — background children run while the parent keeps
+working and report back later:
 
 ```python
 from lovia import Agent, Runner
@@ -247,6 +249,22 @@ manager = Agent(
     model="deepseek-v4-flash",
     tools=[summarizer.as_tool(description="Summarize a passage.")],  # delegate a subtask
 )
+```
+
+```python
+from lovia import Subagents
+
+researcher = Agent(name="researcher", instructions="Research a topic and report back.",
+                   model="glm-5.2")
+
+assistant = Agent(
+    name="assistant",
+    model="deepseek-v4-flash",
+    plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
+)
+# The model spawns researchers in the background, keeps working, and their
+# reports arrive as messages; in the web UI, `wire_subagents(app)` lets them
+# outlive the run and deliver into the chat whenever they finish.
 ```
 
 → [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)

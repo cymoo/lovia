@@ -17,19 +17,21 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
 * the concurrency cap (or a lost start race) → retry with backoff, then drop
   with a warning.
 
-This is explicit wiring, not a ``create_app`` default, because it changes
-lifecycle semantics — detached children keep running after their spawning
-run ends (and after a user stop; the model can still ``cancel_subagent``
-them). Web defaults stay aligned with core::
-
-    app = create_app(agent, db_path="lovia.db")
-    wire_subagents(app)
+Attaching the plugin stays the user's explicit choice; *adapting* an
+attached plugin to the serving context is automatic — ``create_app`` wires
+any served ``Subagents`` still on core defaults (opt out with
+``create_app(..., wire_subagents=False)``). Wired children keep running
+after their spawning run ends and after a user stop of the parent (the
+model can still ``cancel_subagent`` them; the task's own stop button works
+too).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
 try:
@@ -39,9 +41,17 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
-from ..plugins.subagents import DeliverFn, SubagentReport, Subagents
+from ..exceptions import RunCancelled
+from ..plugins.subagents import (
+    ChildSpec,
+    DeliverFn,
+    RunChildFn,
+    SubagentReport,
+    Subagents,
+)
 
 if TYPE_CHECKING:
+    from ..runtime.result import RunResult
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
@@ -111,27 +121,128 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
     return deliver
 
 
-def wire_subagents(app: FastAPI) -> int:
-    """Switch served ``Subagents`` plugins to web delivery; returns how many.
+def subagent_runner(deps: "RouterDeps") -> RunChildFn:
+    """Build the supervised :data:`~lovia.plugins.RunChildFn` for ``deps``.
 
-    Scans every served agent for :class:`~lovia.plugins.Subagents` plugins
-    still on the core default (``deliver=None``) and sets their ``deliver``
-    to :func:`subagent_deliver`. Call it once, after ``create_app``. Plugins
-    with a ``deliver`` of their own are left untouched.
+    Each spawn becomes a **clientless supervised run in its own task
+    session** (``parent_id`` = the spawning chat), so the child streams over
+    the ordinary session SSE, shows up in the UI's Tasks group, can be
+    stopped there, and leaves a run record + transcript behind. The child's
+    outcome is read off the controller (``final_status``/``final_output``)
+    once its task finishes.
+
+    Cancellation bridges both ways: the UI's stop button cancels the
+    supervised run (→ :class:`~lovia.exceptions.RunCancelled` here → no
+    report), and a ``cancel_subagent`` call trips ``spec.token``, which a
+    small watcher translates into ``supervisor.cancel`` — going through the
+    supervisor keeps its terminal bookkeeping (partial persist, checkpoint
+    drop, "cancelled" record) intact, which a raw shared token would bypass.
     """
-    deps: RouterDeps = app.state.deps
-    fn = subagent_deliver(deps)
+
+    async def run_child(spec: ChildSpec) -> "RunResult":
+        from ..runtime.result import RunResult
+        from .titles import provisional_title
+
+        child_sid = uuid.uuid4().hex
+        # The registry key the task chat speaks afterwards. The child agent
+        # itself is unregistered (often a clone), so record the parent chat's
+        # agent — a follow-up message in the finished task then runs the
+        # served agent closest to it.
+        agent_key: str | None = None
+        if spec.parent_session_id is not None:
+            row = await deps.store.get(spec.parent_session_id)
+            if row is not None:
+                agent_key = row.agent
+        await deps.store.upsert(
+            child_sid,
+            agent=agent_key,
+            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            parent_id=spec.parent_session_id,
+        )
+        try:
+            ctrl = await deps.supervisor.start(
+                session_id=child_sid,
+                agent=spec.agent,
+                input=spec.prompt,
+                is_new=False,  # no title generation for task sessions
+                title_message=None,
+                autostart=True,
+                source=f"subagent:{child_sid}",
+            )
+        except HTTPException as exc:
+            await deps.store.delete(child_sid)
+            if exc.status_code == 429:
+                raise RuntimeError(
+                    "the server is at its concurrent-run limit; "
+                    "wait for other work to finish and spawn again"
+                ) from exc
+            raise
+        assert ctrl.task is not None  # autostart began it
+
+        async def watch_token() -> None:
+            while not spec.token.is_cancelled:
+                await asyncio.sleep(0.3)
+            deps.supervisor.cancel(child_sid)
+
+        watcher = asyncio.create_task(watch_token())
+        try:
+            await ctrl.task
+        finally:
+            # Cancel *and* join (the Scheduler.stop() idiom) so no pending
+            # watcher outlives run_child.
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+        if ctrl.final_status == "completed":
+            return RunResult(
+                output=ctrl.final_output,
+                entries=[],
+                final_agent=spec.agent,
+                usage=ctrl.usage,
+                turns=ctrl.turns,
+            )
+        if ctrl.final_status == "cancelled":
+            raise RunCancelled("subagent stopped")
+        raise RuntimeError(ctrl.final_error or "subagent run did not complete")
+
+    return run_child
+
+
+def _wire(deps: "RouterDeps") -> int:
+    """Adapt served ``Subagents`` plugins to this app; returns how many.
+
+    A plugin still entirely on core defaults (``deliver`` **and**
+    ``run_child`` both ``None``) gets the pair set together: supervised
+    children + inject-or-start delivery. A plugin with either seam already
+    set is considered hand-wired and left untouched.
+    """
+    deliver = subagent_deliver(deps)
+    run_child = subagent_runner(deps)
     wired: set[int] = set()
     for agent in deps.agents.values():
         for plugin in agent.plugins:
             if (
                 isinstance(plugin, Subagents)
                 and plugin.deliver is None
+                and plugin.run_child is None
                 and id(plugin) not in wired
             ):
-                plugin.deliver = fn
+                plugin.deliver = deliver
+                plugin.run_child = run_child
                 wired.add(id(plugin))
     return len(wired)
 
 
-__all__ = ["subagent_deliver", "wire_subagents"]
+def wire_subagents(app: FastAPI) -> int:
+    """Adapt served ``Subagents`` plugins to web semantics; returns how many.
+
+    ``create_app`` calls this automatically (disable with
+    ``create_app(..., wire_subagents=False)``); the helper exists for apps
+    that mount :func:`~lovia.web.build_api_router` into their own FastAPI
+    app. See :func:`subagent_runner` and :func:`subagent_deliver` for what
+    the wiring does.
+    """
+    return _wire(app.state.deps)
+
+
+__all__ = ["subagent_deliver", "subagent_runner", "wire_subagents"]

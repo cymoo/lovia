@@ -155,10 +155,15 @@ budget=None, max_result_chars=16_000, instructions=None)`：
   传入回调（*detached*）：所有报告改走回调，子 Agent 可以活过运行——这是
   服务层模式（见 [Web 投递](web-ui.md)）。
 - 子 Agent 无人值守运行：无人裁决的审批请求会被**默认拒绝**，因此请给
-  子 Agent 配置无需审批的工具集。
+  子 Agent 配置无需审批的工具集。（在 Web UI 下子 Agent 是可观察的任务会话，
+  人可以当场裁决审批——见 [Web 投递](web-ui.md#后台子-agent)。）
 - `Subagents()` 不带目录时，会克隆当前 agent 并剥离 `plugins` 与
   `handoffs`——不会递归 spawn、不共享插件状态；模型、指令、工具和
   workspace 原样继承。
+- `run_child`（进阶）替换子 Agent 的*执行方式*：覆盖实现接收 `ChildSpec`、
+  返回子运行的 `RunResult`——web 层正是用这个 seam 把子 Agent 路由进它的
+  run supervisor。它应与 `deliver` 成对设置；单独设置时 bounded 模式的收尾
+  无法取消它管不到的子任务，只会把它们变成孤儿。
 
 ## 如何选择协作方式
 

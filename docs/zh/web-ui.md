@@ -166,25 +166,26 @@ Run 尚未结束时仍可发送纯文本消息。UI 会将它显示为排队状�
 
 ## 后台子 Agent
 
-携带 [`Subagents` 插件](multi-agent.md#后台子-agentsubagents)的 agent 在 Web UI 中
-开箱即用，语义与 core 一致：子 Agent 随派生它的 Run 一同结束。显式调用一行即可切换
-到更适合聊天的模式——模型答复后子 Agent 继续运行，报告完成时随时落入对话：
+`lovia web` 默认开启[后台子 Agent](multi-agent.md#后台子-agentsubagents)
+（`--no-subagents` 关闭）：助手可以把自包含的任务派给一个子助手，子助手保留基础
+能力（Skills、Todo、工具、workspace），去掉 Scheduling、Memory 与递归派生。托管
+自定义 agent 时自行挂载 `Subagents` 插件即可——`create_app` 会自动把它适配到服务
+场景（`create_app(..., wire_subagents=False)` 可退出；直接 mount
+`build_api_router` 的应用改为调用一次 `wire_subagents(app)`）。
 
-```python
-from lovia.web import create_app, wire_subagents
+**每次 spawn 都是一个真实会话。** 接线后的子 Agent 作为受管 Run 跑在自己的
+*任务会话*里——出现在侧栏底部的 **任务** 分组中，运行中带标记。点开即可逐 token
+观察它工作（就是普通会话视图：流式、断线重连、停止按钮、删除都可用），包括它正在
+等待的工具审批——可以当场批准或拒绝；无人处理的审批在服务端 `approval_timeout`
+（`lovia web` 设为 10 分钟）后自动拒绝，任务不会永久占用并发槽。每个任务留下
+自己的运行记录（状态、Token 用量），source 为 `subagent:<session>`。
 
-app = create_app(agent, db_path="lovia.db")
-wire_subagents(app)   # detach：报告完成后投递回对话
-```
+**报告投递回父对话。** 子 Agent 完成时，报告落入派生它的对话——父会话有活跃
+Run 就注入为下一条用户侧消息，空闲则以报告为输入启动一次无客户端 Run，模型对
+报告做出反应并持久化。达到并发上限时投递带退避重试，最终失败记录警告。
 
-投递复用调度器的模式：目标会话有活跃 Run 时，报告作为下一条用户侧消息注入；会话
-空闲时则以报告为输入启动一次无客户端 Run（记录 source 为 `subagent:<id>`），模型
-对报告做出反应，往来内容持久化到会话中。若达到并发上限，投递会带退避重试，最终
-失败则记录警告。
-
-两点语义说明：接线后的子 Agent 不受停止按钮影响（模型仍可用 `cancel_subagent`
-停掉它们）；父 Run 记录落库之后才完成的子 Agent，其 Token 用量只计入内存中的
-父用量合计，不会补进该 Run 已存储的用量行。
+接线后的子 Agent 不受父对话停止按钮影响（可在其任务会话里停止，或由模型
+`cancel_subagent`）；服务重启不会恢复进行中的任务。
 
 ## 关闭或刷新页面
 

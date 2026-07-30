@@ -37,7 +37,7 @@ from .skills import (
     Skills,
     SkillsError,
 )
-from .subagents import DeliverFn, SubagentReport, Subagents
+from .subagents import ChildSpec, DeliverFn, RunChildFn, SubagentReport, Subagents
 from .todo import (
     Todo,
     TodoItem,
@@ -72,7 +72,9 @@ __all__ = [
     "SkillSource",
     "Skills",
     "SkillsError",
+    "ChildSpec",
     "DeliverFn",
+    "RunChildFn",
     "SubagentReport",
     "Subagents",
     "Todo",

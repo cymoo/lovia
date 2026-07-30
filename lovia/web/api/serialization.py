@@ -36,6 +36,7 @@ def session_info(meta: ChatMeta) -> ChatSessionInfo:
         created_at=meta.created_at,
         updated_at=meta.updated_at,
         pinned=meta.pinned,
+        parent_id=meta.parent_id,
     )
 
 

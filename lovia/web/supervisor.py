@@ -215,6 +215,11 @@ class RunController:
         self.turns = 0
         self.succeeded = False
         self.final_output: Any = None
+        # Terminal outcome, set exactly once in the task's finally — lets a
+        # programmatic owner (e.g. the subagent runner) await ``task`` and
+        # read what happened without re-querying the run-record store.
+        self.final_status: str | None = None
+        self.final_error: str | None = None
         self.started_at = time.time()
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
@@ -619,6 +624,8 @@ class RunController:
                 # survives, so a reconnect may pick this run back up — in which
                 # case start_run flips this same row back to "running".
                 status = "interrupted"
+            self.final_status = status
+            self.final_error = None if succeeded else final_error
             try:
                 await store.finish_run(
                     record_id,

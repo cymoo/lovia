@@ -380,6 +380,11 @@ body.sidebar-collapsed .sidebar {
   font-size: 13px;
   text-align: center;
 }
+/* The subagent-tasks group header rendered inside the scrolling list — the
+   shared label style, minus the sticky-header horizontal inset. */
+.sessions-tasks-label {
+  padding: 14px 10px 4px;
+}
 /* Tail row shown when more chats exist than the sidebar page — opens the
    "All chats" dialog. */
 .sessions-more {

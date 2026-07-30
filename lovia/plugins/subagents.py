@@ -91,6 +91,39 @@ class SubagentReport:
 DeliverFn = Callable[[SubagentReport], Awaitable[None]]
 
 
+@dataclass
+class ChildSpec:
+    """One spawn request, as handed to a :data:`RunChildFn` override."""
+
+    id: str
+    """Run-scoped task id (``t1``, ``t2``, …)."""
+
+    agent: "Agent[Any]"
+    """The child agent to run."""
+
+    prompt: str
+    """The self-contained prompt the child was spawned with."""
+
+    token: CancelToken
+    """The child's cancel signal — ``cancel_subagent`` trips it, and (in
+    bounded mode) so does run teardown. An override must honor it: stop the
+    child it started when the token cancels, and raise
+    :class:`~lovia.exceptions.RunCancelled` for a cancelled outcome so no
+    report is delivered."""
+
+    parent_session_id: str | None
+    """The spawning run's session, when it has one."""
+
+    max_turns: int
+    """Turn bound for the child run (the plugin's ``max_turns``)."""
+
+    budget: RunBudget | None
+    """A fresh per-spawn budget copy, when the plugin carries one."""
+
+
+RunChildFn = Callable[[ChildSpec], Awaitable["RunResult"]]
+
+
 # --------------------------------------------------------------------------- #
 # run-scoped state
 # --------------------------------------------------------------------------- #
@@ -237,6 +270,16 @@ class Subagents:
     children are cancelled when the run ends. A callback (detached): every
     report goes through it and children may outlive the run."""
 
+    run_child: RunChildFn | None = None
+    """Replaces *how* a child executes. ``None`` runs it in-process
+    (``Runner.run`` inheriting the parent's deps, tracer, and usage
+    accumulator). An override receives a :class:`ChildSpec` and returns the
+    child's :class:`~lovia.RunResult` — ``lovia.web`` uses this to route
+    children through its run supervisor so they stream in the UI. Advanced:
+    set it via :func:`lovia.web.wire_subagents` (which pairs it with
+    ``deliver``) rather than by hand — an override with bounded-mode teardown
+    would orphan, not cancel, its children."""
+
     max_concurrent: int = 4
     """Spawn cap; at capacity ``spawn_subagent`` declines (no queueing)."""
 
@@ -343,26 +386,46 @@ class Subagents:
     async def _drive(
         self, rec: _Record, child: "Agent[Any]", ctx: RunContext[Any]
     ) -> None:
+        try:
+            if self.run_child is not None:
+                rec.result = await self.run_child(
+                    ChildSpec(
+                        id=rec.id,
+                        agent=child,
+                        prompt=rec.prompt,
+                        token=rec.token,
+                        parent_session_id=ctx.session_id,
+                        max_turns=self.max_turns,
+                        budget=replace(self.budget)
+                        if self.budget is not None
+                        else None,
+                    )
+                )
+            else:
+                rec.result = await self._run_inline(rec, child, ctx)
+        except Exception as exc:
+            rec.error = exc
+        await self._finish(rec, ctx)
+
+    async def _run_inline(
+        self, rec: _Record, child: "Agent[Any]", ctx: RunContext[Any]
+    ) -> "RunResult":
         # Local import: plugins must stay importable without the runner
         # (mirrors agent_as_tool's circular-import guard).
         from ..runner import Runner
 
-        try:
-            rec.result = await Runner.run(
-                child,
-                rec.prompt,
-                context=ctx.context,
-                max_turns=self.max_turns,
-                budget=replace(self.budget) if self.budget is not None else None,
-                cancel_token=rec.token,
-                # Join the parent's trace and fold usage into the parent's
-                # accumulator (failed legs included) — as agent_as_tool does.
-                tracer=ctx._tracer,
-                _parent_usage=ctx.usage,
-            )
-        except Exception as exc:
-            rec.error = exc
-        await self._finish(rec, ctx)
+        return await Runner.run(
+            child,
+            rec.prompt,
+            context=ctx.context,
+            max_turns=self.max_turns,
+            budget=replace(self.budget) if self.budget is not None else None,
+            cancel_token=rec.token,
+            # Join the parent's trace and fold usage into the parent's
+            # accumulator (failed legs included) — as agent_as_tool does.
+            tracer=ctx._tracer,
+            _parent_usage=ctx.usage,
+        )
 
     async def _finish(self, rec: _Record, ctx: RunContext[Any]) -> None:
         if rec.cancelled:
@@ -588,4 +651,4 @@ class Subagents:
         return inject
 
 
-__all__ = ["DeliverFn", "SubagentReport", "Subagents"]
+__all__ = ["ChildSpec", "DeliverFn", "RunChildFn", "SubagentReport", "Subagents"]

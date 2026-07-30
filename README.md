@@ -217,56 +217,58 @@ agent = Agent(
 
 ### Multi-agent
 
-Three primitives, all ordinary tools underneath. **Handoff** transfers the
-conversation — the specialist continues with the full history and answers
-the user. **Agent-as-tool** delegates a bounded subtask — the child sees
-only the prompt and its answer comes back as a tool result. **Subagents**
-delegates without waiting — background children run while the parent keeps
-working and report back later:
+The choice comes down to who owns the conversation, what context the target
+agent receives, and whether the parent waits:
+
+| Mechanism | Who answers the user | Target agent context | Does the parent wait? | How the result returns |
+| --- | --- | --- | --- | --- |
+| **Handoff** | The specialist that takes over | Full conversation history | N/A; control transfers | The specialist continues in the same run |
+| **Agent-as-tool** | The parent | Only the delegated prompt | Yes | As a tool result |
+| **Subagents** | The parent | Only the delegated prompt | Not by default; it may wait explicitly | Later as a message, or directly from the wait tool |
+
+In short: use Handoff when a specialist should take over the conversation;
+Agent-as-tool when the parent needs a subtask result before it can continue;
+and Subagents when the task can run independently in the background. The
+three configurations below are alternatives, showing how the same
+`researcher` can be used in each mode:
 
 ```python
-from lovia import Agent, Runner
+from lovia import Agent, Subagents
 
-billing = Agent(name="billing", instructions="Handle billing issues.", model="glm-5.2")
-support = Agent(name="support", instructions="Handle technical issues.", model="glm-5.2")
-
-triage = Agent(
-    name="triage",
-    instructions="Route the user to the right specialist.",
-    model="deepseek-v4-flash",
-    handoffs=[billing, support],       # handoff: the specialist takes over
+researcher = Agent(
+    name="researcher",
+    instructions="Research the given topic and return a concise report.",
+    model="glm-5.2",
 )
-result = await Runner.run(triage, "I was charged twice.")
-```
 
-```python
-summarizer = Agent(name="summarizer", instructions="Summarize text in five bullets.",
-                   model="glm-5.2")
+# Handoff: researcher takes over and receives the full conversation
+router = Agent(
+    name="router",
+    instructions="Transfer to researcher when in-depth research is needed.",
+    model="deepseek-v4-flash",
+    handoffs=[researcher],
+)
 
+# Agent-as-tool: manager waits for the research, then answers the user itself
 manager = Agent(
     name="manager",
-    instructions="Delegate summarization when useful.",
+    instructions="Ask researcher for any research needed before answering.",
     model="deepseek-v4-flash",
-    tools=[summarizer.as_tool(description="Summarize a passage.")],  # delegate a subtask
+    tools=[researcher.as_tool(description="Research a topic and return a report.")],
 )
-```
 
-```python
-from lovia import Subagents
-
-researcher = Agent(name="researcher", instructions="Research a topic and report back.",
-                   model="glm-5.2")
-
+# Subagents: assistant starts background research and keeps working
 assistant = Agent(
     name="assistant",
+    instructions="Run independent research in the background while drafting the answer.",
     model="deepseek-v4-flash",
-    plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
+    plugins=[Subagents([researcher])],
 )
-# The model spawns researchers in the background, keeps working, and their
-# reports arrive as messages. Under the web UI each spawn runs as a watchable
-# task session (sidebar "Tasks" group) and reports back into the chat — wired
-# automatically; `lovia web` has this on by default.
 ```
+
+`lovia web` enables Subagents by default. Each background task appears in
+the sidebar's **Tasks** group and automatically reports back to the original
+conversation when it finishes.
 
 → [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)
 

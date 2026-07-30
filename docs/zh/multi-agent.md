@@ -1,10 +1,13 @@
 # 多 Agent
 
-lovia 刻意将多 Agent 协作保持得简单清晰：只提供三个原语，底层均以普通工具实现，
-不引入编排 DSL。**Handoff** 用于移交控制权，由专家 Agent 接手当前对话；
-**Agent-as-tool** 用于委派任务，父 Agent 等待子 Agent 回答一个边界明确的问题；
-**Subagents** 用于不等待的委派——后台子 Agent 并发运行，稍后汇报结果。
-更复杂的模式可以直接用普通 Python 组合这些原语。
+lovia 只提供三种多 Agent 协作机制，不引入编排 DSL。它们的核心区别在于谁掌握
+对话、目标 Agent 能看到哪些上下文，以及父 Agent 是否需要等待：
+
+- **Handoff** 移交对话，由专家 Agent 带着完整历史接手。
+- **Agent-as-tool** 委派子任务，父 Agent 等到结果后继续。
+- **Subagents** 把独立任务放到后台，父 Agent 默认无需等待，可以同时处理其他工作。
+
+更复杂的流程可以直接用普通 Python 组合这三种机制。
 
 ## Handoff
 
@@ -25,23 +28,23 @@ result = await Runner.run(triage, "我被重复扣款了。")
 print(result.final_agent.name)   # "billing"
 ```
 
-`handoffs` 里的每个条目都会变成一个 `transfer_to_<name>` 工具（名称会 slugify，以符合
-provider 对工具名的要求：ASCII、64 字符，必要时加稳定 digest 后缀）。模型调用这个工具时，循环会
-切换活跃 agent 并继续。
+`handoffs` 中的每个条目都会注册为 `transfer_to_<name>` 工具。工具名会被规范成
+Provider 接受的格式：仅使用 ASCII，最长 64 个字符，必要时附加稳定的摘要后缀。
+模型调用这个工具后，运行循环会切换到目标 Agent 并继续。
 
-**目标 Agent 可以看到哪些内容。** Handoff 会连同对话历史一起移交：新的 Agent 会收到完整的既有上下文，
-包括历史、工具调用和结果。唯一变化是开头的 system prompt 会重新渲染成目标 agent 自己的
-内容（instructions、workspace、plugins、结构化输出契约）。运行级
-`extra_instructions` 会重新应用到 handoff 到达的每个 agent。
+**目标 Agent 可以看到哪些内容。** Handoff 会把对话历史一并移交，包括此前的消息、
+工具调用和工具结果。只有开头的系统提示会按目标 Agent 重新生成，其中包含它自己的
+instructions、Workspace、插件和结构化输出约束。运行级 `extra_instructions` 也会
+重新应用到 Handoff 到达的每个 Agent。
 
-**还会改变什么。** 目标 agent 的 provider、工具、插件和工作区会重新解析（插件会运行
-自己的 `setup()`）；会触发一个 `HandoffOccurred` 事件（派发给两个 agent 的 hooks）。
-保持不变的是整体运行状态：`max_turns`、预算、取消令牌、Mailbox、Session、Checkpoint，以及
-**初始** agent 的 retry/context 应对策略都会延续。
+**还会改变什么。** 系统会重新解析目标 Agent 的 Provider、工具、插件和 Workspace，
+并执行各插件的 `setup()`；同时触发 `HandoffOccurred` 事件，交给移交双方的 hooks。
+运行本身则保持不变：`max_turns`、预算、取消令牌、Mailbox、Session、Checkpoint，
+以及初始 Agent 配置的重试策略和上下文策略都会沿用。
 
 ### 自定义 Handoff
 
-用 `Handoff` 包装目标 agent，可以控制工具：
+需要自定义移交工具时，可以用 `Handoff` 包装目标 Agent：
 
 ```python
 from lovia import Agent, Handoff
@@ -55,34 +58,37 @@ triage = Agent(
             description="账单：退款、重复扣款、发票、支付方式。",
             on_handoff=lambda args, ctx: audit_log(ctx.session_id, args.get("reason")),
         ),
-        support,   # 普通 agent 也可以混用
+        support,   # 也可以直接传入 Agent
     ],
 )
 ```
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
-| `target` | 必填 | 要转交给哪个 agent |
+| `target` | 必填 | 要转交给哪个 Agent |
 | `name` | `transfer_to_<slug>` | 覆盖工具名 |
-| `description` | 通用转交文本 | **路由信号**。父 agent 需要在相似专家间选择时，请写清目标专长 |
-| `on_handoff` | `None` | handoff 触发时调用的同步或异步回调 `(args, ctx)`；`args` 携带模型可选的 `reason` |
+| `description` | 通用移交说明 | **路由依据**。父 Agent 需要在相似专家间选择时，应写清目标专长 |
+| `on_handoff` | `None` | Handoff 发生时调用的同步或异步回调 `(args, ctx)`；`args` 包含模型可选填的 `reason` |
 
-默认 description 有意保持简略（只有 agent 名称），所以 `description` 是让路由可靠的关键设置。
+默认 `description` 只有 Agent 名称，信息很少。需要可靠路由时，应明确填写目标 Agent
+擅长处理的问题。
 
 ### Handoff 语义
 
-- **第一个 handoff 胜出。** Handoff 工具永远作为[屏障](tools.md#并发执行与屏障)执行，
-  不会和其他调用并发；同一轮里的第二个 handoff 会在它的 `on_handoff` 副作用发生前
+- **只执行第一个 Handoff。** Handoff 工具始终作为[屏障](tools.md#并发执行与屏障)执行，
+  不会与其他工具调用并发；同一轮里的第二个 Handoff 会在触发 `on_handoff` 之前
   被拒绝。
-- **切换发生在轮次结束时。** 本轮剩余工具结果会先处理；下一次模型调用才是目标 agent。
-- **恢复能穿过 handoff。** [Checkpoint](sessions-and-checkpoints.md) 会按名称记录
-  **活跃** agent；恢复时从入口 agent 的 handoff 图中重新解析并继续。
-- **Handoff 不会嵌套运行。** 无论转交链多深，它仍然是一次运行、一份 transcript、一个预算。
+- **切换发生在当前轮次结束时。** 系统会先处理本轮剩余的工具结果，下一次模型调用
+  才交给目标 Agent。
+- **Handoff 后仍可恢复。** [Checkpoint](sessions-and-checkpoints.md) 会按名称记录
+  当前 Agent；恢复时会从入口 Agent 的 Handoff 关系中找到它并继续运行。
+- **Handoff 不会创建嵌套运行。** 无论连续移交多少次，始终只有一个 Run、
+  一份 Transcript 和一套预算。
 
 ## Agent-as-tool
 
-这是委派，不是转交：子 agent 在自己的循环里运行，只看到交给它的 prompt（绝不会看到父 agent
-历史），最终输出作为工具结果返回：
+这是委派，不是移交：子 Agent 在独立的运行循环中处理任务，只能看到交给它的提示词，
+无法访问父 Agent 的对话历史。完成后，结果会作为工具结果返回。
 
 ```python
 summarizer = Agent(
@@ -102,22 +108,23 @@ manager = Agent(
 `agent.as_tool(*, name=None, description=None, max_turns=50, budget=None,
 retry=None, context_policy=None)`：
 
-- 工具默认名为 `ask_<slug>`，只接受一个由模型控制的参数：`input`，即被委派的 prompt。
-  执行策略关键字由**你**固定，不暴露给模型。尤其要给委派 agent 绑定 `max_turns`，
-  因为它有自己的循环。
+- 工具默认名为 `ask_<slug>`，只接受一个由模型填写的参数 `input`，也就是交给子 Agent
+  的提示词。`max_turns` 等执行策略由应用代码固定，不会暴露给模型。子 Agent 有自己的
+  运行循环，因此尤其建议明确限制 `max_turns`。
 - `budget` 每次调用都会复制一份，所以限制作用于每个子运行，而不是跨调用累计。
 - 子运行会**继承**父运行的 `context`（deps）、`cancel_token`（一次取消停止整棵树）和
   Tracer（子 Span 会加入同一条 Trace）；Token 用量会计入父运行的 `usage`。
-- 子运行拥有**自己的 mailbox**。这不是父运行的 mailbox，因为从 mailbox 取消息会消费它，
-  注入消息也只应发给一段对话。
-- 子运行耗尽自己的预算时，会作为工具错误结果反馈给父 agent，让父 agent 处理。这是可恢复
-  的委派失败，不是结束父运行的失败（见[错误语义](tools.md#错误语义)）。
+- 子运行拥有**独立的 Mailbox**，不会与父运行共用。Mailbox 中的消息一经读取就会被消费，
+  而且每条注入消息只应属于一段对话。
+- 子运行耗尽预算时，父 Agent 会收到一个工具错误结果并决定如何处理。这属于可恢复的
+  委派失败，不会直接结束父运行，详见[错误语义](tools.md#错误语义)。
 
-## 后台子 Agent（Subagents）
+## 后台子 Agent
 
-`Subagents` 插件是 agent-as-tool 的异步版本：`spawn_subagent` 立即返回任务 id，
-子 Agent 在事件循环上并发运行，父 Agent 继续干自己的活；子 Agent 的报告稍后
-以用户侧消息的形式在轮次边界进入对话——绝不会以"迟到的工具结果"出现：
+Agent-as-tool 会让父 Agent 等待；`Subagents` 则把任务放到后台。
+`spawn_subagent` 启动任务后立即返回任务 ID，子 Agent 在同一事件循环中并发执行，
+父 Agent 可以继续工作。任务完成后，报告会在轮次边界作为用户侧消息进入对话，
+不会变成属于较早一轮的工具结果。
 
 ```python
 from lovia import Agent, Runner, Subagents
@@ -128,76 +135,77 @@ researcher = Agent(name="researcher", instructions="调研并输出报告。",
 agent = Agent(
     name="assistant",
     model="<model>",
-    plugins=[Subagents([researcher])],   # 或 Subagents()：克隆当前 agent
-                                         # （剥离 plugins/handoffs）
+    plugins=[Subagents([researcher])],   # 或用 Subagents() 克隆当前 Agent
+                                         # （不包含 plugins 和 handoffs）
 )
 result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
 ```
 
-模型获得三个工具和一条每轮重现的状态提醒：
+父 Agent 会获得三个工具；系统提示还会在每轮注明后台任务的当前状态：
 
-- `spawn_subagent(prompt, agent=...)`：用一段自包含 prompt 启动子 Agent
-  （子 Agent 只能看到这段 prompt）。超过 `max_concurrent` 时拒绝。
-- `wait_subagents(ids=None, timeout_seconds=60)`：阻塞至目标子 Agent 完成
-  （或超时）并收取报告。尚未被看到的自动投递会被*撤回*并直接返回，
-  报告绝不重复出现。
-- `cancel_subagent(id)`：协作式停止，不产生报告。
+- `spawn_subagent(prompt, agent=...)`：用一段无需依赖父对话的完整提示词启动子 Agent；
+  子 Agent 看不到父对话。正在运行的任务达到 `max_concurrent` 后，新任务会被拒绝。
+- `wait_subagents(ids=None, timeout_seconds=60)`：等待指定任务完成或超时，并收取
+  已完成任务的报告。如果报告已经自动进入消息队列、但还没有被模型读取，它会从
+  队列中撤回并直接返回，因此同一份报告不会出现两次。
+- `cancel_subagent(id)`：请求子 Agent 停止；被取消的任务不会产生报告。
 
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
 budget=None, max_result_chars=16_000, instructions=None)`：
 
-- 子运行继承父运行的 `context`（deps）与 Tracer，Token 用量计入父运行的
-  `usage`——与 `as_tool` 子运行一致。每个子 Agent 有**自己的**取消令牌
-  （`cancel_subagent` 触发的就是它），`budget` 每次 spawn 复制一份。
-- **生命周期由 `deliver` 决定。** 默认（`deliver=None`，*bounded*）：报告
-  推入本次运行的 mailbox，运行结束时仍在跑的子 Agent 会被取消——子 Agent
-  不会活过运行本身；内置指令会要求模型在收尾前 `wait_subagents` 或取消。
-  传入回调（*detached*）：所有报告改走回调，子 Agent 可以活过运行——这是
-  服务层模式（见 [Web 投递](web-ui.md)）。
-- 子 Agent 无人值守运行：无人裁决的审批请求会被**默认拒绝**，因此请给
-  子 Agent 配置无需审批的工具集。（在 Web UI 下子 Agent 是可观察的任务会话，
-  人可以当场裁决审批——见 [Web 投递](web-ui.md#后台子-agent)。）
-- `Subagents()` 不带目录时，会克隆当前 agent 并剥离 `plugins` 与
-  `handoffs`——不会递归 spawn、不共享插件状态；模型、指令、工具和
-  workspace 原样继承。
-- `run_child`（进阶）替换子 Agent 的*执行方式*：覆盖实现接收 `ChildSpec`、
-  返回子运行的 `RunResult`——web 层正是用这个 seam 把子 Agent 路由进它的
-  run supervisor。它应与 `deliver` 成对设置；单独设置时 bounded 模式的收尾
-  无法取消它管不到的子任务，只会把它们变成孤儿。
+- 子运行继承父运行的 `context`（deps）和 Tracer，Token 用量也计入父运行的
+  `usage`，这一点与 `as_tool` 相同。每个子 Agent 使用独立的取消令牌；
+  `budget` 则在每次启动任务时复制一份。
+- **`deliver` 决定任务是否能脱离当前 Run。** 默认不传 `deliver`：报告进入
+  当前 Run 的消息队列；Run 结束时，尚未完成的任务会被取消。内置提示会要求模型
+  在结束前等待这些任务，或明确取消它们。传入 `deliver` 回调后，报告全部交给
+  回调处理，子 Agent 也可以在父 Run 结束后继续运行。这种方式主要供 Web 服务等
+  托管场景使用，详见 [Web UI](web-ui.md#后台子-agent)。
+- 默认模式下，子 Agent 无人值守运行。没有人处理的工具审批会被**自动拒绝**，
+  因此应只给它配置无需人工审批的工具。在 Web UI 中，后台任务是可查看的独立会话，
+  可以直接处理其中的审批。
+- `Subagents()` 未指定 `agents` 时，会以当前 Agent 为模板，但移除 `plugins`
+  和 `handoffs`。这样既不会递归派生，也不会共享插件状态；模型、指令、工具和
+  Workspace 保持不变。
+- `run_child` 是面向服务层的高级扩展点，用来接管子 Agent 的执行过程。它接收
+  `ChildSpec` 并返回子运行的 `RunResult`；Web 层借此把任务交给自己的运行管理器。
+  应将它与 `deliver` 配套设置。若只替换 `run_child`，当前 Run 结束时，
+  `Subagents` 无法取消由外部管理的任务。
 
 ## 如何选择协作方式
 
-| 你想要 | 使用 |
-| --- | --- |
-| 用户接下来继续和专家对话 | handoff |
-| 只要一个有边界子任务的答案，然后继续 | agent-as-tool |
-| 专家看到完整对话 | handoff |
-| 隔离：子 agent 不应看到父历史 | agent-as-tool / subagents |
-| 最终答案归属专家（`result.final_agent`） | handoff |
-| 子 Agent 运行时父 Agent 继续干活 | subagents |
-| 发射后不管、稍后回报的调研任务 | subagents |
+| 方式 | 谁继续回答用户 | 目标 Agent 看到什么 | 父 Agent 是否等待 | 结果如何返回 |
+| --- | --- | --- | --- | --- |
+| Handoff | 接手的专家 Agent | 完整对话历史 | 不适用，控制权已移交 | 专家在同一次 Run 中继续回答 |
+| Agent-as-tool | 父 Agent | 本次委派的提示词 | 等待 | 作为工具结果返回 |
+| Subagents | 父 Agent | 本次委派的提示词 | 默认不等待，也可主动等待 | 稍后作为消息送达，或由等待工具直接返回 |
 
-更大的模式，如链式调用、路由、并行化、orchestrator-worker、evaluator loop，都不需要框架
-支持：在 `Runner.run` 外层用普通 Python 写即可。
+需要专家接管后续对话，选择 Handoff；父 Agent 必须先拿到子任务结果，选择
+Agent-as-tool；任务可以独立在后台完成，选择 Subagents。
+
+链式调用、路由、并行处理、编排者—执行者和评估循环等更复杂的流程，都不需要额外的
+框架抽象：在 `Runner.run` 外层用普通 Python 组合即可。
 [`examples/workflows/`](../../examples/workflows/) 目录用一页代码实现了 Anthropic
 *Building effective agents* 里的每个模式。
 
 ## 注意事项
 
-- **Handoff 目标需要可发现的 description。** 两个专家如果都用默认 description，
-  从路由角度看起来几乎一样；误路由首先是 prompt 问题，其次才是框架问题。
-- **运行级 `output_type` 覆盖跟着运行，而不是跟着 agent。**
-  `Runner.run(..., output_type=...)` 覆盖会绑定 handoff 到达的每个 agent；没有覆盖时，
-  各 agent 使用自己的 `output_type`。triage → specialist 链如果输出类型不同，契约会在运行中变化。
-- **非 ASCII agent 名会生成 digest 工具名。** `transfer_to_agent_a1b2c3d4` 能正常路由，
-  但日志不好读；需要可读名称时设置 `Handoff(name=...)` / `as_tool(name=...)`。
-- **很深的 agent-as-tool 层级会放大成本。** 用量向上汇总，所以 `result.usage` 是**整个调用层级**
-  的总量。根运行要按这个总量设置预算。
+- **为 Handoff 目标写清 `description`。** 如果两个专家都使用默认说明，路由 Agent
+  几乎无法区分它们。遇到错误路由时，应先检查提示词和说明，再排查框架行为。
+- **运行级 `output_type` 覆盖跟随 Run，而不是 Agent。**
+  `Runner.run(..., output_type=...)` 指定的输出类型会应用到 Handoff 到达的每个 Agent。
+  未指定时，各 Agent 使用自己的 `output_type`；如果分流 Agent 和专家的类型不同，
+  输出约束会在移交后发生变化。
+- **非 ASCII 的 Agent 名称会生成带摘要的工具名。**
+  `transfer_to_agent_a1b2c3d4` 可以正常路由，但日志不易阅读。需要可读名称时，
+  请设置 `Handoff(name=...)` 或 `as_tool(name=...)`。
+- **Agent-as-tool 嵌套越深，成本越高。** 用量会逐层向上汇总，因此
+  `result.usage` 表示整棵调用树的总用量；根 Run 的预算应按这个总量设置。
 
 ## 延伸阅读
 
-- [工具](tools.md)：两个原语底层都是普通工具
-- [Session 与 Checkpoint](sessions-and-checkpoints.md)：跨 handoff 恢复
+- [工具](tools.md)：三种机制如何通过普通工具工作
+- [Session 与 Checkpoint](sessions-and-checkpoints.md)：Handoff 后恢复运行
 - 示例：[`07_handoff.py`](../../examples/07_handoff.py)，
   [`08_agent_as_tool.py`](../../examples/08_agent_as_tool.py)，
   [`30_subagents.py`](../../examples/30_subagents.py)，

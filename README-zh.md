@@ -197,56 +197,54 @@ agent = Agent(
 
 ### 多 Agent
 
-三个原语，底层都是普通工具。**Handoff** 会移交对话：子 agent 带着完整历史接管并
-直接回答用户。**Agent-as-tool** 委派一个有边界的子任务：子 agent 只看到交给
-它的提示词，结果作为工具结果返回。**Subagents** 是不等待的委派：后台子 agent
-并发运行，父 agent 继续干活，报告稍后送达。
+区别主要在于：谁继续回答用户、目标 Agent 能看到哪些上下文，以及父 Agent 是否等待。
+
+| 方式 | 谁继续回答用户 | 目标 Agent 看到什么 | 父 Agent 是否等待 | 结果如何返回 |
+| --- | --- | --- | --- | --- |
+| **Handoff** | 接手的专家 Agent | 完整对话历史 | 不适用，控制权已移交 | 专家在同一次 Run 中继续回答 |
+| **Agent-as-tool** | 父 Agent | 本次委派的提示词 | 等待 | 作为工具结果返回 |
+| **Subagents** | 父 Agent | 本次委派的提示词 | 默认不等待，也可主动等待 | 稍后作为消息送达，或由等待工具直接返回 |
+
+简单说：需要专家接管对话，用 Handoff；父 Agent 必须拿到子任务结果才能继续，用
+Agent-as-tool；任务可以独立在后台完成，用 Subagents。下面三段配置彼此独立，展示
+同一个 `researcher` 的三种接入方式，按需选择一种即可：
 
 ```python
-from lovia import Agent, Runner
+from lovia import Agent, Subagents
 
-billing = Agent(name="billing", instructions="处理账单问题。", model="glm-5.2")
-support = Agent(name="support", instructions="处理技术问题。", model="glm-5.2")
-
-triage = Agent(
-    name="triage",
-    instructions="把用户转给合适的专家。",
-    model="deepseek-v4-flash",
-    handoffs=[billing, support],       # handoff：专家接管对话
-)
-result = await Runner.run(triage, "我被重复扣款了。")
-```
-
-```python
-summarizer = Agent(
-    name="summarizer",
-    instructions="用五个要点总结文本。",
+researcher = Agent(
+    name="researcher",
+    instructions="调研给定主题并返回简明报告。",
     model="glm-5.2",
 )
 
+# Handoff：researcher 接管对话，并看到此前的完整历史
+router = Agent(
+    name="router",
+    instructions="需要深入调研时，把对话转给 researcher。",
+    model="deepseek-v4-flash",
+    handoffs=[researcher],
+)
+
+# Agent-as-tool：manager 等待调研结果，再自行回答用户
 manager = Agent(
     name="manager",
-    instructions="需要总结时，把任务委派给 summarizer。",
+    instructions="回答前先让 researcher 完成必要的调研。",
     model="deepseek-v4-flash",
-    tools=[summarizer.as_tool(description="总结一段文本。")],  # 委派子任务
+    tools=[researcher.as_tool(description="调研一个主题并返回报告。")],
 )
-```
 
-```python
-from lovia import Subagents
-
-researcher = Agent(name="researcher", instructions="调研主题并输出报告。",
-                   model="glm-5.2")
-
+# Subagents：assistant 派出后台任务，同时继续处理当前工作
 assistant = Agent(
     name="assistant",
+    instructions="把独立调研放到后台，同时继续组织答案。",
     model="deepseek-v4-flash",
-    plugins=[Subagents([researcher])],  # spawn_subagent / wait_subagents / cancel_subagent
+    plugins=[Subagents([researcher])],
 )
-# 模型把调研派给后台子 agent、自己继续干活，报告以消息形式送达。
-# 在 Web UI 下每次 spawn 都是一个可观察的任务会话（侧栏"任务"分组），
-# 完成后自动投递回对话——自动接线；`lovia web` 默认开启。
 ```
+
+`lovia web` 默认启用 Subagents。每个后台任务都会显示在侧栏的 **任务** 分组中，完成后
+自动把报告送回原对话。
 
 → [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)
 

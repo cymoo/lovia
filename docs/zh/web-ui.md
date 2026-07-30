@@ -133,6 +133,7 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启 |
+| `--no-subagents` | — | 后台子 Agent 默认开启 |
 | — | `LOVIA_FOLLOWUP_MODEL` | Agent 自身的模型 |
 | `--setup` / `--check` | — | 重跑配置向导 / 探测端点后退出 |
 | `--env-file` | — | 未指定时依次读取 `./.lovia/config.env`、`~/.lovia/config.env` |
@@ -166,26 +167,31 @@ Run 尚未结束时仍可发送纯文本消息。UI 会将它显示为排队状�
 
 ## 后台子 Agent
 
-`lovia web` 默认开启[后台子 Agent](multi-agent.md#后台子-agentsubagents)
-（`--no-subagents` 关闭）：助手可以把自包含的任务派给一个子助手，子助手保留基础
-能力（Skills、Todo、工具、workspace），去掉 Scheduling、Memory 与递归派生。托管
-自定义 agent 时自行挂载 `Subagents` 插件即可——`create_app` 会自动把它适配到服务
-场景（`create_app(..., wire_subagents=False)` 可退出；直接 mount
-`build_api_router` 的应用改为调用一次 `wire_subagents(app)`）。
+`lovia web` 默认启用[后台子 Agent](multi-agent.md#后台子-agent)，可用
+`--no-subagents` 关闭。默认助手可以把无需查看父对话也能理解的完整任务说明交给
+后台助手；后台助手保留 Skills、Todo、工具和 Workspace，但不加载 Scheduling、
+Memory 或 Subagents，因此不会继续递归派生。
 
-**每次 spawn 都是一个真实会话。** 接线后的子 Agent 作为受管 Run 跑在自己的
-*任务会话*里——出现在侧栏底部的 **任务** 分组中，运行中带标记。点开即可逐 token
-观察它工作（就是普通会话视图：流式、断线重连、停止按钮、删除都可用），包括它正在
-等待的工具审批——可以当场批准或拒绝；无人处理的审批在服务端 `approval_timeout`
-（`lovia web` 设为 10 分钟）后自动拒绝，任务不会永久占用并发槽。每个任务留下
-自己的运行记录（状态、Token 用量），source 为 `subagent:<session>`。
+使用自定义 Agent 时，需要自行添加 `Subagents` 插件。`create_app()` 会自动将仍采用
+默认执行和投递方式的插件切换为 Web 托管模式；可通过
+`create_app(..., wire_subagents=False)` 禁用。若应用直接挂载
+`build_api_router`，则需调用一次 `wire_subagents(app)`。
 
-**报告投递回父对话。** 子 Agent 完成时，报告落入派生它的对话——父会话有活跃
-Run 就注入为下一条用户侧消息，空闲则以报告为输入启动一次无客户端 Run，模型对
-报告做出反应并持久化。达到并发上限时投递带退避重试，最终失败记录警告。
+**每个后台任务都是独立会话。** 任务会显示在侧栏底部的 **任务** 分组中，运行时带有
+状态标记。点开后与普通对话一样支持流式显示和断线重连，也可以停止或删除任务，
+并直接批准或拒绝工具调用。若审批在 `approval_timeout` 内无人处理，服务端会自动
+拒绝；`lovia web` 的默认超时时间为 10 分钟，避免任务一直占用并发名额。
+每个任务都会保留状态和 Token 用量等运行记录，来源标记为
+`subagent:<session>`。
 
-接线后的子 Agent 不受父对话停止按钮影响（可在其任务会话里停止，或由模型
-`cancel_subagent`）；服务重启不会恢复进行中的任务。
+**报告会自动送回原对话。** 如果父对话仍有 Run 在执行，报告会在下一轮作为用户侧
+消息注入；如果父对话已经空闲，服务端会以报告为输入自动启动一次 Run，并保存模型的
+后续回复，不要求浏览器保持在线。父会话暂时达到并发上限时，服务端会间隔重试；
+多次尝试仍失败才会记录警告。
+
+后台任务独立于父 Run，因此停止父对话不会同时停止它。可以在 **任务** 分组中单独
+停止；父 Run 尚未结束时，模型也可以调用 `cancel_subagent`。服务重启后，进行中的
+后台任务不会自动恢复。
 
 ## 关闭或刷新页面
 

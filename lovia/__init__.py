@@ -89,6 +89,7 @@ from .plugins import (
     SkillNotFoundError,
     Skills,
     SkillsError,
+    Subagents,
     Todo,
 )
 from .tools import Tool, tool
@@ -146,6 +147,7 @@ __all__ = [
     "SkillNotFoundError",
     "Skills",
     "SkillsError",
+    "Subagents",
     "TextPart",
     "Todo",
     "Tool",
@@ -161,4 +163,4 @@ __all__ = [
     "user",
 ]
 
-__version__ = "0.9.15"
+__version__ = "0.9.16"

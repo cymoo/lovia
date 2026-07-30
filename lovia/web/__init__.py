@@ -38,6 +38,7 @@ try:
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
+    from .subagents import subagent_deliver, wire_subagents
     from .ui import SURFACE_NOTE
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -58,5 +59,7 @@ __all__ = [
     "generate_token",
     "is_loopback",
     "serve",
+    "subagent_deliver",
     "token_dependency",
+    "wire_subagents",
 ]

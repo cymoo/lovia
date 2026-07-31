@@ -110,7 +110,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             metas = await store.search(q, limit=limit, offset=offset)
         else:
             metas = await store.list(limit=limit, offset=offset)
-        # Task sessions carry their latest run outcome so the sidebar can
+        # Task sessions carry their latest run outcome so the topbar Tasks
+        # popover can
         # badge finished tasks without per-task follow-up requests.
         task_ids = [m.id for m in metas if m.parent_id]
         statuses = await store.latest_run_statuses(task_ids)

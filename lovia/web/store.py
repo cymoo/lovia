@@ -468,9 +468,14 @@ class ChatStore:
     # annotation would resolve to the method and fail strict mypy. Matches the
     # schedule reads (``list_schedules``/``due_schedules``) anyway.
     async def list(self, *, limit: int = 200, offset: int = 0) -> Sequence[ChatMeta]:
-        """Return chat metadata, pinned first, then most recent activity."""
+        """Return chat metadata, pinned first, then most recent activity.
+
+        Subagent task sessions (``parent_id`` set) are excluded — they belong
+        to their parent chat (``list_children``), and letting them into the
+        page would crowd real chats out of the sidebar's window.
+        """
         return await self._read_all(
-            f"SELECT {_META_COLS} FROM chat_sessions "
+            f"SELECT {_META_COLS} FROM chat_sessions WHERE parent_id IS NULL "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
             ChatMeta.from_row,
@@ -519,7 +524,8 @@ class ChatStore:
         pattern = f"%{escaped}%"
         return await self._read_all(
             f"SELECT {_META_COLS} FROM chat_sessions "
-            "WHERE title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\' "
+            "WHERE parent_id IS NULL "
+            "AND (title LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\') "
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
             (pattern, pattern, limit, offset),
             ChatMeta.from_row,

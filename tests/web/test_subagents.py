@@ -198,7 +198,8 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
 
     # The spawn became a task session: parent_id set, [t1]-prefixed title,
     # its own supervised run record.
-    task_rows = [r for r in await deps.store.list() if r.parent_id == "s3"]
+    assert not [r for r in await deps.store.list() if r.parent_id]  # chats only
+    task_rows = list(await deps.store.list_children("s3"))
     assert len(task_rows) == 1
     task = task_rows[0]
     assert task.title is not None and task.title.startswith("[t1]")
@@ -294,7 +295,7 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
         source="user",
     )
     await _poll(lambda: _none(deps.supervisor.get("s4")))
-    (task,) = [r for r in await deps.store.list() if r.parent_id == "s4"]
+    (task,) = await deps.store.list_children("s4")
 
     async def _cancelled() -> bool:
         run = await deps.store.latest_run_for(f"subagent:{task.id}")

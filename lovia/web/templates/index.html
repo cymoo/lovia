@@ -78,6 +78,9 @@
     <input type="search" id="session-search" class="search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" />
   </div>
   <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
+  <!-- Subagent tasks: pinned below the scrolling chat list so background
+       work is always in view, never buried at the end of a long scroll. -->
+  <div id="tasks-dock" class="tasks-dock hidden" aria-label="Background tasks"></div>
 </aside>
 
 <!-- Main -->
@@ -132,6 +135,10 @@
       </div>
     </section>
     <aside id="todo-panel" class="todo-panel hidden" aria-label="Current plan" aria-live="polite"></aside>
+    <!-- Ambient background-work indicator: appears only while subagent tasks
+         run; bottom-right, clear of the top-right plan card. -->
+    <button id="tasks-pill" class="tasks-pill hidden" type="button" aria-haspopup="true" aria-expanded="false"></button>
+    <div id="tasks-popover" class="tasks-popover hidden" role="menu" aria-label="Running tasks"></div>
     <button id="scroll-bottom" class="scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>

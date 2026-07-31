@@ -378,9 +378,8 @@ def test_sessions_api_exposes_parent_id() -> None:
     rows = {r["id"]: r for r in client.get("/api/sessions").json()}
     assert rows["chat"]["parent_id"] is None
     assert rows["chat"]["last_run_status"] is None
-    assert rows["task"]["parent_id"] == "chat"
-    # The finished-task badge: latest run outcome joined in.
-    assert rows["task"]["last_run_status"] == "completed"
+    # Task sessions are excluded from the global list by construction.
+    assert "task" not in rows
     # ?parent= scopes to one chat's tasks — the topbar popover's data.
     kids = client.get("/api/sessions", params={"parent": "chat"}).json()
     assert [k["id"] for k in kids] == ["task"]
@@ -409,5 +408,6 @@ async def test_store_parent_id_roundtrip_and_legacy_migration(tmp_path) -> None:
     await store.upsert("kid", agent="bot", title="task", parent_id="old")
     kid = await store.get("kid")
     assert kid is not None and kid.parent_id == "old"
-    listed = {r.id: r.parent_id for r in await store.list()}
-    assert listed == {"old": None, "kid": "old"}
+    # The global list is chats-only; children come from list_children.
+    assert [r.id for r in await store.list()] == ["old"]
+    assert [r.id for r in await store.list_children("old")] == ["kid"]

@@ -367,14 +367,23 @@ function renderTasksButton() {
     tasksPopover.hidden = true;
     tasksBtn.setAttribute('aria-expanded', 'false');
     if (parentId) {
-      // Inside a task session: the same topbar slot becomes the way home.
+      // Inside a task session: the same topbar slot becomes the way home —
+      // plain navigation, so drop the menu semantics along with the popover.
       tasksBtn.dataset.parent = parentId;
       tasksBtn.classList.remove('attention');
       tasksBtn.textContent = `← ${t('task.backToParent')}`;
+      tasksBtn.removeAttribute('aria-haspopup');
+      tasksBtn.removeAttribute('aria-controls');
+      tasksBtn.removeAttribute('aria-expanded');
     }
     return;
   }
   delete tasksBtn.dataset.parent;
+  tasksBtn.setAttribute('aria-haspopup', 'menu');
+  tasksBtn.setAttribute('aria-controls', 'tasks-popover');
+  if (!tasksBtn.hasAttribute('aria-expanded')) {
+    tasksBtn.setAttribute('aria-expanded', 'false');
+  }
   const liveCount = tasks.filter((s) => store.runsBySession?.has(s.id)).length;
   const attention = tasks.some((s) => taskState(s) === 'approval');
   tasksBtn.classList.toggle('attention', attention);

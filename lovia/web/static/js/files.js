@@ -917,6 +917,10 @@ export function initFiles() {
   els.attach = document.getElementById('files-attach');
   els.copyContent = document.getElementById('files-copy');
   els.fullscreen = document.getElementById('files-fullscreen');
+  els.modal = document.getElementById('file-modal');
+  els.modalName = document.getElementById('file-modal-name');
+  els.modalBody = document.getElementById('file-modal-body');
+  els.modalClose = document.getElementById('file-modal-close');
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
@@ -930,6 +934,7 @@ export function initFiles() {
   els.copyContent.title = t('files.copyContent');
   els.fullscreen.innerHTML = icon('maximize-2', { size: 15 });
   els.fullscreen.title = t('files.fullscreen');
+  els.modalClose.innerHTML = icon('x', { size: 16 });
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
   if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
@@ -968,10 +973,22 @@ export function initFiles() {
     if (await copyToClipboard(content)) toast(t('toast.contentCopied'));
   });
   els.fullscreen.addEventListener('click', () => {
-    const full = els.panel.classList.toggle('fullscreen');
-    els.fullscreen.classList.toggle('active', full);
-    els.fullscreen.title = full ? t('files.exitFullscreen') : t('files.fullscreen');
+    const v = state.viewing;
+    if (!v) return;
+    els.modalName.textContent = v.name || v.path;
+    // Clone the rendered view rather than moving it: the panel keeps its own
+    // DOM (and its listeners) intact, so closing the reader can't leave the
+    // panel blank. Markdown/CSV/text/images all clone faithfully.
+    const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
+    copy.removeAttribute('id');
+    els.modalBody.replaceChildren(copy);
+    els.modal.showModal();
   });
+  els.modalClose.addEventListener('click', () => els.modal.close());
+  els.modal.addEventListener('click', (e) => {
+    if (e.target === els.modal) els.modal.close(); // backdrop click
+  });
+  els.modal.addEventListener('close', () => els.modalBody.replaceChildren());
   // The reverse of the tool card's "open in Files panel": put the viewed file
   // on the next message. chat.js owns the composer tray and answers.
   els.attach.addEventListener('click', () => {
@@ -998,6 +1015,9 @@ export function initFiles() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !state.open) return;
+    // The reader dialog owns Escape while it is up (it closes itself) —
+    // otherwise one keypress would close the viewer underneath it too.
+    if (els.modal?.open) return;
     if (state.viewing) closeViewer();
     else if (window.matchMedia('(max-width: 720px)').matches) setOpen(false);
   });

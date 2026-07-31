@@ -203,7 +203,7 @@
         <button id="files-wrap-toggle" class="btn-icon hidden" type="button" title="Toggle line wrap" aria-label="Toggle line wrap"></button>
         <button id="files-attach" class="btn-icon" type="button" title="Attach to chat" aria-label="Attach this file to the chat"></button>
         <button id="files-copy" class="btn-icon" type="button" title="Copy content" aria-label="Copy file content"></button>
-        <button id="files-fullscreen" class="btn-icon" type="button" title="Fullscreen" aria-label="View file fullscreen"></button>
+        <button id="files-fullscreen" class="btn-icon" type="button" title="Expand view" aria-haspopup="dialog" aria-label="Open file in the reader"></button>
         <a id="files-download" class="btn-icon" title="Download" aria-label="Download file" download></a>
         <button id="files-viewer-close" class="btn-icon" type="button" title="Close file" aria-label="Close file preview"></button>
       </div>
@@ -212,6 +212,16 @@
   </section>
 </aside>
 </main>
+
+<!-- Reader modal: the file viewer's content at a comfortable, centered
+     measure. A native dialog — Esc, backdrop, and focus trap for free. -->
+<dialog id="file-modal" class="file-modal" aria-label="File reader">
+  <div class="file-modal-head">
+    <span id="file-modal-name" class="file-modal-name"></span>
+    <button id="file-modal-close" class="btn-icon" type="button" title="Close" aria-label="Close reader"></button>
+  </div>
+  <div id="file-modal-body" class="file-modal-body"></div>
+</dialog>
 
 <!-- Screen-reader live regions. They live OUTSIDE #transcript because the
      transcript carries aria-busy while streaming, which would mute anything

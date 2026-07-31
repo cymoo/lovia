@@ -742,6 +742,19 @@ async function followViewerLink(href) {
   if (rootRelative !== fileRelative) await openFile(rootRelative);
 }
 
+/** Mirror the panel viewer into the reader dialog.
+ *
+ * A clone, not a move: the panel keeps its own DOM (and listeners) intact, so
+ * closing the reader can never leave it blank. Markdown, CSV, text, and
+ * images all clone faithfully; the one interactive control inside — "load
+ * more" — is delegated back to the panel above.
+ */
+function syncModal() {
+  const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
+  copy.removeAttribute('id');
+  els.modalBody.replaceChildren(copy);
+}
+
 function syncWrapButton() {
   els.wrapToggle.innerHTML = icon('wrap-text', { size: 15 });
   els.wrapToggle.title = state.wrap ? t('files.nowrap') : t('files.wrap');
@@ -765,7 +778,9 @@ function renderViewerContent() {
   if (v.truncated) {
     const more = document.createElement('button');
     more.type = 'button';
-    more.className = 'btn btn-ghost btn-sm';
+    // The class marks it for the reader modal, whose cloned copy delegates
+    // back to this same loadMore (a clone carries no listeners of its own).
+    more.className = 'btn btn-ghost btn-sm files-load-more';
     more.textContent = t('files.loadMore');
     more.addEventListener('click', loadMore);
     els.viewerBody.appendChild(
@@ -976,13 +991,16 @@ export function initFiles() {
     const v = state.viewing;
     if (!v) return;
     els.modalName.textContent = v.name || v.path;
-    // Clone the rendered view rather than moving it: the panel keeps its own
-    // DOM (and its listeners) intact, so closing the reader can't leave the
-    // panel blank. Markdown/CSV/text/images all clone faithfully.
-    const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
-    copy.removeAttribute('id');
-    els.modalBody.replaceChildren(copy);
+    syncModal();
     els.modal.showModal();
+  });
+  // A truncated file's "load more" clone is inert (clones carry no
+  // listeners) — delegate it back to the panel's loader, then re-mirror.
+  els.modalBody.addEventListener('click', async (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target?.closest('.files-load-more')) return;
+    await loadMore();
+    syncModal();
   });
   els.modalClose.addEventListener('click', () => els.modal.close());
   els.modal.addEventListener('click', (e) => {

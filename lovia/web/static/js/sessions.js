@@ -302,6 +302,7 @@ function taskStatusLabel(state) {
     running: 'task.running',
     approval: 'task.needsApproval',
     completed: 'task.completed',
+    done: 'task.completed', // no-record fallback — never leak the raw state
     failed: 'task.failed',
     cancelled: 'task.cancelled',
     interrupted: 'task.interrupted',

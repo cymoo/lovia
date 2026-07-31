@@ -182,8 +182,9 @@ The whole lifecycle is legible in the server log: task started/ended,
 report injected vs. delivered via a new run, and a run parking on an
 approval. `lovia web` additionally tags every line emitted inside a
 supervised run with its source — `[user]`, `[schedule:<id>]`,
-`[subagent:<session>]` — so parallel background work reads apart from the
-main chat. Custom setups get the same tagging by including `%(run_source)s`
+`[subagent:<session>]` for a child task run, `[subagent-report:<task>]` for
+the run that delivers its report — so parallel background work reads apart
+from the main chat. Custom setups get the same tagging by including `%(run_source)s`
 in their log format and attaching
 `lovia.web.supervisor.run_source_log_filter()` to their handler.
 

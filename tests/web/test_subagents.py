@@ -140,7 +140,7 @@ async def test_deliver_starts_clientless_run_when_idle() -> None:
         if isinstance(e, InputEntry) and isinstance(e.content, str)
     ]
     assert any("[subagent t1: done]" in t for t in texts)
-    run = await deps.store.latest_run_for("subagent:t1")
+    run = await deps.store.latest_run_for("subagent-report:t1")
     assert run is not None
     assert run.status == "completed"
 
@@ -209,7 +209,7 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     child_gate.set()
 
     async def _delivered() -> bool:
-        run = await deps.store.latest_run_for("subagent:t1")
+        run = await deps.store.latest_run_for("subagent-report:t1")
         return run is not None and run.status == "completed"
 
     await _poll(_delivered)
@@ -303,7 +303,7 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
     await _poll(_cancelled)  # the token watcher routed through supervisor.cancel
     # A cancelled child delivers no report: no clientless delivery run starts.
     await asyncio.sleep(0.1)
-    assert await deps.store.latest_run_for("subagent:t1") is None
+    assert await deps.store.latest_run_for("subagent-report:t1") is None
 
 
 async def test_failed_child_delivers_failure_report() -> None:
@@ -330,7 +330,7 @@ async def test_failed_child_delivers_failure_report() -> None:
     )
 
     async def _delivered() -> bool:
-        run = await deps.store.latest_run_for("subagent:t1")
+        run = await deps.store.latest_run_for("subagent-report:t1")
         return run is not None and run.status == "completed"
 
     await _poll(_delivered)

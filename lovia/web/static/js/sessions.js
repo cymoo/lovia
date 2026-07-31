@@ -186,7 +186,9 @@ export function initEventStream() {
       if (
         d.session_id === store.sessionId &&
         !store.streaming &&
-        (src.startsWith('schedule:') || src.startsWith('subagent:'))
+        (src.startsWith('schedule:') ||
+          src.startsWith('subagent:') ||
+          src.startsWith('subagent-report:'))
       ) {
         refreshTranscript();
       }

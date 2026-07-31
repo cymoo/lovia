@@ -58,9 +58,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # What started the run this task serves: "user" | "schedule:<id>" |
-# "subagent:<session>". Set at the top of every supervised task, so every log
-# line emitted inside that task's context — core RunLoop lines included, since
-# ``create_task`` copies the context — can be attributed to its run.
+# "subagent:<session>" (a child task run) | "subagent-report:<task>" (the
+# clientless run that delivers a report). Set at the top of every supervised
+# task, so every log line emitted inside that task's context — core RunLoop
+# lines included, since ``create_task`` copies the context — can be
+# attributed to its run.
 RUN_SOURCE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "lovia_web_run_source", default=None
 )

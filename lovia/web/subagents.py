@@ -12,7 +12,8 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
   turn sees it; the supervisor's auto-chain covers a run that is just
   finishing);
 * no live run → start a clientless supervised run with the report as its
-  input (recorded under source ``subagent:<id>``), so the model reacts to the
+  input (recorded under source ``subagent-report:<task id>``, distinct from
+  the child task run's ``subagent:<session>``), so the model reacts to the
   report and the exchange persists in the transcript;
 * the concurrency cap (or a lost start race) → retry with backoff, then drop
   with a warning.
@@ -108,7 +109,7 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     is_new=False,
                     title_message=None,
                     autostart=True,  # clientless: consume the report unattended
-                    source=f"subagent:{report.id}",
+                    source=f"subagent-report:{report.id}",
                 )
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",

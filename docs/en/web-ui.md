@@ -159,11 +159,11 @@ yourself — `create_app` automatically adapts it to the serving context
 `build_api_router` directly call `wire_subagents(app)` once instead).
 
 **Every spawn is a real session.** A wired child runs as a supervised run in
-its own *task session* — it appears in the **Tasks dock** pinned below the
-chat list (always in view, never scrolled out), and while any task runs an
-ambient pill floats at the chat's bottom-right — count, pulsing state,
-amber when an approval waits — whose popover jumps straight into a task.
-Click a task to watch the child work token by
+its own *task session*, surfaced by a **Tasks button in the chat's top
+bar** — visible only when the open chat has background tasks, pulsing while
+any run and amber when an approval waits. Its popover lists this chat's
+tasks (`t1`, `t2`, … with live elapsed or outcome); click one to watch the
+child work token by
 token (the ordinary session view: streaming, reconnect, stop button, delete
 all work), including any tool approval it is waiting on — you can approve or
 deny right there; unanswered approvals auto-deny after the server's

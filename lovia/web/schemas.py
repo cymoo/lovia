@@ -203,6 +203,9 @@ class ChatSessionInfo(BaseModel):
     # Set on a subagent task session: the chat that spawned it. The UI groups
     # such sessions under a Tasks section instead of the chat list.
     parent_id: str | None = None
+    # Task sessions only: the latest run's terminal status ("completed",
+    # "failed", "cancelled", …) — the sidebar's badge for finished tasks.
+    last_run_status: str | None = None
 
 
 class RunInfo(BaseModel):
@@ -213,9 +216,12 @@ class RunInfo(BaseModel):
     agent: str
     status: Literal["running", "blocked_on_approval"]
     turns: int
-    # What started the run: "user" | "schedule:<id>" — lets a UI tie a live
-    # run back to the schedule that fired it.
+    # What started the run: "user" | "schedule:<id>" | "subagent:<session>"
+    # | "subagent-report:<task>" — lets a UI tie a live run back to what
+    # fired it.
     source: str = "user"
+    # Epoch seconds when the run began — the sidebar's elapsed ticker.
+    started_at: float | None = None
 
 
 class RunRecordInfo(BaseModel):

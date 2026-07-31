@@ -107,7 +107,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             if q
             else await store.list(limit=limit, offset=offset)
         )
-        return [session_info(m) for m in metas]
+        # Task sessions carry their latest run outcome so the sidebar can
+        # badge finished tasks without per-task follow-up requests.
+        task_ids = [m.id for m in metas if m.parent_id]
+        statuses = await store.latest_run_statuses(task_ids)
+        return [session_info(m, last_run_status=statuses.get(m.id)) for m in metas]
 
     @router.get("/api/runs", response_model=list[RunInfo])
     async def list_runs() -> list[RunInfo]:
@@ -120,6 +124,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 status=c.status,
                 turns=c.turns,
                 source=c.source,
+                started_at=c.started_at,
             )
             for sid, c in deps.supervisor
         ]

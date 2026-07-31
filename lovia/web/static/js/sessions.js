@@ -251,6 +251,8 @@ export async function loadSessions(query = '') {
     store.sessions = sessions.slice(0, PAGE_SIZE);
     const prevRuns = store.activeRuns || new Set();
     store.activeRuns = new Set(runs.map((r) => r.session_id));
+    // Full live-run rows (status, started_at) — the task rows' badge data.
+    store.runsBySession = new Map(runs.map((r) => [r.session_id, r]));
     // Diff-based completion detection belongs to the polling fallback; with
     // the event stream live, run_finished notifies directly (no double toast).
     if (_runsPrimed && !_eventsLive) {
@@ -277,9 +279,113 @@ function sessionsSignature() {
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
       s.id, s.title ?? '', s.updated_at, s.pinned ? 1 : 0, s.agent ?? '',
-      s.parent_id ?? '',
+      s.parent_id ?? '', s.last_run_status ?? '',
     ]),
+    // Live-run status flips (running → blocked_on_approval) re-badge tasks.
+    [...(store.runsBySession || new Map())].map(([id, r]) => `${id}:${r.status}`).sort(),
   ]);
+}
+
+// ---- Task rows (subagent sessions) ---------------------------------------
+
+const TASKS_COLLAPSED_KEY = 'lovia-tasks-collapsed';
+
+/** Lifecycle bucket for a task session: live status wins, else last outcome. */
+function taskState(s) {
+  const live = store.runsBySession?.get(s.id);
+  if (live) return live.status === 'blocked_on_approval' ? 'approval' : 'running';
+  return s.last_run_status || 'done';
+}
+
+function taskStatusLabel(state) {
+  const key = {
+    running: 'task.running',
+    approval: 'task.needsApproval',
+    completed: 'task.completed',
+    failed: 'task.failed',
+    cancelled: 'task.cancelled',
+    interrupted: 'task.interrupted',
+  }[state];
+  return key ? t(key) : state;
+}
+
+function fmtElapsed(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+// One shared 1s ticker keeps running tasks' elapsed text fresh without
+// re-rendering the sidebar; it stops itself when no task is running.
+let _taskTicker = null;
+function syncTaskTicker() {
+  if (_taskTicker != null || !document.querySelector('.task-elapsed[data-started]')) return;
+  _taskTicker = setInterval(() => {
+    const els = document.querySelectorAll('.task-elapsed[data-started]');
+    if (!els.length) {
+      clearInterval(_taskTicker);
+      _taskTicker = null;
+      return;
+    }
+    const now = Date.now() / 1000;
+    for (const el of els) el.textContent = fmtElapsed(now - Number(el.dataset.started));
+  }, 1000);
+}
+
+/** Turn a plain session row into a task row: tag chip + status meta. */
+function decorateTaskRow(s, item, titleEl, meta) {
+  const state = taskState(s);
+  item.classList.add('task', `task-${state}`);
+  const m = /^\[([^\]]{1,8})\]\s*(.*)$/.exec(s.title || '');
+  if (m) {
+    titleEl.textContent = m[2] || s.id;
+    const tag = document.createElement('span');
+    tag.className = 'task-tag';
+    tag.textContent = m[1];
+    titleEl.prepend(tag);
+  }
+  meta.textContent = '';
+  const dot = document.createElement('span');
+  dot.className = `task-dot ${state}`;
+  const label = document.createElement('span');
+  label.textContent = taskStatusLabel(state);
+  meta.append(dot, label);
+  const live = store.runsBySession?.get(s.id);
+  if (live?.started_at) {
+    const el = document.createElement('span');
+    el.className = 'task-elapsed';
+    el.dataset.started = String(live.started_at);
+    el.textContent = fmtElapsed(Date.now() / 1000 - live.started_at);
+    meta.append(el);
+  } else {
+    const when = document.createElement('span');
+    when.textContent = formatTimeSmart(s.updated_at);
+    meta.append(when);
+  }
+}
+
+function buildTasksHeader(tasks) {
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'sidebar-section-label sessions-tasks-header';
+  const chevron = document.createElement('span');
+  chevron.className = 'tasks-chevron';
+  chevron.textContent = '▾';
+  header.append(chevron, document.createTextNode(t('nav.tasks')));
+  const liveCount = tasks.filter((s) => store.runsBySession?.has(s.id)).length;
+  if (liveCount) {
+    const count = document.createElement('span');
+    count.className =
+      'tasks-count' + (tasks.some((s) => taskState(s) === 'approval') ? ' attention' : '');
+    count.textContent = t('nav.tasksRunning', { n: liveCount });
+    header.append(count);
+  }
+  header.setAttribute('aria-expanded', String(!sessionsList.classList.contains('tasks-collapsed')));
+  header.addEventListener('click', () => {
+    const collapsed = sessionsList.classList.toggle('tasks-collapsed');
+    localStorage.setItem(TASKS_COLLAPSED_KEY, collapsed ? '1' : '0');
+    header.setAttribute('aria-expanded', String(!collapsed));
+  });
+  return header;
 }
 
 function renderSessions() {
@@ -297,19 +403,27 @@ function renderSessions() {
     return;
   }
 
-  // Subagent task sessions (parent_id set) group under their own label at
-  // the bottom, out of the chat list proper.
+  // Subagent task sessions (parent_id set) group under their own collapsible
+  // header at the bottom, out of the chat list proper — attention first.
   const chats = store.sessions.filter((s) => !s.parent_id);
-  const tasks = store.sessions.filter((s) => s.parent_id);
+  const rank = { approval: 0, running: 1 };
+  const tasks = store.sessions
+    .filter((s) => s.parent_id)
+    .sort(
+      (a, b) =>
+        (rank[taskState(a)] ?? 2) - (rank[taskState(b)] ?? 2) ||
+        b.updated_at - a.updated_at,
+    );
+  sessionsList.classList.toggle(
+    'tasks-collapsed',
+    localStorage.getItem(TASKS_COLLAPSED_KEY) === '1',
+  );
   let prevPinned = false;
   let tasksLabeled = false;
   for (const s of [...chats, ...tasks]) {
     if (s.parent_id && !tasksLabeled) {
       tasksLabeled = true;
-      const label = document.createElement('div');
-      label.className = 'sidebar-section-label sessions-tasks-label';
-      label.textContent = t('nav.tasks');
-      sessionsList.appendChild(label);
+      sessionsList.appendChild(buildTasksHeader(tasks));
     }
     const item = document.createElement('div');
     item.className = 'session-item';
@@ -337,6 +451,9 @@ function renderSessions() {
       chip.className = 'session-agent';
       chip.textContent = s.agent;
       meta.append(' · ', chip);
+    }
+    if (s.parent_id) {
+      decorateTaskRow(s, item, main.querySelector('.session-title'), meta);
     }
     main.addEventListener('click', () => switchSession(s.id));
 
@@ -397,6 +514,7 @@ function renderSessions() {
     sessionsList.appendChild(item);
   }
 
+  syncTaskTicker();
   // More chats exist than the sidebar page shows — open the full, paged list.
   if (_hasMore) {
     const more = document.createElement('button');

@@ -27,7 +27,9 @@ from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo
 from ..store import ChatMeta, RunRow
 
 
-def session_info(meta: ChatMeta) -> ChatSessionInfo:
+def session_info(
+    meta: ChatMeta, *, last_run_status: str | None = None
+) -> ChatSessionInfo:
     """Project a metadata row onto the public session-list shape."""
     return ChatSessionInfo(
         id=meta.id,
@@ -37,6 +39,7 @@ def session_info(meta: ChatMeta) -> ChatSessionInfo:
         updated_at=meta.updated_at,
         pinned=meta.pinned,
         parent_id=meta.parent_id,
+        last_run_status=last_run_status,
     )
 
 

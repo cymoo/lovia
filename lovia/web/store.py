@@ -798,6 +798,25 @@ class ChatStore:
             RunRow.from_row,
         )
 
+    async def latest_run_statuses(
+        self, session_ids: Sequence[str]
+    ) -> dict[str, str]:
+        """Each session's most recent run status, in one query.
+
+        Backs the sidebar's task badges: the sessions list joins this in for
+        task sessions so the client needs no per-task follow-up requests.
+        """
+        if not session_ids:
+            return {}
+        marks = ",".join("?" for _ in session_ids)
+        rows = await self._read_all(
+            "SELECT session_id, status FROM chat_runs "
+            f"WHERE session_id IN ({marks}) ORDER BY started_at",
+            tuple(session_ids),
+            lambda r: (r[0], r[1]),
+        )
+        return {sid: status for sid, status in rows}  # last write wins
+
     async def latest_run_for(self, source: str) -> RunRow | None:
         """The most recent run started by ``source`` (a schedule's last outcome)."""
         return await self._read_one(

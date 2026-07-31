@@ -353,13 +353,32 @@ def test_sessions_api_exposes_parent_id() -> None:
     deps = app.state.deps
 
     async def seed() -> None:
+        from lovia.web.store import RunRow
+
         await deps.store.upsert("chat", agent="bot", title="chat")
         await deps.store.upsert("task", agent="bot", title="[t1] x", parent_id="chat")
+        await deps.store.start_run(
+            RunRow(
+                id="r1",
+                session_id="task",
+                agent="bot",
+                source="subagent:task",
+                status="running",
+                error=None,
+                started_at=1.0,
+                finished_at=None,
+                usage=None,
+            )
+        )
+        await deps.store.finish_run("r1", status="completed", error=None, usage=None)
 
     asyncio.run(seed())
     rows = {r["id"]: r for r in TestClient(app).get("/api/sessions").json()}
     assert rows["chat"]["parent_id"] is None
+    assert rows["chat"]["last_run_status"] is None
     assert rows["task"]["parent_id"] == "chat"
+    # The sidebar's finished-task badge: latest run outcome joined in.
+    assert rows["task"]["last_run_status"] == "completed"
 
 
 async def test_store_parent_id_roundtrip_and_legacy_migration(tmp_path) -> None:

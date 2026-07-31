@@ -798,6 +798,30 @@ class ChatStore:
             RunRow.from_row,
         )
 
+    async def latest_run_statuses(self, session_ids: Sequence[str]) -> dict[str, str]:
+        """Each session's most recent run status, in one query.
+
+        Backs the sidebar's task badges: the sessions list joins this in for
+        task sessions so the client needs no per-task follow-up requests.
+        """
+        out: dict[str, str] = {}
+        ids = list(session_ids)
+        # Chunk under SQLite's default 999-bind limit; pick each session's
+        # newest row in SQL rather than scanning every run.
+        for i in range(0, len(ids), 900):
+            chunk = ids[i : i + 900]
+            marks = ",".join("?" for _ in chunk)
+            rows = await self._read_all(
+                "SELECT r.session_id, r.status FROM chat_runs r JOIN ("
+                "SELECT session_id, MAX(started_at) AS ts FROM chat_runs "
+                f"WHERE session_id IN ({marks}) GROUP BY session_id"
+                ") m ON r.session_id = m.session_id AND r.started_at = m.ts",
+                tuple(chunk),
+                lambda r: (r[0], r[1]),
+            )
+            out.update(rows)
+        return out
+
     async def latest_run_for(self, source: str) -> RunRow | None:
         """The most recent run started by ``source`` (a schedule's last outcome)."""
         return await self._read_one(

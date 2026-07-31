@@ -380,10 +380,89 @@ body.sidebar-collapsed .sidebar {
   font-size: 13px;
   text-align: center;
 }
-/* The subagent-tasks group header rendered inside the scrolling list — the
-   shared label style, minus the sticky-header horizontal inset. */
-.sessions-tasks-label {
+/* -- subagent task group: collapsible header + status-badged rows -------- */
+.sessions-tasks-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
   padding: 14px 10px 4px;
+  cursor: pointer;
+  transition: color var(--t-fast);
+}
+.sessions-tasks-header:hover {
+  color: var(--ink);
+}
+.tasks-chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform var(--t-fast);
+}
+#sessions-list.tasks-collapsed .tasks-chevron {
+  transform: rotate(-90deg);
+}
+#sessions-list.tasks-collapsed .session-item.task {
+  display: none;
+}
+.tasks-count {
+  margin-left: auto;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+.tasks-count.attention {
+  color: var(--warn);
+}
+.task-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  padding: 0 5px;
+  margin-right: 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.session-item.task .session-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.task-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.task-dot.running {
+  background: var(--accent);
+  animation: sched-pulse 1.6s ease-out infinite;
+}
+.task-dot.approval {
+  background: var(--warn);
+  animation: sched-pulse 1.6s ease-out infinite;
+}
+.task-dot.completed {
+  background: var(--ok);
+}
+.task-dot.failed {
+  background: var(--danger);
+}
+.task-dot.cancelled,
+.task-dot.interrupted,
+.task-dot.done {
+  background: var(--border-strong);
+}
+/* The generic after-title running dot duplicates the task dot — hide it. */
+.session-item.task.task-running .session-title::after,
+.session-item.task.task-approval .session-title::after {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-dot.running,
+  .task-dot.approval {
+    animation: none;
+  }
 }
 /* Tail row shown when more chats exist than the sidebar page — opens the
    "All chats" dialog. */

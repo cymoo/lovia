@@ -328,7 +328,8 @@ function syncTaskTicker() {
       return;
     }
     const now = Date.now() / 1000;
-    for (const el of els) el.textContent = fmtElapsed(now - Number(el.dataset.started));
+    for (const el of els)
+      el.textContent = fmtElapsed(now - Number(el.getAttribute('data-started')));
   }, 1000);
 }
 

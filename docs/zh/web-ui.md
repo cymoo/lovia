@@ -193,6 +193,12 @@ Memory 或 Subagents，因此不会继续递归派生。
 停止；父 Run 尚未结束时，模型也可以调用 `cancel_subagent`。服务重启后，进行中的
 后台任务不会自动恢复。
 
+整条生命周期在服务端日志里清晰可读：任务启动/结束、报告是注入还是新起 Run
+投递、Run 卡在审批上等待。`lovia web` 还会给受管 Run 内产生的每条日志打上来源
+标记——`[user]`、`[schedule:<id>]`、子任务 Run 的 `[subagent:<session>]`、
+投递报告 Run 的 `[subagent-report:<task>]`——并行的后台工作与主对话一眼可分。自定义部署在日志格式中加入 `%(run_source)s` 并给 handler
+挂上 `lovia.web.supervisor.run_source_log_filter()` 即可获得同样的标记。
+
 ## 关闭或刷新页面
 
 Run 由服务端托管，关闭或刷新页面不会中断运行。重新打开对话后，UI 会恢复当前进度并继续

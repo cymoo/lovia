@@ -809,7 +809,17 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 f"invalid log level: {level!r}",
                 hint=f"choose one of: {', '.join(lv.lower() for lv in LOG_LEVELS)}",
             )
-        enable_logging(level)
+        # %(run_source)s tags every line emitted inside a supervised run's
+        # task with what started it — [user] / [schedule:<id>] /
+        # [subagent:<session>] — so parallel background work stays legible.
+        enable_logging(
+            level,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(run_source)s%(message)s",
+        )
+        from .supervisor import run_source_log_filter
+
+        for handler in logging.getLogger("lovia").handlers:
+            handler.addFilter(run_source_log_filter())
 
         if args.provider_timeout is not None:
             if args.provider_timeout <= 0:

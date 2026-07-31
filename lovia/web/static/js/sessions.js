@@ -177,14 +177,18 @@ export function initEventStream() {
       const d = JSON.parse(e.data);
       // "interrupted" is a server shutdown/resumable pause, not an outcome.
       if (d.status !== 'interrupted') _notifyRunFinished(d.session_id);
-      // A scheduled fire finished on the open chat before this tab attached
-      // to it (a fast run wins the race against the reconnect above): reload
-      // the transcript so its results appear. User-sourced runs never reload
-      // here — this client just rendered its own stream.
+      // A clientless run (a scheduled fire, or a subagent report delivery)
+      // finished on the open chat before this tab attached to it (a fast run
+      // wins the race against the reconnect above): reload the transcript so
+      // its results appear. User-sourced runs never reload here — this
+      // client just rendered its own stream.
+      const src = String(d.source || '');
       if (
         d.session_id === store.sessionId &&
         !store.streaming &&
-        String(d.source || '').startsWith('schedule:')
+        (src.startsWith('schedule:') ||
+          src.startsWith('subagent:') ||
+          src.startsWith('subagent-report:'))
       ) {
         refreshTranscript();
       }

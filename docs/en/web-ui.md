@@ -178,6 +178,16 @@ Wired children keep running after the parent's Stop button (stop them from
 their task session, or let the model `cancel_subagent`); a server restart
 does not resume in-flight tasks.
 
+The whole lifecycle is legible in the server log: task started/ended,
+report injected vs. delivered via a new run, and a run parking on an
+approval. `lovia web` additionally tags every line emitted inside a
+supervised run with its source — `[user]`, `[schedule:<id>]`,
+`[subagent:<session>]` for a child task run, `[subagent-report:<task>]` for
+the run that delivers its report — so parallel background work reads apart
+from the main chat. Custom setups get the same tagging by including `%(run_source)s`
+in their log format and attaching
+`lovia.web.supervisor.run_source_log_filter()` to their handler.
+
 ## Closing or refreshing the page
 
 Runs are managed by the server, so closing or refreshing the page does not stop

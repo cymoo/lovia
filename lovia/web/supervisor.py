@@ -15,6 +15,7 @@ loop or the endpoints.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -55,6 +56,35 @@ if TYPE_CHECKING:
     from .api.deps import RouterDeps
 
 log = logging.getLogger(__name__)
+
+# What started the run this task serves: "user" | "schedule:<id>" |
+# "subagent:<session>" (a child task run) | "subagent-report:<task>" (the
+# clientless run that delivers a report). Set at the top of every supervised
+# task, so every log line emitted inside that task's context — core RunLoop
+# lines included, since ``create_task`` copies the context — can be
+# attributed to its run.
+RUN_SOURCE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "lovia_web_run_source", default=None
+)
+
+
+class _RunSourceFilter(logging.Filter):
+    """Stamps ``record.run_source`` (``"[<source>] "`` or ``""``).
+
+    Attach to a *handler* (filters on loggers don't apply to child loggers)
+    and include ``%(run_source)s`` in its format — see ``lovia web``'s
+    logging setup for the wiring.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        source = RUN_SOURCE.get()
+        record.run_source = f"[{source}] " if source else ""
+        return True
+
+
+def run_source_log_filter() -> logging.Filter:
+    """A handler filter exposing the current run's source as ``%(run_source)s``."""
+    return _RunSourceFilter()
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +355,17 @@ class RunController:
         holds its concurrency slot forever — ``RunBudget.max_seconds`` is only
         checked at turn boundaries, which a parked run never reaches.
         """
+        # Visible before the wait, not only after a timeout: a clientless run
+        # (schedule fire, subagent task) parked here is otherwise a silent
+        # stall of up to ``approval_timeout`` seconds.
+        log.info(
+            "run parked on approval: session=%s tool=%s (timeout: %s)",
+            self.session_id,
+            ev.call.name,
+            "none — waits for a decision"
+            if self.deps.approval_timeout is None
+            else f"auto-deny after {self.deps.approval_timeout:.0f}s",
+        )
         decision = self.deps.approvals.await_decision(self.session_id, ev)
         if self.deps.approval_timeout is None:
             await decision
@@ -422,6 +463,7 @@ class RunController:
     # -- the supervised task --------------------------------------------- #
 
     async def _run(self) -> None:
+        RUN_SOURCE.set(self.source)  # tag every log line under this task
         deps, sid = self.deps, self.session_id
         session, store = deps.session, deps.store
         next_input: str | list[Message] = self._first_input
@@ -452,6 +494,7 @@ class RunController:
             )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("run record insert failed for %s: %s", sid, exc)
+        log.info("run started: session=%s agent=%s", sid, deps.name_of(self.agent))
         deps.emit(
             "run_started",
             session_id=sid,
@@ -639,6 +682,12 @@ class RunController:
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("run record write failed for %s: %s", sid, exc)
+            log.info(
+                "run finished: session=%s status=%s%s",
+                sid,
+                status,
+                "" if succeeded or not final_error else f" error={final_error}",
+            )
             deps.emit(
                 "run_finished",
                 session_id=sid,

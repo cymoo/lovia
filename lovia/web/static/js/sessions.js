@@ -218,6 +218,8 @@ async function refreshTranscript() {
   try {
     const data = await api.getSession(id);
     if (store.sessionId !== id || store.streaming) return; // superseded
+    store.currentParentId = data.parent_id || null;
+    renderTasksButton();
     if (chatTitleEl) chatTitleEl.textContent = data.title || t('session.newChat');
     store.emit('render-history', data.entries || []);
     if (data.active_run_id) store.emit('reconnect', id);
@@ -359,11 +361,28 @@ export async function loadCurrentTasks() {
 function renderTasksButton() {
   if (!tasksWrap || !tasksBtn || !tasksPopover) return;
   const tasks = store.currentTasks || [];
-  tasksWrap.style.display = tasks.length ? '' : 'none';
+  const parentId = store.currentParentId;
+  tasksWrap.style.display = tasks.length || parentId ? '' : 'none';
   if (!tasks.length) {
     tasksPopover.hidden = true;
     tasksBtn.setAttribute('aria-expanded', 'false');
+    if (parentId) {
+      // Inside a task session: the same topbar slot becomes the way home —
+      // plain navigation, so drop the menu semantics along with the popover.
+      tasksBtn.dataset.parent = parentId;
+      tasksBtn.classList.remove('attention');
+      tasksBtn.textContent = `← ${t('task.backToParent')}`;
+      tasksBtn.removeAttribute('aria-haspopup');
+      tasksBtn.removeAttribute('aria-controls');
+      tasksBtn.removeAttribute('aria-expanded');
+    }
     return;
+  }
+  delete tasksBtn.dataset.parent;
+  tasksBtn.setAttribute('aria-haspopup', 'menu');
+  tasksBtn.setAttribute('aria-controls', 'tasks-popover');
+  if (!tasksBtn.hasAttribute('aria-expanded')) {
+    tasksBtn.setAttribute('aria-expanded', 'false');
   }
   const liveCount = tasks.filter((s) => store.runsBySession?.has(s.id)).length;
   const attention = tasks.some((s) => taskState(s) === 'approval');
@@ -425,6 +444,10 @@ function buildTaskRow(s) {
 if (tasksBtn && tasksPopover) {
   tasksBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (tasksBtn.dataset.parent) {
+      switchSession(tasksBtn.dataset.parent);
+      return;
+    }
     tasksPopover.hidden = !tasksPopover.hidden;
     tasksBtn.setAttribute('aria-expanded', String(!tasksPopover.hidden));
   });
@@ -654,6 +677,7 @@ export async function switchSession(id) {
   store.sessionId = id;
   store.syncURL(id);
   store.emit('session-switched', id);
+  store.currentParentId = null; // re-learned from the session detail below
   loadCurrentTasks();
 
   const transcript = document.getElementById('transcript');
@@ -670,6 +694,8 @@ export async function switchSession(id) {
   try {
     const data = await api.getSession(id);
     if (store.sessionId !== id) return; // a newer switch superseded this one
+    store.currentParentId = data.parent_id || null;
+    renderTasksButton();
     // Align the switcher with the chat's own agent BEFORE the history replay:
     // the sync may reset the Files panel, which must not eat the replayed
     // workspace touches. Follow-ups then run on the agent this chat belongs to.

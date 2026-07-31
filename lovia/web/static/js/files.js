@@ -759,6 +759,8 @@ function renderViewerContent() {
     v.kind === 'csv' ||
     ((v.kind === 'md' || v.kind === 'html') && v.raw);
   els.wrapToggle.classList.toggle('hidden', !textual);
+  // Copy only means something when there is text content to copy.
+  els.copyContent.classList.toggle('hidden', typeof v.content !== 'string');
 
   if (v.truncated) {
     const more = document.createElement('button');
@@ -913,7 +915,12 @@ export function initFiles() {
   els.wrapToggle = document.getElementById('files-wrap-toggle');
   els.mdToggle = document.getElementById('files-md-toggle');
   els.attach = document.getElementById('files-attach');
-  els.copyPath = document.getElementById('files-copy-path');
+  els.copyContent = document.getElementById('files-copy');
+  els.fullscreen = document.getElementById('files-fullscreen');
+  els.modal = document.getElementById('file-modal');
+  els.modalName = document.getElementById('file-modal-name');
+  els.modalBody = document.getElementById('file-modal-body');
+  els.modalClose = document.getElementById('file-modal-close');
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
@@ -923,7 +930,11 @@ export function initFiles() {
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   els.close.innerHTML = icon('x', { size: 16 });
   els.attach.innerHTML = icon('paperclip', { size: 14 });
-  els.copyPath.innerHTML = icon('copy', { size: 14 });
+  els.copyContent.innerHTML = icon('copy', { size: 14 });
+  els.copyContent.title = t('files.copyContent');
+  els.fullscreen.innerHTML = icon('maximize-2', { size: 15 });
+  els.fullscreen.title = t('files.fullscreen');
+  els.modalClose.innerHTML = icon('x', { size: 16 });
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
   if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
@@ -956,10 +967,28 @@ export function initFiles() {
     state.viewing.raw = !state.viewing.raw;
     renderViewerContent();
   });
-  els.copyPath.addEventListener('click', async () => {
-    if (!state.viewing) return;
-    if (await copyToClipboard(state.viewing.path)) toast(t('toast.pathCopied'));
+  els.copyContent.addEventListener('click', async () => {
+    const content = state.viewing?.content;
+    if (typeof content !== 'string') return;
+    if (await copyToClipboard(content)) toast(t('toast.contentCopied'));
   });
+  els.fullscreen.addEventListener('click', () => {
+    const v = state.viewing;
+    if (!v) return;
+    els.modalName.textContent = v.name || v.path;
+    // Clone the rendered view rather than moving it: the panel keeps its own
+    // DOM (and its listeners) intact, so closing the reader can't leave the
+    // panel blank. Markdown/CSV/text/images all clone faithfully.
+    const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
+    copy.removeAttribute('id');
+    els.modalBody.replaceChildren(copy);
+    els.modal.showModal();
+  });
+  els.modalClose.addEventListener('click', () => els.modal.close());
+  els.modal.addEventListener('click', (e) => {
+    if (e.target === els.modal) els.modal.close(); // backdrop click
+  });
+  els.modal.addEventListener('close', () => els.modalBody.replaceChildren());
   // The reverse of the tool card's "open in Files panel": put the viewed file
   // on the next message. chat.js owns the composer tray and answers.
   els.attach.addEventListener('click', () => {
@@ -986,6 +1015,9 @@ export function initFiles() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !state.open) return;
+    // The reader dialog owns Escape while it is up (it closes itself) —
+    // otherwise one keypress would close the viewer underneath it too.
+    if (els.modal?.open) return;
     if (state.viewing) closeViewer();
     else if (window.matchMedia('(max-width: 720px)').matches) setOpen(false);
   });

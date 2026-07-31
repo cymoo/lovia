@@ -191,6 +191,9 @@ class SessionDetail(BaseModel):
     updated_at: float
     entries: list[MessageOut] = Field(default_factory=list)
     active_run_id: str | None = None
+    # Set on a subagent task session: the chat that spawned it — the UI's
+    # "back to parent chat" affordance.
+    parent_id: str | None = None
 
 
 class ChatSessionInfo(BaseModel):

@@ -154,10 +154,13 @@ async def test_deliver_drops_when_session_is_gone() -> None:
     await subagent_deliver(deps)(_report(None))  # sessionless: dropped quietly
 
 
-async def test_wired_plugin_delivers_end_to_end() -> None:
+async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     """The whole supervised detached path: spawn -> child runs in its own
     task session -> parent run ends -> child finishes -> report starts a
     clientless run back in the parent session."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="lovia.web")
     child_gate = asyncio.Event()
     child = Agent(
         name="researcher",
@@ -174,6 +177,12 @@ async def test_wired_plugin_delivers_end_to_end() -> None:
     agent = Agent(name="bot", model=provider, plugins=[plugin])
     app = _app(agent)
     deps = app.state.deps  # auto-wired by create_app
+    emitted: list[tuple[str, dict]] = []
+    orig_emit = deps.emit
+    deps.emit = lambda name, **data: (
+        emitted.append((name, data)),
+        orig_emit(name, **data),
+    )[1]  # type: ignore[method-assign]
 
     await deps.store.upsert("s3", agent="bot", title="chat")
     await deps.supervisor.start(
@@ -214,6 +223,51 @@ async def test_wired_plugin_delivers_end_to_end() -> None:
     # The child's own transcript persisted in its task session too.
     child_entries = await deps.session.load(task.id)
     assert any(isinstance(e, InputEntry) and e.content == "dig" for e in child_entries)
+    # The sidebar learns about the task session immediately (scheduler parity).
+    assert any(
+        name == "session_created" and data["session_id"] == task.id
+        for name, data in emitted
+    )
+    # The lifecycle is legible in the logs: spawn, end, delivery.
+    assert f"task session {task.id} started" in caplog.text
+    assert f"task session {task.id} ended: completed" in caplog.text
+    assert "report delivered to idle session s3" in caplog.text
+
+
+async def test_run_source_filter_tags_task_context_logs() -> None:
+    import logging
+
+    from lovia.web.supervisor import RUN_SOURCE, run_source_log_filter
+
+    records: list[logging.LogRecord] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Capture()
+    handler.addFilter(run_source_log_filter())
+    lg = logging.getLogger("lovia.web._source_test")
+    lg.addHandler(handler)
+    lg.setLevel(logging.INFO)
+    try:
+        lg.info("outside")
+
+        async def inner() -> None:
+            RUN_SOURCE.set("subagent:abc")  # what RunController._run does
+            lg.info("inside")
+
+        # create_task copies the context, so the tag stays task-local.
+        await asyncio.create_task(inner())
+        lg.info("outside-after")
+    finally:
+        lg.removeHandler(handler)
+    tags = {r.getMessage(): r.run_source for r in records}
+    assert tags == {
+        "outside": "",
+        "inside": "[subagent:abc] ",
+        "outside-after": "",
+    }
 
 
 async def test_cancel_subagent_cancels_supervised_child() -> None:

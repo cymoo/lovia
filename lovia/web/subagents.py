@@ -76,6 +76,12 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
             live = deps.supervisor.get(sid)
             if live is not None:
                 live.inject(report.text)
+                log.info(
+                    "subagent %s: report injected into session %s's live run "
+                    "(visible at its next turn)",
+                    report.id,
+                    sid,
+                )
                 return
             row = await deps.store.get(sid)
             if row is None:
@@ -103,6 +109,11 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     title_message=None,
                     autostart=True,  # clientless: consume the report unattended
                     source=f"subagent:{report.id}",
+                )
+                log.info(
+                    "subagent %s: report delivered to idle session %s via a new run",
+                    report.id,
+                    sid,
                 )
                 return
             except HTTPException as exc:
@@ -178,6 +189,19 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 ) from exc
             raise
         assert ctrl.task is not None  # autostart began it
+        log.info(
+            "subagent %s: task session %s started (agent=%s, parent=%s)",
+            spec.id,
+            child_sid,
+            spec.agent.name,
+            spec.parent_session_id,
+        )
+        deps.emit(
+            "session_created",
+            session_id=child_sid,
+            agent=agent_key,
+            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+        )
 
         async def watch_token() -> None:
             while not spec.token.is_cancelled:
@@ -193,6 +217,12 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
+        log.info(
+            "subagent %s: task session %s ended: %s",
+            spec.id,
+            child_sid,
+            ctrl.final_status,
+        )
         if ctrl.final_status == "completed":
             return RunResult(
                 output=ctrl.final_output,

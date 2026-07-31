@@ -398,11 +398,108 @@ body.sidebar-collapsed .sidebar {
   font-size: 9px;
   transition: transform var(--t-fast);
 }
-#sessions-list.tasks-collapsed .tasks-chevron {
+#tasks-dock.tasks-collapsed .tasks-chevron {
   transform: rotate(-90deg);
 }
-#sessions-list.tasks-collapsed .session-item.task {
+#tasks-dock.tasks-collapsed .session-item.task {
   display: none;
+}
+/* Pinned below the scrolling chat list: background work is always in view. */
+.tasks-dock {
+  flex-shrink: 0;
+  max-height: 38%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--border);
+}
+.tasks-dock.hidden {
+  display: none;
+}
+.tasks-dock .sessions-tasks-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sidebar-bg, var(--surface));
+}
+/* Ambient background-work pill: bottom-right of the chat region, clear of
+   the top-right plan card and the bottom-center scroll button. */
+.tasks-pill {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  transition:
+    color var(--t-fast),
+    transform var(--t-fast);
+}
+.tasks-pill:hover {
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+.tasks-pill.attention {
+  color: var(--warn);
+}
+.tasks-pill.hidden {
+  display: none;
+}
+.tasks-popover {
+  position: absolute;
+  right: 20px;
+  bottom: 56px;
+  z-index: 9;
+  min-width: 240px;
+  max-width: min(340px, calc(100% - 40px));
+  padding: 6px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+.tasks-popover.hidden {
+  display: none;
+}
+.tasks-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  transition: background var(--t-fast);
+}
+.tasks-popover-row:hover {
+  background: var(--surface-2);
+}
+.tasks-popover-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-popover-row .task-elapsed {
+  color: var(--muted-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .tasks-count {
   margin-left: auto;

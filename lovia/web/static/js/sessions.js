@@ -10,6 +10,9 @@ import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
 
 const sessionsList = document.getElementById('sessions-list');
+const tasksDock = document.getElementById('tasks-dock');
+const tasksPill = document.getElementById('tasks-pill');
+const tasksPopover = document.getElementById('tasks-popover');
 const chatTitleEl = document.getElementById('chat-title');
 const sessionSearch = /** @type {HTMLInputElement | null} */ (
   document.getElementById('session-search')
@@ -381,13 +384,80 @@ function buildTasksHeader(tasks) {
     count.textContent = t('nav.tasksRunning', { n: liveCount });
     header.append(count);
   }
-  header.setAttribute('aria-expanded', String(!sessionsList.classList.contains('tasks-collapsed')));
+  const host = tasksDock || sessionsList;
+  header.setAttribute('aria-expanded', String(!host.classList.contains('tasks-collapsed')));
   header.addEventListener('click', () => {
-    const collapsed = sessionsList.classList.toggle('tasks-collapsed');
+    const collapsed = host.classList.toggle('tasks-collapsed');
     localStorage.setItem(TASKS_COLLAPSED_KEY, collapsed ? '1' : '0');
     header.setAttribute('aria-expanded', String(!collapsed));
   });
   return header;
+}
+
+/** The ambient bottom-right pill: visible only while tasks are live; its
+ * popover lists them for one-click jump-in. */
+function renderTasksPill(tasks) {
+  if (!tasksPill || !tasksPopover) return;
+  const live = tasks.filter((s) => store.runsBySession?.has(s.id));
+  tasksPill.classList.toggle('hidden', !live.length);
+  if (!live.length) {
+    tasksPopover.classList.add('hidden');
+    tasksPill.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const attention = live.some((s) => taskState(s) === 'approval');
+  tasksPill.classList.toggle('attention', attention);
+  tasksPill.innerHTML = '';
+  const dot = document.createElement('span');
+  dot.className = `task-dot ${attention ? 'approval' : 'running'}`;
+  const label = document.createElement('span');
+  label.textContent = attention
+    ? t('task.needsApproval')
+    : t('nav.tasksRunning', { n: live.length });
+  tasksPill.append(dot, label);
+  tasksPill.title = t('nav.tasks');
+  tasksPopover.innerHTML = '';
+  for (const s of live) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'tasks-popover-row';
+    row.setAttribute('role', 'menuitem');
+    const d = document.createElement('span');
+    d.className = `task-dot ${taskState(s)}`;
+    const title = document.createElement('span');
+    title.className = 'tasks-popover-title';
+    title.textContent = (s.title || s.id).replace(/^\[[^\]]{1,8}\]\s*/, '');
+    row.append(d, title);
+    const liveRun = store.runsBySession?.get(s.id);
+    if (liveRun?.started_at) {
+      const el = document.createElement('span');
+      el.className = 'task-elapsed';
+      el.dataset.started = String(liveRun.started_at);
+      el.textContent = fmtElapsed(Date.now() / 1000 - liveRun.started_at);
+      row.append(el);
+    }
+    row.addEventListener('click', () => {
+      tasksPopover.classList.add('hidden');
+      tasksPill.setAttribute('aria-expanded', 'false');
+      switchSession(s.id);
+    });
+    tasksPopover.appendChild(row);
+  }
+}
+
+if (tasksPill && tasksPopover) {
+  tasksPill.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = tasksPopover.classList.toggle('hidden');
+    tasksPill.setAttribute('aria-expanded', String(!open));
+  });
+  document.addEventListener('click', (e) => {
+    const target = e.target instanceof Node ? e.target : null;
+    if (!tasksPopover.classList.contains('hidden') && !tasksPopover.contains(target)) {
+      tasksPopover.classList.add('hidden');
+      tasksPill.setAttribute('aria-expanded', 'false');
+    }
+  });
 }
 
 function renderSessions() {
@@ -396,17 +466,10 @@ function renderSessions() {
   if (sig === _lastRenderSig) return; // nothing changed — keep the DOM as-is
   _lastRenderSig = sig;
   sessionsList.innerHTML = '';
+  if (tasksDock) tasksDock.innerHTML = '';
 
-  if (!store.sessions.length) {
-    const empty = document.createElement('div');
-    empty.className = 'sessions-empty';
-    empty.textContent = t('nav.noChats');
-    sessionsList.appendChild(empty);
-    return;
-  }
-
-  // Subagent task sessions (parent_id set) group under their own collapsible
-  // header at the bottom, out of the chat list proper — attention first.
+  // Subagent task sessions (parent_id set) live in the pinned dock below the
+  // scrolling chat list — always in view, never buried — attention first.
   const chats = store.sessions.filter((s) => !s.parent_id);
   const rank = { approval: 0, running: 1 };
   const tasks = store.sessions
@@ -416,17 +479,25 @@ function renderSessions() {
         (rank[taskState(a)] ?? 2) - (rank[taskState(b)] ?? 2) ||
         b.updated_at - a.updated_at,
     );
-  sessionsList.classList.toggle(
-    'tasks-collapsed',
-    localStorage.getItem(TASKS_COLLAPSED_KEY) === '1',
-  );
+  if (tasksDock) {
+    tasksDock.classList.toggle('hidden', !tasks.length);
+    tasksDock.classList.toggle(
+      'tasks-collapsed',
+      localStorage.getItem(TASKS_COLLAPSED_KEY) === '1',
+    );
+    if (tasks.length) tasksDock.appendChild(buildTasksHeader(tasks));
+  }
+  renderTasksPill(tasks);
+
+  if (!chats.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sessions-empty';
+    empty.textContent = t('nav.noChats');
+    sessionsList.appendChild(empty);
+    if (!tasks.length) return;
+  }
   let prevPinned = false;
-  let tasksLabeled = false;
   for (const s of [...chats, ...tasks]) {
-    if (s.parent_id && !tasksLabeled) {
-      tasksLabeled = true;
-      sessionsList.appendChild(buildTasksHeader(tasks));
-    }
     const item = document.createElement('div');
     item.className = 'session-item';
     if (s.parent_id) item.classList.add('task');
@@ -513,7 +584,7 @@ function renderSessions() {
 
     menu.append(pinBtn, renameBtn, delBtn);
     item.append(main, pinMark, menu);
-    sessionsList.appendChild(item);
+    (s.parent_id && tasksDock ? tasksDock : sessionsList).appendChild(item);
   }
 
   syncTaskTicker();
@@ -548,7 +619,7 @@ function updateSessionInSidebar(sessionId, title) {
   if (s) s.title = title;
 
   // Update the DOM directly without full re-render
-  const item = sessionsList?.querySelector(`.session-item[data-id="${sessionId}"]`);
+  const item = document.querySelector(`.session-item[data-id="${sessionId}"]`);
   if (item) {
     const titleEl = item.querySelector('.session-title');
     if (titleEl) titleEl.textContent = title || 'New chat';

@@ -78,9 +78,6 @@
     <input type="search" id="session-search" class="search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" />
   </div>
   <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
-  <!-- Subagent tasks: pinned below the scrolling chat list so background
-       work is always in view, never buried at the end of a long scroll. -->
-  <div id="tasks-dock" class="tasks-dock hidden" aria-label="Background tasks"></div>
 </aside>
 
 <!-- Main -->
@@ -94,6 +91,11 @@
     <h1 id="chat-title" class="chat-title">New chat</h1>
     <div class="topbar-actions">
       <span id="turn-progress" class="turn-progress hidden"></span>
+      <!-- This chat's background subagent tasks; shown only when it has any. -->
+      <div class="export-wrap" id="tasks-wrap" style="display:none">
+        <button id="tasks-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>
+        <div class="tasks-popover" id="tasks-popover" role="menu" hidden aria-label="Background tasks"></div>
+      </div>
       <div class="export-wrap" id="export-wrap" style="display:none">
         <button id="export-btn" class="btn btn-ghost btn-sm" type="button" title="Export chat" aria-haspopup="menu" aria-expanded="false"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>Export</button>
         <div class="export-menu" id="export-menu" role="menu" hidden>
@@ -135,10 +137,6 @@
       </div>
     </section>
     <aside id="todo-panel" class="todo-panel hidden" aria-label="Current plan" aria-live="polite"></aside>
-    <!-- Ambient background-work indicator: appears only while subagent tasks
-         run; bottom-right, clear of the top-right plan card. -->
-    <button id="tasks-pill" class="tasks-pill hidden" type="button" aria-haspopup="menu" aria-controls="tasks-popover" aria-expanded="false"></button>
-    <div id="tasks-popover" class="tasks-popover hidden" role="menu" aria-label="Running tasks"></div>
     <button id="scroll-bottom" class="scroll-bottom-btn" type="button" aria-label="Scroll to latest" title="Scroll to latest">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
     </button>

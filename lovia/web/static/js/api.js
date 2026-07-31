@@ -91,9 +91,9 @@ export const api = {
     }).then(_json),
 
   // ---- sessions ----
-  /** @param {{ q?: string, limit?: number, offset?: number }} [opts] */
-  listSessions: ({ q = '', limit, offset } = {}) =>
-    fetch(`/api/sessions${qs({ q, limit, offset })}`).then(_json),
+  /** @param {{ q?: string, limit?: number, offset?: number, parent?: string }} [opts] */
+  listSessions: ({ q = '', limit, offset, parent } = {}) =>
+    fetch(`/api/sessions${qs({ q, limit, offset, parent })}`).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
   listRuns: () => fetch('/api/runs').then(_json),
   // Persisted run records, newest first. `since` keeps only runs finished

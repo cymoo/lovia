@@ -101,12 +101,15 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         q: str = Query("", max_length=200),
         limit: int = Query(200, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        parent: str | None = Query(None, max_length=64),
     ) -> list[ChatSessionInfo]:
-        metas = (
-            await store.search(q, limit=limit, offset=offset)
-            if q
-            else await store.list(limit=limit, offset=offset)
-        )
+        if parent:
+            # A chat's own subagent tasks — the topbar tasks popover.
+            metas = await store.list_children(parent)
+        elif q:
+            metas = await store.search(q, limit=limit, offset=offset)
+        else:
+            metas = await store.list(limit=limit, offset=offset)
         # Task sessions carry their latest run outcome so the sidebar can
         # badge finished tasks without per-task follow-up requests.
         task_ids = [m.id for m in metas if m.parent_id]

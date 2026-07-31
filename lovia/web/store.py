@@ -798,6 +798,15 @@ class ChatStore:
             RunRow.from_row,
         )
 
+    async def list_children(self, parent_id: str) -> Sequence[ChatMeta]:
+        """A chat's subagent task sessions, oldest first (t1, t2, …)."""
+        return await self._read_all(
+            f"SELECT {_META_COLS} FROM chat_sessions WHERE parent_id = ? "
+            "ORDER BY created_at",
+            (parent_id,),
+            ChatMeta.from_row,
+        )
+
     async def latest_run_statuses(self, session_ids: Sequence[str]) -> dict[str, str]:
         """Each session's most recent run status, in one query.
 

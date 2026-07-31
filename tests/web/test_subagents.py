@@ -373,12 +373,18 @@ def test_sessions_api_exposes_parent_id() -> None:
         await deps.store.finish_run("r1", status="completed", error=None, usage=None)
 
     asyncio.run(seed())
-    rows = {r["id"]: r for r in TestClient(app).get("/api/sessions").json()}
+    client = TestClient(app)
+    rows = {r["id"]: r for r in client.get("/api/sessions").json()}
     assert rows["chat"]["parent_id"] is None
     assert rows["chat"]["last_run_status"] is None
     assert rows["task"]["parent_id"] == "chat"
-    # The sidebar's finished-task badge: latest run outcome joined in.
+    # The finished-task badge: latest run outcome joined in.
     assert rows["task"]["last_run_status"] == "completed"
+    # ?parent= scopes to one chat's tasks — the topbar popover's data.
+    kids = client.get("/api/sessions", params={"parent": "chat"}).json()
+    assert [k["id"] for k in kids] == ["task"]
+    assert kids[0]["last_run_status"] == "completed"
+    assert client.get("/api/sessions", params={"parent": "nope"}).json() == []
 
 
 async def test_store_parent_id_roundtrip_and_legacy_migration(tmp_path) -> None:

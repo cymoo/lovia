@@ -421,6 +421,7 @@ function renderTasksPill(tasks) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'tasks-popover-row';
+    row.setAttribute('role', 'menuitem');
     const d = document.createElement('span');
     d.className = `task-dot ${taskState(s)}`;
     const title = document.createElement('span');

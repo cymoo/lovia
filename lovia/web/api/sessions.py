@@ -180,6 +180,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             updated_at=updated,
             entries=entries,
             active_run_id=active_run_id,
+            parent_id=meta.parent_id if meta else None,
         )
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)

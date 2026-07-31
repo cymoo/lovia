@@ -759,6 +759,8 @@ function renderViewerContent() {
     v.kind === 'csv' ||
     ((v.kind === 'md' || v.kind === 'html') && v.raw);
   els.wrapToggle.classList.toggle('hidden', !textual);
+  // Copy only means something when there is text content to copy.
+  els.copyContent.classList.toggle('hidden', typeof v.content !== 'string');
 
   if (v.truncated) {
     const more = document.createElement('button');
@@ -913,7 +915,8 @@ export function initFiles() {
   els.wrapToggle = document.getElementById('files-wrap-toggle');
   els.mdToggle = document.getElementById('files-md-toggle');
   els.attach = document.getElementById('files-attach');
-  els.copyPath = document.getElementById('files-copy-path');
+  els.copyContent = document.getElementById('files-copy');
+  els.fullscreen = document.getElementById('files-fullscreen');
   els.download = document.getElementById('files-download');
   els.viewerClose = document.getElementById('files-viewer-close');
   els.resizer = document.getElementById('files-resizer');
@@ -923,7 +926,10 @@ export function initFiles() {
   els.refresh.innerHTML = icon('refresh-cw', { size: 15 });
   els.close.innerHTML = icon('x', { size: 16 });
   els.attach.innerHTML = icon('paperclip', { size: 14 });
-  els.copyPath.innerHTML = icon('copy', { size: 14 });
+  els.copyContent.innerHTML = icon('copy', { size: 14 });
+  els.copyContent.title = t('files.copyContent');
+  els.fullscreen.innerHTML = icon('maximize-2', { size: 15 });
+  els.fullscreen.title = t('files.fullscreen');
   els.download.innerHTML = icon('download', { size: 14 });
   els.viewerClose.innerHTML = icon('x', { size: 15 });
   if (els.upload) els.upload.innerHTML = icon('upload', { size: 15 });
@@ -956,9 +962,15 @@ export function initFiles() {
     state.viewing.raw = !state.viewing.raw;
     renderViewerContent();
   });
-  els.copyPath.addEventListener('click', async () => {
-    if (!state.viewing) return;
-    if (await copyToClipboard(state.viewing.path)) toast(t('toast.pathCopied'));
+  els.copyContent.addEventListener('click', async () => {
+    const content = state.viewing?.content;
+    if (typeof content !== 'string') return;
+    if (await copyToClipboard(content)) toast(t('toast.contentCopied'));
+  });
+  els.fullscreen.addEventListener('click', () => {
+    const full = els.panel.classList.toggle('fullscreen');
+    els.fullscreen.classList.toggle('active', full);
+    els.fullscreen.title = full ? t('files.exitFullscreen') : t('files.fullscreen');
   });
   // The reverse of the tool card's "open in Files panel": put the viewed file
   // on the next message. chat.js owns the composer tray and answers.

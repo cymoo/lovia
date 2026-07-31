@@ -3054,6 +3054,16 @@ dialog.custom-dialog::backdrop {
    the assistant just make), breadcrumb browsing second, viewer below.
    `--files-w` (set by the drag divider, persisted) overrides the fluid
    default; the `min()` keeps a stale saved width from starving the chat. */
+.files-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  border-left: none;
+  background: var(--surface);
+}
 .files-panel {
   display: none;
   position: relative;

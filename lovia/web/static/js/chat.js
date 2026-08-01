@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
-import { loadSessions } from './sessions.js';
+import { loadSessions, updateSessionInSidebar } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled } from './settings.js';
@@ -2164,9 +2164,14 @@ function stopTitlePolling() {
 
 async function pollForTitle(sessionId) {
   stopTitlePolling();
-  await loadSessions(); // ensure the provisional title is on screen first
+  await loadSessions(); // surface the provisional row right away
   if (store.sessionId !== sessionId) return; // user moved on
-  const provisional = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
+  // Baseline to detect the replacement against. The sidebar row is the free
+  // source; with a search filter hiding the row, ask the server directly.
+  const provisional =
+    store.sessions.find((s) => s.id === sessionId)?.title ??
+    (await api.getSession(sessionId).catch(() => null))?.title ??
+    null;
   let attempt = 0;
 
   // Keep the timer callback synchronous and swallow rejections so a failed
@@ -2178,10 +2183,13 @@ async function pollForTitle(sessionId) {
   async function tick() {
     _titlePollTimer = null;
     if (store.sessionId !== sessionId) return;
-    await loadSessions();
-    const current = store.sessions.find((s) => s.id === sessionId)?.title ?? null;
-    const landed = current && current !== provisional;
-    if (!landed && attempt < _TITLE_POLL_BACKOFF_MS.length) {
+    // Poll the session itself, not the list: immune to the sidebar filter and
+    // cheap for a first-turn chat. A fetch blip counts as "not yet" so the
+    // remaining back-off steps still retry.
+    const current = (await api.getSession(sessionId).catch(() => null))?.title ?? null;
+    if (current && current !== provisional) {
+      updateSessionInSidebar(sessionId, current); // row (if visible) + topbar
+    } else if (attempt < _TITLE_POLL_BACKOFF_MS.length) {
       schedule(_TITLE_POLL_BACKOFF_MS[attempt++]);
     }
   }

@@ -72,12 +72,12 @@ ACL 有三个决策值，分别作用于两个执行环节：
 
 | 工具 | 说明 | 并发？ |
 | --- | --- | --- |
-| `read_file` | 1-based `start`/`end` 行分页 | 是 |
+| `read_file` | 1-based `start`/`end` 行分页；拒绝二进制 / 非 UTF-8 文件 | 是 |
 | `list_files` | glob 过滤、是否包含隐藏文件 | 是 |
 | `grep_files` | regex，每文件和总匹配数上限 | 是 |
 | `write_file` | `create_only=True` 拒绝覆盖 | **屏障** |
 | `edit_file` | 精确子串替换；0 或 >1 匹配时失败，除非 `replace_all`；兼容 CRLF | **屏障** |
-| `shell` | `cwd` 和每次调用 `timeout`；默认超时 300s | **屏障** |
+| `shell` | `cwd` 和每次调用 `timeout`（默认 300s）；可选 `description` —— 给用户看的一句话说明，UI 展示、策略忽略 | **屏障** |
 
 会修改状态的工具默认 `parallel=False`（[执行屏障](tools.md#并发执行与屏障)），避免文件和进程副作用在同一轮
 里互相竞态；只读工具保持并发。

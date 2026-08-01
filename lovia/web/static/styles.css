@@ -1616,7 +1616,8 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .tool summary {
   display: flex;
   align-items: center;
-  gap: 9px;
+  flex-wrap: wrap; /* a .tool-desc subtitle wraps to its own row */
+  gap: 3px 9px;
   padding: 8px 14px;
   cursor: pointer;
   list-style: none;
@@ -1658,6 +1659,19 @@ body.sidebar-collapsed .sidebar-expand-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+}
+/* The shell card's model-written one-liner: a muted prose subtitle on its own
+   row (order pushes it past the summary's hover actions). */
+.tool summary .tool-desc {
+  order: 10;
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Expanded card: full arguments as key/value rows (shared with .approval-args).
    Grid keeps keys aligned across rows; a long/multi-line value spans the full
@@ -1717,6 +1731,21 @@ body.sidebar-collapsed .sidebar-expand-btn {
   color: var(--ink-2);
   line-height: 1.6;
   background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+}
+/* read_file's pagination header, split off the result (chat.js
+   splitReadFileHeader): shares the result block's background so range + code
+   read as one block, with the border-top moving up to the chip. */
+.tool .tool-result-meta {
+  padding: 8px 14px 0;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted-2);
+}
+.tool .tool-result-meta + .tool-result {
+  border-top: none;
+  padding-top: 6px;
 }
 .tool .tool-result:empty {
   display: none;

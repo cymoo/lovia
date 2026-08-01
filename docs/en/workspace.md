@@ -91,12 +91,12 @@ no `shell` when disabled):
 
 | Tool | Notes | Parallel? |
 | --- | --- | --- |
-| `read_file` | 1-based `start`/`end` line paging | yes |
+| `read_file` | 1-based `start`/`end` line paging; refuses binary / non-UTF-8 files | yes |
 | `list_files` | glob filter, hidden-file toggle | yes |
 | `grep_files` | regex, per-file and match caps | yes |
 | `write_file` | `create_only=True` refuses overwrite | **barrier** |
 | `edit_file` | exact-substring replace; fails on 0 or >1 matches unless `replace_all`; CRLF-tolerant | **barrier** |
-| `shell` | `cwd` and per-call `timeout`; default timeout 300s | **barrier** |
+| `shell` | `cwd` and per-call `timeout` (default 300s); optional `description` — a user-facing one-liner the UI shows, ignored by policy | **barrier** |
 
 Mutators default to `parallel=False`
 ([execution barriers](tools.md#parallel-execution-and-barriers)) so file

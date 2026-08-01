@@ -158,6 +158,8 @@ const MESSAGES = {
     'tool.openInFiles': '在文件面板中打开',
     'tool.old': '− 旧',
     'tool.new': '+ 新',
+    'tool.lines': '第 {start}–{end} 行 · 共 {total} 行',
+    'tool.linesAll': '共 {total} 行',
     // ---- files panel
     'files.recent': '最近',
     'files.browse': '浏览',
@@ -462,6 +464,8 @@ const EN = {
   'tool.openInFiles': 'Open in Files panel',
   'tool.old': '− old',
   'tool.new': '+ new',
+  'tool.lines': 'Lines {start}–{end} of {total}',
+  'tool.linesAll': '{total} lines',
   'files.recent': 'Recent',
   'files.browse': 'Browse',
   'files.refresh': 'Refresh',

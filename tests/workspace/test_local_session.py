@@ -220,6 +220,49 @@ async def test_read_directory_raises(tmp_path) -> None:
         await session.read_text("dir")
 
 
+async def test_read_binary_file_is_refused(tmp_path) -> None:
+    # SQLite-style header: text prefix, NUL within the sniff window.
+    (tmp_path / "data.db").write_bytes(b"SQLite format 3\x00" + b"\x00\x01" * 64)
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Binary file") as exc:
+        await session.read_text("data.db")
+    assert "shell" in str(exc.value)  # the hint names the escape hatch
+
+
+async def test_read_utf16_is_refused_as_binary(tmp_path) -> None:
+    # UTF-16 text is full of NULs — refused like grep/edit, not decoded to soup.
+    (tmp_path / "f.txt").write_bytes("hello world".encode("utf-16"))
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Binary file"):
+        await session.read_text("f.txt")
+
+
+async def test_read_legacy_encoding_is_refused(tmp_path) -> None:
+    # GBK Chinese has no NULs; the replacement-ratio guard catches it.
+    (tmp_path / "gbk.txt").write_bytes("中文内容,历史遗留编码。\n".encode("gbk") * 20)
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Not UTF-8") as exc:
+        await session.read_text("gbk.txt")
+    assert "iconv" in str(exc.value)
+
+
+async def test_read_mostly_utf8_with_stray_bytes_still_reads(tmp_path) -> None:
+    # A few undecodable bytes must not trip the ratio guard — lenient decode
+    # with isolated U+FFFD beats refusing a 99%-readable file.
+    (tmp_path / "f.txt").write_bytes(b"ok line\n" * 100 + b"\xff\xfe\n")
+    session = await _session(tmp_path)
+    result = await session.read_text("f.txt")
+    assert result.total_lines == 101 and "\ufffd" in result.content
+
+
+async def test_read_binary_checked_before_paging(tmp_path) -> None:
+    # start/end must not bypass the sniff — page 2 of a binary is still binary.
+    (tmp_path / "blob.bin").write_bytes(b"a\nb\n\x00rest\n")
+    session = await _session(tmp_path)
+    with pytest.raises(WorkspaceError, match="Binary file"):
+        await session.read_text("blob.bin", start=1, end=2)
+
+
 async def test_write_create_only_and_nested_dirs(tmp_path) -> None:
     session = await _session(tmp_path)
     created = await session.write_text("a/b/new.txt", "data", create_only=True)

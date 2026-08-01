@@ -60,6 +60,19 @@ _ENV_PASSTHROUGH = frozenset(
 )
 
 
+# Binary/encoding sniffing shared by read_text and grep. A NUL in the leading
+# bytes is git's text-vs-binary test; the replacement-character ratio catches
+# what NUL can't — text in a legacy encoding (GBK, Latin-1) that decodes to
+# mojibake rather than failing outright.
+_BINARY_SNIFF_BYTES = 1024
+_ENCODING_SNIFF_CHARS = 4096
+_MAX_REPLACEMENT_RATIO = 0.10
+
+
+def _looks_binary(data: bytes) -> bool:
+    return b"\0" in data[:_BINARY_SNIFF_BYTES]
+
+
 def _has_hidden_segment(rel: str) -> bool:
     return any(seg.startswith(".") for seg in rel.split("/") if seg)
 
@@ -321,7 +334,27 @@ class LocalWorkspaceSession:
             # that does not match the file on disk.
             with p.open("rb") as fh:
                 raw = fh.read(self.limits.max_file_read_bytes if oversized else -1)
+            # Refuse non-text instead of returning replacement-character soup:
+            # it burns context (U+FFFD compresses terribly) and tells the model
+            # nothing a targeted shell command wouldn't tell it better.
+            if _looks_binary(raw):
+                raise WorkspaceError(
+                    f"Binary file: {rp.display()}",
+                    hint=(
+                        "read_file handles UTF-8 text only; inspect binary "
+                        "content via the shell (file, xxd, sqlite3, ...)."
+                    ),
+                )
             text = raw.decode("utf-8", errors="replace")
+            sample = text[:_ENCODING_SNIFF_CHARS]
+            if sample.count("\ufffd") / max(len(sample), 1) > _MAX_REPLACEMENT_RATIO:
+                raise WorkspaceError(
+                    f"Not UTF-8 text: {rp.display()}",
+                    hint=(
+                        "the file likely uses a legacy encoding (e.g. GBK); "
+                        "convert it via the shell, e.g. iconv -f gbk -t utf-8."
+                    ),
+                )
             if oversized:
                 hint = (
                     "Large file: only its leading portion was read (line numbers "
@@ -684,9 +717,9 @@ class LocalWorkspaceSession:
                     if file_path.stat().st_size > self.limits.max_grep_file_bytes:
                         continue
                     with open(file_path, "rb") as fh:
-                        head = fh.read(1024)
-                        if b"\0" in head:
-                            continue  # binary
+                        head = fh.read(_BINARY_SNIFF_BYTES)
+                        if _looks_binary(head):
+                            continue
                         data = head + fh.read()
                 except OSError as exc:
                     logger.debug("grep: read failed for %s (%s)", file_display, exc)

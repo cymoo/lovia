@@ -72,7 +72,7 @@ ACL 有三个决策值，分别作用于两个执行环节：
 
 | 工具 | 说明 | 并发？ |
 | --- | --- | --- |
-| `read_file` | 1-based `start`/`end` 行分页 | 是 |
+| `read_file` | 1-based `start`/`end` 行分页；拒绝二进制 / 非 UTF-8 文件 | 是 |
 | `list_files` | glob 过滤、是否包含隐藏文件 | 是 |
 | `grep_files` | regex，每文件和总匹配数上限 | 是 |
 | `write_file` | `create_only=True` 拒绝覆盖 | **屏障** |

@@ -192,7 +192,8 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
         "- Large files are truncated; use start/end (1-based line numbers, inclusive) "
         "to read in pages.\n"
         "- Always read a file before editing it so edit_file gets exact text.\n"
-        "- Binary files decode to replacement characters and aren't useful here."
+        "- Binary and non-UTF-8 files are refused; inspect those via the shell "
+        "instead (file, xxd, iconv, ...)."
     ),
     needs_approval=_path_needs_approval("read"),
     result_renderer=_render_file_content,

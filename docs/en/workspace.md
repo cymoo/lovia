@@ -91,7 +91,7 @@ no `shell` when disabled):
 
 | Tool | Notes | Parallel? |
 | --- | --- | --- |
-| `read_file` | 1-based `start`/`end` line paging | yes |
+| `read_file` | 1-based `start`/`end` line paging; refuses binary / non-UTF-8 files | yes |
 | `list_files` | glob filter, hidden-file toggle | yes |
 | `grep_files` | regex, per-file and match caps | yes |
 | `write_file` | `create_only=True` refuses overwrite | **barrier** |

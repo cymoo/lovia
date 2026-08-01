@@ -189,17 +189,27 @@ function openLightbox(fig) {
   }, { passive: false });
 
   let dragging = false, ox = 0, oy = 0;
+  // A press that starts on the scrim and releases without panning is a
+  // backdrop click: it dismisses, like every other modal. Panning the view
+  // from the scrim must not, hence the movement slop.
+  let pressedOnScrim = false, px = 0, py = 0, panned = false;
   stage.addEventListener('pointerdown', (e) => {
     e.preventDefault(); // panning, not selecting the diagram's text
     dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
+    pressedOnScrim = !sheet.contains(e.target); panned = false;
+    px = e.clientX; py = e.clientY;
     stage.setPointerCapture(e.pointerId); stage.classList.add('grabbing');
   });
   stage.addEventListener('pointermove', (e) => {
     if (!dragging) return;
+    if (Math.abs(e.clientX - px) > 4 || Math.abs(e.clientY - py) > 4) panned = true;
     tx = e.clientX - ox; ty = e.clientY - oy; apply();
   });
   const endDrag = () => { dragging = false; stage.classList.remove('grabbing'); };
-  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointerup', () => {
+    endDrag();
+    if (pressedOnScrim && !panned) close();
+  });
   stage.addEventListener('pointercancel', endDrag);
 
   function onKey(e) {
@@ -212,7 +222,6 @@ function openLightbox(fig) {
     document.removeEventListener('keydown', onKey);
     overlay.remove();
   }
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey);
 
   document.body.appendChild(overlay);

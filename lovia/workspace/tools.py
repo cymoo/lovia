@@ -475,5 +475,19 @@ async def shell(
         float | None,
         Field(default=None, ge=1, description="Override timeout in seconds."),
     ] = None,
+    description: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "One short sentence, in the conversation's language, saying "
+                "what the command does — shown to the user while it runs. "
+                "Omit for short, self-explanatory commands."
+            ),
+        ),
+    ] = None,
 ) -> CommandResult:
+    # description is display chrome for UI consumers; execution and the
+    # approval policy ignore it deliberately — model-authored prose must
+    # never soften how a command is judged or reviewed.
     return await require_workspace(ctx).run(command, cwd=cwd, timeout=timeout)

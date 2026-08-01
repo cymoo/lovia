@@ -189,6 +189,32 @@ async def test_shell_renderer_formats_result(session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_shell_accepts_display_description(session) -> None:
+    # description is UI chrome: validated like any argument, then ignored —
+    # the command runs exactly as it would without it.
+    ctx = _ctx(session)
+    result = await shell.invoke(
+        {"command": "echo hi", "description": "prints a greeting"}, ctx
+    )
+    assert isinstance(result, CommandResult)
+    assert result.stdout.strip() == "hi" and result.exit_code == 0
+
+
+def test_shell_schema_exposes_description() -> None:
+    prop = shell.parameters["properties"]["description"]
+    assert "shown to the user" in prop["description"]
+
+
+def test_shell_needs_approval_ignores_description(session) -> None:
+    # Model-authored prose must not sway the verdict in either direction.
+    base = {"command": "cat /etc/hosts"}
+    ctx = _ctx(session)
+    assert _shell_needs_approval(base | {"description": "harmless, promise"}, ctx) == (
+        _shell_needs_approval(base, ctx)
+    )
+
+
+@pytest.mark.asyncio
 async def test_read_file_renders_empty_and_past_eof(tmp_path) -> None:
     (tmp_path / "empty.txt").write_text("", encoding="utf-8")
     (tmp_path / "small.txt").write_text("a\nb\n", encoding="utf-8")

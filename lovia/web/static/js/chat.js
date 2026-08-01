@@ -196,18 +196,21 @@ function isDiffArgs(obj) {
 // its key order is not stable — the same call can come back path-first once and
 // new-before-old the next time. Two keys are pinned so a card always reads the
 // same way: `path` leads (it is the subject of the call, and the first declared
-// parameter of every workspace tool that takes one), and a diff pair renders
-// old-then-new at whichever side the model mentioned first. Every other key
-// keeps the order it came in.
+// parameter of every workspace tool that takes one; `command` plays that role
+// for shell-style tools), and a diff pair renders old-then-new at whichever
+// side the model mentioned first. Every other key keeps the order it came in.
 function argEntries(obj) {
   const entries = Object.entries(obj);
   const diff = isDiffArgs(obj);
-  const lead = typeof obj.path === 'string';
+  const lead =
+    typeof obj.path === 'string' ? 'path'
+      : typeof obj.command === 'string' ? 'command'
+        : null;
   if (!diff && !lead) return entries;
   const ordered = [];
   let placed = false;
   for (const [k, v] of entries) {
-    if (lead && k === 'path') continue; // hoisted to the front below
+    if (k === lead) continue; // hoisted to the front below
     if (diff && (k === 'old' || k === 'new')) {
       if (placed) continue;
       placed = true;
@@ -216,13 +219,14 @@ function argEntries(obj) {
     }
     ordered.push([k, v]);
   }
-  if (lead) ordered.unshift(['path', obj.path]);
+  if (lead) ordered.unshift([lead, obj[lead]]);
   return ordered;
 }
 
 // A one-line `(k: v, …)` preview for the tool bubble's summary. The full
-// values live in the expanded card's params rows (fillParams).
-function formatArgs(args) {
+// values live in the expanded card's params rows (fillParams). `omit` drops
+// keys the card already surfaces elsewhere (e.g. shell's description).
+function formatArgs(args, omit) {
   if (!args) return '()';
   let obj;
   try {
@@ -231,7 +235,7 @@ function formatArgs(args) {
     return `(${args})`;
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return `(${args})`;
-  const entries = argEntries(obj);
+  const entries = argEntries(obj).filter(([k]) => !omit?.includes(k));
   if (entries.length === 0) return '()';
   return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
 }
@@ -676,10 +680,35 @@ function toolActionBtn(iconName, title) {
   return b;
 }
 
+// The shell tool's optional `description` argument — a model-written one-liner
+// for the user. Shown as a muted subtitle under the summary; the command stays
+// the summary's primary text (the description is the model's claim about the
+// command, not ground truth).
+function toolDescription(call) {
+  if (call.name !== 'shell') return null;
+  try {
+    const d = JSON.parse(call.arguments || '{}').description;
+    return typeof d === 'string' && d.trim() ? d.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
   node.querySelector('.tool-name').textContent = call.name;
-  node.querySelector('.tool-args').textContent = formatArgs(call.arguments);
+  const desc = toolDescription(call);
+  node.querySelector('.tool-args').textContent = formatArgs(
+    call.arguments,
+    desc ? ['description'] : undefined,
+  );
+  if (desc) {
+    const sub = document.createElement('span');
+    sub.className = 'tool-desc';
+    sub.textContent = desc;
+    sub.title = desc; // ellipsized subtitle stays readable on hover
+    node.querySelector('summary')?.appendChild(sub);
+  }
   fillParams(node.querySelector('.tool-params'), call.arguments);
   // The result renderer only needs the name and the path — stash those
   // instead of the full arguments (write_file args can be megabytes).
@@ -743,18 +772,38 @@ function resultLang(node) {
   return /^[a-z0-9]{1,8}$/.test(ext) ? ext : null;
 }
 
+// A successful read_file result opens with the renderer's pagination header,
+// "path (lines X-Y of Z)". The model needs it to page through big files; the
+// card doesn't — the path is already in the summary. Split it off so copy and
+// highlighting see pure file content, and render the range as a meta chip.
+// The empty-file / past-eof variants (and any custom result_renderer format)
+// simply never match and pass through whole.
+const READ_FILE_HEADER = /^.+ \(lines (\d+)-(\d+) of (\d+)\)(?:\n|$)/;
+
+function splitReadFileHeader(node, text, isError) {
+  if (isError || node.dataset.toolName !== 'read_file') return { text, meta: null };
+  const m = READ_FILE_HEADER.exec(text);
+  if (!m) return { text, meta: null };
+  return {
+    text: text.slice(m[0].length),
+    meta: { start: +m[1], end: +m[2], total: +m[3] },
+  };
+}
+
 // The one renderer behind both the live tool_result event and history replay:
 // content (highlighted or linkified), error styling, and the hover actions
 // (copy, expand when clipped).
 function setToolResult(node, result, isError) {
   const pre = node.querySelector('.tool-result');
   if (!pre) return;
-  const text = String(result ?? '');
+  const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
   if (!text.trim()) {
     pre.style.display = 'none';
     return;
   }
-  const lang = !isError && text.length <= RESULT_HL_MAX ? resultLang(node) : null;
+  // Highlight only content the header vouches for: a headerless read_file
+  // result is a notice (empty file, custom renderer), not code.
+  const lang = meta && text.length <= RESULT_HL_MAX ? resultLang(node) : null;
   if (lang) {
     const code = document.createElement('code');
     code.className = `language-${lang}`;
@@ -768,6 +817,20 @@ function setToolResult(node, result, isError) {
 
   const box = node.querySelector('.tool-result-box');
   if (!box) return;
+  let metaEl = box.querySelector('.tool-result-meta');
+  if (meta) {
+    if (!metaEl) {
+      metaEl = document.createElement('div');
+      metaEl.className = 'tool-result-meta';
+      pre.before(metaEl);
+    }
+    metaEl.textContent =
+      meta.start === 1 && meta.end >= meta.total
+        ? t('tool.linesAll', { total: meta.total })
+        : t('tool.lines', meta);
+  } else {
+    metaEl?.remove(); // idempotent across repeated result updates
+  }
   let actions = box.querySelector('.tool-result-actions');
   if (!actions) {
     actions = document.createElement('div');

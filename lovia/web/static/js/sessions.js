@@ -131,7 +131,7 @@ function _schedulePoll() {
   clearTimeout(_pollTimer);
   if (_eventsLive) return; // pushed, not polled
   _pollTimer = setTimeout(async () => {
-    await loadSessions(sessionSearch?.value.trim() || '');
+    await loadSessions();
     _schedulePoll();
   }, document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS);
 }
@@ -145,7 +145,7 @@ function _schedulePoll() {
  */
 export function initEventStream() {
   if (typeof EventSource === 'undefined') return; // keep polling instead
-  const refresh = () => loadSessions(sessionSearch?.value.trim() || '');
+  const refresh = () => loadSessions();
   const es = new EventSource('/api/events');
   es.onopen = () => {
     _eventsLive = true;
@@ -239,12 +239,15 @@ async function stopRun(sid) {
     console.error('stopRun:', err);
     toast(t('toast.stopFailed'), { type: 'error' });
   }
-  loadSessions(sessionSearch?.value.trim() || '');
+  loadSessions();
 }
 
 // ---- Load ----------------------------------------------------------------
-/** @param {string} [query] Filter substring; empty lists the most recent. */
-export async function loadSessions(query = '') {
+/**
+ * @param {string} [query] Filter substring; defaults to the live sidebar
+ * filter so refreshes (delete, stream end, polls) keep an active search.
+ */
+export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
   try {
     const [sessions, runs] = await Promise.all([
       // Fetch one row past the page: its presence answers "is there more?"
@@ -281,6 +284,7 @@ function sessionsSignature() {
   return JSON.stringify([
     store.sessionId,
     _hasMore,
+    !!sessionSearch?.value.trim(), // the empty state's wording depends on it
     store.agents.length > 1, // agent chips appear once agents finish loading
     [...(store.activeRuns || [])].sort(),
     store.sessions.map((s) => [
@@ -473,7 +477,7 @@ function renderSessions() {
   if (!chats.length) {
     const empty = document.createElement('div');
     empty.className = 'sessions-empty';
-    empty.textContent = t('nav.noChats');
+    empty.textContent = t(sessionSearch?.value.trim() ? 'nav.noMatches' : 'nav.noChats');
     sessionsList.appendChild(empty);
     return;
   }
@@ -589,7 +593,7 @@ function renderSessions() {
 }
 
 // ---- Update a single session's title in the sidebar --------------------
-function updateSessionInSidebar(sessionId, title) {
+export function updateSessionInSidebar(sessionId, title) {
   // Update the cached sessions list
   const s = store.sessions.find(s => s.id === sessionId);
   if (s) s.title = title;
@@ -598,7 +602,7 @@ function updateSessionInSidebar(sessionId, title) {
   const item = document.querySelector(`.session-item[data-id="${sessionId}"]`);
   if (item) {
     const titleEl = item.querySelector('.session-title');
-    if (titleEl) titleEl.textContent = title || 'New chat';
+    if (titleEl) titleEl.textContent = title || t('session.newChat');
   }
 
   // Update header if this is the active session (fall back when cleared)
@@ -867,12 +871,18 @@ function initExportMenu() {
 
 // ---- Search --------------------------------------------------------------
 let _searchTimer = null;
-/** Wire up the sidebar chat filter (debounced input → reload). */
+/** Wire up the sidebar chat filter (debounced input → reload; Enter = now). */
 export function initSearch() {
   if (!sessionSearch) return;
   sessionSearch.addEventListener('input', () => {
     clearTimeout(_searchTimer);
-    _searchTimer = setTimeout(() => loadSessions(sessionSearch.value.trim()), 250);
+    _searchTimer = setTimeout(() => loadSessions(), 250);
+  });
+  sessionSearch.addEventListener('keydown', (e) => {
+    // isComposing: Enter that confirms an IME candidate isn't a search.
+    if (e.key !== 'Enter' || e.isComposing) return;
+    clearTimeout(_searchTimer);
+    loadSessions();
   });
 }
 
@@ -900,7 +910,7 @@ export function initSessions() {
     if (!document.hidden) {
       _unseenFinished = 0;
       document.title = _baseTitle; // clear the "(n)" badge
-      loadSessions(sessionSearch?.value.trim() || '');
+      loadSessions();
     }
     _schedulePoll(); // re-arm at the cadence matching the new visibility
   });

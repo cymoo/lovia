@@ -196,7 +196,7 @@ function openLightbox(fig) {
   stage.addEventListener('pointerdown', (e) => {
     e.preventDefault(); // panning, not selecting the diagram's text
     dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
-    pressedOnScrim = !sheet.contains(e.target); panned = false;
+    pressedOnScrim = !(e.target instanceof Node && sheet.contains(e.target)); panned = false;
     px = e.clientX; py = e.clientY;
     stage.setPointerCapture(e.pointerId); stage.classList.add('grabbing');
   });

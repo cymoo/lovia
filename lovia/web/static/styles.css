@@ -4180,13 +4180,16 @@ body.files-splitting {
   background: var(--border);
 }
 
-/* ---- Diff blocks (old_string / new_string params) --------------------------------------------------- */
-.param-val.diff-old {
+/* ---- Diff blocks (old / new params) --------------------------------------------------- */
+/* Matches `.block` too: these values are always block-rendered, and the plain
+   `.param-val.diff-*` pair loses to `.tool-params .param-val.block` above on
+   specificity. Naming `.block` here ties them, and later wins. */
+.param-val.block.diff-old {
   background: var(--danger-soft);
   border-left: 3px solid var(--danger);
   color: var(--ink-2);
 }
-.param-val.diff-new {
+.param-val.block.diff-new {
   background: color-mix(in srgb, var(--ok) 10%, var(--surface));
   border-left: 3px solid var(--ok);
   color: var(--ink-2);

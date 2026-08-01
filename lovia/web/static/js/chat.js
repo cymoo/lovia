@@ -186,6 +186,40 @@ function argValue(v) {
   return JSON.stringify(v);
 }
 
+// old/new pairs (edit_file) ARE a diff: the arguments are already the two
+// sides of the change, so no diff algorithm is needed to present them as one.
+function isDiffArgs(obj) {
+  return typeof obj.old === 'string' && typeof obj.new === 'string';
+}
+
+// Arguments in render order. `arguments` is the raw JSON the model emitted and
+// its key order is not stable — the same call can come back path-first once and
+// new-before-old the next time. Two keys are pinned so a card always reads the
+// same way: `path` leads (it is the subject of the call, and the first declared
+// parameter of every workspace tool that takes one), and a diff pair renders
+// old-then-new at whichever side the model mentioned first. Every other key
+// keeps the order it came in.
+function argEntries(obj) {
+  const entries = Object.entries(obj);
+  const diff = isDiffArgs(obj);
+  const lead = typeof obj.path === 'string';
+  if (!diff && !lead) return entries;
+  const ordered = [];
+  let placed = false;
+  for (const [k, v] of entries) {
+    if (lead && k === 'path') continue; // hoisted to the front below
+    if (diff && (k === 'old' || k === 'new')) {
+      if (placed) continue;
+      placed = true;
+      ordered.push(['old', obj.old], ['new', obj.new]);
+      continue;
+    }
+    ordered.push([k, v]);
+  }
+  if (lead) ordered.unshift(['path', obj.path]);
+  return ordered;
+}
+
 // A one-line `(k: v, …)` preview for the tool bubble's summary. The full
 // values live in the expanded card's params rows (fillParams).
 function formatArgs(args) {
@@ -197,7 +231,7 @@ function formatArgs(args) {
     return `(${args})`;
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return `(${args})`;
-  const entries = Object.entries(obj);
+  const entries = argEntries(obj);
   if (entries.length === 0) return '()';
   return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
 }
@@ -226,14 +260,12 @@ function fillParams(container, args) {
     addBlock(String(args));
     return;
   }
-  // old_string/new_string pairs (edit_file and friends) ARE a diff — color
-  // them so an approval is reviewed as a change, not two look-alike walls of
-  // text. No diff algorithm needed: the arguments are already the two sides.
-  const isDiff =
-    typeof obj.old_string === 'string' && typeof obj.new_string === 'string';
-  for (const [k, v] of Object.entries(obj)) {
-    if (isDiff && (k === 'old_string' || k === 'new_string')) {
-      const old = k === 'old_string';
+  // Color the two sides of a diff so an approval is reviewed as a change,
+  // not as two look-alike walls of text.
+  const isDiff = isDiffArgs(obj);
+  for (const [k, v] of argEntries(obj)) {
+    if (isDiff && (k === 'old' || k === 'new')) {
+      const old = k === 'old';
       const key = document.createElement('div');
       key.className = 'param-key';
       key.textContent = old ? t('tool.old') : t('tool.new');

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Annotated, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from lovia import RunContext
@@ -63,6 +64,36 @@ def test_function_args_schema_ignores_run_context() -> None:
 
     schema2, names2 = function_args_schema(fn2)
     assert names2 == ["query", "ctx"]
+
+
+def test_optional_annotated_keeps_field_metadata() -> None:
+    # Python 3.10's get_type_hints wraps an `ann = None` param in Optional[...],
+    # burying the Annotated Field inside a union member — which used to drop
+    # its description and constraints from the schema (silently, and on 3.10
+    # only). The schema must come out identical on every supported version.
+    def fn(
+        x: Annotated[int | None, Field(default=None, ge=1, description="the x")] = None,
+    ) -> None:
+        return None
+
+    schema, _ = function_args_schema(fn)
+    assert schema["properties"]["x"] == {
+        "anyOf": [{"minimum": 1, "type": "integer"}, {"type": "null"}],
+        "default": None,
+        "description": "the x",
+    }
+
+
+def test_user_written_optional_around_annotated() -> None:
+    # The hoist also normalizes an explicit Optional[Annotated[...]]: the
+    # metadata applies to the whole optional value, on every version.
+    def fn(name: Optional[Annotated[str, Field(description="who")]] = None) -> None:
+        return None
+
+    schema, _ = function_args_schema(fn)
+    prop = schema["properties"]["name"]
+    assert prop["description"] == "who"
+    assert {"type": "null"} in prop["anyOf"]
 
 
 def test_validate_args_coerces() -> None:

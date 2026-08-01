@@ -25,7 +25,17 @@ extra metadata. Two forms are recognised:
 from __future__ import annotations
 
 import inspect
-from typing import Annotated, Callable, cast, get_args, get_origin, get_type_hints
+import types
+from typing import (
+    Annotated,
+    Callable,
+    Optional,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 
@@ -48,6 +58,29 @@ def _is_context_annotation(annotation: object) -> bool:
     return origin is RunContext
 
 
+def _hoist_optional(annotation: object) -> object:
+    """Rewrite ``Optional[Annotated[T, meta]]`` as ``Annotated[T | None, meta]``.
+
+    Python 3.10's ``get_type_hints`` wraps a ``ann = None`` parameter in
+    ``Optional[...]`` (removed in 3.11), burying ``Annotated`` metadata inside
+    a union member — where pydantic ignores it, silently dropping the Field's
+    description and constraints from the schema. Hoisting the metadata back
+    out is semantically identical and keeps schemas byte-identical across
+    Python versions (``Optional`` flattens an already-optional ``T``).
+    """
+    origin = get_origin(annotation)
+    if origin is not Union and origin is not types.UnionType:
+        return annotation
+    args = get_args(annotation)
+    if len(args) != 2 or type(None) not in args:
+        return annotation
+    inner = args[0] if args[1] is type(None) else args[1]
+    if get_origin(inner) is not Annotated:
+        return annotation
+    base, *meta = get_args(inner)
+    return Annotated[(Optional[base], *meta)]
+
+
 def _normalize_annotation(annotation: object) -> object:
     """Convert ``Annotated[T, "desc"]`` to ``Annotated[T, Field(description=...)]``.
 
@@ -55,6 +88,7 @@ def _normalize_annotation(annotation: object) -> object:
     ``query: Annotated[str, "the search query"]`` without importing pydantic.
     Existing ``Field(...)`` metadata is left intact.
     """
+    annotation = _hoist_optional(annotation)
     if get_origin(annotation) is not Annotated:
         return annotation
     base, *meta = get_args(annotation)

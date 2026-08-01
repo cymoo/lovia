@@ -799,8 +799,12 @@ function setToolResult(node, result, isError) {
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
   if (!text.trim()) {
     pre.style.display = 'none';
+    node.querySelector('.tool-result-meta')?.remove();
     return;
   }
+  // Undo the hide above: a card replayed while its call was still pending got
+  // an empty result first and the real one only after the run resumed.
+  pre.style.display = '';
   // Highlight only content the header vouches for: a headerless read_file
   // result is a notice (empty file, custom renderer), not code.
   const lang = meta && text.length <= RESULT_HL_MAX ? resultLang(node) : null;

@@ -131,3 +131,73 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+  # Publish to PyPI when a main push carries a version not yet released —
+  # merging a version-bump PR IS the release, matching how this repo already
+  # works (every release PR bumps pyproject/__init__/uv.lock). Pushes without
+  # a bump skip quietly, so docs/chore commits stay silent. Idempotent: the
+  # PyPI existence gate makes re-runs and manual dispatches safe, and a flaked
+  # gate can at worst hit PyPI's own duplicate-file rejection. Auth is trusted
+  # publishing (OIDC via id-token, configured on PyPI for ci.yml + the `pypi`
+  # environment) — no long-lived token secret. After a successful upload the
+  # job tags the release commit and creates a GitHub Release so versions get
+  # bisect/diff anchors without any manual tagging ritual.
+  publish:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [lint, test, typecheck-web]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/lovia/${{ steps.ver.outputs.version }}/
+    permissions:
+      id-token: write # PyPI trusted publishing (OIDC)
+      contents: write # tag + GitHub Release after upload
+    # Queue back-to-back merges instead of cancelling — every bumped version
+    # should ship, and the existence gate keeps a queued duplicate harmless.
+    concurrency:
+      group: pypi-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: |
+          v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Skip if already on PyPI
+        id: gate
+        # The version-specific JSON URL is uncached (the aggregate one lags
+        # behind a CDN), so 200 here is authoritative.
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json")
+          echo "publish=$([ "$code" != "200" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v${{ steps.ver.outputs.version }} on PyPI: HTTP $code"
+      - uses: astral-sh/setup-uv@v5
+        if: steps.gate.outputs.publish == 'true'
+      - name: Build sdist + wheel
+        if: steps.gate.outputs.publish == 'true'
+        run: uv build
+      - name: Twine check
+        if: steps.gate.outputs.publish == 'true'
+        run: uvx twine check dist/*
+      - name: Publish to PyPI
+        if: steps.gate.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Verify on PyPI
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          for i in $(seq 1 10); do
+            curl -sf "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json" >/dev/null && exit 0
+            sleep 5
+          done
+          echo "v${{ steps.ver.outputs.version }} not visible on PyPI after 50s" && exit 1
+      - name: Tag + GitHub Release
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" dist/* \
+            --title "v${{ steps.ver.outputs.version }}" --generate-notes

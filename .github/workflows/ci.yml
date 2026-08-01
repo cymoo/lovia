@@ -136,12 +136,14 @@ jobs:
   # merging a version-bump PR IS the release, matching how this repo already
   # works (every release PR bumps pyproject/__init__/uv.lock). Pushes without
   # a bump skip quietly, so docs/chore commits stay silent. Idempotent: the
-  # PyPI existence gate makes re-runs and manual dispatches safe, and a flaked
-  # gate can at worst hit PyPI's own duplicate-file rejection. Auth is trusted
+  # gate publishes on 404, skips on 200, and fails loudly on anything else
+  # (transient PyPI errors never trigger a stray upload). Auth is trusted
   # publishing (OIDC via id-token, configured on PyPI for ci.yml + the `pypi`
   # environment) — no long-lived token secret. After a successful upload the
   # job tags the release commit and creates a GitHub Release so versions get
-  # bisect/diff anchors without any manual tagging ritual.
+  # bisect/diff anchors without any manual tagging ritual. The Release leg
+  # self-heals: if the upload landed but tagging failed, any rerun (or later
+  # push still carrying that version) recreates the missing Release.
   publish:
     if: >-
       github.ref == 'refs/heads/main' &&
@@ -166,22 +168,42 @@ jobs:
         run: |
           v=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - name: Skip if already on PyPI
+      - name: Gate on PyPI and Release state
         id: gate
         # The version-specific JSON URL is uncached (the aggregate one lags
-        # behind a CDN), so 200 here is authoritative.
+        # behind a CDN), so its status is authoritative: 404 → publish,
+        # 200 → already shipped, anything else → fail rather than guess.
+        # `release` goes true whenever the vX.Y.Z GitHub Release is missing —
+        # on a fresh publish, and on reruns healing a failed tag/Release leg.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' \
-            "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json")
-          echo "publish=$([ "$code" != "200" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "v${{ steps.ver.outputs.version }} on PyPI: HTTP $code"
+          v="${{ steps.ver.outputs.version }}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors \
+            --max-time 30 "https://pypi.org/pypi/lovia/$v/json") || code=000
+          case "$code" in
+            200) publish=false ;;
+            404) publish=true ;;
+            *) echo "unexpected HTTP $code from PyPI for v$v"; exit 1 ;;
+          esac
+          release=false
+          gh release view "v$v" --json name >/dev/null 2>&1 || release=true
+          # dist/* is needed to upload and to attach to the Release.
+          build=false
+          [ "$publish" = true ] || [ "$release" = true ] && build=true
+          {
+            echo "publish=$publish"
+            echo "release=$release"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+          echo "v$v — publish: $publish, create release: $release"
       - uses: astral-sh/setup-uv@v5
-        if: steps.gate.outputs.publish == 'true'
+        if: steps.gate.outputs.build == 'true'
       - name: Build sdist + wheel
-        if: steps.gate.outputs.publish == 'true'
+        if: steps.gate.outputs.build == 'true'
         run: uv build
       - name: Twine check
-        if: steps.gate.outputs.publish == 'true'
+        if: steps.gate.outputs.build == 'true'
         run: uvx twine check dist/*
       - name: Publish to PyPI
         if: steps.gate.outputs.publish == 'true'
@@ -190,12 +212,13 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         run: |
           for i in $(seq 1 10); do
-            curl -sf "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json" >/dev/null && exit 0
+            curl -sfS --max-time 15 \
+              "https://pypi.org/pypi/lovia/${{ steps.ver.outputs.version }}/json" >/dev/null && exit 0
             sleep 5
           done
           echo "v${{ steps.ver.outputs.version }} not visible on PyPI after 50s" && exit 1
       - name: Tag + GitHub Release
-        if: steps.gate.outputs.publish == 'true'
+        if: steps.gate.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

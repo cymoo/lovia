@@ -55,6 +55,7 @@ class QuestionOption(BaseModel):
     )
     description: str = Field(
         default="",
+        pattern=r"^[^\r\n]*$",
         description=(
             "Optional one-line explanation of the choice — its meaning or "
             "trade-off. Empty when the label alone is clear."
@@ -208,10 +209,11 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
                 min_length=2,
                 max_length=4,
                 description=(
-                    "When the question is a choice, offer 2-4 mutually "
-                    "exclusive options, the recommended one first. The human "
-                    "may still answer in free text, so never add an "
-                    "'other'/'none' filler option. Omit for open questions."
+                    "When the question is a choice, offer 2-4 options, the "
+                    "recommended one first (mutually exclusive unless "
+                    "multi_select). The human may still answer in free text, "
+                    "so never add an 'other'/'none' filler option. Omit for "
+                    "open questions."
                 ),
             ),
             AfterValidator(_unique_labels),

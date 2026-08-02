@@ -84,7 +84,8 @@ async def test_options_flow_through_to_the_operator() -> None:
     async def operator() -> None:
         async for q in channel.questions():
             seen.append(q)
-            channel.answer(q.id, ", ".join(o.label for o in q.options))
+            # Multi-select convention: chosen labels joined with newlines.
+            channel.answer(q.id, "\n".join(o.label for o in q.options))
 
     op = asyncio.create_task(operator())
 
@@ -163,6 +164,7 @@ async def test_option_count_is_schema_enforced() -> None:
         [{"label": "twin"}, {"label": "twin"}],  # duplicate labels
         [{"label": "one\ntwo"}, {"label": "three"}],  # multi-line label
         [{"label": ""}, {"label": "ok"}],  # empty label
+        [{"label": "a", "description": "x\ny"}, {"label": "b"}],  # multi-line desc
     ):
         with pytest.raises(InvalidToolArguments):
             await run_tool(the_tool, {"question": "pick", "options": bad}, ctx)

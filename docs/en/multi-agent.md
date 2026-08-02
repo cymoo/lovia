@@ -154,7 +154,7 @@ agent = Agent(
 result = await Runner.run(agent, "Research X and Y, then compare them.")
 ```
 
-The model gets three tools and a per-turn status reminder:
+The model gets four tools and a per-turn status reminder:
 
 - `spawn_subagent(prompt, agent=...)` — start a child on a self-contained
   prompt (the child sees nothing else). Declines beyond `max_concurrent`.

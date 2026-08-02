@@ -141,7 +141,7 @@ agent = Agent(
 result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
 ```
 
-父 Agent 会获得三个工具；系统提示还会在每轮注明后台任务的当前状态：
+父 Agent 会获得四个工具；系统提示还会在每轮注明后台任务的当前状态：
 
 - `spawn_subagent(prompt, agent=...)`：用一段无需依赖父对话的完整提示词启动子 Agent；
   子 Agent 看不到父对话。正在运行的任务达到 `max_concurrent` 后，新任务会被拒绝。

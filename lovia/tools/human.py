@@ -51,7 +51,7 @@ class QuestionOption(BaseModel):
         min_length=1,
         pattern=r"^[^\r\n]+$",
         description=(
-            "Short display label (1-5 words, single line). Choosing the "
+            "Short single-line display label — a few words. Choosing the "
             "option answers with this exact text."
         ),
     )
@@ -226,7 +226,8 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
                 default=False,
                 description=(
                     "Set true when several options may be picked together; "
-                    "the reply then lists the chosen labels, one per line."
+                    "the reply then lists the chosen labels, one per line. "
+                    "Meaningless without options (ignored)."
                 ),
             ),
         ] = False,
@@ -241,7 +242,9 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
         q, fut = channel._new_question(
             question,
             options=options or (),
-            multi_select=multi_select,
+            # Pick-many implies choices: without options the flag would hand
+            # consumers an inconsistent question shape, so normalize it away.
+            multi_select=multi_select and bool(options),
             session_id=ctx.session_id,
             run_id=ctx.run_id,
         )

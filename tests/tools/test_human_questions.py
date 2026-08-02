@@ -132,6 +132,27 @@ async def test_question_without_options_stays_free_form() -> None:
     assert await asyncio.wait_for(fut, timeout=1) == "sure"
 
 
+async def test_multi_select_without_options_is_normalized_away() -> None:
+    channel = HumanChannel()
+    the_tool = ask_human(channel)
+    agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
+    ctx: RunContext[None] = RunContext(context=None, entries=[], agent=agent)
+
+    async def operator() -> None:
+        async for q in channel.questions():
+            # Pick-many with nothing to pick: the flag must not leak through.
+            assert q.multi_select is False and q.options == []
+            channel.answer(q.id, "free text then")
+            channel.close()
+
+    op = asyncio.create_task(operator())
+    out = await run_tool(
+        the_tool, {"question": "which?", "multi_select": True}, ctx
+    )
+    assert out == "free text then"
+    await asyncio.wait_for(op, timeout=1)
+
+
 async def test_question_carries_session_and_run_identity() -> None:
     channel = HumanChannel()
     the_tool = ask_human(channel)

@@ -248,6 +248,26 @@ async for q in channel.questions():   # ends when channel.close() is called
 The Tool call blocks until an answer arrives, the question is cancelled, or
 the channel closes.
 
+When the question is a pick-one (or, with `multi_select`, pick-many), the
+model attaches 2–4 `options` — each a `QuestionOption` with a `label` and an
+optional one-line `description`. Options are suggestions for the UI: render
+them as buttons, keep a free-text input as the escape hatch (any string is a
+valid answer), and join the labels of a multi-select with newlines — labels
+are schema-enforced to be single-line and unique, so the joined answer is
+unambiguous:
+
+```python
+async for q in channel.questions():
+    if q.options:
+        print(q.question, [o.label for o in q.options], q.multi_select)
+    channel.answer(q.id, "Kyoto\nOsaka")
+```
+
+Each question also carries the asking run's `session_id` / `run_id` (when
+set), so a consumer serving several sessions can route it to the right
+surface. `ask_human` is an execution barrier (`parallel=False`): a run has at
+most one pending question at a time.
+
 | API | Effect |
 | --- | --- |
 | `questions()` | Async-iterate queued questions; one consumer |

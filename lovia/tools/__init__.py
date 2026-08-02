@@ -23,7 +23,7 @@ from .base import (
     tool,
 )
 from .http import http_request, writes_need_approval
-from .human import HumanChannel, HumanQuestion, ask_human
+from .human import HumanChannel, HumanQuestion, QuestionOption, ask_human
 from .page import (
     HttpReader,
     Page,
@@ -54,6 +54,7 @@ __all__ = [
     "Page",
     "PageImage",
     "PageReader",
+    "QuestionOption",
     "SearchResult",
     "TavilySearch",
     "Tool",

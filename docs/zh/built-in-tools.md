@@ -227,6 +227,21 @@ async for q in channel.questions():   # channel.close() 后结束
 
 工具调用会等待，直到收到答案、问题被取消或 Channel 关闭。
 
+当问题是单选（或配合 `multi_select` 的多选）时，模型会附带 2–4 个 `options`——每个
+`QuestionOption` 有 `label` 和可选的一行 `description`。选项只是给 UI 的建议：渲染成
+按钮的同时保留自由文本输入作为逃生门（任何字符串都是合法答案）；多选时用换行连接
+所选 label——schema 强制 label 单行且互不重复，因此连接后的答案没有歧义：
+
+```python
+async for q in channel.questions():
+    if q.options:
+        print(q.question, [o.label for o in q.options], q.multi_select)
+    channel.answer(q.id, "Kyoto\nOsaka")
+```
+
+每个问题还携带发问运行的 `session_id` / `run_id`（若有），服务多个会话的消费者可以据此
+路由。`ask_human` 是执行屏障（`parallel=False`）：一个运行同一时刻至多一个挂起问题。
+
 | API | 效果 |
 | --- | --- |
 | `questions()` | 异步迭代已经排队的问题；只允许一个消费者 |

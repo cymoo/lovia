@@ -165,7 +165,7 @@ The model gets three tools and a per-turn status reminder:
 - `send_to_subagent(id, message)` — steer a running child: the message is
   injected as a user message at its next turn start (a forgotten constraint,
   a scope change) without restarting it. Each spawn gets its own
-  [steering mailbox](steering.md); a `run_child` override receives it as
+  [steering mailbox](cancellation.md#steering-a-live-run); a `run_child` override receives it as
   `ChildSpec.mailbox` and must hand it to however it runs the child.
 - `cancel_subagent(id)` — cooperative stop, no report.
 

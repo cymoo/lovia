@@ -229,6 +229,7 @@ class RunController:
         is_new: bool,
         title_message: str | None,
         source: str,
+        mailbox: Mailbox | None = None,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
@@ -236,7 +237,10 @@ class RunController:
         self.agent = agent
         self.source = source
         self.cancel = CancelToken()
-        self.mailbox = Mailbox()
+        # Caller-supplied for runs steered from outside the HTTP surface
+        # (a parent's send_to_subagent pushes into the same channel the
+        # /inject endpoint uses); otherwise this run's own.
+        self.mailbox = mailbox if mailbox is not None else Mailbox()
         self.hub = EventHub()
         self.run_id = (
             first_checkpoint.resolved_run_id if first_checkpoint is not None else None
@@ -751,6 +755,7 @@ class RunSupervisor:
         title_message: str | None,
         autostart: bool = False,
         source: str = "user",
+        mailbox: Mailbox | None = None,
     ) -> RunController:
         if session_id in self._controllers:
             raise HTTPException(
@@ -779,6 +784,7 @@ class RunSupervisor:
             is_new=is_new,
             title_message=title_message,
             source=source,
+            mailbox=mailbox,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the

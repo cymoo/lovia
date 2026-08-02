@@ -1083,3 +1083,53 @@ def test_lifespan_sweeps_stale_running_records(tmp_path) -> None:
         recs = c.get("/api/runs/history").json()
     assert recs and recs[0]["run_id"] == "stale"
     assert recs[0]["status"] == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_start_accepts_an_external_mailbox() -> None:
+    # The subagents plugin steers children via ChildSpec.mailbox; the web
+    # run_child passes it here, so send_to_subagent and /inject share one
+    # channel.
+    from lovia.steering import Mailbox
+    from lovia.tools import tool
+
+    release = asyncio.Event()
+
+    @tool
+    async def hold() -> str:
+        """Wait until released."""
+        await release.wait()
+        return "released"
+
+    provider = ScriptedProvider([call("hold", {}, call_id="b1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[hold])
+    # Drive the supervisor directly through a fresh RouterDeps.
+    from lovia.web import RouterDeps
+    from lovia.web.approvals import ApprovalRegistry
+
+    deps = RouterDeps(
+        agents={"bot": agent},
+        store=ChatStore.in_memory(),
+        approvals=ApprovalRegistry(),
+    )
+    external = Mailbox()
+    ctrl = await deps.supervisor.start(
+        session_id="s-ext",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        mailbox=external,
+    )
+    assert ctrl.mailbox is external
+    # A push through the external handle reaches the run's next turn.
+    external.push("steer note")
+    release.set()
+    assert ctrl.task is not None
+    await asyncio.wait_for(ctrl.task, timeout=5)
+    second_call = provider.calls[1]
+    assert any(
+        m.role == "user" and "steer note" in str(m.content) for m in second_call
+    )
+    await deps.supervisor.shutdown()

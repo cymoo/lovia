@@ -162,6 +162,11 @@ The model gets three tools and a per-turn status reminder:
   child finishes (or the timeout passes) and collect its report. A report
   whose automatic mailbox push has not been seen yet is *withdrawn* and
   returned directly, so nothing arrives twice.
+- `send_to_subagent(id, message)` — steer a running child: the message is
+  injected as a user message at its next turn start (a forgotten constraint,
+  a scope change) without restarting it. Each spawn gets its own
+  [steering mailbox](steering.md); a `run_child` override receives it as
+  `ChildSpec.mailbox` and must hand it to however it runs the child.
 - `cancel_subagent(id)` — cooperative stop, no report.
 
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,

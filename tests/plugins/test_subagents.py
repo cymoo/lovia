@@ -551,3 +551,126 @@ async def test_empty_prompt_spawns_nothing() -> None:
     )
     result = await Runner.run(parent, "go")
     assert "Nothing spawned" in _tool_result(result.entries, "c_spawn")
+
+
+# --------------------------------------------------------------------------- #
+# send_to_subagent: steer a running child
+# --------------------------------------------------------------------------- #
+
+
+async def test_send_reaches_the_child_at_its_next_turn_start() -> None:
+    # The mailbox drains at TURN START, so the child needs a second turn to
+    # see the steer: turn 1 parks on `nap` while the parent sends, then the
+    # parent's `release` tool opens the gate — send strictly before release,
+    # because the parent's turns are sequential.
+    gate = asyncio.Event()
+    child_provider = ScriptedProvider(
+        [call("nap", {}, call_id="n1"), text("adjusted")]
+    )
+    child = Agent(name="worker", model=child_provider, tools=[_nap_tool(gate)])
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                call("spawn_subagent", {"prompt": "draft a plan"}, call_id="c_spawn"),
+                call(
+                    "send_to_subagent",
+                    {"id": "t1", "message": "keep it under one page"},
+                    call_id="c_send",
+                ),
+                call("release", {}, call_id="c_rel"),
+                call("wait_subagents", {}, call_id="c_wait"),
+                text("final"),
+            ]
+        ),
+        tools=[_release_tool(gate)],
+        plugins=[Subagents(child)],
+    )
+    result = await Runner.run(parent, "go")
+    assert result.output == "final"
+    send_out = _tool_result(result.entries, "c_send")
+    assert "Delivered to t1" in send_out
+
+    # The steer opened the child's SECOND turn as a user message.
+    second_call = child_provider.calls[1]
+    injected = [
+        m.content for m in second_call if m.role == "user" and m.content is not None
+    ]
+    assert any("keep it under one page" in str(c) for c in injected)
+
+
+async def test_send_errors_are_soft_and_actionable() -> None:
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                batch(
+                    ("spawn_subagent", {"prompt": "quick job"}, "c_spawn"),
+                    ("wait_subagents", {}, "c_wait"),
+                ),
+                batch(
+                    ("send_to_subagent", {"id": "t1", "message": "late"}, "c_late"),
+                    ("send_to_subagent", {"id": "zz", "message": "x"}, "c_unknown"),
+                    ("send_to_subagent", {"id": "t1", "message": "  "}, "c_empty"),
+                ),
+                text("final"),
+            ]
+        ),
+        plugins=[Subagents(_child([text("done fast")]))],
+    )
+    result = await Runner.run(parent, "go")
+    assert result.output == "final"
+    assert "already finished" in _tool_result(result.entries, "c_late")
+    assert "No subagent 'zz'" in _tool_result(result.entries, "c_unknown")
+    assert "Nothing sent" in _tool_result(result.entries, "c_empty")
+
+
+async def test_childspec_carries_the_spawn_mailbox() -> None:
+    from lovia.plugins.subagents import ChildSpec
+    from lovia.runtime.result import RunResult
+
+    specs: list[ChildSpec] = []
+    gate = asyncio.Event()
+
+    async def run_child(spec: ChildSpec) -> RunResult:
+        specs.append(spec)
+        # Deliberately does NOT hand spec.mailbox to Runner.run: the pushed
+        # steer must stay queued in exactly this channel, proving targeting.
+        return await Runner.run(spec.agent, spec.prompt, max_turns=spec.max_turns)
+
+    async def deliver(report) -> None:  # detached mode: reports via callback
+        return None
+
+    # The child parks on `nap` until the parent's `release` tool opens the
+    # gate — deterministically after send_to_subagent ran.
+    child = Agent(
+        name="researcher",
+        model=ScriptedProvider([call("nap", {}, call_id="n1"), text("ok")]),
+        tools=[_nap_tool(gate)],
+    )
+    parent = Agent(
+        name="parent",
+        model=ScriptedProvider(
+            [
+                call("spawn_subagent", {"prompt": "job"}, call_id="c_spawn"),
+                call(
+                    "send_to_subagent",
+                    {"id": "t1", "message": "extra constraint"},
+                    call_id="c_send",
+                ),
+                call("release", {}, call_id="c_rel"),
+                call("wait_subagents", {}, call_id="c_wait"),
+                text("final"),
+            ]
+        ),
+        tools=[_release_tool(gate)],
+        plugins=[Subagents(child, run_child=run_child, deliver=deliver)],
+    )
+    result = await Runner.run(parent, "go")
+    assert result.output == "final"
+    assert "Delivered to t1" in _tool_result(result.entries, "c_send")
+    (spec,) = specs
+    from lovia.steering import Mailbox
+
+    assert isinstance(spec.mailbox, Mailbox)
+    assert spec.mailbox.drain() == ["extra constraint"]

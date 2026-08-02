@@ -148,6 +148,10 @@ result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
 - `wait_subagents(ids=None, timeout_seconds=60)`：等待指定任务完成或超时，并收取
   已完成任务的报告。如果报告已经自动进入消息队列、但还没有被模型读取，它会从
   队列中撤回并直接返回，因此同一份报告不会出现两次。
+- `send_to_subagent(id, message)`：给运行中的子 Agent 发消息——在其下一个回合开始时
+  作为用户消息注入（补一条遗漏的约束、收窄范围），无需重启任务。每次 spawn 都有自己的
+  [steering 邮箱](steering.md)；`run_child` 覆盖实现会通过 `ChildSpec.mailbox` 拿到它，
+  并必须把它接入实际运行子 Agent 的方式。
 - `cancel_subagent(id)`：请求子 Agent 停止；被取消的任务不会产生报告。
 
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,

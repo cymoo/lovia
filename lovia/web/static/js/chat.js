@@ -1296,7 +1296,24 @@ function appendQuestion(call) {
   store.body = null;
   store.rawText = '';
   scrollDown();
+  // The run is now parked on the user — same signals as an approval card.
   announce(t('a11y.questionAsked'), { assertive: true });
+  focusQuestionCard(node);
+}
+
+// Same neutral-ground rule as focusApprovalCard: put the keyboard on the
+// question only when nothing else holds focus (the page body, or an empty
+// composer) — never yank it from a search box, dialog, or draft.
+function focusQuestionCard(node) {
+  if (document.querySelector('dialog[open]')) return;
+  const ae = document.activeElement;
+  const neutral =
+    !ae ||
+    ae === document.body ||
+    (ae === promptEl && !promptEl.value.trim());
+  if (!neutral) return;
+  const target = node.querySelector('.question-option, .question-input');
+  /** @type {HTMLElement | null} */ (target)?.focus({ preventScroll: true });
 }
 
 // Compact, human-readable token count: 950, 18.2k, 240k, 1.3M.

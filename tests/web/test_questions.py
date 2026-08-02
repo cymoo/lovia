@@ -98,6 +98,16 @@ async def test_registry_cancel_session_fails_the_parked_call() -> None:
     await registry.aclose()
 
 
+async def test_cancel_session_sweeps_questions_the_consumer_has_not_indexed() -> None:
+    channel = HumanChannel()
+    registry = QuestionRegistry(channel)  # consumer never started: worst case
+    _, fut = channel._new_question("just asked", session_id="s1")
+
+    registry.cancel_session("s1")
+    with pytest.raises(ToolError, match="run cancelled"):
+        await asyncio.wait_for(fut, timeout=1)
+
+
 async def test_registry_aclose_cancels_parked_calls_and_joins_consumer() -> None:
     channel = HumanChannel()
     registry = await _registry(channel)

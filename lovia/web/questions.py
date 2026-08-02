@@ -108,11 +108,17 @@ class QuestionRegistry:
         return True
 
     def cancel_session(self, session_id: str, reason: str = "run cancelled") -> None:
-        """Cancel the session's pending question, if any (idempotent)."""
+        """Cancel the session's pending question(s), if any (idempotent)."""
         q = self._by_session.get(session_id)
         if q is not None:
             self._forget(session_id)
             self._channel.cancel(q.id, reason)
+        # The consumer indexes asynchronously — a just-asked question may
+        # still be in the feed only. Sweep the channel too, so a cancelled
+        # run can never stay parked on a question we have not seen yet.
+        for pending in self._channel.pending:
+            if (pending.session_id or "") == session_id:
+                self._channel.cancel(pending.id, reason)
 
     # -- internals --------------------------------------------------------- #
     def _expire(self, session_id: str, question_id: str) -> None:

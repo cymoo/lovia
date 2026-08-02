@@ -126,6 +126,10 @@ class QuestionRegistry:
         if q is None or q.id != question_id:  # answered or replaced meanwhile
             return
         self._forget(session_id)
+        if all(p.id != question_id for p in self._channel.pending):
+            # Resolved out-of-band (a custom operator loop answered the
+            # channel directly): only the stale index entry needed dropping.
+            return
         self._channel.cancel(
             question_id,
             f"no answer within {self._timeout:.0f}s — continue without one",

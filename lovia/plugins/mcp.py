@@ -589,7 +589,9 @@ def _deferred_instructions(by_server: list[tuple[str | None, list[str]]]) -> str
     ]
     for prefix, names in by_server:
         label = prefix or "unnamed server"
-        lines.append(f"- {label} ({len(names)} tools): {', '.join(names)}")
+        # Sorted: servers may list tools in varying order across runs, and an
+        # unstable fragment would churn the provider's prompt cache for nothing.
+        lines.append(f"- {label} ({len(names)} tools): {', '.join(sorted(names))}")
     return "\n".join(lines)
 
 
@@ -666,7 +668,13 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
         target = catalog.get(str(args.get("tool", "")))
         if target is None:
             return False  # the call fails with unknown-tool before running
-        return target.requires_approval(dict(args.get("arguments") or {}), ctx)
+        # Approval predicates see *raw* args — a model may send a non-object
+        # ``arguments``. Judge that as {} rather than crash: the call itself
+        # still fails argument validation with a correctable error.
+        raw = args.get("arguments")
+        return target.requires_approval(
+            dict(raw) if isinstance(raw, dict) else {}, ctx
+        )
 
     @tool(
         name="call_mcp_tool",
@@ -704,10 +712,17 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
             )
         # Full delegation: run_tool honors the underlying tool's retries and
         # timeout; rendering + truncation below honor its renderer and output
-        # cap, so a deferred tool behaves exactly like its exposed self.
-        # (Approval is the runner's job and is delegated via ``_needs``.)
+        # cap, so a deferred tool behaves like its exposed self. (Approval is
+        # the runner's job and is delegated via ``_needs``.) The agent-level
+        # default renderer is passed for exact parity with the runner's own
+        # render call. One deliberate difference: the runner then also caps
+        # this tool's (string) result by the agent's max_tool_output_chars, so
+        # a deferred result is bounded by min(server cap, agent cap) — never
+        # looser than either.
         raw = await run_tool(target, dict(arguments or {}), ctx)
-        rendered = await render_tool_result(target, raw, ctx)
+        rendered = await render_tool_result(
+            target, raw, ctx, default=getattr(ctx.agent, "tool_result_renderer", None)
+        )
         if target.max_output_chars is not None:
             rendered = truncate_tool_output(rendered, target.max_output_chars)
         return rendered

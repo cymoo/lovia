@@ -437,9 +437,12 @@ async def test_defer_swaps_tools_for_search_and_call() -> None:
     assert sorted(tools) == ["call_mcp_tool", "search_mcp_tools"]
     assert instructions is not None
     assert "## Deferred MCP tools" in instructions
-    assert "gh (3 tools)" in instructions
-    for name in ("gh__create_issue", "gh__list_issues", "gh__get_pr"):
-        assert name in instructions
+    # Names are listed sorted, whatever order the server returned them in —
+    # an order-unstable fragment would churn the provider's prompt cache.
+    assert (
+        "gh (3 tools): gh__create_issue, gh__get_pr, gh__list_issues"
+        in instructions
+    )
 
 
 async def test_defer_mixes_with_regular_servers() -> None:
@@ -518,6 +521,10 @@ async def test_call_delegates_needs_approval_to_the_underlying_tool() -> None:
     assert call_tool.requires_approval(hot, ctx) is True
     # Unknown target: no approval prompt; the call itself will error instead.
     assert call_tool.requires_approval({"tool": "nope"}, ctx) is False
+    # Raw args may be malformed (predicates run before validation): a
+    # non-object ``arguments`` is judged as {} instead of crashing.
+    bad = {"tool": "create_issue", "arguments": ["not", "a", "dict"]}
+    assert call_tool.requires_approval(bad, ctx) is False
 
 
 async def test_call_honors_underlying_renderer_and_output_cap() -> None:

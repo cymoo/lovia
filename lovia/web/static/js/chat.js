@@ -1117,6 +1117,178 @@ function appendHandoff(from, to) {
   appendBubbleContent(store.bubble, node);
 }
 
+// ---- ask_human: interactive question card ------------------------------
+// The run is parked on the ask_human tool call; this card answers it over
+// POST /api/chat/answer. The plain tool card still shows the raw call — this
+// card is the interaction, resolved either by the user or by the call's
+// result event (an answer echoed back, or a timeout/cancel error).
+const QUESTION_TOOL = 'ask_human';
+
+function parseQuestion(args) {
+  try {
+    const obj = JSON.parse(args);
+    if (obj && typeof obj.question === 'string') {
+      const options = Array.isArray(obj.options)
+        ? obj.options
+            .map((o) => ({
+              label: String(o?.label ?? ''),
+              description: String(o?.description ?? ''),
+            }))
+            .filter((o) => o.label)
+        : [];
+      return {
+        question: obj.question,
+        options,
+        multi: !!obj.multi_select && options.length > 0,
+      };
+    }
+  } catch { /* not a question payload */ }
+  return null;
+}
+
+function findQuestionNode(id) {
+  const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
+  return /** @type {HTMLElement | null} */ (
+    document.querySelector(`#transcript .question[data-call-id="${escaped}"]`)
+  );
+}
+
+/** Freeze the card into its answered/expired end state. */
+function settleQuestion(node, answer) {
+  if (!node || node.classList.contains('resolved')) return;
+  node.classList.add('resolved');
+  const head = node.querySelector('.question-head');
+  if (head) head.textContent = answer != null ? t('question.answered') : t('question.expired');
+  node.querySelector('.question-options')?.remove();
+  node.querySelector('.question-free')?.remove();
+  if (answer != null && answer.trim()) {
+    const echo = document.createElement('div');
+    echo.className = 'question-answer';
+    echo.textContent = answer;
+    node.querySelector('.question-text')?.after(echo);
+  }
+}
+
+/**
+ * Build the interactive card for a parked ask_human call, or null when the
+ * arguments don't parse as a question. Shared by the live event path
+ * (appendQuestion) and the history/snapshot renderer, so a reloaded or
+ * re-attached tab can still answer a question that is waiting server-side.
+ */
+function buildQuestionCard(call) {
+  const q = parseQuestion(call.arguments);
+  if (!q) return null; // malformed args — the plain tool card still shows the call
+
+  const node = cloneTemplate('tmpl-question');
+  node.dataset.callId = call.id || '';
+  node.querySelector('.question-head').textContent = t('question.waiting');
+  node.querySelector('.question-text').textContent = q.question;
+  const optionsBox = node.querySelector('.question-options');
+  const form = node.querySelector('.question-free');
+  const input = /** @type {HTMLTextAreaElement} */ (
+    node.querySelector('.question-input')
+  );
+  const send = node.querySelector('.question-send');
+  send.textContent = t('question.send');
+  input.placeholder = q.options.length
+    ? t('question.placeholderWithOptions')
+    : t('question.placeholder');
+
+  const submit = async (answer) => {
+    if (node.classList.contains('resolved')) return;
+    try {
+      const res = await api.answer({ session_id: store.sessionId, answer });
+      if (!res.ok) throw new Error(String(res.status));
+      settleQuestion(node, answer);
+    } catch {
+      // Nothing pending anymore (timed out / cancelled / reconnect race):
+      // freeze as expired; the stream's tool-error result tells the story.
+      settleQuestion(node, null);
+    }
+  };
+
+  const optionRow = (opt, el) => {
+    const text = document.createElement('span');
+    text.className = 'question-option-label';
+    text.textContent = opt.label;
+    el.append(text);
+    if (opt.description) {
+      const desc = document.createElement('span');
+      desc.className = 'question-option-desc';
+      desc.textContent = opt.description;
+      el.append(desc);
+    }
+  };
+
+  if (q.multi) {
+    const boxes = [];
+    for (const opt of q.options) {
+      const row = document.createElement('label');
+      row.className = 'question-option multi';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = opt.label;
+      boxes.push(box);
+      row.append(box);
+      optionRow(opt, row);
+      optionsBox.append(row);
+    }
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'btn btn-primary question-pick';
+    pick.textContent = t('question.sendSelected');
+    // Multi-select convention: chosen labels joined with newlines (labels
+    // are schema-enforced single-line + unique, so the join is lossless).
+    pick.addEventListener('click', () => {
+      const chosen = boxes.filter((b) => b.checked).map((b) => b.value);
+      if (chosen.length) submit(chosen.join('\n'));
+    });
+    optionsBox.append(pick);
+  } else {
+    for (const opt of q.options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'question-option';
+      btn.setAttribute(
+        'aria-label',
+        opt.description ? `${opt.label} — ${opt.description}` : opt.label,
+      );
+      optionRow(opt, btn);
+      btn.addEventListener('click', () => submit(opt.label));
+      optionsBox.append(btn);
+    }
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (text) submit(text);
+  });
+  input.addEventListener('keydown', (e) => {
+    // Enter sends, Shift+Enter breaks the line; never during IME composition.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (text) submit(text);
+    }
+  });
+  return node;
+}
+
+function appendQuestion(call) {
+  if (!store.bubble) return;
+  // A resumed run re-announces the parked call (same reconciliation as
+  // appendTool): if the card is already on screen, don't draw a second one.
+  if (call.id && findQuestionNode(call.id)) return;
+  const node = buildQuestionCard(call);
+  if (!node) return;
+  appendBubbleContent(store.bubble, node);
+  store.body = null;
+  store.rawText = '';
+  scrollDown();
+  announce(t('a11y.questionAsked'), { assertive: true });
+}
+
 // Compact, human-readable token count: 950, 18.2k, 240k, 1.3M.
 function formatTokens(n) {
   if (typeof n !== 'number' || !isFinite(n)) return null;
@@ -1792,6 +1964,13 @@ function renderHistoryWindow({ stickBottom }) {
           // the copy/expand actions all match; absent results hide the <pre>.
           setToolResult(node, result?.text ?? '', result?.isError ?? false);
           appendBubbleContent(currentBubble, node);
+          // A result-less ask_human call is still parked server-side: rebuild
+          // its interactive card so a reloaded or re-attached tab can answer
+          // (the live path can't — this render replaced the transcript).
+          if (call.name === QUESTION_TOOL && !result) {
+            const question = buildQuestionCard(call);
+            if (question) appendBubbleContent(currentBubble, question);
+          }
         }
       }
       addCopyButton(currentBubble);
@@ -2082,6 +2261,8 @@ async function handleEvent({ event, data }) {
       }
       finalizeReasoning();
       appendTool(data);
+      // ask_human parks the run on the user: draw the interactive card too.
+      if (data.name === QUESTION_TOOL) appendQuestion(data);
       // The pill says what the run is doing, not just how far it is.
       if (turnProgressEl && _currentTurn) {
         turnProgressEl.textContent = `${t('topbar.turn', { n: _currentTurn })} · ${data.name}…`;
@@ -2092,6 +2273,14 @@ async function handleEvent({ event, data }) {
       // A finished shell command may have created/edited files we can't see
       // individually — let the Files panel mark its listing as maybe stale.
       if (data.name === 'shell') store.emit('workspace-maybe-stale');
+      // The call resolved out-of-band (another tab answered, timeout,
+      // cancel): freeze the interactive card to match.
+      if (data.name === QUESTION_TOOL) {
+        settleQuestion(
+          findQuestionNode(data.id),
+          data.is_error ? null : String(data.result ?? ''),
+        );
+      }
       updateToolResult(data.id, data.result, data.is_error);
       break;
 

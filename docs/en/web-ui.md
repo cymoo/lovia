@@ -130,6 +130,31 @@ prints the same and probes the endpoint without serving.
 window), agent, server, and advanced — output tokens, Provider timeout and
 retries, proxy handling, and log level.
 
+## Questions from the agent
+
+The default agent carries the [`ask_human`](built-in-tools.md#ask-a-human)
+tool: when the model needs a decision only you can make, the run parks and
+the chat shows an interactive card — the question, up to four option buttons
+(with a one-line rationale each), and a free-text field that always works as
+the escape hatch. Multi-select questions render as checkboxes; the chosen
+labels are sent one per line. The card survives reloads and re-attach (the
+question is parked server-side, not in the page), and an unanswered question
+is cancelled after 10 minutes — the model sees a tool error and continues —
+so a scheduled or backgrounded run can never park forever.
+
+Serving your own agent, wire the same channel into both the tool and the
+app:
+
+```python
+from lovia import Agent
+from lovia.tools import HumanChannel, ask_human
+from lovia.web import serve
+
+channel = HumanChannel()
+agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
+serve(agent, question_channel=channel, question_timeout=600)
+```
+
 ## Follow-up suggestions
 
 After a reply lands, the UI offers a few questions you might want to ask next

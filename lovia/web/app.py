@@ -27,7 +27,9 @@ from ..session import Session
 from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
 from .api.memory import memory_plugin
+from ..tools.human import HumanChannel
 from .approvals import ApprovalRegistry
+from .questions import QuestionRegistry
 from .auth import generate_token, is_loopback, token_dependency
 from .followups import FollowupFn
 from .scheduler import Scheduler
@@ -156,6 +158,8 @@ def create_app(
     tracer: Tracer | None = None,
     max_background_runs: int = 8,
     approval_timeout: float | None = None,
+    question_channel: HumanChannel | None = None,
+    question_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     wire_subagents: bool = True,
     ui: bool = True,
@@ -203,6 +207,14 @@ def create_app(
     occupies one of the ``max_background_runs`` slots until someone opens the
     chat and decides.
 
+    ``question_channel`` wires an agent's ``ask_human`` tool into the UI: pass
+    the same :class:`~lovia.tools.HumanChannel` the tool was built with, and
+    pending questions render as interactive cards answered over
+    ``POST /api/chat/answer``. ``question_timeout`` is the question's
+    ``approval_timeout`` twin — after that many seconds an unanswered question
+    is cancelled (the tool call fails with an error the model can route
+    around), so a clientless run never parks forever.
+
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
     app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
     JSON + SSE server you drive from your own front-end (see
@@ -238,6 +250,11 @@ def create_app(
         chat_store = ChatStore.sqlite(_default_db_path(next(iter(agents), "lovia")))
 
     approvals = ApprovalRegistry()
+    questions = (
+        QuestionRegistry(question_channel, timeout=question_timeout)
+        if question_channel is not None
+        else None
+    )
 
     deps = RouterDeps(
         agents=agents,
@@ -257,6 +274,7 @@ def create_app(
         tracer=tracer,
         max_background_runs=max_background_runs,
         approval_timeout=approval_timeout,
+        questions=questions,
     )
 
     @asynccontextmanager
@@ -269,9 +287,15 @@ def create_app(
         scheduler = Scheduler(deps, poll_interval=scheduler_poll)
         _app.state.scheduler = scheduler
         scheduler.start()
+        if questions is not None:
+            questions.start()
         try:
             yield
         finally:
+            if questions is not None:
+                # Before supervisor shutdown: cancelling parked ask_human
+                # calls lets their runs wind down instead of being killed.
+                await questions.aclose()
             await scheduler.stop()
             await deps.supervisor.shutdown()
             # End any open /api/events streams so shutdown doesn't wait on them.
@@ -365,6 +389,8 @@ def serve(
     retry: RetryPolicy | None = None,
     tracer: Tracer | None = None,
     approval_timeout: float | None = None,
+    question_channel: HumanChannel | None = None,
+    question_timeout: float | None = None,
     wire_subagents: bool = True,
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
@@ -425,6 +451,8 @@ def serve(
         retry=retry,
         tracer=tracer,
         approval_timeout=approval_timeout,
+        question_channel=question_channel,
+        question_timeout=question_timeout,
         wire_subagents=wire_subagents,
         ui=ui,
         cors_origins=cors_origins,

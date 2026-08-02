@@ -165,6 +165,18 @@ class ApprovalRequest(BaseModel):
     decision: Literal["approve", "deny"]
 
 
+class AnswerRequest(BaseModel):
+    """Answer the session's pending ``ask_human`` question.
+
+    Session-scoped on purpose: ``ask_human`` is an execution barrier and a
+    session has one live run, so "the pending question" is unambiguous —
+    no question/call id needed.
+    """
+
+    session_id: str
+    answer: str
+
+
 class MessageOut(BaseModel):
     role: str
     content: Any

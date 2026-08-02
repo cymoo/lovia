@@ -142,6 +142,27 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 上下文窗口位于 model 组，输出 token 上限、Provider 超时与重试、代理和日志级别位于
 advanced 组。
 
+## 来自 Agent 的提问
+
+默认 Agent 带有 [`ask_human`](built-in-tools.md#询问人工) 工具：当模型需要一个只有
+你能做的决定时，运行会挂起，聊天里出现交互问题卡——问题本身、至多四个选项按钮（各带
+一行说明），以及始终可用的自由文本输入逃生门。多选问题渲染为复选框，所选 label 按
+每行一个发送。问题挂在服务端而非页面里，因此刷新或重连后卡片会重建、仍可回答；无人
+回答的问题 10 分钟后自动取消——模型收到工具错误并继续——定时或后台运行永远不会
+被永久卡住。
+
+自定义 Agent 时，把同一个 channel 同时接到工具和应用上：
+
+```python
+from lovia import Agent
+from lovia.tools import HumanChannel, ask_human
+from lovia.web import serve
+
+channel = HumanChannel()
+agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
+serve(agent, question_channel=channel, question_timeout=600)
+```
+
 ## 追问建议
 
 Run 成功产出回答后，UI 会在答案下方显示几个可直接点击发送的追问。建议由一次独立的

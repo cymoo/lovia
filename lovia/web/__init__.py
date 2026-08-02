@@ -36,6 +36,7 @@ try:
     from .app import create_app, serve
     from .auth import generate_token, is_loopback, token_dependency
     from .followups import FollowupFn, FollowupRequest, generate_followups
+    from .questions import QuestionRegistry
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .subagents import subagent_deliver, wire_subagents
@@ -50,6 +51,7 @@ __all__ = [
     "ChatStore",
     "FollowupFn",
     "FollowupRequest",
+    "QuestionRegistry",
     "RouterDeps",
     "SURFACE_NOTE",
     "Scheduling",

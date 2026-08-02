@@ -49,11 +49,13 @@ sampling, OAuth, heartbeats/subscriptions, and hosted MCP.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import (
+    Annotated,
     Any,
     AsyncIterator,
     Awaitable,
@@ -62,10 +64,20 @@ from typing import (
     cast,
 )
 
+from pydantic import Field
+
 from ..types import JsonObject
-from ..exceptions import MCPError, UserError
+from ..exceptions import MCPError, ToolError, UserError
 from ..run_context import RunContext
-from ..tools import ApprovalPredicate, Tool, ToolResultRenderer
+from ..tools import (
+    ApprovalPredicate,
+    Tool,
+    ToolResultRenderer,
+    render_tool_result,
+    run_tool,
+    tool,
+    truncate_tool_output,
+)
 from .base import PluginInstance
 
 logger = logging.getLogger(__name__)
@@ -233,6 +245,7 @@ class MCPConnection:
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = False
+    defer: bool = False
     _session: Any = field(default=None, repr=False)
     _exit_stack: Any = field(default=None, repr=False)
     _tools: list[Tool] | None = field(default=None, repr=False)
@@ -451,6 +464,11 @@ class MCPServer:
     result_renderer: ToolResultRenderer | None = None
     auto_reconnect: bool = True
     close_after_run: bool = True
+    # Withhold this server's tools from the agent's tool list: the model
+    # discovers them with ``search_mcp_tools`` and invokes them with
+    # ``call_mcp_tool``. Only the tool *names* reach the system prompt, so a
+    # large server stops crowding the context with unused schemas.
+    defer: bool = False
 
     def _make_transport(self) -> Callable[[], Any]:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -481,6 +499,7 @@ class MCPServer:
             result_renderer=self.result_renderer,
             auto_reconnect=self.auto_reconnect,
             close_after_run=close_after_run,
+            defer=self.defer,
         )
         try:
             await conn._open_session()
@@ -545,6 +564,152 @@ class MCPServerStreamableHTTP(MCPServer):
 
 
 # --------------------------------------------------------------------------- #
+# Deferred tools: keyword search + generic invoker
+# --------------------------------------------------------------------------- #
+def _deferred_instructions(by_server: list[tuple[str | None, list[str]]]) -> str:
+    """System-prompt fragment: name every deferred tool, and nothing more.
+
+    Names alone are enough for the model to know a capability exists (and to
+    search for the exact one); the costly part — descriptions and parameter
+    schemas — stays behind ``search_mcp_tools``.
+    """
+    lines = [
+        "## Deferred MCP tools",
+        "The MCP tools listed below exist but are not in your tool list. To "
+        "use one: look it up with search_mcp_tools (keywords or its exact "
+        "name) to get its description and parameters schema, then invoke it "
+        "with call_mcp_tool. Search before concluding a capability is "
+        "missing.",
+    ]
+    for prefix, names in by_server:
+        label = prefix or "unnamed server"
+        lines.append(f"- {label} ({len(names)} tools): {', '.join(names)}")
+    return "\n".join(lines)
+
+
+def _make_search_tool(catalog: dict[str, Tool]) -> Tool:
+    @tool(
+        name="search_mcp_tools",
+        description=(
+            "Find deferred MCP tools and return their full definitions "
+            "(name, description, parameters JSON schema).\n"
+            "- Matches keywords against tool names and descriptions; an "
+            "exact tool name ranks first.\n"
+            "- Always fetch a tool's definition here before invoking it "
+            "with call_mcp_tool, so the arguments match its schema."
+        ),
+    )
+    async def search_mcp_tools(
+        query: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Keywords (or an exact tool name) to search for.",
+            ),
+        ],
+        max_results: Annotated[
+            int,
+            Field(default=5, ge=1, le=20, description="Maximum matches returned."),
+        ] = 5,
+    ) -> str:
+        tokens = query.lower().split()
+        scored: list[tuple[int, str, Tool]] = []
+        for name, target in catalog.items():
+            name_l, desc_l = name.lower(), (target.description or "").lower()
+            score = 0
+            for tok in tokens:
+                if tok == name_l:
+                    score += 3
+                elif tok in name_l:
+                    score += 2
+                if tok in desc_l:
+                    score += 1
+            if score:
+                scored.append((-score, name, target))
+        scored.sort(key=lambda item: (item[0], item[1]))
+        if not scored:
+            return (
+                f"No deferred MCP tool matched {query!r} ({len(catalog)} "
+                "available — the full name list is in your instructions; "
+                "try other keywords)."
+            )
+        shown = scored[:max_results]
+        text = json.dumps(
+            [
+                {
+                    "name": name,
+                    "description": target.description,
+                    "parameters": target.parameters,
+                }
+                for _, name, target in shown
+            ],
+            ensure_ascii=False,
+        )
+        if len(scored) > len(shown):
+            text += (
+                f"\n({len(scored) - len(shown)} more matches not shown; "
+                "refine the query or raise max_results.)"
+            )
+        return text
+
+    return search_mcp_tools
+
+
+def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
+    def _needs(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
+        target = catalog.get(str(args.get("tool", "")))
+        if target is None:
+            return False  # the call fails with unknown-tool before running
+        return target.requires_approval(dict(args.get("arguments") or {}), ctx)
+
+    @tool(
+        name="call_mcp_tool",
+        description=(
+            "Invoke a deferred MCP tool by its exact name.\n"
+            "- arguments must match the parameters schema that "
+            "search_mcp_tools returned for the tool.\n"
+            "- Only deferred MCP tools are reachable here; regular tools "
+            "are called directly."
+        ),
+        needs_approval=_needs,
+    )
+    async def call_mcp_tool(
+        ctx: RunContext[Any],
+        tool: Annotated[str, "Exact tool name, as returned by search_mcp_tools."],
+        arguments: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description="Arguments matching the tool's parameters schema.",
+            ),
+        ] = None,
+    ) -> str:
+        target = catalog.get(tool)
+        if target is None:
+            near = difflib.get_close_matches(tool, list(catalog), n=3, cutoff=0.4)
+            raise ToolError(
+                f"unknown deferred MCP tool: {tool!r}",
+                hint=(
+                    f"Did you mean: {', '.join(near)}?"
+                    if near
+                    else "Use search_mcp_tools to discover tools."
+                ),
+                tool_name="call_mcp_tool",
+            )
+        # Full delegation: run_tool honors the underlying tool's retries and
+        # timeout; rendering + truncation below honor its renderer and output
+        # cap, so a deferred tool behaves exactly like its exposed self.
+        # (Approval is the runner's job and is delegated via ``_needs``.)
+        raw = await run_tool(target, dict(arguments or {}), ctx)
+        rendered = await render_tool_result(target, raw, ctx)
+        if target.max_output_chars is not None:
+            rendered = truncate_tool_output(rendered, target.max_output_chars)
+        return rendered
+
+    return call_mcp_tool
+
+
+# --------------------------------------------------------------------------- #
 # Plugin factory
 # --------------------------------------------------------------------------- #
 class MCP:
@@ -563,6 +728,17 @@ class MCP:
             ...,
             plugins=[MCP(MCPServerStdio(command="uvx", args=["mcp-server-fetch"]))],
         )
+
+    A server with ``defer=True`` contributes **no** tools directly: the agent
+    instead gets ``search_mcp_tools`` + ``call_mcp_tool`` (one pair, shared by
+    all deferred servers of this plugin) and a system-prompt line naming the
+    deferred tools. Use it for large servers whose schemas would crowd the
+    context; deferred and regular servers mix freely::
+
+        plugins=[MCP(
+            MCPServerStdio(command="...", name="github", defer=True),  # 60 tools
+            MCPServerStdio(command="..."),                             # 3 tools
+        )]
     """
 
     name: str
@@ -572,7 +748,9 @@ class MCP:
         self.name = name
 
     async def setup(self) -> PluginInstance:
-        tools: list[Tool] = []
+        exposed: list[Tool] = []
+        deferred: dict[str, Tool] = {}
+        deferred_by_server: list[tuple[str | None, list[str]]] = []
         closers: list[Callable[[], Awaitable[None]]] = []
 
         async def aclose() -> None:
@@ -587,14 +765,46 @@ class MCP:
                 conn = await server.open()
                 if server.close_after_run:
                     closers.append(conn.close)
-                tools.extend(conn.tools())
+                if conn.defer:
+                    names: list[str] = []
+                    for t in conn.tools():
+                        if t.name in deferred:
+                            raise UserError(
+                                f"deferred MCP tool name clash: {t.name!r} is "
+                                "provided by two servers.",
+                                hint=(
+                                    "Set MCPServer(name=...) to prefix one "
+                                    "server's tools."
+                                ),
+                            )
+                        deferred[t.name] = t
+                        names.append(t.name)
+                    deferred_by_server.append((conn.prefix, names))
+                else:
+                    exposed.extend(conn.tools())
+            # The catalog and the tool list form one namespace in the model's
+            # eyes — a name on both sides would make call_mcp_tool and the
+            # direct call subtly diverge, so refuse it outright.
+            overlap = sorted(deferred.keys() & {t.name for t in exposed})
+            if overlap:
+                raise UserError(
+                    f"deferred MCP tool name clash with exposed tools: "
+                    f"{', '.join(overlap)}.",
+                    hint="Set MCPServer(name=...) to prefix one server's tools.",
+                )
         except BaseException:
-            # A later server failed to open: the runner never receives the
-            # instance, so close the connections opened so far here — otherwise
-            # their transports (stdio subprocesses) would leak.
+            # A later server failed to open (or validation failed): the runner
+            # never receives the instance, so close the connections opened so
+            # far here — otherwise their transports (stdio subprocesses) would
+            # leak.
             await aclose()
             raise
-        return PluginInstance(tools=tools, aclose=aclose)
+        instructions: str | None = None
+        if deferred:
+            exposed.append(_make_search_tool(deferred))
+            exposed.append(_make_call_tool(deferred))
+            instructions = _deferred_instructions(deferred_by_server)
+        return PluginInstance(tools=exposed, instructions=instructions, aclose=aclose)
 
 
 __all__ = [

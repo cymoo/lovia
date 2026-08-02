@@ -437,6 +437,12 @@ class MCPServerLike(Protocol):
     @property
     def close_after_run(self) -> bool: ...
 
+    # Whether this server's tools are deferred (searchable via
+    # ``search_mcp_tools`` instead of listed on the agent). Same read-only
+    # rationale as ``close_after_run``.
+    @property
+    def defer(self) -> bool: ...
+
     async def open(self) -> MCPConnection: ...
 
 
@@ -765,7 +771,7 @@ class MCP:
                 conn = await server.open()
                 if server.close_after_run:
                     closers.append(conn.close)
-                if conn.defer:
+                if server.defer:
                     names: list[str] = []
                     for t in conn.tools():
                         if t.name in deferred:

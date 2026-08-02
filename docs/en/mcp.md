@@ -94,6 +94,30 @@ single MCP session are unsupported; give each concurrent worker its own.
   sampling, OAuth, and subscriptions are non-goals; the plugin does one
   thing.
 
+## Deferring large servers
+
+A server with dozens of tools costs its full schema catalog in every prompt,
+even when the model uses none of them. Set `defer=True` and the server's
+tools stay out of the tool list; the agent instead gets one shared pair —
+`search_mcp_tools` (keyword lookup returning name, description, and
+parameters schema) and `call_mcp_tool` (invoke by exact name) — plus one
+system-prompt line naming the deferred tools, so the model knows they exist
+without paying for their schemas:
+
+```python
+plugins=[MCP(
+    MCPServerStdio(command="...", name="github", defer=True),  # 60 tools
+    MCPServerStdio(command="..."),                             # 3 tools, direct
+)]
+```
+
+Deferral changes *when schemas enter the context*, not how tools run: a
+deferred call is fully delegated, so the server's `needs_approval`,
+`retries`, `timeout`, `result_renderer`, and `max_output_chars` apply
+exactly as if the tool were exposed directly. Names must stay unambiguous —
+a deferred name colliding with another deferred or exposed tool in the same
+plugin raises `UserError` at setup (give servers a `name=` prefix).
+
 ## Sharp edges
 
 - **`auto_reconnect` means at-least-once.** A call that died mid-flight is

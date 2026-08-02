@@ -50,6 +50,7 @@ class _FakeMCPServer:
     """Minimal MCPServerLike: acts as its own connection."""
 
     close_after_run = True
+    defer = False
 
     def __init__(self, *tools: Any) -> None:
         self._tools = list(tools)

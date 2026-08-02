@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from lovia.exceptions import MCPError
+from lovia.exceptions import MCPError, ToolError, UserError
 from lovia.plugins.mcp import (
     MCP,
     MCPConnection,
@@ -17,7 +18,7 @@ from lovia.plugins.mcp import (
     render_mcp_content,
 )
 from lovia.run_context import RunContext
-from lovia.tools import render_tool_result
+from lovia.tools import Tool, render_tool_result, run_tool
 
 
 # --------------------------------------------------------------------------- #
@@ -406,3 +407,151 @@ async def test_persistent_session_not_owned(monkeypatch: pytest.MonkeyPatch) -> 
         assert conn._session is not None
         assert [t.name for t in conn.tools()] == ["echo"]
     assert conn._session is None  # closed on context exit
+
+
+# --------------------------------------------------------------------------- #
+# Deferred servers: search_mcp_tools + call_mcp_tool
+# --------------------------------------------------------------------------- #
+def _issue_pages() -> list[SimpleNamespace]:
+    return [
+        _page(
+            [
+                _tool("create_issue", description="Create a new issue"),
+                _tool("list_issues", description="List open issues"),
+                _tool("get_pr", description="Get one pull request"),
+            ],
+            None,
+        )
+    ]
+
+
+async def _deferred_plugin(**kwargs: Any) -> tuple[dict[str, Tool], str | None]:
+    """One deferred server -> {tool name: tool} of the instance + instructions."""
+    conn = await _loaded(FakeSession(pages=_issue_pages()), defer=True, **kwargs)
+    inst = await MCP(conn).setup()
+    return {t.name: t for t in inst.tools}, inst.instructions
+
+
+async def test_defer_swaps_tools_for_search_and_call() -> None:
+    tools, instructions = await _deferred_plugin(prefix="gh")
+    assert sorted(tools) == ["call_mcp_tool", "search_mcp_tools"]
+    assert instructions is not None
+    assert "## Deferred MCP tools" in instructions
+    assert "gh (3 tools)" in instructions
+    for name in ("gh__create_issue", "gh__list_issues", "gh__get_pr"):
+        assert name in instructions
+
+
+async def test_defer_mixes_with_regular_servers() -> None:
+    big = await _loaded(FakeSession(pages=_issue_pages()), prefix="big", defer=True)
+    small = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
+    inst = await MCP(big, small).setup()
+    assert sorted(t.name for t in inst.tools) == [
+        "call_mcp_tool",
+        "echo",
+        "search_mcp_tools",
+    ]
+    assert inst.instructions is not None
+    assert "echo" not in inst.instructions  # only deferred tools are listed
+
+
+async def test_regular_only_plugin_contributes_no_search_pair() -> None:
+    small = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
+    inst = await MCP(small).setup()
+    assert [t.name for t in inst.tools] == ["echo"]
+    assert inst.instructions is None
+
+
+async def test_search_ranks_exact_name_first_and_returns_schemas() -> None:
+    tools, _ = await _deferred_plugin()
+    out = await run_tool(tools["search_mcp_tools"], {"query": "create_issue"}, _ctx())
+    hits = json.loads(out)
+    assert hits[0]["name"] == "create_issue"
+    assert hits[0]["description"] == "Create a new issue"
+    assert hits[0]["parameters"] == {"type": "object", "properties": {}}
+
+
+async def test_search_caps_results_and_reports_more() -> None:
+    tools, _ = await _deferred_plugin()
+    out = await run_tool(
+        tools["search_mcp_tools"], {"query": "issue", "max_results": 1}, _ctx()
+    )
+    first_line, _, suffix = out.partition("\n")
+    assert len(json.loads(first_line)) == 1
+    assert "1 more match" in suffix
+
+
+async def test_search_no_match_is_a_helpful_message() -> None:
+    tools, _ = await _deferred_plugin()
+    out = await run_tool(tools["search_mcp_tools"], {"query": "zzz"}, _ctx())
+    assert "No deferred MCP tool matched" in out
+    assert "3 available" in out
+
+
+async def test_call_dispatches_arguments_and_renders_text() -> None:
+    session = FakeSession(pages=_issue_pages())
+    conn = await _loaded(session, defer=True)
+    inst = await MCP(conn).setup()
+    call_tool = next(t for t in inst.tools if t.name == "call_mcp_tool")
+    out = await run_tool(
+        call_tool, {"tool": "create_issue", "arguments": {"title": "x"}}, _ctx()
+    )
+    assert session.calls == [("create_issue", {"title": "x"})]
+    assert out == "create_issue-ok"
+
+
+async def test_call_unknown_tool_suggests_near_matches() -> None:
+    tools, _ = await _deferred_plugin()
+    with pytest.raises(ToolError, match="unknown deferred MCP tool"):
+        await run_tool(tools["call_mcp_tool"], {"tool": "create_issu"}, _ctx())
+
+
+async def test_call_delegates_needs_approval_to_the_underlying_tool() -> None:
+    tools, _ = await _deferred_plugin(
+        needs_approval=lambda args, ctx: bool(args.get("danger"))
+    )
+    call_tool = tools["call_mcp_tool"]
+    ctx = _ctx()
+    safe = {"tool": "create_issue", "arguments": {}}
+    hot = {"tool": "create_issue", "arguments": {"danger": True}}
+    assert call_tool.requires_approval(safe, ctx) is False
+    assert call_tool.requires_approval(hot, ctx) is True
+    # Unknown target: no approval prompt; the call itself will error instead.
+    assert call_tool.requires_approval({"tool": "nope"}, ctx) is False
+
+
+async def test_call_honors_underlying_renderer_and_output_cap() -> None:
+    def upper(result: Any, ctx: RunContext[Any]) -> str:
+        return render_mcp_content(result.content).upper() * 20
+
+    tools, _ = await _deferred_plugin(result_renderer=upper, max_output_chars=40)
+    out = await run_tool(tools["call_mcp_tool"], {"tool": "get_pr"}, _ctx())
+    assert out.startswith("GET_PR-OK")
+    assert "truncated" in out  # the per-server cap applied, not the agent's
+
+
+async def test_deferred_name_clash_between_servers_raises() -> None:
+    a = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
+    b = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
+    with pytest.raises(UserError, match="name clash"):
+        await MCP(a, b).setup()
+
+
+async def test_deferred_name_clash_with_exposed_raises() -> None:
+    deferred = await _loaded(
+        FakeSession(pages=[_page([_tool("echo")], None)]), defer=True
+    )
+    exposed = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
+    with pytest.raises(UserError, match="clash with exposed"):
+        await MCP(deferred, exposed).setup()
+
+
+async def test_defer_flag_flows_from_server_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_open(self: MCPConnection) -> None:
+        self._session = FakeSession(pages=[_page([_tool("echo")], None)])
+
+    monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
+    conn = await _FakeServer(defer=True).open()
+    assert conn.defer is True

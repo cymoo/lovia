@@ -15,7 +15,9 @@ model invokes the tool, the runner emits a future that any external code
         async for q in channel.questions():   # ends when channel.close()
             channel.answer(q.id, await get_reply_somehow(q.question))
 
-Tool calls block until an answer is supplied or the channel is closed.
+Tool calls block until an answer is supplied, the question is cancelled, or
+the channel is closed — cancellation and closure surface as tool-error
+results the model can route around.
 
 A question may carry :attr:`~HumanQuestion.options` — 2–4 choices the model
 offers when the question is a pick-one (or, with ``multi_select``, pick-many).

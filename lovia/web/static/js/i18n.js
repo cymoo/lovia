@@ -146,6 +146,8 @@ const MESSAGES = {
     'question.placeholderWithOptions': '或输入其他回答…',
     'question.answered': '✓ 已回答',
     'question.expired': '问题已过期，助手将继续运行',
+    'question.sendFailed': '发送回答失败，请重试',
+    'question.answerLabel': '你的回答',
     'a11y.questionAsked': '助手提出了一个问题，正在等待你的回答',
     // ---- context notices / meter
     'context.compacted': '上下文已压缩',
@@ -463,6 +465,8 @@ const EN = {
   'question.placeholderWithOptions': 'Or type your own answer…',
   'question.answered': '✓ Answered',
   'question.expired': 'The question expired — the agent continues without an answer',
+  'question.sendFailed': 'Sending the answer failed — try again',
+  'question.answerLabel': 'Your answer',
   'a11y.questionAsked': 'The assistant asked a question and is waiting for your answer',
   'context.compacted': 'Context compacted',
   'context.proactive': 'Proactive',

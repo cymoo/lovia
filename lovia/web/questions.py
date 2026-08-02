@@ -53,14 +53,16 @@ class QuestionRegistry:
     async def aclose(self) -> None:
         """Close the channel (failing parked calls) and stop the consumer."""
         self._channel.close("server shutting down")
+        # Join the consumer FIRST (close() ends its iterator, so this is a
+        # join, not a kill): a question it already pulled from the feed would
+        # otherwise repopulate the maps and arm a timer after the clear.
+        if self._task is not None:
+            await self._task
+            self._task = None
         for timer in self._timers.values():
             timer.cancel()
         self._timers.clear()
         self._by_session.clear()
-        if self._task is not None:
-            # close() ends the iterator, so this is a join, not a kill.
-            await self._task
-            self._task = None
 
     async def _consume(self) -> None:
         async for q in self._channel.questions():

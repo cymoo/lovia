@@ -1193,17 +1193,27 @@ function buildQuestionCard(call) {
   input.placeholder = q.options.length
     ? t('question.placeholderWithOptions')
     : t('question.placeholder');
+  input.setAttribute('aria-label', t('question.answerLabel'));
 
   const submit = async (answer) => {
     if (node.classList.contains('resolved')) return;
     try {
       const res = await api.answer({ session_id: store.sessionId, answer });
-      if (!res.ok) throw new Error(String(res.status));
-      settleQuestion(node, answer);
-    } catch {
-      // Nothing pending anymore (timed out / cancelled / reconnect race):
-      // freeze as expired; the stream's tool-error result tells the story.
-      settleQuestion(node, null);
+      if (res.ok) {
+        settleQuestion(node, answer);
+      } else if (res.status === 404) {
+        // Nothing pending anymore (timed out / cancelled / answered from
+        // another tab): freeze as expired; the stream's tool result tells
+        // the story.
+        settleQuestion(node, null);
+      } else {
+        throw new Error(String(res.status));
+      }
+    } catch (err) {
+      // Transient failure (network, 5xx): the question is still parked
+      // server-side, so keep the card interactive for a retry.
+      console.error(err);
+      toast(t('question.sendFailed'), { type: 'error' });
     }
   };
 

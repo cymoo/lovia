@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Awaitable, Callable, Sequence
 from ..exceptions import RunCancelled, UserError
 from ..reliability import CancelToken, RunBudget
 from ..run_context import RunContext
+from ..steering import Mailbox
 from ..tools import Tool, tool
 from ..transcript import InputEntry, TranscriptEntry
 from ..types import JsonObject
@@ -120,6 +121,12 @@ class ChildSpec:
     budget: RunBudget | None
     """A fresh per-spawn budget copy, when the plugin carries one."""
 
+    mailbox: Mailbox
+    """The child's inbound steering channel — ``send_to_subagent`` pushes
+    into it and the child drains it at each turn start. An override must
+    hand it to however it runs the child (``Runner.run(mailbox=...)`` or its
+    serving-layer equivalent), or sends silently never arrive."""
+
 
 RunChildFn = Callable[[ChildSpec], Awaitable["RunResult"]]
 
@@ -135,6 +142,7 @@ class _Record:
     agent_name: str
     prompt: str
     token: CancelToken
+    mailbox: Mailbox
     started: float  # time.monotonic() at spawn
     task: asyncio.Task[None] | None = None
     result: "RunResult | None" = None
@@ -224,10 +232,11 @@ _INSTRUCTIONS_COMMON = (
     "subagent sees nothing of this conversation and works in a fresh context. "
     "Spawn early, then keep doing your own work while they run. Reports "
     "arrive automatically as `[subagent …]` messages; call `wait_subagents` "
-    "when you need pending results before continuing, and "
-    "`cancel_subagent(id)` to stop one. Tools that need approval are "
-    "auto-denied inside a subagent, so delegate only work its tools can do "
-    "unattended."
+    "when you need pending results before continuing, "
+    "`send_to_subagent(id, message)` to steer a running one (a forgotten "
+    "constraint, a scope change), and `cancel_subagent(id)` to stop one. "
+    "Tools that need approval are auto-denied inside a subagent, so delegate "
+    "only work its tools can do unattended."
 )
 
 _INSTRUCTIONS_BOUNDED = (
@@ -358,6 +367,7 @@ class Subagents:
             tools=[
                 self._spawn_tool(registry),
                 self._wait_tool(registry),
+                self._send_tool(registry),
                 self._cancel_tool(registry),
             ],
             view_injectors=[self._injector(registry, bounded=bounded)],
@@ -399,6 +409,7 @@ class Subagents:
                         budget=replace(self.budget)
                         if self.budget is not None
                         else None,
+                        mailbox=rec.mailbox,
                     )
                 )
             else:
@@ -421,6 +432,7 @@ class Subagents:
             max_turns=self.max_turns,
             budget=replace(self.budget) if self.budget is not None else None,
             cancel_token=rec.token,
+            mailbox=rec.mailbox,
             # Join the parent's trace and fold usage into the parent's
             # accumulator (failed legs included) — as agent_as_tool does.
             tracer=ctx._tracer,
@@ -489,6 +501,7 @@ class Subagents:
                 agent_name=child.name,
                 prompt=prompt,
                 token=CancelToken(),
+                mailbox=Mailbox(),
                 started=time.monotonic(),
             )
             registry.records[rec.id] = rec
@@ -605,6 +618,45 @@ class Subagents:
         if running:
             parts.append(f"Still running: {_running_summary(running)}.")
         return "\n\n".join(parts)
+
+    def _send_tool(self, registry: _Registry) -> Tool:
+        @tool(
+            name="send_to_subagent",
+            description=(
+                "Send a message to a running background subagent. It is "
+                "injected as a user message at the subagent's next turn "
+                "start — use it to add a forgotten constraint, narrow scope, "
+                "or redirect work without restarting. Write it standalone: "
+                "the subagent still sees nothing of this conversation."
+            ),
+        )
+        async def send_to_subagent(
+            ctx: RunContext[Any],
+            id: Annotated[str, "The subagent id, as returned by spawn_subagent."],
+            message: Annotated[str, "The message to deliver."],
+        ) -> str:
+            _ = ctx
+            body = message.strip()
+            if not body:
+                return "Nothing sent: the message was empty."
+            rec = registry.records.get(id.strip())
+            if rec is None:
+                known = ", ".join(registry.records) or "none"
+                return f"No subagent {id!r} (known: {known})."
+            if rec.done:
+                return (
+                    f"Subagent {rec.id} already finished; nothing to steer. "
+                    "Spawn a new one instead."
+                )
+            if rec.token.is_cancelled:
+                return f"Subagent {rec.id} is stopping; the message would be lost."
+            rec.mailbox.push(body)
+            return (
+                f"Delivered to {rec.id}; it sees the message at its next "
+                "turn start."
+            )
+
+        return send_to_subagent
 
     def _cancel_tool(self, registry: _Registry) -> Tool:
         @tool(

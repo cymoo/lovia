@@ -180,6 +180,9 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 title_message=None,
                 autostart=True,
                 source=f"subagent:{child_sid}",
+                # The parent's send_to_subagent pushes into this same channel,
+                # joining whatever the task chat's own /inject sends.
+                mailbox=spec.mailbox,
             )
         except HTTPException as exc:
             await deps.store.delete(child_sid)

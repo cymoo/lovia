@@ -81,6 +81,26 @@ async with server.session() as conn:      # 只打开一次
 - **支持范围仅限工具。** MCP 提示词、资源浏览、采样、OAuth 和订阅不在支持范围内；
   这个插件只做一件事。
 
+## 延迟加载大型服务器
+
+几十个工具的服务器会把完整 schema 目录塞进每个提示词，哪怕模型一个也没用。设置
+`defer=True` 后，该服务器的工具不再进入工具列表；Agent 得到一对共享工具——
+`search_mcp_tools`（按关键词查找，返回名称、描述和参数 schema）和 `call_mcp_tool`
+（按精确名称调用）——外加系统提示词中的一行工具名清单，模型知道它们存在，却不用为
+schema 付费：
+
+```python
+plugins=[MCP(
+    MCPServerStdio(command="...", name="github", defer=True),  # 60 个工具
+    MCPServerStdio(command="..."),                             # 3 个工具，直接暴露
+)]
+```
+
+延迟只改变 *schema 何时进入上下文*，不改变工具怎么运行：延迟调用是完全委托的，服务器的
+`needs_approval`、`retries`、`timeout`、`result_renderer` 和 `max_output_chars` 与直接
+暴露时完全一致。名称必须无歧义——延迟名称与同插件内其他延迟或暴露工具冲突时，setup 抛
+`UserError`（给服务器设置 `name=` 前缀即可）。
+
 ## 注意事项
 
 - **`auto_reconnect` 意味着至少执行一次。** 调用中途断开后，会在新连接上重试一次；

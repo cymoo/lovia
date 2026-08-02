@@ -41,6 +41,7 @@ from ..store import ChatStore
 from ..titles import generate_title, provisional_title
 
 if TYPE_CHECKING:
+    from ..questions import QuestionRegistry
     from ..supervisor import EventHub, RunSupervisor
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,10 @@ class RouterDeps:
     # forever). Without it a clientless (scheduled) run parked on an approval
     # holds one of the ``max_background_runs`` slots indefinitely.
     approval_timeout: float | None = None
+    # Bridge for the ``ask_human`` tool (None = the app serves no question
+    # channel and ``POST /api/chat/answer`` 404s). Built by ``create_app``
+    # when a ``question_channel`` is supplied.
+    questions: "QuestionRegistry | None" = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)

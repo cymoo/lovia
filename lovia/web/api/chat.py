@@ -22,6 +22,7 @@ from ...agent import Agent
 from ...runner import Runner
 from ..attachments import build_user_input
 from ..schemas import (
+    AnswerRequest,
     ApprovalRequest,
     ChatRequest,
     ChatResponse,
@@ -199,6 +200,20 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
         if not ok:
             raise HTTPException(status_code=404, detail="no pending approval matches")
+        return {"ok": True}
+
+    @router.post("/api/chat/answer")
+    async def answer_question(req: AnswerRequest) -> dict[str, bool]:
+        """Answer the session's pending ``ask_human`` question.
+
+        404 when no question channel is configured, or when the question has
+        already been answered/cancelled (e.g. it timed out) — the client shows
+        the card as expired and the tool-error result follows in the stream.
+        """
+        if deps.questions is None:
+            raise HTTPException(status_code=404, detail="no question channel")
+        if not deps.questions.resolve(req.session_id, req.answer):
+            raise HTTPException(status_code=404, detail="no pending question matches")
         return {"ok": True}
 
     @router.post("/api/chat/cancel")

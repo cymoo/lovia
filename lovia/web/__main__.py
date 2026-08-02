@@ -36,7 +36,9 @@ from ..providers import (
 )
 from ..reliability import RetryPolicy
 from ..tools import (
+    HumanChannel,
     Tool,
+    ask_human,
     current_date,
     duckduckgo_search,
     http_request,
@@ -682,7 +684,10 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
 
 
 def build_default_agent(
-    args: argparse.Namespace, store: ChatStore, provider: Provider
+    args: argparse.Namespace,
+    store: ChatStore,
+    provider: Provider,
+    question_channel: HumanChannel | None = None,
 ) -> Agent[Any]:
     instructions = resolve_instructions(args.instructions, args.instructions_file)
     skills_dirs = resolve_skills_dirs(args.skills_dir)
@@ -708,6 +713,8 @@ def build_default_agent(
         # itself (no recursive spawning), Scheduling (a child schedules
         # nothing), and Memory (a task transcript is not user memory) —
         # Skills and Todo are basic capabilities a delegated task needs.
+        # ask_human is likewise parent-only (added below): a delegated
+        # background task has no operator watching to answer it.
         child: Agent[Any] = Agent(
             name=f"{DEFAULT_AGENT_NAME}-sub",
             instructions=instructions,
@@ -721,6 +728,8 @@ def build_default_agent(
         # Cap below max_background_runs (8): parent + children + scheduler
         # fires must all fit without starving each other.
         plugins.append(Subagents([child], max_concurrent=3))
+    if question_channel is not None:
+        tools = [*tools, ask_human(question_channel)]
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,
@@ -855,6 +864,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # Compaction policy for the default agent; None lets create_app pick its
         # own default for a custom --app agent.
         context_policy: ContextPolicy | None = None
+        # ask_human bridge for the default agent. A custom --app brings its own
+        # agents; wiring their channel is the library API's job (create_app's
+        # question_channel=), so it stays None here.
+        question_channel: HumanChannel | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             for flag, given in (("--setup", args.setup), ("--check", args.check)):
@@ -918,7 +931,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             # The store is created only after setup succeeds so an aborted
             # first-run wizard leaves no stray database behind.
             store = ChatStore.sqlite(db_desc)
-            agent = build_default_agent(args, store, provider)
+            question_channel = HumanChannel()
+            agent = build_default_agent(
+                args, store, provider, question_channel=question_channel
+            )
             context_policy = Compaction(context_window=conn.context_window)
             _warn_if_exposed(host, agent.workspace)
             summary = setup.format_summary(
@@ -953,6 +969,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             # approval holds one of the concurrency slots forever; for a chat
             # the user is watching, ten idle minutes means the answer is no.
             approval_timeout=600,
+            # Same policy for the ask_human tool: an unanswered question is
+            # cancelled after 10 minutes (the model gets a tool error and
+            # continues), so a scheduled run that asks can never park forever.
+            question_channel=question_channel,
+            question_timeout=600,
             log_level=level.lower(),
         )
     except UserError as exc:

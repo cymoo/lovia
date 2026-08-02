@@ -347,6 +347,9 @@ class RunController:
         self.cancel.cancel("user requested stop" if user else "server shutdown")
         # Unblock a run parked on a pending approval (deny) so it can wind down.
         self.deps.approvals.deny_pending(self.session_id)
+        # Same for a run parked on an ask_human question (cancel).
+        if self.deps.questions is not None:
+            self.deps.questions.cancel_session(self.session_id)
 
     async def _await_approval(self, ev: events.ApprovalRequired) -> None:
         """Await the HTTP decision for ``ev``, denying after ``approval_timeout``.

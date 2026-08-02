@@ -1839,6 +1839,118 @@ body.sidebar-collapsed .sidebar-expand-btn {
   color: var(--danger);
 }
 
+/* ---- ask_human question card ----------------------------------------------------- */
+.question {
+  margin: 14px 0;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 13px 16px 14px;
+  box-shadow: var(--shadow-xs);
+}
+.question-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.question-head::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: run-pulse 1.6s var(--ease) infinite;
+}
+.question.resolved .question-head::before {
+  animation: none;
+}
+.question-text {
+  white-space: pre-wrap;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
+.question-answer {
+  white-space: pre-wrap;
+  font-size: 13px;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  margin-bottom: 4px;
+}
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.question-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+button.question-option:hover {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.question-option.multi {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+}
+.question-option-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+.question-option-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.question-pick {
+  align-self: flex-end;
+}
+.question-free {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.question-input {
+  flex: 1;
+  resize: vertical;
+  min-height: 34px;
+  max-height: 160px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.question-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.question.resolved {
+  opacity: 0.72;
+}
+.question.resolved .question-head {
+  color: var(--muted);
+}
+
 /* ---- Banners --------------------------------------------------------------------- */
 .handoff-banner {
   display: flex;

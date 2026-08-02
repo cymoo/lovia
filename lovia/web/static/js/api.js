@@ -73,6 +73,12 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }),
+  answer: (body) =>
+    fetch('/api/chat/answer', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }),
   cancel: (sessionId) =>
     fetch(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }),
   // Queue a message into the active run. `body`: { session_id, message }.

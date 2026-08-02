@@ -252,13 +252,15 @@ When the question is a pick-one (or, with `multi_select`, pick-many), the
 model attaches 2–4 `options` — each a `QuestionOption` with a `label` and an
 optional one-line `description`. Options are suggestions for the UI: render
 them as buttons, keep a free-text input as the escape hatch (any string is a
-valid answer), and join the labels of a multi-select with `", "`:
+valid answer), and join the labels of a multi-select with newlines — labels
+are schema-enforced to be single-line and unique, so the joined answer is
+unambiguous:
 
 ```python
 async for q in channel.questions():
     if q.options:
         print(q.question, [o.label for o in q.options], q.multi_select)
-    channel.answer(q.id, "Kyoto, Osaka")
+    channel.answer(q.id, "Kyoto\nOsaka")
 ```
 
 Each question also carries the asking run's `session_id` / `run_id` (when

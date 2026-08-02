@@ -160,6 +160,9 @@ async def test_option_count_is_schema_enforced() -> None:
     for bad in (
         [{"label": "only one"}],
         [{"label": f"o{i}"} for i in range(5)],
+        [{"label": "twin"}, {"label": "twin"}],  # duplicate labels
+        [{"label": "one\ntwo"}, {"label": "three"}],  # multi-line label
+        [{"label": ""}, {"label": "ok"}],  # empty label
     ):
         with pytest.raises(InvalidToolArguments):
             await run_tool(the_tool, {"question": "pick", "options": bad}, ctx)

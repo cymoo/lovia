@@ -21,7 +21,9 @@ A question may carry :attr:`~HumanQuestion.options` — 2–4 choices the model
 offers when the question is a pick-one (or, with ``multi_select``, pick-many).
 Options are *suggestions for the UI*: an answer is always a free-form string,
 so a consumer renders them as buttons but keeps a text input as the escape
-hatch. For a multi-select, join the chosen labels with ``", "``.
+hatch. For a multi-select, join the chosen labels with newlines — labels are
+single-line and unique (schema-enforced), so the joined answer is
+unambiguous.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Annotated, Any, AsyncIterator, Sequence
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from ..exceptions import ToolError
 from ..run_context import RunContext
@@ -44,10 +46,12 @@ class QuestionOption(BaseModel):
     """One selectable choice offered alongside a question."""
 
     label: str = Field(
+        min_length=1,
+        pattern=r"^[^\r\n]+$",
         description=(
-            "Short display label (1-5 words). Choosing the option answers "
-            "with this exact text."
-        )
+            "Short display label (1-5 words, single line). Choosing the "
+            "option answers with this exact text."
+        ),
     )
     description: str = Field(
         default="",
@@ -56,6 +60,19 @@ class QuestionOption(BaseModel):
             "trade-off. Empty when the label alone is clear."
         ),
     )
+
+
+def _unique_labels(
+    options: list[QuestionOption] | None,
+) -> list[QuestionOption] | None:
+    """Reject duplicate labels — the label *is* the answer, so twins are
+    indistinguishable both on the buttons and in a multi-select reply."""
+    if options:
+        labels = [o.label for o in options]
+        dupes = sorted({label for label in labels if labels.count(label) > 1})
+        if dupes:
+            raise ValueError(f"duplicate option labels: {', '.join(dupes)}")
+    return options
 
 
 @dataclass
@@ -197,6 +214,7 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
                     "'other'/'none' filler option. Omit for open questions."
                 ),
             ),
+            AfterValidator(_unique_labels),
         ] = None,
         multi_select: Annotated[
             bool,
@@ -204,7 +222,7 @@ def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
                 default=False,
                 description=(
                     "Set true when several options may be picked together; "
-                    "the reply then joins the chosen labels with ', '."
+                    "the reply then lists the chosen labels, one per line."
                 ),
             ),
         ] = False,

@@ -7,9 +7,11 @@ import asyncio
 import pytest
 
 from lovia import Agent, Runner
-from lovia.exceptions import ToolError
+from lovia.exceptions import InvalidToolArguments, ToolError
+from lovia.run_context import RunContext
 from lovia.testing import ScriptedProvider, call, text
-from lovia.tools.human import HumanChannel, HumanQuestion, ask_human
+from lovia.tools.base import run_tool
+from lovia.tools.human import HumanChannel, HumanQuestion, QuestionOption, ask_human
 
 
 async def test_questions_yields_and_close_ends_iteration() -> None:
@@ -73,6 +75,106 @@ async def test_resolved_while_queued_is_skipped() -> None:
     channel.close()
     await asyncio.wait_for(op, timeout=1)
     assert seen == []  # the cancelled question never reached the consumer
+
+
+async def test_options_flow_through_to_the_operator() -> None:
+    channel = HumanChannel()
+    seen: list[HumanQuestion] = []
+
+    async def operator() -> None:
+        async for q in channel.questions():
+            seen.append(q)
+            channel.answer(q.id, ", ".join(o.label for o in q.options))
+
+    op = asyncio.create_task(operator())
+
+    agent = Agent(
+        name="concierge",
+        model=ScriptedProvider(
+            [
+                call(
+                    "ask_human",
+                    {
+                        "question": "Which cities?",
+                        "options": [
+                            {"label": "Kyoto", "description": "temples"},
+                            {"label": "Osaka"},
+                        ],
+                        "multi_select": True,
+                    },
+                ),
+                text("Kyoto and Osaka it is."),
+            ]
+        ),
+        tools=[ask_human(channel)],
+    )
+    result = await Runner.run(agent, "plan a trip")
+    assert result.output == "Kyoto and Osaka it is."
+
+    (q,) = seen
+    assert [o.label for o in q.options] == ["Kyoto", "Osaka"]
+    assert q.options[0].description == "temples"
+    assert q.options[1].description == ""
+    assert q.multi_select is True
+
+    channel.close()
+    await asyncio.wait_for(op, timeout=1)
+
+
+async def test_question_without_options_stays_free_form() -> None:
+    channel = HumanChannel()
+    q, fut = channel._new_question("anything?")
+    assert q.options == []
+    assert q.multi_select is False
+    assert q.session_id is None and q.run_id is None
+    channel.answer(q.id, "sure")
+    assert await asyncio.wait_for(fut, timeout=1) == "sure"
+
+
+async def test_question_carries_session_and_run_identity() -> None:
+    channel = HumanChannel()
+    the_tool = ask_human(channel)
+    agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
+    ctx: RunContext[None] = RunContext(
+        context=None, entries=[], agent=agent, session_id="s1", run_id="r1"
+    )
+
+    async def operator() -> None:
+        async for q in channel.questions():
+            assert (q.session_id, q.run_id) == ("s1", "r1")
+            channel.answer(q.id, "ok")
+            channel.close()
+
+    op = asyncio.create_task(operator())
+    answer = await run_tool(the_tool, {"question": "who am I?"}, ctx)
+    assert answer == "ok"
+    await asyncio.wait_for(op, timeout=1)
+
+
+async def test_option_count_is_schema_enforced() -> None:
+    channel = HumanChannel()
+    the_tool = ask_human(channel)
+    agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
+    ctx: RunContext[None] = RunContext(context=None, entries=[], agent=agent)
+
+    for bad in (
+        [{"label": "only one"}],
+        [{"label": f"o{i}"} for i in range(5)],
+    ):
+        with pytest.raises(InvalidToolArguments):
+            await run_tool(the_tool, {"question": "pick", "options": bad}, ctx)
+    assert channel.pending == []  # rejected calls never became questions
+
+
+def test_ask_human_is_an_execution_barrier() -> None:
+    # One pending question per run at a time: answers often steer what comes
+    # next, so ask_human must not run concurrently with other tools.
+    assert ask_human(HumanChannel()).parallel is False
+
+
+def test_option_labels_round_trip_as_models() -> None:
+    o = QuestionOption(label="Ship it", description="merge and release now")
+    assert (o.label, o.description) == ("Ship it", "merge and release now")
 
 
 async def test_ask_after_close_fails_fast() -> None:

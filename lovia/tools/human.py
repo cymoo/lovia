@@ -16,6 +16,12 @@ model invokes the tool, the runner emits a future that any external code
             channel.answer(q.id, await get_reply_somehow(q.question))
 
 Tool calls block until an answer is supplied or the channel is closed.
+
+A question may carry :attr:`~HumanQuestion.options` — 2–4 choices the model
+offers when the question is a pick-one (or, with ``multi_select``, pick-many).
+Options are *suggestions for the UI*: an answer is always a free-form string,
+so a consumer renders them as buttons but keeps a text input as the escape
+hatch. For a multi-select, join the chosen labels with ``", "``.
 """
 
 from __future__ import annotations
@@ -23,18 +29,48 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Annotated, AsyncIterator
+from typing import Annotated, Any, AsyncIterator, Sequence
+
+from pydantic import BaseModel, Field
 
 from ..exceptions import ToolError
+from ..run_context import RunContext
 from .base import Tool, tool
 
-__all__ = ["HumanChannel", "HumanQuestion", "ask_human"]
+__all__ = ["HumanChannel", "HumanQuestion", "QuestionOption", "ask_human"]
+
+
+class QuestionOption(BaseModel):
+    """One selectable choice offered alongside a question."""
+
+    label: str = Field(
+        description=(
+            "Short display label (1-5 words). Choosing the option answers "
+            "with this exact text."
+        )
+    )
+    description: str = Field(
+        default="",
+        description=(
+            "Optional one-line explanation of the choice — its meaning or "
+            "trade-off. Empty when the label alone is clear."
+        ),
+    )
 
 
 @dataclass
 class HumanQuestion:
     id: str
     question: str
+    options: list[QuestionOption] = field(default_factory=list)
+    """Choices to offer; empty for a free-form question."""
+    multi_select: bool = False
+    """Whether several options may be picked together."""
+    session_id: str | None = None
+    """``RunContext.session_id`` of the asking run, for consumers that route
+    questions across sessions (``None`` for one-shot runs)."""
+    run_id: str | None = None
+    """``RunContext.run_id`` of the asking run (``None`` without a checkpoint)."""
 
 
 @dataclass
@@ -84,10 +120,25 @@ class HumanChannel:
             if q.id in self._futures:  # still unresolved?
                 yield q
 
-    def _new_question(self, question: str) -> tuple[HumanQuestion, asyncio.Future[str]]:
+    def _new_question(
+        self,
+        question: str,
+        *,
+        options: Sequence[QuestionOption] = (),
+        multi_select: bool = False,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> tuple[HumanQuestion, asyncio.Future[str]]:
         if self._closed:
             raise ToolError("human channel is closed", tool_name="ask_human")
-        q = HumanQuestion(id=str(uuid.uuid4()), question=question)
+        q = HumanQuestion(
+            id=str(uuid.uuid4()),
+            question=question,
+            options=list(options),
+            multi_select=multi_select,
+            session_id=session_id,
+            run_id=run_id,
+        )
         fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._futures[q.id] = fut
         self._pending[q.id] = q
@@ -126,12 +177,52 @@ class HumanChannel:
 def ask_human(channel: HumanChannel, *, name: str = "ask_human") -> Tool:
     """Build an ``ask_human`` tool wired to ``channel``."""
 
-    @tool(name=name)
+    # parallel=False: one pending question per run at a time. Humans answer
+    # dialogs sequentially, later questions often depend on earlier answers,
+    # and a UI can then treat "the run's pending question" as unambiguous.
+    @tool(name=name, parallel=False)
     async def _ask(
+        ctx: RunContext[Any],
         question: Annotated[str, "The question to ask the human."],
+        options: Annotated[
+            list[QuestionOption] | None,
+            Field(
+                default=None,
+                min_length=2,
+                max_length=4,
+                description=(
+                    "When the question is a choice, offer 2-4 mutually "
+                    "exclusive options, the recommended one first. The human "
+                    "may still answer in free text, so never add an "
+                    "'other'/'none' filler option. Omit for open questions."
+                ),
+            ),
+        ] = None,
+        multi_select: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Set true when several options may be picked together; "
+                    "the reply then joins the chosen labels with ', '."
+                ),
+            ),
+        ] = False,
     ) -> str:
-        """Ask the human operator a question and wait for their reply."""
-        q, fut = channel._new_question(question)
+        """Ask the human operator a question and wait for their reply.
+
+        - Blocks until the human answers; a cancelled question surfaces as a
+          tool error you can route around.
+        - Prefer options for pick-one (or pick-many) questions; the reply may
+          still be any free text.
+        """
+        q, fut = channel._new_question(
+            question,
+            options=options or (),
+            multi_select=multi_select,
+            session_id=ctx.session_id,
+            run_id=ctx.run_id,
+        )
         try:
             return await fut
         finally:

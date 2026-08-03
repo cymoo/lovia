@@ -704,6 +704,8 @@ async def test_workspace_local_mode_presets_and_overrides(tmp_path) -> None:
         "write_file",
         "edit_file",
         "shell",
+        "read_process_output",
+        "kill_process",
     }
 
 
@@ -1079,6 +1081,187 @@ async def test_run_started_during_close_self_reaps(tmp_path) -> None:
             await session.run(f"sleep 1 && touch {marker}", timeout=30)
     await asyncio.sleep(1.2)
     assert not marker.exists()  # the child was killed, not orphaned
+
+
+# ---------------------------------------------------------------------------
+# Background processes (spawn / read_process_output / kill_process)
+# ---------------------------------------------------------------------------
+
+
+async def _drain(session, process_id: str, timeout: float = 10.0):
+    """Poll until the process leaves "running"; return (final read, all text,
+    whether any read reported dropped output)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    text, truncated = "", False
+    while True:
+        out = await session.read_process_output(process_id)
+        text += out.output
+        truncated = truncated or out.truncated
+        if out.status != "running":
+            return out, text, truncated
+        assert asyncio.get_running_loop().time() < deadline, "no exit in time"
+        await asyncio.sleep(0.05)
+
+
+async def test_spawn_streams_output_incrementally(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo one; echo two >&2; sleep 0.4; echo three")
+    assert start.process_id.startswith("bg-") and start.pid > 0
+    await asyncio.sleep(0.2)
+    first = await session.read_process_output(start.process_id)
+    assert first.status == "running"
+    assert "one" in first.output and "two" in first.output  # stderr merged in
+    final, rest, _ = await _drain(session, start.process_id)
+    assert final.status == "exited" and final.exit_code == 0
+    assert "three" in rest
+    assert "one" not in rest  # incremental: delivered output is not repeated
+    # Reading after the exit was reported stays a clean status, not an error.
+    again = await session.read_process_output(start.process_id)
+    assert again.status == "exited" and again.output == ""
+
+
+async def test_spawn_buffer_keeps_newest_tail(tmp_path) -> None:
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.trusted(),
+        limits=WorkspaceLimits(max_shell_output_chars=100),
+    )
+    start = await session.spawn("seq 1 500")
+    final, text, truncated = await _drain(session, start.process_id)
+    assert final.exit_code == 0
+    assert truncated is True  # the burst overflowed the buffer between reads
+    assert text.rstrip().endswith("500")  # the newest output survives
+
+
+async def test_kill_process_kills_the_whole_group(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    start = await session.spawn(f"(sleep 1 && touch {marker}) & echo started; wait")
+    for _ in range(100):
+        out = await session.read_process_output(start.process_id)
+        if "started" in out.output:
+            break
+        await asyncio.sleep(0.05)
+    result = await session.kill_process(start.process_id)
+    assert result.status == "killed"
+    assert result.exit_code == -9  # SIGKILL
+    await asyncio.sleep(1.2)
+    assert not marker.exists()  # the grandchild died with the group
+
+
+async def test_kill_after_natural_exit_reports_exited(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("echo done")
+    await _drain(session, start.process_id)
+    result = await session.kill_process(start.process_id)
+    assert result.status == "exited" and result.exit_code == 0
+
+
+async def test_close_kills_background_processes(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    start = await session.spawn(f"sleep 1 && touch {marker}")
+    await asyncio.sleep(0.2)
+    await session.close()
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+    with pytest.raises(WorkspaceClosedError):
+        await session.read_process_output(start.process_id)
+
+
+async def test_close_after_kill_process_is_idempotent(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    start = await session.spawn("sleep 30")
+    killed = await session.kill_process(start.process_id)
+    assert killed.status == "killed"
+    await session.close()  # double-kill on close must be a no-op
+
+
+async def test_unknown_process_id_errors_teach_the_retry(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    # Empty registry (the state after a checkpoint resume): the error says
+    # processes are ephemeral and to re-run the command.
+    with pytest.raises(WorkspaceError, match="no background processes"):
+        await session.read_process_output("bg-zzzzzz")
+    with pytest.raises(WorkspaceError, match="restart"):
+        await session.kill_process("bg-zzzzzz")
+    # With live processes, the error lists them (no separate list tool).
+    start = await session.spawn("sleep 5")
+    with pytest.raises(WorkspaceError, match=start.process_id):
+        await session.read_process_output("bg-zzzzzz")
+    await session.close()
+
+
+async def test_spawn_refuses_denied_commands(tmp_path) -> None:
+    session = await _session(
+        tmp_path,
+        policy=WorkspacePolicy.trusted(command_rules=(CommandRule("npm", "deny"),)),
+    )
+    with pytest.raises(PermissionDeniedError):
+        await session.spawn("npm run dev")
+
+
+async def test_spawn_refuses_custom_executor(tmp_path) -> None:
+    class _Executor:
+        async def run(self, command, *, cwd, env, timeout, policy, root):
+            raise AssertionError("never reached")
+
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy.trusted(), executor=_Executor()
+    )
+    with pytest.raises(WorkspaceError, match="executor"):
+        await session.spawn("echo hi")
+
+
+async def test_spawn_gets_no_stdin(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    # cat with a live stdin would sit forever; /dev/null stdin means EOF now.
+    start = await session.spawn("cat")
+    final, _, _ = await _drain(session, start.process_id)
+    assert final.status == "exited" and final.exit_code == 0
+
+
+async def test_spawn_applies_env_and_cwd(tmp_path) -> None:
+    (tmp_path / "sub").mkdir()
+    session = await _session(
+        tmp_path, policy=WorkspacePolicy.trusted(), env={"MY_VAR": "bg-env"}
+    )
+    start = await session.spawn('echo "$MY_VAR in $(pwd)"', cwd="sub")
+    _, text, _ = await _drain(session, start.process_id)
+    assert "bg-env in" in text and text.strip().endswith("/sub")
+
+
+async def test_spawn_during_close_self_reaps(tmp_path) -> None:
+    # Same race as run(): close() snapshots the registry while spawn() awaits
+    # the subprocess; spawn must observe _closed and reap its own child.
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+
+    real_create = asyncio.create_subprocess_shell
+
+    async def _closing_create(*args, **kwargs):
+        proc = await real_create(*args, **kwargs)
+        await session.close()
+        return proc
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(asyncio, "create_subprocess_shell", _closing_create)
+        with pytest.raises(WorkspaceClosedError):
+            await session.spawn(f"sleep 1 && touch {marker}")
+    await asyncio.sleep(1.2)
+    assert not marker.exists()
+
+
+def test_tail_buffer_semantics() -> None:
+    buf = local_module._TailBuffer(10)
+    buf.append("abcde")
+    assert buf.take() == ("abcde", False)
+    buf.append("0123456789ABCDE")  # 15 chars -> only the newest 10 kept
+    assert buf.take() == ("56789ABCDE", True)
+    assert buf.take() == ("", False)  # the dropped flag resets on take
+    for chunk in ("aaaa", "bbbb", "cccc"):
+        buf.append(chunk)
+    assert buf.take() == ("aabbbbcccc", True)
 
 
 # ---------------------------------------------------------------------------

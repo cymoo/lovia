@@ -394,7 +394,9 @@ mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 
 File and shell tools scoped to a root, governed by one `allow`/`ask`/`deny`
 policy over paths *and* commands — `ask` decisions ride the normal approval
-channel:
+channel. `shell(background=true)` runs dev servers, watchers, and long
+builds as session-owned background processes (poll `read_process_output`,
+stop with `kill_process`):
 
 ```python
 from lovia import Agent

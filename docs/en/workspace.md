@@ -96,7 +96,9 @@ no `shell` when disabled):
 | `grep_files` | regex, per-file and match caps | yes |
 | `write_file` | `create_only=True` refuses overwrite | **barrier** |
 | `edit_file` | exact-substring replace; fails on 0 or >1 matches unless `replace_all`; CRLF-tolerant | **barrier** |
-| `shell` | `cwd` and per-call `timeout` (default 300s); optional `description` — a user-facing one-liner the UI shows, ignored by policy | **barrier** |
+| `shell` | `cwd` and per-call `timeout` (default 300s); `background=true` starts a background process instead; optional `description` — a user-facing one-liner the UI shows, ignored by policy | **barrier** |
+| `read_process_output` | incremental output + status of a background process | yes |
+| `kill_process` | kill a background process's whole group | **barrier** |
 
 Mutators default to `parallel=False`
 ([execution barriers](tools.md#parallel-execution-and-barriers)) so file
@@ -114,6 +116,38 @@ with a **minimal environment** by default (`PATH`, `HOME`, locale — secrets
 are not passed through; `inherit_env=True` opts into the full environment,
 `env=` adds specific variables), in a fresh process group; a timeout kills
 the whole group and reports `timed_out=True`.
+
+## Background processes
+
+`shell(command, background=true)` starts the command as a **session-owned
+background process** and returns a process id immediately — the way to run
+dev servers, watchers, and long builds or test runs, then verify them with
+follow-up commands (`http_request` against the server, `read_process_output`
+for the test tail). The start is judged by the **same policy and approval
+gate** as a foreground command; backgrounding never softens the verdict.
+
+Semantics:
+
+- stdout and stderr are **merged** and spooled to a bounded per-process
+  buffer; `read_process_output(process_id)` returns what arrived since the
+  last read, plus status (`running` / `exited` with code / `killed`).
+  Between reads only the newest `max_shell_output_chars` are kept — older
+  unread output is dropped and the drop is announced.
+- Reads never turn into errors: polling an exited process reports its exit
+  code and drains the remainder. An *unknown* id raises with the live ids
+  listed in the message (there is no separate list tool).
+- `kill_process(process_id)` kills the whole process group (children
+  included) and returns the final tail. No timeout applies to background
+  processes; they die with the session (`close()` reaps every group).
+- Processes are **ephemeral**: a checkpoint resume does not restore them.
+  After a restart, `read_process_output` says so and the fix is to re-run
+  the start command from the transcript.
+- `spawn` refuses to run under a custom `ShellExecutor` rather than
+  silently bypassing its sandbox (background support for executors is not
+  wired yet).
+
+The same surface is available on the session for library use and custom
+tools: `spawn` / `read_process_output` / `kill_process`.
 
 A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
 **auto-activated** for every command: its bin dir is prepended to `PATH`
@@ -171,14 +205,15 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 
 Custom tools reach the active run's session as `ctx.workspace` and get the
 same gate: `read_text` / `write_text` / `edit_text` / `list_files` /
-`grep` / `run`, plus `decide_path(path, write=...)` and
+`grep` / `run` / `spawn` / `read_process_output` / `kill_process`, plus
+`decide_path(path, write=...)` and
 `decide_command(command)` for tools that want to *check* before acting.
 Deny raises; `ask` returns as a decision your tool's own `needs_approval`
 predicate can honor. (`Workspace.local(...)` returns a `LocalWorkspace`
 whose `open()` yields a `LocalWorkspaceSession`; the calls return typed
 results — `FileContent`, `FileChange`, `EditResult`, `DirEntry`,
-`GrepMatch`, `CommandResult` — and `PathRule.ops` takes `FileOp` values,
-`"read"`/`"write"`.)
+`GrepMatch`, `CommandResult`, `ProcessStart`, `ProcessOutput` — and
+`PathRule.ops` takes `FileOp` values, `"read"`/`"write"`.)
 
 By default each run opens a fresh session and closes it at run end; the
 `.session()` context manager above holds one open across runs
@@ -196,6 +231,9 @@ By default each run opens a fresh session and closes it at run end; the
   is killed on timeout, but a run-level cancel between approval and
   completion behaves like any [sync-tool cancellation](tools.md#sharp-edges):
   effects may land anyway; resume re-executes dangling calls.
+- **Background processes are session-scoped.** They die on `close()` and
+  are not restored by a checkpoint resume — treat a dev server started with
+  `background=true` as something to re-start, not something that survives.
 - **[Skills](skills.md#sharp-edges) file IO bypasses this ACL** — skill
   directories are read with the plugin's own IO, not the workspace's.
 

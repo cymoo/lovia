@@ -367,7 +367,9 @@ mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一轮可见
 ### 工作区
 
 文件和 shell 工具限定在一个根目录下，并由同一套 `allow`/`ask`/`deny` 策略
-同时管理路径和命令。`ask` 决策走标准审批通道：
+同时管理路径和命令。`ask` 决策走标准审批通道；`shell(background=true)` 把
+dev server、watcher、长构建作为 session 拥有的后台进程运行（用
+`read_process_output` 轮询输出，`kill_process` 终止）：
 
 ```python
 from lovia import Agent

@@ -13,6 +13,8 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    ProcessOutput,
+    ProcessStart,
 )
 
 if TYPE_CHECKING:
@@ -109,6 +111,33 @@ class WorkspaceSession(Protocol):
         """Run a one-shot, non-interactive shell command."""
         ...
 
+    async def spawn(
+        self,
+        command: str,
+        *,
+        cwd: str = ".",
+        env: Mapping[str, str] | None = None,
+    ) -> ProcessStart:
+        """Start a session-owned background process (same gate as ``run``).
+
+        Returns immediately; output spools to a bounded buffer consumed via
+        :meth:`read_process_output`. Background processes are ephemeral: they
+        die with the session and are not restored by a checkpoint resume.
+        """
+        ...
+
+    async def read_process_output(self, process_id: str) -> ProcessOutput:
+        """Output since the last read plus running/exited status.
+
+        Reading a known-but-exited process reports its outcome (never an
+        error); an unknown id raises with the live ids in the message.
+        """
+        ...
+
+    async def kill_process(self, process_id: str) -> ProcessOutput:
+        """Kill a background process's whole group; report its final tail."""
+        ...
+
     async def close(self) -> None:
         """Release held resources (including live subprocesses). Idempotent."""
         ...
@@ -125,6 +154,10 @@ class ShellExecutor(Protocol):
     decide *how* a command runs, never *whether*. Output may be returned
     unclipped; the session applies its limits afterwards. An executor owns
     the processes it spawns, including killing them on cancellation.
+
+    Executors cover one-shot ``run`` only: ``spawn`` (background processes)
+    refuses to start under a custom executor rather than silently bypassing
+    its sandbox.
     """
 
     async def run(

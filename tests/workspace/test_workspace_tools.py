@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from lovia.exceptions import ToolError
@@ -16,6 +18,8 @@ from lovia.workspace.types import (
     EditResult,
     FileChange,
     GrepMatch,
+    ProcessOutput,
+    ProcessStart,
 )
 from lovia.workspace.tools import (
     read_file,
@@ -23,12 +27,15 @@ from lovia.workspace.tools import (
     edit_file,
     list_files,
     grep_files,
+    kill_process,
+    read_process_output,
     shell,
     _render_command_result,
     _render_edit_result,
     _render_entries,
     _render_file_change,
     _render_matches,
+    _render_process_output,
     _shell_needs_approval,
 )
 
@@ -212,6 +219,87 @@ def test_shell_needs_approval_ignores_description(session) -> None:
     assert _shell_needs_approval(base | {"description": "harmless, promise"}, ctx) == (
         _shell_needs_approval(base, ctx)
     )
+
+
+def test_shell_needs_approval_ignores_background(session) -> None:
+    # Backgrounding must not soften (or harden) how a command is judged.
+    base = {"command": "cat /etc/hosts"}
+    ctx = _ctx(session)
+    assert _shell_needs_approval(base | {"background": True}, ctx) == (
+        _shell_needs_approval(base, ctx)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Background process tools
+# ---------------------------------------------------------------------------
+
+
+async def _drain_tool(ctx, process_id: str, timeout: float = 10.0):
+    """Poll the read tool until the process leaves "running"."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    text = ""
+    while True:
+        out = await read_process_output.invoke({"process_id": process_id}, ctx)
+        text += out.output
+        if out.status != "running":
+            return out, text
+        assert asyncio.get_running_loop().time() < deadline, "no exit in time"
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_shell_background_round_trip(session) -> None:
+    ctx = _ctx(session)
+    start = await shell.invoke({"command": "echo bg-hi", "background": True}, ctx)
+    assert isinstance(start, ProcessStart)
+    rendered = await render_tool_result(shell, start, ctx)
+    assert "started background process" in rendered
+    assert start.process_id in rendered  # the model needs the id to poll/kill
+
+    final, text = await _drain_tool(ctx, start.process_id)
+    assert "bg-hi" in text
+    rendered_out = await render_tool_result(read_process_output, final, ctx)
+    assert rendered_out.startswith(f"process {start.process_id}: exited with code 0")
+
+
+@pytest.mark.asyncio
+async def test_kill_process_tool_kills_and_renders(session) -> None:
+    ctx = _ctx(session)
+    start = await shell.invoke({"command": "sleep 30", "background": True}, ctx)
+    raw = await kill_process.invoke({"process_id": start.process_id}, ctx)
+    rendered = await render_tool_result(kill_process, raw, ctx)
+    assert rendered.startswith(f"process {start.process_id}: killed")
+    assert "(no new output)" in rendered
+
+
+@pytest.mark.asyncio
+async def test_read_process_output_unknown_id_is_tool_error(session) -> None:
+    ctx = _ctx(session)
+    with pytest.raises(ToolError, match="no background processes"):
+        await read_process_output.invoke({"process_id": "bg-nope"}, ctx)
+
+
+def test_background_tool_parallel_flags() -> None:
+    # Start and kill are ordered side effects (barriers); reading is not.
+    assert shell.parallel is False
+    assert kill_process.parallel is False
+    assert read_process_output.parallel is True
+
+
+def test_render_process_output_variants() -> None:
+    ctx = _ctx(None)
+    assert _render_process_output("raw", ctx) == "raw"  # non-result passthrough
+    running = ProcessOutput(process_id="bg-1", status="running", output="line\n")
+    assert _render_process_output(running, ctx) == "process bg-1: running\nline"
+    empty = ProcessOutput(process_id="bg-1", status="running")
+    assert "(no new output)" in _render_process_output(empty, ctx)
+    dropped = ProcessOutput(
+        process_id="bg-1", status="running", output="tail", truncated=True
+    )
+    assert "earlier output dropped" in _render_process_output(dropped, ctx)
+    killed = ProcessOutput(process_id="bg-1", status="killed", exit_code=-9)
+    assert _render_process_output(killed, ctx).startswith("process bg-1: killed")
 
 
 @pytest.mark.asyncio

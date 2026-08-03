@@ -77,7 +77,9 @@ ACL 有三个决策值，分别作用于两个执行环节：
 | `grep_files` | regex，每文件和总匹配数上限 | 是 |
 | `write_file` | `create_only=True` 拒绝覆盖 | **屏障** |
 | `edit_file` | 精确子串替换；0 或 >1 匹配时失败，除非 `replace_all`；兼容 CRLF | **屏障** |
-| `shell` | `cwd` 和每次调用 `timeout`（默认 300s）；可选 `description` —— 给用户看的一句话说明，UI 展示、策略忽略 | **屏障** |
+| `shell` | `cwd` 和每次调用 `timeout`（默认 300s）；`background=true` 改为启动后台进程；可选 `description` —— 给用户看的一句话说明，UI 展示、策略忽略 | **屏障** |
+| `read_process_output` | 增量读取后台进程输出及状态 | 是 |
+| `kill_process` | 杀掉后台进程的整个 process group | **屏障** |
 
 会修改状态的工具默认 `parallel=False`（[执行屏障](tools.md#并发执行与屏障)），避免文件和进程副作用在同一轮
 里互相竞态；只读工具保持并发。
@@ -90,6 +92,30 @@ ACL 有三个决策值，分别作用于两个执行环节：
 shell 执行细节：命令通过系统 shell 运行，默认使用**最小环境**（`PATH`、`HOME`、locale，不传 secrets；
 `inherit_env=True` 才继承完整环境，`env=` 可加特定变量），运行在新的 process group 中；超时会杀掉整个
 process group，并报告 `timed_out=True`。
+
+## 后台进程
+
+`shell(command, background=true)` 会把命令作为 **session 拥有的后台进程**启动，并立即返回
+process id —— 这是运行 dev server、watcher、长构建/长测试的方式：启动后用后续命令验证它
+（对 server 发 `http_request`，用 `read_process_output` 看测试尾部输出）。启动经过与前台命令
+**完全相同的策略与审批门禁**；backgrounding 绝不会让判定变松。
+
+语义：
+
+- stdout 和 stderr **合并**后写入每进程的有界缓冲；`read_process_output(process_id)` 返回
+  自上次读取以来的新输出，附带状态（`running` / `exited` 及退出码 / `killed`）。两次读取之间
+  只保留最新的 `max_shell_output_chars` 个字符——更早的未读输出被丢弃，丢弃会在结果中说明。
+- 读取永远不会变成错误：轮询一个已退出的进程会报告退出码并排空剩余输出。*未知* id 才会报错，
+  错误信息里列出当前存活的 id（没有单独的 list 工具）。
+- `kill_process(process_id)` 杀掉整个 process group（包括子进程）并返回最后的输出尾部。
+  后台进程没有超时；它们随 session 一起消亡（`close()` 收割所有 process group）。
+- 进程是**短暂的**：checkpoint 恢复不会还原它们。重启后 `read_process_output` 会明确说明，
+  解法是照 transcript 里的启动命令重跑一次。
+- 配置了自定义 `ShellExecutor` 时 `spawn` 会拒绝执行，而不是悄悄绕过其 sandbox
+  （executor 的后台支持尚未接入）。
+
+同一套能力也在 session 上供库用法和自定义工具使用：`spawn` / `read_process_output` /
+`kill_process`。
 
 工作区根目录下的 virtualenv（优先 `.venv`，也识别 `venv`）会对每条命令**自动激活**：其 bin 目录被前置到
 `PATH`、并设置 `VIRTUAL_ENV`，于是 `python`/`pip` 解析到工作区自己的环境，而不是 lovia 运行所在的那个。
@@ -138,12 +164,14 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 ```
 
 自定义工具可以通过 `ctx.workspace` 访问当前运行的工作区 Session，所有操作仍会经过同一套权限检查：
-`read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run`，以及
+`read_text` / `write_text` / `edit_text` / `list_files` / `grep` / `run` / `spawn` /
+`read_process_output` / `kill_process`，以及
 `decide_path(path, write=...)` 和 `decide_command(command)`，供工具在行动前检查。deny 会抛异常；
 `ask` 会作为决策返回，让你自己的 `needs_approval` 谓词处理。
 （`Workspace.local(...)` 返回 `LocalWorkspace`，其 `open()` 产出 `LocalWorkspaceSession`；
 调用返回类型化结果：`FileContent`、`FileChange`、`EditResult`、`DirEntry`、`GrepMatch`、
-`CommandResult`；`PathRule.ops` 接受 `FileOp` 值 `"read"`/`"write"`。）
+`CommandResult`、`ProcessStart`、`ProcessOutput`；`PathRule.ops` 接受 `FileOp` 值
+`"read"`/`"write"`。）
 
 默认每次运行都会打开一个新 session，并在运行结束时关闭；上面的 `.session()` context manager 可以把一个
 session 跨运行保持打开（`close_after_run=False`），适合启动成本重要的场景。
@@ -155,6 +183,8 @@ session 跨运行保持打开（`close_after_run=False`），适合启动成本�
 - **`denied_paths` 胜过一切，包括你自己的 `readable=` 授权。** 调试“为什么读不了”前，先看优先级。
 - **被取消的 `shell` 调用可能留下半完成状态。** 超时时会杀掉 process group，但运行级取消如果发生在审批后、
   完成前，就和任何[同步工具取消](tools.md#注意事项)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
+- **后台进程随 session 存亡。** `close()` 时被杀掉，checkpoint 恢复也不会还原——用
+  `background=true` 启动的 dev server 应当被视为需要重启的东西，而不是会一直活着的东西。
 - **[Skills](skills.md#注意事项) 文件 IO 不受此 ACL 管理**：Skill 目录由插件自行读取，不经过工作区。
 
 ## 延伸阅读

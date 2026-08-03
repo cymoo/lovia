@@ -81,6 +81,30 @@ class CommandResult(BaseModel):
         return self.exit_code == 0 and not self.timed_out
 
 
+class ProcessStart(BaseModel):
+    """A background process just started by ``spawn``."""
+
+    process_id: str
+    pid: int
+    command: str
+
+
+class ProcessOutput(BaseModel):
+    """One incremental read of a background process.
+
+    ``output`` is everything the process wrote (stdout and stderr merged)
+    since the previous read; ``truncated`` reports that older unread output
+    was dropped to the buffer cap. After the process ends, ``status`` and
+    ``exit_code`` carry the outcome — reads never turn into errors.
+    """
+
+    process_id: str
+    status: Literal["running", "exited", "killed"]
+    exit_code: int | None = None
+    output: str = ""
+    truncated: bool = False
+
+
 @dataclass(frozen=True)
 class WorkspaceLimits:
     """Size and count caps for the workspace tools — one discoverable home.
@@ -107,7 +131,8 @@ class WorkspaceLimits:
 
     max_shell_output_chars: int = 30_000
     """Max characters of one command's stdout/stderr captured (each stream
-    clipped independently)."""
+    clipped independently). Also the per-process buffer cap for background
+    output: between reads only the newest this-many characters are kept."""
 
     max_grep_file_bytes: int = 5_000_000
     """Files larger than this are skipped by grep."""
@@ -148,6 +173,8 @@ __all__ = [
     "FileChange",
     "FileContent",
     "GrepMatch",
+    "ProcessOutput",
+    "ProcessStart",
     "WorkspaceLimits",
     "WorkspaceMode",
 ]

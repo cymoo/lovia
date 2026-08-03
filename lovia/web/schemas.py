@@ -122,6 +122,9 @@ class ServerInfo(BaseModel):
     agents: list[str] = Field(default_factory=list)
     default_agent: str | None = None
     version: str | None = None
+    # False only when the CLI serves its not-yet-configured state (no agents
+    # to chat with until /api/config receives a model).
+    configured: bool = True
     features: dict[str, bool] = Field(default_factory=dict)
 
 

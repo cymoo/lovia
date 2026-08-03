@@ -63,6 +63,9 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
             agents=list(deps.agents),
             default_agent=deps.default_agent,
             version=_lovia_version(),
+            # False only in the CLI's not-yet-configured state (no served
+            # agents): the UI then shows the first-run setup instead of chat.
+            configured=bool(deps.agents),
             features={
                 "checkpointing": deps.store.checkpointer is not None,
                 "titles": deps.generate_titles,
@@ -81,9 +84,16 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
                 "rewind": hasattr(deps.session, "rewind"),
                 # The /api/events lifecycle stream (push instead of poll).
                 "events": True,
+                # /api/config exists: the model connection is editable from
+                # the UI (the CLI's default agent only — never embedders).
+                "model_config": deps.config_runtime is not None,
             },
         )
 
+    if deps.config_runtime is not None:
+        from .config import build_config_router
+
+        router.include_router(build_config_router(deps.config_runtime))
     router.include_router(build_agents_router(deps))
     router.include_router(build_chat_router(deps))
     router.include_router(build_events_router(deps))

@@ -94,6 +94,11 @@ class RouterDeps:
     # end. Bound by the supervisor at run start; closed on chat deletion and
     # at app shutdown. Per-process, like the supervisor.
     workspaces: WorkspaceSessions = field(default_factory=WorkspaceSessions)
+    # The CLI's runtime-reconfiguration surface (a
+    # :class:`lovia.web.config.ConfigRuntime`), set by ``create_app`` when it
+    # received one. ``None`` — the embedder case — means no ``/api/config``
+    # routes and no ``model_config`` feature flag.
+    config_runtime: Any | None = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
@@ -136,9 +141,7 @@ class RouterDeps:
         Payloads are small JSON facts (ids, status, title) — never the per-token
         stream, which stays on each run's own hub.
         """
-        self.bus.publish(
-            {"event": event, "data": json.dumps(data, ensure_ascii=False)}
-        )
+        self.bus.publish({"event": event, "data": json.dumps(data, ensure_ascii=False)})
 
     @property
     def cancel_tokens(self) -> dict[str, CancelToken]:

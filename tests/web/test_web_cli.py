@@ -583,16 +583,25 @@ def test_main_serves_custom_app(
     assert captured["port"] == 9123
 
 
-def test_main_reports_missing_model(
+def test_main_missing_model_serves_the_setup_ui(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Headless + nothing configured: serve anyway, browser finishes setup."""
+    import io
+    import sys
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "stdin", io.StringIO())  # no TTY -> no wizard
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
     rc = cli.main([])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "error:" in err and "no model configured" in err
-    assert "--setup" in err  # the recovery hint names the wizard
+    assert rc == 0
+    assert captured["agent"] == {}  # nothing to chat with yet
+    runtime = captured["config_runtime"]
+    assert runtime is not None and not runtime.configured  # type: ignore[union-attr]
+    out = capsys.readouterr().out
+    assert "not configured" in out
+    assert "serving on http://127.0.0.1:8000" in out
 
 
 def test_main_port_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -800,24 +809,35 @@ def test_app_warns_about_agent_flags(
     assert warned and "--workspace" in warned[0] and "--max-tokens" in warned[0]
 
 
-def test_main_reports_missing_api_key_when_not_a_tty(
+def test_main_missing_api_key_serves_the_setup_ui(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
     write_config: Callable[..., Path],
 ) -> None:
+    """A partial config (key missing on an official host) also defers to the UI."""
     import io
     import sys
 
     monkeypatch.chdir(tmp_path)
     write_config(model="openai:gpt-5.5", api_key=None)
     monkeypatch.setattr(sys, "stdin", io.StringIO())
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
     rc = cli.main([])
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "no API key configured" in err
-    assert "--setup" in err
+    assert rc == 0
+    assert captured["agent"] == {}
+
+
+def test_main_configured_run_passes_the_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    assert cli.main([]) == 0
+    runtime = captured["config_runtime"]
+    assert runtime is not None and runtime.configured  # type: ignore[union-attr]
 
 
 def test_main_setup_needs_a_tty(

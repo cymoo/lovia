@@ -5,8 +5,11 @@ current-date awareness, model-driven scheduled runs, built-in tools — time,
 HTTP fetch, web search — and a workspace) and serves it with the bundled web
 UI. ``--app module:attribute`` serves your own ``Agent`` instead.
 
-The user-facing contract is the ``--help`` text: :data:`DESCRIPTION`,
-:data:`EPILOG` and the option groups in :func:`build_parser`.
+The model connection is not a flag: it lives in ``config.json`` (see
+:mod:`lovia.web.config`), created by the first-run wizard / ``--setup`` and
+edited in the web UI's Settings. The user-facing contract is the ``--help``
+text: :data:`DESCRIPTION`, :data:`EPILOG` and the option groups in
+:func:`build_parser`.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import sys
 from collections.abc import Mapping
 from importlib import import_module
 from pathlib import Path
-from typing import Any, NoReturn, cast, get_args
+from typing import Any, NoReturn, cast
 
 from .. import __version__
 from ..agent import Agent
@@ -27,78 +30,56 @@ from ..context import Compaction, ContextPolicy
 from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
-from ..plugins import Memory, Plugin, Skills, Subagents, Todo
-from ..providers import (
-    ModelSettings,
-    Provider,
-    provider_from_string,
-    supports_vision,
-)
+from ..providers import provider_from_string
 from ..reliability import RetryPolicy
-from ..tools import (
-    HumanChannel,
-    Tool,
-    ask_human,
-    current_date,
-    duckduckgo_search,
-    http_request,
-    now,
-    read_page,
-    tavily_search,
-)
-from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
-from . import setup
+from ..tools import HumanChannel
+from . import config as webconfig
 from .app import _default_db_path, _display_host, serve
 from .auth import is_loopback
-from .scheduling import Scheduling
+from .builder import (
+    DEFAULT_MAX_TURNS,
+    DEFAULT_MEMORY_DIR,
+    DEFAULT_RETRIES,
+    DEFAULT_SKILLS_DIR,
+    DEFAULT_WORKSPACE_MODE,
+    INSTRUCTIONS_FILES,
+    _first,
+    _mode_flag,
+    build_default_agent,
+    resolve_followup_model,
+    resolve_followups,
+    resolve_max_retries,
+    resolve_max_turns,
+)
 from .store import ChatStore
-from .ui import SURFACE_NOTE
-from .vision import make_see_image_tool
 
 log = logging.getLogger("lovia.web.cli")
 
-WORKSPACE_MODES: tuple[str, ...] = get_args(WorkspaceMode)
 LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-INSTRUCTIONS_FILES: tuple[str, ...] = ("AGENTS.md",)
-DEFAULT_SKILLS_DIR = ".agents/skills"
-DEFAULT_MEMORY_DIR = "./.lovia/memory"
-DEFAULT_AGENT_NAME = "lovia"
-DEFAULT_MAX_TURNS = 50
-# Rendered into --help from the core defaults so the text can never drift.
-DEFAULT_RETRIES = RetryPolicy().max_attempts - 1
-# Match the core library's ``Workspace.local`` default: shell and out-of-root
-# reads go through human approval. ``trusted`` (unprompted shell, read
-# anywhere) stays available via --trusted / LOVIA_WORKSPACE_MODE.
-DEFAULT_WORKSPACE_MODE = "coding"
-GENERIC_INSTRUCTIONS = (
-    "You are a helpful assistant running in the lovia web UI. "
-    "Be concise and accurate, and use your tools and skills when they help."
-)
 
 DESCRIPTION = """\
 Launch the lovia chat UI in your browser.
 
 Serves a ready-made agent — skills, long-term memory, todos, web search,
-scheduled runs, and a workspace rooted at the current directory. Anything
-required but missing (the model, an API key) is asked on first run, checked
-against the endpoint, and can be saved so it is never retyped.
+scheduled runs, and a workspace rooted at the current directory. The model
+connection is asked once on first run, checked against the endpoint, and
+saved to config.json so it is never retyped.
 """
 
 EPILOG = """\
 examples:
-  lovia web                                # default agent, cwd workspace
-  lovia web --setup                        # change the saved model/key
-  lovia web --port 9000 --model openai:gpt-5.5
-  lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
+  lovia web                                # first run opens the setup wizard
+  lovia web --setup                        # change the saved model or key
+  lovia web --port 9000
   lovia web --workspace ~/notes --readonly # let it read, not write
   lovia web --app myagents:assistant       # serve your own agent
 
 configuration:
-  flag > environment > ./.lovia/config.env > ~/.lovia/config.env (or --env-file)
-  The model's vendor prefix picks the endpoint variables: anthropic:/claude:
-  use ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY, anything else the OPENAI_* pair.
-  Every other setting uses the LOVIA_* name shown above. Reconfigure anytime
-  with --setup; inspect what would win (and why) with --check.
+  The model connection (model, base URL, API key, context window), extra
+  models, web search and role assignments live in ./.lovia/config.json —
+  the project file wins — or ~/.lovia/config.json (any directory). Managed
+  by --setup and the web UI's Settings; inspect with --check. The server and
+  agent options above stay flags, each with the LOVIA_* variable shown.
 """
 
 
@@ -125,28 +106,10 @@ class CliError(UserError):
     """A user-facing CLI misconfiguration; rendered without a traceback."""
 
 
-def _first(*values: str | None) -> str | None:
-    """Return the first non-empty value (the precedence helper)."""
-    for value in values:
-        if value:
-            return value
-    return None
-
-
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if not raw:
         return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise CliError(f"invalid integer for {name}: {raw!r}") from exc
-
-
-def _env_int_optional(name: str) -> int | None:
-    raw = os.getenv(name)
-    if not raw:
-        return None
     try:
         return int(raw)
     except ValueError as exc:
@@ -164,29 +127,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"lovia {__version__}")
 
-    model = p.add_argument_group("model")
-    model.add_argument(
-        "--model",
-        help="model id, e.g. openai:gpt-5.5 or deepseek-v4-pro "
-        "(env LOVIA_MODEL; asked on first run)",
-    )
-    model.add_argument(
-        "--base-url",
-        metavar="URL",
-        help="model API endpoint (env OPENAI_BASE_URL / ANTHROPIC_BASE_URL)",
-    )
-    model.add_argument(
-        "--api-key",
-        metavar="KEY",
-        help="model API key (env OPENAI_API_KEY / ANTHROPIC_API_KEY — preferred: "
-        "flags are visible in the process list)",
-    )
-    model.add_argument(
-        "--context-window",
-        type=int,
-        metavar="N",
-        help="context window in tokens, used for compaction "
-        "(env LOVIA_CONTEXT_WINDOW; default: ask the provider)",
+    model = p.add_argument_group(
+        "model", "the connection lives in config.json — these manage it"
     )
     model.add_argument(
         "--setup",
@@ -197,8 +139,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     model.add_argument(
         "--check",
         action="store_true",
-        help="print the resolved connection with each value's source, probe "
-        "the endpoint, and exit (0 reachable, 2 not)",
+        help="print the configured connection, probe the endpoint, and exit "
+        "(0 reachable, 2 not)",
     )
 
     agent = p.add_argument_group(
@@ -283,8 +225,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     server.add_argument(
         "--no-followups",
         action="store_true",
-        help="don't suggest follow-up questions after a reply "
-        "(env LOVIA_FOLLOWUPS=0; model via LOVIA_FOLLOWUP_MODEL)",
+        help="don't suggest follow-up questions after a reply (env LOVIA_FOLLOWUPS=0)",
     )
     server.add_argument(
         "--db",
@@ -293,13 +234,6 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     )
 
     advanced = p.add_argument_group("advanced")
-    advanced.add_argument(
-        "--env-file",
-        action="append",
-        metavar="FILE",
-        help="env file to load; repeatable "
-        "(default: ./.lovia/config.env, then ~/.lovia/config.env)",
-    )
     advanced.add_argument(
         "--max-turns",
         type=int,
@@ -342,314 +276,6 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     return p
 
 
-def load_env_files(env_files: list[str] | None) -> dict[str, str]:
-    """Load the ``--env-file`` files (or the autoload defaults); report added keys.
-
-    Default autoload is the project ``./.lovia/config.env``, then the user
-    ``~/.lovia/config.env`` (both written by the setup wizard). The process
-    environment always wins because files never override existing variables
-    (``override=False``), and the project file wins over the user one (it
-    loads first). A generic ``./.env`` is no longer read (dropped in 0.9.10):
-    silently adopting another tool's env file surprised more than it helped.
-    Returns ``{key: <source label>}`` for keys the files introduced — the
-    startup summary shows it as each value's source.
-
-    A missing python-dotenv is fatal only when ``--env-file`` was given
-    explicitly; otherwise auto-loading is silently skipped. This lives in the
-    CLI only — the embeddable ``create_app`` / ``serve`` never loads env files.
-    """
-    sources: dict[str, str] = {}
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        if env_files:
-            raise CliError(
-                "--env-file requires python-dotenv, which is not installed.",
-                hint="Install it with: pip install python-dotenv",
-            )
-        log.debug("python-dotenv not installed; skipping config autoload")
-        return sources
-
-    def load(path: Path, label: str) -> None:
-        before = set(os.environ)
-        load_dotenv(path, override=False)
-        for key in os.environ.keys() - before:
-            sources[key] = label
-        log.debug("loaded env file %s", path)
-
-    if env_files:
-        # An explicit --env-file that IS one of the scope files keeps its
-        # canonical label, so scope-aware behavior (the --setup save default,
-        # shadow warnings) recognizes it.
-        scope_labels = {
-            setup.config_path().expanduser().resolve(): setup.PROJECT_CONFIG_LABEL,
-            setup.user_config_path().expanduser().resolve(): setup.USER_CONFIG_LABEL,
-        }
-        for raw in env_files:
-            path = Path(raw)
-            if not path.is_file():
-                raise CliError(f"env file not found: {path}")
-            label = scope_labels.get(path.expanduser().resolve(), path.name)
-            load(path, label)
-    else:
-        # Project scope first (wins on conflicts via override=False), then
-        # user scope; one load when they resolve to the same file (cwd == ~).
-        seen: set[Path] = set()
-        for path, label in (
-            (setup.config_path(), setup.PROJECT_CONFIG_LABEL),
-            (setup.user_config_path(), setup.USER_CONFIG_LABEL),
-        ):
-            resolved = path.expanduser().resolve()
-            if resolved in seen or not path.is_file():
-                continue
-            seen.add(resolved)
-            load(path, label)
-    return sources
-
-
-def resolve_max_retries(cli: int | None) -> int | None:
-    """Explicit provider retry count, or ``None`` for the agent's posture.
-
-    Precedence: ``--max-retries`` flag, then ``LOVIA_MAX_RETRIES``. ``None``
-    means no override — the agent's own :class:`RetryPolicy` default applies.
-    """
-    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_RETRIES")
-    if value is not None and value < 0:
-        raise CliError(f"--max-retries must be >= 0, got {value}")
-    return value
-
-
-def resolve_max_turns(cli: int | None) -> int:
-    """Per-run agent turn cap (flag > LOVIA_MAX_TURNS > 50)."""
-    value = cli if cli is not None else _env_int("LOVIA_MAX_TURNS", DEFAULT_MAX_TURNS)
-    if value < 1:
-        raise CliError(f"--max-turns must be >= 1, got {value}")
-    return value
-
-
-def resolve_max_tokens(cli: int | None) -> int | None:
-    """Max output tokens per response (flag > LOVIA_MAX_TOKENS > provider default)."""
-    value = cli if cli is not None else _env_int_optional("LOVIA_MAX_TOKENS")
-    if value is not None and value <= 0:
-        raise CliError(f"--max-tokens must be > 0, got {value}")
-    return value
-
-
-def resolve_skills_dirs(cli_dirs: list[str] | None) -> list[Path]:
-    """Skill directories: ``--skills-dir`` > ``LOVIA_SKILLS_DIR`` > the default.
-
-    The default is ``./.agents/skills`` when present — the cross-agent
-    convention (shared with Claude Code, Codex, OpenCode), pairing with the
-    ``AGENTS.md`` instructions default. A bare ``./skills`` was the default
-    before 0.9.13; it is no longer auto-loaded (the generic name collides
-    with non-skill directories), so we point at the move once at startup.
-    """
-    if cli_dirs:
-        dirs = [Path(d) for d in cli_dirs]
-        for d in dirs:
-            if not d.is_dir():
-                raise CliError(f"skills directory not found: {d}")
-        return dirs
-    env = os.getenv("LOVIA_SKILLS_DIR")
-    if env:
-        d = Path(env)
-        if not d.is_dir():
-            raise CliError(f"skills directory not found (LOVIA_SKILLS_DIR): {d}")
-        return [d]
-    default = Path(DEFAULT_SKILLS_DIR)
-    if default.is_dir():
-        return [default]
-    if Path("skills").is_dir():
-        log.warning(
-            "./skills is no longer auto-loaded; move it to ./%s "
-            "or pass --skills-dir skills",
-            DEFAULT_SKILLS_DIR,
-        )
-    return []
-
-
-def resolve_memory(cli_dir: str | None, no_memory: bool) -> Memory | None:
-    """Build the default :class:`Memory` plugin unless ``--no-memory`` is set.
-
-    Storage-root precedence: ``--memory-dir`` > ``LOVIA_MEMORY_DIR`` >
-    ``./.lovia/memory``. The directory need not exist yet — the notes file and
-    archive db are created under it on first write.
-    """
-    if no_memory:
-        return None
-    root = _first(cli_dir, os.getenv("LOVIA_MEMORY_DIR")) or DEFAULT_MEMORY_DIR
-    path = Path(root)
-    if path.exists() and not path.is_dir():
-        raise CliError(f"memory path is not a directory: {path}")
-    log.info("memory enabled at %s", path)
-    # Long-lived server: curation must not hold back each run's final event.
-    return Memory(root, curate_in_background=True)
-
-
-def resolve_tools() -> list[Tool]:
-    """The always-on built-in tools for the default agent.
-
-    ``now``, ``read_page`` and ``http_request`` have no extra dependencies. Web
-    search prefers the Tavily backend when ``TAVILY_API_KEY`` is set; otherwise
-    it falls back to the keyless ``ddgs`` backend (bundled with the
-    ``web``/``ddg`` extras). When neither is available we load the rest and log
-    how to enable it rather than failing.
-    """
-    tools: list[Tool] = [now, read_page, http_request]
-    if os.environ.get("TAVILY_API_KEY"):
-        tools.append(tavily_search())
-    else:
-        try:
-            tools.append(duckduckgo_search())
-        except UserError:
-            log.info(
-                "web_search disabled: set TAVILY_API_KEY or install the "
-                "'ddgs' backend (pip install 'lovia[ddg]')."
-            )
-    return tools
-
-
-def _env_bool(name: str) -> bool | None:
-    """Parse a boolean-ish env var: True/False for set values, None when unset.
-
-    Warns on a value that is neither truthy nor falsy — the likely mistake is
-    putting a model spec in a flag (``LOVIA_VISION=openai:...`` instead of
-    ``LOVIA_VISION_MODEL=openai:...``), which would otherwise silently read
-    false.
-    """
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    value = raw.strip().lower()
-    if value in ("1", "true", "yes", "on"):
-        return True
-    if value in ("0", "false", "no", "off", ""):
-        return False
-    log.warning("%s=%r is not a boolean (use 1 or 0); treating as false", name, raw)
-    return False
-
-
-def resolve_followups(cli_off: bool) -> bool:
-    """Follow-up chips: on unless ``--no-followups`` or ``LOVIA_FOLLOWUPS=0``.
-
-    The opposite of the library default (``create_app(followups=False)``), on
-    purpose: an embedder must never silently gain a model call per run, while
-    the bundled CLI is a finished chat app where the chips are part of it.
-    """
-    if cli_off:
-        return False
-    env = _env_bool("LOVIA_FOLLOWUPS")
-    return True if env is None else env
-
-
-def resolve_followup_model() -> Provider | None:
-    """A cheaper model for follow-up suggestions (env ``LOVIA_FOLLOWUP_MODEL``).
-
-    ``None`` falls back to the agent's own model. Same env-gated shape as
-    ``LOVIA_VISION_MODEL``: ``LOVIA_FOLLOWUP_BASE_URL`` /
-    ``LOVIA_FOLLOWUP_API_KEY`` override the endpoint for a small model that
-    lives somewhere other than the main one.
-    """
-    spec = os.getenv("LOVIA_FOLLOWUP_MODEL")
-    if not spec:
-        return None
-    try:
-        return provider_from_string(
-            spec,
-            api_key=os.getenv("LOVIA_FOLLOWUP_API_KEY"),
-            base_url=os.getenv("LOVIA_FOLLOWUP_BASE_URL"),
-        )
-    except (UserError, ValueError) as exc:
-        log.warning(
-            "LOVIA_FOLLOWUP_MODEL=%r unusable; falling back to the agent's "
-            "own model: %s",
-            spec,
-            exc,
-        )
-        return None
-
-
-def resolve_vision_tool(
-    provider: Provider, workspace: LocalWorkspace | None
-) -> Tool | None:
-    """The ``see_image`` tool, when a distinct vision model is configured.
-
-    Wired only when all three hold: ``LOVIA_VISION_MODEL`` is set; the agent
-    has a local workspace to read images from; and the *main* model can't see
-    images itself. A vision-capable main model gets images inline, so a
-    delegation tool would just be a redundant, slower second path — we log and
-    skip it. Same env-gated shape as ``web_search`` in :func:`resolve_tools`.
-
-    The vision model's endpoint and key default to the vendor env the spec
-    routes to (``OPENAI_*`` / ``ANTHROPIC_*``); ``LOVIA_VISION_BASE_URL`` and
-    ``LOVIA_VISION_API_KEY`` override them for a vision model that lives on a
-    different endpoint than the main model (the common case).
-    """
-    spec = os.getenv("LOVIA_VISION_MODEL")
-    if not spec:
-        return None
-    if workspace is None:
-        log.info("LOVIA_VISION_MODEL set but no workspace; see_image disabled.")
-        return None
-    if supports_vision(provider):
-        log.info(
-            "main model is vision-capable; ignoring LOVIA_VISION_MODEL "
-            "(images go inline as ImagePart)."
-        )
-        return None
-    try:
-        vision_provider = provider_from_string(
-            spec,
-            api_key=os.getenv("LOVIA_VISION_API_KEY"),
-            base_url=os.getenv("LOVIA_VISION_BASE_URL"),
-        )
-    except UserError as exc:
-        log.warning("LOVIA_VISION_MODEL=%r unusable; see_image disabled: %s", spec, exc)
-        return None
-    log.info("see_image enabled via vision model %r", spec)
-    return make_see_image_tool(vision_provider, workspace_root=workspace.root)
-
-
-def resolve_instructions(cli_text: str | None, cli_file: str | None) -> str:
-    if cli_text is not None:
-        return cli_text
-    file = _first(cli_file, os.getenv("LOVIA_INSTRUCTIONS_FILE"))
-    if file:
-        path = Path(file)
-        if not path.is_file():
-            raise CliError(f"instructions file not found: {path}")
-        return path.read_text(encoding="utf-8")
-    for name in INSTRUCTIONS_FILES:
-        path = Path(name)
-        if path.is_file():
-            log.info("using instructions from %s", path)
-            return path.read_text(encoding="utf-8")
-    return GENERIC_INSTRUCTIONS
-
-
-def _mode_flag(args: argparse.Namespace) -> str | None:
-    """Workspace mode selected by the boolean flags, if any."""
-    return "readonly" if args.readonly else "trusted" if args.trusted else None
-
-
-def resolve_workspace(
-    cli_dir: str | None, cli_mode: str | None, no_workspace: bool
-) -> LocalWorkspace | None:
-    if no_workspace:
-        return None
-    root = _first(cli_dir, os.getenv("LOVIA_WORKSPACE")) or "."
-    mode = _first(cli_mode, os.getenv("LOVIA_WORKSPACE_MODE")) or DEFAULT_WORKSPACE_MODE
-    if mode not in WORKSPACE_MODES:
-        raise CliError(
-            f"invalid workspace mode: {mode!r}",
-            hint=f"choose one of: {', '.join(WORKSPACE_MODES)}",
-        )
-    path = Path(root)
-    if not path.is_dir():
-        raise CliError(f"workspace directory not found: {path}")
-    return Workspace.local(str(path), mode=cast(WorkspaceMode, mode))
-
-
 def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
     """Import ``module:attribute`` and return the Agent (or mapping) it names.
 
@@ -683,78 +309,8 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
     return cast("Agent[Any] | Mapping[str, Agent[Any]]", obj)
 
 
-def build_default_agent(
-    args: argparse.Namespace,
-    store: ChatStore,
-    provider: Provider,
-    question_channel: HumanChannel | None = None,
-) -> Agent[Any]:
-    instructions = resolve_instructions(args.instructions, args.instructions_file)
-    skills_dirs = resolve_skills_dirs(args.skills_dir)
-    plugins: list[Plugin] = []
-    if skills_dirs:
-        plugins.append(Skills(*skills_dirs))
-        log.info("loaded skills from %s", ", ".join(str(d) for d in skills_dirs))
-    plugins.append(Todo())
-    # Let the model create Scheduled runs from chat (gated by approval). Closes
-    # over the app's store so it writes the rows the scheduler polls.
-    plugins.append(Scheduling(store))
-    memory = resolve_memory(args.memory_dir, args.no_memory)
-    if memory is not None:
-        plugins.append(memory)
-    workspace = resolve_workspace(args.workspace, _mode_flag(args), args.no_workspace)
-    tools = resolve_tools()
-    vision_tool = resolve_vision_tool(provider, workspace)
-    if vision_tool is not None:
-        tools.append(vision_tool)
-    if not args.no_subagents:
-        # Background subagents, on by default. The child is the same
-        # assistant minus the plugins that must not ride along: Subagents
-        # itself (no recursive spawning), Scheduling (a child schedules
-        # nothing), and Memory (a task transcript is not user memory) —
-        # Skills and Todo are basic capabilities a delegated task needs.
-        # ask_human is likewise parent-only (added below): a delegated
-        # background task has no operator watching to answer it.
-        child: Agent[Any] = Agent(
-            name=f"{DEFAULT_AGENT_NAME}-sub",
-            instructions=instructions,
-            model=provider,
-            settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
-            plugins=[p for p in plugins if isinstance(p, (Skills, Todo))],
-            tools=tools,
-            workspace=workspace,
-        )
-        child.instruction(current_date())
-        # Cap below max_background_runs (8): parent + children + scheduler
-        # fires must all fit without starving each other.
-        plugins.append(Subagents([child], max_concurrent=3))
-    if question_channel is not None:
-        tools = [*tools, ask_human(question_channel)]
-    agent: Agent[Any] = Agent(
-        name=DEFAULT_AGENT_NAME,
-        instructions=instructions,
-        model=provider,
-        settings=ModelSettings(max_tokens=resolve_max_tokens(args.max_tokens)),
-        plugins=plugins,
-        tools=tools,
-        workspace=workspace,
-    )
-    # This agent only ever runs in the bundled UI, so declare what it renders —
-    # untold, models assume plain text and refuse to embed images. Static, so
-    # it precedes the fragment that changes daily.
-    agent.instruction(lambda _ctx: SURFACE_NOTE)
-    # Tell the model today's date up front so it searches the current year and
-    # skips the now->web_search round-trip. Date only (server-local tz): stable
-    # within a prompt-cache window; precise time stays the `now` tool's job.
-    agent.instruction(current_date())
-    return agent
-
-
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     flags = [
-        ("--model", args.model is not None),
-        ("--base-url", args.base_url is not None),
-        ("--api-key", args.api_key is not None),
         ("--skills-dir", bool(args.skills_dir)),
         ("--memory-dir", args.memory_dir is not None),
         ("--no-memory", args.no_memory),
@@ -766,7 +322,6 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
         ("--instructions", args.instructions is not None),
         ("--instructions-file", args.instructions_file is not None),
         ("--max-tokens", args.max_tokens is not None),
-        ("--context-window", args.context_window is not None),
     ]
     ignored = [name for name, given in flags if given]
     if ignored:
@@ -811,7 +366,6 @@ def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
 def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     args = build_parser(prog).parse_args(argv)
     try:
-        env_sources = load_env_files(args.env_file)
         level = (_first(args.log_level, os.getenv("LOVIA_LOG_LEVEL")) or "info").upper()
         if level not in LOG_LEVELS:
             raise CliError(
@@ -868,6 +422,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # agents; wiring their channel is the library API's job (create_app's
         # question_channel=), so it stays None here.
         question_channel: HumanChannel | None = None
+        followup_model = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             for flag, given in (("--setup", args.setup), ("--check", args.check)):
@@ -885,7 +440,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             )
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)
-            summary = setup.format_app_summary(
+            summary = webconfig.format_app_summary(
                 version=__version__,
                 app_target=app_target,
                 # Without --db, create_app derives the file from the agent name.
@@ -893,36 +448,39 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 url=url,
             )
         else:
-            db_desc = db_path or str(_default_db_path(DEFAULT_AGENT_NAME))
-            conn = setup.resolve_connection(
-                model_flag=args.model,
-                base_url_flag=args.base_url,
-                api_key_flag=args.api_key,
-                context_window_flag=args.context_window,
-                env_sources=env_sources,
+            db_desc = db_path or str(_default_db_path("lovia"))
+            loaded = webconfig.load_active()
+            profile = loaded.config.default_profile()
+            conn = (
+                webconfig.Connection.from_profile(profile)
+                if profile is not None
+                else webconfig.Connection()
             )
             if args.check:
                 # Read-only diagnosis: report, probe, exit — never the wizard.
-                return setup.run_check(conn, version=__version__)
+                return webconfig.run_check(conn, version=__version__)
             if conn.missing() or args.setup:
                 if not sys.stdin.isatty():
                     missing = conn.missing()
                     if missing:
                         raise CliError(
                             f"no {' or '.join(missing)} configured",
-                            hint=setup.CONFIG_HINT,
+                            hint=webconfig.CONFIG_HINT,
                         )
                     raise CliError("--setup needs an interactive terminal")
-                conn = setup.interactive_setup(
-                    conn, env_sources=env_sources, reconfigure=args.setup
-                )
+                conn = webconfig.interactive_setup(loaded, reconfigure=args.setup)
             assert conn.model is not None
+            # The wizard upserted the entered profile into the config (even on
+            # a declined save), so roles resolve against the session's truth.
+            active_profile = loaded.config.default_profile()
             try:
                 provider = provider_from_string(
                     conn.model,
                     api_key=conn.api_key,
                     base_url=conn.base_url,
-                    supports_vision=_env_bool("LOVIA_VISION"),
+                    supports_vision=(
+                        active_profile.vision_override() if active_profile else None
+                    ),
                 )
             except ValueError as exc:
                 # Eager construction also surfaces vendor-prefix typos at
@@ -933,14 +491,22 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             store = ChatStore.sqlite(db_desc)
             question_channel = HumanChannel()
             agent = build_default_agent(
-                args, store, provider, question_channel=question_channel
+                args,
+                store,
+                provider,
+                question_channel=question_channel,
+                config=loaded.config,
             )
+            followup_model = resolve_followup_model(loaded.config.aux_profile())
             context_policy = Compaction(context_window=conn.context_window)
             _warn_if_exposed(host, agent.workspace)
-            summary = setup.format_summary(
+            summary = webconfig.format_summary(
                 conn,
                 version=__version__,
                 url=url,
+                config_desc=(
+                    loaded.label if loaded.exists else "(not saved — session only)"
+                ),
                 workspace_desc=_workspace_desc(args, agent.workspace),
                 db_desc=db_desc,
             )
@@ -963,7 +529,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             retry=retry,
             token=token,
             followups=resolve_followups(args.no_followups),
-            followup_model=resolve_followup_model(),
+            followup_model=followup_model,
             # Deny an unanswered tool approval after 10 minutes. Without it a
             # clientless run (a scheduled fire, a subagent task) parked on an
             # approval holds one of the concurrency slots forever; for a chat

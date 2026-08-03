@@ -579,10 +579,12 @@ export function updateSessionTitle(sessionId, title) {
  * sidebar the same lines land on a row `renderSessions` already replaced — a
  * no-op on a detached node.
  *
- * @param {HTMLElement} row Row to restate after an action.
- * @param {{ onDeleted?: () => void, stacked?: boolean }} [opts]
+ * `stacked` layers the rename prompt over an open dialog instead of closing it;
+ * `onDeleted` runs once a delete lands. Both options are typed by inference off
+ * the defaults below — a `@param` tag naming a destructured parameter fails
+ * `tsc --checkJs` (TS8024), and one without a default drops out of the type.
  */
-function rowActions(s, row, { onDeleted, stacked = false } = {}) {
+function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, stacked = false } = {}) {
   const pinMark = document.createElement('span');
   pinMark.className = 'session-pin';
   pinMark.setAttribute('aria-hidden', 'true');
@@ -635,13 +637,13 @@ function rowActions(s, row, { onDeleted, stacked = false } = {}) {
     renameSession(s, { stack: stacked }),
   );
   add(t('session.delete'), icon('trash-2', { size: 14 }), async () => {
-    if (await deleteSession(s.id, s.title)) onDeleted?.();
+    if (await deleteSession(s.id, s.title)) onDeleted();
   });
 
   return [pinMark, menu];
 }
 
-/** @param {{ stack?: boolean }} [opts] `stack` keeps an open dialog alive under the prompt. */
+/** `stack` keeps an already-open dialog alive under the prompt. */
 async function renameSession(s, { stack = false } = {}) {
   const title = await promptDialog(t('dialog.renameChat'), s.title || '', { stack });
   if (title === null) return; // cancelled — empty string means "clear the title"

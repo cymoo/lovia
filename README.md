@@ -484,14 +484,13 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 ```bash
 lovia web --port 9000                      # python -m lovia.web works too
-lovia web --setup                          # change the saved model/key
+lovia web --check                          # inspect the saved connection
 ```
 
-The model connection (model name, Base URL, API key) is configured once —
-in the browser (Settings → Models: multiple profiles, a vision/aux role per
-task, connection testing, live switching from the composer) or via the
-`--setup` terminal wizard — and saved to `~/.lovia/config.json` (owner-only,
-git-ignored). A project-local `./.lovia/config.json` overrides it wholesale;
+The model connection (model name, Base URL, API key) is configured once,
+in the browser — Settings → Models: multiple profiles, a vision/aux role per
+task, connection testing, live switching from the composer — and saved to
+`~/.lovia/config.json` (owner-only, git-ignored). A project-local `./.lovia/config.json` overrides it wholesale;
 changes apply live, no restart. Diagnose with `lovia web --check`; server
 and agent options stay flags/env vars.
 

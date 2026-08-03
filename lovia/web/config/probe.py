@@ -1,8 +1,7 @@
 """Probing a model endpoint: reachability, auth, model list, context window.
 
-Shared by the terminal wizard (``--setup``), the ``--check`` diagnosis and
-(upcoming) the web UI's "test connection" button, so every front-end
-reports identical outcomes.
+Shared by the ``--check`` diagnosis and the web UI's "test connection"
+button, so every front-end reports identical outcomes.
 """
 
 from __future__ import annotations

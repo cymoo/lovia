@@ -386,6 +386,8 @@ const MESSAGES = {
     'cfg.visionOn': '支持',
     'cfg.visionOff': '不支持',
     'cfg.visionHint': '自动 = 按已知模型能力表判断；网关改名时可手动指定',
+    'cfg.testNeedsModel': '先填写模型 ID',
+    'cfg.fetchNeedsEndpoint': '先填写 Base URL 或 API Key',
     'cfg.test': '测试连接',
     'cfg.testing': '测试中…',
     'cfg.testOk': '端点可达',
@@ -424,7 +426,7 @@ const MESSAGES = {
     'cfg.heroTitle': '接入你的第一个模型',
     'cfg.heroBody': 'lovia 需要一个模型端点才能开始对话。填写 Base URL、API Key 与模型 ID，配置保存在服务端的 .lovia/config.json，今后启动即用。',
     'cfg.heroCta': '配置模型',
-    'cfg.heroAlt': '也可以在终端运行 lovia web --setup',
+    'cfg.heroAlt': '也可以直接编辑 ~/.lovia/config.json',
   },
 };
 
@@ -788,6 +790,8 @@ const EN = {
   'cfg.visionOff': 'Not supported',
   'cfg.visionHint':
     'Auto follows the known-model table; set it for renamed gateway models',
+  'cfg.testNeedsModel': 'Enter a model ID first',
+  'cfg.fetchNeedsEndpoint': 'Enter a Base URL or API key first',
   'cfg.test': 'Test connection',
   'cfg.testing': 'Testing…',
   'cfg.testOk': 'Endpoint reachable',
@@ -833,7 +837,7 @@ const EN = {
     + 'model ID — saved server-side in .lovia/config.json, ready on every '
     + 'later launch.',
   'cfg.heroCta': 'Configure a model',
-  'cfg.heroAlt': 'Or run lovia web --setup in a terminal',
+  'cfg.heroAlt': 'Or hand-edit ~/.lovia/config.json',
 };
 
 function browserLang() {

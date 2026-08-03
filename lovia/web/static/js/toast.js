@@ -13,6 +13,21 @@ function container() {
     el.setAttribute('aria-live', 'polite');
     document.body.appendChild(el);
   }
+  // Promote to the top layer via the Popover API: a modal <dialog> paints
+  // above any z-index, so a toast fired from inside Settings would otherwise
+  // be buried under the backdrop. Later top-layer entries stack on top, and
+  // re-showing after a dialog opens keeps toasts the newest entry.
+  // (any-cast: the bundled TS lib predates the Popover API.)
+  const pop = /** @type {any} */ (el);
+  if ('popover' in el) {
+    pop.popover = 'manual';
+    try {
+      if (document.querySelector('dialog[open]') && el.matches(':popover-open')) {
+        pop.hidePopover(); // re-enter the top layer above the dialog
+      }
+      if (!el.matches(':popover-open')) pop.showPopover();
+    } catch { /* popover unsupported edge — the fixed container still shows */ }
+  }
   return el;
 }
 

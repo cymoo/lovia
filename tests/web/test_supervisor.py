@@ -1129,7 +1129,5 @@ async def test_start_accepts_an_external_mailbox() -> None:
     assert ctrl.task is not None
     await asyncio.wait_for(ctrl.task, timeout=5)
     second_call = provider.calls[1]
-    assert any(
-        m.role == "user" and "steer note" in str(m.content) for m in second_call
-    )
+    assert any(m.role == "user" and "steer note" in str(m.content) for m in second_call)
     await deps.supervisor.shutdown()

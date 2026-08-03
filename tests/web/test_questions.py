@@ -177,9 +177,7 @@ async def test_answer_endpoint_404_without_question_channel() -> None:
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        r = await ac.post(
-            "/api/chat/answer", json={"session_id": "s1", "answer": "x"}
-        )
+        r = await ac.post("/api/chat/answer", json={"session_id": "s1", "answer": "x"})
         assert r.status_code == 404
         assert "no question channel" in r.json()["detail"]
 
@@ -195,7 +193,9 @@ def test_build_default_agent_wires_ask_human_parent_only(
     args = cli.build_parser().parse_args([])
     channel = HumanChannel()
     agent = cli.build_default_agent(
-        args, ChatStore.in_memory(), provider_from_string("test-model"),
+        args,
+        ChatStore.in_memory(),
+        provider_from_string("test-model"),
         question_channel=channel,
     )
     assert "ask_human" in {t.name for t in agent.tools}

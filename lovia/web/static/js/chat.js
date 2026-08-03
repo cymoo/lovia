@@ -1436,6 +1436,12 @@ export function initContextRing() {
   const ring = document.getElementById('context-ring');
   const pop = document.getElementById('context-popover');
   if (!ring || !pop) return;
+  // A model switch refetches the agent list; the ring's denominator (the
+  // window the NEXT message runs against) and the popover's model row must
+  // follow it instead of showing the previous model's math.
+  store.on('agents-loaded', () => {
+    if (_lastUsage) updateContextMeter(_lastUsage);
+  });
   ring.addEventListener('click', (e) => {
     e.stopPropagation();
     toggleContextPopover();

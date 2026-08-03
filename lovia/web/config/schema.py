@@ -2,8 +2,7 @@
 
 The model connection, web-search backend and role assignments live in one
 JSON document — ``./.lovia/config.json`` (project scope) or
-``~/.lovia/config.json`` (user scope) — managed by ``lovia web --setup`` and
-the web UI's Settings. The file is the single source of truth: there are no
+``~/.lovia/config.json`` (user scope) — managed in the web UI's Settings. The file is the single source of truth: there are no
 model-connection flags or environment variables. (:mod:`.storage` owns where
 the file lives; this module owns what it says.)
 """
@@ -185,9 +184,9 @@ class WebConfig(BaseModel):
 
 @dataclass
 class Connection:
-    """The wizard's working state: one connection being entered/probed.
+    """One connection as launched or probed: a profile with defaults filled.
 
-    ``context_window`` may be adopted from a ``/models`` probe during setup;
+    ``context_window`` may be adopted from a ``/models`` probe;
     ``window_from_endpoint`` marks that case so the value is used for this
     launch but never persisted (it would go on lying after the deployment is
     resized).

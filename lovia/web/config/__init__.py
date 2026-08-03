@@ -1,13 +1,14 @@
 """Configuration engine for the ``lovia web`` CLI.
 
-One engine, several front-ends: the terminal wizard (first run / ``--setup``),
-the ``--check`` diagnosis, and the web UI's Settings (upcoming) all read
-and write the same ``config.json`` through this package.
+The web UI's Settings is the one write path (over ``/api/config``); the
+``--check`` diagnosis and the CLI boot read the same ``config.json``
+through this package. Hand-editing the file stays possible — it is
+validated wholesale on load.
 
 - :mod:`.schema` — what the file says (profiles, roles, search).
 - :mod:`.storage` — where it lives, and atomic owner-only writes.
 - :mod:`.probe` — endpoint validation shared by every front-end.
-- :mod:`.wizard` — the interactive terminal flow.
+- :mod:`.runtime` — building and hot-swapping the served agent.
 - :mod:`.check` — read-only diagnosis and the startup summary.
 """
 
@@ -51,7 +52,6 @@ from .storage import (
     save_config,
     user_config_path,
 )
-from .wizard import interactive_setup
 
 __all__ = [
     "ANTHROPIC_FLAVOR",
@@ -73,7 +73,6 @@ __all__ = [
     "format_app_summary",
     "format_summary",
     "format_unconfigured_summary",
-    "interactive_setup",
     "known_context_window",
     "load_active",
     "load_config",

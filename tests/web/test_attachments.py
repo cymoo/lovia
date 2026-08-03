@@ -49,7 +49,9 @@ def test_no_attachments_returns_plain_string(tmp_path: Path) -> None:
 def test_vision_inlines_image_and_notes_its_path(tmp_path: Path) -> None:
     rel = _seed_image(tmp_path)
     agent = _agent(tmp_path, vision=True)
-    req = ChatRequest(message="what is this", attachments=[_att(rel, "image/png", "image")])
+    req = ChatRequest(
+        message="what is this", attachments=[_att(rel, "image/png", "image")]
+    )
     out = build_user_input(req, agent)
     assert isinstance(out, list) and len(out) == 1
     parts = out[0].content
@@ -61,7 +63,9 @@ def test_vision_inlines_image_and_notes_its_path(tmp_path: Path) -> None:
 def test_non_vision_references_path_without_inlining(tmp_path: Path) -> None:
     rel = _seed_image(tmp_path)
     agent = _agent(tmp_path, vision=False)
-    req = ChatRequest(message="what is this", attachments=[_att(rel, "image/png", "image")])
+    req = ChatRequest(
+        message="what is this", attachments=[_att(rel, "image/png", "image")]
+    )
     out = build_user_input(req, agent)
     parts = out[0].content
     assert not any(isinstance(p, ImagePart) for p in parts)  # NOT inlined
@@ -101,7 +105,9 @@ def test_missing_file_is_dropped_but_message_survives(tmp_path: Path) -> None:
 
 def test_no_workspace_agent_ignores_attachments(tmp_path: Path) -> None:
     agent = Agent(name="plain", model=ScriptedProvider([text("ok")]))
-    req = ChatRequest(message="hi", attachments=[_att("uploads/x.png", "image/png", "image")])
+    req = ChatRequest(
+        message="hi", attachments=[_att("uploads/x.png", "image/png", "image")]
+    )
     assert build_user_input(req, agent) == "hi"
 
 
@@ -111,7 +117,9 @@ def test_history_serialization_preserves_image_parts() -> None:
     from lovia.messages import user
     from lovia.web.api.serialization import _content
 
-    out = _content(user([TextPart("hi"), ImagePart(data="AAAA", mime_type="image/png")]))
+    out = _content(
+        user([TextPart("hi"), ImagePart(data="AAAA", mime_type="image/png")])
+    )
     assert isinstance(out, list)
     assert any(p["type"] == "image" and p["mime_type"] == "image/png" for p in out)
     assert any(p["type"] == "text" and p["text"] == "hi" for p in out)

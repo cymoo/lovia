@@ -88,7 +88,7 @@ class ConfigRuntime:
     def serveable(config: WebConfig) -> list[str]:
         """What stops ``config`` from serving; empty when it can.
 
-        Mirrors the wizard's completeness rule: a default profile must exist,
+        The completeness rule: a default profile must exist,
         and an official-host endpoint must have its key.
         """
         profile = config.default_profile()
@@ -158,7 +158,7 @@ class ConfigRuntime:
                 save_config(config, self.loaded.path)
                 self.loaded.exists = True
             deps = self._deps
-            if deps is None:  # not serving yet (wizard path builds its own)
+            if deps is None:  # not bound yet (boot builds its own agent)
                 return
             old = deps.agents.get(self.agent_key)
             deps.agents[self.agent_key] = agent

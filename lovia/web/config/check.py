@@ -85,7 +85,7 @@ def run_check(
 ) -> int:
     """``lovia web --check``: report the configuration, probe it, exit.
 
-    Read-only diagnosis — never prompts (no wizard) and never writes. Exit 0
+    Read-only diagnosis — never prompts and never writes. Exit 0
     when the endpoint answered (or can't be verified, which is normal for
     gateways without ``/models``), 2 when configuration is missing or the
     probe failed hard — so CI and containers can assert on it.

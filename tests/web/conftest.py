@@ -2,7 +2,7 @@
 
 The providers fall back to the credential env vars, so a developer's real
 configuration must never leak into (or be touched by) tests. Tests that
-exercise the wizard's project-scope save isolate the filesystem with
+exercise project-scope config files isolate the filesystem with
 ``monkeypatch.chdir(tmp_path)`` themselves; ``~`` is redirected for every
 test below, since the CLI reads and writes ``~/.lovia/config.json``.
 """

@@ -80,11 +80,13 @@ Provider 认证失败。
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `POST /api/config/test` | CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent |
 
 ### 生命周期事件
 
 `GET /api/events` 使用 GET + `EventSource`，推送 `run_started`、`run_finished`、
-`session_created` 和 `session_retitled`。事件流不重放历史；客户端每次连接或重连时，
+`session_created`、`session_retitled` 和 `config_changed`（模型配置被修改——
+重新拉取 `/api/config` 即可同步）。事件流不重放历史；客户端每次连接或重连时，
 应先通过 `/api/sessions` 和 `/api/runs` 获取一次当前状态，再处理后续事件。订阅者处理过慢时，
 服务端会关闭连接，客户端仍按上述流程恢复。如需补查断线期间已经结束的 Run，可调用
 `/api/runs/history` 并传入 `since`。

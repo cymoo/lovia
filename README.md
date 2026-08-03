@@ -487,11 +487,13 @@ lovia web --port 9000                      # python -m lovia.web works too
 lovia web --setup                          # change the saved model/key
 ```
 
-The model connection (model name, Base URL, API key) is asked interactively
-on first run and saved to `~/.lovia/config.json` (owner-only, git-ignored) —
-one setup, every directory. A project-local `./.lovia/config.json` overrides
-it wholesale. Change it later with `lovia web --setup`, diagnose with
-`lovia web --check`; server and agent options stay flags/env vars.
+The model connection (model name, Base URL, API key) is configured once —
+in the browser (Settings → Models: multiple profiles, a vision/aux role per
+task, connection testing, live switching from the composer) or via the
+`--setup` terminal wizard — and saved to `~/.lovia/config.json` (owner-only,
+git-ignored). A project-local `./.lovia/config.json` overrides it wholesale;
+changes apply live, no restart. Diagnose with `lovia web --check`; server
+and agent options stay flags/env vars.
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST
 API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or

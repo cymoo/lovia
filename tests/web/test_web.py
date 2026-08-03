@@ -856,7 +856,9 @@ def test_usage_dict_includes_cache_counts() -> None:
     from lovia.web.sse import usage_dict
 
     d = usage_dict(
-        Usage(input_tokens=10, output_tokens=2, cache_read_tokens=7, cache_write_tokens=1)
+        Usage(
+            input_tokens=10, output_tokens=2, cache_read_tokens=7, cache_write_tokens=1
+        )
     )
     assert d == {
         "input_tokens": 10,

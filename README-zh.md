@@ -456,12 +456,12 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 ```bash
 lovia web --port 9000                      # python -m lovia.web 亦可
-lovia web --setup                          # 修改已保存的模型/密钥
+lovia web --check                          # 查看已保存的连接
 ```
 
-模型连接（模型名、Base URL、API 密钥）只需配置一次——可以在浏览器里完成
-（设置 → 模型：多模型档案、视觉/辅助角色指派、连接测试、输入框旁即时切换），也可以走
-`--setup` 终端向导——保存到 `~/.lovia/config.json`（仅当前用户可读写、自动 git-ignore）。
+模型连接（模型名、Base URL、API 密钥）只需在浏览器里配置一次
+（设置 → 模型：多模型档案、视觉/辅助角色指派、连接测试、输入框旁即时切换），
+保存到 `~/.lovia/config.json`（仅当前用户可读写、自动 git-ignore）。
 项目级 `./.lovia/config.json` 存在时整体优先；所有修改即时生效，无需重启。用
 `lovia web --check` 检查配置与端点；服务器与 Agent 选项仍走参数/环境变量。
 

@@ -17,7 +17,6 @@ from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
 from lovia.web import builder  # noqa: E402
 from lovia.web.config import (  # noqa: E402
-    Connection,
     ModelProfile,
     SearchConfig,
     WebConfig,
@@ -586,12 +585,11 @@ def test_main_serves_custom_app(
 def test_main_missing_model_serves_the_setup_ui(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Headless + nothing configured: serve anyway, browser finishes setup."""
-    import io
+    """Nothing configured: serve the setup UI — even on a TTY (single entry)."""
     import sys
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "stdin", io.StringIO())  # no TTY -> no wizard
+    monkeypatch.setattr(sys, "stdin", _FakeTty())  # a TTY changes nothing
     captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
     rc = cli.main([])
@@ -840,35 +838,16 @@ def test_main_configured_run_passes_the_runtime(
     assert runtime is not None and runtime.configured  # type: ignore[union-attr]
 
 
-def test_main_setup_needs_a_tty(
+def test_main_check_rejects_custom_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    write_config: Callable[..., Path],
-) -> None:
-    import io
-    import sys
-
-    monkeypatch.chdir(tmp_path)
-    write_config()
-    monkeypatch.setattr(sys, "stdin", io.StringIO())
-    rc = cli.main(["--setup"])
-    assert rc == 2
-    assert "--setup needs an interactive terminal" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("flag", ["--setup", "--check"])
-def test_main_setup_and_check_reject_custom_app(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    flag: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     # Guarded before the app target is even imported: the bogus module is fine.
-    rc = cli.main(["--app", "nosuchmod:agent", flag])
+    rc = cli.main(["--app", "nosuchmod:agent", "--check"])
     assert rc == 2
-    assert flag in capsys.readouterr().err
+    assert "--check" in capsys.readouterr().err
 
 
 def test_main_check_reports_and_exits_without_serving(
@@ -901,15 +880,15 @@ def test_main_check_reports_and_exits_without_serving(
     assert "~/.lovia/config.json (present)" in out
 
 
-def test_main_check_missing_config_is_exit_2_not_a_wizard(
+def test_main_check_missing_config_is_exit_2_without_serving(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    def _no_wizard(*a: object, **k: object) -> None:
-        raise AssertionError("--check must never prompt")
+    def _no_serve(*a: object, **k: object) -> None:
+        raise AssertionError("--check must exit before serving")
 
-    monkeypatch.setattr(cli.webconfig, "interactive_setup", _no_wizard)
+    monkeypatch.setattr(cli, "serve", _no_serve)
     rc = cli.main(["--check"])
     assert rc == 2
     assert "missing: model" in capsys.readouterr().out
@@ -927,7 +906,6 @@ def test_main_configured_run_prints_summary_and_skips_wizard(
     def _boom(*a: object, **k: object) -> object:
         raise AssertionError("configured launches must not prompt or validate")
 
-    monkeypatch.setattr(cli.webconfig, "interactive_setup", _boom)
     monkeypatch.setattr("lovia.web.config.check.validate_connection", _boom)
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main([])
@@ -1002,47 +980,6 @@ def test_main_app_prints_reduced_summary(
     assert "agentmod_sum:agent" in out
     assert "serving on http://127.0.0.1:8000" in out
     assert "api key" not in out  # endpoint rows are the default agent's
-
-
-def test_main_runs_wizard_when_config_missing_on_a_tty(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import sys
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "stdin", _FakeTty())
-    completed = Connection(model="wizard-model", base_url="http://gw/v1")
-    calls: list[object] = []
-
-    def fake_wizard(loaded: object, **kwargs: object) -> Connection:
-        calls.append(loaded)
-        return completed
-
-    monkeypatch.setattr(cli.webconfig, "interactive_setup", fake_wizard)
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
-    rc = cli.main([])
-    assert rc == 0
-    assert len(calls) == 1
-    agent = captured["agent"]
-    assert isinstance(agent, Agent)
-    assert getattr(agent.model, "base_url", None) == "http://gw/v1"
-
-
-def test_main_wizard_interrupt_exits_130(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import sys
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "stdin", _FakeTty())
-
-    def interrupted(loaded: object, **kwargs: object) -> object:
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(cli.webconfig, "interactive_setup", interrupted)
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    assert cli.main([]) == 130
 
 
 def test_main_injects_profile_endpoint_into_the_provider(
@@ -1151,23 +1088,6 @@ def test_main_rejects_bad_provider_timeout(
     rc = cli.main(["--provider-timeout", "0"])
     assert rc == 2
     assert "must be > 0" in capsys.readouterr().err
-
-
-def test_main_wizard_leaves_no_db_when_aborted(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import sys
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "stdin", _FakeTty())
-    monkeypatch.setattr(
-        cli.webconfig,
-        "interactive_setup",
-        lambda loaded, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
-    )
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    cli.main([])
-    assert not (tmp_path / ".lovia").exists()
 
 
 def test_main_default_db_lands_under_dot_lovia(

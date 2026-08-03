@@ -6,9 +6,10 @@ HTTP fetch, web search — and a workspace) and serves it with the bundled web
 UI. ``--app module:attribute`` serves your own ``Agent`` instead.
 
 The model connection is not a flag: it lives in ``config.json`` (see
-:mod:`lovia.web.config`), created by the first-run wizard / ``--setup`` and
-edited in the web UI's Settings. The user-facing contract is the ``--help``
-text: :data:`DESCRIPTION`, :data:`EPILOG` and the option groups in
+:mod:`lovia.web.config`) and is managed in one place — the web UI's
+Settings. An unconfigured launch serves the setup screen; ``--check`` is
+the read-only diagnosis. The user-facing contract is the ``--help`` text:
+:data:`DESCRIPTION`, :data:`EPILOG` and the option groups in
 :func:`build_parser`.
 """
 
@@ -62,14 +63,13 @@ Launch the lovia chat UI in your browser.
 
 Serves a ready-made agent — skills, long-term memory, todos, web search,
 scheduled runs, and a workspace rooted at the current directory. The model
-connection is asked once on first run, checked against the endpoint, and
+connection is configured once, in the browser (Settings → Models), and
 saved to config.json so it is never retyped.
 """
 
 EPILOG = """\
 examples:
-  lovia web                                # first run opens the setup wizard
-  lovia web --setup                        # change the saved model or key
+  lovia web                                # first run: configure in the browser
   lovia web --port 9000
   lovia web --workspace ~/notes --readonly # let it read, not write
   lovia web --app myagents:assistant       # serve your own agent
@@ -78,8 +78,8 @@ configuration:
   The model connection (model, base URL, API key, context window), extra
   models, web search and role assignments live in ./.lovia/config.json —
   the project file wins — or ~/.lovia/config.json (any directory). Managed
-  by --setup and the web UI's Settings; inspect with --check. The server and
-  agent options above stay flags, each with the LOVIA_* variable shown.
+  in the web UI's Settings; inspect with --check. The server and agent
+  options above stay flags, each with the LOVIA_* variable shown.
 """
 
 
@@ -128,13 +128,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"lovia {__version__}")
 
     model = p.add_argument_group(
-        "model", "the connection lives in config.json — these manage it"
-    )
-    model.add_argument(
-        "--setup",
-        action="store_true",
-        help="rerun the connection wizard — change the saved model, endpoint "
-        "or key (Enter keeps a value) — then launch",
+        "model", "the connection lives in config.json, managed in the web UI"
     )
     model.add_argument(
         "--check",
@@ -428,12 +422,11 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         config_runtime: webconfig.ConfigRuntime | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
-            for flag, given in (("--setup", args.setup), ("--check", args.check)):
-                if given:
-                    raise CliError(
-                        f"{flag} works on the default agent's model connection; "
-                        "a custom --app brings its own"
-                    )
+            if args.check:
+                raise CliError(
+                    "--check works on the default agent's model connection; "
+                    "a custom --app brings its own"
+                )
             _warn_ignored_agent_flags(args)
             agent_or_agents = load_app_target(app_target)
             custom_agents = (
@@ -460,21 +453,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 else webconfig.Connection()
             )
             if args.check:
-                # Read-only diagnosis: report, probe, exit — never the wizard.
+                # Read-only diagnosis: report, probe, exit — never serves.
                 return webconfig.run_check(conn, version=__version__)
-            unconfigured = False
-            if conn.missing() or args.setup:
-                if not sys.stdin.isatty():
-                    if args.setup:
-                        raise CliError("--setup needs an interactive terminal")
-                    # No TTY to run the wizard: serve anyway — the browser's
-                    # first-run Settings finish the setup over /api/config.
-                    unconfigured = True
-                else:
-                    conn = webconfig.interactive_setup(loaded, reconfigure=args.setup)
-            # The store is created only after an interactive wizard succeeds,
-            # so an aborted first run leaves no stray database behind. The
-            # unconfigured server *is* a deliberate launch — it gets one.
+            # Anything missing (no model, a keyless official host) means
+            # "serve the setup screen": the browser's Settings is the one
+            # write path, on a TTY exactly like everywhere else.
+            unconfigured = bool(conn.missing())
             store = ChatStore.sqlite(db_desc)
             question_channel = HumanChannel()
             config_runtime = webconfig.ConfigRuntime(
@@ -490,9 +474,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 )
             else:
                 assert conn.model is not None
-                # The wizard upserted the entered profile into the config
-                # (even on a declined save), so roles resolve against the
-                # session's truth.
                 active_profile = loaded.config.default_profile()
                 try:
                     provider = provider_from_string(

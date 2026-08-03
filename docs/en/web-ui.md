@@ -14,14 +14,14 @@ pip install "lovia[web]"
 lovia web
 ```
 
-Open `http://127.0.0.1:8000`. On first launch a terminal shows the setup
-wizard; without a TTY (Docker, a service manager) the server starts anyway and
-the browser shows a first-run setup screen — enter one model in Settings and
-start chatting. The configuration lands (owner-only, git-ignored) in
+Open `http://127.0.0.1:8000`. On first launch the browser shows a first-run
+setup screen — enter one model in Settings and start chatting. That is the
+one way in, terminal or not (Docker included); the file can also be
+hand-written. The configuration lands (owner-only, git-ignored) in
 `~/.lovia/config.json` — one setup works from any directory; a project-local
 `./.lovia/config.json` wins wholesale when both exist. Change it later in
-Settings or with `lovia web --setup`; `lovia web --check` prints the
-configured connection and probes the endpoint without serving.
+Settings → Models; `lovia web --check` prints the configured connection and
+probes the endpoint without serving.
 
 The default Agent includes `Todo`, optional Skills from `./.agents/skills`
 (the cross-agent convention, shared with e.g. Claude Code and Codex), Memory in
@@ -146,8 +146,7 @@ not restored after a server restart.
 
 The model connection (model id, base URL, API key, context window), extra
 model profiles, role assignments and web search live only in `config.json` —
-no flags, no environment variables — managed by `--setup` and the web UI's
-Settings (upcoming). Every *other* option resolves as: command-line flag,
+no flags, no environment variables — managed in the web UI's Settings. Every *other* option resolves as: command-line flag,
 then environment variable, then the default. `--check` prints the configured
 connection and probes the endpoint without serving.
 
@@ -163,10 +162,10 @@ connection and probes the endpoint without serving.
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | Suggestions on (the aux role model in `config.json`, else the Agent's) |
-| `--setup` / `--check` | — | Rerun the wizard / probe and exit |
+| `--check` | — | Print the configured connection, probe, and exit |
 
-`lovia web --help` lists them all in four groups: model (`--setup` /
-`--check`), agent, server, and advanced — output tokens, Provider timeout and
+`lovia web --help` lists them all in four groups: model (`--check`),
+agent, server, and advanced — output tokens, Provider timeout and
 retries, proxy handling, and log level.
 
 ## Questions from the agent

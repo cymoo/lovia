@@ -290,7 +290,13 @@ def test_raw_avif_uses_explicit_mime_not_os_guess(client: TestClient) -> None:
     up = client.post(
         "/api/workspace/upload",
         params={"agent": "bot"},
-        files={"file": ("pic.avif", b"\x00\x00\x00\x1cftypavif", "application/octet-stream")},
+        files={
+            "file": (
+                "pic.avif",
+                b"\x00\x00\x00\x1cftypavif",
+                "application/octet-stream",
+            )
+        },
     )
     assert up.status_code == 200
     assert up.json()["kind"] == "image"

@@ -12,16 +12,15 @@ pip install "lovia[web]"
 lovia web
 ```
 
-打开 `http://127.0.0.1:8000`。首次启动时，如果模型配置不完整，终端里会出现配置向导；
-没有终端交互（如 Docker）时服务照常启动，浏览器中会显示引导页，在设置里填好第一个模型
-即可开始对话。配置保存到用户级的 `~/.lovia/config.json`，此后从任意目录启动都能读取。
-在支持 Unix 权限的平台上，配置文件仅允许当前用户读写；CLI 还会在 `.lovia/` 目录中创建
-`.gitignore`，避免密钥和聊天数据被意外提交。
+打开 `http://127.0.0.1:8000`。首次启动（无论有无终端，Docker 亦然）浏览器会显示
+引导页——在设置里填好第一个模型即可开始对话，这是唯一的配置入口；文件也可以手写。
+配置保存到用户级的 `~/.lovia/config.json`，此后从任意目录启动都能读取；仅对当前项目
+生效的 `./.lovia/config.json` 存在时整体优先。在支持 Unix 权限的平台上，配置文件仅允许
+当前用户读写；CLI 还会在 `.lovia/` 目录中创建 `.gitignore`，避免密钥和聊天数据被意外
+提交。
 
-需要修改配置时，运行 `lovia web --setup`。向导会把当前值作为默认值，直接回车即可保留；
-保存时可选择用户级配置，也可以选择仅对当前项目生效的 `./.lovia/config.json`（两者同时
-存在时项目级整体优先）。运行 `lovia web --check` 则会显示当前配置并探测端点，但不会
-启动服务。
+之后修改配置走「设置 → 模型」；运行 `lovia web --check` 会显示当前配置并探测端点，
+但不会启动服务。
 
 CLI 创建的默认 Agent 会启用 `Todo`、`./.lovia/memory` 中的 Memory、时间与 HTTP 工具、
 Web 搜索、定时任务，以及以当前目录为根、采用 `coding` 模式的 Workspace。如果
@@ -138,8 +137,8 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 ## 常用 CLI 选项
 
 模型连接（模型名、Base URL、API Key、上下文窗口）、多模型档案、角色指派与 Web 搜索
-只存在于 `config.json` 中——没有对应的命令行参数或环境变量——由 `--setup`（以及即将
-提供的网页设置界面）管理；项目级 `./.lovia/config.json` 存在时整体优先于用户级。其余
+只存在于 `config.json` 中——没有对应的命令行参数或环境变量——在网页「设置」中管理；
+项目级 `./.lovia/config.json` 存在时整体优先于用户级。其余
 选项按 命令行参数 > 环境变量 > 默认值 取值。`--check` 会打印当前配置并探测端点，但
 不会启动服务。
 
@@ -156,9 +155,9 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启（可在 `config.json` 中指派辅助模型） |
 | `--no-subagents` | — | 后台子 Agent 默认开启 |
-| `--setup` / `--check` | — | 重跑配置向导 / 探测端点后退出 |
+| `--check` | — | 显示当前配置并探测端点后退出 |
 
-完整选项见 `lovia web --help`。帮助信息分为 model（`--setup` / `--check`）、agent、
+完整选项见 `lovia web --help`。帮助信息分为 model（`--check`）、agent、
 server 和 advanced 四组；输出 token 上限、Provider 超时与重试、代理和日志级别位于
 advanced 组。
 

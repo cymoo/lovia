@@ -3963,6 +3963,7 @@ body.files-splitting {
    One neutral pill; state is a leading dot, not a shouting background. */
 .toast-container {
   position: fixed;
+  inset: auto;
   bottom: max(20px, env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
@@ -3972,6 +3973,15 @@ body.files-splitting {
   align-items: center;
   gap: 8px;
   pointer-events: none;
+  /* Popover-mode resets: the UA [popover] rules add margin/border/padding
+     and an opaque background; the container must stay a transparent shell. */
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
 }
 .toast {
   pointer-events: auto;
@@ -5099,10 +5109,6 @@ body.files-splitting {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-.model-chip-caret {
-  opacity: 0.55;
-  font-size: 10px;
 }
 .model-chip-menu {
   position: absolute;

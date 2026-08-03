@@ -333,6 +333,7 @@ export function buildModelsPane() {
     const keyIn = input('', { type: 'password', placeholder: t('cfg.apiKeyNone') });
     const keyBox = el('div', 'cfg-key');
     const renderKey = () => {
+      syncProbeButtons();
       keyBox.replaceChildren();
       if (keyMode === 'keep') {
         const row = el('div', 'cfg-key-set');
@@ -386,7 +387,6 @@ export function buildModelsPane() {
         }
       }
     };
-    renderKey();
     form.appendChild(field(t('cfg.apiKey'), keyBox, t('cfg.apiKeyNote')));
 
     const modelIn = input(stored?.model || '', { mono: true, placeholder: 'deepseek-v4-pro' });
@@ -397,6 +397,7 @@ export function buildModelsPane() {
     const fetchBtn = el('button', 'btn btn-sm', t('cfg.fetchModels'));
     fetchBtn.setAttribute('type', 'button');
     fetchBtn.addEventListener('click', async () => {
+      if (!hasEndpoint()) return;
       fetchBtn.disabled = true;
       try {
         const res = await probe();
@@ -452,6 +453,7 @@ export function buildModelsPane() {
     testBtn.setAttribute('type', 'button');
     const testOut = el('span', 'cfg-test-result');
     testBtn.addEventListener('click', async () => {
+      if (!modelIn.value.trim()) return;
       testBtn.disabled = true;
       testOut.className = 'cfg-test-result';
       testOut.textContent = t('cfg.testing');
@@ -481,9 +483,28 @@ export function buildModelsPane() {
     testRow.append(testBtn, testOut);
     form.appendChild(testRow);
 
+    // Enough of an endpoint to talk to: an explicit URL, or a key for the
+    // flavor's official default host (entered now or stored).
+    function hasEndpoint() {
+      return !!(
+        urlIn.value.trim() ||
+        (keyMode === 'edit' && keyIn.value) ||
+        (keyMode === 'keep' && stored?.api_key?.set)
+      );
+    }
+
+    // A probe with nothing filled in can only time out against a default
+    // host — keep the buttons dead until they can mean something.
+    function syncProbeButtons() {
+      testBtn.disabled = !modelIn.value.trim();
+      testBtn.title = testBtn.disabled ? t('cfg.testNeedsModel') : '';
+      fetchBtn.disabled = !hasEndpoint();
+      fetchBtn.title = fetchBtn.disabled ? t('cfg.fetchNeedsEndpoint') : '';
+    }
+
     function probe() {
       const body = {
-        model: modelIn.value.trim() || (stored ? stored.model : 'model'),
+        model: modelIn.value.trim() || (stored ? stored.model : 'probe'),
         flavor,
         base_url: urlIn.value.trim() || null,
         context_window: parseWindow() ?? null,
@@ -502,6 +523,12 @@ export function buildModelsPane() {
       const n = parseInt(raw.replace(/[,\s]/g, ''), 10);
       return Number.isFinite(n) && n > 0 ? n : undefined;
     }
+
+    renderKey();
+    modelIn.addEventListener('input', syncProbeButtons);
+    urlIn.addEventListener('input', syncProbeButtons);
+    keyIn.addEventListener('input', syncProbeButtons);
+    syncProbeButtons();
 
     const errBox = el('div', 'cfg-error');
     errBox.hidden = true;
@@ -817,7 +844,6 @@ function initModelChip() {
   chip.setAttribute('aria-haspopup', 'menu');
   chip.setAttribute('aria-expanded', 'false');
   chip.appendChild(el('span', 'model-chip-label', chipLabel()));
-  chip.appendChild(el('span', 'model-chip-caret', '⌄'));
   chip.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!store.configured) {

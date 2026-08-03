@@ -24,9 +24,9 @@ from .schema import WebConfig
 
 log = logging.getLogger("lovia.web.config")
 
-# The non-interactive ways to configure the model — shown when there's no TTY.
+# How to get configured — pointed at whenever the model is missing.
 CONFIG_HINT = (
-    "run `lovia web --setup` in an interactive terminal, "
+    "start `lovia web` and open the printed URL — Settings → Models — "
     "or write ~/.lovia/config.json by hand"
 )
 
@@ -165,7 +165,7 @@ def _warn_legacy_env_files() -> None:
     ]
     if legacy:
         log.warning(
-            "found legacy %s — no longer read since 0.9.37; run `lovia web "
-            "--setup` to recreate the configuration in config.json",
+            "found legacy %s — no longer read since 0.9.37; reconnect the "
+            "model in the web UI (Settings → Models writes config.json)",
             " and ".join(legacy),
         )

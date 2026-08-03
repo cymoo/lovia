@@ -242,6 +242,13 @@ def create_app(
     default agent up. Embedders leave it ``None``.
     """
     agents = _normalise(agent_or_agents)
+    if not agents and config_runtime is None:
+        # Without the reconfiguration API there is no way to ever add an
+        # agent to this server — an empty mapping would serve nothing forever.
+        raise ValueError(
+            "agent_or_agents is empty; pass at least one agent "
+            "(an empty mapping is only valid with config_runtime=)"
+        )
 
     token = _clean_token(token)
     if token is not None and auth is not None:

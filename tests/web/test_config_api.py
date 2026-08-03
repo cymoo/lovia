@@ -101,6 +101,12 @@ def test_get_config_masks_secrets_and_never_caches(served) -> None:
     assert "sk-secret" not in res.text
 
 
+def test_create_app_rejects_empty_agents_without_a_runtime() -> None:
+    """An empty mapping without /api/config could never gain an agent."""
+    with pytest.raises(ValueError, match="config_runtime"):
+        create_app({}, store=ChatStore.in_memory())
+
+
 def test_embedder_apps_have_no_config_api() -> None:
     from lovia.agent import Agent
 
@@ -302,6 +308,13 @@ def test_probe_endpoint_reuses_the_stored_key(
     assert res.status_code == 200
     assert seen["key"] == "sk-secret-1234567890"  # stored, not round-tripped
     assert "does not list" in (res.json()["note"] or "")
+    # An explicit "" means "probe keyless" — it must never silently
+    # substitute the stored secret (the base URL is caller-chosen).
+    client.post(
+        "/api/config/test",
+        json={"profile_id": "m", "api_key": "", "base_url": "https://elsewhere/v1"},
+    )
+    assert seen["key"] is None
     assert (
         client.post("/api/config/test", json={"profile_id": "nope"}).status_code == 404
     )

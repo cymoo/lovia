@@ -106,7 +106,8 @@ class TestIn(BaseModel):
 
     With ``profile_id`` set, absent fields fall back to the stored profile —
     in particular ``api_key: null`` reuses the stored key, so the UI can
-    test without ever holding the secret.
+    test without ever holding the secret. An explicit ``""`` means "probe
+    without a key" and never falls back.
     """
 
     profile_id: str | None = None
@@ -309,6 +310,14 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         model = body.model or (stored.model if stored else None)
         if not model:
             raise HTTPException(status_code=400, detail="model is required")
+        # Key selection mirrors the write endpoints' keep/clear convention:
+        # None falls back to the stored profile's key, while an explicit ""
+        # means "probe keyless" — it must never silently substitute the
+        # stored secret (the base URL is caller-chosen).
+        if body.api_key is not None:
+            probe_key = body.api_key or None
+        else:
+            probe_key = stored.api_key if stored else None
         try:
             probe_profile = ModelProfile(
                 id="probe",
@@ -317,11 +326,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 if body.model
                 else (stored.flavor if stored else body.flavor),
                 base_url=body.base_url or (stored.base_url if stored else None),
-                api_key=(
-                    body.api_key
-                    if body.api_key
-                    else (stored.api_key if stored else None)
-                ),
+                api_key=probe_key,
                 context_window=body.context_window,
             )
         except ValidationError as exc:

@@ -44,6 +44,16 @@ function requestPreview(flavor, baseUrl, fallback) {
   return t('cfg.baseUrlPreview', { url: base + path });
 }
 
+/** The display host of a base URL; tolerant of scheme-less values. */
+function hostOf(baseUrl) {
+  if (!baseUrl) return '';
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl.replace(/^[a-z+.-]+:\/\//i, '').split('/')[0];
+  }
+}
+
 function flavorDefault(flavor) {
   const d = cfg()?.defaults;
   if (!d) return '';
@@ -171,7 +181,7 @@ export function buildModelsPane() {
       if (p.vision === 'on') {
         name.appendChild(el('span', 'badge badge-plain', t('cfg.visionBadge')));
       }
-      const host = p.base_url ? new URL(p.base_url).host : '';
+      const host = hostOf(p.base_url);
       info.append(name, el('div', 'model-row-meta', host ? `${p.model} · ${host}` : p.model));
       row.appendChild(info);
 
@@ -276,7 +286,7 @@ export function buildModelsPane() {
     const head = el('div', 'cfg-form-head');
     const back = el('button', 'btn-icon cfg-back', '‹');
     back.setAttribute('type', 'button');
-    back.setAttribute('aria-label', t('dialog.close'));
+    back.setAttribute('aria-label', t('cfg.backLabel'));
     back.addEventListener('click', () => {
       view = { name: 'list' };
       render();
@@ -726,7 +736,7 @@ async function switchModel(id) {
   const p = activeProfile();
   toast(t('cfg.switched', { name: profileName(p) }));
   updateChip();
-  refreshAgents();
+  await refreshAgents();
 }
 
 // The agent list carries the model id + workspace/vision capabilities the

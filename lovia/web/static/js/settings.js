@@ -284,6 +284,8 @@ export function openSettings(initialTab = 'general') {
   rail.setAttribute('role', 'tablist');
   const pane = document.createElement('div');
   pane.className = 'settings-pane-host';
+  pane.id = 'settings-pane';
+  pane.setAttribute('role', 'tabpanel');
 
   let active = tabs.some((tab) => tab.id === initialTab) ? initialTab : 'general';
   const buttons = new Map();
@@ -293,6 +295,7 @@ export function openSettings(initialTab = 'general') {
       btn.classList.toggle('active', tabId === id);
       btn.setAttribute('aria-selected', tabId === id ? 'true' : 'false');
     }
+    pane.setAttribute('aria-labelledby', `settings-tab-${id}`);
     const tab = tabs.find((item) => item.id === id);
     pane.replaceChildren(tab ? tab.build() : document.createElement('div'));
   };
@@ -300,7 +303,9 @@ export function openSettings(initialTab = 'general') {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'settings-rail-item';
+    btn.id = `settings-tab-${tab.id}`;
     btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-controls', 'settings-pane');
     btn.textContent = tab.label;
     btn.addEventListener('click', () => activate(tab.id));
     buttons.set(tab.id, btn);

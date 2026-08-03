@@ -31,6 +31,8 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    ProcessOutput,
+    ProcessStart,
     WorkspaceLimits,
     WorkspaceMode,
 )
@@ -50,6 +52,8 @@ __all__ = [
     "LocalWorkspaceSession",
     "PathRule",
     "PermissionDeniedError",
+    "ProcessOutput",
+    "ProcessStart",
     "Workspace",
     "WorkspaceClosedError",
     "WorkspaceError",

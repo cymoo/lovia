@@ -13,6 +13,7 @@ backend implementing the same protocols.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import logging
 import os
@@ -22,10 +23,11 @@ import stat as stat_module
 import tempfile
 import uuid
 import weakref
+from collections import deque
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Mapping
+from typing import TYPE_CHECKING, Iterator, Literal, Mapping
 
 from ..exceptions import UserError
 from .command_guard import extract_path_claims
@@ -43,6 +45,8 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    ProcessOutput,
+    ProcessStart,
     WorkspaceLimits,
 )
 from ..tools.base import clip_text
@@ -96,6 +100,83 @@ def _venv_bin_dir(root: Path) -> tuple[Path, Path] | None:
     return None
 
 
+class _TailBuffer:
+    """Unread output of one background process, capped to the newest chars.
+
+    Appends between reads accumulate; once the cap is exceeded the *oldest*
+    unread text is dropped — for a long-running process the tail is what a
+    poll cares about, and earlier reads already delivered the head.
+    ``take`` drains the buffer and reports whether anything was dropped
+    since the previous take. Single-threaded by construction (only touched
+    from the event loop), so no locking.
+    """
+
+    __slots__ = ("_cap", "_parts", "_size", "_dropped")
+
+    def __init__(self, cap: int) -> None:
+        self._cap = max(0, cap)
+        self._parts: deque[str] = deque()
+        self._size = 0
+        self._dropped = False
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        self._parts.append(text)
+        self._size += len(text)
+        while self._size > self._cap:
+            head = self._parts[0]
+            excess = self._size - self._cap
+            if len(head) <= excess:
+                self._parts.popleft()
+                self._size -= len(head)
+            else:
+                self._parts[0] = head[excess:]
+                self._size -= excess
+            self._dropped = True
+
+    def take(self) -> tuple[str, bool]:
+        text, dropped = "".join(self._parts), self._dropped
+        self._parts.clear()
+        self._size = 0
+        self._dropped = False
+        return text, dropped
+
+
+@dataclass
+class _BackgroundProcess:
+    """A session-owned background process and its output plumbing."""
+
+    id: str
+    command: str
+    proc: asyncio.subprocess.Process
+    buffer: _TailBuffer
+    # Drains the merged stdout/stderr pipe into ``buffer`` until EOF, then
+    # reaps the child. Always draining matters beyond bookkeeping: an
+    # unread pipe fills up and blocks the process.
+    reader: asyncio.Task[None] = field(init=False, repr=False)
+    killed: bool = False
+
+    @property
+    def status(self) -> Literal["running", "exited", "killed"]:
+        # returncode flips on its own (asyncio's child watcher reaps), so
+        # exit is visible even before anyone awaits the reader.
+        if self.proc.returncode is None:
+            return "running"
+        return "killed" if self.killed else "exited"
+
+    def snapshot(self) -> ProcessOutput:
+        """Drain the buffer into a read result reflecting current status."""
+        output, dropped = self.buffer.take()
+        return ProcessOutput(
+            process_id=self.id,
+            status=self.status,
+            exit_code=self.proc.returncode,
+            output=output,
+            truncated=dropped,
+        )
+
+
 @dataclass
 class LocalWorkspaceSession:
     """A workspace session rooted at a local directory."""
@@ -128,6 +209,12 @@ class LocalWorkspaceSession:
     _procs: "set[asyncio.subprocess.Process]" = field(
         default_factory=set, init=False, repr=False
     )
+    # Background processes by process_id. Entries survive exit as cheap
+    # tombstones (buffer drained) so a read after exit reports the outcome
+    # instead of "unknown id"; the whole registry dies with the session.
+    _bg: "dict[str, _BackgroundProcess]" = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         root = Path(self.root).expanduser().resolve()
@@ -147,11 +234,24 @@ class LocalWorkspaceSession:
     async def close(self) -> None:
         self._closed = True
         procs, self._procs = list(self._procs), set()
+        bgs, self._bg = list(self._bg.values()), {}
         for proc in procs:
             _kill_process_group(proc)
+        for bp in bgs:
+            # Idempotent with an earlier kill_process: killing an already
+            # dead group is suppressed inside _kill_process_group.
+            _kill_process_group(bp.proc)
+            bp.reader.cancel()
         for proc in procs:
             with contextlib.suppress(Exception):
                 await proc.wait()
+        for bp in bgs:
+            with contextlib.suppress(Exception):
+                await bp.proc.wait()
+        if bgs:
+            # Let the cancelled readers finish unwinding so no task outlives
+            # the session; return_exceptions collects their CancelledError.
+            await asyncio.gather(*(bp.reader for bp in bgs), return_exceptions=True)
 
     # ------------------------------------------------------------------ #
     # Decisions
@@ -775,18 +875,15 @@ class LocalWorkspaceSession:
     # Shell
     # ------------------------------------------------------------------ #
 
-    async def run(
-        self,
-        command: str,
-        *,
-        cwd: str = ".",
-        timeout: float | None = None,
-        env: Mapping[str, str] | None = None,
-    ) -> CommandResult:
-        self._check_open()
-        # Defense in depth: a policy-denied command is refused even when a
-        # custom tool calls the session directly. "ask" cannot be resolved
-        # here (approval is a runner concern); the shell tool gates it.
+    def _prepare_command(
+        self, command: str, cwd: str, env: Mapping[str, str] | None
+    ) -> tuple[Path, dict[str, str]]:
+        """Shared gate and setup for ``run`` and ``spawn``.
+
+        Defense in depth: a policy-denied command is refused even when a
+        custom tool calls the session directly. "ask" cannot be resolved
+        here (approval is a runner concern); the shell tool gates it.
+        """
         if self.decide_command(command, cwd) == "deny":
             raise PermissionDeniedError(
                 "Command denied by workspace policy.",
@@ -807,6 +904,18 @@ class LocalWorkspaceSession:
             merged_env.update(self.env)
         if env:
             merged_env.update(env)
+        return run_cwd, merged_env
+
+    async def run(
+        self,
+        command: str,
+        *,
+        cwd: str = ".",
+        timeout: float | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
+        self._check_open()
+        run_cwd, merged_env = self._prepare_command(command, cwd, env)
         command_timeout = self.shell_timeout if timeout is None else timeout
 
         if self.executor is not None:
@@ -892,6 +1001,157 @@ class LocalWorkspaceSession:
         return result.model_copy(
             update={"stdout": stdout, "stderr": stderr, "truncated": True}
         )
+
+    # ------------------------------------------------------------------ #
+    # Background processes
+    # ------------------------------------------------------------------ #
+
+    async def spawn(
+        self,
+        command: str,
+        *,
+        cwd: str = ".",
+        env: Mapping[str, str] | None = None,
+    ) -> ProcessStart:
+        """Start ``command`` as a session-owned background process.
+
+        Judged by the same policy gate as :meth:`run`. Returns immediately;
+        stdout and stderr are merged and spooled to a bounded tail buffer
+        read incrementally via :meth:`read_process_output`. The process (its
+        whole group) dies with the session — or via :meth:`kill_process`.
+        """
+        self._check_open()
+        if self.executor is not None:
+            # Falling back to a direct spawn would silently bypass the
+            # executor's OS sandbox — refuse instead.
+            raise WorkspaceError(
+                "Background execution is not supported with a custom shell executor.",
+                hint="Run the command in the foreground, or drop executor=.",
+            )
+        run_cwd, merged_env = self._prepare_command(command, cwd, env)
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(run_cwd),
+            env=merged_env,
+            # No stdin: a background process that prompts must fail fast
+            # (read EOF), not sit waiting on input nobody can type.
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            # Merged into one stream: interleaving preserves the temporal
+            # order a human would see in a terminal, and incremental reads
+            # stay one cursor instead of two.
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        # Random ids on purpose: sequential ones ("p1") would alias across a
+        # checkpoint resume — processes are ephemeral, ids must be too.
+        process_id = f"bg-{uuid.uuid4().hex[:6]}"
+        bp = _BackgroundProcess(
+            id=process_id,
+            command=command,
+            proc=proc,
+            buffer=_TailBuffer(self.limits.max_shell_output_chars),
+        )
+        bp.reader = asyncio.create_task(
+            _drain_background(bp), name=f"lovia-bg-{process_id}"
+        )
+        self._bg[process_id] = bp
+        # Same close() race as run(): registration may have happened after
+        # close() snapshotted the registry — self-reap in that case.
+        if self._closed:
+            self._bg.pop(process_id, None)
+            _kill_process_group(proc)
+            bp.reader.cancel()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
+        return ProcessStart(process_id=process_id, pid=proc.pid, command=command)
+
+    async def read_process_output(self, process_id: str) -> ProcessOutput:
+        """Return output produced since the last read, plus current status.
+
+        Never an error for a known process: reading after exit reports the
+        exit code and drains what remains — poll it freely.
+        """
+        self._check_open()
+        bp = self._bg.get(process_id)
+        if bp is None:
+            raise self._unknown_process_error(process_id)
+        if bp.proc.returncode is not None and not bp.reader.done():
+            # The child exited but the reader may still be flushing the last
+            # chunk; wait briefly so the exit-reporting read carries the full
+            # tail. shield(): on timeout (an inherited-pipe straggler still
+            # holds the write end) the reader must keep draining, not die.
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(bp.reader), timeout=1.0)
+        return bp.snapshot()
+
+    async def kill_process(self, process_id: str) -> ProcessOutput:
+        """Kill a background process (its whole group) and report the tail.
+
+        Idempotent: killing an already-exited process just drains and
+        reports its final status.
+        """
+        self._check_open()
+        bp = self._bg.get(process_id)
+        if bp is None:
+            raise self._unknown_process_error(process_id)
+        if bp.proc.returncode is None:
+            bp.killed = True
+            _kill_process_group(bp.proc)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(bp.reader), timeout=2.0)
+        with contextlib.suppress(Exception):
+            await bp.proc.wait()
+        return bp.snapshot()
+
+    def _unknown_process_error(self, process_id: str) -> WorkspaceError:
+        if not self._bg:
+            return WorkspaceError(
+                f"Unknown process id: {process_id!r} — no background "
+                "processes exist in this session.",
+                hint=(
+                    "Background processes do not survive a session restart; "
+                    "re-run the command with background=true to start it again."
+                ),
+            )
+        known = ", ".join(
+            f"{bp.id} ({bp.status}: {_brief(bp.command)})" for bp in self._bg.values()
+        )
+        return WorkspaceError(
+            f"Unknown process id: {process_id!r}.",
+            hint=f"Known processes: {known}.",
+        )
+
+
+def _brief(command: str, limit: int = 40) -> str:
+    """One-line preview of a command for error/listing text."""
+    line = " ".join(command.split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+async def _drain_background(bp: _BackgroundProcess) -> None:
+    """Pump the merged output pipe into the tail buffer, then reap.
+
+    Runs for the process's whole life: an undrained pipe fills up and blocks
+    the child. Decodes incrementally so multi-byte UTF-8 sequences split
+    across chunks survive.
+    """
+    assert bp.proc.stdout is not None
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    try:
+        while True:
+            chunk = await bp.proc.stdout.read(65536)
+            if not chunk:
+                break
+            bp.buffer.append(decoder.decode(chunk))
+        bp.buffer.append(decoder.decode(b"", True))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a pipe error just ends the stream
+        logger.debug("background %s: output pipe closed (%s)", bp.id, exc)
+    with contextlib.suppress(Exception):
+        await bp.proc.wait()
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:

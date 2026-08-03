@@ -33,13 +33,17 @@ from .types import (
     FileChange,
     FileContent,
     GrepMatch,
+    ProcessOutput,
+    ProcessStart,
 )
 
 __all__ = [
     "edit_file",
     "grep_files",
+    "kill_process",
     "list_files",
     "read_file",
+    "read_process_output",
     "require_workspace",
     "shell",
     "write_file",
@@ -418,6 +422,13 @@ def _shell_needs_approval(args: dict[str, Any], ctx: RunContext[Any]) -> bool:
 
 
 def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
+    if isinstance(result, ProcessStart):
+        return (
+            f"started background process {result.process_id} "
+            f"(pid {result.pid}). Poll read_process_output"
+            f"('{result.process_id}') for its output; "
+            f"kill_process('{result.process_id}') stops it."
+        )
     if not isinstance(result, CommandResult):
         return result
     if result.timed_out:
@@ -438,15 +449,21 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
 @tool(
     name="shell",
     description=(
-        "Run a one-shot, non-interactive shell command in the workspace.\n"
+        "Run a non-interactive shell command in the workspace.\n"
         "- cwd is workspace-relative; the command starts there. Quote paths "
         "that contain spaces.\n"
-        "- Each call is a fresh process: nothing persists between calls (a cd, "
-        "an exported variable, or a background job does not carry over). Chain "
-        "steps in one command with && (or set cwd=).\n"
-        "- No TTY and no interactive input: never run editors, REPLs, "
-        "watchers, or anything that prompts (use non-interactive flags like "
-        "--yes instead). Long-running commands are killed at the timeout.\n"
+        "- Each call is a fresh process: nothing persists between calls (a cd "
+        "or an exported variable does not carry over). Chain steps in one "
+        "command with && (or set cwd=).\n"
+        "- No TTY and no interactive input: never run editors, REPLs, or "
+        "anything that prompts (use non-interactive flags like --yes "
+        "instead). A foreground command is killed at the timeout.\n"
+        "- background=true starts the command as a background process and "
+        "returns its process id immediately — the way to run dev servers, "
+        "watchers, and long builds or test runs. Check it with "
+        "read_process_output (soon after starting, to catch startup errors), "
+        "stop it with kill_process. No timeout applies; the process dies "
+        "with the session.\n"
         "- stdout/stderr are captured and truncated when large; pipe through "
         "filters (grep, head, tail) to keep output focused.\n"
         "- The same path policy that governs the file tools also governs "
@@ -464,7 +481,8 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
     needs_approval=_shell_needs_approval,
     result_renderer=_render_command_result,
     # A command can mutate anything in the workspace — barrier, so it never
-    # races file tools or another command within one turn.
+    # races file tools or another command within one turn. background=true
+    # keeps the barrier: the *start* is still an ordered side effect.
     parallel=False,
 )
 async def shell(
@@ -473,8 +491,22 @@ async def shell(
     cwd: Annotated[str, "Workspace-relative working directory."] = ".",
     timeout: Annotated[
         float | None,
-        Field(default=None, ge=1, description="Override timeout in seconds."),
+        Field(
+            default=None,
+            ge=1,
+            description="Override timeout in seconds (ignored with background=true).",
+        ),
     ] = None,
+    background: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Start the command as a background process and return its "
+                "process id immediately instead of waiting for it to finish."
+            ),
+        ),
+    ] = False,
     description: Annotated[
         str | None,
         Field(
@@ -486,8 +518,89 @@ async def shell(
             ),
         ),
     ] = None,
-) -> CommandResult:
+) -> CommandResult | ProcessStart:
     # description is display chrome for UI consumers; execution and the
     # approval policy ignore it deliberately — model-authored prose must
-    # never soften how a command is judged or reviewed.
-    return await require_workspace(ctx).run(command, cwd=cwd, timeout=timeout)
+    # never soften how a command is judged or reviewed. background goes
+    # through the same _shell_needs_approval verdict (it only reads
+    # command/cwd), so backgrounding cannot soften the judgment either.
+    session = require_workspace(ctx)
+    if background:
+        return await session.spawn(command, cwd=cwd)
+    return await session.run(command, cwd=cwd, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# Background process tools
+# ---------------------------------------------------------------------------
+
+
+def _render_process_output(result: Any, ctx: RunContext[Any]) -> Any:
+    if not isinstance(result, ProcessOutput):
+        return result
+    if result.status == "running":
+        status = f"process {result.process_id}: running"
+    elif result.status == "killed":
+        status = f"process {result.process_id}: killed"
+    else:
+        status = f"process {result.process_id}: exited with code {result.exit_code}"
+    parts = [status]
+    if result.truncated:
+        parts.append(
+            "[... earlier output dropped: only the newest output is kept "
+            "between reads ...]"
+        )
+    body = result.output.rstrip("\n")
+    parts.append(body if body.strip() else "(no new output)")
+    return "\n".join(parts)
+
+
+@tool(
+    name="read_process_output",
+    description=(
+        "Read new output from a background process started with "
+        "shell(background=true).\n"
+        "- Returns everything the process wrote since the last read (stdout "
+        "and stderr merged), plus its status: running, or exited with its "
+        "exit code.\n"
+        "- Returns immediately — it reports what is there now, never waits "
+        "for more. If a just-started process shows no output yet, do other "
+        "work (or briefly `sleep`) before reading again rather than polling "
+        "in a tight loop.\n"
+        "- Reading an exited process is fine: it reports the exit code and "
+        "whatever output remains.\n"
+        "- Between reads only the newest output is buffered (older text is "
+        "dropped and noted), so poll before output you care about scrolls "
+        "away."
+    ),
+    result_renderer=_render_process_output,
+)
+async def read_process_output(
+    ctx: RunContext[Any],
+    process_id: Annotated[str, "Process id returned by shell(background=true)."],
+) -> ProcessOutput:
+    return await require_workspace(ctx).read_process_output(process_id)
+
+
+@tool(
+    name="kill_process",
+    description=(
+        "Kill a background process started with shell(background=true).\n"
+        "- Kills the whole process group (children included) and returns its "
+        "final status plus any unread output.\n"
+        "- Killing an already-exited process is not an error: it reports how "
+        "the process ended.\n"
+        "- Background processes also die automatically when the session "
+        "ends, but kill promptly what you no longer need (a dev server "
+        "holding a port, a watcher holding files)."
+    ),
+    result_renderer=_render_process_output,
+    # Killing changes what every later command observes (ports freed, files
+    # no longer being written) — barrier, same as shell.
+    parallel=False,
+)
+async def kill_process(
+    ctx: RunContext[Any],
+    process_id: Annotated[str, "Process id returned by shell(background=true)."],
+) -> ProcessOutput:
+    return await require_workspace(ctx).kill_process(process_id)

@@ -134,8 +134,10 @@ class LocalWorkspace:
         from .tools import (
             edit_file,
             grep_files,
+            kill_process,
             list_files,
             read_file,
+            read_process_output,
             shell,
             write_file,
         )
@@ -144,7 +146,10 @@ class LocalWorkspace:
         if self.policy.write != "deny" or self.policy.write_outside != "deny":
             bundle += [write_file, edit_file]
         if self.policy.allow_shell:
-            bundle.append(shell)
+            # Background processes travel with the shell: they are the same
+            # capability (spawn goes through the same command gate), and
+            # read/kill are useless without a way to start one.
+            bundle += [shell, read_process_output, kill_process]
         return bundle
 
     def instructions(self) -> str:

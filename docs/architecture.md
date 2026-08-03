@@ -74,10 +74,13 @@ lovia/
                     #   classifies inside/outside the root; no path is
                     #   rejected on syntax, the ACL judges the target
     local.py        #   LocalWorkspaceSession — the single enforcement point
-                    #   (deny raises here; ask is gated at the tool layer)
+                    #   (deny raises here; ask is gated at the tool layer);
+                    #   owns background processes (spawn/read/kill, reaped
+                    #   on close)
     command_guard.py#   lexical path-claim extraction from shell commands
     tools.py        #   read_file/write_file/edit_file/list_files/grep_files/
-                    #   shell + needs_approval predicates (the ask side)
+                    #   shell(+background)/read_process_output/kill_process
+                    #   + needs_approval predicates (the ask side)
     protocol.py     #   WorkspaceSession/WorkspaceLike/ShellExecutor protocols
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
@@ -115,13 +118,13 @@ Tools from several sources are merged in `RunLoop._collect_tools()` with name-co
 
 One turn's tool calls run **concurrently by default**. `RunLoop._tool_phase` splits each call in two (`runtime/tool_calls.py`): `preflight()` — cancel/budget checks, tool lookup, handoff dedup, argument parsing, and the approval flow — runs serially in request order on the loop's generator body (so approval backpressure and budget determinism are exactly the serial semantics), while ready calls execute in background tasks (`ToolCallProcessor.execute()`) whose events funnel through one `asyncio.Queue` back onto that body. That drain point is the single place events reach hooks and the stream consumer and checkpoints are saved — hook ordering and the per-result durability cadence survive unchanged. Results append to the transcript in completion order, which is safe because every consumer pairs calls to results by `call_id`, never by position.
 
-`Tool.parallel=False` (`@tool(parallel=...)`) opts a tool out: it becomes an **execution barrier** — in-flight calls finish, the tool runs alone, then dispatching resumes. Handoff tools are always barriers (whatever their flag), which keeps first-handoff-wins race-free; the built-in workspace mutators (`write_file`, `edit_file`, `shell`) default to `parallel=False` so filesystem/process side effects never race within a turn. A `BudgetExceeded` from preflight stops dispatching but drains in-flight calls to completion (the `RunBudget` contract); `RunCancelled` and checkpoint-store failures cancel the in-flight siblings promptly — their dangling calls are re-executed by a resume, exactly like a serial abort's not-yet-run calls.
+`Tool.parallel=False` (`@tool(parallel=...)`) opts a tool out: it becomes an **execution barrier** — in-flight calls finish, the tool runs alone, then dispatching resumes. Handoff tools are always barriers (whatever their flag), which keeps first-handoff-wins race-free; the built-in workspace mutators (`write_file`, `edit_file`, `shell` — including `background=true` starts — and `kill_process`) default to `parallel=False` so filesystem/process side effects never race within a turn. A `BudgetExceeded` from preflight stops dispatching but drains in-flight calls to completion (the `RunBudget` contract); `RunCancelled` and checkpoint-store failures cancel the in-flight siblings promptly — their dangling calls are re-executed by a resume, exactly like a serial abort's not-yet-run calls.
 
 ## Workspace permission model
 
 One three-valued ACL (`allow`/`ask`/`deny`) governs both files and shell. The split invariant:
 
-- **`deny` is enforced in the session** (`LocalWorkspaceSession`): every file op resolves its path (symlinks followed, absolute/`~`/relative all accepted) and asks `WorkspacePolicy.decide_path(rel, abs, op)`; `run()` asks `session.decide_command(command, cwd)` (static `command_rules` merged most-restrictive with path claims lexically extracted by `command_guard.py` — redirect targets are writes, path-looking args are reads). Custom tools calling the session directly get the same gate.
+- **`deny` is enforced in the session** (`LocalWorkspaceSession`): every file op resolves its path (symlinks followed, absolute/`~`/relative all accepted) and asks `WorkspacePolicy.decide_path(rel, abs, op)`; `run()` and `spawn()` ask `session.decide_command(command, cwd)` (static `command_rules` merged most-restrictive with path claims lexically extracted by `command_guard.py` — redirect targets are writes, path-looking args are reads), so a background start is judged exactly like a foreground command. Custom tools calling the session directly get the same gate.
 - **`ask` is resolved at the tool layer**: the built-in tools carry `needs_approval` predicates that call `session.decide_path`/`decide_command` and route through the existing `ApprovalRequired` channel. By the time a call reaches the session, `ask` has been approved — the session lets it pass. Bulk operations (list/grep) never trigger approval mid-walk; anything short of `allow` for a symlinked file inside the walk is skipped, and only the operation's own target can ask.
 - Symlinks have no special case: a path is judged by where it resolves. Inside-root reads are always `allow`; `write`, `read_outside`, `write_outside` and `path_rules`/`denied_paths` cover the rest. Presets: `readonly`, `coding` (outside reads ask, outside writes deny), `trusted` (reads anywhere, outside writes ask).
 - The command guard is **advisory** (it cannot see `python -c` or `$(...)` payloads) but one-sided: a missed claim falls back to the static rules, and a false claim is almost always a relative token that resolves inside the root where reads are allowed — it can surface extra `ask`s, not loosen anything. Hard enforcement is the `ShellExecutor` seam (`protocol.py`): an executor derives OS sandbox scopes (Seatbelt/bubblewrap) from the policy and runs *after* the policy/approval gates.

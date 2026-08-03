@@ -659,6 +659,14 @@ class RunLoop:
         )
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
         plugins = await self._activate_plugins(agent, resources)
+        if workspace is not None:
+            # The workspace's per-turn reminders (background-process status)
+            # ride the plugins' view-injector channel — one transient-view
+            # mechanism, one merge point. getattr: a third-party
+            # WorkspaceLike predating the seam simply contributes none.
+            contribute = getattr(agent.workspace, "view_injectors", None)
+            if contribute is not None:
+                plugins.view_injectors.extend(contribute())
         tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
         active = ActiveAgent(
             agent=agent,
@@ -851,7 +859,10 @@ class RunLoop:
     async def _augment_view(
         self, state: RunState, view: list[TranscriptEntry]
     ) -> list[TranscriptEntry]:
-        """Append transient per-turn entries from plugin view injectors.
+        """Append transient per-turn entries from view injectors.
+
+        Injectors come from plugins and from the workspace (merged into one
+        list at activation).
 
         Injected entries are used for this one model call only — never added to
         ``state.transcript`` or the Session, so they don't accumulate as turns

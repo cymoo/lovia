@@ -34,6 +34,35 @@ async def test_workspace_injects_tools_and_instructions(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_status_reminder_reaches_the_view(tmp_path) -> None:
+    # Turn 1 starts a background process; the turn-2 model view must carry the
+    # transient status reminder (wired via WorkspaceLike.view_injectors), and
+    # the persisted transcript must not.
+    provider = ScriptedProvider(
+        [
+            call("shell", {"command": "sleep 5", "background": True}, call_id="bg"),
+            text("started"),
+        ]
+    )
+    agent = Agent(
+        name="coder",
+        model=provider,
+        workspace=Workspace.local(str(tmp_path), mode="trusted"),
+    )
+
+    result = await Runner.run(agent, "start the server")
+
+    marker = "Background processes:"
+    turn_two = provider.calls[1]
+    assert any(
+        m.role == "user" and marker in (m.content or "") and "sleep 5" in m.content
+        for m in turn_two
+    )
+    assert not any(marker in (getattr(e, "content", "") or "") for e in result.entries)
+    # The runner-owned session closed at run end, killing the process with it.
+
+
+@pytest.mark.asyncio
 async def test_full_file_tool_round_trip(tmp_path) -> None:
     (tmp_path / "app.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
     provider = ScriptedProvider(

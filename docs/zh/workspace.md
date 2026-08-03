@@ -109,13 +109,18 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
   错误信息里列出当前存活的 id（没有单独的 list 工具）。
 - `kill_process(process_id)` 杀掉整个 process group（包括子进程）并返回最后的输出尾部。
   后台进程没有超时；它们随 session 一起消亡（`close()` 收割所有 process group）。
+- 每一轮都有一条临时**状态提醒**（与 todo 重新展示相同的视图注入机制——不落 transcript、
+  不累积）：让运行中的进程保持在模型视野里，并持续通告某次退出，直到
+  `read_process_output`/`kill_process` 把结果交付给模型为止。于是 dev server 崩溃后
+  下一轮就会被注意到，无需轮询。
 - 进程是**短暂的**：checkpoint 恢复不会还原它们。重启后 `read_process_output` 会明确说明，
   解法是照 transcript 里的启动命令重跑一次。
 - 配置了自定义 `ShellExecutor` 时 `spawn` 会拒绝执行，而不是悄悄绕过其 sandbox
   （executor 的后台支持尚未接入）。
 
 同一套能力也在 session 上供库用法和自定义工具使用：`spawn` / `read_process_output` /
-`kill_process`。
+`kill_process`，另有 `background_processes()`——被动状态列表（不消费任何输出），
+供状态提醒和 UI 列表使用。
 
 工作区根目录下的 virtualenv（优先 `.venv`，也识别 `venv`）会对每条命令**自动激活**：其 bin 目录被前置到
 `PATH`、并设置 `VIRTUAL_ENV`，于是 `python`/`pip` 解析到工作区自己的环境，而不是 lovia 运行所在的那个。

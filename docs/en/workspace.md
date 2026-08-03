@@ -139,6 +139,11 @@ Semantics:
 - `kill_process(process_id)` kills the whole process group (children
   included) and returns the final tail. No timeout applies to background
   processes; they die with the session (`close()` reaps every group).
+- Every turn, a transient **status reminder** (same view-injection
+  mechanism as the todo re-show — never persisted, never accumulating)
+  keeps running processes in the model's view and announces an exit until
+  a `read_process_output`/`kill_process` delivers it. So a crashed dev
+  server is noticed on the next turn without polling.
 - Processes are **ephemeral**: a checkpoint resume does not restore them.
   After a restart, `read_process_output` says so and the fix is to re-run
   the start command from the transcript.
@@ -147,7 +152,9 @@ Semantics:
   wired yet).
 
 The same surface is available on the session for library use and custom
-tools: `spawn` / `read_process_output` / `kill_process`.
+tools: `spawn` / `read_process_output` / `kill_process`, plus
+`background_processes()` — a passive status list (nothing consumed) that
+feeds the reminder and suits UI listings.
 
 A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
 **auto-activated** for every command: its bin dir is prepended to `PATH`

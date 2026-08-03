@@ -105,6 +105,21 @@ class ProcessOutput(BaseModel):
     truncated: bool = False
 
 
+class ProcessStatus(BaseModel):
+    """Passive status of one background process — consumes no output.
+
+    ``exit_seen`` reports whether a ``read_process_output``/``kill_process``
+    already delivered the exit to its caller; the per-turn status reminder
+    announces an exited process until that flips.
+    """
+
+    process_id: str
+    command: str
+    status: Literal["running", "exited", "killed"]
+    exit_code: int | None = None
+    exit_seen: bool = False
+
+
 @dataclass(frozen=True)
 class WorkspaceLimits:
     """Size and count caps for the workspace tools — one discoverable home.
@@ -175,6 +190,7 @@ __all__ = [
     "GrepMatch",
     "ProcessOutput",
     "ProcessStart",
+    "ProcessStatus",
     "WorkspaceLimits",
     "WorkspaceMode",
 ]

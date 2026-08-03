@@ -24,6 +24,7 @@ from pydantic import Field
 from ..exceptions import ToolError
 from ..run_context import RunContext
 from ..tools.base import tool
+from ..transcript import InputEntry, TranscriptEntry
 from .errors import WorkspaceError
 from .protocol import WorkspaceSession
 from .types import (
@@ -38,6 +39,7 @@ from .types import (
 )
 
 __all__ = [
+    "background_process_reminder",
     "edit_file",
     "grep_files",
     "kill_process",
@@ -580,6 +582,51 @@ async def read_process_output(
     process_id: Annotated[str, "Process id returned by shell(background=true)."],
 ) -> ProcessOutput:
     return await require_workspace(ctx).read_process_output(process_id)
+
+
+def _preview(command: str, limit: int = 60) -> str:
+    """One-line command preview for the status reminder."""
+    line = " ".join(command.split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def background_process_reminder(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+    """Per-turn view injector: one transient status line per background process.
+
+    Running processes are re-shown every turn, so the model keeps the id and
+    the fact that the process exists in view without polling; an exited
+    process is announced until a ``read_process_output``/``kill_process``
+    delivers its exit (``exit_seen``), then disappears. Announce-until-seen
+    beats notify-exactly-once here because injected entries are never
+    persisted — a one-shot notice would be lost to a retry or resume.
+
+    Wired by the runner through ``WorkspaceLike.view_injectors()``; the same
+    transient-view mechanism as the todo reminder, so the lines neither
+    accumulate in the transcript nor bust the cached prompt prefix.
+    """
+    lister = getattr(ctx.workspace, "background_processes", None)
+    if lister is None:  # no workspace, or a backend without background support
+        return None
+    procs = [p for p in lister() if p.status == "running" or not p.exit_seen]
+    if not procs:
+        return None
+    lines = []
+    for p in procs:
+        if p.status == "running":
+            lines.append(f"- {p.process_id} running: {_preview(p.command)}")
+        else:
+            lines.append(
+                f"- {p.process_id} {p.status} (exit code {p.exit_code}): "
+                f"{_preview(p.command)} — call "
+                f"read_process_output('{p.process_id}') for its final output"
+            )
+    body = "\n".join(lines)
+    return [
+        InputEntry(
+            role="user",
+            content=f"<system-reminder>\nBackground processes:\n{body}\n</system-reminder>",
+        )
+    ]
 
 
 @tool(

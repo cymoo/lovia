@@ -15,9 +15,11 @@ from .types import (
     GrepMatch,
     ProcessOutput,
     ProcessStart,
+    ProcessStatus,
 )
 
 if TYPE_CHECKING:
+    from ..plugins.base import ViewInjector
     from ..tools import Tool
 
 __all__ = ["ShellExecutor", "WorkspaceLike", "WorkspaceSession"]
@@ -138,6 +140,14 @@ class WorkspaceSession(Protocol):
         """Kill a background process's whole group; report its final tail."""
         ...
 
+    def background_processes(self) -> list[ProcessStatus]:
+        """Passive status of every background process (consumes no output).
+
+        Feeds the per-turn status reminder and any UI listing; returns
+        ``[]`` when there are none (including after ``close()``).
+        """
+        ...
+
     async def close(self) -> None:
         """Release held resources (including live subprocesses). Idempotent."""
         ...
@@ -195,4 +205,13 @@ class WorkspaceLike(Protocol):
 
     def instructions(self) -> str:
         """Return the workspace prompt fragment for the system prompt."""
+        ...
+
+    def view_injectors(self) -> list["ViewInjector"]:
+        """Per-turn view injectors contributed by this workspace.
+
+        Merged by the runner with the plugins' injectors (same transient
+        per-call-view mechanism). The local backend contributes the
+        background-process status reminder; return ``[]`` for none.
+        """
         ...

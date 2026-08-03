@@ -33,6 +33,7 @@ from .types import (
     GrepMatch,
     ProcessOutput,
     ProcessStart,
+    ProcessStatus,
     WorkspaceLimits,
     WorkspaceMode,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "PermissionDeniedError",
     "ProcessOutput",
     "ProcessStart",
+    "ProcessStatus",
     "Workspace",
     "WorkspaceClosedError",
     "WorkspaceError",

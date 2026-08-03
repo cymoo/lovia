@@ -1252,6 +1252,27 @@ async def test_spawn_during_close_self_reaps(tmp_path) -> None:
     assert not marker.exists()
 
 
+async def test_background_processes_lists_status_passively(tmp_path) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    assert session.background_processes() == []
+    start = await session.spawn("echo done")
+    for _ in range(100):
+        (status,) = session.background_processes()
+        if status.status != "running":
+            break
+        await asyncio.sleep(0.05)
+    # Passive listing observes the exit without consuming it: exit_seen stays
+    # False until a read/kill delivers the outcome to its caller.
+    assert status.process_id == start.process_id
+    assert status.status == "exited" and status.exit_code == 0
+    assert status.exit_seen is False
+    await session.read_process_output(start.process_id)
+    (status,) = session.background_processes()
+    assert status.exit_seen is True
+    await session.close()
+    assert session.background_processes() == []
+
+
 def test_tail_buffer_semantics() -> None:
     buf = local_module._TailBuffer(10)
     buf.append("abcde")

@@ -36,6 +36,7 @@ from .protocol import ShellExecutor, WorkspaceSession
 from .types import WorkspaceLimits, WorkspaceMode
 
 if TYPE_CHECKING:
+    from ..plugins.base import ViewInjector
     from ..tools import Tool
 
 __all__ = ["LocalWorkspace", "Workspace"]
@@ -151,6 +152,19 @@ class LocalWorkspace:
             # read/kill are useless without a way to start one.
             bundle += [shell, read_process_output, kill_process]
         return bundle
+
+    def view_injectors(self) -> list["ViewInjector"]:
+        """Per-turn reminders for this workspace.
+
+        Just the background-process status line — and only when the policy
+        has a shell at all (no shell means nothing can ever spawn, so no
+        point evaluating the injector every turn).
+        """
+        from .tools import background_process_reminder
+
+        if not self.policy.allow_shell:
+            return []
+        return [background_process_reminder]
 
     def instructions(self) -> str:
         """Render the workspace fragment appended to the system prompt.
@@ -446,3 +460,6 @@ class _WorkspaceSessionBinding:
 
     def instructions(self) -> str:
         return self.workspace.instructions()
+
+    def view_injectors(self) -> list["ViewInjector"]:
+        return self.workspace.view_injectors()

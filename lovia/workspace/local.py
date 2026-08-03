@@ -47,6 +47,7 @@ from .types import (
     GrepMatch,
     ProcessOutput,
     ProcessStart,
+    ProcessStatus,
     WorkspaceLimits,
 )
 from ..tools.base import clip_text
@@ -156,6 +157,11 @@ class _BackgroundProcess:
     # unread pipe fills up and blocks the process.
     reader: asyncio.Task[None] = field(init=False, repr=False)
     killed: bool = False
+    # Whether a read/kill has delivered the exit to its caller. The per-turn
+    # status reminder announces an exited process until this flips — sturdier
+    # than notifying exactly once, which an injected (never persisted) entry
+    # cannot promise across resumes.
+    exit_seen: bool = False
 
     @property
     def status(self) -> Literal["running", "exited", "killed"]:
@@ -168,9 +174,12 @@ class _BackgroundProcess:
     def snapshot(self) -> ProcessOutput:
         """Drain the buffer into a read result reflecting current status."""
         output, dropped = self.buffer.take()
+        status = self.status
+        if status != "running":
+            self.exit_seen = True
         return ProcessOutput(
             process_id=self.id,
-            status=self.status,
+            status=status,
             exit_code=self.proc.returncode,
             output=output,
             truncated=dropped,
@@ -1104,6 +1113,25 @@ class LocalWorkspaceSession:
         with contextlib.suppress(Exception):
             await bp.proc.wait()
         return bp.snapshot()
+
+    def background_processes(self) -> list[ProcessStatus]:
+        """Passive status of every background process, in spawn order.
+
+        Consumes no output and never raises: after ``close()`` the registry
+        is empty and this returns ``[]``. This is what the per-turn status
+        reminder reads; UI/API consumers can list live processes the same
+        way.
+        """
+        return [
+            ProcessStatus(
+                process_id=bp.id,
+                command=bp.command,
+                status=bp.status,
+                exit_code=bp.proc.returncode,
+                exit_seen=bp.exit_seen,
+            )
+            for bp in self._bg.values()
+        ]
 
     def _unknown_process_error(self, process_id: str) -> WorkspaceError:
         if not self._bg:

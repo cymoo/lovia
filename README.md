@@ -483,16 +483,15 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-lovia web --port 9000 --model glm-5.2      # python -m lovia.web works too
-lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
+lovia web --port 9000                      # python -m lovia.web works too
+lovia web --setup                          # change the saved model/key
 ```
 
-Anything required but missing (Base URL, API key, model name) is asked
-interactively on first run and can be saved to `~/.lovia/config.env`
-(owner-only, git-ignored) — one setup, every directory. Change it later with
-`lovia web --setup`, diagnose with `lovia web --check`. Configuration
-precedence: flag > environment > `./.lovia/config.env` >
-`~/.lovia/config.env` (or `--env-file`).
+The model connection (model name, Base URL, API key) is asked interactively
+on first run and saved to `~/.lovia/config.json` (owner-only, git-ignored) —
+one setup, every directory. A project-local `./.lovia/config.json` overrides
+it wholesale. Change it later with `lovia web --setup`, diagnose with
+`lovia web --check`; server and agent options stay flags/env vars.
 
 The bundled page is optional: everything is exposed as a JSON + SSE REST
 API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or

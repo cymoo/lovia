@@ -16,17 +16,17 @@ lovia web
 
 Open `http://127.0.0.1:8000`. On first launch the CLI asks for whatever model
 configuration is missing, checks it against the endpoint, and can save it
-(owner-only, git-ignored) to `~/.lovia/config.env` — one setup works from any
+(owner-only, git-ignored) to `~/.lovia/config.json` — one setup works from any
 directory — so it is never retyped. Change it later with `lovia web --setup`:
 the wizard revisits every value (Enter keeps the current one) and asks whether
-to save user-wide or to the project-local `./.lovia/config.env`. To see what
-configuration would win and whether the endpoint answers, run
-`lovia web --check`.
+to save user-wide or to the project-local `./.lovia/config.json`, which wins
+wholesale when both exist. To see the configured connection and whether the
+endpoint answers, run `lovia web --check`.
 
 The default Agent includes `Todo`, optional Skills from `./.agents/skills`
 (the cross-agent convention, shared with e.g. Claude Code and Codex), Memory in
 `./.lovia/memory`, time and HTTP Tools, web search (Tavily when
-`TAVILY_API_KEY` is set, else optional DuckDuckGo), scheduling, and a
+a key is configured, else optional DuckDuckGo), scheduling, and a
 coding-mode Workspace rooted at the current directory. If `AGENTS.md` exists,
 its content becomes the Agent's instructions.
 
@@ -121,29 +121,29 @@ not restored after a server restart.
 
 ## Useful CLI options
 
-Every option resolves in this order: command-line flag, environment variable,
-`./.lovia/config.env`, `~/.lovia/config.env` (or the `--env-file` files),
-then the default. The startup summary names each value's source; `--check`
-prints the same and probes the endpoint without serving.
+The model connection (model id, base URL, API key, context window), extra
+model profiles, role assignments and web search live only in `config.json` —
+no flags, no environment variables — managed by `--setup` and the web UI's
+Settings (upcoming). Every *other* option resolves as: command-line flag,
+then environment variable, then the default. `--check` prints the configured
+connection and probes the endpoint without serving.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--token` | `LOVIA_WEB_TOKEN` | None on loopback; generated + printed otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
-| `--model` | `LOVIA_MODEL` | Asked on first run |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |
 | `--skills-dir` | `LOVIA_SKILLS_DIR` | `./.agents/skills` when present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--no-followups` | `LOVIA_FOLLOWUPS`, `LOVIA_FOLLOWUP_MODEL` | Suggestions on, using the Agent's model |
+| `--no-followups` | `LOVIA_FOLLOWUPS` | Suggestions on (the aux role model in `config.json`, else the Agent's) |
 | `--setup` / `--check` | — | Rerun the wizard / probe and exit |
-| `--env-file` | — | `./.lovia/config.env`, then `~/.lovia/config.env` |
 
-`lovia web --help` lists them all in four groups: model (including the context
-window), agent, server, and advanced — output tokens, Provider timeout and
+`lovia web --help` lists them all in four groups: model (`--setup` /
+`--check`), agent, server, and advanced — output tokens, Provider timeout and
 retries, proxy handling, and log level.
 
 ## Questions from the agent

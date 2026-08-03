@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -14,6 +15,13 @@ from lovia.context import Compaction  # noqa: E402
 from lovia.exceptions import UserError  # noqa: E402
 from lovia.web import ChatStore  # noqa: E402
 from lovia.web import __main__ as cli  # noqa: E402
+from lovia.web import builder  # noqa: E402
+from lovia.web.config import (  # noqa: E402
+    Connection,
+    ModelProfile,
+    SearchConfig,
+    WebConfig,
+)
 
 
 # ---------------------------------------------------------------- skills -
@@ -24,19 +32,19 @@ def test_resolve_skills_explicit_dirs(tmp_path: Path) -> None:
     b = tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    assert cli.resolve_skills_dirs([str(a), str(b)]) == [a, b]
+    assert builder.resolve_skills_dirs([str(a), str(b)]) == [a, b]
 
 
 def test_resolve_skills_explicit_missing_errors(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="skills directory not found"):
-        cli.resolve_skills_dirs([str(tmp_path / "nope")])
+        builder.resolve_skills_dirs([str(tmp_path / "nope")])
 
 
 def test_resolve_skills_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     d = tmp_path / "team"
     d.mkdir()
     monkeypatch.setenv("LOVIA_SKILLS_DIR", str(d))
-    assert cli.resolve_skills_dirs(None) == [d]
+    assert builder.resolve_skills_dirs(None) == [d]
 
 
 def test_resolve_skills_default_present(
@@ -45,7 +53,7 @@ def test_resolve_skills_default_present(
     monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    assert cli.resolve_skills_dirs(None) == [Path(".agents/skills")]
+    assert builder.resolve_skills_dirs(None) == [Path(".agents/skills")]
 
 
 def test_resolve_skills_legacy_dir_ignored_with_hint(
@@ -57,8 +65,8 @@ def test_resolve_skills_legacy_dir_ignored_with_hint(
     monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "skills").mkdir()
-    with caplog.at_level("WARNING", logger="lovia.web.cli"):
-        assert cli.resolve_skills_dirs(None) == []
+    with caplog.at_level("WARNING", logger="lovia.web.builder"):
+        assert builder.resolve_skills_dirs(None) == []
     assert "no longer auto-loaded" in caplog.text
 
 
@@ -67,14 +75,14 @@ def test_resolve_skills_default_absent(
 ) -> None:
     monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert cli.resolve_skills_dirs(None) == []
+    assert builder.resolve_skills_dirs(None) == []
 
 
 # ----------------------------------------------------------------- memory -
 
 
 def test_resolve_memory_disabled() -> None:
-    assert cli.resolve_memory("./anywhere", no_memory=True) is None
+    assert builder.resolve_memory("./anywhere", no_memory=True) is None
 
 
 def test_resolve_memory_default_root(
@@ -82,7 +90,7 @@ def test_resolve_memory_default_root(
 ) -> None:
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
-    mem = cli.resolve_memory(None, no_memory=False)
+    mem = builder.resolve_memory(None, no_memory=False)
     assert isinstance(mem, Memory)
     assert mem.index is not None  # default builds both the notes and archive tiers
     # The default root is created eagerly under cwd.
@@ -91,7 +99,7 @@ def test_resolve_memory_default_root(
 
 def test_resolve_memory_explicit_dir(tmp_path: Path) -> None:
     target = tmp_path / "mem"
-    mem = cli.resolve_memory(str(target), no_memory=False)
+    mem = builder.resolve_memory(str(target), no_memory=False)
     assert isinstance(mem, Memory)
     assert target.is_dir()
 
@@ -99,7 +107,7 @@ def test_resolve_memory_explicit_dir(tmp_path: Path) -> None:
 def test_resolve_memory_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     envmem = tmp_path / "envmem"
     monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
-    mem = cli.resolve_memory(None, no_memory=False)
+    mem = builder.resolve_memory(None, no_memory=False)
     assert isinstance(mem, Memory)
     assert envmem.is_dir()
 
@@ -110,7 +118,7 @@ def test_resolve_memory_flag_beats_env(
     envmem = tmp_path / "envmem"
     flagmem = tmp_path / "flagmem"
     monkeypatch.setenv("LOVIA_MEMORY_DIR", str(envmem))
-    mem = cli.resolve_memory(str(flagmem), no_memory=False)
+    mem = builder.resolve_memory(str(flagmem), no_memory=False)
     assert isinstance(mem, Memory)
     # The flag root is used; the env root is left untouched.
     assert flagmem.is_dir()
@@ -121,20 +129,25 @@ def test_resolve_memory_path_is_file(tmp_path: Path) -> None:
     f = tmp_path / "notadir"
     f.write_text("x", encoding="utf-8")
     with pytest.raises(UserError, match="not a directory"):
-        cli.resolve_memory(str(f), no_memory=False)
+        builder.resolve_memory(str(f), no_memory=False)
 
 
 # ------------------------------------------------------------ built-in tools -
 
 
 def test_resolve_tools_includes_builtins() -> None:
-    names = {t.name for t in cli.resolve_tools()}
+    names = {t.name for t in builder.resolve_tools()}
     assert {"now", "read_page", "http_request"} <= names
 
 
-def test_resolve_tools_includes_search_when_available() -> None:
+def test_resolve_tools_auto_uses_ddg_without_a_key() -> None:
     pytest.importorskip("ddgs")
-    assert "web_search" in {t.name for t in cli.resolve_tools()}
+    assert "web_search" in {t.name for t in builder.resolve_tools()}
+
+
+def test_resolve_tools_off_disables_search() -> None:
+    names = {t.name for t in builder.resolve_tools(SearchConfig(backend="off"))}
+    assert names == {"now", "read_page", "http_request"}
 
 
 def test_resolve_tools_skips_search_when_backend_missing(
@@ -143,42 +156,49 @@ def test_resolve_tools_skips_search_when_backend_missing(
     def _missing() -> object:
         raise UserError("ddgs not installed")
 
-    # A real key may have leaked from .env via the live-test helpers.
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setattr(cli, "duckduckgo_search", _missing)
+    monkeypatch.setattr(builder, "duckduckgo_search", _missing)
     # The missing optional backend must degrade gracefully, not crash.
-    names = {t.name for t in cli.resolve_tools()}
+    names = {t.name for t in builder.resolve_tools()}
     assert names == {"now", "read_page", "http_request"}
 
 
-def test_resolve_tools_prefers_tavily_when_key_set(
+def test_resolve_tools_prefers_tavily_when_key_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _boom() -> object:
         raise AssertionError("duckduckgo_search must not be constructed")
 
-    monkeypatch.setenv("TAVILY_API_KEY", "k")
-    monkeypatch.setattr(cli, "duckduckgo_search", _boom)
-    names = {t.name for t in cli.resolve_tools()}
+    monkeypatch.setattr(builder, "duckduckgo_search", _boom)
+    search = SearchConfig(tavily_api_key="k")  # backend "auto"
+    names = {t.name for t in builder.resolve_tools(search)}
     assert names == {"now", "read_page", "http_request", "web_search"}
+
+
+def test_resolve_tools_tavily_without_key_warns_and_degrades(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="lovia.web.builder"):
+        names = {t.name for t in builder.resolve_tools(SearchConfig(backend="tavily"))}
+    assert "web_search" not in names
+    assert "no API key" in caplog.text
 
 
 # ---------------------------------------------------------- instructions -
 
 
 def test_resolve_instructions_inline() -> None:
-    assert cli.resolve_instructions("be terse", None) == "be terse"
+    assert builder.resolve_instructions("be terse", None) == "be terse"
 
 
 def test_resolve_instructions_file(tmp_path: Path) -> None:
     f = tmp_path / "prompt.md"
     f.write_text("from file", encoding="utf-8")
-    assert cli.resolve_instructions(None, str(f)) == "from file"
+    assert builder.resolve_instructions(None, str(f)) == "from file"
 
 
 def test_resolve_instructions_file_missing(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="instructions file not found"):
-        cli.resolve_instructions(None, str(tmp_path / "nope.md"))
+        builder.resolve_instructions(None, str(tmp_path / "nope.md"))
 
 
 def test_resolve_instructions_convention_file(
@@ -187,7 +207,7 @@ def test_resolve_instructions_convention_file(
     monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "AGENTS.md").write_text("conventional prompt", encoding="utf-8")
-    assert cli.resolve_instructions(None, None) == "conventional prompt"
+    assert builder.resolve_instructions(None, None) == "conventional prompt"
 
 
 def test_resolve_instructions_generic_fallback(
@@ -195,18 +215,18 @@ def test_resolve_instructions_generic_fallback(
 ) -> None:
     monkeypatch.delenv("LOVIA_INSTRUCTIONS_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert cli.resolve_instructions(None, None) == cli.GENERIC_INSTRUCTIONS
+    assert builder.resolve_instructions(None, None) == builder.GENERIC_INSTRUCTIONS
 
 
 # ------------------------------------------------------------- workspace -
 
 
 def test_resolve_workspace_disabled() -> None:
-    assert cli.resolve_workspace(".", "trusted", no_workspace=True) is None
+    assert builder.resolve_workspace(".", "trusted", no_workspace=True) is None
 
 
 def test_resolve_workspace_default_mode_is_coding(tmp_path: Path) -> None:
-    ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
     assert ws is not None
     # Matches the core ``Workspace.local`` default: writes allowed inside the
     # root, but shell and out-of-root reads go through approval — no unprompted
@@ -220,7 +240,7 @@ def test_resolve_workspace_mode_from_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "readonly")
-    ws = cli.resolve_workspace(str(tmp_path), None, no_workspace=False)
+    ws = builder.resolve_workspace(str(tmp_path), None, no_workspace=False)
     assert ws is not None
     assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
@@ -228,28 +248,30 @@ def test_resolve_workspace_mode_from_env(
 
 def test_resolve_workspace_invalid_mode(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="invalid workspace mode"):
-        cli.resolve_workspace(str(tmp_path), "bogus", no_workspace=False)
+        builder.resolve_workspace(str(tmp_path), "bogus", no_workspace=False)
 
 
 def test_resolve_workspace_missing_dir(tmp_path: Path) -> None:
     with pytest.raises(UserError, match="workspace directory not found"):
-        cli.resolve_workspace(str(tmp_path / "nope"), "trusted", no_workspace=False)
+        builder.resolve_workspace(str(tmp_path / "nope"), "trusted", no_workspace=False)
 
 
 def test_workspace_flags_map_to_modes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     args = cli.build_parser().parse_args(["--readonly"])
-    assert cli._mode_flag(args) == "readonly"
+    assert builder._mode_flag(args) == "readonly"
     # The flag wins over the env var, like every other option.
     monkeypatch.setenv("LOVIA_WORKSPACE_MODE", "trusted")
-    ws = cli.resolve_workspace(str(tmp_path), cli._mode_flag(args), args.no_workspace)
+    ws = builder.resolve_workspace(
+        str(tmp_path), builder._mode_flag(args), args.no_workspace
+    )
     assert ws is not None
     assert ws.policy.write == "deny"
     assert ws.policy.allow_shell is False
 
-    assert cli._mode_flag(cli.build_parser().parse_args(["--trusted"])) == "trusted"
-    assert cli._mode_flag(cli.build_parser().parse_args([])) is None
+    assert builder._mode_flag(cli.build_parser().parse_args(["--trusted"])) == "trusted"
+    assert builder._mode_flag(cli.build_parser().parse_args([])) is None
 
 
 # -------------------------------------------------------------- --app -
@@ -312,62 +334,6 @@ def test_load_app_wrong_type(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         cli.load_app_target("agentmod_d:agent")
 
 
-# ------------------------------------------------------------- env files -
-
-
-def test_load_env_file_sets_vars(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    pytest.importorskip("dotenv")
-    env = tmp_path / "custom.env"
-    env.write_text("LOVIA_TEST_VAR=hello\n", encoding="utf-8")
-    monkeypatch.delenv("LOVIA_TEST_VAR", raising=False)
-    sources = cli.load_env_files([str(env)])
-    assert os.getenv("LOVIA_TEST_VAR") == "hello"
-    # The summary names the actual file, not a generic ".env".
-    assert sources["LOVIA_TEST_VAR"] == "custom.env"
-
-
-def test_load_env_file_existing_env_wins(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    pytest.importorskip("dotenv")
-    (tmp_path / ".lovia").mkdir()
-    (tmp_path / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_VAR2=fromfile\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("LOVIA_TEST_VAR2", "fromenv")
-    monkeypatch.chdir(tmp_path)
-    cli.load_env_files(None)
-    assert os.getenv("LOVIA_TEST_VAR2") == "fromenv"
-
-
-def test_load_env_file_explicit_scope_path_keeps_canonical_label(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """--env-file pointing at a scope file labels it as that scope, so
-    scope-aware behavior (--setup save default, shadow warnings) still
-    recognizes the source."""
-    pytest.importorskip("dotenv")
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".lovia").mkdir()
-    (tmp_path / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_SCOPED=x\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("LOVIA_TEST_SCOPED", raising=False)
-    try:
-        sources = cli.load_env_files([".lovia/config.env"])
-        assert sources["LOVIA_TEST_SCOPED"] == ".lovia/config.env"
-    finally:
-        os.environ.pop("LOVIA_TEST_SCOPED", None)
-
-
-def test_load_env_file_missing_errors() -> None:
-    pytest.importorskip("dotenv")
-    with pytest.raises(UserError, match="env file not found"):
-        cli.load_env_files(["/no/such/file.env"])
-
-
 # --------------------------------------------------------------- parser -
 
 
@@ -385,7 +351,7 @@ def test_parser_workspace_flags_are_mutually_exclusive() -> None:
 
 def test_parser_defaults_are_none() -> None:
     args = cli.build_parser().parse_args([])
-    assert args.host is None and args.port is None and args.model is None
+    assert args.host is None and args.port is None
     assert args.no_workspace is False
     assert args.readonly is False and args.trusted is False
     assert args.memory_dir is None and args.no_memory is False
@@ -395,6 +361,55 @@ def test_parser_memory_flags() -> None:
     args = cli.build_parser().parse_args(["--memory-dir", "mem", "--no-memory"])
     assert args.memory_dir == "mem"
     assert args.no_memory is True
+
+
+def test_parser_has_no_model_connection_flags() -> None:
+    """The connection lives in config.json — flags for it are gone (0.9.37)."""
+    for flag in (
+        "--model",
+        "--base-url",
+        "--api-key",
+        "--context-window",
+        "--env-file",
+    ):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args([flag, "x"])
+
+
+def test_parser_prog_override() -> None:
+    assert cli.build_parser("lovia web").prog == "lovia web"
+    assert cli.build_parser().prog == "python -m lovia.web"
+
+
+def test_help_defaults_render_from_core_constants() -> None:
+    # The numbers in --help are f-string-rendered from the core defaults, so
+    # they can never drift from what the library actually does.
+    help_text = cli.build_parser().format_help()
+    assert f"default {cli.DEFAULT_TIMEOUT:g}" in help_text
+    assert f"{builder.DEFAULT_RETRIES} retries" in help_text
+    assert f"default {builder.DEFAULT_MAX_TURNS}" in help_text
+    assert builder.DEFAULT_WORKSPACE_MODE in help_text
+
+
+def test_help_is_grouped_and_plain_text() -> None:
+    """The help is the CLI's front door: grouped, and free of docstring markup."""
+    help_text = cli.build_parser("lovia web").format_help()
+    assert help_text.startswith("usage: lovia web [options]")
+    for group in ("model:", "agent:", "server:", "advanced:"):
+        assert f"\n{group}\n" in help_text
+    assert "``" not in help_text and "::" not in help_text
+    # The examples and the configuration story live in the epilog.
+    assert "examples:" in help_text
+    assert "config.json" in help_text
+
+
+def test_parser_error_points_at_help(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser("lovia web").parse_args(["--nope"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "usage: lovia web [options]" in err
+    assert "try 'lovia web --help'" in err
 
 
 # --------------------------------------------------- build_default_agent -
@@ -412,10 +427,10 @@ def test_build_default_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
     args = cli.build_parser().parse_args([])
     provider = _provider()
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), provider)
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), provider)
     assert agent.name == "lovia"
     assert agent.model is provider
-    assert agent.instructions == cli.GENERIC_INSTRUCTIONS
+    assert agent.instructions == builder.GENERIC_INSTRUCTIONS
     # ./.agents/skills -> Skills, plus the on-by-default Todo + Scheduling +
     # Memory + Subagents plugins.
     assert {type(p).__name__ for p in agent.plugins} == {
@@ -435,7 +450,7 @@ def test_build_default_agent_no_memory(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args(["--no-memory"])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
     assert all(not isinstance(p, Memory) for p in agent.plugins)
 
 
@@ -448,7 +463,7 @@ def test_build_default_agent_subagents_child_composition(
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
     args = cli.build_parser().parse_args([])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
     # The child keeps the basic capabilities (Skills, Todo) and sheds the
@@ -465,8 +480,32 @@ def test_build_default_agent_no_subagents(
 
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args(["--no-subagents"])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
+
+
+def test_build_default_agent_wires_the_vision_role(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = cli.build_parser().parse_args(["--no-memory"])
+    config = WebConfig.model_validate(
+        {
+            "models": [
+                {"id": "chat", "model": "text-model"},
+                {"id": "eyes", "model": "glm-4.6v", "api_key": "sk-v"},
+            ],
+            "roles": {"chat": "chat", "vision": "eyes"},
+        }
+    )
+    from lovia.providers import provider_from_string
+
+    # The main model must be text-only, or images would go inline instead.
+    blind = provider_from_string("text-model", supports_vision=False)
+    agent = builder.build_default_agent(
+        args, ChatStore.in_memory(), blind, config=config
+    )
+    assert "see_image" in {t.name for t in agent.tools}
 
 
 def test_build_default_agent_injects_current_date(
@@ -481,7 +520,7 @@ def test_build_default_agent_injects_current_date(
 
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args([])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(context=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
@@ -500,11 +539,20 @@ def test_build_default_agent_declares_render_surface(
 
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args([])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
 
     ctx = RunContext(context=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
     assert SURFACE_NOTE in system_prompt
+
+
+def test_build_default_agent_max_tokens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = cli.build_parser().parse_args(["--max-tokens", "1234"])
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    assert agent.settings.max_tokens == 1234
 
 
 # ----------------------------------------------------------------- main -
@@ -539,13 +587,12 @@ def test_main_reports_missing_model(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    for var in ("LOVIA_MODEL", "OPENAI_DEFAULT_MODEL", "ANTHROPIC_DEFAULT_MODEL"):
-        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main([])
     assert rc == 2
     err = capsys.readouterr().err
     assert "error:" in err and "no model configured" in err
+    assert "--setup" in err  # the recovery hint names the wizard
 
 
 def test_main_port_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -632,7 +679,7 @@ def test_main_passes_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def test_warn_when_trusted_workspace_exposed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ws = cli.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    ws = builder.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("0.0.0.0", ws)
@@ -640,7 +687,7 @@ def test_warn_when_trusted_workspace_exposed(
 
 
 def test_no_warn_on_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ws = cli.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
+    ws = builder.resolve_workspace(str(tmp_path), "trusted", no_workspace=False)
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("127.0.0.1", ws)
@@ -650,7 +697,7 @@ def test_no_warn_on_loopback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def test_no_warn_on_readonly_workspace(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ws = cli.resolve_workspace(str(tmp_path), "readonly", no_workspace=False)
+    ws = builder.resolve_workspace(str(tmp_path), "readonly", no_workspace=False)
     calls: list[tuple[object, ...]] = []
     monkeypatch.setattr(cli.log, "warning", lambda *a, **k: calls.append(a))
     cli._warn_if_exposed("0.0.0.0", ws)
@@ -670,41 +717,41 @@ def test_no_warn_without_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_resolve_max_retries_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_MAX_RETRIES", raising=False)
     # No flag, no env -> None: the agent's own retry posture applies.
-    assert cli.resolve_max_retries(None) is None
+    assert builder.resolve_max_retries(None) is None
     monkeypatch.setenv("LOVIA_MAX_RETRIES", "5")
-    assert cli.resolve_max_retries(None) == 5  # env
-    assert cli.resolve_max_retries(0) == 0  # flag wins; 0 disables retries
+    assert builder.resolve_max_retries(None) == 5  # env
+    assert builder.resolve_max_retries(0) == 0  # flag wins; 0 disables retries
 
 
 def test_resolve_max_retries_rejects_negative() -> None:
     with pytest.raises(UserError, match="must be >= 0"):
-        cli.resolve_max_retries(-1)
+        builder.resolve_max_retries(-1)
 
 
 def test_resolve_max_turns_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_MAX_TURNS", raising=False)
-    assert cli.resolve_max_turns(None) == 50  # default
+    assert builder.resolve_max_turns(None) == 50  # default
     monkeypatch.setenv("LOVIA_MAX_TURNS", "10")
-    assert cli.resolve_max_turns(None) == 10  # env
-    assert cli.resolve_max_turns(5) == 5  # flag wins
+    assert builder.resolve_max_turns(None) == 10  # env
+    assert builder.resolve_max_turns(5) == 5  # flag wins
 
 
 def test_resolve_max_turns_rejects_zero() -> None:
     with pytest.raises(UserError, match="must be >= 1"):
-        cli.resolve_max_turns(0)
+        builder.resolve_max_turns(0)
 
 
 def test_resolve_max_tokens_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOVIA_MAX_TOKENS", raising=False)
-    assert cli.resolve_max_tokens(None) is None  # provider default
+    assert builder.resolve_max_tokens(None) is None  # provider default
     monkeypatch.setenv("LOVIA_MAX_TOKENS", "1024")
-    assert cli.resolve_max_tokens(None) == 1024  # env
-    assert cli.resolve_max_tokens(4096) == 4096  # flag wins
+    assert builder.resolve_max_tokens(None) == 1024  # env
+    assert builder.resolve_max_tokens(4096) == 4096  # flag wins
 
 
 def test_resolve_max_tokens_rejects_non_positive() -> None:
     with pytest.raises(UserError, match="must be > 0"):
-        cli.resolve_max_tokens(0)
+        builder.resolve_max_tokens(0)
 
 
 def test_parser_reliability_flags() -> None:
@@ -716,8 +763,6 @@ def test_parser_reliability_flags() -> None:
             "90",
             "--max-tokens",
             "2048",
-            "--context-window",
-            "128000",
             "--max-turns",
             "20",
             "--trust-env",
@@ -726,101 +771,11 @@ def test_parser_reliability_flags() -> None:
     assert args.max_retries == 4
     assert args.provider_timeout == 90.0
     assert args.max_tokens == 2048
-    assert args.context_window == 128_000
     assert args.max_turns == 20
     assert args.trust_env is True
 
 
-def test_help_defaults_render_from_core_constants() -> None:
-    # The numbers in --help are f-string-rendered from the core defaults, so
-    # they can never drift from what the library actually does.
-    help_text = cli.build_parser().format_help()
-    assert f"default {cli.DEFAULT_TIMEOUT:g}" in help_text
-    assert f"{cli.DEFAULT_RETRIES} retries" in help_text
-    assert f"default {cli.DEFAULT_MAX_TURNS}" in help_text
-    assert cli.DEFAULT_WORKSPACE_MODE in help_text
-
-
-def test_help_is_grouped_and_plain_text() -> None:
-    """The help is the CLI's front door: grouped, and free of docstring markup."""
-    help_text = cli.build_parser("lovia web").format_help()
-    assert help_text.startswith("usage: lovia web [options]")
-    for group in ("model:", "agent:", "server:", "advanced:"):
-        assert f"\n{group}\n" in help_text
-    assert "``" not in help_text and "::" not in help_text
-    # The examples and the precedence chain live in the epilog.
-    assert "examples:" in help_text
-    assert "flag > environment > ./.lovia/config.env > ~/.lovia/config.env" in help_text
-
-
-def test_parser_error_points_at_help(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as exc:
-        cli.build_parser("lovia web").parse_args(["--nope"])
-    assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "usage: lovia web [options]" in err
-    assert "try 'lovia web --help'" in err
-
-
-def test_build_default_agent_max_tokens(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    args = cli.build_parser().parse_args(["--max-tokens", "1234"])
-    agent = cli.build_default_agent(args, ChatStore.in_memory(), _provider())
-    assert agent.settings.max_tokens == 1234
-
-
-def test_main_passes_retry_and_context_policy(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
-    rc = cli.main(
-        ["--max-retries", "1", "--context-window", "111111", "--max-turns", "7"]
-    )
-    assert rc == 0
-    retry = captured["retry"]
-    assert isinstance(retry, RetryPolicy)
-    assert retry.max_attempts == 2  # first attempt + 1 retry
-    policy = captured["context_policy"]
-    assert isinstance(policy, Compaction)
-    assert policy.context_window == 111_111
-    assert captured["max_turns"] == 7
-
-
-def test_main_provider_timeout_and_trust_env_set_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    # setenv (not delenv) so monkeypatch restores/removes them on teardown even
-    # though main() mutates os.environ directly.
-    monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
-    monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", "")
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--provider-timeout", "150", "--trust-env"])
-    assert rc == 0
-    assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
-    assert os.environ["LOVIA_PROVIDER_TRUST_ENV"] == "1"
-
-
-def test_main_rejects_bad_provider_timeout(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--provider-timeout", "0"])
-    assert rc == 2
-    assert "must be > 0" in capsys.readouterr().err
-
-
-# ----------------------------------------- endpoint flags + onboarding -
+# ------------------------------------------------- config-driven launch -
 
 
 class _FakeTty:
@@ -831,22 +786,7 @@ class _FakeTty:
         return "\n"
 
 
-def test_parser_base_url_and_api_key() -> None:
-    args = cli.build_parser().parse_args(
-        ["--base-url", "https://api.deepseek.com", "--api-key", "sk-x"]
-    )
-    assert args.base_url == "https://api.deepseek.com"
-    assert args.api_key == "sk-x"
-    defaults = cli.build_parser().parse_args([])
-    assert defaults.base_url is None and defaults.api_key is None
-
-
-def test_parser_prog_override() -> None:
-    assert cli.build_parser("lovia web").prog == "lovia web"
-    assert cli.build_parser().prog == "python -m lovia.web"
-
-
-def test_app_warns_about_endpoint_flags(
+def test_app_warns_about_agent_flags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     warned: list[str] = []
@@ -854,90 +794,43 @@ def test_app_warns_about_endpoint_flags(
         cli.log, "warning", lambda msg, *a: warned.append(msg % a if a else msg)
     )
     args = cli.build_parser().parse_args(
-        ["--app", "m:a", "--base-url", "http://x", "--api-key", "k"]
+        ["--app", "m:a", "--workspace", ".", "--max-tokens", "5"]
     )
     cli._warn_ignored_agent_flags(args)
-    assert warned and "--base-url" in warned[0] and "--api-key" in warned[0]
-
-
-def test_load_env_files_source_map_and_precedence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".lovia").mkdir()
-    (tmp_path / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_A=file\nLOVIA_TEST_B=file\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("LOVIA_TEST_A", "process")
-    monkeypatch.delenv("LOVIA_TEST_B", raising=False)
-    try:
-        sources = cli.load_env_files(None)
-        # Process env beats every file layer.
-        assert os.getenv("LOVIA_TEST_A") == "process"
-        assert os.getenv("LOVIA_TEST_B") == "file"
-        assert "LOVIA_TEST_A" not in sources  # pre-existing -> plain env
-        assert sources["LOVIA_TEST_B"] == ".lovia/config.env"
-    finally:
-        os.environ.pop("LOVIA_TEST_B", None)
-
-
-def test_load_env_files_project_beats_user_and_legacy_env_is_dead(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
-) -> None:
-    """Layering: ./.lovia wins over ~/.lovia; a generic ./.env is ignored."""
-    monkeypatch.chdir(tmp_path)
-    (fake_home / ".lovia").mkdir(parents=True, exist_ok=True)
-    (fake_home / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_C=user\nLOVIA_TEST_D=user\n", encoding="utf-8"
-    )
-    (tmp_path / ".lovia").mkdir()
-    (tmp_path / ".lovia" / "config.env").write_text(
-        "LOVIA_TEST_C=project\n", encoding="utf-8"
-    )
-    (tmp_path / ".env").write_text("LOVIA_TEST_E=legacy\n", encoding="utf-8")
-    for var in ("LOVIA_TEST_C", "LOVIA_TEST_D", "LOVIA_TEST_E"):
-        monkeypatch.delenv(var, raising=False)
-    try:
-        sources = cli.load_env_files(None)
-        assert os.getenv("LOVIA_TEST_C") == "project"  # project layer wins
-        assert os.getenv("LOVIA_TEST_D") == "user"  # user layer fills the rest
-        assert os.getenv("LOVIA_TEST_E") is None  # ./.env no longer read
-        # Sources carry scope-distinct labels for the startup summary.
-        assert sources["LOVIA_TEST_C"] == ".lovia/config.env"
-        assert sources["LOVIA_TEST_D"] == "~/.lovia/config.env"
-        assert "LOVIA_TEST_E" not in sources
-    finally:
-        for var in ("LOVIA_TEST_C", "LOVIA_TEST_D"):
-            os.environ.pop(var, None)
+    assert warned and "--workspace" in warned[0] and "--max-tokens" in warned[0]
 
 
 def test_main_reports_missing_api_key_when_not_a_tty(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     import io
     import sys
 
     monkeypatch.chdir(tmp_path)
+    write_config(model="openai:gpt-5.5", api_key=None)
     monkeypatch.setattr(sys, "stdin", io.StringIO())
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--model", "openai:gpt-5.5"])
+    rc = cli.main([])
     assert rc == 2
     err = capsys.readouterr().err
     assert "no API key configured" in err
-    # The concise hint names the non-interactive channels (flags + env vars).
-    for channel in ("--api-key", "OPENAI_API_KEY"):
-        assert channel in err
+    assert "--setup" in err
 
 
 def test_main_setup_needs_a_tty(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     import io
     import sys
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    write_config()
     monkeypatch.setattr(sys, "stdin", io.StringIO())
     rc = cli.main(["--setup"])
     assert rc == 2
@@ -959,15 +852,18 @@ def test_main_setup_and_check_reject_custom_app(
 
 
 def test_main_check_reports_and_exits_without_serving(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
+    from lovia.web.config import ValidationOutcome
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    write_config()
     monkeypatch.setattr(
-        cli.setup,
-        "validate_connection",
-        lambda conn, transport=None: (cli.setup.ValidationOutcome.OK, "HTTP 200"),
+        "lovia.web.config.check.validate_connection",
+        lambda conn, transport=None: (ValidationOutcome.OK, "HTTP 200"),
     )
 
     def _no_serve(*a: object, **k: object) -> None:
@@ -978,11 +874,11 @@ def test_main_check_reports_and_exits_without_serving(
     assert rc == 0
     out = capsys.readouterr().out
     assert "configuration check" in out
-    assert "openai:gpt-x (env)" in out
+    assert "openai:gpt-x" in out
     assert "✓ endpoint reachable" in out
     # Both config scopes are reported with presence.
-    assert "./.lovia/config.env (absent)" in out
-    assert "~/.lovia/config.env (absent)" in out
+    assert "./.lovia/config.json (absent)" in out
+    assert "~/.lovia/config.json (present)" in out
 
 
 def test_main_check_missing_config_is_exit_2_not_a_wizard(
@@ -993,31 +889,34 @@ def test_main_check_missing_config_is_exit_2_not_a_wizard(
     def _no_wizard(*a: object, **k: object) -> None:
         raise AssertionError("--check must never prompt")
 
-    monkeypatch.setattr(cli.setup, "interactive_setup", _no_wizard)
+    monkeypatch.setattr(cli.webconfig, "interactive_setup", _no_wizard)
     rc = cli.main(["--check"])
     assert rc == 2
     assert "missing: model" in capsys.readouterr().out
 
 
 def test_main_configured_run_prints_summary_and_skips_wizard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    write_config()
 
     def _boom(*a: object, **k: object) -> object:
         raise AssertionError("configured launches must not prompt or validate")
 
-    monkeypatch.setattr(cli.setup, "interactive_setup", _boom)
-    monkeypatch.setattr(cli.setup, "validate_connection", _boom)
+    monkeypatch.setattr(cli.webconfig, "interactive_setup", _boom)
+    monkeypatch.setattr("lovia.web.config.check.validate_connection", _boom)
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main([])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "openai:gpt-x (env)" in out
-    assert "https://api.openai.com/v1 (default)" in out
-    assert "sk-…9876 (env)" in out
+    assert "openai:gpt-x" in out
+    assert "https://api.openai.com/v1" in out
+    assert "sk-…9876" in out
+    assert "~/.lovia/config.json" in out
     assert "serving on http://127.0.0.1:8000" in out
 
 
@@ -1038,10 +937,10 @@ def test_main_summary_prints_a_browsable_url(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-abcdefghijkl9876")
+    write_config()
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     assert cli.main(["--host", host, "--port", "9000"]) == 0
     assert f"serving on {expected}" in capsys.readouterr().out
@@ -1092,19 +991,14 @@ def test_main_runs_wizard_when_config_missing_on_a_tty(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "stdin", _FakeTty())
-    completed = cli.setup.Connection(
-        model="wizard-model",
-        model_source="prompt",
-        base_url="http://gw/v1",
-        base_url_source="prompt",
-    )
+    completed = Connection(model="wizard-model", base_url="http://gw/v1")
     calls: list[object] = []
 
-    def fake_wizard(conn: object, **kwargs: object) -> object:
-        calls.append(conn)
+    def fake_wizard(loaded: object, **kwargs: object) -> Connection:
+        calls.append(loaded)
         return completed
 
-    monkeypatch.setattr(cli.setup, "interactive_setup", fake_wizard)
+    monkeypatch.setattr(cli.webconfig, "interactive_setup", fake_wizard)
     captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
     rc = cli.main([])
@@ -1123,32 +1017,28 @@ def test_main_wizard_interrupt_exits_130(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "stdin", _FakeTty())
 
-    def interrupted(conn: object, **kwargs: object) -> object:
+    def interrupted(loaded: object, **kwargs: object) -> object:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli.setup, "interactive_setup", interrupted)
+    monkeypatch.setattr(cli.webconfig, "interactive_setup", interrupted)
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     assert cli.main([]) == 130
 
 
-def test_main_injects_endpoint_flags_into_the_provider(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_main_injects_profile_endpoint_into_the_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     from lovia.providers import OpenAIChatProvider
 
     monkeypatch.chdir(tmp_path)
+    write_config(
+        model="deepseek-v4-pro",
+        base_url="https://api.deepseek.com/",
+        api_key="sk-deep",
+    )
     captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
-    rc = cli.main(
-        [
-            "--model",
-            "deepseek-v4-pro",
-            "--base-url",
-            "https://api.deepseek.com/",
-            "--api-key",
-            "sk-deep",
-        ]
-    )
+    rc = cli.main([])
     assert rc == 0
     agent = captured["agent"]
     assert isinstance(agent, Agent)
@@ -1158,17 +1048,20 @@ def test_main_injects_endpoint_flags_into_the_provider(
     assert provider._api_key == "sk-deep"
 
 
-def test_main_injects_anthropic_env_endpoint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_main_injects_anthropic_profile_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     from lovia.providers import AnthropicProvider
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gw.example/anthropic")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anth")
+    write_config(
+        model="anthropic:claude-x",
+        base_url="https://gw.example/anthropic",
+        api_key="sk-anth",
+    )
     captured: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
-    rc = cli.main(["--model", "anthropic:claude-x"])
+    rc = cli.main([])
     assert rc == 0
     agent = captured["agent"]
     assert isinstance(agent, Agent)
@@ -1179,13 +1072,65 @@ def test_main_injects_anthropic_env_endpoint(
 
 
 def test_main_reports_unknown_vendor_at_startup(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    write_config(model="nosuchvendor:m", api_key="sk-x")
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
-    rc = cli.main(["--model", "nosuchvendor:m", "--api-key", "sk-x"])
+    rc = cli.main([])
     assert rc == 2
     assert "Unknown model spec" in capsys.readouterr().err
+
+
+def test_main_passes_retry_and_context_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config(context_window=111_111)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    rc = cli.main(["--max-retries", "1", "--max-turns", "7"])
+    assert rc == 0
+    retry = captured["retry"]
+    assert isinstance(retry, RetryPolicy)
+    assert retry.max_attempts == 2  # first attempt + 1 retry
+    policy = captured["context_policy"]
+    assert isinstance(policy, Compaction)
+    assert policy.context_window == 111_111
+    assert captured["max_turns"] == 7
+
+
+def test_main_provider_timeout_and_trust_env_set_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    # setenv (not delenv) so monkeypatch restores/removes them on teardown even
+    # though main() mutates os.environ directly.
+    monkeypatch.setenv("LOVIA_PROVIDER_TIMEOUT", "60")
+    monkeypatch.setenv("LOVIA_PROVIDER_TRUST_ENV", "")
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main(["--provider-timeout", "150", "--trust-env"])
+    assert rc == 0
+    assert os.environ["LOVIA_PROVIDER_TIMEOUT"] == "150.0"
+    assert os.environ["LOVIA_PROVIDER_TRUST_ENV"] == "1"
+
+
+def test_main_rejects_bad_provider_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config()
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    rc = cli.main(["--provider-timeout", "0"])
+    assert rc == 2
+    assert "must be > 0" in capsys.readouterr().err
 
 
 def test_main_wizard_leaves_no_db_when_aborted(
@@ -1196,9 +1141,9 @@ def test_main_wizard_leaves_no_db_when_aborted(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "stdin", _FakeTty())
     monkeypatch.setattr(
-        cli.setup,
+        cli.webconfig,
         "interactive_setup",
-        lambda conn, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
+        lambda loaded, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     cli.main([])
@@ -1206,11 +1151,13 @@ def test_main_wizard_leaves_no_db_when_aborted(
 
 
 def test_main_default_db_lands_under_dot_lovia(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_config: Callable[..., Path],
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    write_config()
     monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
     rc = cli.main([])
     assert rc == 0
@@ -1218,57 +1165,73 @@ def test_main_default_db_lands_under_dot_lovia(
     assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")
 
 
+def test_main_wires_the_aux_role_into_followups(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    write_config(
+        models=[
+            {"id": "chat", "model": "openai:gpt-x", "api_key": "sk-x"},
+            {"id": "small", "model": "openai:gpt-small", "api_key": "sk-small"},
+        ],
+        roles={"chat": "chat", "aux": "small"},
+    )
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
+    assert cli.main([]) == 0
+    followup = seen["followup_model"]
+    assert followup is not None
+    assert getattr(followup, "model", None) == "gpt-small"
+
+
 # ------------------------------------------------------------- followups -
 
 
 def test_resolve_followups_on_by_default() -> None:
     """The CLI is a finished chat app; the library default is the opposite."""
-    assert cli.resolve_followups(False) is True
+    assert builder.resolve_followups(False) is True
 
 
 def test_resolve_followups_flag_disables() -> None:
-    assert cli.resolve_followups(True) is False
+    assert builder.resolve_followups(True) is False
 
 
 def test_resolve_followups_env_disables(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_FOLLOWUPS", "0")
-    assert cli.resolve_followups(False) is False
+    assert builder.resolve_followups(False) is False
 
 
 def test_resolve_followups_flag_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOVIA_FOLLOWUPS", "1")
-    assert cli.resolve_followups(True) is False
+    assert builder.resolve_followups(True) is False
 
 
-def test_resolve_followup_model_unset() -> None:
-    assert cli.resolve_followup_model() is None
+def test_resolve_followup_model_unassigned() -> None:
+    assert builder.resolve_followup_model(None) is None
 
 
-def test_resolve_followup_model_builds_a_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LOVIA_FOLLOWUP_MODEL", "openai:gpt-small")
-    monkeypatch.setenv("LOVIA_FOLLOWUP_API_KEY", "sk-small")
-    provider = cli.resolve_followup_model()
+def test_resolve_followup_model_builds_a_provider() -> None:
+    profile = ModelProfile(id="s", model="openai:gpt-small", api_key="sk-small")
+    provider = builder.resolve_followup_model(profile)
     assert provider is not None
     assert provider.model == "gpt-small"
 
 
 def test_resolve_followup_model_bad_spec_falls_back(
-    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An unusable spec must not take the whole server down with it."""
-    monkeypatch.setenv("LOVIA_FOLLOWUP_MODEL", "no-such-vendor:whatever")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    assert cli.resolve_followup_model() is None
+    """An unusable profile must not take the whole server down with it."""
+    profile = ModelProfile(id="s", model="no-such-vendor:whatever")
+    with caplog.at_level("WARNING", logger="lovia.web.builder"):
+        assert builder.resolve_followup_model(profile) is None
+    assert "falling back" in caplog.text
 
 
 def test_main_passes_followups_to_serve(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LOVIA_MODEL", "openai:gpt-x")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    write_config()
     seen: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
     assert cli.main([]) == 0

@@ -455,15 +455,15 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 ```
 
 ```bash
-lovia web --port 9000 --model glm-5.2      # python -m lovia.web 亦可
-lovia web --model deepseek-v4-pro --base-url https://api.deepseek.com
+lovia web --port 9000                      # python -m lovia.web 亦可
+lovia web --setup                          # 修改已保存的模型/密钥
 ```
 
-首次配置模型时，CLI 会引导填写模型名称、端点（Base URL）和 API 密钥。验证连接后，可将配置
-保存到 `~/.lovia/config.env`，此后从任意目录启动时都能自动读取。之后可用
-`lovia web --setup` 修改配置，用 `lovia web --check` 查看配置来源并检查端点。默认优先级为：
-命令行参数 > 环境变量 > `./.lovia/config.env` > `~/.lovia/config.env`。显式传入
-`--env-file` 后，则只读取指定文件。
+首次运行时，CLI 会引导填写模型名称、端点（Base URL）和 API 密钥，验证连接后保存到
+`~/.lovia/config.json`（仅当前用户可读写、自动 git-ignore），此后从任意目录启动都能读取；
+项目级的 `./.lovia/config.json` 存在时整体优先。之后可用 `lovia web --setup` 修改，
+用 `lovia web --check` 检查配置与端点。模型连接不再使用命令行参数或环境变量；
+服务器与 Agent 选项仍走参数/环境变量。
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的

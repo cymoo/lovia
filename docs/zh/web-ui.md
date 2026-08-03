@@ -13,20 +13,21 @@ lovia web
 ```
 
 打开 `http://127.0.0.1:8000`。首次启动时，如果模型配置不完整，CLI 会逐项询问，并连接
-端点进行验证。确认后可将配置保存到用户级的 `~/.lovia/config.env`；此后从任意目录启动时
+端点进行验证。确认后可将配置保存到用户级的 `~/.lovia/config.json`；此后从任意目录启动时
 都能自动读取。在支持 Unix 权限的平台上，配置文件仅允许当前用户读写。CLI 还会在这个
 `.lovia/` 目录中创建 `.gitignore`，避免密钥和聊天数据被意外提交。
 
 需要修改配置时，运行 `lovia web --setup`。向导会把当前值作为默认值，直接回车即可保留；
-保存时可选择用户级配置，也可以选择仅对当前项目生效的 `./.lovia/config.env`。运行
-`lovia web --check` 则会显示各项配置的来源并探测端点，但不会启动服务。
+保存时可选择用户级配置，也可以选择仅对当前项目生效的 `./.lovia/config.json`（两者同时
+存在时项目级整体优先）。运行 `lovia web --check` 则会显示当前配置并探测端点，但不会
+启动服务。
 
 CLI 创建的默认 Agent 会启用 `Todo`、`./.lovia/memory` 中的 Memory、时间与 HTTP 工具、
 Web 搜索、定时任务，以及以当前目录为根、采用 `coding` 模式的 Workspace。如果
 `./.agents/skills` 目录存在，还会自动加载其中的 Skills。这个目录遵循跨 Agent 的通用约定，
 可以与 Claude Code、Codex 等工具共用。0.9.13 起，旧的 `./skills` 不再自动加载；可以将其
-移到新位置，或显式传入 `--skills-dir skills`。设置 `TAVILY_API_KEY` 后，Web 搜索使用
-Tavily；否则尝试使用可选的 DuckDuckGo 后端。如果当前目录存在 `AGENTS.md`，其内容会
+移到新位置，或显式传入 `--skills-dir skills`。在配置中填入 Tavily API Key 后，Web 搜索
+使用 Tavily；否则尝试使用可选的 DuckDuckGo 后端。如果当前目录存在 `AGENTS.md`，其内容会
 作为 Agent 的 instructions。
 
 !!! danger "默认仅供本机使用；对外监听时自动启用 token 验证"
@@ -119,32 +120,29 @@ JPG、PNG、GIF 和 WebP 图片还可在模型支持视觉时**内联**发送：
 
 ## 常用 CLI 选项
 
-配置按以下顺序取值：命令行参数 > 当前进程的环境变量 > 配置文件 > 默认值。未指定
-`--env-file` 时，CLI 先加载项目级的 `./.lovia/config.env`，再加载用户级的
-`~/.lovia/config.env`；出现同名变量时，项目级配置优先。0.9.10 起不再自动读取通用的
-`./.env`。显式指定 `--env-file` 后，只加载指定文件；该选项可以重复使用，先指定的文件
-优先级更高。启动摘要会标明每项配置的来源。
+模型连接（模型名、Base URL、API Key、上下文窗口）、多模型档案、角色指派与 Web 搜索
+只存在于 `config.json` 中——没有对应的命令行参数或环境变量——由 `--setup`（以及即将
+提供的网页设置界面）管理；项目级 `./.lovia/config.json` 存在时整体优先于用户级。其余
+选项按 命令行参数 > 环境变量 > 默认值 取值。`--check` 会打印当前配置并探测端点，但
+不会启动服务。
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；绑定其他地址时自动生成并打印 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
-| `--model` | `LOVIA_MODEL` | 首次运行时询问 |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent |
 | `--skills-dir` | `LOVIA_SKILLS_DIR` | 若存在则使用 `./.agents/skills` |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
-| `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启 |
+| `--no-followups` | `LOVIA_FOLLOWUPS` | 默认开启（可在 `config.json` 中指派辅助模型） |
 | `--no-subagents` | — | 后台子 Agent 默认开启 |
-| — | `LOVIA_FOLLOWUP_MODEL` | Agent 自身的模型 |
 | `--setup` / `--check` | — | 重跑配置向导 / 探测端点后退出 |
-| `--env-file` | — | 未指定时依次读取 `./.lovia/config.env`、`~/.lovia/config.env` |
 
-完整选项见 `lovia web --help`。帮助信息分为 model、agent、server 和 advanced 四组；
-上下文窗口位于 model 组，输出 token 上限、Provider 超时与重试、代理和日志级别位于
+完整选项见 `lovia web --help`。帮助信息分为 model（`--setup` / `--check`）、agent、
+server 和 advanced 四组；输出 token 上限、Provider 超时与重试、代理和日志级别位于
 advanced 组。
 
 ## 来自 Agent 的提问

@@ -960,7 +960,7 @@ wheels = [
 
 [[package]]
 name = "lovia"
-version = "0.9.36"
+version = "0.9.37"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1005,7 +1005,6 @@ web = [
     { name = "ddgs" },
     { name = "fastapi" },
     { name = "jinja2" },
-    { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "sse-starlette" },
     { name = "truststore" },
@@ -1036,7 +1035,6 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-dotenv", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "python-dotenv", marker = "extra == 'examples'", specifier = ">=1.0.0" },
-    { name = "python-dotenv", marker = "extra == 'web'", specifier = ">=1.0.0" },
     { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.9" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },

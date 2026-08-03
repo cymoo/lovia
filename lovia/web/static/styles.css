@@ -541,8 +541,10 @@ body.sidebar-collapsed .sidebar {
   color: var(--accent-text);
   font-weight: 600;
 }
-/* A live background run for this session (detach/reconnect). */
-.session-item.running .session-title::after {
+/* A live background run for this session (detach/reconnect). The all-chats
+   dialog carries a stop button on those rows, so it needs the marker too. */
+.session-item.running .session-title::after,
+.all-chats-item.running .all-chats-title::after {
   content: "";
   display: inline-block;
   width: 6px;
@@ -568,6 +570,8 @@ body.sidebar-collapsed .sidebar {
   margin-top: 1px;
   font-variant-numeric: tabular-nums;
 }
+/* Shared by both chat lists — the sidebar rows and the all-chats dialog rows
+   build the same pin/rename/delete cluster. */
 .session-menu {
   display: none;
   align-items: center;
@@ -575,7 +579,9 @@ body.sidebar-collapsed .sidebar {
   gap: 1px;
 }
 .session-item:hover .session-menu,
-.session-item:focus-within .session-menu {
+.session-item:focus-within .session-menu,
+.all-chats-item:hover .session-menu,
+.all-chats-item:focus-within .session-menu {
   display: flex;
 }
 .session-menu button {
@@ -614,11 +620,14 @@ body.sidebar-collapsed .sidebar {
   width: 13px;
   height: 13px;
 }
-.session-item.pinned .session-pin {
+.session-item.pinned .session-pin,
+.all-chats-item.pinned .session-pin {
   display: flex;
 }
 .session-item:hover .session-pin,
-.session-item:focus-within .session-pin {
+.session-item:focus-within .session-pin,
+.all-chats-item:hover .session-pin,
+.all-chats-item:focus-within .session-pin {
   display: none;
 }
 /* Separator below the pinned group. */
@@ -2641,14 +2650,25 @@ dialog.custom-dialog::backdrop {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* Same three slots as a sidebar row — main button, at-rest pin marker, hover
+   action menu — so the actions don't disappear once a chat scrolls past the
+   sidebar's page. Only the main button's own layout differs (one line, with the
+   timestamp trailing, rather than title over meta). */
 .all-chats-item {
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--radius-sm);
+  transition: background var(--t-fast);
+}
+.all-chats-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 12px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   text-align: left;
-  transition: background var(--t-fast);
 }
 .all-chats-item:hover {
   background: var(--surface-2);
@@ -4227,7 +4247,8 @@ body.files-splitting {
   .session-menu {
     display: flex;
   }
-  .session-item.pinned .session-pin {
+  .session-item.pinned .session-pin,
+  .all-chats-item.pinned .session-pin {
     display: none; /* the menu's pin button (always visible here) takes over */
   }
   .btn-copy,

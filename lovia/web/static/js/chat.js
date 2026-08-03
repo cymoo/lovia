@@ -4,7 +4,7 @@ import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
-import { loadSessions, updateSessionInSidebar } from './sessions.js';
+import { loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
 import { enterToSend, followupsEnabled } from './settings.js';
@@ -2411,7 +2411,7 @@ async function pollForTitle(sessionId) {
     // remaining back-off steps still retry.
     const current = (await api.getSession(sessionId).catch(() => null))?.title ?? null;
     if (current && current !== provisional) {
-      updateSessionInSidebar(sessionId, current); // row (if visible) + topbar
+      updateSessionTitle(sessionId, current); // row (if visible) + topbar
     } else if (attempt < _TITLE_POLL_BACKOFF_MS.length) {
       schedule(_TITLE_POLL_BACKOFF_MS[attempt++]);
     }

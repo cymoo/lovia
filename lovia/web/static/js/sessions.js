@@ -203,7 +203,7 @@ export function initEventStream() {
   es.addEventListener('session_retitled', (e) => {
     try {
       const d = JSON.parse(e.data);
-      updateSessionInSidebar(d.session_id, d.title);
+      updateSessionTitle(d.session_id, d.title);
     } catch { /* ignore */ }
   });
 }
@@ -226,20 +226,24 @@ async function refreshTranscript() {
   } catch { /* transient — the next event or a manual switch repaints */ }
 }
 
+/** @returns {Promise<boolean>} True once the run was actually cancelled. */
 async function stopRun(sid) {
   // Suppress the "finished" notice for a stop the user just asked for.
   _recentlyStopped.set(sid, Date.now());
   // Entries only matter within the grace window — don't let the map grow
   // for the lifetime of the tab.
   setTimeout(() => _recentlyStopped.delete(sid), STOPPED_GRACE_MS);
+  let ok = true;
   try {
     await api.cancel(sid);
     toast(t('toast.runStopped'));
   } catch (err) {
     console.error('stopRun:', err);
     toast(t('toast.stopFailed'), { type: 'error' });
+    ok = false;
   }
   loadSessions();
+  return ok;
 }
 
 // ---- Load ----------------------------------------------------------------
@@ -511,60 +515,7 @@ function renderSessions() {
     }
     main.addEventListener('click', () => switchSession(s.id));
 
-    // At-rest pin marker (hidden on hover, where the menu takes its place).
-    const pinMark = document.createElement('span');
-    pinMark.className = 'session-pin';
-    pinMark.setAttribute('aria-hidden', 'true');
-    pinMark.innerHTML = PIN_SVG;
-
-    const menu = document.createElement('div');
-    menu.className = 'session-menu';
-
-    // A running session gets a stop control right in the sidebar — no need to
-    // open the chat just to end its background run.
-    if (store.activeRuns?.has(s.id)) {
-      const stopBtn = document.createElement('button');
-      stopBtn.type = 'button';
-      stopBtn.title = t('session.stop');
-      stopBtn.className = 'session-stop';
-      stopBtn.innerHTML = icon('square', { size: 13 });
-      stopBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        stopRun(s.id);
-      });
-      menu.append(stopBtn);
-    }
-
-    const pinBtn = document.createElement('button');
-    pinBtn.type = 'button';
-    pinBtn.title = s.pinned ? t('session.unpin') : t('session.pin');
-    pinBtn.innerHTML = PIN_SVG;
-    if (s.pinned) pinBtn.classList.add('active');
-    pinBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      togglePin(s);
-    });
-
-    const renameBtn = document.createElement('button');
-    renameBtn.type = 'button';
-    renameBtn.title = t('session.rename');
-    renameBtn.innerHTML = icon('pencil', { size: 14 });
-    renameBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      renameSession(s);
-    });
-
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.title = t('session.delete');
-    delBtn.innerHTML = icon('trash-2', { size: 14 });
-    delBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteSession(s.id);
-    });
-
-    menu.append(pinBtn, renameBtn, delBtn);
-    item.append(main, pinMark, menu);
+    item.append(main, ...rowActions(s, item));
     sessionsList.appendChild(item);
   }
 
@@ -592,38 +543,122 @@ function renderSessions() {
   }
 }
 
-// ---- Update a single session's title in the sidebar --------------------
-export function updateSessionInSidebar(sessionId, title) {
+// ---- Update a single session's title wherever it shows ------------------
+export function updateSessionTitle(sessionId, title) {
   // Update the cached sessions list
   const s = store.sessions.find(s => s.id === sessionId);
   if (s) s.title = title;
 
-  // Update the DOM directly without full re-render
-  const item = document.querySelector(`.session-item[data-id="${sessionId}"]`);
-  if (item) {
-    const titleEl = item.querySelector('.session-title');
-    if (titleEl) titleEl.textContent = title || t('session.newChat');
-  }
+  const label = title || t('session.newChat');
+  // Update the DOM directly without full re-render. Both lists key rows by
+  // session id and can be on screen at once (the all-chats dialog sits over the
+  // sidebar), so a rename from either has to repaint both.
+  const rows = `.session-item[data-id="${sessionId}"], .all-chats-item[data-id="${sessionId}"]`;
+  document.querySelectorAll(rows).forEach((row) => {
+    const titleEl = row.querySelector('.session-title, .all-chats-title');
+    if (titleEl) titleEl.textContent = label;
+    const main = /** @type {HTMLElement | null} */ (row.querySelector('.session-main, .all-chats-main'));
+    if (main) main.title = title || sessionId; // same fallback the rows render with
+  });
 
   // Update header if this is the active session (fall back when cleared)
-  if (sessionId === store.sessionId && chatTitleEl) {
-    chatTitleEl.textContent = title || t('session.newChat');
-  }
+  if (sessionId === store.sessionId && chatTitleEl) chatTitleEl.textContent = label;
 }
 
 // ---- Actions -------------------------------------------------------------
-async function renameSession(s) {
-  const title = await promptDialog(t('dialog.renameChat'), s.title || '');
+// Both chat lists share these. `s` is whatever row object the caller holds —
+// the all-chats dialog pages straight from the API, so its rows are NOT the
+// cached `store.sessions` objects. Each action therefore updates the row it was
+// handed as well as the cache, and reports back so the caller can repaint.
+
+/**
+ * The at-rest pin marker + hover action menu both chat lists append to a row.
+ *
+ * Handlers restate `row` themselves instead of leaning on a re-render: the
+ * all-chats dialog's rows are standalone and nothing repaints them. In the
+ * sidebar the same lines land on a row `renderSessions` already replaced — a
+ * no-op on a detached node.
+ *
+ * `stacked` layers the rename prompt over an open dialog instead of closing it;
+ * `onDeleted` runs once a delete lands. Both options are typed by inference off
+ * the defaults below — a `@param` tag naming a destructured parameter fails
+ * `tsc --checkJs` (TS8024), and one without a default drops out of the type.
+ */
+function rowActions(s, /** @type {HTMLElement} */ row, { onDeleted = () => {}, stacked = false } = {}) {
+  const pinMark = document.createElement('span');
+  pinMark.className = 'session-pin';
+  pinMark.setAttribute('aria-hidden', 'true');
+  pinMark.innerHTML = PIN_SVG;
+
+  const menu = document.createElement('div');
+  menu.className = 'session-menu';
+  const add = (title, svg, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.title = title;
+    b.innerHTML = svg;
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClick(b);
+    });
+    menu.append(b);
+    return b;
+  };
+
+  // A running chat gets a stop control right in the list — no need to open it
+  // just to end its background run.
+  if (store.activeRuns?.has(s.id)) {
+    add(t('session.stop'), icon('square', { size: 13 }), async (b) => {
+      b.disabled = true;
+      if (!(await stopRun(s.id))) {
+        b.disabled = false; // still running — leave the control usable
+        return;
+      }
+      b.remove();
+      row.classList.remove('running');
+    }).classList.add('session-stop');
+  }
+
+  const pinBtn = add(
+    s.pinned ? t('session.unpin') : t('session.pin'),
+    PIN_SVG,
+    async () => {
+      const pinned = await togglePin(s);
+      if (pinned === null) return;
+      // Restate in place — neither list re-sorts a row out from under the pointer.
+      row.classList.toggle('pinned', pinned);
+      pinBtn.classList.toggle('active', pinned);
+      pinBtn.title = pinned ? t('session.unpin') : t('session.pin');
+    },
+  );
+  pinBtn.classList.toggle('active', !!s.pinned);
+
+  add(t('session.rename'), icon('pencil', { size: 14 }), () =>
+    renameSession(s, { stack: stacked }),
+  );
+  add(t('session.delete'), icon('trash-2', { size: 14 }), async () => {
+    if (await deleteSession(s.id, s.title)) onDeleted();
+  });
+
+  return [pinMark, menu];
+}
+
+/** `stack` keeps an already-open dialog alive under the prompt. */
+async function renameSession(s, { stack = false } = {}) {
+  const title = await promptDialog(t('dialog.renameChat'), s.title || '', { stack });
   if (title === null) return; // cancelled — empty string means "clear the title"
   try {
     await api.renameSession(s.id, title);
-    updateSessionInSidebar(s.id, title);
   } catch (err) {
     console.error(err);
     toast(t('toast.renameFailed'), { type: 'error' });
+    return;
   }
+  s.title = title;
+  updateSessionTitle(s.id, title);
 }
 
+/** @returns {Promise<boolean | null>} The new pinned state, or null if it failed. */
 async function togglePin(s) {
   const next = !s.pinned;
   try {
@@ -631,36 +666,51 @@ async function togglePin(s) {
   } catch (err) {
     console.error(err);
     toast(t('toast.pinFailed'), { type: 'error' });
-    return;
+    return null;
+  }
+  s.pinned = next;
+  const target = store.sessions.find((x) => x.id === s.id);
+  if (!target) {
+    // An all-chats row from beyond the sidebar's page: pinning promotes it into
+    // that page, and the server emits no event for pins — so refetch, or the
+    // sidebar would keep the stale order until some unrelated poll.
+    await loadSessions();
+    return next;
   }
   // Update locally and re-sort to match the server's "pinned first, then most
   // recent" order — cheaper than a reload, and it keeps the active search filter.
-  const target = store.sessions.find((x) => x.id === s.id);
-  if (target) target.pinned = next;
+  target.pinned = next;
   store.sessions.sort(
     (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at - a.updated_at,
   );
   _lastRenderSig = null; // order changed — force a redraw
   renderSessions();
+  return next;
 }
 
-/** @param {string} id */
-export async function deleteSession(id) {
+/**
+ * @param {string} [title] Name for the confirm; all-chats rows pass their own
+ *   because they can be past the sidebar's page, where the lookup finds nothing.
+ * @returns {Promise<boolean>} True once the chat is gone.
+ */
+export async function deleteSession(
+  id,
+  title = store.sessions.find((s) => s.id === id)?.title,
+) {
   // Name what's about to disappear — a bare "this chat?" invites misclicks.
-  // Untitled chats use the same display fallback the sidebar row shows.
-  const target = store.sessions.find((s) => s.id === id);
+  // Untitled chats use the same display fallback the list rows show.
   const ok = await confirmDialog(
-    target
-      ? t('dialog.deleteNamed', { title: target.title || t('session.newChat') })
-      : t('dialog.deleteChat'),
+    title === undefined
+      ? t('dialog.deleteChat')
+      : t('dialog.deleteNamed', { title: title || t('session.newChat') }),
   );
-  if (!ok) return;
+  if (!ok) return false;
   try {
     await api.deleteSession(id);
   } catch (err) {
     console.error(err);
     toast(t('toast.deleteFailed'), { type: 'error' });
-    return; // leave the view untouched if the delete didn't land
+    return false; // leave the view untouched if the delete didn't land
   }
   store.emit('session-deleted', id); // e.g. drop the chat's saved draft
   if (store.sessionId === id) {
@@ -668,6 +718,7 @@ export async function deleteSession(id) {
     store.emit('clear-chat');
   }
   await loadSessions();
+  return true;
 }
 
 /** @param {string} id */
@@ -760,12 +811,20 @@ function openAllSessionsDialog(query = '') {
   let offset = 0;
   let loading = false;
 
+  // Same three-slot row as the sidebar (main button, pin marker, action menu) —
+  // only the main button's layout differs, so the actions come from rowActions.
   function rowFor(s) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'all-chats-item';
-    if (s.id === store.sessionId) b.classList.add('active');
-    b.title = s.title || s.id;
+    const row = document.createElement('div');
+    row.className = 'all-chats-item';
+    row.dataset.id = s.id;
+    if (s.id === store.sessionId) row.classList.add('active');
+    if (store.activeRuns?.has(s.id)) row.classList.add('running');
+    if (s.pinned) row.classList.add('pinned');
+
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'all-chats-main';
+    main.title = s.title || s.id;
     const title = document.createElement('span');
     title.className = 'all-chats-title';
     title.textContent = s.title || t('session.newChat');
@@ -773,12 +832,34 @@ function openAllSessionsDialog(query = '') {
     time.className = 'all-chats-time';
     time.textContent = formatTimeSmart(s.updated_at);
     time.title = formatDateTime(s.updated_at);
-    b.append(title, time);
-    b.addEventListener('click', () => {
+    main.append(title, time);
+    main.addEventListener('click', () => {
       dialog.close();
       switchSession(s.id).catch(() => {});
     });
-    return b;
+
+    row.append(main, ...rowActions(s, row, {
+      stacked: true, // a prompt must not close the list it was opened from
+      onDeleted: () => {
+        row.remove();
+        offset = Math.max(0, offset - 1); // or the next page skips a chat
+        syncEmpty();
+      },
+    }));
+    return row;
+  }
+
+  /** Show the empty notice only while the list really has no rows. */
+  function syncEmpty() {
+    const empty = listEl.querySelector('.sessions-empty');
+    if (listEl.querySelector('.all-chats-item')) {
+      empty?.remove();
+    } else if (!empty) {
+      const el = document.createElement('div');
+      el.className = 'sessions-empty';
+      el.textContent = t('nav.none');
+      listEl.appendChild(el);
+    }
   }
 
   async function loadPage() {
@@ -793,12 +874,7 @@ function openAllSessionsDialog(query = '') {
       offset += page.length;
       listEl.append(...page.map(rowFor));
       moreBtn.hidden = rows.length <= PAGE_SIZE;
-      if (!listEl.children.length) {
-        const empty = document.createElement('div');
-        empty.className = 'sessions-empty';
-        empty.textContent = t('nav.none');
-        listEl.appendChild(empty);
-      }
+      syncEmpty();
     } catch (err) {
       console.error('openAllSessionsDialog:', err);
       toast(t('toast.loadChatsFailed'), { type: 'error' });

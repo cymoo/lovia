@@ -4696,3 +4696,504 @@ body.files-splitting {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ---- Settings dialog: left-rail shell (General / Models / Search / About) - */
+.custom-dialog.dialog-xl {
+  max-width: 760px;
+  width: 94%;
+}
+.settings-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 440px;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 2px 10px;
+}
+.settings-head h3 {
+  margin: 0;
+  font-size: 15.5px;
+}
+.settings-body {
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 132px;
+  flex-shrink: 0;
+}
+.settings-rail-item {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  text-align: left;
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.settings-rail-item:hover {
+  background: var(--surface-2);
+}
+.settings-rail-item.active {
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 570;
+}
+.settings-pane-host {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  max-height: min(62vh, 560px);
+  padding-right: 2px;
+}
+@media (max-width: 640px) {
+  .settings-body {
+    flex-direction: column;
+  }
+  .settings-rail {
+    flex-direction: row;
+    width: auto;
+    overflow-x: auto;
+  }
+  .settings-rail-item {
+    white-space: nowrap;
+  }
+}
+
+/* ---- Config panes (Models / Search / About) ------------------------------ */
+.cfg-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.cfg-pane-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.model-row:hover,
+.model-row:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
+}
+.model-row-info {
+  flex: 1;
+  min-width: 0;
+}
+.model-row-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 560;
+}
+.model-row-meta {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-row-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.model-row:hover .model-row-actions,
+.model-row:focus-within .model-row-actions {
+  opacity: 1;
+}
+.model-row-actions .danger {
+  color: var(--danger);
+}
+.model-row-chev {
+  color: var(--muted-2);
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 570;
+  padding: 1px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+}
+.badge-default {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.badge-plain {
+  background: var(--surface-2);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+}
+.cfg-roles {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.cfg-role-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  flex-wrap: wrap;
+}
+.cfg-role-label {
+  width: 76px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.cfg-role-select {
+  width: auto;
+  min-width: 170px;
+  margin-top: 0;
+}
+.cfg-role-hint {
+  flex: 1 1 160px;
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+.cfg-footnote {
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+.cfg-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  max-width: 460px;
+}
+.cfg-form-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.cfg-back {
+  font-size: 18px;
+  line-height: 1;
+}
+.cfg-field .cfg-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 570;
+  color: var(--ink-2);
+}
+.cfg-input {
+  width: 100%;
+}
+.cfg-input.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.cfg-hint {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted-2);
+}
+.cfg-preview {
+  font-family: var(--mono);
+  color: var(--muted);
+}
+.cfg-key {
+  margin-top: 6px;
+}
+.cfg-key .cfg-input {
+  margin-top: 0;
+}
+.cfg-key-set {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  flex-wrap: wrap;
+}
+.cfg-key-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex-shrink: 0;
+}
+.cfg-key-mask {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.cfg-fetch-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.cfg-fetch-row .cfg-input {
+  flex: 1;
+  margin-top: 0;
+}
+.cfg-advanced {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.cfg-advanced > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  user-select: none;
+}
+.cfg-advanced .cfg-field {
+  margin-bottom: 12px;
+}
+.seg-control {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  margin-top: 6px;
+}
+.seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 13px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.seg-btn.active {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 560;
+  box-shadow: var(--shadow-xs);
+}
+[data-theme="dark"] .seg-btn.active {
+  background: var(--surface-3);
+}
+.cfg-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cfg-test-btn {
+  color: var(--accent);
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+.cfg-test-result {
+  font-size: 12px;
+  color: var(--muted);
+}
+.cfg-test-result.ok {
+  color: var(--ok);
+}
+.cfg-test-result.bad {
+  color: var(--danger);
+}
+.cfg-error {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+}
+.cfg-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  max-width: 460px;
+}
+.cfg-about {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cfg-about-row {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+.cfg-about-label {
+  width: 92px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.cfg-about-value {
+  color: var(--ink-2);
+}
+.cfg-about-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.cfg-about-link:hover {
+  text-decoration: underline;
+}
+
+/* ---- Composer model chip (deliberately quiet — informative, not a control
+   that competes with the message) ----------------------------------------- */
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 4px;
+  max-width: 180px;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.model-chip:hover {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.model-chip-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-chip-caret {
+  opacity: 0.55;
+  font-size: 10px;
+}
+.model-chip-menu {
+  position: absolute;
+  right: 76px;
+  bottom: calc(100% + 10px);
+  width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  z-index: 30;
+}
+[data-theme="dark"] .model-chip-menu {
+  background: var(--surface-2);
+}
+.model-chip-menu-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+  padding: 5px 9px 3px;
+}
+.model-chip-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.model-chip-item:hover {
+  background: var(--surface-2);
+}
+[data-theme="dark"] .model-chip-item:hover {
+  background: var(--surface-3);
+}
+.model-chip-item-name {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-chip-item-sub {
+  font-size: 10.5px;
+  color: var(--muted-2);
+}
+.model-chip-item-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+.model-chip-item.manage {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.model-chip-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+/* ---- First-run setup hero ------------------------------------------------ */
+.setup-hero .setup-hero-glyph {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 16px;
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 24px;
+  display: grid;
+  place-items: center;
+}
+.setup-hero p {
+  max-width: 420px;
+  margin: 8px auto 20px;
+  color: var(--muted);
+}
+.setup-hero .setup-hero-cta {
+  padding: 9px 22px;
+}
+.setup-hero-alt {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--muted-2);
+  font-family: var(--mono);
+}

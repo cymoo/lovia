@@ -169,6 +169,7 @@ def create_app(
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     empty_examples: Sequence[str] | None = None,
+    config_runtime: Any = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -233,8 +234,21 @@ def create_app(
     ``empty_description`` may be a string or a list of short lines, and
     ``empty_examples`` lists clickable starter prompts (clicking fills the
     composer without sending).
+
+    ``config_runtime`` is the CLI's runtime-reconfiguration surface (a
+    :class:`lovia.web.config.ConfigRuntime`); passing one mounts the
+    ``/api/config`` routes and allows an *empty* agents mapping — the
+    not-yet-configured state whose first ``/api/config`` write brings the
+    default agent up. Embedders leave it ``None``.
     """
     agents = _normalise(agent_or_agents)
+    if not agents and config_runtime is None:
+        # Without the reconfiguration API there is no way to ever add an
+        # agent to this server — an empty mapping would serve nothing forever.
+        raise ValueError(
+            "agent_or_agents is empty; pass at least one agent "
+            "(an empty mapping is only valid with config_runtime=)"
+        )
 
     token = _clean_token(token)
     if token is not None and auth is not None:
@@ -260,6 +274,7 @@ def create_app(
         agents=agents,
         store=chat_store,
         approvals=approvals,
+        config_runtime=config_runtime,
         title=title,
         # ``None`` = no server-level override: each agent's own context_policy
         # (or the loop's default Compaction) applies per run.
@@ -341,6 +356,11 @@ def create_app(
     # Auth guards the API router only: static assets and the UI shell carry no
     # data, and serving them lets the UI collect the token client-side.
     guard = auth if auth is not None else (token_dependency(token) if token else None)
+    if config_runtime is not None:
+        config_runtime.bind(deps)
+        # Without an auth guard the config write endpoints fall back to a
+        # loopback-Host check (the DNS-rebinding guard in api/config.py).
+        config_runtime.require_local_host = guard is None
     app.include_router(
         build_api_router(deps),
         dependencies=[Depends(guard)] if guard is not None else None,
@@ -404,6 +424,7 @@ def serve(
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     empty_examples: Sequence[str] | None = None,
+    config_runtime: Any = None,
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking).
@@ -466,5 +487,6 @@ def serve(
         empty_title=empty_title,
         empty_description=empty_description,
         empty_examples=empty_examples,
+        config_runtime=config_runtime,
     )
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

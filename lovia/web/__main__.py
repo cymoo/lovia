@@ -423,6 +423,9 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # question_channel=), so it stays None here.
         question_channel: HumanChannel | None = None
         followup_model = None
+        # The runtime-reconfiguration surface behind /api/config — built for
+        # the default agent only (a custom --app configures itself in code).
+        config_runtime: webconfig.ConfigRuntime | None = None
         app_target = _first(args.app, os.getenv("LOVIA_APP"))
         if app_target:
             for flag, given in (("--setup", args.setup), ("--check", args.check)):
@@ -459,58 +462,72 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             if args.check:
                 # Read-only diagnosis: report, probe, exit — never the wizard.
                 return webconfig.run_check(conn, version=__version__)
+            unconfigured = False
             if conn.missing() or args.setup:
                 if not sys.stdin.isatty():
-                    missing = conn.missing()
-                    if missing:
-                        raise CliError(
-                            f"no {' or '.join(missing)} configured",
-                            hint=webconfig.CONFIG_HINT,
-                        )
-                    raise CliError("--setup needs an interactive terminal")
-                conn = webconfig.interactive_setup(loaded, reconfigure=args.setup)
-            assert conn.model is not None
-            # The wizard upserted the entered profile into the config (even on
-            # a declined save), so roles resolve against the session's truth.
-            active_profile = loaded.config.default_profile()
-            try:
-                provider = provider_from_string(
-                    conn.model,
-                    api_key=conn.api_key,
-                    base_url=conn.base_url,
-                    supports_vision=(
-                        active_profile.vision_override() if active_profile else None
-                    ),
-                )
-            except ValueError as exc:
-                # Eager construction also surfaces vendor-prefix typos at
-                # startup instead of on the first chat message.
-                raise CliError(str(exc)) from exc
-            # The store is created only after setup succeeds so an aborted
-            # first-run wizard leaves no stray database behind.
+                    if args.setup:
+                        raise CliError("--setup needs an interactive terminal")
+                    # No TTY to run the wizard: serve anyway — the browser's
+                    # first-run Settings finish the setup over /api/config.
+                    unconfigured = True
+                else:
+                    conn = webconfig.interactive_setup(loaded, reconfigure=args.setup)
+            # The store is created only after an interactive wizard succeeds,
+            # so an aborted first run leaves no stray database behind. The
+            # unconfigured server *is* a deliberate launch — it gets one.
             store = ChatStore.sqlite(db_desc)
             question_channel = HumanChannel()
-            agent = build_default_agent(
-                args,
-                store,
-                provider,
+            config_runtime = webconfig.ConfigRuntime(
+                args=args,
+                loaded=loaded,
+                store=store,
                 question_channel=question_channel,
-                config=loaded.config,
             )
-            followup_model = resolve_followup_model(loaded.config.aux_profile())
-            context_policy = Compaction(context_window=conn.context_window)
-            _warn_if_exposed(host, agent.workspace)
-            summary = webconfig.format_summary(
-                conn,
-                version=__version__,
-                url=url,
-                config_desc=(
-                    loaded.label if loaded.exists else "(not saved — session only)"
-                ),
-                workspace_desc=_workspace_desc(args, agent.workspace),
-                db_desc=db_desc,
-            )
-            agent_or_agents = agent
+            if unconfigured:
+                agent_or_agents = {}
+                summary = webconfig.format_unconfigured_summary(
+                    version=__version__, url=url, db_desc=db_desc
+                )
+            else:
+                assert conn.model is not None
+                # The wizard upserted the entered profile into the config
+                # (even on a declined save), so roles resolve against the
+                # session's truth.
+                active_profile = loaded.config.default_profile()
+                try:
+                    provider = provider_from_string(
+                        conn.model,
+                        api_key=conn.api_key,
+                        base_url=conn.base_url,
+                        supports_vision=(
+                            active_profile.vision_override() if active_profile else None
+                        ),
+                    )
+                except ValueError as exc:
+                    # Eager construction also surfaces vendor-prefix typos at
+                    # startup instead of on the first chat message.
+                    raise CliError(str(exc)) from exc
+                agent = build_default_agent(
+                    args,
+                    store,
+                    provider,
+                    question_channel=question_channel,
+                    config=loaded.config,
+                )
+                followup_model = resolve_followup_model(loaded.config.aux_profile())
+                context_policy = Compaction(context_window=conn.context_window)
+                _warn_if_exposed(host, agent.workspace)
+                summary = webconfig.format_summary(
+                    conn,
+                    version=__version__,
+                    url=url,
+                    config_desc=(
+                        loaded.label if loaded.exists else "(not saved — session only)"
+                    ),
+                    workspace_desc=_workspace_desc(args, agent.workspace),
+                    db_desc=db_desc,
+                )
+                agent_or_agents = agent
 
         # stdout, not the logger: the summary must be visible at every log
         # level, while log lines keep flowing to stderr.
@@ -540,6 +557,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             # continues), so a scheduled run that asks can never park forever.
             question_channel=question_channel,
             question_timeout=600,
+            config_runtime=config_runtime,
             log_level=level.lower(),
         )
     except UserError as exc:

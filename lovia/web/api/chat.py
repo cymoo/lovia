@@ -48,9 +48,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         title = provisional_title(message) if is_new else None
         await store.upsert(sid, agent=agent_name, title=title)
         if is_new:
-            deps.emit(
-                "session_created", session_id=sid, agent=agent_name, title=title
-            )
+            deps.emit("session_created", session_id=sid, agent=agent_name, title=title)
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).

@@ -142,6 +142,19 @@ def format_summary(
     return "\n".join(lines)
 
 
+def format_unconfigured_summary(*, version: str, url: str, db_desc: str) -> str:
+    """The startup block for a headless launch with nothing configured yet."""
+    lines = [
+        f"lovia v{version}",
+        "  model            (not configured — open the UI to connect one)",
+        f"  {'config files':<16} {_config_files_cell()}",
+        f"  db               {db_desc}",
+        "",
+        f"serving on {url}",
+    ]
+    return "\n".join(lines)
+
+
 def format_app_summary(*, version: str, app_target: str, db_desc: str, url: str) -> str:
     lines = [
         f"lovia v{version}",

@@ -62,7 +62,9 @@ def build_user_input(req: ChatRequest, agent: Agent[Any]) -> str | list[Message]
     for att in attachments:
         resolved = resolve_path(root, att.path)
         if not resolved.inside or not resolved.abs.is_file():
-            log.warning("dropping attachment outside workspace or missing: %r", att.path)
+            log.warning(
+                "dropping attachment outside workspace or missing: %r", att.path
+            )
             continue
         rels.append(resolved.rel or att.path)
         # Whether to inline is decided from the saved file's extension, not the

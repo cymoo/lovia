@@ -13,7 +13,13 @@ and write the same ``config.json`` through this package.
 
 from __future__ import annotations
 
-from .check import format_app_summary, format_summary, mask_key, run_check
+from .check import (
+    format_app_summary,
+    format_summary,
+    format_unconfigured_summary,
+    mask_key,
+    run_check,
+)
 from .probe import (
     ValidationOutcome,
     build_provider,
@@ -21,6 +27,7 @@ from .probe import (
     unlisted_model_note,
     validate_connection,
 )
+from .runtime import ConfigRuntime
 from .schema import (
     ANTHROPIC_FLAVOR,
     OPENAI_FLAVOR,
@@ -52,6 +59,7 @@ __all__ = [
     "OPENAI_FLAVOR",
     "PROJECT_CONFIG_LABEL",
     "USER_CONFIG_LABEL",
+    "ConfigRuntime",
     "Connection",
     "LoadedConfig",
     "ModelProfile",
@@ -64,6 +72,7 @@ __all__ = [
     "flavor_for_model",
     "format_app_summary",
     "format_summary",
+    "format_unconfigured_summary",
     "interactive_setup",
     "known_context_window",
     "load_active",

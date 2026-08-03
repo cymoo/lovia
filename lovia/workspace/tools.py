@@ -457,7 +457,7 @@ def _render_command_result(result: Any, ctx: RunContext[Any]) -> Any:
         "command with && (or set cwd=).\n"
         "- No TTY and no interactive input: never run editors, REPLs, or "
         "anything that prompts (use non-interactive flags like --yes "
-        "instead). Long-running commands are killed at the timeout.\n"
+        "instead). A foreground command is killed at the timeout.\n"
         "- background=true starts the command as a background process and "
         "returns its process id immediately — the way to run dev servers, "
         "watchers, and long builds or test runs. Check it with "

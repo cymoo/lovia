@@ -14,14 +14,14 @@ pip install "lovia[web]"
 lovia web
 ```
 
-Open `http://127.0.0.1:8000`. On first launch the CLI asks for whatever model
-configuration is missing, checks it against the endpoint, and can save it
-(owner-only, git-ignored) to `~/.lovia/config.json` — one setup works from any
-directory — so it is never retyped. Change it later with `lovia web --setup`:
-the wizard revisits every value (Enter keeps the current one) and asks whether
-to save user-wide or to the project-local `./.lovia/config.json`, which wins
-wholesale when both exist. To see the configured connection and whether the
-endpoint answers, run `lovia web --check`.
+Open `http://127.0.0.1:8000`. On first launch a terminal shows the setup
+wizard; without a TTY (Docker, a service manager) the server starts anyway and
+the browser shows a first-run setup screen — enter one model in Settings and
+start chatting. The configuration lands (owner-only, git-ignored) in
+`~/.lovia/config.json` — one setup works from any directory; a project-local
+`./.lovia/config.json` wins wholesale when both exist. Change it later in
+Settings or with `lovia web --setup`; `lovia web --check` prints the
+configured connection and probes the endpoint without serving.
 
 The default Agent includes `Todo`, optional Skills from `./.agents/skills`
 (the cross-agent convention, shared with e.g. Claude Code and Codex), Memory in
@@ -38,6 +38,29 @@ its content becomes the Agent's instructions.
     and asks for it on 401). The token then protects file edits and shell,
     so treat it like a password, and prefer `--readonly` off-loopback. For
     real multi-user exposure see [Deployment](deployment.md).
+
+## Models and switching
+
+**Settings → Models** manages the profiles in `config.json`: display name, API
+format (OpenAI-compatible / Anthropic), Base URL, API key, model ID, plus an
+optional context window and vision declaration. **Test connection** probes the
+endpoint for real (reachability, auth, the `/models` list, context-window
+adoption); **Fetch list** turns the endpoint's models into suggestions — IDs
+it doesn't list can still be typed in. Keys are write-only: the page shows
+`Set · sk-…1234` and the full value never travels back to the browser.
+
+The model chip beside the composer names the model the chat runs on; clicking
+it switches between profiles. A switch applies to the next message everywhere
+— continued chats, scheduled runs, subagents — while in-flight replies finish
+undisturbed, and every open tab syncs over the event stream. **Role
+assignment** binds *vision* (the `see_image` delegate when the chat model
+can't see images) and *aux* (titles and follow-up suggestions; a cheaper
+model works well) to specific profiles.
+
+**Settings → Search** picks the `web_search` backend (auto / Tavily /
+DuckDuckGo / off) and holds the Tavily key. Every change is validated as a
+whole document server-side, written atomically to `config.json`, and applied
+live — no restart.
 
 ## Serve your own Agent
 

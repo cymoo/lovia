@@ -82,11 +82,13 @@ FastAPI app rather than this router and remain public by default.
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `POST /api/config/test` | the CLI default agent's [model configuration](web-ui.md#models-and-switching) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent |
 
 ### Lifecycle events
 
 `GET /api/events` uses GET + `EventSource` to publish `run_started`,
-`run_finished`, `session_created`, and `session_retitled`. It does not replay
+`run_finished`, `session_created`, `session_retitled`, and `config_changed`
+(the model configuration was edited — refetch `/api/config`). It does not replay
 history. On every connection or reconnection, fetch current state from
 `/api/sessions` and `/api/runs` before processing new events. The server closes
 subscribers that fall behind; recover them with the same snapshot-first flow.

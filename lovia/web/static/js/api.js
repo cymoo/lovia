@@ -236,6 +236,52 @@ export const api = {
     }).then(_jsonOrDetail);
   },
 
+  // ---- model configuration (Settings → Models/Search; CLI default agent) ----
+  // Only served when /api/info reports features.model_config. API keys never
+  // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
+  getConfig: () => fetch('/api/config').then(_jsonOrDetail),
+  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision? }. */
+  createModel: (body) =>
+    fetch('/api/config/models', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  updateModel: (id, body) =>
+    fetch(`/api/config/models/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  deleteModel: (id) =>
+    fetch(`/api/config/models/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }).then(_jsonOrDetail),
+  // Role assignment; sending { chat } switches the served model live.
+  /** @param {{ chat?: string, vision?: string | null, aux?: string | null }} body */
+  setRoles: (body) =>
+    fetch('/api/config/roles', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  /** @param {{ backend?: string, tavily_api_key?: string }} body */
+  setSearch: (body) =>
+    fetch('/api/config/search', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  // Probe a connection (a real /models request server-side). Either free-form
+  // fields or { profile_id } — the stored key is reused server-side, so the
+  // page never holds it.
+  testConnection: (body) =>
+    fetch('/api/config/test', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+
   // ---- memory (the agent's editable Notes) ----
   /** @param {{ agent?: string }} [opts] */
   getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_jsonOrDetail),

@@ -2112,10 +2112,39 @@ scrollBtn?.addEventListener('click', () => {
   scrollDown();
 });
 
+/** The first-run setup hero: shown instead of the welcome view until the
+ * server has a model to chat with (CLI default agent only). */
+function renderSetupHero(transcript) {
+  const hero = document.createElement('div');
+  hero.className = 'empty-state setup-hero';
+  hero.id = 'empty-state';
+  const glyph = document.createElement('div');
+  glyph.className = 'setup-hero-glyph';
+  glyph.textContent = '◈';
+  const h2 = document.createElement('h2');
+  h2.textContent = t('cfg.heroTitle');
+  const p = document.createElement('p');
+  p.textContent = t('cfg.heroBody');
+  const cta = document.createElement('button');
+  cta.type = 'button';
+  cta.className = 'btn btn-primary setup-hero-cta';
+  cta.textContent = t('cfg.heroCta');
+  cta.addEventListener('click', () => store.emit('open-model-settings'));
+  const alt = document.createElement('div');
+  alt.className = 'setup-hero-alt';
+  alt.textContent = t('cfg.heroAlt');
+  hero.append(glyph, h2, p, cta, alt);
+  transcript.replaceChildren(hero);
+}
+
 /** Render the empty-state (welcome) view — title, description, example prompts — into the transcript. */
 export function renderEmptyState() {
   const transcript = document.getElementById('transcript');
   if (!transcript) return;
+  if (store.canConfigureModels && !store.configured) {
+    renderSetupHero(transcript);
+    return;
+  }
   const title = store.emptyTitle || 'Where shall we begin?';
   const desc = store.emptyDescription;
   const empty = document.createElement('div');

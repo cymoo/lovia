@@ -7,6 +7,7 @@ import {
   cancelStream,
   detachStream,
   initComposer,
+  renderEmptyState,
   renderHistory,
   resetChatForNewSession,
   runReconnect,
@@ -21,6 +22,7 @@ import {
 import { initSchedules } from './schedules.js';
 import { initFiles } from './files.js';
 import { initMemory } from './memory.js';
+import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 
@@ -293,6 +295,16 @@ function initKeyboardShortcuts() {
   }
   if (info) store.canRewind = !!info.features?.rewind;
   if (info) store.canSuggest = !!info.features?.followups;
+  if (info) {
+    store.serverInfo = info;
+    store.canConfigureModels = !!info.features?.model_config;
+    store.configured = info.configured !== false;
+    // The model chip + first-run setup; a no-op on embedder servers.
+    initModelConfig();
+    // The welcome view rendered before /api/info resolved; an unconfigured
+    // server replaces it with the setup hero (no session exists yet).
+    if (store.canConfigureModels && !store.configured) renderEmptyState();
+  }
   // Push instead of poll: the lifecycle stream replaces the sidebar's run
   // polling wherever the server (and browser) support it.
   if (info?.features?.events) initEventStream();

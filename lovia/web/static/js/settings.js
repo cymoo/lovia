@@ -1,14 +1,13 @@
-// settings.js — the gear dialog: language, theme, message text size, Enter
-// behavior, desktop notifications, and a completion sound.
-//
-// All preferences are client-side (localStorage). Language applies on reload
-// (the app reads every string at boot); theme and text size apply live; the
-// notification toggle asks the browser for permission the moment it's turned
-// on, so denial surfaces immediately instead of silently at first use.
+// settings.js — the Settings dialog: a left-rail shell (General / Models /
+// Search / About) in a wide dialog. General holds the client-side preferences
+// (localStorage: language, theme, text size, Enter behavior, notifications,
+// sound); Models/Search edit the server's config.json through model-config.js
+// and appear only when the server reports features.model_config.
 import { showDialog, setThemePref, themePref } from './ui.js';
 import { t, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
+import { buildAboutPane, buildModelsPane, buildSearchPane } from './model-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -105,7 +104,8 @@ export function playCompletionSound() {
   } catch { /* audio blocked/unavailable — stay silent */ }
 }
 
-// ---- Dialog ---------------------------------------------------------------
+// ---- General pane ---------------------------------------------------------
+
 function field(labelText, control) {
   const row = document.createElement('label');
   row.className = 'settings-row';
@@ -129,12 +129,9 @@ function select(options, value) {
   return el;
 }
 
-function openSettingsDialog() {
+function buildGeneralPane() {
   const panel = document.createElement('div');
   panel.className = 'settings-panel';
-  const h = document.createElement('h3');
-  h.textContent = t('settings.title');
-  panel.appendChild(h);
 
   // Language — applies on reload.
   const lang = select(
@@ -244,18 +241,89 @@ function openSettingsDialog() {
   note.className = 'settings-note';
   note.textContent = t('settings.reloadNote');
   panel.appendChild(note);
+  return panel;
+}
 
+// ---- Dialog shell ---------------------------------------------------------
+
+/**
+ * Open the Settings dialog on a given tab.
+ * @param {'general' | 'models' | 'search' | 'about'} [initialTab]
+ */
+export function openSettings(initialTab = 'general') {
+  const tabs = [
+    { id: 'general', label: t('settings.tabGeneral'), build: buildGeneralPane },
+  ];
+  if (store.canConfigureModels) {
+    tabs.push(
+      { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
+      { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
+    );
+  }
+  tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });
+
+  const shell = document.createElement('div');
+  shell.className = 'settings-shell';
+
+  const head = document.createElement('div');
+  head.className = 'settings-head';
+  const h = document.createElement('h3');
+  h.textContent = t('settings.title');
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'btn btn-ghost';
-  close.textContent = t('dialog.close');
-  const dialog = showDialog({ body: panel, actions: close });
+  close.className = 'btn-icon settings-close';
+  close.setAttribute('aria-label', t('dialog.close'));
+  close.textContent = '✕';
+  head.append(h, close);
+  shell.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'settings-body';
+  const rail = document.createElement('nav');
+  rail.className = 'settings-rail';
+  rail.setAttribute('role', 'tablist');
+  const pane = document.createElement('div');
+  pane.className = 'settings-pane-host';
+  pane.id = 'settings-pane';
+  pane.setAttribute('role', 'tabpanel');
+
+  let active = tabs.some((tab) => tab.id === initialTab) ? initialTab : 'general';
+  const buttons = new Map();
+  const activate = (id) => {
+    active = id;
+    for (const [tabId, btn] of buttons) {
+      btn.classList.toggle('active', tabId === id);
+      btn.setAttribute('aria-selected', tabId === id ? 'true' : 'false');
+    }
+    pane.setAttribute('aria-labelledby', `settings-tab-${id}`);
+    const tab = tabs.find((item) => item.id === id);
+    pane.replaceChildren(tab ? tab.build() : document.createElement('div'));
+  };
+  for (const tab of tabs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-rail-item';
+    btn.id = `settings-tab-${tab.id}`;
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-controls', 'settings-pane');
+    btn.textContent = tab.label;
+    btn.addEventListener('click', () => activate(tab.id));
+    buttons.set(tab.id, btn);
+    rail.appendChild(btn);
+  }
+  body.append(rail, pane);
+  shell.appendChild(body);
+
+  const dialog = showDialog({ body: shell });
+  dialog.classList.add('dialog-xl');
   close.addEventListener('click', () => dialog.close());
+  activate(active);
+  return dialog;
 }
 
 export function initSettings() {
   applyTextSize(); // restore the saved size before the transcript renders
   document
     .getElementById('settings-btn')
-    ?.addEventListener('click', openSettingsDialog);
+    ?.addEventListener('click', () => openSettings());
 }

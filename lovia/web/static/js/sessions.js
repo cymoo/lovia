@@ -206,6 +206,13 @@ export function initEventStream() {
       updateSessionTitle(d.session_id, d.title);
     } catch { /* ignore */ }
   });
+  // The model configuration changed (this tab or another): model-config.js
+  // owns the reaction (chip label, config cache, agent refetch).
+  es.addEventListener('config_changed', (e) => {
+    try {
+      store.emit('config-changed', JSON.parse(e.data));
+    } catch { /* malformed payload — the next explicit load resyncs */ }
+  });
 }
 
 /**

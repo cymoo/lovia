@@ -412,7 +412,9 @@ export function buildModelsPane() {
       } catch (err) {
         toast(String(err.message || err), { type: 'error' });
       } finally {
-        fetchBtn.disabled = false;
+        // Re-derive, not re-enable: the inputs may have been cleared while
+        // the probe was in flight.
+        syncProbeButtons();
       }
     });
     fetchRow.append(modelIn, fetchBtn, datalist);
@@ -477,7 +479,7 @@ export function buildModelsPane() {
         testOut.classList.add('bad');
         testOut.textContent = `✗ ${String(err.message || err)}`;
       } finally {
-        testBtn.disabled = false;
+        syncProbeButtons();
       }
     });
     testRow.append(testBtn, testOut);

@@ -298,6 +298,11 @@ def create_app(
                 await questions.aclose()
             await scheduler.stop()
             await deps.supervisor.shutdown()
+            # After the runs: close every chat's workspace session, killing
+            # the background processes that deliberately outlive run ends.
+            # (kill -9 / a crash skips this — those orphan the processes, as
+            # documented; Ctrl+C lands here.)
+            await deps.workspaces.aclose()
             # End any open /api/events streams so shutdown doesn't wait on them.
             if deps._bus is not None:
                 deps._bus.close()

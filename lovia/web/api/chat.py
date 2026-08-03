@@ -89,6 +89,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # workspace) and there's no text — nothing to run.
             raise HTTPException(status_code=422, detail="empty message")
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
+        # Same chat-scoped workspace binding the supervised path applies in
+        # RunSupervisor.start(): background processes belong to the chat, no
+        # matter which endpoint ran the turn.
+        agent = await deps.workspaces.bind(sid, agent)
         result = await Runner.run(
             agent,
             user_input,

@@ -160,6 +160,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         """Delete every session's transcript and metadata (stopping live runs)."""
         for sid, _ctrl in deps.supervisor:
             deps.supervisor.cancel(sid, discard=True)
+        # Reap every chat's workspace session (and its background processes).
+        await deps.workspaces.aclose()
         await store.delete_all()
         return {"ok": True}
 
@@ -206,6 +208,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # it keeps burning tokens and re-persists entries for the deleted chat
         # when it winds down.
         deps.supervisor.cancel(session_id, discard=True)
+        # Deleting the chat is what ends its workspace session — background
+        # processes deliberately survive run ends, so this is where they die.
+        await deps.workspaces.close(session_id)
         await store.delete(session_id)
         return {"ok": True}
 

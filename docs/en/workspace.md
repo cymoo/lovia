@@ -156,6 +156,17 @@ tools: `spawn` / `read_process_output` / `kill_process`, plus
 `background_processes()` — a passive status list (nothing consumed) that
 feeds the reminder and suits UI listings.
 
+**Session lifetime is the serving layer's dial.** By default the runner
+opens a session per run and closes it at the run's end — fine for one-shot
+`Runner.run` scripts, where the run *is* the conversation. A serving layer
+that holds conversations open should scope the session wider by binding a
+caller-owned one via `LocalWorkspace.bind(session)` (or the
+`.session()` context manager): `lovia web` binds one session per **chat**,
+so a dev server started in one turn is still up when the next message
+arrives, and dies when the chat is deleted or the server shuts down
+(Ctrl+C; a hard `kill -9` skips teardown and orphans processes). The web
+UI's Files panel shows the chat's live processes with a kill button.
+
 A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
 **auto-activated** for every command: its bin dir is prepended to `PATH`
 and `VIRTUAL_ENV` is set, so `python`/`pip` resolve to the workspace's own
@@ -241,6 +252,8 @@ By default each run opens a fresh session and closes it at run end; the
 - **Background processes are session-scoped.** They die on `close()` and
   are not restored by a checkpoint resume — treat a dev server started with
   `background=true` as something to re-start, not something that survives.
+  How long the session itself lives is the serving layer's choice: per run
+  by default, per chat in `lovia web` (see above).
 - **[Skills](skills.md#sharp-edges) file IO bypasses this ACL** — skill
   directories are read with the plugin's own IO, not the workspace's.
 

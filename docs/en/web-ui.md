@@ -103,6 +103,22 @@ Uploads are capped at 25 MiB (`LOVIA_MAX_UPLOAD_MB`) and limited to a built-in
 allowlist of common image, document, data, and code extensions
 (`LOVIA_UPLOAD_ALLOWED_EXT`, comma/space-separated, or `*` for any).
 
+## Files panel
+
+The Workspace panel (top-right button) is a read-only window into the agent's
+workspace: **Recent** floats what the assistant just wrote, **Browse** walks
+directories, and the viewer renders images, PDF, Markdown, HTML (sandboxed),
+CSV and code. Uploads from the panel land in `uploads/`; environment junk
+(`tmp/`, `node_modules/`, `venv/`, `__pycache__/`) is hidden so it never
+crowds Recent.
+
+Above the file list, a **Background processes** strip shows what this chat
+started with `shell(background=true)` — dev servers, watchers — with status,
+exit code, and a kill button, so stopping a server doesn't require asking the
+model. These processes live with the *chat*: a run ending doesn't touch them;
+deleting the chat or stopping `lovia web` (Ctrl+C) reaps them, and they are
+not restored after a server restart.
+
 ## Useful CLI options
 
 Every option resolves in this order: command-line flag, environment variable,

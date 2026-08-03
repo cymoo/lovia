@@ -39,6 +39,7 @@ from ..followups import (
 )
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
+from ..workspaces import WorkspaceSessions
 
 if TYPE_CHECKING:
     from ..questions import QuestionRegistry
@@ -88,6 +89,11 @@ class RouterDeps:
     # channel and ``POST /api/chat/answer`` 404s). Built by ``create_app``
     # when a ``question_channel`` is supplied.
     questions: "QuestionRegistry | None" = None
+    # Chat-scoped workspace sessions (one per web session id), so background
+    # processes survive across a chat's runs instead of dying at each run's
+    # end. Bound by the supervisor at run start; closed on chat deletion and
+    # at app shutdown. Per-process, like the supervisor.
+    workspaces: WorkspaceSessions = field(default_factory=WorkspaceSessions)
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)

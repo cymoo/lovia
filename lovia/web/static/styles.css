@@ -3422,6 +3422,101 @@ body.files-splitting {
   opacity: 0.55;
 }
 
+/* ---- Background processes strip ---- */
+.files-procs {
+  flex-shrink: 0;
+  margin: 0 8px 6px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+.files-procs-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 9px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+.files-procs-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 10.5px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.proc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+}
+.proc-row:hover {
+  background: var(--surface-2);
+}
+.proc-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted-2);
+}
+.proc-dot.running {
+  background: var(--ok);
+  animation: proc-pulse 2s ease-in-out infinite;
+}
+.proc-dot.killed {
+  background: var(--warn);
+}
+@keyframes proc-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proc-dot.running {
+    animation: none;
+  }
+}
+.proc-main {
+  flex: 1;
+  min-width: 0;
+}
+.proc-cmd {
+  display: block;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proc-meta {
+  display: block;
+  font-size: 11px;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+.proc-kill {
+  flex-shrink: 0;
+  opacity: 0;
+}
+.proc-row:hover .proc-kill,
+.proc-kill:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .proc-kill {
+    opacity: 1; /* no hover on touch — the control must be visible */
+  }
+}
+
 .files-list {
   flex: 1;
   min-height: 0;

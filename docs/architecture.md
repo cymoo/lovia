@@ -84,6 +84,9 @@ lovia/
     protocol.py     #   WorkspaceSession/WorkspaceLike/ShellExecutor protocols
   web/              # Optional FastAPI + SSE layer + Jinja2 chat UI
                     #   (decoupled from core; only loaded when lovia[web] is used)
+                    #   workspaces.py scopes one workspace session per chat via
+                    #   LocalWorkspace.bind() — background processes survive
+                    #   run ends and die on chat deletion / app shutdown
 ```
 
 Three layers, each strictly downstream of the previous: **core** (everything

@@ -585,8 +585,14 @@ async def read_process_output(
 
 
 def _preview(command: str, limit: int = 60) -> str:
-    """One-line command preview for the status reminder."""
-    line = " ".join(command.split())
+    """One-line command preview for the status reminder.
+
+    The literal closing tag is neutralized so a crafted command cannot break
+    out of the reminder wrapper. Wrapper integrity only, not secrecy — the
+    command already appears verbatim in the transcript as the shell call's
+    arguments.
+    """
+    line = " ".join(command.split()).replace("</system-reminder>", "[/system-reminder]")
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
@@ -615,8 +621,9 @@ def background_process_reminder(ctx: RunContext[Any]) -> list[TranscriptEntry] |
         if p.status == "running":
             lines.append(f"- {p.process_id} running: {_preview(p.command)}")
         else:
+            code = "unknown" if p.exit_code is None else p.exit_code
             lines.append(
-                f"- {p.process_id} {p.status} (exit code {p.exit_code}): "
+                f"- {p.process_id} {p.status} (exit code {code}): "
                 f"{_preview(p.command)} — call "
                 f"read_process_output('{p.process_id}') for its final output"
             )

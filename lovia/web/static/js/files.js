@@ -437,13 +437,19 @@ function procRow(p) {
     kill.title = t('procs.kill');
     kill.setAttribute('aria-label', t('procs.kill'));
     kill.addEventListener('click', async () => {
+      // Capture the id: if the user switches chats while the kill is in
+      // flight, the response is the OLD chat's list — don't paint it onto
+      // the new one (the switch handler already refetched for it).
+      const sid = store.sessionId;
       kill.disabled = true;
       try {
-        const procs = await api.killProcess(store.sessionId, p.process_id);
-        state.procs = procs;
-        renderProcs();
-        // The process may have written files right up to its death.
-        store.emit('workspace-maybe-stale');
+        const procs = await api.killProcess(sid, p.process_id);
+        if (store.sessionId === sid) {
+          state.procs = procs;
+          renderProcs();
+          // The process may have written files right up to its death.
+          store.emit('workspace-maybe-stale');
+        }
         toast(t('procs.killed'));
       } catch (err) {
         kill.disabled = false;

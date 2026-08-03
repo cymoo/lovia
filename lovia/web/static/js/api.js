@@ -208,6 +208,21 @@ export const api = {
   /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
   workspaceRawUrl: ({ agent, path, download } = {}) =>
     `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
+  // ---- background processes (chat-scoped; the panel's Processes strip) ----
+  // Keyed by session id: processes belong to the chat's live workspace
+  // session, not to the agent. `[]` when nothing ran yet (or after a server
+  // restart — background processes never survive one).
+  /** @param {string} sessionId */
+  sessionProcesses: (sessionId) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_jsonOrDetail),
+  // Kill one process; resolves to the refreshed process list.
+  /** @param {string} sessionId @param {string} processId */
+  killProcess: (sessionId, processId) =>
+    fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/kill`,
+      { method: 'POST' },
+    ).then(_jsonOrDetail),
+
   // Upload a file into the workspace `uploads/` dir → { path, name, mime, kind,
   // size }. Multipart; the browser sets the boundary, so we send no headers.
   /** @param {File} file @param {{ agent?: string, signal?: AbortSignal }} [opts] */

@@ -31,6 +31,7 @@ const state = {
   mode: 'recent', // 'recent' | 'browse'
   browsePath: '', // '' = workspace root
   entries: [],
+  procs: [], // background processes of this chat's workspace session
   touched: new Set(), // paths this chat's write_file/edit_file produced
   // Per-path edit counter — busts the browser's in-page image cache only when
   // the agent actually touched the file. First opens use the bare URL, so the
@@ -276,6 +277,10 @@ function setOpen(open, { persist = true } = {}) {
   if (state.open) {
     setUnseen(0); // the badge's job is done — the user is looking
     refresh();
+    refreshProcs();
+  } else {
+    clearTimeout(_procsTimer); // no polling behind a closed panel
+    _procsTimer = null;
   }
 }
 
@@ -341,6 +346,119 @@ function emptyNode(text) {
   div.className = 'files-empty';
   div.textContent = text;
   return div;
+}
+
+// ---- Background processes ---------------------------------------------------
+// A strip above the file list: what this chat's workspace session still has
+// running (dev servers, watchers), with a kill button — "stop the server"
+// must not require asking the model. Server-side these live for the chat
+// (lovia/web/workspaces.py), so the strip is the user's only window into
+// them between runs. Polls only while something is running and the panel is
+// open; refetches ride the same signals the file list uses.
+let _procsTimer = null;
+
+function refreshProcs() {
+  clearTimeout(_procsTimer);
+  _procsTimer = null;
+  if (!state.open || !store.sessionId) {
+    state.procs = [];
+    renderProcs();
+    return;
+  }
+  const sid = store.sessionId;
+  api
+    .sessionProcesses(sid)
+    .then((procs) => {
+      // The chat (or agent) may have changed while the request was in flight.
+      if (!state.open || store.sessionId !== sid) return;
+      state.procs = procs;
+      renderProcs();
+    })
+    .catch(() => {}); // transient (e.g. mid-restart) — keep the last render
+}
+
+function renderProcs() {
+  if (!els.procs) return;
+  clearTimeout(_procsTimer);
+  _procsTimer = null;
+  const procs = state.procs;
+  els.procs.classList.toggle('hidden', !procs.length);
+  if (!procs.length) {
+    els.procs.replaceChildren();
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  const running = procs.filter((p) => p.status === 'running').length;
+  const head = document.createElement('div');
+  head.className = 'files-procs-head';
+  head.textContent = t('procs.title');
+  if (running) {
+    const count = document.createElement('span');
+    count.className = 'files-procs-count';
+    count.textContent = String(running);
+    head.appendChild(count);
+  }
+  frag.appendChild(head);
+  for (const p of procs) frag.appendChild(procRow(p));
+  els.procs.replaceChildren(frag);
+  // Live processes exit on their own schedule — poll while any are running.
+  if (running && state.open) _procsTimer = setTimeout(refreshProcs, 8000);
+}
+
+function procRow(p) {
+  const row = document.createElement('div');
+  row.className = 'proc-row';
+
+  const dot = document.createElement('span');
+  dot.className = `proc-dot ${p.status}`;
+
+  const main = document.createElement('span');
+  main.className = 'proc-main';
+  const cmd = document.createElement('span');
+  cmd.className = 'proc-cmd';
+  cmd.textContent = p.command;
+  const meta = document.createElement('span');
+  meta.className = 'proc-meta';
+  meta.textContent =
+    p.status === 'running'
+      ? t('procs.running')
+      : p.status === 'killed'
+        ? t('procs.killedStatus')
+        : t('procs.exited', { code: p.exit_code == null ? '?' : p.exit_code });
+  main.append(cmd, meta);
+  row.append(dot, main);
+  row.title = p.command;
+
+  if (p.status === 'running') {
+    const kill = document.createElement('button');
+    kill.type = 'button';
+    kill.className = 'btn-icon proc-kill';
+    kill.innerHTML = icon('x', { size: 14 });
+    kill.title = t('procs.kill');
+    kill.setAttribute('aria-label', t('procs.kill'));
+    kill.addEventListener('click', async () => {
+      // Capture the id: if the user switches chats while the kill is in
+      // flight, the response is the OLD chat's list — don't paint it onto
+      // the new one (the switch handler already refetched for it).
+      const sid = store.sessionId;
+      kill.disabled = true;
+      try {
+        const procs = await api.killProcess(sid, p.process_id);
+        if (store.sessionId === sid) {
+          state.procs = procs;
+          renderProcs();
+          // The process may have written files right up to its death.
+          store.emit('workspace-maybe-stale');
+        }
+        toast(t('procs.killed'));
+      } catch (err) {
+        kill.disabled = false;
+        toast(err.message || t('procs.killFailed'), { type: 'error' });
+      }
+    });
+    row.appendChild(kill);
+  }
+  return row;
 }
 
 function setMode(mode) {
@@ -923,6 +1041,7 @@ export function initFiles() {
   els.close = document.getElementById('files-close');
   els.crumbs = document.getElementById('files-crumbs');
   els.list = document.getElementById('files-list');
+  els.procs = document.getElementById('files-procs');
   els.viewer = document.getElementById('files-viewer');
   els.viewerName = document.getElementById('files-viewer-name');
   els.viewerBody = document.getElementById('files-viewer-body');
@@ -960,7 +1079,10 @@ export function initFiles() {
 
   els.btn.addEventListener('click', () => setOpen(!state.open));
   els.close.addEventListener('click', () => setOpen(false));
-  els.refresh.addEventListener('click', refresh);
+  els.refresh.addEventListener('click', () => {
+    refresh();
+    refreshProcs();
+  });
   els.tabRecent.addEventListener('click', () => setMode('recent'));
   els.tabBrowse.addEventListener('click', () => setMode('browse'));
   els.viewerClose.addEventListener('click', closeViewer);
@@ -1050,18 +1172,28 @@ export function initFiles() {
     setUnseen(0);
     closeViewer();
     updateVisibility();
-    if (state.open) refresh();
+    if (state.open) {
+      refresh();
+      refreshProcs();
+    }
   });
-  // "touched" (and the edit revisions) are scoped to the chat on screen.
+  // "touched" (and the edit revisions) are scoped to the chat on screen —
+  // and so are background processes.
   store.on('session-switched', () => {
     state.touched.clear();
     state.revs.clear();
     setUnseen(0);
+    state.procs = [];
+    renderProcs();
+    refreshProcs();
   });
   store.on('reset-chat-view', () => {
     state.touched.clear();
     state.revs.clear();
     setUnseen(0);
+    state.procs = [];
+    renderProcs();
+    refreshProcs();
   });
   store.on('workspace-file-touched', ({ path }) => {
     state.touched.add(path);
@@ -1074,6 +1206,9 @@ export function initFiles() {
   store.on('workspace-maybe-stale', () => {
     state.stale = true;
     if (state.open) els.refresh.classList.add('stale');
+    // The same tool completions that can change files (shell, output polls,
+    // kills) are exactly the moments the process list can change.
+    if (state.open) refreshProcs();
   });
   // A tool card's "open in Files panel" action (chat.js) — open the panel and
   // jump straight to the file the tool touched.

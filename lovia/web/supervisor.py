@@ -763,6 +763,10 @@ class RunSupervisor:
             )
         if len(self._controllers) >= self.max_background_runs:
             raise HTTPException(status_code=429, detail="too many concurrent runs")
+        # Every run of one web session shares that session's workspace session
+        # (lazily opened here), so background processes survive across runs —
+        # they die with the *chat* (deletion/shutdown), not with the turn.
+        agent = await self.deps.workspaces.bind(session_id, agent)
         # ``input`` seeds the transcript for immediate display and is what the
         # runner consumes. A plain string is the text-only path; a list[Message]
         # (one ``user([...parts])``) carries composer attachments as content
@@ -816,6 +820,10 @@ class RunSupervisor:
             raise HTTPException(
                 status_code=409, detail="a run is already active for this session"
             )
+        # Same chat-scoped workspace binding as start(): the resumed leg's
+        # background processes are gone (they never survive a restart), but
+        # its shell/file tools must land on the chat's one live session.
+        agent = await self.deps.workspaces.bind(session_id, agent)
         ckpt = CheckpointOptions(
             checkpointer=self.deps.store.checkpointer,
             resume_from=snapshot,

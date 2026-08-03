@@ -86,6 +86,20 @@ class WorkspaceFile(BaseModel):
     binary: bool = False
 
 
+class ProcessInfo(BaseModel):
+    """One background process of a chat's workspace session (mirrors
+    ``lovia.workspace.ProcessStatus``).
+
+    Passive: listing consumes no output and flips no state — the model's own
+    ``read_process_output`` cursor is unaffected by the panel looking.
+    """
+
+    process_id: str
+    command: str
+    status: Literal["running", "exited", "killed"]
+    exit_code: int | None = None
+
+
 class UploadedFile(BaseModel):
     """Result of a workspace upload (``POST /api/workspace/upload``).
 

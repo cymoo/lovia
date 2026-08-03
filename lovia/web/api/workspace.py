@@ -43,7 +43,13 @@ from ...workspace import (
 )
 from ...workspace.paths import resolve_path
 from ..media import is_preview_image, preview_image_mime
-from ..schemas import UploadedFile, WorkspaceEntry, WorkspaceFile, WorkspaceInfo
+from ..schemas import (
+    ProcessInfo,
+    UploadedFile,
+    WorkspaceEntry,
+    WorkspaceFile,
+    WorkspaceInfo,
+)
 from .deps import RouterDeps
 
 
@@ -385,6 +391,52 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                     },
                 )
         return response
+
+    # ---- background processes (chat-scoped) --------------------------------
+    # Keyed by web session id, not agent: processes belong to the chat's live
+    # workspace session (lovia/web/workspaces.py). Listing is passive; kill is
+    # the one user-side control — "stop the dev server without asking the
+    # model". The model's next status reminder shows the process as killed.
+
+    def _process_list(session_id: str) -> list[ProcessInfo]:
+        session = deps.workspaces.get(session_id)
+        if session is None:
+            return []
+        return [
+            ProcessInfo(
+                process_id=s.process_id,
+                command=s.command,
+                status=s.status,
+                exit_code=s.exit_code,
+            )
+            for s in session.background_processes()
+        ]
+
+    @router.get(
+        "/api/sessions/{session_id}/processes", response_model=list[ProcessInfo]
+    )
+    async def list_processes(session_id: str) -> list[ProcessInfo]:
+        """Background processes of the chat's workspace session.
+
+        ``[]`` when the chat has no live session (nothing ran yet, or the
+        server restarted — processes never survive a restart).
+        """
+        return _process_list(session_id)
+
+    @router.post(
+        "/api/sessions/{session_id}/processes/{process_id}/kill",
+        response_model=list[ProcessInfo],
+    )
+    async def kill_process(session_id: str, process_id: str) -> list[ProcessInfo]:
+        """Kill one background process; returns the refreshed process list."""
+        session = deps.workspaces.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no live workspace session")
+        try:
+            await session.kill_process(process_id)
+        except WorkspaceError as exc:  # unknown id (or a closed session)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _process_list(session_id)
 
     @router.post("/api/workspace/upload", response_model=UploadedFile)
     async def upload_file(

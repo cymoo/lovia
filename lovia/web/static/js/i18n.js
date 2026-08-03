@@ -205,6 +205,15 @@ const MESSAGES = {
     'files.nowrap': '取消自动换行',
     'files.noWorkspace': '当前 Agent 没有工作区',
     'files.openFailed': '无法在面板中打开该文件',
+
+    // ---- background processes (Files panel strip)
+    'procs.title': '后台进程',
+    'procs.running': '运行中',
+    'procs.exited': '已退出（{code}）',
+    'procs.killedStatus': '已终止',
+    'procs.kill': '终止进程',
+    'procs.killed': '已终止进程',
+    'procs.killFailed': '无法终止进程',
     'lightbox.close': '关闭',
     'lightbox.download': '下载原图',
     // ---- memory dialog
@@ -519,6 +528,15 @@ const EN = {
   'files.attachBusy': 'Wait for the current run to finish before attaching',
   'files.wrap': 'Wrap long lines',
   'files.nowrap': 'Don’t wrap long lines',
+
+  // ---- background processes (Files panel strip)
+  'procs.title': 'Background processes',
+  'procs.running': 'running',
+  'procs.exited': 'exited ({code})',
+  'procs.killedStatus': 'killed',
+  'procs.kill': 'Kill process',
+  'procs.killed': 'Process killed',
+  'procs.killFailed': 'Couldn’t kill the process',
   'files.noWorkspace': 'This agent has no workspace',
   'files.openFailed': 'Couldn’t open that file in the panel',
   'lightbox.close': 'Close',

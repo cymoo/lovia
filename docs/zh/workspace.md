@@ -122,6 +122,13 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
 `kill_process`，另有 `background_processes()`——被动状态列表（不消费任何输出），
 供状态提醒和 UI 列表使用。
 
+**session 的生命周期由服务层决定。**默认情况下 runner 每次 run 打开新 session、run 结束即关闭——
+对一次性的 `Runner.run` 脚本正合适（run 就是整个对话）。持有长对话的服务层应该用
+`LocalWorkspace.bind(session)`（或 `.session()` 上下文管理器）绑定一个自管的 session 来拉长作用域：
+`lovia web` 给每个**聊天**绑定一个 session，所以某一轮启动的 dev server 在下一条消息到来时仍然活着，
+直到聊天被删除或服务停止（Ctrl+C 会收割全部进程；`kill -9` 跳过清理，进程会成为孤儿）。web UI 的
+Files 面板会列出当前聊天的存活进程，并提供终止按钮。
+
 工作区根目录下的 virtualenv（优先 `.venv`，也识别 `venv`）会对每条命令**自动激活**：其 bin 目录被前置到
 `PATH`、并设置 `VIRTUAL_ENV`，于是 `python`/`pip` 解析到工作区自己的环境，而不是 lovia 运行所在的那个。
 检测按命令进行——agent 刚创建的 venv 立即生效——且只在目录里确实有解释器时才激活（仅仅叫 `venv`
@@ -190,6 +197,7 @@ session 跨运行保持打开（`close_after_run=False`），适合启动成本�
   完成前，就和任何[同步工具取消](tools.md#注意事项)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
 - **后台进程随 session 存亡。** `close()` 时被杀掉，checkpoint 恢复也不会还原——用
   `background=true` 启动的 dev server 应当被视为需要重启的东西，而不是会一直活着的东西。
+  session 本身活多久由服务层决定：默认随 run,在 `lovia web` 里随聊天（见上文）。
 - **[Skills](skills.md#注意事项) 文件 IO 不受此 ACL 管理**：Skill 目录由插件自行读取，不经过工作区。
 
 ## 延伸阅读

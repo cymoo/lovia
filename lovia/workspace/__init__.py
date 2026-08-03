@@ -37,7 +37,11 @@ from .types import (
     WorkspaceLimits,
     WorkspaceMode,
 )
-from .workspace import LocalWorkspace, Workspace
+
+# ``WorkspaceSessionBinding`` is the return type of ``LocalWorkspace.bind`` /
+# ``.session()`` — importable for typing, but out of ``__all__`` like the
+# protocols above (callers construct it via those methods, never directly).
+from .workspace import LocalWorkspace, Workspace, WorkspaceSessionBinding  # noqa: F401
 
 __all__ = [
     "CommandResult",

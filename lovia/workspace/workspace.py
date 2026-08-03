@@ -118,7 +118,7 @@ class LocalWorkspace:
         )
 
     @asynccontextmanager
-    async def session(self) -> AsyncIterator["_WorkspaceSessionBinding"]:
+    async def session(self) -> AsyncIterator["WorkspaceSessionBinding"]:
         """Open a user-owned session that survives across multiple runs.
 
         The yielded binding is accepted by ``Agent.workspace``; the runner
@@ -126,9 +126,21 @@ class LocalWorkspace:
         """
         session = await self.open()
         try:
-            yield _WorkspaceSessionBinding(workspace=self, _session=session)
+            yield self.bind(session)
         finally:
             await session.close()
+
+    def bind(self, session: WorkspaceSession) -> "WorkspaceSessionBinding":
+        """Bind a caller-owned live session for reuse across runs.
+
+        The returned binding is accepted by ``Agent.workspace``: the runner
+        uses ``session`` instead of opening a fresh one, and never closes it
+        (``close_after_run=False``) — its lifetime is the caller's to manage.
+        This is the seam for serving layers that scope one session to a
+        conversation (background processes then survive individual runs);
+        prefer :meth:`session` when a context manager fits the lifetime.
+        """
+        return WorkspaceSessionBinding(workspace=self, _session=session)
 
     def tools(self) -> list["Tool"]:
         """Return the built-in tool bundle permitted by this policy."""
@@ -445,8 +457,13 @@ def _combine_rules(
 
 
 @dataclass(frozen=True)
-class _WorkspaceSessionBinding:
-    """A user-owned live session accepted by ``Agent.workspace``."""
+class WorkspaceSessionBinding:
+    """A caller-owned live session accepted by ``Agent.workspace``.
+
+    Built by :meth:`LocalWorkspace.bind` / :meth:`LocalWorkspace.session`;
+    delegates tools/instructions/injectors to the underlying config and hands
+    the held session to every run without ever closing it.
+    """
 
     workspace: LocalWorkspace
     _session: WorkspaceSession

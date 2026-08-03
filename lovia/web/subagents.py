@@ -185,6 +185,10 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 mailbox=spec.mailbox,
             )
         except HTTPException as exc:
+            # No-op for today's 409/429 (both raise before the workspace
+            # binding), but keeps "delete session ⇒ close its workspace"
+            # airtight if start()'s failure points ever move.
+            await deps.workspaces.close(child_sid)
             await deps.store.delete(child_sid)
             if exc.status_code == 429:
                 raise RuntimeError(

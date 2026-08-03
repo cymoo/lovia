@@ -1,8 +1,9 @@
-"""The see_image tool (vision-as-a-tool) and its CLI env gating.
+"""The see_image tool (vision-as-a-tool) and its config gating.
 
 The tool lets a text-only main model delegate "look at this image" to a vision
-model, reading only workspace files. Gating: registered only when a vision model
-is configured, a workspace exists, and the main model can't already see images.
+model, reading only workspace files. Gating: registered only when the config
+assigns a vision role, a workspace exists, and the main model can't already
+see images.
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from lovia.run_context import RunContext
-from lovia.web.__main__ import resolve_vision_tool
+from lovia.web.builder import resolve_vision_tool
+from lovia.web.config import ModelProfile
 from lovia.web.vision import make_see_image_tool
 from lovia.workspace import Workspace
 
@@ -60,33 +62,47 @@ async def test_see_image_reports_missing_and_unsupported(tmp_path: Path) -> None
     )
 
 
-def test_resolve_vision_tool_gating(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
     ws = Workspace.local(str(tmp_path))
     text_prov = ScriptedProvider([text("x")])  # no vision
     vision_prov = ScriptedProvider([text("x")])
     vision_prov.supports_vision = True  # type: ignore[attr-defined]
+    profile = ModelProfile(id="eyes", model="openai:qwen-vl", api_key="sk-vision")
 
-    monkeypatch.delenv("LOVIA_VISION_MODEL", raising=False)
-    assert resolve_vision_tool(text_prov, ws) is None  # not configured
-
-    monkeypatch.setenv("LOVIA_VISION_MODEL", "openai:qwen-vl")
-    assert resolve_vision_tool(text_prov, None) is None  # no workspace
-    assert resolve_vision_tool(vision_prov, ws) is None  # main model already sees
-    tool = resolve_vision_tool(text_prov, ws)  # text main + workspace + configured
+    assert resolve_vision_tool(text_prov, ws, None) is None  # no vision role
+    assert resolve_vision_tool(text_prov, None, profile) is None  # no workspace
+    # A vision-capable main model gets images inline — no delegation tool.
+    assert resolve_vision_tool(vision_prov, ws, profile) is None
+    tool = resolve_vision_tool(text_prov, ws, profile)
     assert tool is not None and tool.name == "see_image"
 
     # A vision model on its own endpoint: the overrides thread through cleanly.
-    monkeypatch.setenv("LOVIA_VISION_BASE_URL", "https://dashscope.example/v1")
-    monkeypatch.setenv("LOVIA_VISION_API_KEY", "sk-vision")
-    assert resolve_vision_tool(text_prov, ws).name == "see_image"
+    remote = ModelProfile(
+        id="eyes2",
+        model="openai:qwen-vl",
+        base_url="https://dashscope.example/v1",
+        api_key="sk-vision",
+    )
+    tool2 = resolve_vision_tool(text_prov, ws, remote)
+    assert tool2 is not None and tool2.name == "see_image"
+
+
+def test_resolve_vision_tool_bad_profile_degrades(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unusable vision profile disables the tool instead of crashing boot."""
+    ws = Workspace.local(str(tmp_path))
+    text_prov = ScriptedProvider([text("x")])
+    bad = ModelProfile(id="eyes", model="no-such-vendor:qwen-vl")
+    with caplog.at_level("WARNING", logger="lovia.web.builder"):
+        assert resolve_vision_tool(text_prov, ws, bad) is None
+    assert "see_image disabled" in caplog.text
 
 
 def test_env_bool_parses_values_and_guards_model_specs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from lovia.web.__main__ import _env_bool
+    from lovia.web.builder import _env_bool
 
     monkeypatch.delenv("X_FLAG", raising=False)
     assert _env_bool("X_FLAG") is None  # unset

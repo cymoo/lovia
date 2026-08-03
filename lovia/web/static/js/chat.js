@@ -658,6 +658,12 @@ function finalizeReasoning() {
 // offer "open in the Files panel", and read_file results highlight by
 // extension.
 const PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
+// Tools whose completion means workspace files may have changed since the
+// Files panel last looked. shell covers its own (foreground) run; the
+// background tools are the observation points of a process that keeps
+// writing while nobody watches — its start ('shell' again), each output
+// poll, and the kill.
+const STALE_TOOLS = new Set(['shell', 'read_process_output', 'kill_process']);
 const RESULT_HL_MAX = 200_000; // chars — hljs over megabyte dumps janks the tab
 const RESULT_EXPANDABLE_LINES = 12; // roughly what the capped height shows
 
@@ -2297,9 +2303,10 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'tool_result':
-      // A finished shell command may have created/edited files we can't see
-      // individually — let the Files panel mark its listing as maybe stale.
-      if (data.name === 'shell') store.emit('workspace-maybe-stale');
+      // A finished shell command — or a background process observed via a
+      // poll/kill — may have created/edited files we can't see individually;
+      // let the Files panel mark its listing as maybe stale.
+      if (STALE_TOOLS.has(data.name)) store.emit('workspace-maybe-stale');
       // The call resolved out-of-band (another tab answered, timeout,
       // cancel): freeze the interactive card to match.
       if (data.name === QUESTION_TOOL) {

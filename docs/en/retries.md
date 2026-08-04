@@ -1,8 +1,14 @@
 # Provider retries
 
-Transient provider failures are normal: rate limits, timeouts, and interrupted
-streams should not require application-specific retry loops. lovia applies a
-retry policy around each model turn.
+Rate limits, timeouts, and interrupted streams are often retryable. lovia
+handles these temporary failures around each model turn, so application code
+does not need another retry loop.
+
+| Failure source | Mechanism |
+| --- | --- |
+| Provider rate limit, timeout, or connection interruption | `RetryPolicy` on this page |
+| Recoverable Tool exception | Tool `retries=`; see [Tools](tools.md#retries-and-timeouts) |
+| Guardrail, budget, or business rejection | No automatic retry; the caller decides whether to start another Run |
 
 ```python
 from lovia import Agent, RetryPolicy, Runner

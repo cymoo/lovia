@@ -2,8 +2,8 @@
 
 [English](./README.md) | **简体中文**
 
-lovia 是一个优雅、克制的 Python agent 框架，适合想要掌控 agent
-循环、又不想从零搭完所有基础设施的开发者。它把 agent 应用里反复出现的
+lovia 是一个优雅、克制的 Python Agent 框架，适合想要掌控 Agent
+循环、又不想从零搭完所有基础设施的开发者。它把 Agent 应用里反复出现的
 难点处理好：工具、会话、事件流、上下文压缩、服务化等；但不会因此变得大而重。
 
 ```bash
@@ -55,15 +55,15 @@ Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点�
 可组合的原语，普通的 Python，不另造一套抽象宇宙：
 
 - **极简依赖。** 核心依赖只有 `httpx`、`pydantic` 和 `pyyaml`，其余按需安装即可。
-- **抽象很少。** `Agent` 是不可变配置，`Runner` 执行一次运行，`@tool`
-  就是带类型的函数；handoff 和 agent-as-tool 组合多个 agent；插件负责打包
+- **抽象很少。** `Agent` 按约定作为不可变配置使用，通常用 `clone()` 派生；`Runner` 执行一次运行，`@tool`
+  把带类型的 callable 包装成 `Tool`；handoff 和 agent-as-tool 组合多个 agent；插件负责打包
   其余能力。
 - **读得懂。** 关键流程集中，模型调用、工具执行、重试和持久化的顺序都很清楚。
   遇到意外行为时，可以顺着同一条链路查下去。
 - **模型接入轻。** 内置 OpenAI、Anthropic 及其兼容接口。
   不堆厚重适配层；要接新模型，实现一个小 `Protocol` 就够了。
 - **缓存友好的上下文管理。** 压缩只改变下一次模型调用能看到的内容，
-  保持提示词前缀稳定，同时完整记录始终保留。
+  不改写对话主体，并保持提示词前缀稳定；显式输出上限和持久化维护仍会按配置生效。
 - **生产控制点清楚。** 审批、预算、取消、运行中追加指令、重试、快照/恢复，
   都是明确的开关，可以按你的应用需要接入。
 - **扩展方式统一。** Skills、MCP、Todo、Memory 都是插件；要加入自定义的能力，
@@ -78,7 +78,7 @@ lovia 在设计上始终保持克制：能在应用层用少量代码组合出�
 
 ### Agent
 
-`Agent` 是声明式配置：不保存会话状态，可轻松 `clone()` 出变体。自定义工具、
+`Agent` 是声明式配置：不保存会话状态，可用 `clone()` 派生不同配置。自定义工具、
 工作区和插件等都可以直接组合到这份配置上：
 
 ```python
@@ -128,7 +128,7 @@ result = await handle.result()
 
 ### 工具
 
-带类型的 Python 函数就是工具。schema 来自函数签名、docstring、`Annotated`
+`@tool` 把带类型的 callable 包装成 `Tool`，schema 来自函数签名、docstring、`Annotated`
 和 Pydantic `Field`。同一轮里的多个工具调用默认并发执行；有不可重入副作用的
 工具可以选择退出并发：
 
@@ -197,17 +197,13 @@ agent = Agent(
 
 ### 多 Agent
 
-区别主要在于：谁继续回答用户、目标 Agent 能看到哪些上下文，以及父 Agent 是否等待。
+| 你的任务 | 使用 | 运行方式 |
+| --- | --- | --- |
+| 让专家接手后续对话 | **Handoff** | 专家带着完整历史，在同一次 Run 中继续回答 |
+| 主 Agent 需要先拿到子任务结果 | **Agent-as-tool** | 子 Agent 只接收委派提示词，结果作为 Tool 返回 |
+| 独立任务可以在后台完成 | **Subagents** | 子 Agent 独立运行，稍后把报告送回父对话 |
 
-| 方式 | 谁继续回答用户 | 目标 Agent 看到什么 | 父 Agent 是否等待 | 结果如何返回 |
-| --- | --- | --- | --- | --- |
-| **Handoff** | 接手的专家 Agent | 完整对话历史 | 不适用，控制权已移交 | 专家在同一次 Run 中继续回答 |
-| **Agent-as-tool** | 父 Agent | 本次委派的提示词 | 等待 | 作为工具结果返回 |
-| **Subagents** | 父 Agent | 本次委派的提示词 | 默认不等待，也可主动等待 | 稍后作为消息送达，或由等待工具直接返回 |
-
-简单说：需要专家接管对话，用 Handoff；父 Agent 必须拿到子任务结果才能继续，用
-Agent-as-tool；任务可以独立在后台完成，用 Subagents。下面三段配置彼此独立，展示
-同一个 `researcher` 的三种接入方式，按需选择一种即可：
+下面三段配置彼此独立，展示同一个 `researcher` 的三种接入方式：
 
 ```python
 from lovia import Agent, Subagents
@@ -243,8 +239,7 @@ assistant = Agent(
 )
 ```
 
-`lovia web` 默认启用 Subagents。每个后台任务都会显示在侧栏的 **任务** 分组中，完成后
-自动把报告送回原对话。
+`lovia web` 默认启用 Subagents，并在任务完成后自动把报告送回原对话。
 
 → [多 Agent](https://cymoo.github.io/lovia/zh/multi-agent/)
 
@@ -336,7 +331,7 @@ result = await Runner.run(
 )
 ```
 
-→ [护栏](https://cymoo.github.io/lovia/zh/guardrails/) · [可靠性](https://cymoo.github.io/lovia/zh/reliability/)
+→ [护栏](https://cymoo.github.io/lovia/zh/guardrails/) · [Provider 重试](https://cymoo.github.io/lovia/zh/retries/) · [预算与限制](https://cymoo.github.io/lovia/zh/budgets/)
 
 ### 观察与运行中调整
 
@@ -362,7 +357,7 @@ mailbox.push("重点看 14:00 左右的 5xx 峰值。")  # 下一轮可见
 ```
 
 → [可观测性](https://cymoo.github.io/lovia/zh/observability/) ·
-[可靠性](https://cymoo.github.io/lovia/zh/reliability/#运行中追加指令)
+[取消与运行中引导](https://cymoo.github.io/lovia/zh/cancellation/#在运行中追加指令)
 
 ### 工作区
 
@@ -426,7 +421,7 @@ agent = Agent(
 
 跨对话的长期记忆：常驻提示词的 **Notes** 加可检索的 **Archive**。零配置可用，
 默认会在运行结束时筛选真正值得长期保留的事实，并定期整理 Notes，合并重复内容、
-清理过期信息。需要更强的检索能力时，只需逐步增加参数：
+清理过期信息。需要更强的检索能力时，可以按需增加参数：
 
 ```python
 from lovia import Agent, Memory

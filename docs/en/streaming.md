@@ -1,9 +1,14 @@
 # Streaming
 
-A UI can't wait for `RunResult` — it needs text as it generates, tool calls
-as they start, approval requests the moment they block. `Runner.stream`
-yields typed events for all of it, and the same event types drive
-[hooks](observability.md), so learning the catalog once pays twice.
+Use `Runner.stream()` when an interface must update during a run. Text deltas,
+Tool calls, approvals, and terminal state all arrive as typed events;
+[hooks](observability.md) use the same event types.
+
+| Need | Entry point |
+| --- | --- |
+| Final result only | `await Runner.run(...)` |
+| Show text, Tools, and approvals live | `Runner.stream(...)` |
+| React to events without consuming a stream | `AgentHooks` |
 
 ```python
 from lovia import Runner, events

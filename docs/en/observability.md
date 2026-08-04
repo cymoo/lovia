@@ -1,9 +1,15 @@
 # Observability
 
-You can't fix what you can't see, and an agent's failure modes are
-mid-run — the tool that took 40 seconds, the turn that burned 30k tokens.
-Three instruments, smallest first: **hooks** (react to events), **tracing**
-(timed spans), **logging** (the built-in narrative).
+Agent problems often appear mid-run, such as a slow Tool or a sudden token
+spike. Use **hooks** to react to events, **tracing** for timed spans, and
+**logging** for built-in runtime detail.
+
+| Question | Use |
+| --- | --- |
+| Run code when an event type occurs | Hook |
+| See timing and nested scopes | Tracer |
+| Explain why the framework took a path | Logging |
+| Read total tokens for one Run | `RunResult.usage` or a terminal event |
 
 ## Hooks
 

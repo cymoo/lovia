@@ -1,9 +1,13 @@
 # Session 与 Checkpoint
 
-两类持久化需求分别由两种存储解决。**Session** 记录“这段对话到目前为止说过什么”，
-用于保存跨运行的多轮对话；**Checkpoint** 记录“本次运行执行到哪里了”，用于单次运行的
-崩溃恢复和幂等处理。Runner 正常运行时只会追加记录，不会覆写已有历史；内置存储另有明确的
-维护操作，可以按需截断或回退 Session。
+**Session** 保存跨 Run 的对话历史；**Checkpoint** 保存单次 Run 的执行进度，用于崩溃恢复
+和幂等处理。两者解决的问题不同，也不会相互替代。
+
+| 如果你需要… | 使用 | 标识 |
+| --- | --- | --- |
+| 让下一次 Run 记得此前对话 | Session | `session_id` |
+| 让同一次 Run 在崩溃后继续 | Checkpoint | `run_id` |
+| 既保留对话，又恢复在途工作 | 两者一起使用 | 两个标识都需要 |
 
 ## Session
 
@@ -102,8 +106,8 @@ checkpointer 内唯一（UUID、job id 都可以）。id 已存在时怎么处�
 | `"fail"` | 抛 `UserError` | 开始新运行 |
 | `"resume_only"` | 继续它 | 抛 `UserError` |
 
-所以崩溃的 worker 只要重新提交同一个调用：中断运行会恢复，已完成运行会重放保存结果并且不触碰模型，
-两种情况下调用方都能拿到答案。有两个细节需要注意：
+Worker 崩溃后，只需重新提交同一个调用：中断的运行会恢复；已经完成的运行会直接重放结果，
+不再调用模型。两种情况都会返回答案，但有两个细节需要注意：
 
 - **恢复时新的 `input` 会被忽略**，因为 transcript 已经带着原始输入。`run_id` 是每次运行的
   幂等键，不是对话键；对话连续性请用 session。要按 id 继续一个已知运行且不带新输入：
@@ -121,14 +125,14 @@ checkpointer 内唯一（UUID、job id 都可以）。id 已存在时怎么处�
 
 ### 恢复运行的过程
 
-恢复会重建运行：重新渲染 system prompt，重新加载 session 历史，追加 snapshot entries，然后
+恢复会重建运行：重新渲染 system prompt，加载 Session 历史，追加 snapshot entries，然后
 **处理未完成的工具调用**。也就是说，崩溃时留下但没有结果的工具调用会重新执行（同一个轮次编号），
 之后循环继续。已完成结果不会重跑；悬空调用会重跑。带副作用的工具请按“至少执行一次”的语义
 设计，或让它们幂等。
 
-恢复支持穿过 [handoff](multi-agent.md)：snapshot 按名称记录**活跃** agent，runner 会从入口
-agent 的 handoff 图中重新解析。重命名或移除 agent 会让在途运行无法恢复（硬错误）；但已完成运行
-的**重放**会降级为入口 agent 并记录 warning 日志，已完成工作不会因为一次部署就报错。
+恢复也支持 [Handoff](multi-agent.md)：snapshot 按名称记录**活跃** Agent，Runner 会从入口
+Agent 的 Handoff 图中重新解析。重命名或移除 Agent 会让在途运行无法恢复；已完成运行的
+**重放**则会退回入口 Agent，并记录 warning 日志。
 
 ## 两个存储的关系
 
@@ -144,7 +148,7 @@ session append 是幂等的。
 两个 SQLite 存储都接受 `wal=True`（默认关闭）：WAL journal mode 加上 busy timeout，适合多个写入者
 共享一个数据库文件，比如一个文件里有多个 store，或多进程部署。
 
-## 注意事项
+## 使用建议
 
 - **复用已完成的 `run_id` 会忽略你的新输入**，这是设计（重放）。如果你想要“对话的下一轮”，
   那是 session，不是 checkpoint。

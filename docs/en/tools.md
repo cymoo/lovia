@@ -1,9 +1,7 @@
 # Tools
 
-A tool is a typed Python function the model can call. lovia derives the JSON
-Schema from the signature, validates arguments before your code runs, and
-handles the loop mechanics — concurrency, retries, timeouts, truncation — so
-a tool stays an ordinary function.
+`@tool` wraps a typed callable as a `Tool` and derives its JSON Schema. The
+Runner handles validation, concurrency, retries, timeouts, and truncation.
 
 ```python
 from typing import Annotated
@@ -31,6 +29,16 @@ def search_docs(
 Attach tools with `Agent(tools=[...])`. Sync functions run on a worker
 thread so they never block the event loop; `async def` functions are awaited
 directly.
+
+Choose safeguards from the Tool's behavior:
+
+| Tool characteristic | Recommended setting |
+| --- | --- |
+| Read-only and independent | Keep default concurrency |
+| Writes or other non-reentrant side effects | `parallel=False` |
+| Temporary failures are safe to retry | `retries=` and `timeout=` |
+| Charges, sends, deletes, or other sensitive effects | `needs_approval=True` |
+| May return a large payload | `max_output_chars=` |
 
 ## Schema derivation
 
@@ -73,7 +81,7 @@ async def save_note(ctx: RunContext, text: str) -> str:
 
 The context parameter is excluded from the schema the model sees. At most
 one parameter may carry the annotation (`UserError` otherwise). The full
-field catalog is in [Core concepts](concepts.md#runcontext-the-one-handle).
+related fields are covered in [Core concepts](concepts.md#runcontext-the-one-handle).
 
 ## Error semantics
 

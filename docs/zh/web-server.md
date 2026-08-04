@@ -1,7 +1,7 @@
 # Web 服务端
 
-Web 包基于 FastAPI，为一个或多个 Agent 提供 HTTP 服务。独立启动时使用 `serve()`；
-集成到现有 ASGI 应用时使用 `create_app()`。
+Web 包基于 FastAPI。独立启动 Agent 服务时用 `serve()`；接入现有 ASGI 应用时用
+`create_app()`。
 
 ```bash
 pip install "lovia[web]"
@@ -44,8 +44,8 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 
 ## 追问建议
 
-UI 可以在回答下方显示几个可直接点击发送的追问。内置建议器会在 Run 成功产出回答后，
-单独调用一次模型；这次请求不会写入主对话的 Transcript，也不会延迟原回答的显示。
+内置建议器会在 Run 成功产出回答后单独调用一次模型；这次请求不会写入主对话的
+Transcript，也不会延迟原回答。
 建议器只会把最近一组用户问题和模型回答发给追问模型，过长内容会先截断。
 
 ```python
@@ -146,8 +146,8 @@ Web 包会持久化定时任务，支持三种触发方式：
 - `max_fires`：最多触发指定次数；
 - `expires_at`：到期后不再触发。
 
-插件还提供无需审批的 `list_schedules` 和 `cancel_schedule`。取消操作只会停用任务，
-之后仍可在面板中恢复或删除。停止条件通常由无人值守的定时运行自行处理，而这类运行中的
+插件还提供无需审批的 `list_schedules` 和 `cancel_schedule`。取消只会停用任务，不会删除记录。
+停止条件通常由无人值守的定时运行自行处理，而这类运行中的
 审批请求会被自动拒绝，因此 `cancel_schedule` 不能依赖审批。
 
 ## 安全检查

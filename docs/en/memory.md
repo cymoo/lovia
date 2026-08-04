@@ -1,15 +1,17 @@
 # Memory
 
-Sessions give an agent history *within* a conversation; nothing carries
-across conversations — the user re-explains their preferences every chat.
-The `Memory` plugin adds long-term memory built from **two tiers and three
-verbs** the model already understands:
+Sessions preserve one conversation. The `Memory` plugin carries selected
+information across conversations in two tiers:
 
 - **Notes** (hot) — a small, char-budgeted block of durable facts,
   **always injected** into the system prompt. Curated with
   `remember(fact)` / `forget(fact)`.
 - **Archive** (cold) — a full-text-searchable store of past conversations,
   pulled in only on demand with `recall(query)`.
+
+If information only needs to survive within one conversation, a Session is
+enough. Enable Memory for cross-conversation reuse. Use
+`Memory(..., index=None)` when you want Notes without a searchable archive.
 
 ```python
 from lovia import Agent, Memory
@@ -36,8 +38,8 @@ covers the lexical gaps (below).
 └── vectors.db     # cold tier: vector arm (only with embedder=)
 ```
 
-`MEMORY.md` is deliberately plain markdown: open it in an editor, delete a
-line, done. Writes are atomic, and non-bullet lines are ignored on load.
+`MEMORY.md` is directly editable. Writes are atomic, and non-bullet lines are
+ignored on load.
 
 > **Privacy.** The archive persists user and assistant message text to
 > disk. Keep the memory directory under appropriate access control, and
@@ -70,8 +72,11 @@ Three paths, from automatic to manual:
    await mem.replace_notes(edited_body)   # editor write (normalizes + dedups)
    ```
 
-   The web UI's sidebar Memory editor (`GET`/`PUT /api/memory`) is built on
-   that last pair.
+   `GET` / `PUT /api/memory` use that same pair.
+
+Setting `auto_curate=False` disables the run-end digest and episode summary,
+but it does not stop raw user and assistant messages from entering the Archive.
+Use `index=None` when no searchable conversation record should be stored.
 
 ## Dreaming
 
@@ -91,8 +96,7 @@ Three triggers:
 - **Budget overflow** — Notes past `notes_budget` (default 8000 chars; the
   model sees a meter) dream immediately.
 - **On demand** — `await mem.dream()` returns `(before, after)` note
-  counts. Wire it to a cleanup button, or run it once to tidy a bloated
-  legacy file.
+  counts and can tidy a bloated legacy file.
 
 Before each rewrite the previous body lands in `MEMORY.md.bak` — a
 one-level undo. Deeper history is what git and the archive are for: the
@@ -190,6 +194,9 @@ Memory plugin). Because lovia's transcript is durable and
 - **Curation costs a model call per run** (two when a dream is due). On
   high-volume, low-value traffic, set `auto_curate=False` and rely on the
   `remember` tool, or point `model=` at a cheaper model.
+- **One `recall` may add two side calls.** The default lexical index expands
+  the query, and the retrieved hits are summarized. Set `expand_query=False`
+  and `summarize_recall=False` respectively to disable them.
 - **Dream state lives under `root`** — the `.dreamed` cadence marker and
   the `MEMORY.md.bak` backup are plain files there, even when `notes=` is
   a custom store (the backup then holds an export of the store's facts).

@@ -1,9 +1,12 @@
 # Structured output
 
-"Return JSON" prompts drift: the model adds prose, wraps output in code
-fences, renames a field. `output_type` replaces hope with a contract — the
-run's final answer is parsed and validated into the type you declared, or
-the run fails loudly after a bounded repair attempt.
+A "return JSON" prompt is not a reliable contract. With `output_type`, lovia
+parses and validates the final answer, applies the configured repair strategy,
+and raises a clear error if the result still does not match.
+
+Keep the default `str` when humans are the only consumers. Set `output_type`
+when downstream code needs stable fields, types, or constraints. External side
+effects belong in approved Tools, not output validation.
 
 ```python
 from pydantic import BaseModel

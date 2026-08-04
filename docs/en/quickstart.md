@@ -1,9 +1,11 @@
 # Quickstart
 
-Go from a fresh environment to Tools, streaming, typed output, and the Web UI.
-lovia requires Python 3.10 or newer. Every Python block is a complete script:
-replace `<model>` with your endpoint's model name, save the block to a file,
-and run it.
+This is a runnable path from installation to a complete application. On a
+first pass, complete the first four steps; streaming, structured output, and
+the Web UI are optional branches. lovia requires Python 3.10 or newer.
+
+Every Python block is a complete script. Replace `<model>` with a model your
+endpoint exposes.
 
 ## 1. Install lovia
 
@@ -13,9 +15,12 @@ pip install lovia
 
 ## 2. Configure a model
 
-`Agent(model=...)` accepts a Provider instance or a model string. Bare model
-names use the OpenAI-compatible adapter; `anthropic:` names use the
-Anthropic-compatible adapter. Pick the endpoint you use:
+Three values work together: the Provider selects the request protocol, the
+Base URL identifies the endpoint, and `model` names a model exposed there.
+`Agent(model=...)` may also receive a Provider instance directly.
+
+Bare model names use the OpenAI-compatible adapter; `anthropic:` names use
+the Anthropic-compatible adapter. Pick the endpoint you use:
 
 === "OpenAI"
 
@@ -61,9 +66,8 @@ Anthropic-compatible adapter. Pick the endpoint you use:
     export OPENAI_BASE_URL="http://127.0.0.1:11434/v1"
     ```
 
-    Use a model you have pulled locally. Ollama silently truncates overlong
-    prompts, so match `Compaction(context_window=...)` to its `num_ctx`; see
-    [context windows](providers.md#context-windows).
+    Use a model you have pulled locally. Long conversations also need a
+    context-window setting; see [context windows](providers.md#context-windows).
 
 ## 3. Run your first Agent
 
@@ -181,17 +185,18 @@ print(result.output.population_millions)
 ```
 
 lovia validates the final answer and returns a `CityFact`. Provider-native JSON
-Schema is used when available; otherwise lovia uses a portable Tool fallback.
+Schema is used when available; otherwise lovia adds a portable output contract
+to the system prompt.
 See [Structured output](structured-output.md).
 
 ## 7. Open the chat UI
 
 ```bash
+pip install "lovia[web]"
 lovia web
 ```
 
-Install the `web` extra listed [below](#optional-extras), then visit
-`http://127.0.0.1:8000`. The first-run prompt can collect and save model
+Visit `http://127.0.0.1:8000`. The first-run prompt can collect and save model
 configuration; see [Web UI](web-ui.md).
 
 ## Choose your next step

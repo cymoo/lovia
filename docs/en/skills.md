@@ -1,9 +1,8 @@
 # Skills
 
-Team knowledge — policies, runbooks, style guides — doesn't belong in a
-system prompt that every request pays for. A **skill** is a reusable
-instruction bundle the model discovers cheaply and loads only when needed,
-following the Agent Skills convention (`SKILL.md` + supporting files).
+Policies, runbooks, and style guides do not all belong in the system prompt. A
+**skill** packages this knowledge so the model sees a short index first and
+loads the full instructions or supporting files only when needed.
 
 ```python
 from lovia import Agent, Skills

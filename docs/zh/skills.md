@@ -1,8 +1,7 @@
 # Skills
 
-政策、运维手册（runbook）、风格指南等团队知识，不应全部塞进每次请求都要付费传输的系统提示词。
-**Skill** 是一种可复用的指令包：模型可以用很低的成本发现它，并且只在需要时加载。
-lovia 遵循 Agent Skills 约定，以 `SKILL.md` 搭配附属文件组织 Skill。
+政策、运维手册（runbook）和风格指南不必全部塞进系统提示词。**Skill** 把这类知识组织成
+可复用的指令包：模型先看到简短索引，需要时再加载正文和附属文件。
 
 ```python
 from lovia import Agent, Skills
@@ -119,7 +118,7 @@ agent = Agent(..., plugins=[Skills(catalog)])
 - **frontmatter 不能改变索引结构**：写入系统提示词前，`description` 和其他 frontmatter 字段
   会被压成单行，额外字段的长度也有限制，无法借此注入新的提示词结构。
 
-## 注意事项
+## 使用建议
 
 - **Skill 文件 I/O 不受工作区 ACL 限制。** `load_skill` 和 `read_skill_file` 会自行读取文件；
   即使 Skill 目录在[工作区](workspace.md)根目录之外，或匹配 `denied_paths`，也仍能加载。

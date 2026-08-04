@@ -1,7 +1,13 @@
 # HTTP API
 
-JSON + SSE API 与内置聊天页面相互独立。可以关闭 UI，只保留接口，再接入自己的前端或其他
-服务。内置 UI 也使用同一组接口；服务启动后，可在 `/api/docs` 查看交互式 API 文档。
+内置聊天页面和 JSON + SSE API 相互独立。你可以关闭页面，只保留接口，再接入自己的前端。
+服务启动后，访问 `/api/docs` 可查看交互式 API 文档。
+
+| 集成方式 | 适合场景 |
+| --- | --- |
+| `create_app(agent, ui=False)` | 独立服务，只关闭内置页面 |
+| `create_app(...)` | 需要完整 ASGI 应用，但由自己启动服务器 |
+| `build_api_router(...)` | 已有 FastAPI 应用，需要复用其中间件和生命周期 |
 
 ## 只提供 API
 
@@ -151,7 +157,7 @@ for await (const { event, data } of readSSE(res)) {
 测试和演示；`ChatStore(session=..., meta_path=...)` 可以接入自定义 `Session` 后端，
 同时保留聊天元数据功能。
 
-## 注意事项
+## 使用建议
 
 - **`build_api_router` 本身不包含认证或限流。** `create_app(token=...)` 和
   `serve(token=...)` 可以加上 token 验证，`serve()` 在非回环地址上还会自动生成 token

@@ -1,11 +1,13 @@
 # 记忆
 
-Session 让 Agent 记住**当前对话**的历史，但信息不会自动跨对话传递，用户每次都要
-重新说明自己的偏好。`Memory` 插件用**两层存储、三个操作**提供长期记忆：
+Session 保存当前对话，`Memory` 则让信息跨对话保留。它分为两层：
 
 - **Notes**（热层）：一小块有字符预算的长期事实，**始终注入**系统提示词。默认会在运行结束后
   自动提炼，并定期清理；也可以通过 `remember(fact)` / `forget(fact)` 手动维护。
 - **Archive**（冷层）：可全文搜索的过往对话存储，只在需要时用 `recall(query)` 拉进来。
+
+如果信息只需留在当前对话，Session 已经足够；只有需要跨对话复用时才启用 Memory。
+不希望保留可搜索的对话归档时，使用 `Memory(..., index=None)`，只保留 Notes。
 
 ```python
 from lovia import Agent, Memory
@@ -31,9 +33,8 @@ agent = Agent(
 └── vectors.db     # 冷层：向量检索分支（只有 embedder= 时存在）
 ```
 
-`MEMORY.md` 保持为普通 Markdown 文件：用编辑器打开后，删除一行就能删除一条 Notes。
-写入采用原子替换，读取时会忽略不以 `- ` 开头的行。其他文件均按需创建；首次启用时不一定
-全部存在。
+`MEMORY.md` 可直接编辑。写入采用原子替换，读取时会忽略不以 `- ` 开头的行。其他文件均按需
+创建；首次启用时不一定全部存在。
 
 > **隐私。** Archive 会把用户消息和助手回复持久化到磁盘。请为记忆目录设置合适的
 > 访问控制；如果不想保留可搜索的对话记录，传 `index=None`，只保留 Notes，`recall`
@@ -62,7 +63,7 @@ agent = Agent(
    await mem.replace_notes(edited_body)   # 编辑器写入（规范化 + 去重）
    ```
 
-   Web UI 侧边栏的 Memory 编辑器（`GET` / `PUT /api/memory`）就是基于最后这一对方法。
+   `GET` / `PUT /api/memory` 也基于最后这一对方法。
 
 Archive 对原始消息的建索引不依赖 `auto_curate`。将它设为 `False` 只会关闭运行后的事实提炼和
 对话摘要生成；只要 `index` 没有设为 `None`，原始用户消息和助手回复仍会进入 Archive。
@@ -82,8 +83,8 @@ Notes 长期追加后，容易积累重复说法、互相矛盾的旧记录和�
   首次检查只创建 `.dreamed` 标记并开始计时，不会立刻调用模型。
 - **超出预算**：运行结束时，如果 Notes 已超过 `notes_budget`（默认 8000 字符），无需等待
   周期到期便会整理。
-- **手动执行**：Web UI 的 Memory 编辑器提供“整理”按钮。代码中也可以调用
-  `await mem.dream(model=...)`，返回整理前后的条目数 `(before, after)`；如果创建
+- **手动执行**：调用 `await mem.dream(model=...)`，返回整理前后的条目数
+  `(before, after)`；如果创建
   `Memory` 时已经指定 `model=`，这里可以省略。
 
 只要模型实际返回了可用的重写结果，插件就会先把原 Notes 保存到 `MEMORY.md.bak`，因此可以
@@ -161,7 +162,7 @@ class Index(Protocol):
 因此可以沿用现有 Provider，又不会递归触发 Memory。lovia 会持久保存完整 Transcript，
 而且[压缩只影响模型看到的视图](context.md)，所以运行后提炼始终基于本次运行的完整记录。
 
-## 注意事项
+## 使用建议
 
 - **自定义后端会在多个运行间共享，也可能被并发访问。** 实现必须保证并发安全，其生命周期
   由创建者管理，插件不会主动关闭。Notes 的“读取—修改—写入”由内部锁串行化，内置 SQLite
@@ -169,6 +170,8 @@ class Index(Protocol):
 - **启用 `auto_curate` 后，每次完成运行都会增加一次提炼模型调用。** 定期整理到期或超出预算时，
   还会再调用一次。高流量、低价值场景可以设置 `auto_curate=False`，依赖 `remember` 工具，
   或把 `model=` 指向更便宜的模型。关闭运行后提炼不会关闭定期整理，也不会关闭超预算整理。
+- **一次 `recall` 最多会增加两次辅助模型调用。** 默认关键词索引会扩展查询，命中结果还会经过
+  归纳；分别设置 `expand_query=False` 和 `summarize_recall=False` 可以关闭。
 - **定期整理的状态文件始终放在 `root` 下。** `.dreamed` 周期标记和 `MEMORY.md.bak` 都是普通文件；
   即使 `notes=` 使用自定义存储也一样，此时备份保存的是存储内容的文本导出。自定义存储没有文件
   修改时间可供比较，因此周期到期后，即使内容未变也会再次整理。

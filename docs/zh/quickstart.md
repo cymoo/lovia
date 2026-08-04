@@ -1,8 +1,9 @@
 # 快速开始
 
-从全新环境一路学习到 Tool、流式输出、类型化结果和 Web UI。lovia 需要
-Python 3.10 或更高版本。本页每个 Python 代码块都是完整脚本：把 `<model>` 替换为
-当前端点的模型名，保存到文件后即可运行。
+这是一条从安装到完整应用的可运行路径。第一次使用时，先完成前四步；流式输出、
+结构化结果和 Web UI 可以按需选读。lovia 需要 Python 3.10 或更高版本。
+
+本页每个 Python 代码块都是完整脚本；请把 `<model>` 换成当前端点提供的模型名。
 
 ## 1. 安装 lovia
 
@@ -12,9 +13,11 @@ pip install lovia
 
 ## 2. 配置模型
 
-`Agent(model=...)` 接受 Provider 实例或模型字符串。不带前缀的模型名使用
-OpenAI-compatible 适配器；带 `anthropic:` 前缀的模型名使用 Anthropic-compatible
-适配器。选择你使用的端点：
+模型配置由三部分组成：Provider 决定请求协议，Base URL 指向服务端点，`model` 填该端点
+提供的模型名。`Agent(model=...)` 也可以直接接收 Provider 实例。
+
+不带前缀的模型名使用 OpenAI-compatible 适配器；带 `anthropic:` 前缀的模型名使用
+Anthropic-compatible 适配器。选择你使用的端点：
 
 === "OpenAI"
 
@@ -59,8 +62,8 @@ OpenAI-compatible 适配器；带 `anthropic:` 前缀的模型名使用 Anthropi
     export OPENAI_BASE_URL="http://127.0.0.1:11434/v1"
     ```
 
-    `model=` 使用本地已经拉取的模型。Ollama 会静默截断过长的 prompt，因此应让
-    `Compaction(context_window=...)` 与 `num_ctx` 一致；详见[上下文窗口](providers.md#上下文窗口)。
+    `model=` 使用本地已经拉取的模型。长对话还需要配置上下文窗口，详见
+    [Provider：上下文窗口](providers.md#上下文窗口)。
 
 ## 3. 运行第一个 Agent
 
@@ -107,7 +110,7 @@ print(result.output)
 print(f"turns={result.turns}, tokens={result.usage.total_tokens}")
 ```
 
-如果模型调用 `check_inventory`，一个 Turn 请求并执行 Tool，下一 Turn 使用结果。详见
+如果模型决定调用 `check_inventory`，当前 Turn 会执行这个 Tool；模型在下一 Turn 看到结果并继续回答。详见
 [核心概念](concepts.md#run-与-turn)。
 
 ## 5. 流式接收文本和 Tool 事件
@@ -175,16 +178,17 @@ print(result.output.city)
 print(result.output.population_millions)
 ```
 
-lovia 会校验最终答案并返回 `CityFact`。Provider 支持时使用原生 JSON Schema，否则使用可移植
-的 Tool fallback。详见[结构化输出](structured-output.md)。
+lovia 会校验最终答案并返回 `CityFact`。Provider 支持时使用原生 JSON Schema，否则在
+system prompt 中追加可移植的输出契约。详见[结构化输出](structured-output.md)。
 
 ## 7. 打开聊天 UI
 
 ```bash
+pip install "lovia[web]"
 lovia web
 ```
 
-先安装 web 相关依赖，`pip install "lovia[web]"`，再访问 `http://127.0.0.1:8000`。详见 [Web UI](web-ui.md)。
+访问 `http://127.0.0.1:8000`。详见 [Web UI](web-ui.md)。
 
 ## 选择下一步
 

@@ -1,9 +1,15 @@
 # 评测
 
-单元测试可以确认代码是否正确接通，却很难衡量 Agent 的**实际表现**：回答是否正确、工具是否
-选对、表达是否简洁。模型行为本就存在波动，这类问题尤其难测。借助 `lovia.eval`，你可以用
-`Case` 定义输入和验收条件；验收条件既可以是普通函数，也可以由大模型充当评审。
-`evaluate()` 会执行全部用例，并返回一个可打印、可断言、也可与基线比较的 `Report`。
+单元测试适合验证代码链路；评测用来回答另一类问题：答案是否正确、工具是否选对、表达是否
+符合要求。`lovia.eval` 用 `Case` 描述输入和验收条件，再由 `evaluate()` 生成可断言、
+可与基线比较的报告。
+
+| 想验证什么 | 优先选择 |
+| --- | --- |
+| 固定输入是否触发预期 Tool 或文本 | 确定性 check |
+| 多项明确条件的组合 | `all_of` / `any_of` / `weighted` |
+| 语气、相关性等难以写成规则的质量 | `llm_judge` |
+| Python 链路本身是否接通 | [离线测试](testing.md)，而不是 Eval |
 
 ```python
 from lovia.eval import Case, contains, evaluate, llm_judge, tool_called
@@ -128,7 +134,7 @@ assert diff.ok                                # 为真 ⇔ 没有 regression
 `compare` 返回 `Diff`，按 case **name** 匹配（重复名称会报错；输入重复时请手动命名 case）。
 improvement 和新增/删除 case 会出现在报告里，但不会让 `diff.ok` 失败。
 
-## 注意事项
+## 编写评测时
 
 - **裁判成本按 `samples × judge-checks × cases` 增长**，每次 judge 评估都是一次模型调用。
   只把 judge 用在真正需要语义判断的 case 上；匹配器是免费的。

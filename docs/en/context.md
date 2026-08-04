@@ -1,11 +1,8 @@
 # Context management
 
-Long conversations outgrow context windows. Most frameworks respond by
-rewriting history — after which the record no longer says what the model
-actually saw. lovia's context policy is **view-only**: the transcript (and
-the session) keep everything; only the *per-call view* sent to the provider
-shrinks. "The model forgot" and "the record lost it" stay different
-questions.
+Long conversations outgrow model windows. lovia shrinks only the **view** sent
+to the Provider, never the transcript or Session. Content leaving the current
+view does not mean the system lost it.
 
 ```python
 from lovia import Agent, Compaction
@@ -31,6 +28,13 @@ from lovia.context import NoopContextPolicy
 
 agent = Agent(..., context_policy=NoopContextPolicy())
 ```
+
+| Situation | Recommendation |
+| --- | --- |
+| Most applications | Keep the default `Compaction()` |
+| The endpoint window is known | Set `context_window` explicitly |
+| Offloaded Tool output must remain available | Configure a `ResultStore` |
+| An upstream layer already manages context | Use `NoopContextPolicy` |
 
 ## What Compaction does
 
@@ -218,7 +222,7 @@ content. `lovia/context/policy.py` is a one-screen read.
 
 ## See also
 
-- [Concepts: transcript vs view](concepts.md#transcript-vs-view)
+- [Concepts: transcript and view](concepts.md#transcript-vs-view)
 - [Providers](providers.md#context-windows) — window reporting and caching
 - [Sessions & checkpoints](sessions-and-checkpoints.md) — carried state
 - Example: [`17_context_compaction.py`](../../examples/17_context_compaction.py)

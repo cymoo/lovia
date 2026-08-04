@@ -1,25 +1,22 @@
 # Running agents
 
-`Runner` turns an `Agent` plus an input into one run. It is stateless — all
-per-run state lives inside the loop it starts — and it exposes exactly three
-entry points that differ only in how you consume the run.
+The three `Runner` entry points execute the same RunLoop and differ only in
+how the result is consumed:
 
-```python
-from lovia import Runner
-
-result = await Runner.run(agent, "Draft a release note.")   # run to completion
-result = Runner.run_sync(agent, "Summarize this file.")     # scripts / REPLs
-handle = Runner.stream(agent, "Explain compaction.")        # events as they happen
-```
+| Environment | Entry point |
+| --- | --- |
+| Async application, final result only | `await Runner.run(...)` |
+| Regular script or REPL | `Runner.run_sync(...)` |
+| UI, CLI, or intermediate events | `Runner.stream(...)` |
 
 `agent.run(...)` / `agent.run_sync(...)` / `agent.stream(...)` are the same
-calls, spelled as instance methods.
+calls as instance methods.
 
-## The three entry points
+## How the three entry points behave
 
 **`Runner.run(agent, input, **options) -> RunResult`** — awaits the run and
 returns the final result. Failures raise (`GuardrailTripped`,
-`BudgetExceeded`, `ProviderError`, ... — the [catalog](concepts.md#when-things-go-wrong)).
+`BudgetExceeded`, `ProviderError`, ... — see [When things go wrong](concepts.md#when-things-go-wrong)).
 
 **`Runner.run_sync(...)`** — the same, wrapped in `asyncio.run()` for code
 that isn't async yet. Calling it from inside a running event loop raises
@@ -53,7 +50,7 @@ All three entry points accept the same keywords:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `context` | `None` | your dependency object, surfaced as `ctx.deps` ([Agents](agents.md#per-run-dependencies)) |
+| `context` | `None` | your dependency object, surfaced as `ctx.deps` ([Agents](agents.md#inject-application-dependencies)) |
 | `output_type` | `None` | run-wide override of the agent's [output type](structured-output.md) |
 | `extra_instructions` | `None` | per-run system-prompt addendum, rendered after the agent's own instructions (and re-applied to every agent a handoff reaches) |
 | `max_turns` | `50` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |

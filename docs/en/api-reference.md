@@ -1,7 +1,7 @@
 # API reference
 
-This page is a compact index of the public surface used most often. Each table
-links to the guide that explains behavior, lifecycle, and edge cases.
+This page indexes the public interfaces used most often. Follow the table links
+when you need behavior, lifecycle, or edge-case details.
 
 ## Entry points
 
@@ -59,7 +59,7 @@ See [Running agents](running.md) for input forms and lifecycle semantics.
 | `tool_result_renderer` | `None` | Agent-wide successful Tool-result renderer |
 
 Use `agent.clone(**overrides)` for variants. The field defaults and instruction
-forms are documented in [Agents](agents.md#the-fields).
+forms are documented in [Agents](agents.md#configuration-overview).
 
 ## RunResult and RunHandle
 

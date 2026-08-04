@@ -1,9 +1,7 @@
 # 上下文管理
 
-长对话终会超出上下文窗口。许多框架会直接改写历史，导致事后无法确认模型当时究竟
-看到了什么。lovia 的上下文策略**只调整视图**：运行记录（transcript）和 Session 始终保留
-完整内容，只有每次发送给 Provider 的视图会被压缩。这样，“模型遗忘”和“记录丢失”仍是
-两个彼此独立的问题。
+长对话终会超出模型窗口。lovia 只压缩发给 Provider 的**视图**，不改写运行记录
+（transcript）或 Session。因此，模型暂时看不到某段内容，并不等于系统丢失了它。
 
 ```python
 from lovia import Agent, Compaction
@@ -28,6 +26,13 @@ from lovia.context import NoopContextPolicy
 
 agent = Agent(..., context_policy=NoopContextPolicy())
 ```
+
+| 场景 | 建议 |
+| --- | --- |
+| 大多数应用 | 保持默认 `Compaction()` |
+| 已知端点窗口 | 显式设置 `context_window` |
+| 需要保留被转存的完整 Tool 输出 | 配置 `ResultStore` |
+| 上游已经管理上下文 | 使用 `NoopContextPolicy` |
 
 ## 压缩机制
 
@@ -83,20 +88,21 @@ Compaction(
 )
 ```
 
-- **水位**可以是可用窗口比例（`0.85`），也可以是绝对 token 数（`150_000`）。“可用” =
-  window − `reserve_output_tokens`。低于 `compact_at` 时不处理；越界后会把 view 缩到
-  `compact_to`（有滞后，避免策略在边界抖动）。
-- **`context_window=None`** 会从端点解析窗口——它的 `/models` 列表，或者它第一次拒绝 prompt 时
-  点名的上限——最后才回落到适配器的表。完整链路见[上下文窗口](providers.md#上下文窗口)。
-  端点点名的上限总会压住你配置的值，所以表里没有的模型代价是撞墙一次，之后整个 session 都按
-  真实值计算。只有当**谁都报不出来**时，才会跳过主动压缩、只留 reactive overflow 兜底。
-- **token 计数**是校准过的估算：UTF-8 字节数/4 启发式——中文按 ~0.75 token/字计入，
-  而不是被纯字符计数低估 4 倍——图片/文件有固定成本，加上请求携带的工具 schema
-  （这块固定的加性负载若混进乘性系数会把它带偏），再用 provider 返回的**实际**
-  input token 数做 EMA 修正。在英文、中文、中英混合和代码混合的真实端点校准中，
-  估算值与真实值几乎一致，精度约 **99%**（稳态误差约 0.7–1.3%）；详见
-  [校准报告](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md)。provider 也可以实现
-  `TokenEstimator` 提供精确计数。
+**触发水位。** `compact_at` 和 `compact_to` 可以写成可用窗口比例（如 `0.85`），也可以写成
+绝对 token 数（如 `150_000`）。可用窗口是总窗口减去 `reserve_output_tokens`。低于触发水位时
+不处理；触发后会缩到目标水位，留出余量，避免在边界反复压缩。
+
+**确定上下文窗口。** `context_window=None` 时，Lovia 会先读取端点的 `/models` 列表，再从首次
+prompt overflow 错误中学习上限，最后才回退到适配器内置表。完整链路见
+[上下文窗口](providers.md#上下文窗口)。如果端点明确给出上限，它会覆盖较大的配置值，并在当前
+Session 的后续运行中复用。只有所有来源都无法确定窗口时，Lovia 才跳过主动压缩，仅保留溢出后的
+恢复机制。
+
+**估算 token。** 默认估算器以 UTF-8 字节数为基础，单独计算图片、文件和工具 schema 的固定成本，
+再用 Provider 返回的实际 input token 数做 EMA 校准。真实端点测试中，英文、中文、中英混合和代码
+混合文本的稳态误差约为 0.7–1.3%；测试范围和原始结果见
+[校准报告](https://github.com/cymoo/lovia/blob/main/docs/ratio-calibration.md)。Provider 也可以实现
+`TokenEstimator`，提供更精确的计数。
 
 ## 结果存储
 
@@ -126,7 +132,8 @@ checkpoint，并在运行结束时写入 session segment 的 `meta`。所以下�
 
 ## 自定义上下文策略
 
-扩展有两层深度。**自定义阶段**保留 Compaction 的机制（水位、尾部、状态、marker），只替换“压缩什么”：
+扩展有两层深度。**自定义阶段**保留 Compaction 的水位、尾部、状态和 marker 机制，
+只替换“压缩什么”：
 
 ```python
 class DropOldImages:                      # implements Stage
@@ -157,7 +164,7 @@ required_sections=...)`，不要 fork 这段实现。
 `lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 
-## 注意事项
+## 使用建议
 
 - **Compaction 不是内存上限。** **transcript** 保留完整输出；只有 view 缩小。失控载荷要在源头由
   [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
@@ -167,7 +174,7 @@ required_sections=...)`，不要 fork 这段实现。
 - **未知模型的第一次撞墙是一次真实的失败请求。** 正是端点的这次拒绝教会了 lovia 窗口大小；
   紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 60%——它下手重一倍多。
   知道窗口就请提前设置 `context_window=...`。Ollama 压根不会撞墙
-  （它会[静默截断](providers.md#注意事项)），因此必须显式配置。
+  （它会[静默截断](providers.md#使用建议)），因此必须显式配置。
 - **不要在窗口不同的 agent 间共享同一个 `Compaction` 实例。** 状态是按运行/session 的，但配置窗口属于
   policy 实例。clone agent 会共享 policy 实例；变体请各自配置一个。
 

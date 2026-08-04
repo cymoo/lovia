@@ -1,7 +1,7 @@
 # Todo
 
-`Todo` 为 Agent 提供一份外置 Checklist，用于处理多步骤任务。模型通过类型化 Tool 更新计划，
-临时提醒则在每个 Turn 重新展示当前状态，同时避免 Transcript 持续增长。
+`Todo` 为多步骤任务提供一份外置清单。模型通过 Tool 更新它；每个 Turn 都能看到最新状态，
+但提醒不会反复写入 Transcript。
 
 ```python
 from lovia import Agent, Runner, Todo
@@ -54,7 +54,7 @@ Todo Store 本身属于 Run，但列表可以跨中断和 Handoff 恢复：插�
 `event.result` 是结构化的 `list[TodoItem]`。对于已经保存的对话，可调用
 `lovia.plugins.todos_from_entries(entries)` 重建列表。内置 Web UI 使用的也是这个函数。
 
-## 注意事项
+## 使用建议
 
 - Todo 是规划辅助工具，不是定时器或持久化任务队列。未来任务应使用[定时运行](web-server.md#定时任务)。
 - 临时提醒有意不进入 Session 和 Checkpoint；需要审计时应查看 `todo_write` Tool 调用。

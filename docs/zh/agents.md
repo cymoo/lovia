@@ -1,8 +1,7 @@
 # Agent
 
-`Agent` 定义的是**运行内容**：名称、指令、模型、工具和策略。它本身不保存
-对话状态，因此同一个实例可以同时处理任意数量的请求。需要为某次请求调整配置时，
-用 `clone()` 派生一个变体即可，无须复制带有运行状态的对象。
+`Agent` 只保存运行配置：名称、指令、模型、工具和策略。它不保存对话状态，
+可以安全复用；某次请求需要不同配置时，用 `clone()` 派生即可。
 
 ```python
 from lovia import Agent
@@ -14,7 +13,10 @@ agent = Agent(
 )
 ```
 
-## 字段
+第一次创建 Agent 时，通常只需要 `name`、`model`、`instructions` 和 `tools`。
+输出类型、重试、上下文策略、插件与护栏都可以在需求出现后再配置。
+
+## 配置总览
 
 每个字段都有明确的默认值。`None` 不代表某个隐藏常量，只表示关闭、继承或自动创建。
 
@@ -43,7 +45,7 @@ agent = Agent(
 可靠性相关字段遵循一条明确的配置原则：**故障处理策略属于 Agent，资源限制属于单次运行**。
 见 [Provider 重试](retries.md)和[预算与限制](budgets.md)。
 
-## 指令
+## 编写指令
 
 四种形式，从静态到完全动态：
 
@@ -82,7 +84,7 @@ runner 追加在它后面。
 > （见[内置工具](built-in-tools.md#时间)里的 `current_date`）、用户等级而不是
 > session id。易变细节更适合放在工具结果里。
 
-## 派生不同配置
+## 为不同场景派生配置
 
 `clone()` 会返回一个只替换部分字段的副本，是派生单次请求配置或实验变体的推荐方式：
 
@@ -96,7 +98,7 @@ variant = agent.clone(model="<other-model>")
 立即注册所需片段；如果不希望修改原对象，可以使用
 `with_instructions`。
 
-## 每次运行的依赖
+## 注入应用依赖
 
 instructions、工具、hooks 或护栏在运行时需要的依赖，比如数据库连接池、当前用户，
 应该作为本次运行的 `context` 对象传入，而不是放在 agent 状态上：
@@ -131,13 +133,13 @@ result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps(
 内容，包括 transcript、usage、mailbox、cancel token，见
 [核心概念](concepts.md#runcontext访问运行状态)。
 
-## 运行 Agent
+## 启动运行
 
 `agent.run(...)`、`agent.run_sync(...)` 和 `agent.stream(...)` 只是对应
 `Runner` 方法的便捷写法。Session、预算、Checkpoint 和运行中追加指令等完整参数，
 见[运行 Agent](running.md)。
 
-## 注意事项
+## 使用建议
 
 - **`@agent.instruction` 会修改 agent**：这是为了装饰器易用性而保留的唯一例外。
   如果涉及 clone，片段注册发生在 clone 前还是后，决定谁会得到这个片段。

@@ -1,9 +1,8 @@
 # Testing
 
-Agent code deserves tests that run offline, free, and deterministically —
-network-flaky "tests" that cost money per run don't get run.
-`lovia.testing` ships the test double that makes this routine:
-`ScriptedProvider`, a real `Provider` that replays pre-canned turns.
+`ScriptedProvider` replays prepared model turns so real Tools and the real
+RunLoop can be tested offline. Use [Evals](eval.md) for answer quality, Tool
+choice, or behavioral consistency.
 
 ```python
 from lovia import Agent, tool
@@ -66,15 +65,15 @@ assert "Be terse." in first_prompt[0].content
 ```
 
 `provider.calls[i]` is the chat-format view of turn *i*'s input — the
-sharpest tool for testing [dynamic instructions](agents.md#instructions),
+sharpest tool for testing [dynamic instructions](agents.md#write-instructions),
 [view injectors](plugins.md#view-injectors-the-per-turn-seam), and
 [compaction](context.md) behavior ("did the cleared result really leave
 the view?").
 
 ## What to test, and with what
 
-- **Tools in isolation** — plain pytest; a `@tool` function is just a
-  function.
+- **Tool business logic** — keep the implementation as a separate callable
+  and test it with pytest; use `ScriptedProvider` for Tool schema and wiring.
 - **Loop behavior** (routing, tool choice, repair, guardrails, handoff) —
   `ScriptedProvider`, as above. Handoffs and
   [agent-as-tool](multi-agent.md) sub-runs each consume from their *own*

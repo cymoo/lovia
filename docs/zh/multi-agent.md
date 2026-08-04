@@ -1,13 +1,14 @@
 # 多 Agent
 
-lovia 只提供三种多 Agent 协作机制，不引入编排 DSL。它们的核心区别在于谁掌握
-对话、目标 Agent 能看到哪些上下文，以及父 Agent 是否需要等待：
+lovia 提供 Handoff、Agent-as-tool 和 Subagents 三种组合方式，不引入编排 DSL。
 
-- **Handoff** 移交对话，由专家 Agent 带着完整历史接手。
-- **Agent-as-tool** 委派子任务，父 Agent 等到结果后继续。
-- **Subagents** 把独立任务放到后台，父 Agent 默认无需等待，可以同时处理其他工作。
+## 按任务选择方式
 
-更复杂的流程可以直接用普通 Python 组合这三种机制。
+| 你的任务 | 使用 | 目标 Agent 看到什么 | 结果如何返回 |
+| --- | --- | --- | --- |
+| 让专家接手后续对话 | Handoff | 完整对话历史 | 专家在同一次 Run 中继续回答 |
+| 主 Agent 需要先拿到子任务结果 | Agent-as-tool | 本次委派的提示词 | 作为 Tool 结果返回 |
+| 独立任务可以在后台完成 | Subagents | 本次委派的提示词 | 稍后送回父对话，也可主动等待 |
 
 ## Handoff
 
@@ -176,23 +177,14 @@ budget=None, max_result_chars=16_000, instructions=None)`：
   应将它与 `deliver` 配套设置。若只替换 `run_child`，当前 Run 结束时，
   `Subagents` 无法取消由外部管理的任务。
 
-## 如何选择协作方式
-
-| 方式 | 谁继续回答用户 | 目标 Agent 看到什么 | 父 Agent 是否等待 | 结果如何返回 |
-| --- | --- | --- | --- | --- |
-| Handoff | 接手的专家 Agent | 完整对话历史 | 不适用，控制权已移交 | 专家在同一次 Run 中继续回答 |
-| Agent-as-tool | 父 Agent | 本次委派的提示词 | 等待 | 作为工具结果返回 |
-| Subagents | 父 Agent | 本次委派的提示词 | 默认不等待，也可主动等待 | 稍后作为消息送达，或由等待工具直接返回 |
-
-需要专家接管后续对话，选择 Handoff；父 Agent 必须先拿到子任务结果，选择
-Agent-as-tool；任务可以独立在后台完成，选择 Subagents。
+## 组合更复杂的流程
 
 链式调用、路由、并行处理、编排者—执行者和评估循环等更复杂的流程，都不需要额外的
 框架抽象：在 `Runner.run` 外层用普通 Python 组合即可。
 [`examples/workflows/`](../../examples/workflows/) 目录用一页代码实现了 Anthropic
 *Building effective agents* 里的每个模式。
 
-## 注意事项
+## 使用建议
 
 - **为 Handoff 目标写清 `description`。** 如果两个专家都使用默认说明，路由 Agent
   几乎无法区分它们。遇到错误路由时，应先检查提示词和说明，再排查框架行为。

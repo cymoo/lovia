@@ -1,7 +1,7 @@
 # Troubleshooting
 
-Start with the exception type and its `.hint`; lovia errors are designed to
-say whether the caller, Provider, Tool, or runtime boundary failed.
+Start with the exception type and `.hint`; they usually identify whether the
+problem comes from configuration, the Provider, a Tool, or a runtime limit.
 
 For interactive diagnosis, enable framework logs:
 

@@ -1,8 +1,8 @@
 # Todo
 
-`Todo` gives an Agent an externalized checklist for multi-step work. The model
-updates it through a typed Tool, and a transient reminder re-shows the current
-plan every Turn without growing the Transcript.
+`Todo` gives multi-step work an external checklist. The model updates it through
+a Tool and sees the current state every Turn, without repeatedly appending the
+reminder to the Transcript.
 
 ```python
 from lovia import Agent, Runner, Todo

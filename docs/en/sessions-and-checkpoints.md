@@ -1,10 +1,14 @@
 # Sessions & checkpoints
 
-Two different persistence problems, two stores. A **session** answers "what
-has this conversation said so far?" — multi-turn memory across runs. A
-**checkpoint** answers "how far did this run get?" — crash recovery and
-idempotency within one run. Both are append-only: history is never
-rewritten.
+A **session** preserves conversation across runs. A **checkpoint** preserves
+progress within one run for crash recovery and idempotency. They solve
+different problems and do not replace each other.
+
+| If you need to… | Use | Key |
+| --- | --- | --- |
+| Let the next Run remember earlier conversation | Session | `session_id` |
+| Resume the same Run after a crash | Checkpoint | `run_id` |
+| Preserve conversation and recover in-flight work | Both | Both keys |
 
 ## Sessions
 

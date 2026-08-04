@@ -1,8 +1,8 @@
 # Web server
 
-The optional Web package provides a small FastAPI server for one or more
-Agents. Use `serve()` for a standalone process or `create_app()` when your
-deployment already owns the ASGI lifecycle.
+The Web package is built on FastAPI. Use `serve()` for a standalone Agent
+service and `create_app()` when an existing application owns the ASGI
+lifecycle.
 
 ```bash
 pip install "lovia[web]"
@@ -47,10 +47,9 @@ For endpoint contracts and the `ChatStore` interface, see
 
 ## Follow-up suggestions
 
-Once a turn finishes, the UI can offer a few questions the user might want to
-ask next, rendered as clickable chips (clicking one sends it). They come from a
-separate, tiny model call — the main Transcript never sees the request — made
-only after a run that actually answered.
+After a Run produces an answer, the built-in suggester makes a separate small
+model call. The main Transcript never sees that request, and the call does not
+delay the original answer.
 
 ```python
 create_app(agent, followups=True, followup_model="<small-model>")
@@ -148,9 +147,10 @@ The Web package stores durable schedules and supports three trigger forms:
 
 `Scheduling(store)` contributes the approval-gated `schedule_run` Tool. The
 model can propose a future run, but it is not created until a user approves the
-Tool call. `continue_session=True` appends results to the same chat; otherwise
-each fire starts a new Session. Delivery is at-most-once and coalesced: a fire
-is skipped while the previous one is still running.
+Tool call. With `continue_session=True`, a fire joins the same chat and injects
+its instruction into an active Run. With `continue_session=False`, each fire
+starts a new Session and is skipped rather than queued while the previous fire
+is still running. After downtime, multiple missed fire times coalesce into one.
 
 A repeating schedule can carry a stop condition (`until`, natural language):
 each fire is then told to evaluate it after doing the task and cancel the
@@ -158,8 +158,8 @@ schedule once it is met — "check the log every minute until it says ready".
 Deterministic safety nets (`max_fires`, `expires_at`) deactivate the schedule
 even if the condition is never met; the tool requires one when `until` is set.
 The plugin also contributes `list_schedules` and `cancel_schedule`, which need
-no approval: cancelling only deactivates (resume or delete from the panel),
-and the self-cancel must work inside a clientless scheduled run, where an
+no approval: cancelling deactivates the schedule without deleting its record,
+and self-cancel must work inside a clientless scheduled run, where an
 approval request would be auto-denied.
 
 ## Security checklist

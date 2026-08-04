@@ -1,10 +1,9 @@
 # MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) servers expose
-tools your agent can call — filesystems, browsers, databases — without you
-writing adapters. lovia's `MCP` plugin connects to servers, converts their
-tools into ordinary [`Tool`](tools.md)s, and manages the connection
-lifecycle per run.
+[Model Context Protocol](https://modelcontextprotocol.io) (MCP) lets an Agent
+use tools supplied by servers, such as filesystems, browsers, and databases.
+The `MCP` plugin connects to a server and converts those capabilities into
+ordinary [`Tool`](tools.md)s.
 
 ```bash
 pip install "lovia[mcp]"

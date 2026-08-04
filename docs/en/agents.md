@@ -1,9 +1,8 @@
 # Agents
 
-An `Agent` describes *what* should run — name, instructions, model, tools,
-policies — while holding no conversation state, so one instance can serve any
-number of concurrent requests and per-request variants are cheap clones
-rather than copies of live state.
+An `Agent` holds run configuration: name, instructions, model, tools, and
+policies. It has no conversation state, so you can reuse it safely and derive
+per-request variants with `clone()`.
 
 ```python
 from lovia import Agent
@@ -15,7 +14,11 @@ agent = Agent(
 )
 ```
 
-## The fields
+For a first Agent, you normally need only `name`, `model`, `instructions`, and
+`tools`. Add output contracts, retries, context policy, plugins, and guardrails
+when the application needs them.
+
+## Configuration overview
 
 Every field has a literal default — `None` never hides a constant; it means
 off, inherit, or auto-created.
@@ -46,7 +49,7 @@ The reliability-shaped fields follow one rule worth internalizing —
 **posture lives on the agent, limits live on the run** — covered in
 [Provider retries](retries.md) and [Budgets & limits](budgets.md).
 
-## Instructions
+## Write instructions
 
 Four forms, composing from static to fully dynamic:
 
@@ -91,7 +94,7 @@ structured-output contract are appended after it by the runner.
 > [Built-in tools](built-in-tools.md#time)), tiers rather than session ids —
 > and put volatile detail in tool results instead.
 
-## Clones and variants
+## Derive variants for different situations
 
 `clone()` returns a copy with selected fields replaced — the intended way to
 derive per-request or per-experiment variants:
@@ -108,7 +111,7 @@ it (as an immutable tuple — no shared mutable state); fragments registered
 right after constructing the agent, or use `with_instructions` when you'd
 rather not mutate at all.
 
-## Per-run dependencies
+## Inject application dependencies
 
 Anything your instructions, tools, hooks, or guardrails need at runtime — a
 database pool, the current user — travels as the run's `context` object, not
@@ -146,7 +149,7 @@ the annotation. Everything else on the context handle — transcript, usage,
 mailbox, cancel token — is catalogued in
 [Core concepts](concepts.md#runcontext-the-one-handle).
 
-## Running an agent
+## Start a run
 
 `agent.run(...)`, `agent.run_sync(...)`, and `agent.stream(...)` are thin
 shortcuts for the corresponding `Runner` methods, which hold the full

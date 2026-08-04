@@ -62,8 +62,9 @@ Composable primitives, ordinary Python — no new universe of abstractions:
 
 - **Minimum dependencies.** The core depends only on `httpx`, `pydantic`,
   and `pyyaml`; install everything else only when needed.
-- **Few abstractions.** An `Agent` is immutable configuration, a `Runner`
-  executes one run, a `@tool` is a typed function; handoff and agent-as-tool
+- **Few abstractions.** An `Agent` is treated as immutable configuration and
+  normally varied with `clone()`; a `Runner`
+  executes one run, and `@tool` wraps a typed callable as a `Tool`; handoff and agent-as-tool
   compose agents; plugins package the rest.
 - **Readable.** The critical path is concentrated and explicit: model
   calls, tool execution, retries, and persistence happen in a clear order.
@@ -71,9 +72,10 @@ Composable primitives, ordinary Python — no new universe of abstractions:
 - **Lightweight model integration.** OpenAI, Anthropic, and compatible
   endpoints are built in. There is no adapter stack to
   fight; a new provider is just a small `Protocol`.
-- **Cache-friendly context management.** Compaction only changes what the
-  model sees on the next call, keeping prompt prefixes stable while the
-  complete record stays intact.
+- **Cache-friendly context management.** Compaction changes only the next
+  model view, without rewriting the conversation body, and keeps prompt
+  prefixes stable. Explicit output limits and persistence maintenance still
+  apply.
 - **Production seams, not a production costume.** Approvals, budgets,
   cancellation, mid-run steering, retries, checkpoint/resume — explicit
   knobs you wire into your own app.
@@ -144,8 +146,8 @@ result = await handle.result()
 
 ### Tools
 
-Typed Python functions; the schema comes from signatures, docstrings,
-`Annotated`, and Pydantic `Field`s. One turn's calls execute concurrently by
+`@tool` wraps a typed callable as a `Tool`; the schema comes from signatures,
+docstrings, `Annotated`, and Pydantic `Field`s. One turn's calls execute concurrently by
 default — tools with non-reentrant side effects opt out and become execution
 barriers:
 
@@ -217,20 +219,13 @@ agent = Agent(
 
 ### Multi-agent
 
-The choice comes down to who owns the conversation, what context the target
-agent receives, and whether the parent waits:
+| Your task | Use | Runtime behavior |
+| --- | --- | --- |
+| Let a specialist take over the conversation | **Handoff** | The specialist receives full history and continues in the same Run |
+| Get a subtask result before the parent continues | **Agent-as-tool** | The child receives only the delegated prompt and returns a Tool result |
+| Run independent work in the background | **Subagents** | The child runs independently and reports back later |
 
-| Mechanism | Who answers the user | Target agent context | Does the parent wait? | How the result returns |
-| --- | --- | --- | --- | --- |
-| **Handoff** | The specialist that takes over | Full conversation history | N/A; control transfers | The specialist continues in the same run |
-| **Agent-as-tool** | The parent | Only the delegated prompt | Yes | As a tool result |
-| **Subagents** | The parent | Only the delegated prompt | Not by default; it may wait explicitly | Later as a message, or directly from the wait tool |
-
-In short: use Handoff when a specialist should take over the conversation;
-Agent-as-tool when the parent needs a subtask result before it can continue;
-and Subagents when the task can run independently in the background. The
-three configurations below are alternatives, showing how the same
-`researcher` can be used in each mode:
+The three alternatives below show the same `researcher` in each mode:
 
 ```python
 from lovia import Agent, Subagents
@@ -266,9 +261,8 @@ assistant = Agent(
 )
 ```
 
-`lovia web` enables Subagents by default. Each background task appears in
-the sidebar's **Tasks** group and automatically reports back to the original
-conversation when it finishes.
+`lovia web` enables Subagents by default and reports completed work back to
+the original conversation.
 
 → [Multi-agent](https://cymoo.github.io/lovia/multi-agent/)
 
@@ -362,7 +356,7 @@ result = await Runner.run(
 )
 ```
 
-→ [Guardrails](https://cymoo.github.io/lovia/guardrails/) · [Reliability](https://cymoo.github.io/lovia/reliability/)
+→ [Guardrails](https://cymoo.github.io/lovia/guardrails/) · [Provider retries](https://cymoo.github.io/lovia/retries/) · [Budgets & limits](https://cymoo.github.io/lovia/budgets/)
 
 ### Hooks and steering
 
@@ -388,7 +382,7 @@ handle = Runner.stream(agent.clone(hooks=hooks), "Analyze these logs.", mailbox=
 mailbox.push("Focus on the 5xx spike around 14:00.")  # seen next turn
 ```
 
-→ [Observability](https://cymoo.github.io/lovia/observability/) · [Reliability](https://cymoo.github.io/lovia/reliability/#steering-a-live-run)
+→ [Observability](https://cymoo.github.io/lovia/observability/) · [Cancellation & steering](https://cymoo.github.io/lovia/cancellation/#steering-a-live-run)
 
 ### Workspace
 

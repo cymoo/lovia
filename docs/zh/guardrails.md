@@ -1,7 +1,7 @@
 # 护栏
 
-有些规则不能仅靠提示词约束。护栏（guardrail）是一种拥有否决权的程序化检查：
-**输入护栏**在第一次模型调用前检查对话；**输出护栏**在最终答案返回前检查答案。
+提示词不能替代程序化校验。护栏（guardrail）可以直接否决运行：**输入护栏**在首次模型
+调用前检查对话，**输出护栏**在返回最终答案前检查结果。
 
 ```python
 from lovia import Agent
@@ -26,6 +26,12 @@ agent = Agent(
 )
 ```
 
+| 规则检查什么 | 放在哪里 |
+| --- | --- |
+| 用户输入或已有对话 | 输入护栏 |
+| 最终答案 | 输出护栏 |
+| 某一次 Tool 的副作用 | [Tool 审批](tools.md#工具审批)，而不是护栏 |
+
 ## 护栏接口
 
 护栏可以是任意可调用对象，同步和异步均可：
@@ -41,14 +47,14 @@ agent = Agent(
 - **返回真值**：非空字符串会作为原因（`"output guardrail: Missing source citation."`）；
   `True` 产生通用原因。`None`、`False`、`""` 表示通过。
 
-触发护栏会**结束运行**：`Runner.run` 抛 `GuardrailTripped`；stream 以携带该错误的 `RunFailed`
-结束。这里没有自动重试。护栏是边界，不是提醒；如果想“再试一次”，请捕获异常后重跑，或者在开发期把规则
-写成 [eval check](eval.md)。
+触发护栏会**结束运行**：`Runner.run` 抛出 `GuardrailTripped`；stream 以携带该错误的
+`RunFailed` 结束。这里不会自动重试。护栏是边界，不是提醒；如果想“再试一次”，请捕获异常后
+重跑，或者在开发期把规则写成 [eval check](eval.md)。
 
-两种护栏都会收到实时 `ctx`（[`RunContext`](concepts.md#runcontext访问运行状态)），所以检查可以感知
-tenant（`ctx.deps`）、usage（`ctx.usage`）或 transcript（`ctx.entries`）。护栏按列表顺序运行，
-以第一个违规为准。[插件](plugins.md)也可以贡献护栏；它们在同样的检查点运行，和 agent 自己的护栏合并，
-中止仍由循环负责，而不是插件负责。
+两种护栏都会收到实时 `ctx`（[`RunContext`](concepts.md#runcontext访问运行状态)），因此可以读取
+租户信息（`ctx.deps`）、用量（`ctx.usage`）或运行记录（`ctx.entries`）。护栏按列表顺序运行，
+以第一个违规为准。[插件](plugins.md)也可以贡献护栏；它们与 Agent 自身的护栏在相同检查点合并，
+中止仍由运行循环负责。
 
 ## 常见写法
 
@@ -75,7 +81,7 @@ async def short_enough(output, ctx):
 **想脱敏而不是拒绝？** 护栏只有通过/失败，不能改写值。脱敏应该放在数据流经的位置：
 工具参数/结果用[工具策略](tools.md#工具策略)，输入用你自己的预处理。
 
-## 注意事项
+## 边界
 
 - **输入护栏看到历史，而不只是新消息。** “拒绝任何 @ 符号”这种规则会因为三轮前的消息触发，
   即使当时是合法的。只想检查新输入时，请看 `messages[-1]`。

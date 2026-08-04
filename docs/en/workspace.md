@@ -1,10 +1,8 @@
 # Workspace
 
-Give an agent files and a shell and you have a coding agent — and a safety
-problem. `Workspace` adds file/shell tools scoped to a root directory and
-governed by **one** `allow` / `ask` / `deny` policy that covers both paths
-and commands, so there is a single place to reason about what the agent may
-touch.
+`Workspace` adds file and Shell tools under one `allow` / `ask` / `deny` policy
+for paths and commands. Define the root and permission boundary before exposing
+these capabilities to an Agent.
 
 ```python
 from lovia import Agent
@@ -38,8 +36,7 @@ model sees them and adapts).
 
 ## Modes
 
-`mode` picks a preset policy; reads **inside the root are always allowed**
-(that is the point of having a root):
+`mode` picks a preset policy; every mode allows reads inside the root:
 
 | Mode | Writes inside | Reads outside | Writes outside | Shell |
 | --- | --- | --- | --- | --- |
@@ -164,8 +161,7 @@ caller-owned one via `LocalWorkspace.bind(session)` (or the
 `.session()` context manager): `lovia web` binds one session per **chat**,
 so a dev server started in one turn is still up when the next message
 arrives, and dies when the chat is deleted or the server shuts down
-(Ctrl+C; a hard `kill -9` skips teardown and orphans processes). The web
-UI's Files panel shows the chat's live processes with a kill button.
+(Ctrl+C; a hard `kill -9` skips teardown and orphans processes).
 
 A virtualenv at the workspace root (`.venv` preferred, `venv` accepted) is
 **auto-activated** for every command: its bin dir is prepended to `PATH`
@@ -177,14 +173,9 @@ doesn't). An explicit `env={"PATH": ...}` still wins. The workspace's
 system-prompt fragment tells the model to create `.venv` before installing
 Python packages rather than installing globally.
 
-For writable workspaces the fragment also sets layout conventions: scratch
-and intermediates go under `tmp/` (treated as disposable), files nobody
-asked for are not written at all, and deliverable placement follows the
-root's own shape — in a git repository the repo's layout and conventions
-rule (and `tmp/` is never committed); anywhere else new files extend the
-existing structure rather than scattering the root. The `lovia web` Files
-panel matches the convention from the other side: `tmp/` is hidden along
-with environment junk, so Recent shows deliverables only.
+For writable workspaces, the automatic instructions place temporary work in
+`tmp/`, follow the existing repository layout, and never treat `tmp/` as a
+deliverable.
 
 ## The command guard
 

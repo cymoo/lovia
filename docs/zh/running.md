@@ -1,23 +1,20 @@
 # 运行 Agent
 
-`Runner` 接收一个 `Agent` 和一份输入，并执行一次运行。它本身不保存状态；单次运行的全部状态
-都由其启动的运行循环管理。`Runner` 只提供三个入口，区别仅在于调用方如何获取运行结果。
+`Runner` 的三个入口执行同一个 RunLoop，差别在于如何取得结果：
 
-```python
-from lovia import Runner
-
-result = await Runner.run(agent, "写一段发布说明。")      # 等待运行完成
-result = Runner.run_sync(agent, "总结这个文件。")         # 脚本 / REPL
-handle = Runner.stream(agent, "解释上下文压缩。")         # 边运行边消费事件
-```
+| 代码所在环境 | 入口 |
+| --- | --- |
+| 异步应用，只需要最终结果 | `await Runner.run(...)` |
+| 普通脚本或 REPL | `Runner.run_sync(...)` |
+| UI、CLI 或需要观察中间事件 | `Runner.stream(...)` |
 
 `agent.run(...)`、`agent.run_sync(...)` 和 `agent.stream(...)` 是对应的实例方法写法。
 
-## 三个入口
+## 三个入口的行为
 
 **`Runner.run(agent, input, **options) -> RunResult`**：等待运行完成并返回最终结果。
 失败会抛异常（`GuardrailTripped`、`BudgetExceeded`、`ProviderError` 等，见
-[错误清单](concepts.md#错误处理)）。
+[错误说明](concepts.md#错误处理)）。
 
 **`Runner.run_sync(...)`**：做同样的事，但用 `asyncio.run()` 包起来，适合尚未使用
 async 的代码。如果在已经运行的事件循环里调用，会抛 `UserError`，hint 里会告诉你
@@ -48,7 +45,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 
 | 选项 | 默认值 | 作用 |
 | --- | --- | --- |
-| `context` | `None` | 你的依赖对象，会作为 `ctx.deps` 暴露（见 [Agent](agents.md#每次运行的依赖)） |
+| `context` | `None` | 你的依赖对象，会作为 `ctx.deps` 暴露（见 [Agent](agents.md#注入应用依赖)） |
 | `output_type` | `None` | 本次运行覆盖 agent 的[输出类型](structured-output.md) |
 | `extra_instructions` | `None` | 本次运行追加到 system prompt 的内容，渲染在 agent 自身 instructions 后；handoff 到的每个 agent 都会重新应用 |
 | `max_turns` | `50` | 模型轮次的硬上限；超过会抛 `MaxTurnsExceeded` |
@@ -127,7 +124,7 @@ result = await Runner.run(
 还是从 checkpoint 重建出来，它都一致。要看完整对话，可以在 hook 里读取
 `ctx.entries`，或运行结束后调用 `session.load()`。
 
-## 注意事项
+## 使用建议
 
 - **`RunResult.entries` 不是完整 transcript**：它只是本次运行的增量。用它渲染
   “整段对话”的代码会不小心丢掉之前的历史；请用 session。

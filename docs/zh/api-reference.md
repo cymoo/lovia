@@ -1,6 +1,6 @@
 # API 参考
 
-本页汇总最常用的公开接口，并链接到解释行为、生命周期和边界条件的详细指南。
+这里集中列出常用公开接口。需要理解行为或生命周期时，可沿表格中的链接进入对应指南。
 
 ## 运行入口
 
@@ -58,7 +58,7 @@
 | `tool_result_renderer` | `None` | Agent 级成功 Tool 结果渲染器 |
 
 派生变体时使用 `agent.clone(**overrides)`。字段默认值和 Instructions 形式详见
-[Agent](agents.md#字段)。
+[Agent](agents.md#配置总览)。
 
 ## RunResult 与 RunHandle
 

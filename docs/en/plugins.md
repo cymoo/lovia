@@ -1,11 +1,8 @@
 # Plugins
 
-Reusable capabilities usually need several things at once — a tool, prompt
-text explaining it, a per-turn reminder, maybe a hook and a teardown. Most
-frameworks make you wire each into a separate registry. A lovia **plugin**
-is one object that contributes all of them, and it is the framework's *only*
-extension axis: Skills, MCP, Todo, and Memory are all built on exactly this
-seam.
+A reusable capability may need Tools, instructions, per-turn reminders, hooks,
+and cleanup. A **plugin** packages them together. Skills, MCP, Todo, and Memory
+all use this extension mechanism.
 
 ```python
 from lovia import Agent, Memory, Skills, Todo
@@ -16,6 +13,10 @@ agent = Agent(
     plugins=[Todo(), Skills("./skills"), Memory("./.lovia/memory")],
 )
 ```
+
+If a capability is one independent function, an ordinary `@tool` is usually
+clearer. Reach for a Plugin when the capability must also carry instructions,
+state, per-turn reminders, or cleanup.
 
 ## The contract
 
@@ -41,9 +42,10 @@ into the loop's fixed slots:
 | `input_guardrails` / `output_guardrails` | merged with the agent's own at the loop's existing checkpoints |
 | `aclose` | coroutine awaited when the run ends (LIFO across plugins, best effort) |
 
-Plugins are **purely additive**: they never drive control flow. The loop
-keeps the abort, the retry, and the handoff — a plugin's guardrail can trip
-a run only through the same checkpoint the agent's own guardrails use.
+Plugin contributions merge into fixed extension points; the Plugin does not
+take over control flow. The loop still executes abort, retry, and handoff. A
+Plugin guardrail can stop a Run only at the same checkpoint as an Agent
+guardrail.
 
 `name` is the plugin's identity: unique per agent (validated before any
 `setup()` runs) and stable.
@@ -149,10 +151,6 @@ async def setup(self) -> PluginInstance:
 | `Skills(...)` | instruction bundles with progressive disclosure | [Skills](skills.md) |
 | `MCP(...)` | tools from Model Context Protocol servers | [MCP](mcp.md) |
 | `Memory(...)` | long-term, cross-session memory | [Memory](memory.md) |
-
-`Todo` has its own guide because its model-facing workflow, recovery behavior,
-and observation API are useful without writing a custom plugin. See
-[Todo](todo.md).
 
 ## Sharp edges
 

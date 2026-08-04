@@ -1,8 +1,14 @@
 # 可观测性
 
-无法观察，就无从排查。Agent 的问题往往出现在运行途中：某个工具耗时 40 秒，某一轮消耗了
-3 万个 token。lovia 提供三类由轻到重的观测手段：**钩子（hooks）**用于响应事件，
-**追踪（tracing）**用于记录带时间信息的 span，**日志（logging）**用于记录内置流程。
+Agent 的问题常发生在运行途中，例如工具变慢或某一轮 Token 激增。lovia 提供三种观测方式：
+**钩子（hooks）**响应事件，**追踪（tracing）**记录 span，**日志（logging）**记录内置流程。
+
+| 你想知道… | 使用 |
+| --- | --- |
+| 某类事件发生时执行代码 | Hook |
+| 哪个阶段耗时、嵌套关系如何 | Tracer |
+| 框架内部为什么走到这一步 | 日志 |
+| 单次 Run 消耗了多少 Token | `RunResult.usage` 或终止事件 |
 
 ## 事件钩子
 
@@ -42,10 +48,11 @@ agent = Agent(..., hooks=hooks)
   transcript、cancel token、mailbox）。处理函数可以同步或异步。
 - 按具体类型注册，但用 `isinstance` 匹配；订阅基类（如 `events.ToolEvent`）会捕获整个家族。
   同一类型可有多个 handler，按注册顺序执行；catch-all 最先执行。
-- **失败时放行**：处理函数抛异常会被记录为 warning 日志（带 traceback）并跳过。坏掉的指标不应该中止被观察的运行。
+- **失败时放行**：处理函数抛出的异常会记录为带 traceback 的 warning 日志，然后跳过。
+  观测代码失败不应中止被观察的运行。
 - 顺序保证：事件在循环的单一派发点按发出顺序到达 hooks，和 stream 消费者看到的顺序一致。
-- hooks 不只是观察者：`ctx` 是实时句柄，所以处理函数可以向 `ctx.mailbox` push（[运行中追加指令](cancellation.md#在运行中追加指令)），
-  或触发 `ctx.cancel_token`。
+- hooks 不只是观察者：`ctx` 是实时句柄，处理函数可以向 `ctx.mailbox` push
+  （见[运行中追加指令](cancellation.md#在运行中追加指令)），或触发 `ctx.cancel_token`。
 
 [插件](plugins.md)也可以贡献自己的 `AgentHooks`，和 agent 自己的 hooks 一起派发。[Memory](memory.md)
 就是这样在运行结束时触发整理。
@@ -111,7 +118,7 @@ cache 字段是对 `input_tokens` 的**细分**，不额外相加。成本公式
 `(input - cache_read) * rate_in + cache_read * rate_cached + …`。要看每轮增量，可以在
 `RunCompleted`/`TurnEnded` hook 里做 diff，或从 `model.done` 日志行读取每轮模型调用自己的 usage。
 
-## 注意事项
+## 使用建议
 
 - **hooks 在运行循环里同步派发。** 慢处理函数会拖慢运行；事件之间会 await 派发。指标请异步发送
   （队列 + worker），不要每个事件都阻塞 HTTP 调用。

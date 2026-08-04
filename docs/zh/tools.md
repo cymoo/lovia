@@ -1,7 +1,7 @@
 # 工具
 
-工具是模型可以调用、带类型信息的 Python 函数。lovia 会根据函数签名推导 JSON Schema，
-在执行代码前校验参数，并统一处理并发、重试、超时和截断等运行机制。工具本身仍是普通函数。
+`@tool` 将带类型信息的 callable 包装为 `Tool`，并生成 JSON Schema。Runner 统一处理参数校验、
+并发、重试、超时和输出截断。
 
 ```python
 from typing import Annotated
@@ -28,6 +28,16 @@ def search_docs(
 
 通过 `Agent(tools=[...])` 挂载工具。同步函数在线程池中执行，不会阻塞事件循环；
 `async def` 函数则会被直接 `await`。
+
+先按 Tool 的行为选择保护措施：
+
+| Tool 特征 | 建议配置 |
+| --- | --- |
+| 纯读取、彼此独立 | 保持默认并发 |
+| 写入或其他不可重入副作用 | `parallel=False` |
+| 临时故障可以安全重试 | `retries=` 与 `timeout=` |
+| 涉及费用、发送或删除 | `needs_approval=True` |
+| 可能返回大量内容 | `max_output_chars=` |
 
 ## Schema 推导
 
@@ -64,7 +74,7 @@ async def save_note(ctx: RunContext, text: str) -> str:
 ```
 
 这个上下文参数不会出现在模型看到的 Schema 中。最多只能有一个参数带此标注，
-否则会抛 `UserError`。完整字段列表见[核心概念](concepts.md#runcontext访问运行状态)。
+否则会抛 `UserError`。相关字段见[核心概念](concepts.md#runcontext访问运行状态)。
 
 ## 错误语义
 
@@ -129,7 +139,7 @@ async def flaky_lookup(key: str) -> str:
 工具输出写入 transcript 前会先限长：优先使用工具级
 `@tool(max_output_chars=...)`，否则使用 agent 的 `max_tool_output_chars`
 （默认 **200,000 字符**，这是防止异常输出占满上下文的安全上限，而非内容管理策略）。超出上限的输出会保留
-头部和尾部，并加上说明剪掉了多少内容的标记；原始返回值会被丢弃。
+头部和尾部，并标明省略了多少内容；原始返回值会被丢弃。
 
 这是一项经过权衡的有损处理：从源头控制内存、Checkpoint 和 Session 的开销。
 `recall_tool_result` 看到的也是截断版本。某个工具如果必须保留完整输出，应该把内容写到
@@ -182,7 +192,7 @@ Runner 会在调用 Tool 前发出 `ApprovalRequired`，并按以下顺序取得
    或返回 `"ask"` 交给消费者处理。
 3. 没有任何一方决定时拒绝调用；审批始终 fail closed。
 
-如果决定来自 Web 端点、机器人或另一个 Task，可使用 Run Handle 的带外通道：
+如果决定来自 Web 端点、机器人或另一个异步任务，可使用 `RunHandle` 的带外通道：
 
 ```python
 handle.approvals.approve(call_id)
@@ -232,7 +242,7 @@ async def search_docs(query: str) -> list[str]: ...
 `ask_human(channel)` 都采用这种方式。如果还要附带提示词或生命周期，请用
 [插件](plugins.md)打包。
 
-## 注意事项
+## 使用建议
 
 - **每个 agent 的工具名必须唯一**，不管来源是 agent 工具、插件、工作区还是 handoff。
   冲突会在运行开始时抛 `UserError`。MCP 服务器给工具加前缀正是为了避免这个问题。

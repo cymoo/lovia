@@ -1,8 +1,7 @@
 # 测试
 
-Agent 代码同样需要离线、免费且结果确定的测试。依赖网络、结果不稳定、每次运行都产生成本的“测试”，
-往往很快就无人问津。`lovia.testing` 提供了适合日常使用的测试替身 `ScriptedProvider`；
-它是完整的 `Provider` 实现，会依次回放预先编写的轮次。
+`ScriptedProvider` 按顺序回放预先写好的模型轮次，让真实 Tool 和 RunLoop 可以离线测试。
+回答质量、Tool 选择或风格稳定性应使用[评测](eval.md)。
 
 ```python
 from lovia import Agent, tool
@@ -32,8 +31,9 @@ async def test_calc_uses_the_tool():
     assert result.turns == 2
 ```
 
-脚本描述模型一侧的对话：每个条目按顺序响应一次模型调用。实际工具仍会执行，只有大模型由脚本替代；
-因此测试覆盖的是**真实的运行循环**，包括 Schema 校验、并发执行、审批门禁、结构化输出解析和 Session 持久化。
+脚本描述模型一侧的对话：每个条目按顺序响应一次模型调用。只有大模型被脚本替代，实际 Tool
+仍会执行。因此测试覆盖的仍是**真实运行循环**，包括 Schema 校验、并发、审批、结构化输出解析
+和 Session 持久化。
 
 ## 构建脚本
 
@@ -62,12 +62,13 @@ assert "回答要简短。" in first_prompt[0].content
 ```
 
 `provider.calls[i]` 是第 *i* 轮输入的 chat 格式视图。它非常适合测试
-[动态指令](agents.md#指令)、[视图注入器](plugins.md#视图注入器为每轮添加临时内容)，以及
+[动态指令](agents.md#编写指令)、[视图注入器](plugins.md#视图注入器为每轮添加临时内容)，以及
 [compaction](context.md) 行为，比如“被清理的结果确实已经离开 view 了吗？”。
 
 ## 按测试目标选择方法
 
-- **工具本身**：普通 pytest；`@tool` 函数本质上仍是函数。
+- **Tool 的业务逻辑**：将实现保留为独立函数，用普通 pytest 测试；Tool Schema 和运行接线使用
+  `ScriptedProvider`。
 - **循环行为**（路由、工具选择、修复、护栏、handoff）：用上面的 `ScriptedProvider`。
   handoff 和 [agent-as-tool](multi-agent.md) 子运行各自从自己的 agent provider 消费脚本；
   请给每个 agent 自己的 script。
@@ -77,7 +78,7 @@ assert "回答要简短。" in first_prompt[0].content
 - **在线冒烟测试**：加标记，默认跳过，按需运行。本仓库使用 `pytest -m live_provider`，
   并由 `LOVIA_LIVE_TESTS=1` 控制。
 
-## 注意事项
+## 使用建议
 
 - **`ScriptedProvider` 是一次性的。** 它会从共享队列 pop，不可重复，也不并发安全。每次运行都应创建新的
   provider（和 agent）；在 `evaluate()` 里传 agent **工厂**正是这个原因。

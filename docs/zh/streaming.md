@@ -1,8 +1,13 @@
 # 流式输出
 
-UI 不能等到 `RunResult` 返回后才响应：文本生成时应立即显示，工具开始调用时应更新状态，
-审批请求出现时也应马上提示用户。`Runner.stream` 会在整个过程中产生类型化事件；
-[钩子](observability.md)同样由这些事件驱动，因此只需掌握一套事件类型。
+需要边运行边更新界面时，使用 `Runner.stream()`。文本增量、工具调用、审批和终止状态都会
+成为类型化事件；[钩子](observability.md)也复用同一套事件类型。
+
+| 需求 | 入口 |
+| --- | --- |
+| 只关心最终结果 | `await Runner.run(...)` |
+| 向用户实时展示文本、Tool 和审批状态 | `Runner.stream(...)` |
+| 不消费流，但要记录或响应事件 | `AgentHooks` |
 
 ```python
 from lovia import Runner, events
@@ -121,7 +126,7 @@ async for ev in handle:
 **没有 UI 时的可观测性**：即使无人读取事件流，同一套事件也会传递给
 [钩子](observability.md)。采集指标时更推荐使用钩子，让观测逻辑不依赖事件流的消费者。
 
-## 注意事项
+## 使用建议
 
 - **一个 handle 只能迭代一次。** 第二个 `async for` 会抛 `RuntimeError`；如果多个
   消费者都需要事件，请在下游自行分发。

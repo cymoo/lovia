@@ -1,11 +1,16 @@
 # Evals
 
-Unit tests assert wiring; they can't tell you whether the agent *behaves* —
-answers correctly, calls the right tool, stays concise — especially when
-behavior is non-deterministic. `lovia.eval` turns "does my agent behave?"
-into a declarative suite with three ideas: a **`Case`** pairs an input with
-checks; a **check** is any callable over a `RunResult`; **`evaluate()`**
-returns a `Report` you can print, assert on, and diff against a baseline.
+Unit tests verify wiring. Evals ask whether an Agent answers correctly, chooses
+the right Tool, and follows response requirements. `Case` pairs an input with
+checks; `evaluate()` returns a report you can assert on or compare with a
+baseline.
+
+| What you need to verify | Prefer |
+| --- | --- |
+| A fixed input triggers expected text or Tool usage | Deterministic check |
+| Several explicit conditions | `all_of`, `any_of`, or `weighted` |
+| Tone, relevance, or another hard-to-code quality | `llm_judge` |
+| Python wiring itself | [Offline testing](testing.md), not an Eval |
 
 ```python
 from lovia.eval import Case, contains, evaluate, llm_judge, tool_called

@@ -1,9 +1,11 @@
 # Deployment
 
-Production readiness is mostly about the boundaries around an Agent: who may
-call it, what it may touch, how much it may spend, and what survives a crash.
-Use this checklist before exposing a lovia application beyond one trusted
-user.
+Before deployment, define four boundaries: who may call the Agent, what it may
+touch, how much one request may spend, and what survives a crash.
+
+Start from loopback-only networking, a read-only Workspace, explicit budgets,
+and no high-risk Tools. Add authentication, approval, isolation, or recovery
+at the same time as each capability is opened—not as a final hardening pass.
 
 ## Deployment checklist
 

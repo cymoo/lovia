@@ -1,8 +1,7 @@
 # 插件
 
-一项可复用能力通常不只有工具，还可能包含说明提示词、每轮提醒、钩子和清理操作。
-许多框架要求将这些内容分别注册到不同位置；lovia 则用一个**插件（plugin）**对象统一提供。
-插件是框架**唯一的扩展入口**，Skills、MCP、Todo 和 Memory 都建立在这套机制之上。
+一项可复用能力可能同时包含工具、提示词、每轮提醒、钩子和清理操作。插件（plugin）把它们
+打包在一起；Skills、MCP、Todo 和 Memory 都使用这套扩展机制。
 
 ```python
 from lovia import Agent, Memory, Skills, Todo
@@ -14,6 +13,9 @@ agent = Agent(
 )
 ```
 
+如果能力只有一个独立函数，直接使用 `@tool` 通常更清楚。只有当它需要同时携带
+提示词、状态、每轮提醒或清理逻辑时，才值得写成 Plugin。
+
 ## 契约
 
 任何拥有 `name` 和异步 `setup()` 方法、且能返回 `PluginInstance` 的对象，都可以作为插件：
@@ -24,27 +26,27 @@ class Plugin(Protocol):
     async def setup(self) -> PluginInstance: ...
 ```
 
-runner 会在**每次运行**调用并 await 一次 `setup()`；如果 [handoff](multi-agent.md) 到了另一个
-agent，也会逐个执行目标 agent 插件的 `setup()`。返回的贡献内容会合并到运行循环的固定扩展点：
+Runner 会在**每次运行**调用并等待一次 `setup()`；如果 [Handoff](multi-agent.md) 到另一个
+Agent，也会依次执行目标 Agent 插件的 `setup()`。返回内容会合并到运行循环的固定扩展点：
 
 | `PluginInstance` 字段 | 效果 |
 | --- | --- |
-| `tools` | 合并进 agent 工具集（同一个命名空间；冲突和其他工具来源一样会报错） |
-| `instructions` | 追加到 system prompt 的静态文本，运行开始时渲染一次 |
-| `view_injectors` | **每轮**调用；返回的 entries 只追加到本轮模型 view，不持久化 |
-| `hooks` | 接收每个运行事件的 `AgentHooks`，和 agent 自己的 hooks 一起派发 |
-| `input_guardrails` / `output_guardrails` | 和 agent 自己的护栏合并，在循环已有检查点运行 |
-| `aclose` | 运行结束时 await 的 coroutine（多个插件按 LIFO，尽力清理） |
+| `tools` | 合并进 Agent 工具集（共用一个命名空间；名称冲突时会报错） |
+| `instructions` | 追加到 system prompt，运行开始时渲染一次 |
+| `view_injectors` | **每轮**调用；返回的条目只进入本轮模型 View，不持久化 |
+| `hooks` | 接收运行事件，与 Agent 自身的 `AgentHooks` 一起触发 |
+| `input_guardrails` / `output_guardrails` | 与 Agent 自身的护栏合并，在既定检查点运行 |
+| `aclose` | 运行结束时等待的 coroutine（多个插件按 LIFO 顺序尽力清理） |
 
-插件是**纯追加**的：它们不驱动控制流。中止、重试和 handoff 仍由循环掌控。插件护栏也只能
-通过 agent 自己护栏相同的检查点来终止运行。
+插件的贡献内容只会合并到固定扩展点，Plugin 本身不接管控制流。中止、重试和 Handoff
+仍由运行循环执行；插件护栏也只能在与 Agent 护栏相同的检查点终止运行。
 
 `name` 是插件身份：每个 agent 内唯一（在任何 `setup()` 运行前校验），并且应保持稳定。
 
 ## 视图注入器：为每轮添加临时内容
 
-这是一个比较特殊的扩展点。`ViewInjector` 每轮都会接收实时 `RunContext`，并返回要追加到**本轮模型
-view**的 transcript entries：
+这是一个比较特殊的扩展点。`ViewInjector` 每轮都会接收当前 `RunContext`，并返回要追加到**本轮模型
+View** 的 `TranscriptEntry`：
 
 ```python
 def inject(ctx: RunContext) -> list[TranscriptEntry] | None:
@@ -53,10 +55,10 @@ def inject(ctx: RunContext) -> list[TranscriptEntry] | None:
     return [InputEntry(role="user", content=f"<system-reminder>\n{render(store.items)}\n</system-reminder>")]
 ```
 
-因为注入的 entries 不进入 transcript 或 session，它们不会随着轮次增长而累积，不会破坏
-provider 的缓存 prompt 前缀，恢复运行时也不会回放它们。injector 应该每轮重新生成自己的
-内容（提醒、时钟、todo list）。injector **失败时放行**：抛异常会记录日志并跳过，
-不会中止运行。保持小而快；它们是在[上下文策略](context.md)塑造 view 之后追加的。
+因为注入内容不进入 Transcript 或 Session，所以不会随轮次累积，也不会在恢复运行时回放。
+它们还会保留 Provider 可缓存的 prompt 前缀。Injector 应在每轮重新生成提醒、时钟、Todo 列表等内容。
+Injector **失败时放行**：异常会被记录并跳过，不会中止运行。实现应尽量小而快；注入发生在
+[上下文策略](context.md)塑造模型 View 之后。
 
 ## 状态作用域
 
@@ -134,10 +136,7 @@ async def setup(self) -> PluginInstance:
 | `MCP(...)` | Model Context Protocol 服务器提供的工具 | [MCP](mcp.md) |
 | `Memory(...)` | 跨会话长期记忆 | [记忆](memory.md) |
 
-`Todo` 的模型交互方式、恢复行为和观察接口无需编写自定义插件也很有用，因此单独整理在
-[Todo](todo.md)中。
-
-## 注意事项
+## 设计建议
 
 - **把运行状态放在插件对象上是并发 bug。** 同一个 agent 的两个并发运行共享插件实例；
   不在 `setup()` 内部创建的可变内容，都是共享可变状态。

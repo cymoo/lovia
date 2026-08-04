@@ -1,7 +1,7 @@
 # Built-in tools
 
-Nothing is wired into an agent automatically — every built-in is an explicit
-import, so an agent's capabilities are visible at its construction site.
+Built-in tools must be imported and attached explicitly. An Agent's
+construction site therefore shows every external capability it can use.
 
 ```python
 from lovia import Agent
@@ -17,13 +17,18 @@ agent = Agent(
 File and Shell Tools come from [Workspace](workspace.md). The operator-input
 Tool is covered in [Ask a human](#ask-a-human) below.
 
+| Need | Tool |
+| --- | --- |
+| Convert a web page to Markdown | `read_page` |
+| Call a JSON or HTTP API | `http_request` |
+| Search the public web | `duckduckgo_search()` / `tavily_search()` |
+| Read the current time | `now` |
+| Pause and ask the user | `ask_human` |
+
 ## Reading web pages
 
-`lovia.tools.read_page` reads a page *for its content*: the HTML becomes
-Markdown, so headings, lists, fenced code, tables, links and images survive.
-`[the guide](https://example.com/guide)` in the result is a real URL the model
-can read next — which is exactly what flattening a page to plain text throws
-away.
+`lovia.tools.read_page` converts HTML content into Markdown while preserving
+structure and links.
 
 The model sees three arguments:
 
@@ -53,21 +58,15 @@ URL: https://example.com/guide
 HTTP 200 · text/html
 
 # Example Domain
-
-This domain is for use in illustrative examples. See
-[more information](https://www.iana.org/domains/example).
-
 [... truncated. Continue with offset=20000.]
 
-Images (2):
+Images (1):
 1. https://example.com/img/hero.png — Hero banner
-2. https://example.com/social.png
 ```
 
 The truncation notice carries the offset to continue from, so a long page is
-never a dead end. `read_page` returns a `Page` dataclass (final URL, status,
-title, Markdown text, images) — the block above is what its result renderer
-produces for the model and the web UI.
+never a dead end. The returned `Page` contains the final URL, status, title,
+Markdown text, and images; the block above is the default rendering.
 
 ### Images
 
@@ -214,7 +213,7 @@ construction time, not mid-run.
 - **`sleep`** (tool) — sleep up to 60 seconds; for simple wait-then-check
   flows.
 - **`current_date(tz=None)`** — *not a tool*: a factory returning an
-  [instruction fragment](agents.md#instructions) that states today's date in
+  [instruction fragment](agents.md#write-instructions) that states today's date in
   the system prompt:
 
   ```python
@@ -250,11 +249,9 @@ the channel closes.
 
 When the question is a pick-one (or, with `multi_select`, pick-many), the
 model attaches 2–4 `options` — each a `QuestionOption` with a `label` and an
-optional one-line `description`. Options are suggestions for the UI: render
-them as buttons, keep a free-text input as the escape hatch (any string is a
-valid answer), and join the labels of a multi-select with newlines — labels
-are schema-enforced to be single-line and unique, so the joined answer is
-unambiguous:
+optional one-line `description`. These options are suggestions; any string
+remains a valid answer. Join multi-select labels with newlines. Labels are
+schema-enforced to be single-line and unique, so the result is unambiguous:
 
 ```python
 async for q in channel.questions():

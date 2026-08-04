@@ -1,8 +1,8 @@
 # MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) 服务器可以向 Agent 提供文件系统、
-浏览器、数据库等工具，无须手写适配器。lovia 的 `MCP` 插件负责连接服务器，将这些工具转换为
-普通的 [`Tool`](tools.md)，并以单次运行为边界管理连接的生命周期。
+[Model Context Protocol](https://modelcontextprotocol.io)（MCP）让 Agent 直接使用服务器
+提供的文件系统、浏览器或数据库工具。`MCP` 插件负责连接服务器，并把这些能力转换成普通
+[`Tool`](tools.md)。
 
 ```bash
 pip install "lovia[mcp]"
@@ -101,7 +101,7 @@ plugins=[MCP(
 暴露时完全一致。名称必须无歧义——延迟名称与同插件内其他延迟或暴露工具冲突时，setup 抛
 `UserError`（给服务器设置 `name=` 前缀即可）。
 
-## 注意事项
+## 使用建议
 
 - **`auto_reconnect` 意味着至少执行一次。** 调用中途断开后，会在新连接上重试一次；
   非幂等副作用（如 `create_ticket`）可能发生两次。对会修改状态的服务器，设置

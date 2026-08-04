@@ -1,9 +1,8 @@
 # Guardrails
 
-Some rules the model must not be able to break, however it is prompted.
-Guardrails are programmatic checks with veto power: **input guardrails**
-screen the conversation before the first model call; **output guardrails**
-screen the final answer before it is returned.
+Prompts are not a substitute for programmatic validation. Guardrails can veto
+a run: **input guardrails** check the conversation before the first model call,
+and **output guardrails** check the final result before it returns.
 
 ```python
 from lovia import Agent
@@ -27,6 +26,12 @@ agent = Agent(
     output_guardrails=[must_cite],
 )
 ```
+
+| The rule checks… | Put it in… |
+| --- | --- |
+| User input or prior conversation | Input guardrail |
+| The final answer | Output guardrail |
+| One Tool's side effect | [Tool approval](tools.md#tool-approval), not a guardrail |
 
 ## The contract
 

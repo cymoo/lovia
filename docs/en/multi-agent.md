@@ -1,12 +1,15 @@
 # Multi-agent
 
-Multi-agent composition in lovia is deliberately atomic: three primitives,
-all implemented as ordinary tools, and no orchestration DSL. **Handoff**
-transfers control — the specialist continues the same conversation.
-**Agent-as-tool** delegates — a sub-agent answers a bounded question while
-the parent waits. **Subagents** delegates *without* waiting — background
-children run concurrently and report back later. Everything larger is
-composed from these in plain Python.
+lovia provides Handoff, agent-as-tool, and Subagents without an orchestration
+DSL.
+
+## Choose by task
+
+| Your task | Use | Target context | How the result returns |
+| --- | --- | --- | --- |
+| Let a specialist take over the conversation | Handoff | Full conversation history | The specialist continues in the same Run |
+| Get a subtask result before the parent continues | Agent-as-tool | Delegated prompt only | As a Tool result |
+| Run independent work in the background | Subagents | Delegated prompt only | Delivered later, or returned by an explicit wait |
 
 ## Handoff
 
@@ -196,17 +199,7 @@ budget=None, max_result_chars=16_000, instructions=None)`:
   `deliver`; on its own, bounded-mode teardown would orphan the children it
   cannot cancel.
 
-## Choosing between them
-
-| You want... | Use |
-| --- | --- |
-| The user to *continue talking* to a specialist | handoff |
-| An answer to a bounded subtask, then carry on | agent-as-tool |
-| The specialist to see the full conversation | handoff |
-| Isolation — the child must not see parent history | agent-as-tool / subagents |
-| The final answer attributed to the specialist (`result.final_agent`) | handoff |
-| The parent to keep working while the child runs | subagents |
-| Fire-and-forget research that reports back later | subagents |
+## Compose larger patterns
 
 Larger patterns — chaining, routing, parallelization,
 orchestrator-workers, evaluator loops — need no framework support: they are

@@ -1,7 +1,6 @@
 # 内置工具
 
-内置工具不会自动挂载到 Agent 上。每项内置能力都必须显式导入，因此只需查看 Agent 的
-构造代码，就能清楚知道它具备哪些能力。
+内置工具都要显式导入和挂载。查看 Agent 的构造代码，就能知道它可以访问哪些外部能力。
 
 ```python
 from lovia import Agent
@@ -14,14 +13,20 @@ agent = Agent(
 )
 ```
 
-文件和 Shell 工具来自[工作区](workspace.md)。需要人工输入时，可使用下方的
-[询问人工](#询问人工)工具。
+文件和 Shell 工具由[工作区](workspace.md)提供；需要人工补充信息时，使用
+[询问人工](#询问人工)。
+
+| 需求 | 工具 |
+| --- | --- |
+| 把网页正文转成 Markdown | `read_page` |
+| 调用 JSON / HTTP API | `http_request` |
+| 搜索公开网页 | `duckduckgo_search()` / `tavily_search()` |
+| 获取当前时间 | `now` |
+| 暂停并询问用户 | `ask_human` |
 
 ## 读取网页
 
-`lovia.tools.read_page` 用于读取网页正文。它会把 HTML 转成 Markdown，保留标题层级、
-列表、代码块、表格、链接和图片等结构。与只提取纯文本相比，Markdown 中的
-`[the guide](https://example.com/guide)` 仍是可访问的 URL，模型可以据此继续浏览。
+`lovia.tools.read_page` 将 HTML 正文转换为保留结构和链接的 Markdown。
 
 `read_page` 向模型公开三个参数：
 
@@ -51,20 +56,14 @@ URL: https://example.com/guide
 HTTP 200 · text/html
 
 # Example Domain
-
-This domain is for use in illustrative examples. See
-[more information](https://www.iana.org/domains/example).
-
 [... truncated. Continue with offset=20000.]
 
-Images (2):
+Images (1):
 1. https://example.com/img/hero.png — Hero banner
-2. https://example.com/social.png
 ```
 
 页面过长时，截断提示会给出下一次应传入的 `offset`，便于分段续读。`read_page`
-返回 `Page` 数据类，其中包含最终 URL、状态码、标题、Markdown 正文和图片列表；
-上例是结果渲染器提供给模型和 Web UI 的文本。
+返回的 `Page` 包含最终 URL、状态码、标题、Markdown 正文和图片列表；上例是默认渲染结果。
 
 ### 图片
 
@@ -197,7 +196,7 @@ class WebSearch(Protocol):
   `pip install tzdata`。）
 - **`sleep`**（工具）：最多等待 60 秒，适合简单的“等一下再检查”流程。
 - **`current_date(tz=None)`**：**不是工具**，而是返回
-  [指令片段](agents.md#指令)的工厂，将当天日期写入系统提示词：
+  [指令片段](agents.md#编写指令)的工厂，将当天日期写入系统提示词：
 
   ```python
   agent = Agent(name="researcher", model="<model>", tools=[duckduckgo_search()])
@@ -228,9 +227,8 @@ async for q in channel.questions():   # channel.close() 后结束
 工具调用会等待，直到收到答案、问题被取消或 Channel 关闭。
 
 当问题是单选（或配合 `multi_select` 的多选）时，模型会附带 2–4 个 `options`——每个
-`QuestionOption` 有 `label` 和可选的一行 `description`。选项只是给 UI 的建议：渲染成
-按钮的同时保留自由文本输入作为逃生门（任何字符串都是合法答案）；多选时用换行连接
-所选 label——schema 强制 label 单行且互不重复，因此连接后的答案没有歧义：
+`QuestionOption` 有 `label` 和可选的一行 `description`。这些选项只是建议，任何字符串仍是
+合法答案。多选答案用换行连接所选 label；schema 强制 label 单行且互不重复，因此结果没有歧义：
 
 ```python
 async for q in channel.questions():
@@ -257,7 +255,7 @@ async for q in channel.questions():
 如果问题是“是否允许执行”，并且答案为允许或拒绝，应使用审批；如果模型需要向人询问信息，
 并接收自由文本回答，则使用 `ask_human`。
 
-## 注意事项
+## 使用建议
 
 - **`read_page` 默认缓存响应 5 分钟。** 变化比这更快的页面需要
   `page_reader(HttpReader(cache_ttl=0))`。

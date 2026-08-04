@@ -1,9 +1,14 @@
 # HTTP API
 
-The JSON + SSE API is decoupled from the bundled chat page — keep the
-endpoints, drop the UI, and put your own front-end (or another service) on
-top. Everything the bundled UI does goes through these routes; the full
-interactive schema lives at `/api/docs` on any running server.
+The bundled chat page and JSON + SSE API are independent. Disable the page when
+you want to keep the endpoints and provide your own front end. A running server
+exposes the interactive schema at `/api/docs`.
+
+| Integration | Use it when |
+| --- | --- |
+| `create_app(agent, ui=False)` | You want a standalone service without the bundled page |
+| `create_app(...)` | You want a complete ASGI app but will start the server yourself |
+| `build_api_router(...)` | An existing FastAPI app already owns middleware and lifecycle |
 
 ## Serving the API without the UI
 

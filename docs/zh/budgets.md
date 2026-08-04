@@ -1,7 +1,13 @@
 # 预算与限制
 
-重试决定 Run 如何应对基础设施故障；限制决定单个请求最多可以消耗多少资源。因此它们应作为
-Runner 参数传入，而不是放在可复用的 Agent 配置上。
+重试处理临时故障，预算限制单次请求的资源消耗。预算随 Run 变化，因此应传给 Runner，
+而不是写进可复用的 Agent 配置。
+
+| 要限制什么 | 使用 |
+| --- | --- |
+| 模型最多思考几轮 | `max_turns` |
+| Token、Tool 次数或总时间 | `RunBudget` |
+| Provider 临时失败后的再次尝试 | `RetryPolicy`，见[重试](retries.md) |
 
 ```python
 from lovia import Agent, RunBudget, Runner

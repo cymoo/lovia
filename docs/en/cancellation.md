@@ -1,7 +1,12 @@
 # Cancellation & steering
 
-Two channels let an application control a live run: a `CancelToken` stops work,
-while a `Mailbox` adds new user guidance at the next turn boundary.
+You can still control a live run: `CancelToken` requests a stop, while
+`Mailbox` adds new user guidance at the start of the next turn.
+
+| Goal | Channel | Takes effect |
+| --- | --- | --- |
+| Stop the current Run as soon as practical | `CancelToken` | At the next safe point |
+| Add or correct guidance | `Mailbox` | At the next turn boundary |
 
 ## Cancellation
 

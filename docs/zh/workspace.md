@@ -1,8 +1,7 @@
 # 工作区
 
-让 Agent 访问文件系统和 Shell 后，它便可以修改代码，但也随之带来安全风险。`Workspace` 会添加文件和 Shell
-工具，将操作范围限制在根目录内，并用**同一套** `allow` / `ask` / `deny` 策略管理路径和命令。
-这样只需在一个地方配置 Agent 可以访问哪些资源。
+`Workspace` 为 Agent 提供文件和 Shell 工具，并用同一套 `allow` / `ask` / `deny` 策略
+约束路径与命令。开放这些能力前，应先确定根目录和权限边界。
 
 ```python
 from lovia import Agent
@@ -33,7 +32,7 @@ agent = Agent(
 
 ## 模式
 
-`mode` 用来选择预设策略；根目录内的读取**始终允许**，这正是有根目录的意义：
+`mode` 用来选择预设策略；所有模式都允许读取根目录内部：
 
 | 模式 | 根目录内写入 | 根目录外读取 | 根目录外写入 | Shell |
 | --- | --- | --- | --- | --- |
@@ -126,8 +125,7 @@ process id —— 这是运行 dev server、watcher、长构建/长测试的方�
 对一次性的 `Runner.run` 脚本正合适（run 就是整个对话）。持有长对话的服务层应该用
 `LocalWorkspace.bind(session)`（或 `.session()` 上下文管理器）绑定一个自管的 session 来拉长作用域：
 `lovia web` 给每个**聊天**绑定一个 session，所以某一轮启动的 dev server 在下一条消息到来时仍然活着，
-直到聊天被删除或服务停止（Ctrl+C 会收割全部进程；`kill -9` 跳过清理，进程会成为孤儿）。web UI 的
-Files 面板会列出当前聊天的存活进程，并提供终止按钮。
+直到聊天被删除或服务停止（Ctrl+C 会收割全部进程；`kill -9` 跳过清理，进程会成为孤儿）。
 
 工作区根目录下的 virtualenv（优先 `.venv`，也识别 `venv`）会对每条命令**自动激活**：其 bin 目录被前置到
 `PATH`、并设置 `VIRTUAL_ENV`，于是 `python`/`pip` 解析到工作区自己的环境，而不是 lovia 运行所在的那个。
@@ -135,14 +133,7 @@ Files 面板会列出当前聊天的存活进程，并提供终止按钮。
 的目录不会）。显式传入的 `env={"PATH": ...}` 仍然优先。工作区的 system prompt 片段会告诉模型：安装
 Python 包之前先创建 `.venv`，永远不要装进全局环境。
 
-对于可写工作区，系统提示词还会要求 Agent 保持目录整洁：草稿和中间产物放在 `tmp/` 中，并视为
-可随时清理；能直接在回复中说明的内容，不要为了留痕而额外创建文件。需要交付文件时，应遵循工作区
-原有结构：根目录是 Git 仓库时，沿用仓库的布局和规范，并且绝不提交 `tmp/` 中的内容；其他情况下，
-也应在现有目录结构上扩展。如果一次任务会生成多个相关文件，则集中放进一个以任务主题命名的子目录，
-不要散落在根目录。
-
-`lovia web` 的文件面板也遵循这套约定：所有视图都会隐藏 `tmp/`、`node_modules/`、`venv/`、
-`__pycache__/` 等临时目录或环境目录，减少它们对“最近”列表的干扰。
+可写 Workspace 的自动指令要求临时产物放入 `tmp/`，并遵循现有仓库布局；`tmp/` 不作为交付物提交。
 
 ## 命令执行控制
 
@@ -159,8 +150,8 @@ class ShellExecutor(Protocol):
     async def run(self, command, *, cwd, env, timeout, policy, root) -> CommandResult: ...
 ```
 
-Executor 在策略检查和审批完成**之后**运行。它只负责决定命令**如何执行**，无权决定命令**是否允许执行**。它可以根据收到的
-policy 派生 Seatbelt/bubblewrap/Landlock 范围。用法：
+Executor 在策略检查和审批完成**之后**运行。它只决定命令**如何执行**，无权决定命令
+**是否允许执行**。它可以根据收到的 policy 派生 Seatbelt、bubblewrap 或 Landlock 范围。用法：
 `Workspace.local(..., executor=my_sandbox)`。
 
 ## 在代码和自定义工具中使用
@@ -188,17 +179,17 @@ async with Workspace.local("./project", mode="trusted").session() as ws:
 默认每次运行都会打开一个新 session，并在运行结束时关闭；上面的 `.session()` context manager 可以把一个
 session 跨运行保持打开（`close_after_run=False`），适合启动成本重要的场景。
 
-## 注意事项
+## 使用建议
 
 - **命令门禁不是 sandbox。** 它是尽力而为的词法门禁；解释器和命令替换可以绕过它。任何安全关键场景
   都需要 `ShellExecutor` 或隔离主机。文档和生成的 system prompt 都会明确说明这一点。
 - **`denied_paths` 胜过一切，包括你自己的 `readable=` 授权。** 调试“为什么读不了”前，先看优先级。
 - **被取消的 `shell` 调用可能留下半完成状态。** 超时时会杀掉 process group，但运行级取消如果发生在审批后、
-  完成前，就和任何[同步工具取消](tools.md#注意事项)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
+  完成前，就和任何[同步工具取消](tools.md#使用建议)一样：副作用可能仍然发生；恢复会重新执行悬空调用。
 - **后台进程随 session 存亡。** `close()` 时被杀掉，checkpoint 恢复也不会还原——用
   `background=true` 启动的 dev server 应当被视为需要重启的东西，而不是会一直活着的东西。
-  session 本身活多久由服务层决定：默认随 run,在 `lovia web` 里随聊天（见上文）。
-- **[Skills](skills.md#注意事项) 文件 IO 不受此 ACL 管理**：Skill 目录由插件自行读取，不经过工作区。
+  Session 本身活多久由服务层决定：默认随 Run 存亡；在 `lovia web` 中则随聊天存亡（见上文）。
+- **[Skills](skills.md#使用建议) 文件 IO 不受此 ACL 管理**：Skill 目录由插件自行读取，不经过工作区。
 
 ## 延伸阅读
 

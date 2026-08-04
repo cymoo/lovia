@@ -1,8 +1,7 @@
 # Provider 与模型
 
-lovia 不绑定任何模型供应商，也没有引入厚重的适配层。两个内置 Provider 通过 `httpx` 直接对接
-OpenAI Chat Completions 和 Anthropic Messages；所有 OpenAI 兼容端点均使用 OpenAI Provider；
-接入其他供应商时，只需实现一个 `Protocol`，无须继承特定基类。
+lovia 内置 OpenAI Chat Completions 和 Anthropic Messages 适配器，也支持相应的兼容端点。
+接入其他协议时，实现 `Provider` Protocol 即可，无须继承基类。
 
 ```python
 from lovia import Agent, ModelSettings
@@ -13,6 +12,14 @@ agent = Agent(
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
+
+先按端点协议选择接入方式：
+
+| 端点 | `model` 写法 | 主要环境变量 |
+| --- | --- | --- |
+| OpenAI 官方或兼容协议 | `"<model>"` | `OPENAI_API_KEY`、`OPENAI_BASE_URL` |
+| Anthropic 官方或兼容协议 | `"anthropic:<model>"` | `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL` |
+| 自定义协议 | 传入 `Provider` 实例 | 由实现决定 |
 
 ## 模型字符串
 
@@ -138,7 +145,7 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
 
 无论哪种方式，`usage.input_tokens` 都是**完整** prompt 大小，包含已缓存 token；cache 字段
 只是拆分总量，不额外相加。想受益就要保持前缀稳定：易变的
-[动态指令](agents.md#指令)（如时间戳、请求 ID）会导致缓存每轮失效。
+[动态指令](agents.md#编写指令)（如时间戳、请求 ID）会导致缓存每轮失效。
 
 ## 上下文窗口
 
@@ -247,7 +254,7 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
 `ContextOverflowError`，触发 reactive compaction，而不是重试。这个异常还带着
 `reported_window`——端点在报错里点名的上限（如果它点了名）。
 
-## 注意事项
+## 使用建议
 
 - **Ollama 必须显式设 `context_window`。** 它根本不报 overflow：会静默把 prompt 截断到
   `num_ctx`（默认 4096），而且会**从最旧的 token 开始丢弃**——系统提示词和工具定义最先受到影响。

@@ -1,8 +1,14 @@
 # Budgets & limits
 
-Retries describe how a run reacts to infrastructure. Limits describe how much
-one request may spend. Pass them to the Runner because they belong to a single
-run, not to reusable Agent configuration.
+Retries handle temporary failures; budgets cap one request's resource use.
+Budgets vary by run, so pass them to Runner instead of reusable Agent
+configuration.
+
+| Limit | Use |
+| --- | --- |
+| Number of model reasoning steps | `max_turns` |
+| Tokens, Tool calls, or total time | `RunBudget` |
+| Attempts after a temporary Provider failure | `RetryPolicy`; see [Retries](retries.md) |
 
 ```python
 from lovia import Agent, RunBudget, Runner

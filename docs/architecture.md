@@ -5,6 +5,17 @@ is the tight entry point; this file is the deep reference it links to. Read the
 relevant section before modifying the subsystem it describes — these document
 non-obvious invariants you can't recover from a single file.
 
+Use the page by change type rather than reading it front to back:
+
+| If you are changing… | Read first |
+| --- | --- |
+| Run orchestration or events | Runner split, transcript representations, tool execution |
+| Provider adapters | Provider protocol, transcript representations |
+| Workspace or shell permissions | Workspace permission model |
+| Plugins, Todo, Skills, Memory, or Subagents | Plugins and view injectors |
+| Session, resume, or idempotency | Session vs Checkpointer |
+| Context-window behavior | Context compaction |
+
 ## Module map
 
 ```
@@ -30,7 +41,7 @@ lovia/
   transcript.py     # TranscriptEntry — canonical discriminated union; conversions;
                     #   safe_window() pair-aware slicing
   events.py         # Streaming event types
-  output.py         # Structured output handling (native JSON Schema / final_output fallback)
+  output.py         # Structured output handling (native JSON Schema / prompt fallback)
   handoff.py        # Handoff + agent_as_tool
   hooks.py          # AgentHooks subscriber (handlers called as handler(event, ctx))
   guardrails.py     # input/output guardrail protocol
@@ -109,7 +120,7 @@ Conversion functions: `entries_to_messages()`, `messages_to_entries()`, `input_t
 `Provider` is a `Protocol` (not an ABC) in `providers/base.py`. Each provider:
 1. Receives `list[TranscriptEntry]` (not `list[Message]`)
 2. Yields `ModelDelta` values — `TextDelta`, `ReasoningDelta`, `ToolCallDelta`, `UsageDelta`, `FinishDelta`, `EntryCompletedDelta`
-3. Declares `supports_json_schema` (controls whether structured output uses native `response_format` or the `final_output` tool fallback)
+3. Declares `supports_json_schema` (controls whether structured output uses native `response_format` or a system-prompt contract)
 
 Provider registration supports the `lovia.providers` entry-point group for third-party adapters. Built-in prefixes: `openai` (aliases `openai-chat`, `oai`), `anthropic` (alias `claude`).
 

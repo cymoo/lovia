@@ -1,7 +1,13 @@
 # Provider 重试
 
-限流、超时和流式连接中断都属于常见的临时故障。lovia 会在每个模型 Turn 外应用重试策略，
-应用代码不必重复实现重试循环。
+限流、超时和连接中断通常可以重试。lovia 在模型 Turn 外统一处理这些临时故障，
+应用代码不必再包一层重试循环。
+
+| 失败来自哪里 | 应对方式 |
+| --- | --- |
+| Provider 限流、超时、连接中断 | 本页的 `RetryPolicy` |
+| Tool 的可恢复异常 | Tool 自己的 `retries=`，见[工具](tools.md#重试与超时) |
+| 护栏、预算或业务拒绝 | 不自动重试，由调用方决定是否重新发起 Run |
 
 ```python
 from lovia import Agent, RetryPolicy, Runner

@@ -1,9 +1,8 @@
 # Providers & models
 
-lovia is provider-neutral without an adapter tax: two built-in providers
-speak OpenAI Chat Completions and Anthropic Messages directly over `httpx`,
-any OpenAI-compatible endpoint rides the first one, and a custom vendor is a
-`Protocol` implementation — not a subclassing project.
+lovia includes adapters for OpenAI Chat Completions, Anthropic Messages, and
+compatible endpoints. For another protocol, implement the `Provider` Protocol;
+no base class is required.
 
 ```python
 from lovia import Agent, ModelSettings
@@ -14,6 +13,14 @@ agent = Agent(
     settings=ModelSettings(temperature=0.2, max_tokens=800),
 )
 ```
+
+Choose the integration from the endpoint protocol:
+
+| Endpoint | `model` form | Main environment variables |
+| --- | --- | --- |
+| OpenAI or OpenAI-compatible | `"<model>"` | `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
+| Anthropic or Anthropic-compatible | `"anthropic:<model>"` | `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` |
+| Custom protocol | Pass a `Provider` instance | Defined by the implementation |
 
 ## Model strings
 
@@ -165,7 +172,7 @@ they stay cached.
 Either way, `usage.input_tokens` is the **full** prompt size, cached tokens
 included — the cache fields break the total down; they don't add to it.
 Keep the prefix stable to benefit: volatile
-[dynamic instructions](agents.md#instructions) (timestamps, request ids)
+[dynamic instructions](agents.md#write-instructions) (timestamps, request ids)
 bust the cache every turn.
 
 ## Context windows

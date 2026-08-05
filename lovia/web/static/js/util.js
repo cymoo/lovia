@@ -1,5 +1,6 @@
-// util.js — tiny dependency-free helpers shared across modules.
+// util.js — tiny helpers shared across modules.
 // (marked / DOMPurify / hljs are optional CDN globals — everything degrades.)
+import { api } from './api.js';
 
 /**
  * Escape HTML metacharacters so `s` renders as literal text, never markup.
@@ -17,10 +18,11 @@ export function escapeHtml(s) {
 /**
  * Render markdown to sanitized HTML. Degrades to escaped plain text when
  * marked/DOMPurify aren't loaded (offline, blocked CDN, SRI failure).
+ * Callers go through `renderMarkdownInto`, which also fixes up workspace refs.
  * @param {string} text
  * @returns {string} Sanitized HTML.
  */
-export function renderMarkdown(text) {
+function renderMarkdown(text) {
   if (!text.trim()) return '';
   // Never emit unsanitized HTML: without either library, escaped plain text
   // beats both a dead UI and an XSS hole.
@@ -28,6 +30,101 @@ export function renderMarkdown(text) {
     return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   }
   return DOMPurify.sanitize(marked.parse(text));
+}
+
+// ---- Workspace references inside markdown ----------------------------------
+// Markdown written by the agent points at files the way the agent sees them —
+// `![](uploads/0021.jpg)`. The app serves no such route, so the browser's own
+// relative resolution 404s: workspace files are reachable only through
+// /api/workspace/raw. Rewriting happens after sanitizing, on an inert tree,
+// and only ever produces our own endpoint's URL.
+
+// Left untouched: anything with a scheme (http:, data:, blob:), a
+// protocol-relative URL, and the app's own paths (an already-rewritten src,
+// or a bundled asset).
+const EXTERNAL_SRC = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/(?:api|static)\/)/i;
+
+/** Collapse `.` / `..` / empty segments into a plain relative path. */
+function normalizeRel(path) {
+  const parts = [];
+  for (const part of path.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+/**
+ * Workspace paths to try for one markdown reference, best reading first.
+ *
+ * Mirrors how the Files panel follows a markdown *link*: relative to the
+ * document's own directory, then relative to the workspace root (authors —
+ * and agents — mean either). An absolute path is passed through as-is first,
+ * since the server resolves it and serves whatever lands inside the root;
+ * stripping the leading slash covers the site-root convention.
+ * @param {string} path Decoded, query/fragment-free reference.
+ * @param {string} base Directory the markdown lives in (workspace-relative).
+ * @returns {string[]}
+ */
+function workspaceCandidates(path, base) {
+  const relToRoot = normalizeRel(path);
+  if (path.startsWith('/')) return [path, relToRoot].filter(Boolean);
+  const relToDoc = base ? normalizeRel(`${base}/${path}`) : relToRoot;
+  return [...new Set([relToDoc, relToRoot])].filter(Boolean);
+}
+
+/**
+ * Point workspace-relative `<img>` sources at the raw-bytes endpoint.
+ * @param {ParentNode} root Container of freshly rendered markdown.
+ * @param {{ agent?: string, base?: string }} [opts]
+ */
+function resolveWorkspaceImages(root, { agent, base = '' } = {}) {
+  root.querySelectorAll('img[src]').forEach((/** @type {HTMLImageElement} */ img) => {
+    const src = img.getAttribute('src') || '';
+    if (!src || EXTERNAL_SRC.test(src)) return;
+    let path = src.split('#')[0].split('?')[0];
+    // marked runs encodeURI over hrefs, so a CJK or spaced filename arrives
+    // percent-encoded — and the query builder encodes again. Decode first or
+    // the server looks up a file literally named "%E5%9B%BE...".
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      /* malformed escape — use it verbatim */
+    }
+    const candidates = workspaceCandidates(path, base);
+    if (!candidates.length) return;
+    let i = 0;
+    const show = () => {
+      img.src = api.workspaceRawUrl({ agent, path: candidates[i] });
+    };
+    // 404 (wrong base) / 403 (outside the root) → try the next reading before
+    // giving up and showing the browser's broken-image glyph.
+    if (candidates.length > 1) {
+      img.addEventListener('error', () => {
+        if (++i < candidates.length) show();
+      });
+    }
+    show();
+  });
+}
+
+/**
+ * Render markdown into `el`, resolving workspace-relative image sources.
+ *
+ * Parses into an inert `<template>` first: images there don't load, so the
+ * un-rewritten (404-bound) src is never requested — the corrected one is the
+ * only fetch the browser makes.
+ * @param {Element} el Target; its children are replaced.
+ * @param {string} text Markdown source.
+ * @param {{ agent?: string, base?: string }} [opts] `base` is the directory
+ *   the markdown lives in — '' (the workspace root) for chat replies.
+ */
+export function renderMarkdownInto(el, text, opts = {}) {
+  const tmpl = document.createElement('template');
+  tmpl.innerHTML = renderMarkdown(text);
+  resolveWorkspaceImages(tmpl.content, opts);
+  el.replaceChildren(tmpl.content);
 }
 
 // ---- Syntax highlighting ---------------------------------------------------

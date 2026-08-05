@@ -15,7 +15,13 @@ import { api } from './api.js';
 import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { formatBytes, formatTimeSmart, highlightIn, IMAGE_EXT, renderMarkdown } from './util.js';
+import {
+  formatBytes,
+  formatTimeSmart,
+  highlightIn,
+  IMAGE_EXT,
+  renderMarkdownInto,
+} from './util.js';
 
 // IMAGE_EXT (browser-renderable image previews, mirroring the server's
 // PREVIEW_IMAGE_EXT) is shared from util.js — the chat transcript needs it too.
@@ -913,7 +919,9 @@ function renderViewerContent() {
   }
   if (v.kind === 'md' && !v.raw) {
     const { turn, body } = bodyWrapper();
-    body.innerHTML = renderMarkdown(v.content);
+    // Images resolve like the links below: against the document's own
+    // directory first, then the workspace root.
+    renderMarkdownInto(body, v.content, { agent: store.agent, base: dirname(v.path) });
     highlightIn(body);
     els.viewerBody.appendChild(turn);
     return;

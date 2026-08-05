@@ -117,6 +117,12 @@ message records a relative path. The Agent can therefore open a file through
 Workspace Tools even when the model cannot consume it directly.
 `--no-workspace` disables this path as well.
 
+A Markdown image whose path is workspace-relative — `![chart](uploads/chart.png)`
+— displays the Workspace file itself, in a reply and in the Files panel's
+Markdown preview alike. Paths resolve against the document's own directory and
+then the Workspace root, and are served read-only through the same endpoint as
+the preview, so SVG (which is never served inline) stays a download.
+
 Vision configuration controls whether images are sent inline:
 
 - Official OpenAI and Anthropic endpoints are treated as vision-capable by

@@ -22,7 +22,9 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 SURFACE_NOTE = (
     "Replies render as GitHub-flavored Markdown in the chat UI, including "
     "```mermaid diagrams and inline images — ![alt](url) displays the image "
-    "itself, so embed images directly instead of saying they cannot be shown."
+    "itself, so embed images directly instead of saying they cannot be shown. "
+    "A workspace file works the same way: reference it by its "
+    "workspace-relative path, e.g. ![chart](uploads/chart.png)."
 )
 r"""What the bundled chat UI renders — tell the model, or it assumes plain text.
 

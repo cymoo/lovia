@@ -12,7 +12,11 @@ it is needed (instead of ad-hoc literals scattered across modules):
   of the model set.
 
 SVG is in neither: it can carry scripts, so it is never inlined (download-only).
-The JS side mirrors the preview notion in ``static/js/files.js`` (``IMAGE_EXT``).
+That is load-bearing, not incidental — the UI renders an SVG by pointing an
+``<img>`` at the *attachment* form, which browsers ignore for a subresource
+(where SVG scripts don't run) and honor for navigation (where they would). See
+``workspaceImageUrl`` in ``static/js/util.js``.
+The JS side mirrors the preview notion in ``static/js/util.js`` (``IMAGE_EXT``).
 """
 
 from __future__ import annotations

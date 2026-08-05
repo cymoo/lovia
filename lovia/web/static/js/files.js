@@ -21,10 +21,13 @@ import {
   highlightIn,
   IMAGE_EXT,
   renderMarkdownInto,
+  workspaceImageUrl,
 } from './util.js';
 
 // IMAGE_EXT (browser-renderable image previews, mirroring the server's
 // PREVIEW_IMAGE_EXT) is shared from util.js — the chat transcript needs it too.
+// SVG rides along in the viewer (see workspaceImageUrl) but stays out of the
+// set itself: as an attachment it is a file, not something a model can read.
 const MD_EXT = new Set(['md', 'markdown']);
 const CSV_EXT = new Set(['csv', 'tsv']);
 const HTML_EXT = new Set(['html', 'htm']);
@@ -598,24 +601,11 @@ function renderList() {
 }
 
 // ---- Viewer -------------------------------------------------------------------
-// One live object URL at a time (the SVG preview) — swap-and-revoke so a
-// browsing session doesn't accumulate blobs.
-let _blobUrl = null;
-function holdBlobUrl(blob) {
-  if (_blobUrl) URL.revokeObjectURL(_blobUrl);
-  _blobUrl = URL.createObjectURL(blob);
-  return _blobUrl;
-}
-
 function closeViewer() {
   state.viewing = null;
   els.viewer.classList.add('hidden');
   els.split?.classList.add('hidden');
   els.viewerBody.replaceChildren();
-  if (_blobUrl) {
-    URL.revokeObjectURL(_blobUrl);
-    _blobUrl = null;
-  }
   renderList(); // drop the active highlight
 }
 
@@ -731,19 +721,17 @@ async function openFile(path, { silent = false } = {}) {
   els.wrapToggle?.classList.add('hidden'); // renderViewerContent re-shows for text
 
   const e = ext(path);
-  const kind = IMAGE_EXT.has(e)
+  const kind = IMAGE_EXT.has(e) || e === 'svg'
     ? 'image'
     : e === 'pdf'
       ? 'pdf'
-      : e === 'svg'
-        ? 'svg'
-        : HTML_EXT.has(e)
-          ? 'html'
-          : MD_EXT.has(e)
-            ? 'md'
-            : CSV_EXT.has(e)
-              ? 'csv'
-              : 'text';
+      : HTML_EXT.has(e)
+        ? 'html'
+        : MD_EXT.has(e)
+          ? 'md'
+          : CSV_EXT.has(e)
+            ? 'csv'
+            : 'text';
   const keepRaw = silent && state.viewing?.path === path ? state.viewing.raw : false;
   state.viewing = { path, kind, name, raw: keepRaw };
   if (!silent) renderList();
@@ -753,8 +741,9 @@ async function openFile(path, { silent = false } = {}) {
     img.className = 'files-img';
     img.alt = name;
     const rev = revOf(path);
-    img.src =
-      api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
+    // SVG included: workspaceImageUrl asks for the form that renders in an
+    // <img> and downloads on navigation (util.js) — script-inert either way.
+    img.src = workspaceImageUrl(store.agent, path) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(img);
     return true;
   }
@@ -770,30 +759,6 @@ async function openFile(path, { silent = false } = {}) {
     embed.src =
       api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(embed);
-    return true;
-  }
-
-  if (kind === 'svg') {
-    // The server never serves SVG inline (it can carry scripts). An <img> is
-    // the script-inert way to render one: fetch the text, view it through a
-    // Blob URL — nothing executes in an image context.
-    let text;
-    try {
-      const res = await fetch(
-        api.workspaceRawUrl({ agent: store.agent, path, download: true }),
-      );
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      text = await res.text();
-    } catch (err) {
-      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
-      return false;
-    }
-    if (state.viewing?.path !== path) return true;
-    const img = document.createElement('img');
-    img.className = 'files-img';
-    img.alt = name;
-    img.src = holdBlobUrl(new Blob([text], { type: 'image/svg+xml' }));
-    els.viewerBody.replaceChildren(img);
     return true;
   }
 

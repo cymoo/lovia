@@ -346,6 +346,26 @@ def test_raw_svg_inline_still_refused(client: TestClient) -> None:
     assert r.status_code == 415
 
 
+def test_raw_svg_download_is_how_the_ui_renders_it(client: TestClient) -> None:
+    # The UI points an <img> at this exact response (workspaceImageUrl in
+    # static/js/util.js): browsers ignore Content-Disposition for a subresource
+    # — where SVG scripts don't run — and honor it for navigation, where they
+    # would. Both headers are load-bearing, not cosmetic.
+    up = client.post(
+        "/api/workspace/upload",
+        params={"agent": "bot"},
+        files={"file": ("chart.svg", b"<svg xmlns='...'/>", "image/svg+xml")},
+    )
+    assert up.status_code == 200
+    r = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": up.json()["path"], "download": 1},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/svg+xml"
+    assert r.headers["content-disposition"].startswith("attachment")
+
+
 def test_raw_download_any_file(client: TestClient) -> None:
     r = client.get(
         "/api/workspace/raw",

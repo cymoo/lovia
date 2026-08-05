@@ -98,6 +98,32 @@ function servesInline(path) {
 }
 
 /**
+ * The raw URL to render `path` inside an `<img>`.
+ *
+ * SVG is the exception: the server never serves it inline, because as a
+ * *document* its scripts would run in this origin. The attachment form is the
+ * way in — browsers honor `Content-Disposition` for navigation (so opening the
+ * URL still just downloads the file) and ignore it for a subresource, where an
+ * SVG renders with scripts and external references disabled.
+ * @param {string | undefined} agent
+ * @param {string} path
+ * @returns {string}
+ */
+export function workspaceImageUrl(agent, path) {
+  return api.workspaceRawUrl({ agent, path, download: isSvgPath(path) });
+}
+
+/**
+ * True when `path` is an SVG — an image everywhere except in the one place it
+ * would be scriptable. See {@link workspaceImageUrl}.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isSvgPath(path) {
+  return String(path).toLowerCase().endsWith('.svg');
+}
+
+/**
  * Point workspace-relative refs — `<img>` sources and `<a>` targets — at the
  * raw-bytes endpoint.
  * @param {ParentNode} root Container of freshly rendered markdown.
@@ -111,7 +137,7 @@ function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
     if (!candidates.length) return;
     let i = 0;
     const show = () => {
-      img.src = api.workspaceRawUrl({ agent, path: candidates[i] });
+      img.src = workspaceImageUrl(agent, candidates[i]);
     };
     // 404 (wrong base) / 403 (outside the root) → try the next reading before
     // giving up and showing the browser's broken-image glyph.
@@ -267,8 +293,9 @@ export function formatTimeSmart(ts) {
 
 // ---- Attachments -----------------------------------------------------------
 // Browser-renderable image extensions. Mirrors the server's PREVIEW_IMAGE_EXT
-// (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it can
-// carry scripts and is never served inline, so it's treated as a file here.
+// (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it is
+// never served inline, and as an attachment it is a file (no vision model reads
+// one). Rendering an SVG is `workspaceImageUrl`'s narrow job, not this set's.
 export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico']);
 
 /**

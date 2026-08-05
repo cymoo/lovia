@@ -121,7 +121,10 @@ A Markdown image whose path is workspace-relative — `![chart](uploads/chart.pn
 — displays the Workspace file itself, in a reply and in the Files panel's
 Markdown preview alike. Paths resolve against the document's own directory and
 then the Workspace root, and are served read-only through the same endpoint as
-the preview, so SVG (which is never served inline) stays a download.
+the preview. SVG renders too, through the endpoint's attachment form: browsers
+ignore `Content-Disposition` for an image, where an SVG's scripts are disabled,
+and honor it for navigation, where they would run — so the picture shows and
+the URL only ever downloads.
 
 A link — `[report](report.md)` — points at the same endpoint. In a reply it
 opens in a new tab when the browser can display the file (images, PDF) and

@@ -160,7 +160,12 @@ function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
       return;
     }
     if (EXTERNAL_REF.test(href)) return; // mailto:, tel:, the app's own URLs
-    const [path] = workspaceCandidates(refPath(href), base);
+    // A link gets one shot: there is no error event to retry on the way an
+    // <img> can. So a leading "/" takes the workspace-root reading — the one
+    // followViewerLink has always used for a markdown link — rather than the
+    // OS-absolute one an image tries first precisely because it can fall back.
+    const candidates = workspaceCandidates(refPath(href), base);
+    const path = href.startsWith('/') ? candidates[candidates.length - 1] : candidates[0];
     if (!path) return;
     // The Files panel navigates in-panel instead, and resolves the reference
     // itself — keep the original around for it.

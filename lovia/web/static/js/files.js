@@ -1124,12 +1124,21 @@ export function initFiles() {
     syncModal();
     els.modal.showModal();
   });
-  // A truncated file's "load more" clone is inert (clones carry no
-  // listeners) — delegate it back to the panel's loader, then re-mirror.
+  // The reader holds a clone, and clones carry no listeners — delegate its two
+  // live controls back to the panel, then re-mirror. "Load more" extends the
+  // page; a workspace link keeps the reader reading, same as the viewer below
+  // (a modified click still follows the href into a tab of its own).
   els.modalBody.addEventListener('click', async (e) => {
     const target = e.target instanceof Element ? e.target : null;
-    if (!target?.closest('.files-load-more')) return;
-    await loadMore();
+    if (target?.closest('.files-load-more')) {
+      await loadMore();
+      syncModal();
+      return;
+    }
+    const a = target?.closest('a[data-ws-path]');
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    await followViewerLink(a.dataset.wsPath);
     syncModal();
   });
   els.modalClose.addEventListener('click', () => els.modal.close());
@@ -1151,7 +1160,10 @@ export function initFiles() {
   els.viewerBody.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
     if (!a || !els.viewerBody.contains(a)) return;
-    const href = a.getAttribute('href') || '';
+    // `wsPath` is the reference as authored: the renderer points the href at
+    // the raw endpoint (which is what a new tab or the reader dialog needs),
+    // but in the panel a workspace file opens in the viewer instead.
+    const href = a.dataset.wsPath || a.getAttribute('href') || '';
     e.preventDefault();
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
       if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');

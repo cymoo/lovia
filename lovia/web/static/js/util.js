@@ -34,15 +34,15 @@ function renderMarkdown(text) {
 
 // ---- Workspace references inside markdown ----------------------------------
 // Markdown written by the agent points at files the way the agent sees them —
-// `![](uploads/0021.jpg)`. The app serves no such route, so the browser's own
-// relative resolution 404s: workspace files are reachable only through
-// /api/workspace/raw. Rewriting happens after sanitizing, on an inert tree,
-// and only ever produces our own endpoint's URL.
+// `![](uploads/0021.jpg)`, `[report](report.md)`. The app serves no such
+// route, so the browser's own relative resolution 404s: workspace files are
+// reachable only through /api/workspace/raw. Rewriting happens after
+// sanitizing, on an inert tree, and only ever produces our own endpoint's URL.
 
 // Left untouched: anything with a scheme (http:, data:, blob:), a
-// protocol-relative URL, and the app's own paths (an already-rewritten src,
+// protocol-relative URL, and the app's own paths (an already-rewritten ref,
 // or a bundled asset).
-const EXTERNAL_SRC = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/(?:api|static)\/)/i;
+const EXTERNAL_REF = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/(?:api|static)\/)/i;
 
 /** Collapse `.` / `..` / empty segments into a plain relative path. */
 function normalizeRel(path) {
@@ -75,24 +75,39 @@ function workspaceCandidates(path, base) {
 }
 
 /**
- * Point workspace-relative `<img>` sources at the raw-bytes endpoint.
+ * The path a markdown reference means: fragment and query dropped, decoded.
+ *
+ * marked runs encodeURI over hrefs, so a CJK or spaced filename arrives
+ * percent-encoded — and the query builder encodes again. Decode first or the
+ * server looks up a file literally named "%E5%9B%BE...".
+ * @param {string} ref
+ * @returns {string}
+ */
+function refPath(ref) {
+  const path = ref.split('#')[0].split('?')[0];
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path; // malformed escape — use it verbatim
+  }
+}
+
+/** True when /api/workspace/raw will show this in a tab rather than 415. */
+function servesInline(path) {
+  return isImagePath(path) || path.toLowerCase().endsWith('.pdf');
+}
+
+/**
+ * Point workspace-relative refs — `<img>` sources and `<a>` targets — at the
+ * raw-bytes endpoint.
  * @param {ParentNode} root Container of freshly rendered markdown.
  * @param {{ agent?: string, base?: string }} [opts]
  */
-function resolveWorkspaceImages(root, { agent, base = '' } = {}) {
+function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
   root.querySelectorAll('img[src]').forEach((/** @type {HTMLImageElement} */ img) => {
     const src = img.getAttribute('src') || '';
-    if (!src || EXTERNAL_SRC.test(src)) return;
-    let path = src.split('#')[0].split('?')[0];
-    // marked runs encodeURI over hrefs, so a CJK or spaced filename arrives
-    // percent-encoded — and the query builder encodes again. Decode first or
-    // the server looks up a file literally named "%E5%9B%BE...".
-    try {
-      path = decodeURIComponent(path);
-    } catch {
-      /* malformed escape — use it verbatim */
-    }
-    const candidates = workspaceCandidates(path, base);
+    if (!src || EXTERNAL_REF.test(src)) return;
+    const candidates = workspaceCandidates(refPath(src), base);
     if (!candidates.length) return;
     let i = 0;
     const show = () => {
@@ -107,10 +122,38 @@ function resolveWorkspaceImages(root, { agent, base = '' } = {}) {
     }
     show();
   });
+
+  root.querySelectorAll('a[href]').forEach((/** @type {HTMLAnchorElement} */ a) => {
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#')) return;
+    // A reply lives in a single-page app: following any link in place tears
+    // the conversation down, so everything leaves in a tab of its own.
+    if (/^https?:/i.test(href)) {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      return;
+    }
+    if (EXTERNAL_REF.test(href)) return; // mailto:, tel:, the app's own URLs
+    const [path] = workspaceCandidates(refPath(href), base);
+    if (!path) return;
+    // The Files panel navigates in-panel instead, and resolves the reference
+    // itself — keep the original around for it.
+    a.dataset.wsPath = href;
+    if (servesInline(path)) {
+      a.href = api.workspaceRawUrl({ agent, path });
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    } else {
+      // A note, a script, an archive: the endpoint serves those as an
+      // attachment only, so hand the file over rather than open a 415 page.
+      a.href = api.workspaceRawUrl({ agent, path, download: true });
+      a.setAttribute('download', '');
+    }
+  });
 }
 
 /**
- * Render markdown into `el`, resolving workspace-relative image sources.
+ * Render markdown into `el`, resolving workspace-relative images and links.
  *
  * Parses into an inert `<template>` first: images there don't load, so the
  * un-rewritten (404-bound) src is never requested — the corrected one is the
@@ -123,7 +166,7 @@ function resolveWorkspaceImages(root, { agent, base = '' } = {}) {
 export function renderMarkdownInto(el, text, opts = {}) {
   const tmpl = document.createElement('template');
   tmpl.innerHTML = renderMarkdown(text);
-  resolveWorkspaceImages(tmpl.content, opts);
+  resolveWorkspaceRefs(tmpl.content, opts);
   el.replaceChildren(tmpl.content);
 }
 

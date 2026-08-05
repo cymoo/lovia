@@ -123,6 +123,12 @@ Markdown preview alike. Paths resolve against the document's own directory and
 then the Workspace root, and are served read-only through the same endpoint as
 the preview, so SVG (which is never served inline) stays a download.
 
+A link — `[report](report.md)` — points at the same endpoint. In a reply it
+opens in a new tab when the browser can display the file (images, PDF) and
+downloads it otherwise; either way the conversation stays put. Inside the Files
+panel the same link opens in the viewer instead. External links in a reply also
+open in a new tab.
+
 Vision configuration controls whether images are sent inline:
 
 - Official OpenAI and Anthropic endpoints are treated as vision-capable by

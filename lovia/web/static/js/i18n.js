@@ -192,6 +192,7 @@ const MESSAGES = {
     'toast.contentCopied': '已复制内容',
     'task.backToParent': '返回主对话',
     'files.readFailed': '无法读取文件',
+    'files.outsideWorkspace': '文件面板只显示工作区内的文件——该文件在工作区之外，或被工作区规则隐藏。',
     'files.loadFailed': '无法加载文件',
     'files.rendered': '显示渲染效果',
     'files.raw': '显示源码',
@@ -599,6 +600,8 @@ const EN = {
   'toast.contentCopied': 'Content copied',
   'task.backToParent': 'Back to main chat',
   'files.readFailed': 'Couldn’t read file',
+  'files.outsideWorkspace':
+    'The Files panel only shows workspace files — this one is outside the workspace, or hidden by its rules.',
   'files.loadFailed': 'Couldn’t load more',
   'files.rendered': 'Show rendered',
   'files.raw': 'Show source',

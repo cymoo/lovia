@@ -1,5 +1,6 @@
-// util.js — tiny dependency-free helpers shared across modules.
+// util.js — tiny helpers shared across modules.
 // (marked / DOMPurify / hljs are optional CDN globals — everything degrades.)
+import { api } from './api.js';
 
 /**
  * Escape HTML metacharacters so `s` renders as literal text, never markup.
@@ -17,10 +18,11 @@ export function escapeHtml(s) {
 /**
  * Render markdown to sanitized HTML. Degrades to escaped plain text when
  * marked/DOMPurify aren't loaded (offline, blocked CDN, SRI failure).
+ * Callers go through `renderMarkdownInto`, which also fixes up workspace refs.
  * @param {string} text
  * @returns {string} Sanitized HTML.
  */
-export function renderMarkdown(text) {
+function renderMarkdown(text) {
   if (!text.trim()) return '';
   // Never emit unsanitized HTML: without either library, escaped plain text
   // beats both a dead UI and an XSS hole.
@@ -28,6 +30,175 @@ export function renderMarkdown(text) {
     return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
   }
   return DOMPurify.sanitize(marked.parse(text));
+}
+
+// ---- Workspace references inside markdown ----------------------------------
+// Markdown written by the agent points at files the way the agent sees them —
+// `![](uploads/0021.jpg)`, `[report](report.md)`. The app serves no such
+// route, so the browser's own relative resolution 404s: workspace files are
+// reachable only through /api/workspace/raw. Rewriting happens after
+// sanitizing, on an inert tree, and only ever produces our own endpoint's URL.
+
+// Left untouched: anything with a scheme (http:, data:, blob:), a
+// protocol-relative URL, and the app's own paths (an already-rewritten ref,
+// or a bundled asset).
+const EXTERNAL_REF = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/(?:api|static)\/)/i;
+
+/** Collapse `.` / `..` / empty segments into a plain relative path. */
+function normalizeRel(path) {
+  const parts = [];
+  for (const part of path.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+/**
+ * Workspace paths to try for one markdown reference, best reading first.
+ *
+ * Mirrors how the Files panel follows a markdown *link*: relative to the
+ * document's own directory, then relative to the workspace root (authors —
+ * and agents — mean either). An absolute path is passed through as-is first,
+ * since the server resolves it and serves whatever lands inside the root;
+ * stripping the leading slash covers the site-root convention.
+ * @param {string} path Decoded, query/fragment-free reference.
+ * @param {string} base Directory the markdown lives in (workspace-relative).
+ * @returns {string[]}
+ */
+function workspaceCandidates(path, base) {
+  const relToRoot = normalizeRel(path);
+  if (path.startsWith('/')) return [path, relToRoot].filter(Boolean);
+  const relToDoc = base ? normalizeRel(`${base}/${path}`) : relToRoot;
+  return [...new Set([relToDoc, relToRoot])].filter(Boolean);
+}
+
+/**
+ * The path a markdown reference means: fragment and query dropped, decoded.
+ *
+ * marked runs encodeURI over hrefs, so a CJK or spaced filename arrives
+ * percent-encoded — and the query builder encodes again. Decode first or the
+ * server looks up a file literally named "%E5%9B%BE...".
+ * @param {string} ref
+ * @returns {string}
+ */
+function refPath(ref) {
+  const path = ref.split('#')[0].split('?')[0];
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path; // malformed escape — use it verbatim
+  }
+}
+
+/** True when /api/workspace/raw will show this in a tab rather than 415. */
+function servesInline(path) {
+  return isImagePath(path) || path.toLowerCase().endsWith('.pdf');
+}
+
+/**
+ * The raw URL to render `path` inside an `<img>`.
+ *
+ * SVG is the exception: the server never serves it inline, because as a
+ * *document* its scripts would run in this origin. The attachment form is the
+ * way in — browsers honor `Content-Disposition` for navigation (so opening the
+ * URL still just downloads the file) and ignore it for a subresource, where an
+ * SVG renders with scripts and external references disabled.
+ * @param {string | undefined} agent
+ * @param {string} path
+ * @returns {string}
+ */
+export function workspaceImageUrl(agent, path) {
+  return api.workspaceRawUrl({ agent, path, download: isSvgPath(path) });
+}
+
+/**
+ * True when `path` is an SVG — an image everywhere except in the one place it
+ * would be scriptable. See {@link workspaceImageUrl}.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isSvgPath(path) {
+  return String(path).toLowerCase().endsWith('.svg');
+}
+
+/**
+ * Point workspace-relative refs — `<img>` sources and `<a>` targets — at the
+ * raw-bytes endpoint.
+ * @param {ParentNode} root Container of freshly rendered markdown.
+ * @param {{ agent?: string, base?: string }} [opts]
+ */
+function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
+  root.querySelectorAll('img[src]').forEach((/** @type {HTMLImageElement} */ img) => {
+    const src = img.getAttribute('src') || '';
+    if (!src || EXTERNAL_REF.test(src)) return;
+    const candidates = workspaceCandidates(refPath(src), base);
+    if (!candidates.length) return;
+    let i = 0;
+    const show = () => {
+      img.src = workspaceImageUrl(agent, candidates[i]);
+    };
+    // 404 (wrong base) / 403 (outside the root) → try the next reading before
+    // giving up and showing the browser's broken-image glyph.
+    if (candidates.length > 1) {
+      img.addEventListener('error', () => {
+        if (++i < candidates.length) show();
+      });
+    }
+    show();
+  });
+
+  root.querySelectorAll('a[href]').forEach((/** @type {HTMLAnchorElement} */ a) => {
+    const href = a.getAttribute('href') || '';
+    if (!href || href.startsWith('#')) return;
+    // A reply lives in a single-page app: following any link in place tears
+    // the conversation down, so everything leaves in a tab of its own.
+    if (/^https?:/i.test(href)) {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      return;
+    }
+    if (EXTERNAL_REF.test(href)) return; // mailto:, tel:, the app's own URLs
+    // A link gets one shot: there is no error event to retry on the way an
+    // <img> can. So a leading "/" takes the workspace-root reading — the one
+    // followViewerLink has always used for a markdown link — rather than the
+    // OS-absolute one an image tries first precisely because it can fall back.
+    const candidates = workspaceCandidates(refPath(href), base);
+    const path = href.startsWith('/') ? candidates[candidates.length - 1] : candidates[0];
+    if (!path) return;
+    // The Files panel navigates in-panel instead, and resolves the reference
+    // itself — keep the original around for it.
+    a.dataset.wsPath = href;
+    if (servesInline(path)) {
+      a.href = api.workspaceRawUrl({ agent, path });
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    } else {
+      // A note, a script, an archive: the endpoint serves those as an
+      // attachment only, so hand the file over rather than open a 415 page.
+      a.href = api.workspaceRawUrl({ agent, path, download: true });
+      a.setAttribute('download', '');
+    }
+  });
+}
+
+/**
+ * Render markdown into `el`, resolving workspace-relative images and links.
+ *
+ * Parses into an inert `<template>` first: images there don't load, so the
+ * un-rewritten (404-bound) src is never requested — the corrected one is the
+ * only fetch the browser makes.
+ * @param {Element} el Target; its children are replaced.
+ * @param {string} text Markdown source.
+ * @param {{ agent?: string, base?: string }} [opts] `base` is the directory
+ *   the markdown lives in — '' (the workspace root) for chat replies.
+ */
+export function renderMarkdownInto(el, text, opts = {}) {
+  const tmpl = document.createElement('template');
+  tmpl.innerHTML = renderMarkdown(text);
+  resolveWorkspaceRefs(tmpl.content, opts);
+  el.replaceChildren(tmpl.content);
 }
 
 // ---- Syntax highlighting ---------------------------------------------------
@@ -127,8 +298,9 @@ export function formatTimeSmart(ts) {
 
 // ---- Attachments -----------------------------------------------------------
 // Browser-renderable image extensions. Mirrors the server's PREVIEW_IMAGE_EXT
-// (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it can
-// carry scripts and is never served inline, so it's treated as a file here.
+// (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it is
+// never served inline, and as an attachment it is a file (no vision model reads
+// one). Rendering an SVG is `workspaceImageUrl`'s narrow job, not this set's.
 export const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico']);
 
 /**

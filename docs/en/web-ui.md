@@ -117,6 +117,21 @@ message records a relative path. The Agent can therefore open a file through
 Workspace Tools even when the model cannot consume it directly.
 `--no-workspace` disables this path as well.
 
+A Markdown image whose path is workspace-relative — `![chart](uploads/chart.png)`
+— displays the Workspace file itself, in a reply and in the Files panel's
+Markdown preview alike. Paths resolve against the document's own directory and
+then the Workspace root, and are served read-only through the same endpoint as
+the preview. SVG renders too, through the endpoint's attachment form: browsers
+ignore `Content-Disposition` for an image, where an SVG's scripts are disabled,
+and honor it for navigation, where they would run — so the picture shows and
+the URL only ever downloads.
+
+A link — `[report](report.md)` — points at the same endpoint. In a reply it
+opens in a new tab when the browser can display the file (images, PDF) and
+downloads it otherwise; either way the conversation stays put. Inside the Files
+panel the same link opens in the viewer instead. External links in a reply also
+open in a new tab.
+
 Vision configuration controls whether images are sent inline:
 
 - Official OpenAI and Anthropic endpoints are treated as vision-capable by

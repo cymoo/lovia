@@ -15,10 +15,19 @@ import { api } from './api.js';
 import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
-import { formatBytes, formatTimeSmart, highlightIn, IMAGE_EXT, renderMarkdown } from './util.js';
+import {
+  formatBytes,
+  formatTimeSmart,
+  highlightIn,
+  IMAGE_EXT,
+  renderMarkdownInto,
+  workspaceImageUrl,
+} from './util.js';
 
 // IMAGE_EXT (browser-renderable image previews, mirroring the server's
 // PREVIEW_IMAGE_EXT) is shared from util.js — the chat transcript needs it too.
+// SVG rides along in the viewer (see workspaceImageUrl) but stays out of the
+// set itself: as an attachment it is a file, not something a model can read.
 const MD_EXT = new Set(['md', 'markdown']);
 const CSV_EXT = new Set(['csv', 'tsv']);
 const HTML_EXT = new Set(['html', 'htm']);
@@ -592,25 +601,21 @@ function renderList() {
 }
 
 // ---- Viewer -------------------------------------------------------------------
-// One live object URL at a time (the SVG preview) — swap-and-revoke so a
-// browsing session doesn't accumulate blobs.
-let _blobUrl = null;
-function holdBlobUrl(blob) {
-  if (_blobUrl) URL.revokeObjectURL(_blobUrl);
-  _blobUrl = URL.createObjectURL(blob);
-  return _blobUrl;
-}
-
 function closeViewer() {
   state.viewing = null;
   els.viewer.classList.add('hidden');
   els.split?.classList.add('hidden');
   els.viewerBody.replaceChildren();
-  if (_blobUrl) {
-    URL.revokeObjectURL(_blobUrl);
-    _blobUrl = null;
-  }
   renderList(); // drop the active highlight
+}
+
+// The panel reads through a session locked to the workspace root (see
+// api/workspace.py): a 403 is that boundary, not a failure — say so, instead of
+// echoing the server's bare "path not readable". Everything the agent may read
+// after asking (a skills dir under ~, say) lands here.
+function viewerErrorText(err) {
+  if (err?.status === 403) return t('files.outsideWorkspace');
+  return err?.message || t('files.readFailed');
 }
 
 function viewerNote(text, action) {
@@ -718,26 +723,30 @@ async function openFile(path, { silent = false } = {}) {
   // First show: the restored split was applied blind (panel geometry unknown
   // until now) — re-clamp it, and give the separator its initial aria value.
   if (viewerWasHidden && els.split) clampSplit();
-  els.viewerName.textContent = path;
+  // The name truncates from the left (direction: rtl) so the filename tail
+  // stays visible — which reorders a path's leading punctuation to the far end
+  // ("~/.agents/…/SKILL.md" read as "agents/…/SKILL.md./~"). A bidi isolate
+  // keeps the path itself in logical order inside the right-to-left box.
+  const label = document.createElement('bdi');
+  label.textContent = path;
+  els.viewerName.replaceChildren(label);
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
   els.mdToggle.classList.add('hidden');
   els.wrapToggle?.classList.add('hidden'); // renderViewerContent re-shows for text
 
   const e = ext(path);
-  const kind = IMAGE_EXT.has(e)
+  const kind = IMAGE_EXT.has(e) || e === 'svg'
     ? 'image'
     : e === 'pdf'
       ? 'pdf'
-      : e === 'svg'
-        ? 'svg'
-        : HTML_EXT.has(e)
-          ? 'html'
-          : MD_EXT.has(e)
-            ? 'md'
-            : CSV_EXT.has(e)
-              ? 'csv'
-              : 'text';
+      : HTML_EXT.has(e)
+        ? 'html'
+        : MD_EXT.has(e)
+          ? 'md'
+          : CSV_EXT.has(e)
+            ? 'csv'
+            : 'text';
   const keepRaw = silent && state.viewing?.path === path ? state.viewing.raw : false;
   state.viewing = { path, kind, name, raw: keepRaw };
   if (!silent) renderList();
@@ -747,8 +756,9 @@ async function openFile(path, { silent = false } = {}) {
     img.className = 'files-img';
     img.alt = name;
     const rev = revOf(path);
-    img.src =
-      api.workspaceRawUrl({ agent: store.agent, path }) + (rev ? `&v=${rev}` : '');
+    // SVG included: workspaceImageUrl asks for the form that renders in an
+    // <img> and downloads on navigation (util.js) — script-inert either way.
+    img.src = workspaceImageUrl(store.agent, path) + (rev ? `&v=${rev}` : '');
     els.viewerBody.replaceChildren(img);
     return true;
   }
@@ -767,30 +777,6 @@ async function openFile(path, { silent = false } = {}) {
     return true;
   }
 
-  if (kind === 'svg') {
-    // The server never serves SVG inline (it can carry scripts). An <img> is
-    // the script-inert way to render one: fetch the text, view it through a
-    // Blob URL — nothing executes in an image context.
-    let text;
-    try {
-      const res = await fetch(
-        api.workspaceRawUrl({ agent: store.agent, path, download: true }),
-      );
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      text = await res.text();
-    } catch (err) {
-      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
-      return false;
-    }
-    if (state.viewing?.path !== path) return true;
-    const img = document.createElement('img');
-    img.className = 'files-img';
-    img.alt = name;
-    img.src = holdBlobUrl(new Blob([text], { type: 'image/svg+xml' }));
-    els.viewerBody.replaceChildren(img);
-    return true;
-  }
-
   if (kind === 'html') {
     // The whole document, unpaginated — the sandboxed preview needs it in one
     // piece (fetch ignores the download Content-Disposition).
@@ -799,10 +785,15 @@ async function openFile(path, { silent = false } = {}) {
       const res = await fetch(
         api.workspaceRawUrl({ agent: store.agent, path, download: true }),
       );
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        // Carry the status so a refusal reads as the boundary it is.
+        throw Object.assign(new Error(`${res.status} ${res.statusText}`), {
+          status: res.status,
+        });
+      }
       text = await res.text();
     } catch (err) {
-      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+      els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));
       return false;
     }
     if (state.viewing?.path !== path) return true;
@@ -815,7 +806,7 @@ async function openFile(path, { silent = false } = {}) {
   try {
     data = await api.workspaceFile({ agent: store.agent, path });
   } catch (err) {
-    els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+    els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));
     return false;
   }
   if (state.viewing?.path !== path) return true; // user opened something else meanwhile
@@ -913,7 +904,9 @@ function renderViewerContent() {
   }
   if (v.kind === 'md' && !v.raw) {
     const { turn, body } = bodyWrapper();
-    body.innerHTML = renderMarkdown(v.content);
+    // Images resolve like the links below: against the document's own
+    // directory first, then the workspace root.
+    renderMarkdownInto(body, v.content, { agent: store.agent, base: dirname(v.path) });
     highlightIn(body);
     els.viewerBody.appendChild(turn);
     return;
@@ -1116,12 +1109,21 @@ export function initFiles() {
     syncModal();
     els.modal.showModal();
   });
-  // A truncated file's "load more" clone is inert (clones carry no
-  // listeners) — delegate it back to the panel's loader, then re-mirror.
+  // The reader holds a clone, and clones carry no listeners — delegate its two
+  // live controls back to the panel, then re-mirror. "Load more" extends the
+  // page; a workspace link keeps the reader reading, same as the viewer below
+  // (a modified click still follows the href into a tab of its own).
   els.modalBody.addEventListener('click', async (e) => {
     const target = e.target instanceof Element ? e.target : null;
-    if (!target?.closest('.files-load-more')) return;
-    await loadMore();
+    if (target?.closest('.files-load-more')) {
+      await loadMore();
+      syncModal();
+      return;
+    }
+    const a = target?.closest('a[data-ws-path]');
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    await followViewerLink(a.dataset.wsPath);
     syncModal();
   });
   els.modalClose.addEventListener('click', () => els.modal.close());
@@ -1143,7 +1145,10 @@ export function initFiles() {
   els.viewerBody.addEventListener('click', (e) => {
     const a = e.target.closest('a[href]');
     if (!a || !els.viewerBody.contains(a)) return;
-    const href = a.getAttribute('href') || '';
+    // `wsPath` is the reference as authored: the renderer points the href at
+    // the raw endpoint (which is what a new tab or the reader dialog needs),
+    // but in the panel a workspace file opens in the viewer instead.
+    const href = a.dataset.wsPath || a.getAttribute('href') || '';
     e.preventDefault();
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
       if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');

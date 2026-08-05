@@ -15,7 +15,7 @@ import {
   formatTimeSmart,
   highlightIn,
   isImagePath,
-  renderMarkdown,
+  renderMarkdownInto,
   toDate,
 } from './util.js';
 
@@ -142,7 +142,7 @@ function flushRender(force = false) {
   // so no self-reschedule is needed while the selection is held.
   if (!force && selectionInside(store.body)) return;
   store.body.dataset.raw = store.rawText;
-  store.body.innerHTML = renderMarkdown(store.rawText);
+  renderMarkdownInto(store.body, store.rawText, { agent: store.agent });
   highlightCode(store.body);
   renderMermaid(store.body);
   scrollDown();
@@ -1982,7 +1982,7 @@ function renderHistoryWindow({ stickBottom }) {
         const body = document.createElement('div');
         body.className = 'body';
         body.dataset.raw = text; // store raw markdown for copy
-        body.innerHTML = renderMarkdown(text);
+        renderMarkdownInto(body, text, { agent: store.agent });
         appendBubbleContent(currentBubble, body);
         highlightCode(body);
         renderMermaid(body);

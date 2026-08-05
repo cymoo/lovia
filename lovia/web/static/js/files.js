@@ -609,6 +609,15 @@ function closeViewer() {
   renderList(); // drop the active highlight
 }
 
+// The panel reads through a session locked to the workspace root (see
+// api/workspace.py): a 403 is that boundary, not a failure — say so, instead of
+// echoing the server's bare "path not readable". Everything the agent may read
+// after asking (a skills dir under ~, say) lands here.
+function viewerErrorText(err) {
+  if (err?.status === 403) return t('files.outsideWorkspace');
+  return err?.message || t('files.readFailed');
+}
+
 function viewerNote(text, action) {
   const note = document.createElement('div');
   note.className = 'files-note';
@@ -714,7 +723,13 @@ async function openFile(path, { silent = false } = {}) {
   // First show: the restored split was applied blind (panel geometry unknown
   // until now) — re-clamp it, and give the separator its initial aria value.
   if (viewerWasHidden && els.split) clampSplit();
-  els.viewerName.textContent = path;
+  // The name truncates from the left (direction: rtl) so the filename tail
+  // stays visible — which reorders a path's leading punctuation to the far end
+  // ("~/.agents/…/SKILL.md" read as "agents/…/SKILL.md./~"). A bidi isolate
+  // keeps the path itself in logical order inside the right-to-left box.
+  const label = document.createElement('bdi');
+  label.textContent = path;
+  els.viewerName.replaceChildren(label);
   els.viewerName.title = path;
   els.download.href = api.workspaceRawUrl({ agent: store.agent, path, download: true });
   els.mdToggle.classList.add('hidden');
@@ -770,10 +785,15 @@ async function openFile(path, { silent = false } = {}) {
       const res = await fetch(
         api.workspaceRawUrl({ agent: store.agent, path, download: true }),
       );
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        // Carry the status so a refusal reads as the boundary it is.
+        throw Object.assign(new Error(`${res.status} ${res.statusText}`), {
+          status: res.status,
+        });
+      }
       text = await res.text();
     } catch (err) {
-      els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+      els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));
       return false;
     }
     if (state.viewing?.path !== path) return true;
@@ -786,7 +806,7 @@ async function openFile(path, { silent = false } = {}) {
   try {
     data = await api.workspaceFile({ agent: store.agent, path });
   } catch (err) {
-    els.viewerBody.replaceChildren(viewerNote(err.message || t('files.readFailed')));
+    els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));
     return false;
   }
   if (state.viewing?.path !== path) return true; // user opened something else meanwhile

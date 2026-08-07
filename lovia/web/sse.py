@@ -197,9 +197,17 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         # Same wire shape for both: a tool-scoped error and a terminal run
         # failure render identically in the UI; terminal-ness is implied by
         # the stream ending right after a RunFailed.
+        # Message-less exceptions (a bare ConnectError from a dropped
+        # connection) stringify to "" — fall back to the class name, same as
+        # the runner's own "Tool error: ..." string.
         return {
             "event": "error",
-            "data": _dumps({"type": type(ev.error).__name__, "message": str(ev.error)}),
+            "data": _dumps(
+                {
+                    "type": type(ev.error).__name__,
+                    "message": str(ev.error) or type(ev.error).__name__,
+                }
+            ),
         }
     if isinstance(ev, events.RunCompleted):
         return {

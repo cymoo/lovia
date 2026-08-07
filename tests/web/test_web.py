@@ -359,6 +359,35 @@ def test_context_compacted_sse_forwards_notice() -> None:
     assert data["detail"] == ["context was 82% full", "3 tool results cleared"]
 
 
+def test_error_sse_falls_back_to_class_name_for_messageless_exceptions() -> None:
+    """A bare exception (e.g. httpx.ConnectError from a dropped connection)
+    stringifies to "" — the error event's message must fall back to the class
+    name, mirroring the runner's own "Tool error: ..." fallback. Without it
+    the UI rendered a bare ⚠️ with no text."""
+    from lovia import events
+    from lovia.messages import ToolCall
+    from lovia.web.sse import event_to_sse
+
+    class ConnectError(Exception):
+        pass
+
+    call = ToolCall(id="c1", name="http_request", arguments="{}")
+    payload = event_to_sse(events.ToolCallFailed(error=ConnectError(), call=call))
+    assert payload is not None
+    assert payload["event"] == "error"
+    data = json.loads(payload["data"])
+    assert data["type"] == "ConnectError"
+    assert data["message"] == "ConnectError"
+
+    # A messageful exception keeps its message untouched.
+    payload = event_to_sse(events.RunFailed(error=RuntimeError("boom")))
+    assert payload is not None
+    assert payload["event"] == "error"
+    data = json.loads(payload["data"])
+    assert data["type"] == "RuntimeError"
+    assert data["message"] == "boom"
+
+
 def test_sse_payloads_keep_non_ascii_readable() -> None:
     """Non-ASCII text rides the wire as itself, not as ``\\uXXXX`` escapes.
 

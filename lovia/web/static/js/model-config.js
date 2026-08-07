@@ -35,15 +35,6 @@ function profileName(p) {
   return p?.display_name || p?.model || '';
 }
 
-// The request path lovia actually appends, per API format — the live preview
-// under the Base URL field (the "/v1 or not" question answers itself).
-function requestPreview(flavor, baseUrl, fallback) {
-  const base = (baseUrl || fallback || '').replace(/\/+$/, '');
-  if (!base) return '';
-  const path = flavor === 'anthropic' ? '/messages' : '/chat/completions';
-  return t('cfg.baseUrlPreview', { url: base + path });
-}
-
 /** The display host of a base URL; tolerant of scheme-less values. */
 function hostOf(baseUrl) {
   if (!baseUrl) return '';
@@ -300,15 +291,10 @@ export function buildModelsPane() {
     form.appendChild(field(t('cfg.name'), nameIn, t('cfg.nameHint')));
 
     let flavor = stored?.flavor || 'openai';
-    const preview = el('div', 'cfg-hint cfg-preview');
     const urlIn = input(stored?.base_url || '', {
       mono: true,
       placeholder: flavorDefault(flavor),
     });
-    const syncPreview = () => {
-      urlIn.placeholder = flavorDefault(flavor);
-      preview.textContent = requestPreview(flavor, urlIn.value.trim(), flavorDefault(flavor));
-    };
     const flavorSeg = segmented(
       [
         ['openai', t('cfg.flavorOpenAI')],
@@ -317,23 +303,18 @@ export function buildModelsPane() {
       flavor,
       (val) => {
         flavor = val;
-        syncPreview();
+        urlIn.placeholder = flavorDefault(flavor);
       },
     );
     form.appendChild(field(t('cfg.flavor'), flavorSeg));
-    urlIn.addEventListener('input', syncPreview);
-    const urlField = field(t('cfg.baseUrl'), urlIn);
-    urlField.appendChild(preview);
-    form.appendChild(urlField);
-    syncPreview();
+    form.appendChild(field(t('cfg.baseUrl'), urlIn));
 
     // API key: never echoed. keep (leave stored) / edit (replace) / clear.
     /** @type {'keep' | 'edit' | 'clear'} */
     let keyMode = stored?.api_key?.set ? 'keep' : 'edit';
-    const keyIn = input('', { type: 'password', placeholder: t('cfg.apiKeyNone') });
+    const keyIn = input('', { type: 'password', placeholder: 'sk-xxx' });
     const keyBox = el('div', 'cfg-key');
     const renderKey = () => {
-      syncProbeButtons();
       keyBox.replaceChildren();
       if (keyMode === 'keep') {
         const row = el('div', 'cfg-key-set');
@@ -387,38 +368,10 @@ export function buildModelsPane() {
         }
       }
     };
-    form.appendChild(field(t('cfg.apiKey'), keyBox, t('cfg.apiKeyNote')));
+    form.appendChild(field(t('cfg.apiKey'), keyBox));
 
     const modelIn = input(stored?.model || '', { mono: true, placeholder: 'deepseek-v4-pro' });
-    const datalist = el('datalist');
-    datalist.id = `cfg-model-list-${Math.random().toString(36).slice(2, 8)}`;
-    modelIn.setAttribute('list', datalist.id);
-    const fetchRow = el('div', 'cfg-fetch-row');
-    const fetchBtn = el('button', 'btn btn-sm', t('cfg.fetchModels'));
-    fetchBtn.setAttribute('type', 'button');
-    fetchBtn.addEventListener('click', async () => {
-      if (!hasEndpoint()) return;
-      fetchBtn.disabled = true;
-      try {
-        const res = await probe();
-        datalist.replaceChildren(
-          ...(res.models || []).map((m) => {
-            const opt = /** @type {HTMLOptionElement} */ (document.createElement('option'));
-            opt.value = m;
-            return opt;
-          }),
-        );
-        if (!res.models?.length) toast(t('cfg.fetchHint'));
-      } catch (err) {
-        toast(String(err.message || err), { type: 'error' });
-      } finally {
-        // Re-derive, not re-enable: the inputs may have been cleared while
-        // the probe was in flight.
-        syncProbeButtons();
-      }
-    });
-    fetchRow.append(modelIn, fetchBtn, datalist);
-    form.appendChild(field(t('cfg.modelId'), fetchRow, t('cfg.fetchHint')));
+    form.appendChild(field(t('cfg.modelId'), modelIn));
 
     // Advanced: context window + vision capability.
     const adv = /** @type {HTMLDetailsElement} */ (el('details', 'cfg-advanced'));
@@ -485,23 +438,11 @@ export function buildModelsPane() {
     testRow.append(testBtn, testOut);
     form.appendChild(testRow);
 
-    // Enough of an endpoint to talk to: an explicit URL, or a key for the
-    // flavor's official default host (entered now or stored).
-    function hasEndpoint() {
-      return !!(
-        urlIn.value.trim() ||
-        (keyMode === 'edit' && keyIn.value) ||
-        (keyMode === 'keep' && stored?.api_key?.set)
-      );
-    }
-
-    // A probe with nothing filled in can only time out against a default
-    // host — keep the buttons dead until they can mean something.
+    // A probe without a model ID can't mean anything — keep the button dead
+    // until it can.
     function syncProbeButtons() {
       testBtn.disabled = !modelIn.value.trim();
       testBtn.title = testBtn.disabled ? t('cfg.testNeedsModel') : '';
-      fetchBtn.disabled = !hasEndpoint();
-      fetchBtn.title = fetchBtn.disabled ? t('cfg.fetchNeedsEndpoint') : '';
     }
 
     function probe() {
@@ -528,8 +469,6 @@ export function buildModelsPane() {
 
     renderKey();
     modelIn.addEventListener('input', syncProbeButtons);
-    urlIn.addEventListener('input', syncProbeButtons);
-    keyIn.addEventListener('input', syncProbeButtons);
     syncProbeButtons();
 
     const errBox = el('div', 'cfg-error');

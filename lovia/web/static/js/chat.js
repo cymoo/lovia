@@ -2381,7 +2381,9 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'error':
-      appendErrorNotice(data.message);
+      // `message` can arrive empty (older servers didn't fall back for
+      // message-less exceptions); the class name in `type` beats a bare ⚠️.
+      appendErrorNotice(data.message || data.type);
       break;
 
     case 'done': {

@@ -382,6 +382,7 @@ def test_error_sse_falls_back_to_class_name_for_messageless_exceptions() -> None
     # A messageful exception keeps its message untouched.
     payload = event_to_sse(events.RunFailed(error=RuntimeError("boom")))
     assert payload is not None
+    assert payload["event"] == "error"
     data = json.loads(payload["data"])
     assert data["type"] == "RuntimeError"
     assert data["message"] == "boom"

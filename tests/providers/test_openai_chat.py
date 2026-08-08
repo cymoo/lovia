@@ -181,6 +181,79 @@ def test_entries_to_openai_messages_flushes_assistant_entries_in_order() -> None
     ]
 
 
+def test_tool_result_images_ride_one_synthetic_user_message_per_turn() -> None:
+    """The tool role is text-only: a turn's result images flush as ONE user
+    message after all of that turn's tool messages, each labeled by call —
+    parallel-call-safe, and nothing interleaves the tool-reply run."""
+    image_a = ImagePart(data="YQ==", mime_type="image/png")
+    image_b = ImagePart(data="Yg==", mime_type="image/jpeg")
+    out = entries_to_openai_messages(
+        [
+            ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+            ToolCallEntry(call_id="c2", name="view_image", arguments="{}"),
+            ToolResultEntry(call_id="c1", output="a.png", parts=[image_a]),
+            ToolResultEntry(call_id="c2", output="b.jpg", parts=[image_b]),
+            AssistantTextEntry(content="looked"),
+        ],
+        include_images=True,
+    )
+
+    roles = [m["role"] for m in out]
+    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
+    for tool_msg in (out[1], out[2]):
+        assert "attached in the user message" in tool_msg["content"]
+    synthetic = out[3]["content"]
+    assert [p["type"] for p in synthetic] == [
+        "text",
+        "image_url",
+        "text",
+        "image_url",
+    ]
+    assert "c1" in synthetic[0]["text"]
+    assert synthetic[1]["image_url"]["url"] == "data:image/png;base64,YQ=="
+    assert "c2" in synthetic[2]["text"]
+
+
+def test_tool_result_images_flush_before_following_user_input() -> None:
+    """The synthetic message lands before the next input; adjacent user
+    messages then merge (the standard ``_append_input_message`` behavior),
+    keeping images ahead of the user's own text."""
+    image = ImagePart(data="YQ==", mime_type="image/png")
+    out = entries_to_openai_messages(
+        [
+            ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+            ToolResultEntry(call_id="c1", output="a.png", parts=[image]),
+            InputEntry(role="user", content="next question"),
+        ],
+        include_images=True,
+    )
+
+    assert [m["role"] for m in out] == ["assistant", "tool", "user"]
+    merged = out[2]["content"]
+    assert [p["type"] for p in merged] == ["text", "image_url", "text", "text"]
+    assert merged[-1] == {"type": "text", "text": "next question"}
+
+
+def test_tool_result_images_degrade_to_projection_without_vision() -> None:
+    image = ImagePart(data="YQ==", mime_type="image/png")
+    out = entries_to_openai_messages(
+        [
+            ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+            ToolResultEntry(
+                call_id="c1", output="[image: image/png, 1 B]", parts=[image]
+            ),
+        ],
+        include_images=False,
+    )
+
+    assert out[1] == {
+        "role": "tool",
+        "content": "[image: image/png, 1 B]",
+        "tool_call_id": "c1",
+    }
+    assert [m["role"] for m in out] == ["assistant", "tool"]
+
+
 def test_entries_to_openai_messages_drops_orphan_reasoning() -> None:
     out = entries_to_openai_messages(
         [

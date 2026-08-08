@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import binascii
 import mimetypes
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Union
@@ -185,11 +186,75 @@ def text_of(content: "str | list[ContentPart] | None") -> str:
     return "".join(parts)
 
 
+def coerce_parts(value: object) -> list[ContentPart] | None:
+    """Interpret a tool return value as content parts, if it is part-shaped.
+
+    A tool opts into returning rich content by returning a single
+    :class:`ContentPart` or a sequence mixing ``str`` and parts (strings are
+    wrapped as :class:`TextPart`). Anything else — including a list with no
+    actual part in it — is an ordinary return value and yields ``None``, so
+    plain tools keep flowing through their result renderer untouched.
+    """
+    if isinstance(value, (TextPart, ImagePart, FilePart)):
+        return [value]
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return None
+    items = list(value)
+    if not any(isinstance(i, (TextPart, ImagePart, FilePart)) for i in items):
+        return None
+    if not all(isinstance(i, (str, TextPart, ImagePart, FilePart)) for i in items):
+        return None
+    return [TextPart(i) if isinstance(i, str) else i for i in items]
+
+
+def project_parts(parts: Sequence[ContentPart]) -> str:
+    """Textual projection of a parts list.
+
+    The string consumers see wherever the parts themselves cannot go: the
+    ``output`` of a parts-carrying tool result, and the wire fallback for
+    providers that cannot accept the parts. Text passes through verbatim;
+    binary parts collapse to a short bracketed marker — so the projection is
+    a pure function of the parts and the two consumers can never drift.
+    """
+    out: list[str] = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                out.append(part.text)
+        elif isinstance(part, ImagePart):
+            out.append(_binary_marker("image", part))
+        else:
+            label = f"file {part.filename}" if part.filename else "file"
+            out.append(_binary_marker(label, part))
+    return "\n".join(out)
+
+
+def _binary_marker(label: str, part: ImagePart | FilePart) -> str:
+    if part.url is not None:
+        return f"[{label}: {part.url}]"
+    # base64 inflates 4/3; length over 4/3 minus the padding recovers the
+    # exact decoded byte count without decoding. Clamped: ImagePart does not
+    # validate base64, and a malformed payload must not read "-1 B".
+    raw = part.data or ""
+    size = _human_size(max(0, len(raw) * 3 // 4 - raw[-2:].count("=")))
+    return f"[{label}: {part.mime_type}, {size}]"
+
+
+def _human_size(n: int) -> str:
+    if n >= 1_048_576:
+        return f"{n / 1_048_576:.1f} MB"
+    if n >= 1_024:
+        return f"{n / 1_024:.1f} KB"
+    return f"{n} B"
+
+
 __all__ = [
     "ContentPart",
     "FilePart",
     "ImagePart",
     "TextPart",
+    "coerce_parts",
     "normalize_content",
+    "project_parts",
     "text_of",
 ]

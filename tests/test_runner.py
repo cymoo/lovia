@@ -50,6 +50,32 @@ async def test_tool_call_round_trip() -> None:
     assert result.messages[2].content == "5"
 
 
+async def test_tool_returning_parts_lands_in_entry_with_projection() -> None:
+    from lovia import ImagePart, TextPart
+    from lovia.transcript import ToolResultEntry
+
+    image = ImagePart(data="aGVsbG8=", mime_type="image/png")
+
+    @tool
+    async def snap() -> list:
+        """Return an image."""
+        return [TextPart("shot.png"), image]
+
+    provider = ScriptedProvider([call("snap", {}, call_id="c1"), text("saw it")])
+    agent = Agent(name="t", instructions="x", model=provider, tools=[snap])
+    result = await Runner.run(agent, "look")
+
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert entry.parts == [TextPart("shot.png"), image]
+    # ``output`` is the projection; ``raw`` is dropped (parts are the value).
+    assert entry.output == "shot.png\n[image: image/png, 5 B]"
+    assert entry.raw is None
+    # The dict/JSON serialization round-trips through session storage shape.
+    from lovia.transcript import entry_from_dict, entry_to_dict
+
+    assert entry_from_dict(entry_to_dict(entry)) == entry
+
+
 async def test_unknown_tool_does_not_crash_run() -> None:
     provider = ScriptedProvider(
         [

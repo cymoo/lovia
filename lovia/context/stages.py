@@ -278,7 +278,12 @@ class ClearToolResults:
             protected = pos >= keep_from or i >= ctx.protected_from
             if protected and not (ctx.aggressive and _oversized(entry, ctx)):
                 continue
-            if len(entry.output) <= min_chars or ctx.state.decided(entry.call_id):
+            # A parts-carrying result has a tiny textual projection but a
+            # large flat cost (an image is ~image_tokens), so it is always
+            # worth a marker regardless of ``min_chars``.
+            if (
+                len(entry.output) <= min_chars and not entry.parts
+            ) or ctx.state.decided(entry.call_id):
                 continue
             ctx.state.cleared.add(entry.call_id)
             marker_tokens = ctx.counter.count_text(clear_marker(entry.call_id))

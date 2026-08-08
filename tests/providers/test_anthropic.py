@@ -108,6 +108,78 @@ def test_message_translation_forwards_tool_result_is_error() -> None:
     }
 
 
+def test_tool_result_parts_encode_as_blocks_when_images_included() -> None:
+    entries = [
+        ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+        ToolResultEntry(
+            call_id="c1",
+            output="shot.png\n[image: image/png, 5 B]",
+            parts=[
+                TextPart("shot.png"),
+                ImagePart(data="aGVsbG8=", mime_type="image/png"),
+            ],
+        ),
+    ]
+
+    _, out = _to_anthropic_messages(entries, include_images=True)
+
+    assert out[1]["content"][0] == {
+        "type": "tool_result",
+        "tool_use_id": "c1",
+        "content": [
+            {"type": "text", "text": "shot.png"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "aGVsbG8=",
+                },
+            },
+        ],
+    }
+
+
+def test_tool_result_parts_degrade_to_projection_without_images() -> None:
+    """A text-only endpoint gets the textual projection — nothing else."""
+    entries = [
+        ToolCallEntry(call_id="c1", name="view_image", arguments="{}"),
+        ToolResultEntry(
+            call_id="c1",
+            output="[image: image/png, 5 B]",
+            parts=[ImagePart(data="aGVsbG8=", mime_type="image/png")],
+        ),
+    ]
+
+    _, out = _to_anthropic_messages(entries, include_images=False)
+
+    assert out[1]["content"][0] == {
+        "type": "tool_result",
+        "tool_use_id": "c1",
+        "content": "[image: image/png, 5 B]",
+    }
+
+
+def test_tool_result_file_part_degrades_to_text_marker() -> None:
+    """tool_result content takes text/image blocks only; a FilePart must not
+    become a document block. The marker is the part's ``project_parts`` text,
+    so vision and text-only endpoints see the same wording."""
+    entries = [
+        ToolCallEntry(call_id="c1", name="export", arguments="{}"),
+        ToolResultEntry(
+            call_id="c1",
+            output="[file doc.pdf: application/pdf, 3 B]",
+            parts=[FilePart(data="cGRm", mime_type="application/pdf", filename="doc.pdf")],
+        ),
+    ]
+
+    _, out = _to_anthropic_messages(entries, include_images=True)
+
+    assert out[1]["content"][0]["content"] == [
+        {"type": "text", "text": "[file doc.pdf: application/pdf, 3 B]"}
+    ]
+
+
 def test_message_translation_skips_empty_content() -> None:
     _, out = _to_anthropic_messages(
         [

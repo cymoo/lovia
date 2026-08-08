@@ -32,6 +32,7 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Message, ToolCall, Usage
+from ..parts import ContentPart, ImagePart, TextPart
 from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ._content import (
     content_to_openai_chat as _content_to_openai,
@@ -125,18 +126,41 @@ def entries_to_openai_messages(
     *,
     reasoning_provider: str = "openai-chat",
     include_reasoning: bool = True,
+    include_images: bool = False,
 ) -> list[JsonObject]:
     """Serialize transcript entries to OpenAI Chat messages.
 
     ``include_reasoning`` controls whether :class:`ReasoningEntry` values are
     replayed as ``reasoning_content`` — endpoints disagree on the field (see
     ``_REASONING_REPLAY_DEFAULTS``).
+
+    ``include_images`` controls whether tool-result image parts reach the
+    wire. The ``tool`` role is text-only in this API, so the images of a
+    turn's results ride **one synthetic user message appended after that
+    turn's tool messages** (the only placement the protocol allows — nothing
+    may interleave an assistant ``tool_calls`` message and its tool
+    replies), each labeled with its ``call_id``. The synthetic message is a
+    wire-level artifact: it exists only in the request payload, never in the
+    transcript.
     """
 
     out: list[JsonObject] = []
     pending_reasoning: str | None = None
     pending_content: str | None = None
     pending_calls: list[ToolCall] = []
+    pending_result_images: list[ContentPart] = []
+
+    def flush_result_images() -> None:
+        nonlocal pending_result_images
+        if not pending_result_images:
+            return
+        out.append(
+            {
+                "role": "user",
+                "content": _content_to_openai(pending_result_images),
+            }
+        )
+        pending_result_images = []
 
     def flush_assistant() -> None:
         nonlocal pending_reasoning, pending_content, pending_calls
@@ -155,6 +179,10 @@ def entries_to_openai_messages(
         pending_calls = []
 
     for entry in entries:
+        if not isinstance(entry, ToolResultEntry):
+            # The images of a tool-result run flush as soon as the run ends,
+            # before whatever follows it.
+            flush_result_images()
         if isinstance(entry, InputEntry):
             flush_assistant()
             _append_input_message(out, entry)
@@ -173,15 +201,33 @@ def entries_to_openai_messages(
             )
         elif isinstance(entry, ToolResultEntry):
             flush_assistant()
+            content = entry.output
+            images = (
+                [p for p in entry.parts if isinstance(p, ImagePart)]
+                if include_images and entry.parts
+                else []
+            )
+            if images:
+                content = (
+                    f"{entry.output}\n[The image(s) from this result are "
+                    "attached in the user message after this turn's tool "
+                    "results.]"
+                )
+                for image in images:
+                    pending_result_images.append(
+                        TextPart(f"[Image from tool result {entry.call_id}:]")
+                    )
+                    pending_result_images.append(image)
             out.append(
                 message_to_openai(
                     Message(
                         role="tool",
-                        content=entry.output,
+                        content=content,
                         tool_call_id=entry.call_id,
                     )
                 )
             )
+    flush_result_images()
     flush_assistant()
     return out
 
@@ -359,6 +405,7 @@ class OpenAIChatProvider:
                 entries,
                 reasoning_provider=self.name,
                 include_reasoning=self._should_replay_reasoning(),
+                include_images=self.supports_vision,
             ),
             "stream": stream,
         }

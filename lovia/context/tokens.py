@@ -273,6 +273,19 @@ class TokenCounter:
         elif isinstance(entry, ToolCallEntry):
             size = _utf8_len(entry.name) + _utf8_len(entry.arguments)
         elif isinstance(entry, ToolResultEntry):
+            if entry.parts:
+                # Mirror the wire: parts-carrying results are sent as their
+                # parts (text verbatim, binary at a flat cost), not as the
+                # short textual projection in ``output``.
+                tokens = self.entry_overhead
+                for part in entry.parts:
+                    if isinstance(part, TextPart):
+                        tokens += _utf8_len(part.text) // _BYTES_PER_TOKEN
+                    elif isinstance(part, ImagePart):
+                        tokens += self.image_tokens
+                    elif isinstance(part, FilePart):
+                        tokens += self.file_tokens
+                return tokens
             size = _utf8_len(entry.output)
         else:  # pragma: no cover - exhaustive over TranscriptEntry
             size = 0

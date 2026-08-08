@@ -56,6 +56,22 @@ def test_image_part_gets_flat_cost_not_base64_chars():
     assert estimate < 1_000_000 // 4 / 10
 
 
+def test_tool_result_parts_get_flat_costs_like_input_parts():
+    """A parts-carrying tool result is priced like the wire sends it: text
+    verbatim plus flat per-binary costs — never the base64 as text, and never
+    just the short projection in ``output``."""
+    counter = TokenCounter()
+    entry = ToolResultEntry(
+        call_id="c1",
+        output="[image: image/png, 750.0 KB]",
+        parts=[
+            TextPart(text="shot.png"),
+            ImagePart(data="A" * 1_000_000, mime_type="image/png"),
+        ],
+    )
+    assert counter.count_entry(entry) == 8 + len("shot.png") // 4 + 1_600
+
+
 def test_count_sums_entries():
     counter = TokenCounter()
     entries = [user("x" * 40), user("y" * 40)]

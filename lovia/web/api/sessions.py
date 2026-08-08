@@ -214,7 +214,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     ]
                     if 0 <= index < len(images):
                         return images[index]
-                    return None
+                    # Keep scanning: providers have been seen reusing call
+                    # ids, so an older entry under this id may carry the
+                    # requested index.
             return None
 
         image: ImagePart | None = None

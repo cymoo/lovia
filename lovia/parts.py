@@ -147,8 +147,10 @@ ContentPart = Union[TextPart, ImagePart, FilePart]
 """Discriminated union of all content part types."""
 
 
-# The image formats every supported provider ingests natively.
-_IMAGE_MIME_BY_SUFFIX = {
+# The image formats every supported provider ingests natively. Public: the
+# web layer aliases this table (upload gating, thumbnails) so there is one
+# source of truth for what a vision model accepts.
+IMAGE_MIME_BY_SUFFIX = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "png": "image/png",
@@ -164,7 +166,7 @@ def image_mime(path: str | Path) -> str | None:
     the shared gate for :meth:`ImagePart.from_path` and the tools that feed
     images to a model (``view_image``, the web layer's delegation tool).
     """
-    return _IMAGE_MIME_BY_SUFFIX.get(Path(path).suffix.lower().lstrip("."))
+    return IMAGE_MIME_BY_SUFFIX.get(Path(path).suffix.lower().lstrip("."))
 
 
 def normalize_content(
@@ -266,6 +268,7 @@ __all__ = [
     "FilePart",
     "ImagePart",
     "TextPart",
+    "IMAGE_MIME_BY_SUFFIX",
     "coerce_parts",
     "image_mime",
     "normalize_content",

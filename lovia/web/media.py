@@ -25,11 +25,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..parts import _IMAGE_MIME_BY_SUFFIX, image_mime
+from ..parts import IMAGE_MIME_BY_SUFFIX, image_mime
 
 # Suffix → mime for the raster formats a vision model API accepts — the core
 # table, aliased for the web modules that iterate it.
-MODEL_IMAGE_MIME_BY_EXT = _IMAGE_MIME_BY_SUFFIX
+MODEL_IMAGE_MIME_BY_EXT = IMAGE_MIME_BY_SUFFIX
 MODEL_IMAGE_MIME = frozenset(MODEL_IMAGE_MIME_BY_EXT.values())
 
 # Extension → mime for images a browser renders inline (thumbnails,

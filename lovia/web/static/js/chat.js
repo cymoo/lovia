@@ -829,7 +829,11 @@ function renderToolImages(node, images) {
     img.addEventListener('error', () => {
       const chip = document.createElement('span');
       chip.className = 'tool-image-chip';
-      chip.innerHTML = `${icon('image', { size: 13 })}<span>${im.mime_type || 'image'}</span>`;
+      chip.innerHTML = icon('image', { size: 13 }); // our own SVG, trusted
+      const label = document.createElement('span');
+      // textContent, not markup: mime_type is tool-supplied text.
+      label.textContent = im.mime_type || 'image';
+      chip.append(label);
       img.replaceWith(chip);
     });
     img.addEventListener('click', () =>

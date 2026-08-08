@@ -16,7 +16,9 @@ from lovia.parts import (
     FilePart,
     ImagePart,
     TextPart,
+    coerce_parts,
     normalize_content,
+    project_parts,
     text_of,
 )
 
@@ -151,3 +153,55 @@ def test_text_of_mixed_parts() -> None:
         TextPart(text=" end"),
     ]
     assert text_of(content) == "see [image][file:a.txt][file] end"
+
+
+# ----------------------------------------------------------- coerce_parts ---
+
+
+_PNG = base64.b64encode(b"x" * 1500).decode()
+
+
+def test_coerce_parts_wraps_single_part_and_strings() -> None:
+    image = ImagePart(data=_PNG, mime_type="image/png")
+    assert coerce_parts(image) == [image]
+    got = coerce_parts(["meta line", image])
+    assert got == [TextPart("meta line"), image]
+
+
+def test_coerce_parts_rejects_ordinary_values() -> None:
+    assert coerce_parts("plain string") is None
+    assert coerce_parts(42) is None
+    assert coerce_parts({"a": 1}) is None
+    assert coerce_parts(None) is None
+    assert coerce_parts([]) is None
+    # A list with no actual part is an ordinary structured result.
+    assert coerce_parts(["a", "b"]) is None
+    # A part mixed with a non-part, non-str item is not part-shaped either.
+    assert coerce_parts([ImagePart(url="u"), 42]) is None
+
+
+# ---------------------------------------------------------- project_parts ---
+
+
+def test_project_parts_text_verbatim_binary_as_marker() -> None:
+    projected = project_parts(
+        [
+            TextPart("PNG — uploads/shot.png"),
+            ImagePart(data=_PNG, mime_type="image/png"),
+        ]
+    )
+    assert projected == "PNG — uploads/shot.png\n[image: image/png, 1.5 KB]"
+
+
+def test_project_parts_url_and_file_markers() -> None:
+    projected = project_parts(
+        [
+            ImagePart(url="https://x/y.png"),
+            FilePart(url="https://x/z.pdf", filename="z.pdf"),
+        ]
+    )
+    assert projected == "[image: https://x/y.png]\n[file z.pdf: https://x/z.pdf]"
+
+
+def test_project_parts_skips_empty_text() -> None:
+    assert project_parts([TextPart(""), TextPart("a")]) == "a"

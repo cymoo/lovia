@@ -32,6 +32,16 @@ _ONE_PIXEL_PNG = (
     "+/p9sAAAAASUVORK5CYII="
 )
 
+# A 64×64 solid pure-red PNG: a vision model that actually receives the
+# pixels can name the color; one that only sees the textual projection
+# cannot — which is exactly what the tool-result image tests discriminate.
+_RED_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAb0lEQVR4nO3PAQkAAAyE"
+    "wO9feoshgnABdLep8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUN"
+    "yPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3I8QUNyPEFDcjxBQ3IPanc8OLD"
+    "QitxAAAAAElFTkSuQmCC"
+)
+
 
 class TinyAnswer(BaseModel):
     answer: str
@@ -102,6 +112,32 @@ def live_add(a: int, b: int) -> int:
     """Add two integers."""
 
     return a + b
+
+
+@tool
+def snap_red() -> list:
+    """Take a screenshot and return it as an image."""
+
+    return [
+        TextPart("screenshot.png"),
+        ImagePart(data=_RED_PNG, mime_type="image/png"),
+    ]
+
+
+def _vision_openai_provider():
+    """An OpenAI-flavor provider for the configured vision endpoint (qwen &c)."""
+    _require_live()
+    model = os.getenv("LOVIA_VISION_MODEL")
+    if not model or not os.getenv("LOVIA_VISION_API_KEY"):
+        pytest.skip("LOVIA_VISION_* is not configured")
+    from lovia.providers import OpenAIChatProvider
+
+    return OpenAIChatProvider(
+        model=model,
+        api_key=os.getenv("LOVIA_VISION_API_KEY"),
+        base_url=os.getenv("LOVIA_VISION_BASE_URL"),
+        supports_vision=True,
+    )
 
 
 async def _collect_stream(
@@ -472,6 +508,112 @@ async def test_anthropic_live_pdf_file_input() -> None:
     )
 
     assert marker in _assert_text_result(result)
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_live_tool_result_image_reaches_vision_model() -> None:
+    """End-to-end proof of the synthetic-user-message degrade: the tool role
+    is text-only on this API, so the model can only name the color if the
+    image actually arrived via the appended user message."""
+    provider = _vision_openai_provider()
+    agent = Agent(
+        name="probe",
+        model=provider,
+        instructions=(
+            "Call snap_red exactly once, look at the image it returns, and "
+            "answer with only the dominant color name in English."
+        ),
+        tools=[snap_red],
+        settings=ModelSettings(parallel_tool_calls=False),
+    )
+    try:
+        result = await Runner.run(
+            agent, "What color is the screenshot? Use the tool."
+        )
+    finally:
+        await provider.aclose()
+
+    assert "red" in _assert_text_result(result).lower()
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_live_tool_result_image_degrades_on_text_endpoint() -> None:
+    """A text-only endpoint (DeepSeek et al.) receives the textual projection
+    and no synthetic image message — the run must complete and the model must
+    have seen the projection's file name."""
+    from lovia.providers import OpenAIChatProvider, supports_vision
+
+    model_name = _openai_chat_model()
+    provider = OpenAIChatProvider(model=model_name)
+    if supports_vision(provider):
+        await provider.aclose()
+        pytest.skip("endpoint is vision-capable; the degrade path is not hit")
+    agent = Agent(
+        name="probe",
+        model=provider,
+        instructions=(
+            "Call snap_red exactly once. Its result is an image you cannot "
+            "see; answer with only the file name mentioned in the result."
+        ),
+        tools=[snap_red],
+        settings=ModelSettings(max_tokens=128, parallel_tool_calls=False),
+    )
+    try:
+        result = await Runner.run(agent, "Take the screenshot, then answer.")
+    finally:
+        await provider.aclose()
+
+    assert "screenshot.png" in _assert_text_result(result)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_live_tool_result_image_degrades_on_text_endpoint() -> None:
+    """A text-only Anthropic-flavor endpoint (DeepSeek /anthropic) receives
+    the textual projection instead of image blocks — the run must complete
+    and the model must have seen the projection's file name."""
+    from lovia.providers import AnthropicProvider, supports_vision
+
+    model_name = _anthropic_model()
+    provider = AnthropicProvider(model=model_name)
+    if supports_vision(provider):
+        await provider.aclose()
+        pytest.skip("endpoint is vision-capable; the degrade path is not hit")
+    agent = Agent(
+        name="probe",
+        model=provider,
+        instructions=(
+            "Call snap_red exactly once. Its result is an image you cannot "
+            "see; answer with only the file name mentioned in the result."
+        ),
+        tools=[snap_red],
+        settings=ModelSettings(max_tokens=128, parallel_tool_calls=False),
+    )
+    try:
+        result = await Runner.run(agent, "Take the screenshot, then answer.")
+    finally:
+        await provider.aclose()
+
+    assert "screenshot.png" in _assert_text_result(result)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_live_tool_result_image_native_blocks() -> None:
+    model_name = _anthropic_model()
+    _require_anthropic_content_blocks()
+    agent = Agent(
+        name="probe",
+        model=f"anthropic:{model_name}",
+        instructions=(
+            "Call snap_red exactly once, look at the image it returns, and "
+            "answer with only the dominant color name in English."
+        ),
+        tools=[snap_red],
+        settings=ModelSettings(max_tokens=128, parallel_tool_calls=False),
+    )
+
+    result = await Runner.run(agent, "What color is the screenshot? Use the tool.")
+
+    assert "red" in _assert_text_result(result).lower()
 
 
 async def test_anthropic_live_usage_normalization_across_cache_states() -> None:

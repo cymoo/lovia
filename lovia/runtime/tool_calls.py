@@ -38,6 +38,7 @@ from ..exceptions import RunCancelled
 from ..reliability import CancelToken, RunBudget
 from .run_state import RunState
 from .utils import truncate_repr
+from ..parts import ContentPart, coerce_parts, project_parts
 from ..tools import Tool, render_tool_result, run_tool, truncate_tool_output
 from ..tracing import Tracer, tool_call_span
 from ..transcript import ToolCallEntry, ToolResultEntry
@@ -353,6 +354,7 @@ class ToolCallProcessor:
             )
             yield events.ToolCallFailed(error=exc, call=call)
 
+        parts: list[ContentPart] | None = None
         if isinstance(result, _HandoffSignal):
             state.pending_handoff = result
             result_text = f"Transferred to {result.handoff.target.name}" + (
@@ -365,6 +367,11 @@ class ToolCallProcessor:
             # strings, and a success-shape renderer would crash here and mask
             # the real failure behind "result rendering failed".
             result_text = result
+        elif (parts := coerce_parts(result)) is not None:
+            # A parts return is its own rendering: the entry keeps the parts
+            # and ``output`` is their textual projection, so renderers (which
+            # format plain return values) are bypassed.
+            result_text = project_parts(parts)
         else:
             try:
                 result_text = await render_tool_result(
@@ -399,8 +406,9 @@ class ToolCallProcessor:
         # checkpoints, session storage) pays for the full string, so huge
         # outputs are cut at the source and their retained raw value dropped.
         # The transient ToolCallCompleted event still carries the original
-        # result for observability.
-        raw_value: object = result
+        # result for observability. A parts result keeps no ``raw`` — the
+        # parts themselves are the structured value.
+        raw_value: object = result if parts is None else None
         limit = tool.max_output_chars
         if limit is None:
             limit = state.agent.max_tool_output_chars
@@ -414,6 +422,10 @@ class ToolCallProcessor:
             )
             result_text = truncate_tool_output(result_text, limit)
             raw_value = None
+            # A parts result that trips the cap (a huge text part) degrades to
+            # the truncated text: keeping the parts would put the untruncated
+            # content on the wire for providers that send them as blocks.
+            parts = None
         elif len(result_text) > _KEEP_RAW_MAX_CHARS:
             raw_value = None
 
@@ -423,6 +435,7 @@ class ToolCallProcessor:
                 output=result_text,
                 raw=raw_value,
                 is_error=is_error,
+                parts=parts,
             )
         )
         if not is_error:

@@ -94,6 +94,30 @@ async def test_clear_skips_small_results():
     assert ctx.state.cleared == set()
 
 
+async def test_clear_takes_parts_results_despite_tiny_projection():
+    """A parts-carrying result has a short ``output`` but a large flat cost
+    (~image_tokens); ``min_chars`` must not shield it from clearing."""
+    from lovia.parts import ImagePart
+    from lovia.transcript import ToolResultEntry
+
+    body = []
+    for i in range(4):
+        body.append(call(f"c{i}", "view_image"))
+        body.append(
+            ToolResultEntry(
+                call_id=f"c{i}",
+                output="[image: image/png, 12 B]",
+                parts=[ImagePart(data="aGVsbG8gd29ybGQh", mime_type="image/png")],
+            )
+        )
+    ctx = make_ctx(body)
+    # Images dominate the count (4 × 1600 flat) — the view is over target.
+    assert ctx.current_tokens > ctx.budget.target_tokens
+    decided = await ClearToolResults(keep_last=0, min_chars=200).plan(body, ctx)
+    assert decided is True
+    assert ctx.state.cleared  # image results were eligible despite tiny output
+
+
 async def test_clear_never_decides_reused_call_ids():
     # Decisions are keyed by call_id; with a provider that reuses ids a
     # marker would replace every occurrence, including the newest result.

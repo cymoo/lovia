@@ -48,6 +48,7 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Usage
+from ..parts import ContentPart, FilePart, TextPart
 from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
@@ -249,7 +250,10 @@ class AnthropicProvider:
         # the option being set, so only the official dialect gets the gate.
         replay_thinking = not (self._speaks_official_dialect() and thinking_off)
         system_blocks, anthropic_messages = _to_anthropic_messages(
-            entries, reasoning_provider=self.name, replay_thinking=replay_thinking
+            entries,
+            reasoning_provider=self.name,
+            replay_thinking=replay_thinking,
+            include_images=self.supports_vision,
         )
         if cache_system and system_blocks:
             # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
@@ -590,6 +594,7 @@ def _to_anthropic_messages(
     *,
     reasoning_provider: str = "anthropic",
     replay_thinking: bool = True,
+    include_images: bool = False,
 ) -> tuple[list[JsonObject] | None, list[JsonObject]]:
     """Translate transcript entries into Anthropic's API shape.
 
@@ -600,6 +605,10 @@ def _to_anthropic_messages(
     Only :class:`ReasoningEntry` values written by ``reasoning_provider`` are
     replayed, and only when ``replay_thinking`` is set — the adapter turns it
     off when the current request would be rejected for containing them.
+
+    ``include_images`` controls whether a tool result's ``parts`` are encoded
+    as content blocks inside ``tool_result``; when off (a text-only endpoint)
+    the result's textual projection (``output``) goes on the wire instead.
     """
     system_parts: list[str] = []
     out: list[JsonObject] = []
@@ -628,10 +637,23 @@ def _to_anthropic_messages(
 
         if isinstance(entry, ToolResultEntry):
             flush_assistant()
+            content: str | list[JsonObject] = entry.output
+            if include_images and entry.parts:
+                # ``tool_result`` content accepts text and image blocks only;
+                # a FilePart degrades to its projection-style text marker
+                # rather than a document block the API would reject.
+                safe_parts: list[ContentPart] = [
+                    TextPart(f"[file: {p.filename or p.mime_type or 'attachment'}]")
+                    if isinstance(p, FilePart)
+                    else p
+                    for p in entry.parts
+                ]
+                if blocks := _content_to_anthropic_blocks(safe_parts):
+                    content = blocks
             result_block: JsonObject = {
                 "type": "tool_result",
                 "tool_use_id": entry.call_id,
-                "content": entry.output,
+                "content": content,
             }
             if entry.is_error:
                 result_block["is_error"] = True

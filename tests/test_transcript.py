@@ -48,6 +48,14 @@ from lovia.transcript import (
         ToolCallEntry(call_id="c1", name="add", arguments='{"a":1,"b":2}'),
         ToolResultEntry(call_id="c1", output="3"),
         ToolResultEntry(call_id="c2", output="boom", is_error=True),
+        ToolResultEntry(
+            call_id="c3",
+            output="[image: image/png, 5 B]",
+            parts=[
+                TextPart(text="shot.png"),
+                ImagePart(data="aGVsbG8=", mime_type="image/png"),
+            ],
+        ),
     ],
 )
 def test_entry_roundtrip(entry: object) -> None:
@@ -55,6 +63,27 @@ def test_entry_roundtrip(entry: object) -> None:
     payload = entry_to_dict(entry)  # type: ignore[arg-type]
     restored = entry_from_dict(payload)
     assert restored == entry
+
+
+def test_plain_tool_result_serialization_has_no_parts_key() -> None:
+    """Only parts-carrying results pay for the key — the historical shape of
+    plain results stays byte-identical."""
+    assert "parts" not in entry_to_dict(ToolResultEntry(call_id="c1", output="3"))
+
+
+def test_tool_result_parts_roundtrip_types() -> None:
+    entry = ToolResultEntry(
+        call_id="c1",
+        output="[image: image/png, 5 B]",
+        parts=[ImagePart(data="aGVsbG8=", mime_type="image/png", detail="low")],
+    )
+    restored = entry_from_dict(entry_to_dict(entry))
+    assert isinstance(restored, ToolResultEntry)
+    assert restored.parts is not None
+    part = restored.parts[0]
+    assert isinstance(part, ImagePart)
+    assert part.data == "aGVsbG8="
+    assert part.detail == "low"
 
 
 def test_input_entry_image_part_roundtrip() -> None:

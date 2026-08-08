@@ -103,12 +103,19 @@ class ToolResultEntry:
     ``output`` is the string the model will see. ``raw`` preserves the
     Python-side return value when the tool returned something structured
     so hooks and renderers can inspect it later without re-parsing.
+
+    ``parts`` is set when the tool returned rich content (e.g. an image):
+    it holds the full :class:`ContentPart` list, and ``output`` becomes its
+    textual projection (:func:`~lovia.parts.project_parts`) — what text-only
+    consumers see and what goes on the wire when a provider cannot accept
+    the parts themselves.
     """
 
     call_id: str
     output: str
     raw: object | None = None
     is_error: bool = False
+    parts: list[ContentPart] | None = None
     type: Literal["tool_result"] = "tool_result"
 
 
@@ -278,13 +285,18 @@ def entry_to_dict(entry: TranscriptEntry) -> JsonObject:
             "content": _content_to_dict(entry.content),
         }
     if isinstance(entry, ToolResultEntry):
-        return {
+        out: JsonObject = {
             "type": entry.type,
             "call_id": entry.call_id,
             "output": entry.output,
             "is_error": entry.is_error,
             "raw": to_json_safe(entry.raw),
         }
+        # Only parts-carrying results pay for the key, so plain results keep
+        # their historical serialized shape byte-for-byte.
+        if entry.parts is not None:
+            out["parts"] = _content_to_dict(entry.parts)
+        return out
     return asdict(entry)
 
 
@@ -335,6 +347,17 @@ def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
         return InputEntry(
             role=data["role"],
             content=_content_from_dict(data["content"]),
+        )
+    if cls is ToolResultEntry:
+        raw_parts = data.get("parts")
+        parts = _content_from_dict(raw_parts) if raw_parts is not None else None
+        assert not isinstance(parts, str)
+        return ToolResultEntry(
+            call_id=data["call_id"],
+            output=data["output"],
+            raw=data.get("raw"),
+            is_error=data.get("is_error", False),
+            parts=parts,
         )
     # Strip ``type`` since it's the dataclass default; pass everything else
     # through so we surface unknown fields as a clean TypeError.

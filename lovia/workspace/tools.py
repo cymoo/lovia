@@ -16,16 +16,18 @@ infrastructure), keeping the package dependency one-directional:
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal
 
 from pydantic import Field
 
 from ..exceptions import ToolError
+from ..parts import ContentPart, ImagePart, TextPart, image_mime
 from ..run_context import RunContext
 from ..tools.base import tool
 from ..transcript import InputEntry, TranscriptEntry
-from .errors import WorkspaceError
+from .errors import FileTooLargeError, WorkspaceError
 from .protocol import WorkspaceSession
 from .types import (
     CommandResult,
@@ -48,6 +50,7 @@ __all__ = [
     "read_process_output",
     "require_workspace",
     "shell",
+    "view_image",
     "write_file",
 ]
 
@@ -216,6 +219,54 @@ async def read_file(
     ] = None,
 ) -> FileContent:
     return await require_workspace(ctx).read_text(path, start=start, end=end)
+
+
+# Anthropic's documented per-image limit — the strictest current provider —
+# measured in decoded bytes. Deliberately not a policy/config knob: the cap
+# is UX (fewer wire 400s), not a safety valve — an over-limit image that
+# slips through surfaces a provider error the agent loop recovers from.
+VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
+
+@tool(
+    name="view_image",
+    description=(
+        "Look at an image file: the image itself is returned for you to see.\n"
+        "- path is workspace-relative (e.g. 'shots/app.png') or absolute; "
+        "paths outside the workspace may require user approval or be denied "
+        "by policy.\n"
+        "- Supported: jpg, jpeg, png, gif, webp.\n"
+        "- Images over 5 MB are refused; downscale first via the shell, e.g. "
+        "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
+        "img.png`."
+    ),
+    needs_approval=_path_needs_approval("read"),
+    returns_images=True,
+)
+async def view_image(
+    ctx: RunContext[Any],
+    path: Annotated[str, "Workspace-relative or absolute image path."],
+) -> list[ContentPart]:
+    session = require_workspace(ctx)
+    mime = image_mime(path)
+    if mime is None:
+        raise ToolError(
+            f"Not a supported image type: {path!r}",
+            hint="view_image reads jpg, jpeg, png, gif, or webp files.",
+        )
+    try:
+        file = await session.read_bytes(path, max_bytes=VIEW_IMAGE_MAX_BYTES)
+    except FileTooLargeError as exc:
+        raise ToolError(
+            str(exc),
+            hint=(
+                "Downscale it first via the shell, e.g. `sips -Z 1568 "
+                f"{path}` (macOS) or `magick {path} -resize 1568x1568 {path}`, "
+                "then view the smaller file."
+            ),
+        ) from exc
+    data = base64.b64encode(file.data).decode("ascii")
+    return [TextPart(file.path), ImagePart(data=data, mime_type=mime)]
 
 
 @tool(

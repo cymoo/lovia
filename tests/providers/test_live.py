@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -612,6 +613,32 @@ async def test_anthropic_live_tool_result_image_native_blocks() -> None:
     )
 
     result = await Runner.run(agent, "What color is the screenshot? Use the tool.")
+
+    assert "red" in _assert_text_result(result).lower()
+
+
+@pytest.mark.asyncio
+async def test_live_view_image_workspace_tool_end_to_end(tmp_path) -> None:
+    """The full loop: the built-in view_image reads a workspace file, its
+    image part rides the wire, and the vision model names what it saw."""
+    from lovia.workspace import Workspace
+
+    provider = _vision_openai_provider()
+    (tmp_path / "shot.png").write_bytes(base64.b64decode(_RED_PNG))
+    agent = Agent(
+        name="probe",
+        model=provider,
+        instructions=(
+            "Use view_image on 'shot.png', look at it, and answer with only "
+            "the dominant color name in English."
+        ),
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+        settings=ModelSettings(parallel_tool_calls=False),
+    )
+    try:
+        result = await Runner.run(agent, "What color is shot.png?")
+    finally:
+        await provider.aclose()
 
     assert "red" in _assert_text_result(result).lower()
 

@@ -10,6 +10,7 @@ from .types import (
     CommandResult,
     DirEntry,
     EditResult,
+    FileBytes,
     FileChange,
     FileContent,
     GrepMatch,
@@ -49,6 +50,15 @@ class WorkspaceSession(Protocol):
         self, path: str, *, start: int | None = None, end: int | None = None
     ) -> FileContent:
         """Return UTF-8 text from ``path`` (optionally a 1-based line range)."""
+        ...
+
+    async def read_bytes(self, path: str, *, max_bytes: int | None = None) -> FileBytes:
+        """Return the raw bytes of ``path`` (binary payloads, e.g. images).
+
+        Raises :class:`~lovia.workspace.errors.FileTooLargeError` when the
+        file exceeds ``max_bytes`` — sized *before* reading, so a caller's
+        cap also bounds memory.
+        """
         ...
 
     async def write_text(

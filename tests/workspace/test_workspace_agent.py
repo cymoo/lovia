@@ -182,6 +182,74 @@ async def test_readonly_workspace_exposes_no_shell_or_write(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_view_image_filtered_for_text_only_models(tmp_path) -> None:
+    """The workspace bundle carries view_image, but an ambient tool whose
+    results the model cannot see is not offered — calling it reports
+    "not available" like any unknown tool."""
+    (tmp_path / "s.png").write_bytes(b"png-bytes")
+    provider = ScriptedProvider(
+        [call("view_image", {"path": "s.png"}, call_id="v"), text("done")]
+    )
+    agent = Agent(
+        name="t",
+        model=provider,
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+
+    result = await Runner.run(agent, "look at s.png")
+
+    tool_msg = next(m for m in result.messages if m.role == "tool")
+    assert "not available" in tool_msg.content
+
+
+@pytest.mark.asyncio
+async def test_view_image_offered_to_vision_models(tmp_path) -> None:
+    from lovia.transcript import ToolResultEntry
+
+    class VisionScripted(ScriptedProvider):
+        supports_vision = True
+
+    (tmp_path / "s.png").write_bytes(b"abc")
+    provider = VisionScripted(
+        [call("view_image", {"path": "s.png"}, call_id="v"), text("saw it")]
+    )
+    agent = Agent(
+        name="t",
+        model=provider,
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+
+    result = await Runner.run(agent, "look at s.png")
+
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert entry.output == "s.png\n[image: image/png, 3 B]"
+    assert entry.parts is not None and len(entry.parts) == 2
+    assert result.output == "saw it"
+
+
+@pytest.mark.asyncio
+async def test_explicit_returns_images_tool_survives_text_model(tmp_path) -> None:
+    """agent.tools is the user's own wiring — never filtered; the text-only
+    model sees the projection (adapter degrade), not a missing tool."""
+    from lovia.parts import ImagePart
+    from lovia.transcript import ToolResultEntry
+
+    @tool(returns_images=True)
+    def fake_shot() -> list:
+        """Return an image."""
+        return [ImagePart(data="YQ==", mime_type="image/png")]
+
+    provider = ScriptedProvider([call("fake_shot", {}, call_id="f"), text("ok")])
+    agent = Agent(name="t", model=provider, tools=[fake_shot])
+
+    result = await Runner.run(agent, "shoot")
+
+    entry = next(e for e in result.entries if isinstance(e, ToolResultEntry))
+    assert entry.output == "[image: image/png, 1 B]"
+    assert entry.parts is not None
+
+
+@pytest.mark.asyncio
 async def test_file_tools_without_workspace_fail_with_hint(tmp_path) -> None:
     from lovia.workspace.tools import read_file
 

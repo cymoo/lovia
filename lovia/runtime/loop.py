@@ -88,6 +88,7 @@ from ..providers.base import (
     Provider,
     context_window,
     discover_context_window,
+    supports_vision,
 )
 from ..reliability import CancelToken, RetryPolicy, RunBudget
 from ..run_context import RunContext
@@ -667,7 +668,9 @@ class RunLoop:
             contribute = getattr(agent.workspace, "view_injectors", None)
             if contribute is not None:
                 plugins.view_injectors.extend(contribute())
-        tools_by_name = self._collect_tools(agent, workspace_tools, plugins.tools)
+        tools_by_name = self._collect_tools(
+            agent, workspace_tools, plugins.tools, provider
+        )
         active = ActiveAgent(
             agent=agent,
             provider=provider,
@@ -1381,6 +1384,7 @@ class RunLoop:
         agent: Agent[Any],
         workspace_tools: list[Tool],
         plugin_tools: list[Tool] | None = None,
+        provider: Provider | None = None,
     ) -> dict[str, Tool]:
         tools: dict[str, Tool] = {}
 
@@ -1394,12 +1398,29 @@ class RunLoop:
                 )
             tools[t.name] = t
 
+        def ambient_ok(source: str, t: Tool) -> bool:
+            # Ambient sources (workspace/plugin bundles) skip tools whose
+            # results this model cannot see; ``agent.tools`` is the user's own
+            # explicit wiring and is never filtered — the adapters' wire
+            # degrade covers it, so the flag stays a UX hint, never a
+            # correctness gate.
+            if provider is None or not t.returns_images or supports_vision(provider):
+                return True
+            logger.info(
+                "tool %r (%s) returns images the model cannot see; not offering it",
+                t.name,
+                source,
+            )
+            return False
+
         for t in agent.tools:
             add_tool("agent.tools", t)
         for t in plugin_tools or []:
-            add_tool("plugin", t)
+            if ambient_ok("plugin", t):
+                add_tool("plugin", t)
         for t in workspace_tools:
-            add_tool("agent.workspace", t)
+            if ambient_ok("agent.workspace", t):
+                add_tool("agent.workspace", t)
         for h in agent.handoffs:
             handoff_obj = h if isinstance(h, Handoff) else Handoff(target=h)
             add_tool("handoff", build_handoff_tool(handoff_obj))

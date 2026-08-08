@@ -11,6 +11,7 @@ of sandboxing executors or future backends implementing the same protocols.
 from __future__ import annotations
 
 from .errors import (
+    FileTooLargeError,
     PermissionDeniedError,
     WorkspaceClosedError,
     WorkspaceError,
@@ -28,6 +29,7 @@ from .types import (
     CommandResult,
     DirEntry,
     EditResult,
+    FileBytes,
     FileChange,
     FileContent,
     GrepMatch,
@@ -49,9 +51,11 @@ __all__ = [
     "Decision",
     "DirEntry",
     "EditResult",
+    "FileBytes",
     "FileChange",
     "FileContent",
     "FileOp",
+    "FileTooLargeError",
     "GrepMatch",
     "LocalWorkspace",
     "LocalWorkspaceSession",

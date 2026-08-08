@@ -694,11 +694,12 @@ async def test_workspace_local_mode_presets_and_overrides(tmp_path) -> None:
     ws = Workspace.local(str(tmp_path), mode="readonly")
     assert ws.policy.write == "deny"
     tool_names = [t.name for t in ws.tools()]
-    assert tool_names == ["read_file", "list_files", "grep_files"]
+    assert tool_names == ["read_file", "view_image", "list_files", "grep_files"]
 
     coding = Workspace.local(str(tmp_path), mode="coding")
     assert {t.name for t in coding.tools()} == {
         "read_file",
+        "view_image",
         "list_files",
         "grep_files",
         "write_file",
@@ -707,6 +708,21 @@ async def test_workspace_local_mode_presets_and_overrides(tmp_path) -> None:
         "read_process_output",
         "kill_process",
     }
+
+
+async def test_read_bytes_roundtrip_and_cap(tmp_path) -> None:
+    from lovia.workspace import FileTooLargeError
+
+    (tmp_path / "blob.bin").write_bytes(b"\x00\x01hello")
+    session = await _session(tmp_path)
+
+    fb = await session.read_bytes("blob.bin")
+    assert fb.path == "blob.bin"
+    assert fb.data == b"\x00\x01hello"
+
+    # Sized before reading: the cap refuses without loading the file.
+    with pytest.raises(FileTooLargeError, match="limit 3"):
+        await session.read_bytes("blob.bin", max_bytes=3)
 
 
 async def test_workspace_local_rejects_conflicting_policy_kwargs(tmp_path) -> None:

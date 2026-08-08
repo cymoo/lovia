@@ -23,6 +23,13 @@ class FileContent(BaseModel):
     truncated: bool = False
 
 
+class FileBytes(BaseModel):
+    """Raw bytes returned by ``read_bytes`` (binary payloads, e.g. images)."""
+
+    path: str
+    data: bytes
+
+
 class FileChange(BaseModel):
     """Result of creating or updating a file."""
 

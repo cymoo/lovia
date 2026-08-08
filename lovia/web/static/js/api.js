@@ -208,6 +208,12 @@ export const api = {
   /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
   workspaceRawUrl: ({ agent, path, download } = {}) =>
     `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
+  // Bytes of one image a tool result carried — served from the transcript,
+  // so it shows exactly what the model saw. `index` is 0-based over that
+  // result's image parts (the SSE / history `images` stubs).
+  /** @param {string} sessionId @param {string} callId @param {number} index @returns {string} */
+  toolImageUrl: (sessionId, callId, index) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
   // ---- background processes (chat-scoped; the panel's Processes strip) ----
   // Keyed by session id: processes belong to the chat's live workspace
   // session, not to the agent. `[]` when nothing ran yet (or after a server

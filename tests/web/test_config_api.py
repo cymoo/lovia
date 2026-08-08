@@ -218,14 +218,14 @@ def _config_roles(client: TestClient) -> dict:
     return client.get("/api/config").json()["roles"]
 
 
-def test_vision_role_wires_see_image(served) -> None:
+def test_vision_role_wires_describe_image(served) -> None:
     client, _runtime, app = served
     # A text-only chat model (vision "off") plus an assigned vision profile.
     _add_model(client, id="blind", vision="off")
     _add_model(client, id="eyes", model="glm-4.6v", vision="on")
     client.put("/api/config/roles", json={"vision": "eyes"})
     agent = app.state.deps.agents["lovia"]
-    assert "see_image" in {t.name for t in agent.tools}
+    assert "describe_image" in {t.name for t in agent.tools}
 
 
 # --------------------------------------------------------------- search -

@@ -194,6 +194,19 @@ class AnswerRequest(BaseModel):
     answer: str
 
 
+class ToolImageOut(BaseModel):
+    """Stub for one image carried by a tool result.
+
+    ``index`` counts the *image* parts of that result (0-based); the client
+    fetches the bytes from
+    ``/api/sessions/{sid}/tool-images/{call_id}/{index}`` — transcript-served,
+    never inlined, so session payloads stay light.
+    """
+
+    index: int
+    mime_type: str | None = None
+
+
 class MessageOut(BaseModel):
     role: str
     content: Any
@@ -205,6 +218,8 @@ class MessageOut(BaseModel):
     # True for a ``tool`` message whose stored result was an error, so replayed
     # sessions keep the red error styling the live SSE stream applies.
     is_error: bool = False
+    # Image stubs for a ``tool`` message whose result carried image parts.
+    images: list[ToolImageOut] = Field(default_factory=list)
     # Populated only for a synthetic ``role="context_compacted"`` entry: the
     # persisted compaction notice ({reason, reactive, summary, tokens_before,
     # tokens_after, detail}) that ``renderHistory`` replays. ``None`` for every

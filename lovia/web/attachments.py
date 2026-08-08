@@ -5,7 +5,7 @@ workspace ``uploads/`` dir; here we assemble one turn's text + attachment
 references into runner input. The rules mirror issue #107's two stages:
 
 * Every attachment is surfaced as a **workspace path** the agent can reach with
-  its own file tools (or ``see_image``) — this works with any model.
+  its own file tools (or ``describe_image``) — this works with any model.
 * Images additionally go **inline** as :class:`~lovia.ImagePart` only when the
   model can see them (:func:`~lovia.providers.supports_vision`).
 

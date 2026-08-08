@@ -127,7 +127,7 @@ class Roles(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
     chat: str | None = None  # None -> the first profile
-    vision: str | None = None  # None -> no see_image delegation
+    vision: str | None = None  # None -> no describe_image delegation
     aux: str | None = None  # titles + follow-ups; None -> the chat model
 
 

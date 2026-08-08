@@ -327,6 +327,65 @@ def test_stream_emits_tool_events() -> None:
     assert "tool_result" in kinds
 
 
+def test_tool_result_images_stream_history_and_route() -> None:
+    """The full image loop: SSE carries byte-free stubs, the replayed session
+    stamps them onto the tool message, and the tool-images route serves the
+    exact bytes the transcript recorded."""
+    import base64
+
+    from lovia.parts import ImagePart, TextPart
+
+    png = b"\x89PNG-fake-but-bytes"
+    b64 = base64.b64encode(png).decode("ascii")
+
+    @tool(returns_images=True)
+    async def snap() -> list:
+        """Stub screenshot tool."""
+        return [TextPart("shot.png"), ImagePart(data=b64, mime_type="image/png")]
+
+    provider = ScriptedProvider([call("snap", {}, call_id="c1"), text("done")])
+    agent = Agent(name="bot", model=provider, tools=[snap])
+    c = TestClient(_app(agent))
+    with c.stream("POST", "/api/chat/stream", json={"message": "go"}) as res:
+        events = _parse_sse("".join(res.iter_text()))
+
+    sid = next(d for e, d in events if e == "session")["session_id"]
+    tr = next(d for e, d in events if e == "tool_result")
+    assert tr["images"] == [{"index": 0, "mime_type": "image/png"}]
+    assert b64 not in json.dumps(tr)  # stubs, never inline base64
+
+    detail = c.get(f"/api/sessions/{sid}").json()
+    tool_msg = next(m for m in detail["entries"] if m["role"] == "tool")
+    assert tool_msg["images"] == [{"index": 0, "mime_type": "image/png"}]
+
+    img = c.get(f"/api/sessions/{sid}/tool-images/c1/0")
+    assert img.status_code == 200
+    assert img.headers["content-type"] == "image/png"
+    assert img.content == png
+
+    missing = c.get(f"/api/sessions/{sid}/tool-images/c1/7")
+    assert missing.status_code == 404
+    unknown = c.get(f"/api/sessions/{sid}/tool-images/nope/0")
+    assert unknown.status_code == 404
+
+
+def test_plain_tool_results_carry_no_image_stubs() -> None:
+    @tool
+    async def weather(city: str) -> str:
+        """Stub tool."""
+        return f"{city}:sunny"
+
+    provider = ScriptedProvider(
+        [call("weather", {"city": "paris"}, call_id="c1"), text("done")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[weather])
+    c = TestClient(_app(agent))
+    with c.stream("POST", "/api/chat/stream", json={"message": "go"}) as res:
+        events = _parse_sse("".join(res.iter_text()))
+    tr = next(d for e, d in events if e == "tool_result")
+    assert "images" not in tr
+
+
 def test_context_compacted_sse_forwards_notice() -> None:
     """The compaction SSE payload carries the notice the UI renders."""
     from lovia import events

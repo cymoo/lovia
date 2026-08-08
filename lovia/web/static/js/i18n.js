@@ -164,6 +164,7 @@ const MESSAGES = {
     'ctx.cacheWrite': '缓存写入',
     // ---- tool cards
     'tool.copyResult': '复制结果',
+    'tool.image': '工具结果图片',
     'tool.expand': '展开结果',
     'tool.collapse': '收起结果',
     'tool.openInFiles': '在文件面板中打开',
@@ -569,6 +570,7 @@ const EN = {
   'ctx.cacheRead': 'Cache read',
   'ctx.cacheWrite': 'Cache write',
   'tool.copyResult': 'Copy result',
+  'tool.image': 'Tool result image',
   'tool.expand': 'Expand result',
   'tool.collapse': 'Collapse result',
   'tool.openInFiles': 'Open in Files panel',

@@ -14,7 +14,7 @@ from typing import AsyncIterator, Callable, cast
 from ..types import JsonObject, JsonValue
 from .. import events
 from ..messages import Usage
-from ..parts import text_of
+from ..parts import ImagePart, coerce_parts, text_of
 from ..plugins import TodoItem
 from ..transcript import (
     AssistantTextEntry,
@@ -152,17 +152,25 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
                     }
                 ),
             }
-        return {
-            "event": "tool_result",
-            "data": _dumps(
-                {
-                    "id": ev.call.id,
-                    "name": ev.call.name,
-                    "result": ev.output,
-                    "is_error": ev.is_error,
-                }
-            ),
+        payload: JsonObject = {
+            "id": ev.call.id,
+            "name": ev.call.name,
+            "result": ev.output,
+            "is_error": ev.is_error,
         }
+        # Image parts ride as byte-free stubs; the client fetches the pixels
+        # from the tool-images route (0-based over the result's image parts).
+        parts = None if ev.is_error else coerce_parts(result)
+        if parts:
+            images = [
+                {"index": i, "mime_type": p.mime_type}
+                for i, p in enumerate(
+                    p for p in parts if isinstance(p, ImagePart)
+                )
+            ]
+            if images:
+                payload["images"] = images
+        return {"event": "tool_result", "data": _dumps(payload)}
     if isinstance(ev, events.ApprovalRequired):
         return {
             "event": "approval_required",

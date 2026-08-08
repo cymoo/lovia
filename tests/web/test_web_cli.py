@@ -504,7 +504,7 @@ def test_build_default_agent_wires_the_vision_role(
     agent = builder.build_default_agent(
         args, ChatStore.in_memory(), blind, config=config
     )
-    assert "see_image" in {t.name for t in agent.tools}
+    assert "describe_image" in {t.name for t in agent.tools}
 
 
 def test_build_default_agent_injects_current_date(

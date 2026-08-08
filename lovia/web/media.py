@@ -4,7 +4,9 @@ Two deliberately-separate notions, each defined once here and imported wherever
 it is needed (instead of ad-hoc literals scattered across modules):
 
 * the **model** set — raster formats a vision model API accepts. Gates what is
-  inlined as an :class:`~lovia.ImagePart` and what ``see_image`` will read
+  inlined as an :class:`~lovia.ImagePart`; delegates to the core
+  :func:`lovia.parts.image_mime` (the same gate ``view_image`` and
+  ``describe_image`` use), re-exposed here under the web-layer name
   (:func:`model_image_mime`).
 * the **preview** predicate — formats a browser renders inline. Drives the
   upload ``kind`` (image vs file), the ``/api/workspace/raw`` inline preview,
@@ -23,16 +25,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# Suffix → mime for the raster formats a vision model API accepts. Explicit so
-# an unsupported file fails with a clear message rather than a raw ValueError
-# out of ImagePart.from_path.
-MODEL_IMAGE_MIME_BY_EXT = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "gif": "image/gif",
-    "webp": "image/webp",
-}
+from ..parts import _IMAGE_MIME_BY_SUFFIX, image_mime
+
+# Suffix → mime for the raster formats a vision model API accepts — the core
+# table, aliased for the web modules that iterate it.
+MODEL_IMAGE_MIME_BY_EXT = _IMAGE_MIME_BY_SUFFIX
 MODEL_IMAGE_MIME = frozenset(MODEL_IMAGE_MIME_BY_EXT.values())
 
 # Extension → mime for images a browser renders inline (thumbnails,
@@ -63,8 +60,9 @@ def _ext(name: str | Path) -> str:
 
 def model_image_mime(name: str | Path) -> str | None:
     """The vision-model mime for a filename (by extension), or ``None`` when the
-    model can't ingest it directly — the gate for inlining and ``see_image``."""
-    return MODEL_IMAGE_MIME_BY_EXT.get(_ext(name))
+    model can't ingest it directly — the gate for inlining attachments. Same
+    table as the core ``view_image``/``describe_image`` tools."""
+    return image_mime(name)
 
 
 def preview_image_mime(name: str | Path) -> str | None:

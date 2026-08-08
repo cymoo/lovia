@@ -233,9 +233,10 @@ def _binary_marker(label: str, part: ImagePart | FilePart) -> str:
     if part.url is not None:
         return f"[{label}: {part.url}]"
     # base64 inflates 4/3; length over 4/3 minus the padding recovers the
-    # exact decoded byte count without decoding.
+    # exact decoded byte count without decoding. Clamped: ImagePart does not
+    # validate base64, and a malformed payload must not read "-1 B".
     raw = part.data or ""
-    size = _human_size(len(raw) * 3 // 4 - raw[-2:].count("="))
+    size = _human_size(max(0, len(raw) * 3 // 4 - raw[-2:].count("=")))
     return f"[{label}: {part.mime_type}, {size}]"
 
 

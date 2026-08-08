@@ -48,7 +48,7 @@ from ..transcript import (
     UsageDelta,
 )
 from ..messages import Usage
-from ..parts import ContentPart, FilePart, TextPart
+from ..parts import ContentPart, FilePart, TextPart, project_parts
 from ..http_config import resolve_timeout, resolve_trust_env, resolve_verify
 from ._content import (
     content_to_anthropic_blocks as _content_to_anthropic_blocks,
@@ -640,12 +640,11 @@ def _to_anthropic_messages(
             content: str | list[JsonObject] = entry.output
             if include_images and entry.parts:
                 # ``tool_result`` content accepts text and image blocks only;
-                # a FilePart degrades to its projection-style text marker
-                # rather than a document block the API would reject.
+                # a FilePart degrades to its ``project_parts`` marker — the
+                # same text a text-only endpoint sees in ``output`` — rather
+                # than a document block the API would reject.
                 safe_parts: list[ContentPart] = [
-                    TextPart(f"[file: {p.filename or p.mime_type or 'attachment'}]")
-                    if isinstance(p, FilePart)
-                    else p
+                    TextPart(project_parts([p])) if isinstance(p, FilePart) else p
                     for p in entry.parts
                 ]
                 if blocks := _content_to_anthropic_blocks(safe_parts):

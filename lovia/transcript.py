@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Callable, Literal, Union
+from typing import Any, Callable, Literal, Union, cast
 
 from .types import JsonObject
 from .parts import ContentPart, FilePart, ImagePart, TextPart, text_of
@@ -350,8 +350,16 @@ def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
         )
     if cls is ToolResultEntry:
         raw_parts = data.get("parts")
-        parts = _content_from_dict(raw_parts) if raw_parts is not None else None
-        assert not isinstance(parts, str)
+        parts: list[ContentPart] | None = None
+        if raw_parts is not None:
+            # Persisted data is untrusted; validate explicitly rather than
+            # via assert (stripped under ``-O``, and AssertionError is not
+            # the stable contract ValueError is).
+            if not isinstance(raw_parts, list):
+                raise ValueError(
+                    f"ToolResultEntry parts must be a list, got {type(raw_parts).__name__}"
+                )
+            parts = cast("list[ContentPart]", _content_from_dict(raw_parts))
         return ToolResultEntry(
             call_id=data["call_id"],
             output=data["output"],

@@ -205,3 +205,11 @@ def test_project_parts_url_and_file_markers() -> None:
 
 def test_project_parts_skips_empty_text() -> None:
     assert project_parts([TextPart(""), TextPart("a")]) == "a"
+
+
+def test_project_parts_clamps_malformed_base64_size() -> None:
+    # ImagePart does not validate base64; a malformed payload must not
+    # produce a negative size marker.
+    assert project_parts([ImagePart(data="=", mime_type="image/png")]) == (
+        "[image: image/png, 0 B]"
+    )

@@ -162,7 +162,8 @@ def test_tool_result_parts_degrade_to_projection_without_images() -> None:
 
 def test_tool_result_file_part_degrades_to_text_marker() -> None:
     """tool_result content takes text/image blocks only; a FilePart must not
-    become a document block."""
+    become a document block. The marker is the part's ``project_parts`` text,
+    so vision and text-only endpoints see the same wording."""
     entries = [
         ToolCallEntry(call_id="c1", name="export", arguments="{}"),
         ToolResultEntry(
@@ -175,7 +176,7 @@ def test_tool_result_file_part_degrades_to_text_marker() -> None:
     _, out = _to_anthropic_messages(entries, include_images=True)
 
     assert out[1]["content"][0]["content"] == [
-        {"type": "text", "text": "[file: doc.pdf]"}
+        {"type": "text", "text": "[file doc.pdf: application/pdf, 3 B]"}
     ]
 
 

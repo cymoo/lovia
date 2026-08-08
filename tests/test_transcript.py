@@ -50,7 +50,8 @@ from lovia.transcript import (
         ToolResultEntry(call_id="c2", output="boom", is_error=True),
         ToolResultEntry(
             call_id="c3",
-            output="[image: image/png, 5 B]",
+            # ``output`` is project_parts(parts), as the runner derives it.
+            output="shot.png\n[image: image/png, 5 B]",
             parts=[
                 TextPart(text="shot.png"),
                 ImagePart(data="aGVsbG8=", mime_type="image/png"),

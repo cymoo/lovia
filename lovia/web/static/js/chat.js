@@ -796,10 +796,58 @@ function splitReadFileHeader(node, text, isError) {
   };
 }
 
+// Images a tool result carried (view_image & friends): rendered from the
+// transcript-serving route, so the strip shows exactly the pixels the model
+// saw — even for files since changed, deleted, or outside the workspace.
+// Idempotent across repeated result updates; a fetch failure degrades each
+// image to a small chip instead of a broken-image glyph.
+function renderToolImages(node, images) {
+  const box = node.querySelector('.tool-result-box');
+  if (!box) return;
+  let strip = box.querySelector('.tool-result-images');
+  if (!images?.length) {
+    strip?.remove();
+    return;
+  }
+  const callId = node.dataset.callId;
+  if (!callId || !store.sessionId) return;
+  if (!strip) {
+    strip = document.createElement('div');
+    strip.className = 'tool-result-images';
+    box.append(strip);
+  }
+  // The image IS the payload — surface it instead of hiding it behind the
+  // collapsed card (matching how attachments render without a click).
+  node.open = true;
+  strip.replaceChildren();
+  for (const im of images) {
+    const img = document.createElement('img');
+    img.className = 'tool-result-image';
+    img.loading = 'lazy';
+    img.alt = t('tool.image');
+    img.src = api.toolImageUrl(store.sessionId, callId, im.index ?? 0);
+    img.addEventListener('error', () => {
+      const chip = document.createElement('span');
+      chip.className = 'tool-image-chip';
+      chip.innerHTML = icon('image', { size: 13 }); // our own SVG, trusted
+      const label = document.createElement('span');
+      // textContent, not markup: mime_type is tool-supplied text.
+      label.textContent = im.mime_type || 'image';
+      chip.append(label);
+      img.replaceWith(chip);
+    });
+    img.addEventListener('click', () =>
+      openImageLightbox(img.src, { alt: img.alt }),
+    );
+    strip.append(img);
+  }
+}
+
 // The one renderer behind both the live tool_result event and history replay:
-// content (highlighted or linkified), error styling, and the hover actions
-// (copy, expand when clipped).
-function setToolResult(node, result, isError) {
+// content (highlighted or linkified), error styling, the image strip, and the
+// hover actions (copy, expand when clipped).
+function setToolResult(node, result, isError, images) {
+  renderToolImages(node, images);
   const pre = node.querySelector('.tool-result');
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
@@ -869,10 +917,10 @@ function setToolResult(node, result, isError) {
   actions.append(copy);
 }
 
-function updateToolResult(id, result, isError) {
+function updateToolResult(id, result, isError, images) {
   const node = store.toolNodes.get(id);
   if (!node) return;
-  setToolResult(node, result, isError);
+  setToolResult(node, result, isError, images);
 }
 
 function removeToolNode(id) {
@@ -1914,6 +1962,7 @@ function renderHistoryWindow({ stickBottom }) {
       pendingResults.set(it.tool_call_id, {
         text: contentText(it.content),
         isError: !!it.is_error,
+        images: it.images,
       });
   }
 
@@ -2001,7 +2050,12 @@ function renderHistoryWindow({ stickBottom }) {
           const result = pendingResults.get(call.id);
           // Same renderer as the live path: highlighting, error styling, and
           // the copy/expand actions all match; absent results hide the <pre>.
-          setToolResult(node, result?.text ?? '', result?.isError ?? false);
+          setToolResult(
+            node,
+            result?.text ?? '',
+            result?.isError ?? false,
+            result?.images,
+          );
           appendBubbleContent(currentBubble, node);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
@@ -2350,7 +2404,7 @@ async function handleEvent({ event, data }) {
           data.is_error ? null : String(data.result ?? ''),
         );
       }
-      updateToolResult(data.id, data.result, data.is_error);
+      updateToolResult(data.id, data.result, data.is_error, data.images);
       break;
 
     case 'todo':

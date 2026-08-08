@@ -16,6 +16,7 @@ from dataclasses import asdict
 from typing import Any, cast
 
 from ...messages import Message
+from ...parts import ImagePart
 from ...session import NOTICE_META_KEY, Segment
 from ...transcript import (
     InputEntry,
@@ -23,7 +24,7 @@ from ...transcript import (
     TranscriptEntry,
     entries_to_messages,
 )
-from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo
+from ..schemas import ChatSessionInfo, MessageOut, RunRecordInfo, ToolImageOut
 from ..store import ChatMeta, RunRow
 
 
@@ -118,6 +119,40 @@ def _apply_tool_errors(
     return outs
 
 
+def tool_image_stubs(parts: list[Any] | None) -> list[ToolImageOut]:
+    """Image stubs for one tool result's parts (0-based over its image parts)."""
+    if not parts:
+        return []
+    return [
+        ToolImageOut(index=i, mime_type=p.mime_type)
+        for i, p in enumerate(p for p in parts if isinstance(p, ImagePart))
+    ]
+
+
+def _apply_tool_images(
+    outs: list[MessageOut], entries: list[TranscriptEntry]
+) -> list[MessageOut]:
+    """Stamp image stubs onto tool-result messages.
+
+    Same re-derivation as :func:`_apply_tool_errors`: ``entries_to_messages``
+    flattens a :class:`ToolResultEntry` to its ``output`` string, so replayed
+    sessions would lose the images the live SSE stream advertises. The stubs
+    carry no bytes — the client fetches them from the tool-images route.
+    """
+    stubs = {
+        e.call_id: imgs
+        for e in entries
+        if isinstance(e, ToolResultEntry)
+        and e.call_id
+        and (imgs := tool_image_stubs(e.parts))
+    }
+    if stubs:
+        for o in outs:
+            if o.role == "tool" and o.tool_call_id in stubs:
+                o.images = stubs[o.tool_call_id]
+    return outs
+
+
 def message_to_out(m: Message, *, timestamp: float | None = None) -> MessageOut:
     return MessageOut(
         role=m.role,
@@ -165,8 +200,11 @@ def segments_to_out(
         notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
             boundaries.append((len(all_msgs), notice))
-    outs = _apply_tool_errors(
-        messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
+    outs = _apply_tool_images(
+        _apply_tool_errors(
+            messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
+            all_entries,
+        ),
         all_entries,
     )
     # Insert from last to first so earlier boundary indices stay valid.
@@ -191,11 +229,14 @@ def view_messages(
     session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
     live re-attach snapshot so both render byte-identically."""
     kept = drop_system_entries(entries)
-    return _apply_tool_errors(
-        messages_to_out(
-            entries_to_messages(kept),
-            created_at=created_at,
-            updated_at=updated_at,
+    return _apply_tool_images(
+        _apply_tool_errors(
+            messages_to_out(
+                entries_to_messages(kept),
+                created_at=created_at,
+                updated_at=updated_at,
+            ),
+            kept,
         ),
         kept,
     )

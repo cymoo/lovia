@@ -35,6 +35,7 @@ from .. import events
 from ..checkpointer import CheckpointOptions
 from ..messages import Message, Usage
 from ..reliability import CancelToken
+from ..parts import coerce_parts
 from ..runner import Runner
 from ..runtime.checkpoint import CheckpointWriter
 from ..steering import Mailbox
@@ -444,11 +445,16 @@ class RunController:
         elif isinstance(ev, events.MessageCompleted):
             self.current_turn_entries.extend(ev.entries)
         elif isinstance(ev, events.ToolCallCompleted):
+            # ``ev.result`` is the tool's raw return value — for a
+            # parts-returning tool that IS the parts list, so the mirror
+            # carries them and the tool-images route can serve a live run's
+            # images before any checkpoint persists the real entry.
             self.current_turn_entries.append(
                 ToolResultEntry(
                     call_id=ev.call.id,
                     output=ev.output,
                     is_error=ev.is_error,
+                    parts=None if ev.is_error else coerce_parts(ev.result),
                 )
             )
         elif isinstance(ev, events.TurnEnded):

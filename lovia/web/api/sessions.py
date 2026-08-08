@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import time
 from typing import Any
 
 try:
     from fastapi import APIRouter, HTTPException, Query
-    from fastapi.responses import JSONResponse, PlainTextResponse
+    from fastapi.responses import JSONResponse, PlainTextResponse, Response
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
+from ...parts import ImagePart
 from ...plugins import todos_from_entries
-from ...transcript import InputEntry, entries_to_messages
+from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
 from ..followups import FollowupRequest
 from ..schemas import (
     ChatSessionInfo,
@@ -183,6 +186,69 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             entries=entries,
             active_run_id=active_run_id,
             parent_id=meta.parent_id if meta else None,
+        )
+
+    @router.get("/api/sessions/{session_id}/tool-images/{call_id}/{index}")
+    async def get_tool_image(session_id: str, call_id: str, index: int) -> Response:
+        """Serve one image part of a tool result, straight from the transcript.
+
+        The source of truth is what the model actually saw — not the current
+        workspace file (which may have changed or live outside the root), so
+        the bytes come from the stored entry. Lookup order mirrors freshness:
+        the live run's in-memory mirror first (a checkpoint may not have
+        landed yet), then the persisted session, then a resumable
+        checkpoint's entries (restart recovery). ``index`` is 0-based over
+        the result's *image* parts, matching the stubs in SSE and
+        ``MessageOut.images``.
+        """
+
+        def find(entries: list[Any]) -> ImagePart | None:
+            for entry in reversed(entries):
+                if (
+                    isinstance(entry, ToolResultEntry)
+                    and entry.call_id == call_id
+                    and entry.parts
+                ):
+                    images = [
+                        p for p in entry.parts if isinstance(p, ImagePart)
+                    ]
+                    if 0 <= index < len(images):
+                        return images[index]
+                    # Keep scanning: providers have been seen reusing call
+                    # ids, so an older entry under this id may carry the
+                    # requested index.
+            return None
+
+        image: ImagePart | None = None
+        live = deps.supervisor.get(session_id)
+        if live is not None:
+            image = find([*live.completed_mirror, *live.current_turn_entries])
+        if image is None:
+            image = find(await session.load(session_id))
+        if image is None and store.checkpointer is not None:
+            candidate = await store.get_active_run_id(session_id)
+            if candidate:
+                snapshot = await store.checkpointer.load(candidate)
+                if snapshot is not None:
+                    image = find(list(snapshot.entries))
+        if image is None:
+            raise HTTPException(404, "no such tool image")
+        if image.data is None:
+            # A URL-sourced part has no bytes to serve; the client falls back
+            # to its chip. 404 keeps the route contract simple.
+            raise HTTPException(404, "image part is a URL reference")
+        try:
+            payload = base64.b64decode(image.data, validate=True)
+        except binascii.Error:
+            raise HTTPException(404, "image part is not valid base64") from None
+        return Response(
+            content=payload,
+            media_type=image.mime_type or "application/octet-stream",
+            headers={
+                # The transcript is append-only: a (call_id, index) never
+                # changes its bytes, so the browser may cache hard.
+                "Cache-Control": "private, max-age=31536000, immutable",
+            },
         )
 
     @router.patch("/api/sessions/{session_id}", response_model=ChatSessionInfo)

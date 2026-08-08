@@ -36,7 +36,7 @@ from .config import ModelProfile, SearchConfig, WebConfig
 from .scheduling import Scheduling
 from .store import ChatStore
 from .ui import SURFACE_NOTE
-from .vision import make_see_image_tool
+from .vision import make_describe_image_tool
 
 log = logging.getLogger("lovia.web.builder")
 
@@ -217,26 +217,27 @@ def resolve_vision_tool(
     workspace: LocalWorkspace | None,
     profile: ModelProfile | None,
 ) -> Tool | None:
-    """The ``see_image`` tool, when a distinct vision model is configured.
+    """The ``describe_image`` tool, when a distinct vision model is configured.
 
     Wired only when all three hold: the config assigns a vision role; the
     agent has a local workspace to read images from; and the *main* model
-    can't see images itself. A vision-capable main model gets images inline,
-    so a delegation tool would just be a redundant, slower second path — we
-    log and skip it.
+    can't see images itself. A vision-capable main gets the core
+    ``view_image`` tool from the workspace bundle instead (real pixels), so
+    the two are mutually exclusive by construction — a delegation tool there
+    would just be a redundant, slower second path.
     """
     if profile is None:
         return None
     if workspace is None:
         log.info(
             "a vision model is configured but there is no workspace; "
-            "see_image disabled."
+            "describe_image disabled."
         )
         return None
     if supports_vision(provider):
         log.info(
             "main model is vision-capable; ignoring the vision role "
-            "(images go inline as ImagePart)."
+            "(it gets view_image / inline ImageParts instead)."
         )
         return None
     try:
@@ -248,11 +249,13 @@ def resolve_vision_tool(
         )
     except (UserError, ValueError) as exc:
         log.warning(
-            "vision model %r unusable; see_image disabled: %s", profile.model, exc
+            "vision model %r unusable; describe_image disabled: %s",
+            profile.model,
+            exc,
         )
         return None
-    log.info("see_image enabled via vision model %r", profile.model)
-    return make_see_image_tool(vision_provider, workspace_root=workspace.root)
+    log.info("describe_image enabled via vision model %r", profile.model)
+    return make_describe_image_tool(vision_provider)
 
 
 def resolve_followup_model(profile: ModelProfile | None) -> Provider | None:

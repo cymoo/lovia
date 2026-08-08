@@ -1765,6 +1765,38 @@ body.sidebar-collapsed .sidebar-expand-btn {
   text-decoration-color: color-mix(in srgb, var(--accent-text) 40%, transparent);
   text-underline-offset: 2px;
 }
+/* Images a tool result carried (view_image & friends): thumbnails served from
+   the transcript route; click opens the lightbox. A failed fetch degrades the
+   <img> to a .tool-image-chip. */
+.tool .tool-result-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+}
+.tool .tool-result-image {
+  max-width: min(320px, 100%);
+  max-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: zoom-in;
+  object-fit: contain;
+  background: var(--surface);
+}
+.tool .tool-image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted-2);
+}
+
 .tool.error {
   border-color: var(--danger-border);
 }

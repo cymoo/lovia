@@ -1,9 +1,10 @@
-"""The see_image tool (vision-as-a-tool) and its config gating.
+"""The describe_image tool (vision-as-a-tool) and its config gating.
 
 The tool lets a text-only main model delegate "look at this image" to a vision
-model, reading only workspace files. Gating: registered only when the config
-assigns a vision role, a workspace exists, and the main model can't already
-see images.
+model, reading through the run's workspace session (same path pipeline as
+read_file/view_image). Gating: registered only when the config assigns a
+vision role, a workspace exists, and the main model can't already see images —
+a vision-capable main gets the core ``view_image`` instead.
 """
 
 from __future__ import annotations
@@ -12,31 +13,49 @@ from pathlib import Path
 
 import pytest
 
+from lovia.exceptions import ToolError
 from lovia.run_context import RunContext
 from lovia.web.builder import resolve_vision_tool
 from lovia.web.config import ModelProfile
-from lovia.web.vision import make_see_image_tool
-from lovia.workspace import Workspace
+from lovia.web.vision import make_describe_image_tool
+from lovia.workspace import (
+    LocalWorkspaceSession,
+    PermissionDeniedError,
+    Workspace,
+    WorkspacePolicy,
+)
 
 from ..scripted_provider import ScriptedProvider, text
 
 PNG = bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 32
 
 
-def _ctx() -> RunContext:
-    return RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+def _ctx(session: LocalWorkspaceSession | None = None) -> RunContext:
+    return RunContext(
+        context=None,
+        entries=[],
+        agent=None,  # type: ignore[arg-type]
+        workspace=session,  # type: ignore[arg-type]
+    )
+
+
+def _session(tmp_path: Path, **kwargs) -> LocalWorkspaceSession:
+    return LocalWorkspaceSession(root=str(tmp_path), **kwargs)
 
 
 @pytest.mark.asyncio
-async def test_see_image_runs_vision_model_on_workspace_image(tmp_path: Path) -> None:
+async def test_describe_image_runs_vision_model_on_workspace_image(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "uploads").mkdir()
     (tmp_path / "uploads" / "cat.png").write_bytes(PNG)
     prov = ScriptedProvider([text("a grey cat")])
-    tool = make_see_image_tool(prov, workspace_root=tmp_path)
-    assert tool.name == "see_image"
+    tool = make_describe_image_tool(prov)
+    assert tool.name == "describe_image"
 
     out = await tool.invoke(
-        {"path": "uploads/cat.png", "question": "what animal?"}, _ctx()
+        {"path": "uploads/cat.png", "question": "what animal?"},
+        _ctx(_session(tmp_path)),
     )
     assert out == "a grey cat"
     # The vision model actually received an image content part.
@@ -45,21 +64,51 @@ async def test_see_image_runs_vision_model_on_workspace_image(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_see_image_refuses_paths_outside_workspace(tmp_path: Path) -> None:
-    tool = make_see_image_tool(ScriptedProvider([text("x")]), workspace_root=tmp_path)
-    out = await tool.invoke({"path": "../../etc/passwd"}, _ctx())
-    assert "outside the workspace" in out
+async def test_describe_image_denied_outside_workspace_by_policy(
+    tmp_path: Path,
+) -> None:
+    tool = make_describe_image_tool(ScriptedProvider([text("x")]))
+    session = _session(tmp_path, policy=WorkspacePolicy.readonly())
+    with pytest.raises(PermissionDeniedError):
+        await tool.invoke({"path": "/etc/passwd.png"}, _ctx(session))
 
 
 @pytest.mark.asyncio
-async def test_see_image_reports_missing_and_unsupported(tmp_path: Path) -> None:
+async def test_describe_image_reports_missing_and_unsupported(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "uploads").mkdir()
     (tmp_path / "uploads" / "notes.txt").write_text("hi")
-    tool = make_see_image_tool(ScriptedProvider([text("x")]), workspace_root=tmp_path)
-    assert "no such image" in await tool.invoke({"path": "uploads/ghost.png"}, _ctx())
-    assert "not a supported image" in await tool.invoke(
-        {"path": "uploads/notes.txt"}, _ctx()
-    )
+    tool = make_describe_image_tool(ScriptedProvider([text("x")]))
+    session = _session(tmp_path)
+    with pytest.raises(ToolError, match="Not a file"):
+        await tool.invoke({"path": "uploads/ghost.png"}, _ctx(session))
+    with pytest.raises(ToolError, match="Not a supported image type"):
+        await tool.invoke({"path": "uploads/notes.txt"}, _ctx(session))
+
+
+@pytest.mark.asyncio
+async def test_describe_image_size_cap_is_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lovia.web.vision as vision
+
+    (tmp_path / "big.png").write_bytes(b"x" * 64)
+    monkeypatch.setattr(vision, "VIEW_IMAGE_MAX_BYTES", 10)
+    tool = make_describe_image_tool(ScriptedProvider([text("x")]))
+    with pytest.raises(ToolError, match="sips -Z 1568"):
+        await tool.invoke({"path": "big.png"}, _ctx(_session(tmp_path)))
+
+
+def test_describe_image_outside_read_asks_under_coding_policy(
+    tmp_path: Path,
+) -> None:
+    tool = make_describe_image_tool(ScriptedProvider([text("x")]))
+    session = _session(tmp_path, policy=WorkspacePolicy.coding())
+    ctx = _ctx(session)
+    # Same read pipeline as read_file: outside-root reads ask, inside don't.
+    assert tool.requires_approval({"path": "/tmp/shot.png"}, ctx) is True
+    assert tool.requires_approval({"path": "shot.png"}, ctx) is False
 
 
 def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
@@ -71,10 +120,10 @@ def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
 
     assert resolve_vision_tool(text_prov, ws, None) is None  # no vision role
     assert resolve_vision_tool(text_prov, None, profile) is None  # no workspace
-    # A vision-capable main model gets images inline — no delegation tool.
+    # A vision-capable main model gets view_image instead — no delegation tool.
     assert resolve_vision_tool(vision_prov, ws, profile) is None
     tool = resolve_vision_tool(text_prov, ws, profile)
-    assert tool is not None and tool.name == "see_image"
+    assert tool is not None and tool.name == "describe_image"
 
     # A vision model on its own endpoint: the overrides thread through cleanly.
     remote = ModelProfile(
@@ -84,7 +133,7 @@ def test_resolve_vision_tool_gating(tmp_path: Path) -> None:
         api_key="sk-vision",
     )
     tool2 = resolve_vision_tool(text_prov, ws, remote)
-    assert tool2 is not None and tool2.name == "see_image"
+    assert tool2 is not None and tool2.name == "describe_image"
 
 
 def test_resolve_vision_tool_bad_profile_degrades(
@@ -96,7 +145,7 @@ def test_resolve_vision_tool_bad_profile_degrades(
     bad = ModelProfile(id="eyes", model="no-such-vendor:qwen-vl")
     with caplog.at_level("WARNING", logger="lovia.web.builder"):
         assert resolve_vision_tool(text_prov, ws, bad) is None
-    assert "see_image disabled" in caplog.text
+    assert "describe_image disabled" in caplog.text
 
 
 def test_env_bool_parses_values_and_guards_model_specs(

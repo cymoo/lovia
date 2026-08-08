@@ -1,33 +1,44 @@
 """Vision-as-a-tool: let a text-only main model "see" images via a VLM.
 
 When the app is configured with a dedicated vision model and the main model
-itself isn't vision-capable, the CLI registers a ``see_image`` tool. The main
-model calls it with a workspace image path (typically an ``uploads/…`` file the
-user just attached) and a question; the tool runs a one-shot turn on the vision
-model with the image inlined as an :class:`~lovia.ImagePart` and returns its
-text answer.
+itself isn't vision-capable, the builder registers a ``describe_image`` tool.
+The main model calls it with a workspace image path (an ``uploads/…`` file the
+user attached, or one the run produced) and a question; the tool runs a
+one-shot turn on the vision model with the image inlined as an
+:class:`~lovia.ImagePart` and returns its text answer.
 
-Same "separate ad-hoc model for a sub-task" pattern as :mod:`lovia.web.titles`:
-the main transcript only ever sees the returned text, never the image bytes, so
-a text-only main model stays text-only. The reusable piece is
-:func:`make_see_image_tool`; the CLI decides when to wire it in (see
-``resolve_vision_tool`` in ``lovia.web.__main__``).
+The name states the contract: the model gets a *description*, never the
+pixels — the counterpart of the core ``view_image`` tool, which returns the
+image itself and is what a vision-capable main model gets instead (the two
+are never registered together; see ``resolve_vision_tool`` in
+``lovia.web.builder``).
+
+Same "separate ad-hoc model for a sub-task" pattern as :mod:`lovia.web.titles`.
+Paths go through the same read pipeline as ``read_file``/``view_image``: the
+workspace session enforces the path ACL (``read_outside`` honored), the
+approval predicate resolves the ask side, and the shared 5 MB cap applies.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
-from pathlib import Path
 from typing import Annotated, Any
 
 from ..agent import Agent
+from ..exceptions import ToolError
 from ..messages import user
-from ..parts import ImagePart, TextPart
+from ..parts import ImagePart, TextPart, image_mime
 from ..providers import Provider
+from ..run_context import RunContext
 from ..runner import Runner
 from ..tools import Tool, tool
-from ..workspace.paths import resolve_path
-from .media import model_image_mime
+from ..workspace.errors import FileTooLargeError
+from ..workspace.tools import (
+    VIEW_IMAGE_MAX_BYTES,
+    path_needs_approval,
+    require_workspace,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,30 +52,32 @@ VISION_INSTRUCTIONS = (
 )
 
 
-def make_see_image_tool(
-    vision_model: str | Provider, *, workspace_root: str | Path
-) -> Tool:
-    """Build a ``see_image`` tool backed by ``vision_model``.
+def make_describe_image_tool(vision_model: str | Provider) -> Tool:
+    """Build a ``describe_image`` tool backed by ``vision_model``.
 
     ``vision_model`` is anything :class:`Agent` accepts — a ``"vendor:model"``
-    string or a :class:`~lovia.providers.Provider`. ``workspace_root`` bounds
-    which files the tool may read: a path resolving outside the root is
-    refused, so the model can't turn this into an arbitrary file reader.
+    string or a :class:`~lovia.providers.Provider`. The image is read through
+    the run's workspace session, so the workspace policy bounds what the tool
+    may look at exactly like ``read_file``.
     """
-    root = Path(workspace_root).expanduser().resolve()
     viewer: Agent[Any] = Agent(
         name="vision", instructions=VISION_INSTRUCTIONS, model=vision_model
     )
 
     @tool(
-        name="see_image",
+        name="describe_image",
         description=(
-            "Look at an image file in the workspace and answer a question about "
-            "it. Images the user attaches land under 'uploads/'. Use this "
-            "whenever the user refers to an image you cannot otherwise see."
+            "Have an image file described to you (you will get text, not the "
+            "image). Images the user attaches land under 'uploads/'. Use this "
+            "whenever the user refers to an image you cannot otherwise see.\n"
+            "- path is workspace-relative or absolute; outside paths may need "
+            "approval or be denied by policy.\n"
+            "- Supported: jpg, jpeg, png, gif, webp; over 5 MB is refused."
         ),
+        needs_approval=path_needs_approval("read"),
     )
-    async def see_image(
+    async def describe_image(
+        ctx: RunContext[Any],
         path: Annotated[
             str, "Workspace-relative path to the image, e.g. 'uploads/photo.png'."
         ],
@@ -72,24 +85,32 @@ def make_see_image_tool(
             str, "What to ask about the image; defaults to a full description."
         ] = DEFAULT_QUESTION,
     ) -> str:
-        resolved = resolve_path(root, path)
-        if not resolved.inside:
-            return f"Error: {path!r} is outside the workspace; refusing to read it."
-        abs_path = resolved.abs
-        if not abs_path.is_file():
-            return f"Error: no such image in the workspace: {resolved.display()}"
-        mime = model_image_mime(abs_path)
+        session = require_workspace(ctx)
+        mime = image_mime(path)
         if mime is None:
-            return (
-                f"Error: {resolved.display()} is not a supported image type "
-                "(supported: jpg, png, gif, webp)."
+            raise ToolError(
+                f"Not a supported image type: {path!r}",
+                hint="describe_image reads jpg, jpeg, png, gif, or webp files.",
             )
         try:
-            image = ImagePart.from_path(abs_path, mime_type=mime)
+            file = await session.read_bytes(path, max_bytes=VIEW_IMAGE_MAX_BYTES)
+        except FileTooLargeError as exc:
+            raise ToolError(
+                str(exc),
+                hint=(
+                    "Downscale it first via the shell, e.g. `sips -Z 1568 "
+                    f"{path}` (macOS) or `magick {path} -resize 1568x1568 "
+                    f"{path}`, then try again."
+                ),
+            ) from exc
+        image = ImagePart(
+            data=base64.b64encode(file.data).decode("ascii"), mime_type=mime
+        )
+        try:
             result = await Runner.run(viewer, [user([TextPart(question), image])])
-        except Exception as exc:  # pragma: no cover - defensive
-            log.warning("see_image failed for %s: %s", resolved.display(), exc)
-            return f"Error: could not analyze the image ({exc})."
+        except Exception as exc:
+            log.warning("describe_image failed for %s: %s", file.path, exc)
+            raise ToolError(f"Could not analyze the image ({exc}).") from exc
         return result.output if isinstance(result.output, str) else str(result.output)
 
-    return see_image
+    return describe_image

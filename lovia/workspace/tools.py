@@ -46,6 +46,7 @@ __all__ = [
     "grep_files",
     "kill_process",
     "list_files",
+    "path_needs_approval",
     "read_file",
     "read_process_output",
     "require_workspace",
@@ -66,7 +67,7 @@ def require_workspace(ctx: RunContext[Any]) -> WorkspaceSession:
     return workspace
 
 
-def _path_needs_approval(
+def path_needs_approval(
     *ops: Literal["read", "write"],
 ) -> Callable[[dict[str, Any], RunContext[Any]], bool]:
     """Approval predicate for a path-taking tool.
@@ -204,7 +205,7 @@ def _render_edit_result(result: Any, ctx: RunContext[Any]) -> Any:
         "- Binary and non-UTF-8 files are refused; inspect those via the shell "
         "instead (file, xxd, iconv, ...)."
     ),
-    needs_approval=_path_needs_approval("read"),
+    needs_approval=path_needs_approval("read"),
     result_renderer=_render_file_content,
 )
 async def read_file(
@@ -240,7 +241,7 @@ VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024
         "`sips -Z 1568 img.png` (macOS) or `magick img.png -resize 1568x1568 "
         "img.png`."
     ),
-    needs_approval=_path_needs_approval("read"),
+    needs_approval=path_needs_approval("read"),
     returns_images=True,
 )
 async def view_image(
@@ -283,7 +284,7 @@ async def view_image(
         "skeleton first and extend it with edit_file.\n"
         "- Set create_only=true to fail instead of overwriting an existing file."
     ),
-    needs_approval=_path_needs_approval("write"),
+    needs_approval=path_needs_approval("write"),
     result_renderer=_render_file_change,
     # Mutates the shared workspace: run as an execution barrier so two writes
     # (or a write racing a shell command) cannot interleave within one turn.
@@ -315,7 +316,7 @@ async def write_file(
         "- Set replace_all=true to replace every occurrence (e.g. renaming a "
         "symbol across one file)."
     ),
-    needs_approval=_path_needs_approval("read", "write"),
+    needs_approval=path_needs_approval("read", "write"),
     result_renderer=_render_edit_result,
     # Mutates the shared workspace — barrier, same as write_file.
     parallel=False,
@@ -347,7 +348,7 @@ async def edit_file(
         "- Symlinks are shown with their resolved target ('link -> /target').\n"
         "- To search file *contents*, use grep_files instead."
     ),
-    needs_approval=_path_needs_approval("read"),
+    needs_approval=path_needs_approval("read"),
     result_renderer=_render_entries,
 )
 async def list_files(
@@ -409,7 +410,7 @@ async def list_files(
         "- This is the fastest way to locate code or text; prefer it over "
         "reading files one by one."
     ),
-    needs_approval=_path_needs_approval("read"),
+    needs_approval=path_needs_approval("read"),
     result_renderer=_render_matches,
 )
 async def grep_files(

@@ -25,6 +25,7 @@ from lovia.workspace.types import (
 from lovia.workspace.tools import (
     background_process_reminder,
     read_file,
+    view_image,
     write_file,
     edit_file,
     list_files,
@@ -556,3 +557,77 @@ async def test_list_files_renders_symlink_target(tmp_path) -> None:
     rendered = await render_tool_result(list_files, raw, ctx)
     assert "lnk.txt" in rendered
     assert "->" in rendered  # the model can see where the link leads
+
+
+# ---------------------------------------------------------------------------
+# view_image
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_view_image_returns_path_and_image_parts(session, tmp_path) -> None:
+    import base64
+
+    from lovia.parts import ImagePart, TextPart
+
+    png = b"\x89PNG-not-really-but-extension-decides"
+    (tmp_path / "shot.png").write_bytes(png)
+
+    parts = await view_image.invoke({"path": "shot.png"}, _ctx(session))
+
+    assert parts == [
+        TextPart("shot.png"),
+        ImagePart(
+            data=base64.b64encode(png).decode("ascii"), mime_type="image/png"
+        ),
+    ]
+    assert view_image.returns_images is True
+
+
+@pytest.mark.asyncio
+async def test_view_image_rejects_unsupported_extension(session) -> None:
+    with pytest.raises(ToolError, match="Not a supported image type"):
+        await view_image.invoke({"path": "a.txt"}, _ctx(session))
+
+
+@pytest.mark.asyncio
+async def test_view_image_missing_file(session) -> None:
+    with pytest.raises(ToolError, match="Not a file"):
+        await view_image.invoke({"path": "nope.png"}, _ctx(session))
+
+
+@pytest.mark.asyncio
+async def test_view_image_size_cap_refusal_is_actionable(
+    session, tmp_path, monkeypatch
+) -> None:
+    import lovia.workspace.tools as workspace_tools
+
+    (tmp_path / "big.png").write_bytes(b"x" * 64)
+    monkeypatch.setattr(workspace_tools, "VIEW_IMAGE_MAX_BYTES", 10)
+
+    with pytest.raises(ToolError, match="sips -Z 1568"):
+        await view_image.invoke({"path": "big.png"}, _ctx(session))
+
+
+@pytest.mark.asyncio
+async def test_view_image_denied_outside_root_under_readonly(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+    from lovia.workspace.errors import PermissionDeniedError
+
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy.readonly()
+    )
+    with pytest.raises(PermissionDeniedError):
+        await view_image.invoke({"path": "/etc/whatever.png"}, _ctx(session))
+
+
+def test_view_image_outside_read_asks_under_coding_policy(tmp_path) -> None:
+    from lovia.workspace import WorkspacePolicy
+
+    session = LocalWorkspaceSession(
+        root=str(tmp_path), policy=WorkspacePolicy.coding()
+    )
+    ctx = _ctx(session)
+    # Same read pipeline as read_file: outside-root reads ask, inside don't.
+    assert view_image.requires_approval({"path": "/tmp/shot.png"}, ctx) is True
+    assert view_image.requires_approval({"path": "shot.png"}, ctx) is False

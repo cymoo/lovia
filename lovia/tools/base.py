@@ -129,6 +129,13 @@ class Tool:
     # the request-side knob for whether the model may *emit* several calls in
     # one turn.
     parallel: bool = True
+    # Output-side interface metadata, the dual of ``parameters``: results may
+    # carry :class:`~lovia.parts.ImagePart` content. The runner uses it to
+    # skip *ambient* registration (workspace/plugin bundles) for providers
+    # that cannot see images; explicitly wired tools are never filtered —
+    # the adapters' wire degrade covers them — so the flag is a UX hint,
+    # never load-bearing for correctness.
+    returns_images: bool = False
     # Set by build_handoff_tool: lets the runner recognise a handoff tool
     # *before* invoking it, so a second handoff in the same turn is rejected
     # without firing its on_handoff side effects.
@@ -378,6 +385,7 @@ def tool(
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
+    returns_images: bool = False,
     strict: bool = False,
 ) -> Tool: ...
 
@@ -395,6 +403,7 @@ def tool(
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
+    returns_images: bool = False,
     strict: bool = False,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
 
@@ -411,6 +420,7 @@ def tool(
     result_renderer: ToolResultRenderer | None = None,
     policies: list[ToolPolicy] | tuple[ToolPolicy, ...] = (),
     parallel: bool = True,
+    returns_images: bool = False,
     strict: bool = False,
 ) -> Tool | Callable[[Callable[..., Any]], Tool]:
     """Decorate a function to turn it into a :class:`Tool`.
@@ -493,6 +503,7 @@ def tool(
             result_renderer=result_renderer,
             policies=tuple(policies),
             parallel=parallel,
+            returns_images=returns_images,
         )
 
     if fn is None:

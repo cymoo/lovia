@@ -152,10 +152,13 @@ class LocalWorkspace:
             read_file,
             read_process_output,
             shell,
+            view_image,
             write_file,
         )
 
-        bundle: list["Tool"] = [read_file, list_files, grep_files]
+        # view_image travels with the read tools; the runner drops it for
+        # providers that cannot see images (``Tool.returns_images``).
+        bundle: list["Tool"] = [read_file, view_image, list_files, grep_files]
         if self.policy.write != "deny" or self.policy.write_outside != "deny":
             bundle += [write_file, edit_file]
         if self.policy.allow_shell:

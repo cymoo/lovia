@@ -58,14 +58,7 @@ class ImagePart:
         """Load an image from disk and embed it as base64."""
         p = Path(path)
         if mime_type is None:
-            suffix = p.suffix.lower().lstrip(".")
-            mime_type = {
-                "jpg": "image/jpeg",
-                "jpeg": "image/jpeg",
-                "png": "image/png",
-                "gif": "image/gif",
-                "webp": "image/webp",
-            }.get(suffix)
+            mime_type = image_mime(p)
             if mime_type is None:
                 raise ValueError(f"Cannot infer mime_type for {p.suffix!r}")
         data = base64.b64encode(p.read_bytes()).decode("ascii")
@@ -152,6 +145,26 @@ class FilePart:
 
 ContentPart = Union[TextPart, ImagePart, FilePart]
 """Discriminated union of all content part types."""
+
+
+# The image formats every supported provider ingests natively.
+_IMAGE_MIME_BY_SUFFIX = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def image_mime(path: str | Path) -> str | None:
+    """The model-ingestible image mime for ``path``, by extension.
+
+    ``None`` for anything the providers do not accept as an image part —
+    the shared gate for :meth:`ImagePart.from_path` and the tools that feed
+    images to a model (``view_image``, the web layer's delegation tool).
+    """
+    return _IMAGE_MIME_BY_SUFFIX.get(Path(path).suffix.lower().lstrip("."))
 
 
 def normalize_content(
@@ -254,6 +267,7 @@ __all__ = [
     "ImagePart",
     "TextPart",
     "coerce_parts",
+    "image_mime",
     "normalize_content",
     "project_parts",
     "text_of",

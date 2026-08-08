@@ -31,7 +31,12 @@ from typing import TYPE_CHECKING, Iterator, Literal, Mapping
 
 from ..exceptions import UserError
 from .command_guard import extract_path_claims
-from .errors import PermissionDeniedError, WorkspaceClosedError, WorkspaceError
+from .errors import (
+    FileTooLargeError,
+    PermissionDeniedError,
+    WorkspaceClosedError,
+    WorkspaceError,
+)
 from .paths import ResolvedPath, resolve_path
 from .policy import Decision, FileOp, WorkspacePolicy, merge_decisions
 
@@ -42,6 +47,7 @@ from .types import (
     CommandResult,
     DirEntry,
     EditResult,
+    FileBytes,
     FileChange,
     FileContent,
     GrepMatch,
@@ -494,6 +500,33 @@ class LocalWorkspaceSession:
 
         # Take the per-path lock so a read never observes a half-written file
         # (write_text/edit_text hold the same lock).
+        lock = await self._lock_for(rp)
+        async with lock:
+            return await asyncio.to_thread(_read)
+
+    async def read_bytes(self, path: str, *, max_bytes: int | None = None) -> FileBytes:
+        self._check_open()
+        rp = self._resolve_checked(path, "read")
+        p = rp.abs
+        if not p.is_file():
+            raise WorkspaceError(f"Not a file: {rp.display()}")
+
+        def _read() -> FileBytes:
+            if max_bytes is not None:
+                # Sized before reading, so the caller's cap also bounds memory.
+                try:
+                    size = p.stat().st_size
+                except OSError as exc:
+                    raise WorkspaceError(
+                        f"Cannot stat {rp.display()}: {exc}"
+                    ) from exc
+                if size > max_bytes:
+                    raise FileTooLargeError(
+                        f"{rp.display()} is {size:,} bytes "
+                        f"(limit {max_bytes:,} bytes)."
+                    )
+            return FileBytes(path=rp.display(), data=p.read_bytes())
+
         lock = await self._lock_for(rp)
         async with lock:
             return await asyncio.to_thread(_read)

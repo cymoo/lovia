@@ -4900,6 +4900,57 @@ body.files-splitting {
   color: var(--ink-2);
   border: 1px solid var(--border);
 }
+.skills-root {
+  cursor: default;
+  align-items: flex-start;
+}
+.skills-root.off .skills-path {
+  color: var(--muted);
+}
+.skills-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.skills-details {
+  margin-top: 6px;
+}
+.skills-details summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.skills-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 0 3px 12px;
+  flex-wrap: wrap;
+}
+.skills-item-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 560;
+}
+.skills-item-desc {
+  flex: 1 1 200px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.skills-item-problem {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--danger);
+}
+.skills-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+.skills-add .cfg-input {
+  flex: 1;
+  margin-top: 0;
+}
 .cfg-roles {
   margin-top: 18px;
   border-top: 1px solid var(--border);

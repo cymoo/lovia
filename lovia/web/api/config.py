@@ -14,6 +14,7 @@ always exactly what the next message runs on.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -24,7 +25,9 @@ from ..config.probe import unlisted_model_note, validate_connection
 from ..config.runtime import ConfigRuntime
 from ..config.schema import (
     ANTHROPIC_FLAVOR,
+    DEFAULT_SKILLS_DIR,
     OPENAI_FLAVOR,
+    USER_SKILLS_DIR,
     Connection,
     FlavorName,
     ModelProfile,
@@ -33,6 +36,7 @@ from ..config.schema import (
     WebConfig,
     slugify,
 )
+from ..config.skills import scan_skills_status
 from ..config.storage import PROJECT_CONFIG_LABEL, USER_CONFIG_LABEL
 
 # Loopback names a same-machine browser legitimately uses. Anything else in
@@ -99,6 +103,12 @@ class SearchIn(BaseModel):
 
     backend: SearchBackend | None = None
     tavily_api_key: str | None = None
+
+
+class SkillsIn(BaseModel):
+    """Full-list replacement for the skill directories (order = precedence)."""
+
+    dirs: list[str]
 
 
 class TestIn(BaseModel):
@@ -183,6 +193,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 "backend": cfg.search.backend,
                 "tavily_api_key": _mask(cfg.search.tavily_api_key),
             },
+            "skills": cfg.skills.model_dump(),
         }
 
     async def _apply(config: WebConfig) -> None:
@@ -296,6 +307,29 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
             search["tavily_api_key"] = body.tavily_api_key or None  # "" clears
         await _apply(_copy(search=search))
         return {"config": _config_out()}
+
+    @router.put("/skills")
+    async def update_skills(body: SkillsIn, request: Request) -> dict[str, object]:
+        _guard_host(request)
+        await _apply(_copy(skills={"dirs": body.dirs}))
+        return {"config": _config_out()}
+
+    @router.get("/skills")
+    async def get_skills(response: Response) -> dict[str, object]:
+        """Per-directory discovery report for the Settings pane.
+
+        Live filesystem truth (a directory created after the last apply
+        already shows ``exists``), so never cache; local paths are also
+        not something an intermediary should hold on to.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        roots = await asyncio.to_thread(scan_skills_status, runtime.config.skills)
+        return {
+            # The conventional roots, so the pane can offer restoring a
+            # removed default without hardcoding the paths client-side.
+            "defaults": [DEFAULT_SKILLS_DIR, USER_SKILLS_DIR],
+            "roots": [asdict(r) for r in roots],
+        }
 
     @router.post("/test")
     async def test_connection(body: TestIn, request: Request) -> TestOut:

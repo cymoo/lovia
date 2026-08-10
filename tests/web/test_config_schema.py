@@ -18,6 +18,7 @@ from lovia.web.config import (  # noqa: E402
     OPENAI_FLAVOR,
     Connection,
     ModelProfile,
+    SkillsConfig,
     WebConfig,
     flavor_for_model,
     slugify,
@@ -181,6 +182,37 @@ def test_connection_keyless_gateway_is_complete() -> None:
 def test_connection_official_host_with_key_is_complete() -> None:
     profile = ModelProfile(id="a", model="openai:gpt-5.5", api_key="sk-x")
     assert Connection.from_profile(profile).missing() == []
+
+
+# ----------------------------------------------------------------- skills -
+
+
+def test_skills_defaults_to_conventional_roots() -> None:
+    assert WebConfig().skills.dirs == [".agents/skills", "~/.agents/skills"]
+    # An older document without the key parses to the same defaults.
+    old = WebConfig.model_validate({"version": 1, "models": []})
+    assert old.skills.dirs == [".agents/skills", "~/.agents/skills"]
+
+
+def test_skills_explicit_empty_list_stays_empty() -> None:
+    cfg = WebConfig.model_validate({"skills": {"dirs": []}})
+    assert cfg.skills.dirs == []
+
+
+def test_skills_dirs_stripped_and_deduped_in_order() -> None:
+    assert SkillsConfig(dirs=[" a ", "a", "b"]).dirs == ["a", "b"]
+
+
+def test_skills_blank_entry_rejected() -> None:
+    with pytest.raises(ValidationError, match="non-empty"):
+        SkillsConfig(dirs=["  "])
+
+
+def test_skills_roundtrips_through_storage(tmp_path: Path) -> None:
+    cfg = WebConfig(skills=SkillsConfig(dirs=["~/team-skills"]))
+    path = storage.save_config(cfg, tmp_path / "config.json")
+    assert json.loads(path.read_text())["skills"] == {"dirs": ["~/team-skills"]}
+    assert storage.load_config(path) == cfg
 
 
 # ---------------------------------------------------------------- storage -

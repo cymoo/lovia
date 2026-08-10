@@ -31,11 +31,12 @@ scheduling, and a coding-mode Workspace rooted at the current directory. It
 also discovers:
 
 - `AGENTS.md` as Agent instructions;
-- `./.agents/skills` as the Skills directory;
+- `./.agents/skills` and `~/.agents/skills` as the Skills directories
+  (project scope first; manage the list in Settings → Skills);
 - `./.lovia/memory` as the Memory directory.
 
 The legacy `./skills` directory is no longer discovered automatically. Move it
-to `./.agents/skills`, or pass `--skills-dir skills`. Web search uses Tavily
+to `./.agents/skills`, or add it in Settings → Skills. Web search uses Tavily
 when its key is configured, otherwise it tries the optional DuckDuckGo backend.
 
 Default features can make model calls outside the main Run. Memory performs one
@@ -69,9 +70,22 @@ an existing chat, scheduled runs, and background subagents. An in-flight reply
 continues on its original model. Vision and auxiliary work such as titles and
 follow-up suggestions can be assigned to separate profiles.
 
-The search backend and Tavily key also live in `config.json`. Model
-connections, additional profiles, role assignments, and search configuration
-have no CLI flags; use Settings or maintain the file directly.
+The search backend, Tavily key, and skill directories also live in
+`config.json`. Model connections, additional profiles, role assignments,
+search, and skills have no CLI flags; use Settings or maintain the file
+directly.
+
+## Skills
+
+Settings → Skills manages the skill directories — an ordered list; each skill
+is a subdirectory with a `SKILL.md` (see [Skills](skills.md)). On duplicate
+skill names the earlier directory wins. The list defaults to
+`./.agents/skills` and `~/.agents/skills`; remove a default to disable it,
+or add any other directory (`~` works). The pane shows what each directory
+contributes — discovered skills, parse problems, shadowed duplicates — and a
+directory that does not exist is simply skipped, so a stale entry never
+prevents the server from starting. Changing the list applies immediately;
+adding a skill inside an already-listed directory needs no action at all.
 
 ## Serve your own Agent
 
@@ -159,8 +173,8 @@ and a server restart does not restore them. See
 
 ## Useful CLI options
 
-Apart from model and search configuration, options resolve as CLI flag,
-environment variable, then default.
+Apart from model, search, and skills configuration, options resolve as CLI
+flag, environment variable, then default.
 
 | Flag | Environment | Default |
 | --- | --- | --- |
@@ -168,7 +182,6 @@ environment variable, then default.
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |
-| `--skills-dir` | `LOVIA_SKILLS_DIR` | `./.agents/skills` when present |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |

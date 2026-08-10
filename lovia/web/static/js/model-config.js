@@ -642,6 +642,151 @@ export function buildSearchPane() {
   return pane;
 }
 
+// ---- Skills pane ----------------------------------------------------------
+
+/**
+ * The Settings → Skills pane: the precedence-ordered skill-directory list
+ * with per-directory discovery (what each root contributes). Add/remove
+ * applies immediately — the server rebuilds the agent on every write.
+ */
+export function buildSkillsPane() {
+  const pane = el('div', 'cfg-pane');
+
+  async function render() {
+    pane.replaceChildren(el('div', 'cfg-hint', '…'));
+    let scan;
+    try {
+      if (!cfg()) await loadConfig();
+      scan = await api.getSkills();
+    } catch (err) {
+      pane.replaceChildren(el('div', 'cfg-error', String(err.message || err)));
+      return;
+    }
+    const c = cfg();
+    /** @type {string[]} */
+    const dirs = c.skills.dirs;
+
+    let saving = false;
+    /** @param {string[]} next */
+    const save = async (next) => {
+      if (saving) return;
+      saving = true;
+      try {
+        await api.setSkills({ dirs: next });
+        await loadConfig();
+        toast(t('cfg.saved'));
+      } catch (err) {
+        // The re-render below reverts the pane, so the error must outlive
+        // it — a toast, matching the model-list actions.
+        toast(String(err.message || err), { type: 'error' });
+      }
+      saving = false;
+      render();
+    };
+
+    pane.replaceChildren();
+    pane.appendChild(el('div', 'cfg-pane-title', t('cfg.skillsTitle')));
+    pane.appendChild(el('div', 'cfg-hint', t('cfg.skillsIntro')));
+
+    const list = el('div', 'model-list');
+    if (!scan.roots.length) {
+      list.appendChild(el('div', 'cfg-hint', t('cfg.skillsNone')));
+    }
+    for (const root of scan.roots) {
+      const row = el('div', 'model-row skills-root');
+      if (!root.exists) row.classList.add('off');
+      const info = el('div', 'model-row-info');
+
+      const name = el('div', 'model-row-name');
+      name.appendChild(el('code', 'skills-path', root.path));
+      if (root.kind !== 'custom') {
+        name.appendChild(el('span', 'badge badge-plain', t('cfg.skillsDefaultBadge')));
+      }
+      const meta = el('div', 'model-row-meta');
+      if (!root.exists) meta.textContent = t('cfg.skillsMissing');
+      else if (!root.skills.length && !root.problems.length)
+        meta.textContent = t('cfg.skillsEmpty');
+      else {
+        const parts = [t('cfg.skillsCount', { n: String(root.skills.length) })];
+        if (root.problems.length)
+          parts.push(t('cfg.skillsProblems', { n: String(root.problems.length) }));
+        meta.textContent = parts.join(' · ');
+      }
+      info.append(name, meta);
+
+      if (root.skills.length || root.problems.length) {
+        const details = el('details', 'skills-details');
+        details.appendChild(el('summary', '', t('cfg.skillsShow')));
+        for (const s of root.skills) {
+          const item = el('div', 'skills-item');
+          item.appendChild(el('span', 'skills-item-name', s.name));
+          if (s.shadowed) {
+            item.appendChild(el('span', 'badge badge-plain', t('cfg.skillsShadowed')));
+          }
+          item.appendChild(el('span', 'skills-item-desc', s.description));
+          details.appendChild(item);
+        }
+        for (const p of root.problems) {
+          details.appendChild(
+            el('div', 'skills-item skills-item-problem', `${p.dir}: ${p.error}`),
+          );
+        }
+        info.appendChild(details);
+      }
+      row.appendChild(info);
+
+      const actions = el('div', 'model-row-actions');
+      const del = ghostBtn(t('cfg.skillsRemove'), () =>
+        save(dirs.filter((d) => d !== root.path)),
+      );
+      del.classList.add('danger');
+      actions.appendChild(del);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+    pane.appendChild(list);
+
+    const addRow = el('div', 'skills-add');
+    const pathIn = input('', { mono: true, placeholder: t('cfg.skillsPathPlaceholder') });
+    const addBtn = el('button', 'btn btn-sm', `＋ ${t('cfg.skillsAdd')}`);
+    addBtn.setAttribute('type', 'button');
+    const submit = () => {
+      const value = pathIn.value.trim();
+      if (!value) return;
+      save([...dirs, value]);
+    };
+    addBtn.addEventListener('click', submit);
+    pathIn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      }
+    });
+    addRow.append(pathIn, addBtn);
+    pane.appendChild(addRow);
+
+    // Offer to bring back a removed conventional root; restores put the
+    // defaults first (their conventional precedence), customs keep order.
+    const missingDefaults = scan.defaults.filter((d) => !dirs.includes(d));
+    if (missingDefaults.length) {
+      pane.appendChild(
+        ghostBtn(t('cfg.skillsRestore'), () =>
+          save([...scan.defaults, ...dirs.filter((d) => !scan.defaults.includes(d))]),
+        ),
+      );
+    }
+
+    const note = el('div', 'cfg-footnote');
+    note.textContent = c.scope.exists
+      ? t('cfg.scopeNote', { label: c.scope.label })
+      : t('cfg.scopeNote', { label: c.scope.label }) + ' ' + t('cfg.scopeUnsaved');
+    pane.appendChild(note);
+  }
+
+  render();
+  return pane;
+}
+
 // ---- About pane -----------------------------------------------------------
 
 export function buildAboutPane() {

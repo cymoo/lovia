@@ -278,6 +278,16 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_jsonOrDetail),
+  // Skill directories: full-list replacement, order = precedence.
+  /** @param {{ dirs: string[] }} body */
+  setSkills: (body) =>
+    fetch('/api/config/skills', {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }).then(_jsonOrDetail),
+  // Per-directory discovery report (live filesystem scan) for the pane.
+  getSkills: () => fetch('/api/config/skills').then(_jsonOrDetail),
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.

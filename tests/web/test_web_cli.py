@@ -19,40 +19,67 @@ from lovia.web import builder  # noqa: E402
 from lovia.web.config import (  # noqa: E402
     ModelProfile,
     SearchConfig,
+    SkillsConfig,
     WebConfig,
+    resolve_skills_dirs,
 )
 
 
 # ---------------------------------------------------------------- skills -
 
 
-def test_resolve_skills_explicit_dirs(tmp_path: Path) -> None:
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    a.mkdir()
-    b.mkdir()
-    assert builder.resolve_skills_dirs([str(a), str(b)]) == [a, b]
-
-
-def test_resolve_skills_explicit_missing_errors(tmp_path: Path) -> None:
-    with pytest.raises(UserError, match="skills directory not found"):
-        builder.resolve_skills_dirs([str(tmp_path / "nope")])
-
-
-def test_resolve_skills_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    d = tmp_path / "team"
-    d.mkdir()
-    monkeypatch.setenv("LOVIA_SKILLS_DIR", str(d))
-    assert builder.resolve_skills_dirs(None) == [d]
-
-
-def test_resolve_skills_default_present(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_resolve_skills_defaults_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_home: Path
 ) -> None:
-    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".agents" / "skills").mkdir(parents=True)
-    assert builder.resolve_skills_dirs(None) == [Path(".agents/skills")]
+    user = fake_home / ".agents" / "skills"
+    user.mkdir(parents=True)
+    # Project scope first — on duplicate skill names it wins.
+    assert resolve_skills_dirs(SkillsConfig()) == [Path(".agents/skills"), user]
+
+
+def test_resolve_skills_defaults_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert resolve_skills_dirs(SkillsConfig()) == []
+    assert resolve_skills_dirs(None) == []
+
+
+def test_resolve_skills_removed_default_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Removing a conventional root from the list is how it gets disabled.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    assert resolve_skills_dirs(SkillsConfig(dirs=["~/.agents/skills"])) == []
+
+
+def test_resolve_skills_custom_dir_expands_user(fake_home: Path) -> None:
+    target = fake_home / "team"
+    target.mkdir()
+    assert resolve_skills_dirs(SkillsConfig(dirs=["~/team"])) == [target]
+
+
+def test_resolve_skills_missing_dir_skipped_never_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A stale path in config.json must never make the server unbootable.
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level("INFO", logger="lovia.web.config"):
+        assert resolve_skills_dirs(SkillsConfig(dirs=["/definitely/nope"])) == []
+    assert "skipped" in caplog.text
+
+
+def test_resolve_skills_dedupes_by_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "x").mkdir()
+    assert resolve_skills_dirs(SkillsConfig(dirs=["x", "./x"])) == [Path("x")]
 
 
 def test_resolve_skills_legacy_dir_ignored_with_hint(
@@ -61,20 +88,16 @@ def test_resolve_skills_legacy_dir_ignored_with_hint(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Pre-0.9.13 default: a bare ./skills is no longer auto-loaded.
-    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
+    from lovia.web.config import skills as skills_mod
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(skills_mod, "_legacy_hint_emitted", False)
     (tmp_path / "skills").mkdir()
-    with caplog.at_level("WARNING", logger="lovia.web.builder"):
-        assert builder.resolve_skills_dirs(None) == []
-    assert "no longer auto-loaded" in caplog.text
-
-
-def test_resolve_skills_default_absent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("LOVIA_SKILLS_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    assert builder.resolve_skills_dirs(None) == []
+    with caplog.at_level("WARNING", logger="lovia.web.config"):
+        assert resolve_skills_dirs(SkillsConfig()) == []
+        assert resolve_skills_dirs(SkillsConfig()) == []
+    assert caplog.text.count("no longer auto-loaded") == 1  # once per process
+    assert "--skills-dir" not in caplog.text  # the flag is gone
 
 
 # ----------------------------------------------------------------- memory -
@@ -336,9 +359,10 @@ def test_load_app_wrong_type(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 # --------------------------------------------------------------- parser -
 
 
-def test_parser_repeatable_skills_dir() -> None:
-    args = cli.build_parser().parse_args(["--skills-dir", "a", "--skills-dir", "b"])
-    assert args.skills_dir == ["a", "b"]
+def test_parser_rejects_the_removed_skills_dir_flag() -> None:
+    # Skill directories live in config.json (Settings → Skills) now.
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--skills-dir", "x"])
 
 
 def test_parser_workspace_flags_are_mutually_exclusive() -> None:

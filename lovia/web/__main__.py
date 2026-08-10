@@ -41,7 +41,6 @@ from .builder import (
     DEFAULT_MAX_TURNS,
     DEFAULT_MEMORY_DIR,
     DEFAULT_RETRIES,
-    DEFAULT_SKILLS_DIR,
     DEFAULT_WORKSPACE_MODE,
     INSTRUCTIONS_FILES,
     _first,
@@ -76,10 +75,11 @@ examples:
 
 configuration:
   The model connection (model, base URL, API key, context window), extra
-  models, web search and role assignments live in ./.lovia/config.json —
-  the project file wins — or ~/.lovia/config.json (any directory). Managed
-  in the web UI's Settings; inspect with --check. The server and agent
-  options above stay flags, each with the LOVIA_* variable shown.
+  models, web search, role assignments and skill directories live in
+  ./.lovia/config.json — the project file wins — or ~/.lovia/config.json
+  (any directory). Managed in the web UI's Settings; inspect with --check.
+  The server and agent options above stay flags, each with the LOVIA_*
+  variable shown.
 """
 
 
@@ -155,13 +155,6 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--instructions",
         metavar="TEXT",
         help="system prompt text, overriding --instructions-file",
-    )
-    agent.add_argument(
-        "--skills-dir",
-        action="append",
-        metavar="DIR",
-        help="skill directory; repeatable (env LOVIA_SKILLS_DIR; "
-        f"default ./{DEFAULT_SKILLS_DIR} if present)",
     )
     agent.add_argument(
         "--memory-dir",
@@ -305,7 +298,6 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
 
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     flags = [
-        ("--skills-dir", bool(args.skills_dir)),
         ("--memory-dir", args.memory_dir is not None),
         ("--no-memory", args.no_memory),
         ("--no-subagents", args.no_subagents),

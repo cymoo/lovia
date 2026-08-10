@@ -5,11 +5,12 @@ The web UI's Settings is the one write path (over ``/api/config``); the
 through this package. Hand-editing the file stays possible — it is
 validated wholesale on load.
 
-- :mod:`.schema` — what the file says (profiles, roles, search).
+- :mod:`.schema` — what the file says (profiles, roles, search, skills).
 - :mod:`.storage` — where it lives, and atomic owner-only writes.
 - :mod:`.probe` — endpoint validation shared by every front-end.
 - :mod:`.runtime` — building and hot-swapping the served agent.
 - :mod:`.check` — read-only diagnosis and the startup summary.
+- :mod:`.skills` — skill-directory resolution and discovery.
 """
 
 from __future__ import annotations
@@ -31,15 +32,23 @@ from .probe import (
 from .runtime import ConfigRuntime
 from .schema import (
     ANTHROPIC_FLAVOR,
+    DEFAULT_SKILLS_DIR,
     OPENAI_FLAVOR,
+    USER_SKILLS_DIR,
     Connection,
     ModelProfile,
     ProviderFlavor,
     Roles,
     SearchConfig,
+    SkillsConfig,
     WebConfig,
     flavor_for_model,
     slugify,
+)
+from .skills import (
+    RootStatus,
+    resolve_skills_dirs,
+    scan_skills_status,
 )
 from .storage import (
     CONFIG_HINT,
@@ -56,16 +65,20 @@ from .storage import (
 __all__ = [
     "ANTHROPIC_FLAVOR",
     "CONFIG_HINT",
+    "DEFAULT_SKILLS_DIR",
     "OPENAI_FLAVOR",
     "PROJECT_CONFIG_LABEL",
     "USER_CONFIG_LABEL",
+    "USER_SKILLS_DIR",
     "ConfigRuntime",
     "Connection",
     "LoadedConfig",
     "ModelProfile",
     "ProviderFlavor",
     "Roles",
+    "RootStatus",
     "SearchConfig",
+    "SkillsConfig",
     "ValidationOutcome",
     "WebConfig",
     "build_provider",
@@ -78,8 +91,10 @@ __all__ = [
     "load_config",
     "mask_key",
     "project_config_path",
+    "resolve_skills_dirs",
     "run_check",
     "save_config",
+    "scan_skills_status",
     "slugify",
     "unlisted_model_note",
     "user_config_path",

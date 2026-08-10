@@ -131,6 +131,8 @@ agent = Agent(..., plugins=[Skills(catalog)])
 
 ## 延伸阅读
 
+- [Web UI § Skills](web-ui.md#skills)：`lovia web` 默认加载 `./.agents/skills`
+  与 `~/.agents/skills`，目录列表在设置页管理
 - [插件](plugins.md)：Skills 底层使用的机制
 - [记忆](memory.md)：agent 自己积累的知识，而不是你预先写好的知识
 - 示例：[`22_skills.py`](../../examples/22_skills.py)，示例 Skill：

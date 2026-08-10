@@ -7,7 +7,7 @@ import { showDialog, setThemePref, themePref } from './ui.js';
 import { t, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
-import { buildAboutPane, buildModelsPane, buildSearchPane } from './model-config.js';
+import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
 
 const NOTIF_KEY = 'lovia-notify';
 const SOUND_KEY = 'lovia-sound';
@@ -248,7 +248,7 @@ function buildGeneralPane() {
 
 /**
  * Open the Settings dialog on a given tab.
- * @param {'general' | 'models' | 'search' | 'about'} [initialTab]
+ * @param {'general' | 'models' | 'search' | 'skills' | 'about'} [initialTab]
  */
 export function openSettings(initialTab = 'general') {
   const tabs = [
@@ -258,6 +258,7 @@ export function openSettings(initialTab = 'general') {
     tabs.push(
       { id: 'models', label: t('settings.tabModels'), build: buildModelsPane },
       { id: 'search', label: t('settings.tabSearch'), build: buildSearchPane },
+      { id: 'skills', label: t('settings.tabSkills'), build: buildSkillsPane },
     );
   }
   tabs.push({ id: 'about', label: t('settings.tabAbout'), build: buildAboutPane });

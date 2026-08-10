@@ -26,11 +26,12 @@ CLI 创建的默认 Agent 包含 Todo、Memory、时间与 HTTP Tool、Web 搜�
 当前目录为根的 coding 模式 Workspace。它还会自动读取：
 
 - `AGENTS.md`：作为 Agent instructions；
-- `./.agents/skills`：作为 Skills 目录；
+- `./.agents/skills` 与 `~/.agents/skills`：作为 Skills 目录（项目目录优先；
+  目录列表在设置 → 技能中管理）；
 - `./.lovia/memory`：作为 Memory 目录。
 
-旧的 `./skills` 不再自动加载；可以迁移到 `./.agents/skills`，或显式传入
-`--skills-dir skills`。Web 搜索在配置 Tavily Key 后使用 Tavily，否则尝试可选的
+旧的 `./skills` 不再自动加载；可以迁移到 `./.agents/skills`，或在设置 → 技能中
+添加。Web 搜索在配置 Tavily Key 后使用 Tavily，否则尝试可选的
 DuckDuckGo 后端。
 
 默认功能会产生主 Run 之外的模型调用：Memory 默认在每个已完成 Run 后提炼一次，定期整理时
@@ -55,8 +56,17 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 切换模型从**下一条消息**开始生效，包括旧对话的后续消息、定时任务和后台子 Agent；已经开始的
 回复仍使用原模型。视觉理解以及标题、追问建议等辅助任务，可以分别指派给其他模型档案。
 
-搜索后端与 Tavily Key 也保存在 `config.json` 中。模型连接、多模型档案、角色指派和搜索配置
-没有对应的 CLI 参数；请通过设置页或直接维护配置文件。
+搜索后端、Tavily Key 与 Skill 目录也保存在 `config.json` 中。模型连接、多模型档案、
+角色指派、搜索和 Skills 配置没有对应的 CLI 参数；请通过设置页或直接维护配置文件。
+
+## Skills
+
+设置 → 技能管理 Skill 目录——一个有序列表；每个 skill 是含 `SKILL.md` 的子目录
+（详见 [Skills](skills.md)）。skill 重名时靠前的目录优先。列表默认为
+`./.agents/skills` 和 `~/.agents/skills`；移除某个默认目录即禁用它，也可以添加任意
+其他目录（支持 `~`）。面板会展示每个目录的贡献——发现的 skills、解析问题、被遮蔽的
+重名项；不存在的目录会被直接跳过，过期条目不会阻止服务启动。列表变更立即生效；
+向已配置的目录里新增 skill 则无需任何操作。
 
 ## 加载自定义 Agent
 
@@ -129,7 +139,7 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 
 ## 常用 CLI 选项
 
-除模型和搜索配置外，其余选项按“命令行参数 → 环境变量 → 默认值”解析。
+除模型、搜索和 Skills 配置外，其余选项按“命令行参数 → 环境变量 → 默认值”解析。
 
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
@@ -137,7 +147,6 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent |
-| `--skills-dir` | `LOVIA_SKILLS_DIR` | 若存在则使用 `./.agents/skills` |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |

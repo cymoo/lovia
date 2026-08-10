@@ -1,8 +1,9 @@
 """Configuration schema for the ``lovia web`` CLI.
 
-The model connection, web-search backend and role assignments live in one
-JSON document — ``./.lovia/config.json`` (project scope) or
-``~/.lovia/config.json`` (user scope) — managed in the web UI's Settings. The file is the single source of truth: there are no
+The model connection, web-search backend, role assignments and skill
+directories live in one JSON document — ``./.lovia/config.json`` (project
+scope) or ``~/.lovia/config.json`` (user scope) — managed in the web UI's
+Settings. The file is the single source of truth: there are no
 model-connection flags or environment variables. (:mod:`.storage` owns where
 the file lives; this module owns what it says.)
 """
@@ -140,6 +141,45 @@ class SearchConfig(BaseModel):
     tavily_api_key: str | None = None
 
 
+# The cross-agent convention (shared with Claude Code, Codex, OpenCode),
+# pairing with the AGENTS.md instructions default. Project scope first.
+DEFAULT_SKILLS_DIR = ".agents/skills"
+USER_SKILLS_DIR = "~/.agents/skills"
+
+
+class SkillsConfig(BaseModel):
+    """Skill directories for the default agent's Skills plugin.
+
+    ``dirs`` is precedence-ordered — on a duplicate skill name the first
+    root wins. The default value carries the two conventional roots;
+    removing one from the list is how a default gets disabled. A listed
+    directory that doesn't exist is skipped at build time, never an error:
+    a stale path in ``config.json`` must not make the server unbootable.
+    """
+
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
+    dirs: list[str] = Field(
+        default_factory=lambda: [DEFAULT_SKILLS_DIR, USER_SKILLS_DIR]
+    )
+
+    @model_validator(mode="after")
+    def _normalise(self) -> "SkillsConfig":
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in self.dirs:
+            value = raw.strip()
+            if not value:
+                raise ValueError("directory entries must be non-empty paths")
+            if value in seen:
+                continue
+            seen.add(value)
+            cleaned.append(value)
+        # __dict__ assignment sidesteps validate_assignment re-entrancy.
+        self.__dict__["dirs"] = cleaned
+        return self
+
+
 class WebConfig(BaseModel):
     """The whole ``config.json`` document."""
 
@@ -149,6 +189,7 @@ class WebConfig(BaseModel):
     models: list[ModelProfile] = Field(default_factory=list)
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":

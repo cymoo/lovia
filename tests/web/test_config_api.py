@@ -12,6 +12,7 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from lovia import Skills  # noqa: E402
 from lovia.web import create_app  # noqa: E402
 from lovia.web.__main__ import build_parser  # noqa: E402
 from lovia.web.config import (  # noqa: E402
@@ -251,6 +252,121 @@ def test_search_backend_rebuilds_tools(served) -> None:
     # "" clears the key.
     client.put("/api/config/search", json={"tavily_api_key": ""})
     assert runtime.config.search.tavily_api_key is None
+
+
+# --------------------------------------------------------------- skills -
+
+
+def _write_skill(root: Path, name: str, description: str = "Does a useful thing.") -> None:
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nBody.\n",
+        encoding="utf-8",
+    )
+
+
+def test_skills_block_in_get_config(served) -> None:
+    client, _runtime, _app = served
+    out = client.get("/api/config").json()["skills"]
+    assert out == {"dirs": [".agents/skills", "~/.agents/skills"]}
+
+
+def test_skills_update_rebuilds_the_agent(served, tmp_path: Path) -> None:
+    client, runtime, app = served
+    _write_skill(tmp_path / ".agents" / "skills", "greet")
+    _add_model(client)
+    agent = app.state.deps.agents["lovia"]
+    assert any(isinstance(p, Skills) for p in agent.plugins)
+    res = client.put("/api/config/skills", json={"dirs": []})
+    assert res.status_code == 200
+    assert res.json()["config"]["skills"] == {"dirs": []}
+    agent = app.state.deps.agents["lovia"]
+    assert not any(isinstance(p, Skills) for p in agent.plugins)
+    saved = json.loads((tmp_path / ".lovia" / "config.json").read_text())
+    assert saved["skills"] == {"dirs": []}
+    assert runtime.config.skills.dirs == []
+
+
+def test_skills_missing_dir_still_applies(served) -> None:
+    # A nonexistent path is a warn-and-skip at build time, never a 400 —
+    # otherwise a stale config.json could brick the hot-swap and the boot.
+    client, runtime, _app = served
+    _add_model(client)
+    res = client.put("/api/config/skills", json={"dirs": ["/definitely/nope"]})
+    assert res.status_code == 200
+    assert runtime.config.skills.dirs == ["/definitely/nope"]
+
+
+def test_skills_blank_entry_is_rejected(served) -> None:
+    client, _runtime, _app = served
+    _add_model(client)
+    res = client.put("/api/config/skills", json={"dirs": ["  "]})
+    assert res.status_code == 400
+    assert "skills" in res.json()["detail"]
+    assert "non-empty" in res.json()["detail"]
+
+
+def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
+    client, _runtime, _app = served
+    project = tmp_path / ".agents" / "skills"
+    _write_skill(project, "greet")
+    broken = project / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: broken\n---\nBody.\n", encoding="utf-8")
+    team = tmp_path / "team-skills"
+    _write_skill(team, "greet", "A shadowed duplicate.")
+    _add_model(client)
+    dirs = [".agents/skills", "~/.agents/skills", str(team)]
+    assert client.put("/api/config/skills", json={"dirs": dirs}).status_code == 200
+
+    res = client.get("/api/config/skills")
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == "no-store"
+    out = res.json()
+    assert out["defaults"] == [".agents/skills", "~/.agents/skills"]
+    roots = {r["path"]: r for r in out["roots"]}
+    assert set(roots) == set(dirs)
+
+    project_root = roots[".agents/skills"]
+    assert project_root["kind"] == "project_default"
+    assert project_root["exists"] is True
+    assert [s["name"] for s in project_root["skills"]] == ["greet"]
+    assert project_root["skills"][0]["shadowed"] is False
+    assert project_root["skills"][0]["description"] == "Does a useful thing."
+    assert project_root["problems"][0]["dir"] == "broken"
+    assert "description" in project_root["problems"][0]["error"]
+
+    user_root = roots["~/.agents/skills"]
+    assert user_root["kind"] == "user_default"
+    assert user_root["exists"] is False
+    assert user_root["skills"] == []
+
+    team_root = roots[str(team)]
+    assert team_root["kind"] == "custom"
+    assert [(s["name"], s["shadowed"]) for s in team_root["skills"]] == [("greet", True)]
+
+
+def test_skills_scan_works_unconfigured(served, tmp_path: Path) -> None:
+    # The pane must render (read-only) before any model exists.
+    client, _runtime, _app = served
+    _write_skill(tmp_path / ".agents" / "skills", "greet")
+    res = client.get("/api/config/skills")
+    assert res.status_code == 200
+    assert [r["path"] for r in res.json()["roots"]] == [
+        ".agents/skills",
+        "~/.agents/skills",
+    ]
+
+
+def test_skills_write_refuses_foreign_hosts(served) -> None:
+    client, _runtime, _app = served
+    res = client.put(
+        "/api/config/skills",
+        json={"dirs": []},
+        headers={"host": "evil.example"},
+    )
+    assert res.status_code == 403
 
 
 # ----------------------------------------------------------------- test -

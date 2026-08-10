@@ -686,7 +686,7 @@ export function buildSkillsPane() {
 
     pane.replaceChildren();
     pane.appendChild(el('div', 'cfg-pane-title', t('cfg.skillsTitle')));
-    pane.appendChild(el('div', 'cfg-hint', t('cfg.skillsIntro')));
+    pane.appendChild(el('div', 'cfg-hint skills-intro', t('cfg.skillsIntro')));
 
     const list = el('div', 'model-list');
     if (!scan.roots.length) {
@@ -717,15 +717,42 @@ export function buildSkillsPane() {
       if (root.skills.length || root.problems.length) {
         const details = el('details', 'skills-details');
         details.appendChild(el('summary', '', t('cfg.skillsShow')));
+        /** Rows whose description may need the expand toggle. */
+        const rows = [];
         for (const s of root.skills) {
           const item = el('div', 'skills-item');
-          item.appendChild(el('span', 'skills-item-name', s.name));
+          const head = el('div', 'skills-item-head');
+          head.appendChild(el('span', 'skills-item-name', s.name));
           if (s.shadowed) {
-            item.appendChild(el('span', 'badge badge-plain', t('cfg.skillsShadowed')));
+            head.appendChild(el('span', 'badge badge-plain', t('cfg.skillsShadowed')));
           }
-          item.appendChild(el('span', 'skills-item-desc', s.description));
+          // Descriptions are trigger prose and can run long — clamp to two
+          // lines so a root stays scannable, and expand in place rather than
+          // into a tooltip, which would put the text out of reach of a
+          // selection.
+          const desc = el('div', 'skills-item-desc', s.description);
+          const more = el('button', 'skills-item-more', t('cfg.skillsMore'));
+          more.setAttribute('type', 'button');
+          more.setAttribute('aria-expanded', 'false');
+          more.addEventListener('click', () => {
+            const open = item.classList.toggle('open');
+            more.textContent = t(open ? 'cfg.skillsLess' : 'cfg.skillsMore');
+            more.setAttribute('aria-expanded', String(open));
+          });
+          head.appendChild(more);
+          item.append(head, desc);
+          rows.push({ item, desc });
           details.appendChild(item);
         }
+        // The toggle is only honest once we know the text overflows, and
+        // nothing inside a closed <details> has a layout to measure.
+        details.addEventListener('toggle', () => {
+          if (!details.open) return;
+          for (const { item, desc } of rows) {
+            if (item.classList.contains('open')) continue;
+            item.classList.toggle('clamped', desc.scrollHeight > desc.clientHeight + 1);
+          }
+        });
         for (const p of root.problems) {
           details.appendChild(
             el('div', 'skills-item skills-item-problem', `${p.dir}: ${p.error}`),

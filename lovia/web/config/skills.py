@@ -38,21 +38,25 @@ def _kind(raw: str) -> str:
 
 
 def skill_roots(skills: SkillsConfig) -> list[SkillRoot]:
-    """Every configured root in precedence order, deduplicated by identity."""
+    """Every configured entry in precedence order — one row per string.
+
+    Deliberately no identity folding: entries that resolve to the same
+    directory (``"x"`` and ``"./x"``) each keep their own row, so the
+    Settings pane can remove any of them; :func:`resolve_skills_dirs`
+    dedupes when building the actual plugin roots.
+    """
     roots: list[SkillRoot] = []
-    seen: set[Path] = set()
     for raw in skills.dirs:
         expanded = Path(raw).expanduser()
-        key = expanded.resolve()
-        if key in seen:
-            continue
-        seen.add(key)
         roots.append(
             SkillRoot(
                 kind=_kind(raw), path=raw, resolved=expanded, exists=expanded.is_dir()
             )
         )
     return roots
+
+
+_legacy_hint_emitted = False  # the ./skills nudge fires once per process
 
 
 def resolve_skills_dirs(skills: SkillsConfig | None) -> list[Path]:
@@ -63,13 +67,20 @@ def resolve_skills_dirs(skills: SkillsConfig | None) -> list[Path]:
     per-directory status), so a stale ``config.json`` can never make the
     server unbootable. A bare ``./skills`` was the default before 0.9.13;
     it is no longer auto-loaded (the generic name collides with non-skill
-    directories), so we point at the move once at startup.
+    directories), so we point at the move once per process.
     """
+    global _legacy_hint_emitted
     skills = skills or SkillsConfig()
     dirs: list[Path] = []
+    seen: set[Path] = set()
     for root in skill_roots(skills):
         if not root.exists:
-            if root.kind == "project_default" and Path("skills").is_dir():
+            if (
+                root.kind == "project_default"
+                and Path("skills").is_dir()
+                and not _legacy_hint_emitted
+            ):
+                _legacy_hint_emitted = True
                 log.warning(
                     "./skills is no longer auto-loaded; move it to ./%s "
                     "or add it in Settings -> Skills",
@@ -78,6 +89,10 @@ def resolve_skills_dirs(skills: SkillsConfig | None) -> list[Path]:
             else:
                 log.info("skills directory not found, skipped: %s", root.path)
             continue
+        key = root.resolved.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
         dirs.append(root.resolved)
     return dirs
 

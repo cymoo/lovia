@@ -347,6 +347,18 @@ def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
     assert [(s["name"], s["shadowed"]) for s in team_root["skills"]] == [("greet", True)]
 
 
+def test_skills_scan_keeps_identity_duplicates_visible(served, tmp_path: Path) -> None:
+    # "x" and "./x" resolve to one directory but stay two removable rows;
+    # only the plugin roots are deduplicated.
+    client, _runtime, _app = served
+    _write_skill(tmp_path / "x", "greet")
+    _add_model(client)
+    assert client.put("/api/config/skills", json={"dirs": ["x", "./x"]}).status_code == 200
+    roots = client.get("/api/config/skills").json()["roots"]
+    assert [r["path"] for r in roots] == ["x", "./x"]
+    assert [s["shadowed"] for s in roots[1]["skills"]] == [True]
+
+
 def test_skills_scan_works_unconfigured(served, tmp_path: Path) -> None:
     # The pane must render (read-only) before any model exists.
     client, _runtime, _app = served

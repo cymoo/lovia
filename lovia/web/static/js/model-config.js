@@ -666,21 +666,19 @@ export function buildSkillsPane() {
     /** @type {string[]} */
     const dirs = c.skills.dirs;
 
-    const errBox = el('div', 'cfg-error');
-    errBox.hidden = true;
     let saving = false;
     /** @param {string[]} next */
     const save = async (next) => {
       if (saving) return;
       saving = true;
-      errBox.hidden = true;
       try {
         await api.setSkills({ dirs: next });
         await loadConfig();
         toast(t('cfg.saved'));
       } catch (err) {
-        errBox.textContent = String(err.message || err);
-        errBox.hidden = false;
+        // The re-render below reverts the pane, so the error must outlive
+        // it — a toast, matching the model-list actions.
+        toast(String(err.message || err), { type: 'error' });
       }
       saving = false;
       render();
@@ -778,7 +776,6 @@ export function buildSkillsPane() {
       );
     }
 
-    pane.appendChild(errBox);
     const note = el('div', 'cfg-footnote');
     note.textContent = c.scope.exists
       ? t('cfg.scopeNote', { label: c.scope.label })

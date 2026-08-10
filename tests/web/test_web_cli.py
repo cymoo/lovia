@@ -88,11 +88,15 @@ def test_resolve_skills_legacy_dir_ignored_with_hint(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Pre-0.9.13 default: a bare ./skills is no longer auto-loaded.
+    from lovia.web.config import skills as skills_mod
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(skills_mod, "_legacy_hint_emitted", False)
     (tmp_path / "skills").mkdir()
     with caplog.at_level("WARNING", logger="lovia.web.config"):
         assert resolve_skills_dirs(SkillsConfig()) == []
-    assert "no longer auto-loaded" in caplog.text
+        assert resolve_skills_dirs(SkillsConfig()) == []
+    assert caplog.text.count("no longer auto-loaded") == 1  # once per process
     assert "--skills-dir" not in caplog.text  # the flag is gone
 
 

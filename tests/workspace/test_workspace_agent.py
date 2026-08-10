@@ -203,6 +203,31 @@ async def test_view_image_filtered_for_text_only_models(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_view_image_gating_logged_once_per_model(tmp_path, caplog) -> None:
+    """The 'not offering it' hint is per-process: a static fact about the
+    model, not something to repeat on every run's bootstrap."""
+    import logging
+
+    from lovia.runtime import loop as loop_mod
+
+    class NamedScripted(ScriptedProvider):
+        model = "textonly-model"
+
+    provider = NamedScripted([text("one"), text("two")])
+    agent = Agent(
+        name="t",
+        model=provider,
+        workspace=Workspace.local(str(tmp_path), mode="readonly"),
+    )
+    loop_mod._logged_once.clear()
+    with caplog.at_level(logging.INFO, logger="lovia.runtime.loop"):
+        await Runner.run(agent, "first")
+        await Runner.run(agent, "second")
+    hints = [r for r in caplog.records if "not offering it" in r.getMessage()]
+    assert len(hints) == 1
+
+
+@pytest.mark.asyncio
 async def test_view_image_offered_to_vision_models(tmp_path) -> None:
     from lovia.transcript import ToolResultEntry
 

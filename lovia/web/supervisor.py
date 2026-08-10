@@ -33,6 +33,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from .. import events
 from ..checkpointer import CheckpointOptions
+from ..log_config import CURRENT_AGENT
 from ..messages import Message, Usage
 from ..reliability import CancelToken
 from ..parts import coerce_parts
@@ -70,7 +71,15 @@ RUN_SOURCE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 class _RunSourceFilter(logging.Filter):
-    """Stamps ``record.run_source`` (``"[<source>] "`` or ``""``).
+    """Stamps ``record.run_source`` (``"[<source>/<agent>] "`` or ``""``).
+
+    Two dimensions, either possibly absent: *source* is what started the
+    supervised run (``RUN_SOURCE``), *agent* is who is running right now
+    (:data:`lovia.log_config.CURRENT_AGENT`, kept current by the core loop).
+    A side-run spawned from within a run keeps the source and swaps the
+    agent — ``[user/lovia]`` for the chat itself, ``[user/memory-digest]``
+    for the memory curation it triggered, ``[followups]`` for a run with no
+    supervised parent.
 
     Attach to a *handler* (filters on loggers don't apply to child loggers)
     and include ``%(run_source)s`` in its format — see ``lovia web``'s
@@ -78,8 +87,8 @@ class _RunSourceFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        source = RUN_SOURCE.get()
-        record.run_source = f"[{source}] " if source else ""
+        tag = "/".join(p for p in (RUN_SOURCE.get(), CURRENT_AGENT.get()) if p)
+        record.run_source = f"[{tag}] " if tag else ""
         return True
 
 

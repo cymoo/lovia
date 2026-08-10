@@ -22,7 +22,7 @@ import inspect
 import logging
 import time
 from collections import Counter
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
@@ -63,6 +63,7 @@ from ..guardrails import (
     check_output_guardrails,
 )
 from ..handoff import Handoff, build_handoff_tool
+from ..log_config import CURRENT_AGENT
 from ..hooks import dispatch
 from ..steering import Mailbox
 from ..transcript import (
@@ -113,6 +114,20 @@ _NO_WINDOW_FIELD: object = object()
 # Deliberately permissive — it exists to skip near-no-op retries, not to
 # second-guess a real shrink.
 _RETRY_SHRINK_FACTOR = 0.95
+
+# Keys already logged by _log_once. Static per-(model, ...) facts — a window
+# the endpoint cannot report, a tool withheld from a text-only model — earn
+# one INFO line per process; repeating them on every run turns every
+# follow-up/title/memory side-run into noise.
+_logged_once: set[tuple[object, ...]] = set()
+
+
+def _log_once(*key: object) -> bool:
+    """True the first time ``key`` is seen this process."""
+    if key in _logged_once:
+        return False
+    _logged_once.add(key)
+    return True
 
 
 class RunLoop:
@@ -221,9 +236,20 @@ class RunLoop:
         agent = self.initial_agent
         tracer: Tracer = self.tracer or NoopTracer()
 
-        with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
-            async for ev in self._stream_inner(tracer, span):
-                yield ev
+        # Tag this task context with the running agent for log attribution
+        # (updated on handoff in _resolve_active); a nested run — a plugin's
+        # side-run, an agent-as-tool call — shadows and restores the host's.
+        token = CURRENT_AGENT.set(agent.name)
+        try:
+            with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
+                async for ev in self._stream_inner(tracer, span):
+                    yield ev
+        finally:
+            # The token is context-bound: if a consumer finishes the generator
+            # from a different task than the one that started it, reset would
+            # raise — leave the (cosmetic) tag in place there instead.
+            with suppress(ValueError):
+                CURRENT_AGENT.reset(token)
 
     async def _drain_mailbox(self, state: RunState) -> AsyncIterator[events.Event]:
         """Append any mailbox-injected messages as ``user`` turns.
@@ -649,6 +675,9 @@ class RunLoop:
         until then — closing them eagerly would add failure modes for no
         gain).
         """
+        # Re-tag on every activation so post-handoff log lines carry the agent
+        # they belong to; stream()'s reset restores the pre-run tag at the end.
+        CURRENT_AGENT.set(agent.name)
         cached = self._activated.get(id(agent))
         if cached is not None:
             return cached
@@ -1406,11 +1435,13 @@ class RunLoop:
             # correctness gate.
             if provider is None or not t.returns_images or supports_vision(provider):
                 return True
-            logger.info(
-                "tool %r (%s) returns images the model cannot see; not offering it",
-                t.name,
-                source,
-            )
+            if _log_once("returns_images", t.name, getattr(provider, "model", None)):
+                logger.info(
+                    "tool %r (%s) returns images the model cannot see; "
+                    "not offering it",
+                    t.name,
+                    source,
+                )
             return False
 
         for t in agent.tools:
@@ -1457,11 +1488,14 @@ class RunLoop:
             return
         await discover_context_window(provider)
         if context_window(provider) is None:
-            logger.info(
-                "context.window: unknown for %r; proactive compaction is off — "
-                "set Compaction(context_window=...) if the endpoint cannot report it",
-                getattr(provider, "model", None),
-            )
+            model = getattr(provider, "model", None)
+            if _log_once("context.window", model):
+                logger.info(
+                    "context.window: unknown for %r; proactive compaction is off — "
+                    "set Compaction(context_window=...) if the endpoint cannot "
+                    "report it",
+                    model,
+                )
 
     def _resolve_provider(
         self, agent: Agent[Any], resources: AsyncExitStack

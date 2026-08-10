@@ -4958,6 +4958,7 @@ body.files-splitting {
   font-size: 11px;
   color: var(--muted-2);
   opacity: 0;
+  pointer-events: none; /* invisible must also mean untappable */
   transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .skills-item-more:hover {
@@ -4970,6 +4971,13 @@ body.files-splitting {
 .skills-item:focus-within .skills-item-more,
 .skills-item.open .skills-item-more {
   opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none) {
+  .skills-item-more {
+    opacity: 1; /* no hover on touch — the control must be visible */
+    pointer-events: auto;
+  }
 }
 .skills-item-problem {
   font-family: var(--mono);

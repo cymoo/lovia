@@ -4900,6 +4900,10 @@ body.files-splitting {
   color: var(--ink-2);
   border: 1px solid var(--border);
 }
+.skills-intro {
+  margin-bottom: 14px;
+  line-height: 1.55;
+}
 .skills-root {
   cursor: default;
   align-items: flex-start;
@@ -4920,11 +4924,12 @@ body.files-splitting {
   color: var(--muted);
 }
 .skills-item {
+  padding: 5px 0 5px 12px;
+}
+.skills-item-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 7px;
-  padding: 3px 0 3px 12px;
-  flex-wrap: wrap;
 }
 .skills-item-name {
   font-family: var(--mono);
@@ -4932,9 +4937,39 @@ body.files-splitting {
   font-weight: 560;
 }
 .skills-item-desc {
-  flex: 1 1 200px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 1px;
   font-size: 11.5px;
+  line-height: 1.5;
   color: var(--muted);
+}
+.skills-item.open .skills-item-desc {
+  display: block; /* drops the clamp — the box only clips as a -webkit-box */
+}
+/* Quiet until the row is hovered, like the model-row actions; kept visible
+   while expanded so the way back is never hidden. */
+.skills-item-more {
+  margin-left: auto;
+  padding: 0 2px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted-2);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.skills-item-more:hover {
+  color: var(--ink-2);
+}
+.skills-item:not(.clamped):not(.open) .skills-item-more {
+  display: none;
+}
+.skills-item:hover .skills-item-more,
+.skills-item:focus-within .skills-item-more,
+.skills-item.open .skills-item-more {
+  opacity: 1;
 }
 .skills-item-problem {
   font-family: var(--mono);

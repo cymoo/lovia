@@ -88,6 +88,11 @@ class _RunSourceFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         tag = "/".join(p for p in (RUN_SOURCE.get(), CURRENT_AGENT.get()) if p)
+        # Agent names are free-form: a newline (or other control char) would
+        # split the one-line prefix and fabricate log lines. isprintable() is
+        # the fast path — the collapse only runs on a pathological name.
+        if tag and not tag.isprintable():
+            tag = " ".join(tag.split())
         record.run_source = f"[{tag}] " if tag else ""
         return True
 

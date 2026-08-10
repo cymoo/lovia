@@ -265,9 +265,15 @@ async def test_run_source_filter_tags_task_context_logs() -> None:
             CURRENT_AGENT.set("followups")  # a parentless helper run
             lg.info("helper")
 
+        async def hostile_name() -> None:
+            # A free-form agent name must not split the one-line prefix.
+            CURRENT_AGENT.set("bad\nname")
+            lg.info("hostile")
+
         # create_task copies the context, so the tags stay task-local.
         await asyncio.create_task(inner())
         await asyncio.create_task(agent_only())
+        await asyncio.create_task(hostile_name())
         lg.info("outside-after")
     finally:
         lg.removeHandler(handler)
@@ -277,6 +283,7 @@ async def test_run_source_filter_tags_task_context_logs() -> None:
         "inside": "[subagent:abc] ",
         "inside-run": "[subagent:abc/digger] ",
         "helper": "[followups] ",
+        "hostile": "[bad name] ",
         "outside-after": "",
     }
 

@@ -24,6 +24,7 @@ import contextlib
 import logging
 import time
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 try:
@@ -64,7 +65,12 @@ def _croniter_next(expr: str, after: float) -> float:
         raise RuntimeError(
             "cron triggers need the 'croniter' package — install lovia[web]"
         ) from exc
-    return float(croniter(expr, after).get_next(float))
+    # A bare epoch start makes croniter match the cron fields against UTC wall
+    # time; pass an aware local datetime instead so fields mean the server's
+    # local wall clock — crontab convention, and what the UI's humanized
+    # trigger description ("daily at 22:00") promises.
+    start = datetime.fromtimestamp(after).astimezone()
+    return float(croniter(expr, start).get_next(float))
 
 
 def validate_trigger(kind: str, expr: str) -> None:

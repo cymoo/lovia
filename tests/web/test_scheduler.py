@@ -9,6 +9,7 @@ exercised with a sync ``TestClient`` (they only persist rows — no lifespan).
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import pytest
@@ -140,6 +141,36 @@ def test_next_fire_cron_is_wired() -> None:
     assert 0 < n1 - now <= 300  # next 5-minute slot, in the future
     n2 = advance_next_fire("cron", "*/5 * * * *", now=n1)
     assert n2 - n1 == 300  # successive slots are one interval apart
+
+
+def test_cron_fields_mean_local_wall_time() -> None:
+    # A cron's hour/minute fields are the server's local wall clock — the
+    # contract the UI's humanized description ("daily at 06:30") relies on.
+    # With croniter's bare-epoch start they silently meant UTC, shifting
+    # every fire by the server's UTC offset. Pin a non-UTC zone (no-DST, so
+    # deterministic) for the duration: in a UTC environment — typical CI —
+    # UTC and local coincide and the old bug would pass unnoticed.
+    pytest.importorskip("croniter")
+    if not hasattr(time, "tzset"):  # pragma: no cover - Windows
+        pytest.skip("needs time.tzset to pin a non-UTC timezone")
+    from datetime import datetime
+
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Shanghai"
+    time.tzset()
+    try:
+        now = time.time()
+        for fn in (initial_next_fire, advance_next_fire):
+            nxt = fn("cron", "30 6 * * *", now=now)
+            assert nxt is not None and nxt > now
+            local = datetime.fromtimestamp(nxt).astimezone()
+            assert (local.hour, local.minute) == (6, 30)
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
 
 
 def test_fire_input_plain_without_until() -> None:

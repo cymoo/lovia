@@ -130,7 +130,7 @@ Web 包会持久化定时任务，支持三种触发方式：
 | --- | --- |
 | `at` | ISO-8601 时间戳或 Unix 时间戳 |
 | `every` | 秒数间隔 |
-| `cron` | Cron 表达式；`lovia[web]` 已包含 `croniter` |
+| `cron` | Cron 表达式，按服务器本地时间匹配；`lovia[web]` 已包含 `croniter` |
 
 `Scheduling(store)` 提供需要审批的 `schedule_run` 工具。模型可以建议创建定时任务，
 但只有用户批准工具调用后才会保存。`continue_session=True` 会把结果追加到同一对话；

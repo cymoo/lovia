@@ -137,7 +137,9 @@ def _make_tool(store: ChatStore) -> Tool:
             "For 'at': an ISO-8601 datetime, ideally with the local UTC offset "
             "(e.g. 2026-06-29T09:00+08:00) — a bare time is read in the server's "
             "timezone; epoch seconds also work. For 'every': the interval in "
-            "seconds. For 'cron': a 5-field cron expression like '0 9 * * *'.",
+            "seconds. For 'cron': a 5-field cron expression like '0 9 * * *', "
+            "matched against the server's LOCAL wall clock (crontab convention) "
+            "— never convert the user's local time to UTC.",
         ],
         continue_session: Annotated[
             bool,

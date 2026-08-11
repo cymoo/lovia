@@ -142,6 +142,22 @@ def test_next_fire_cron_is_wired() -> None:
     assert n2 - n1 == 300  # successive slots are one interval apart
 
 
+def test_cron_fields_mean_local_wall_time() -> None:
+    # A cron's hour/minute fields are the server's local wall clock — the
+    # contract the UI's humanized description ("daily at 06:30") relies on.
+    # With croniter's bare-epoch start they silently meant UTC, shifting
+    # every fire by the server's UTC offset.
+    pytest.importorskip("croniter")
+    from datetime import datetime
+
+    now = time.time()
+    for fn in (initial_next_fire, advance_next_fire):
+        nxt = fn("cron", "30 6 * * *", now=now)
+        assert nxt is not None and nxt > now
+        local = datetime.fromtimestamp(nxt).astimezone()
+        assert (local.hour, local.minute) == (6, 30)
+
+
 def test_fire_input_plain_without_until() -> None:
     assert fire_input(_row(input="just do it")) == "just do it"
 

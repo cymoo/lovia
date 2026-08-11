@@ -115,15 +115,15 @@ _NO_WINDOW_FIELD: object = object()
 # second-guess a real shrink.
 _RETRY_SHRINK_FACTOR = 0.95
 
-# Keys already logged by _log_once. Static per-(model, ...) facts — a window
-# the endpoint cannot report, a tool withheld from a text-only model — earn
-# one INFO line per process; repeating them on every run turns every
-# follow-up/title/memory side-run into noise.
 _logged_once: set[tuple[object, ...]] = set()
 
 
 def _log_once(*key: object) -> bool:
-    """True the first time ``key`` is seen this process."""
+    """True the first time ``key`` is seen this process.
+
+    For static per-model facts (an unreported context window, a tool withheld
+    from a text-only model) that would otherwise repeat on every run.
+    """
     if key in _logged_once:
         return False
     _logged_once.add(key)
@@ -236,18 +236,15 @@ class RunLoop:
         agent = self.initial_agent
         tracer: Tracer = self.tracer or NoopTracer()
 
-        # Tag this task context with the running agent for log attribution
-        # (updated on handoff in _resolve_active); a nested run — a plugin's
-        # side-run, an agent-as-tool call — shadows and restores the host's.
+        # Log-attribution tag; _resolve_active re-sets it on handoff.
         token = CURRENT_AGENT.set(agent.name)
         try:
             with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
                 async for ev in self._stream_inner(tracer, span):
                     yield ev
         finally:
-            # The token is context-bound: if a consumer finishes the generator
-            # from a different task than the one that started it, reset would
-            # raise — leave the (cosmetic) tag in place there instead.
+            # reset() raises if the generator is finalized from a different
+            # task than the one that started it; the stale tag is cosmetic.
             with suppress(ValueError):
                 CURRENT_AGENT.reset(token)
 
@@ -675,8 +672,7 @@ class RunLoop:
         until then — closing them eagerly would add failure modes for no
         gain).
         """
-        # Re-tag on every activation so post-handoff log lines carry the agent
-        # they belong to; stream()'s reset restores the pre-run tag at the end.
+        # Re-tag on handoff; stream()'s reset restores the pre-run tag.
         CURRENT_AGENT.set(agent.name)
         cached = self._activated.get(id(agent))
         if cached is not None:

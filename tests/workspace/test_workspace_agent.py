@@ -204,8 +204,7 @@ async def test_view_image_filtered_for_text_only_models(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_view_image_gating_logged_once_per_model(tmp_path, caplog) -> None:
-    """The 'not offering it' hint is per-process: a static fact about the
-    model, not something to repeat on every run's bootstrap."""
+    """The 'not offering it' hint fires once per process, keyed by model."""
     import logging
 
     from lovia.runtime import loop as loop_mod

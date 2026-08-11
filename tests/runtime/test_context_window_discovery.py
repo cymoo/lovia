@@ -73,11 +73,7 @@ async def test_does_not_ask_for_a_policy_that_needs_no_window() -> None:
 
 
 async def test_unknown_window_is_logged_once_per_model(caplog) -> None:
-    """The 'context.window: unknown' hint fires once per process, not per run.
-
-    Every helper side-run (follow-ups, titles, memory curation) bootstraps
-    with a windowless default policy; repeating the same static fact after
-    each of them is noise."""
+    """The 'context.window: unknown' hint fires once per process, not per run."""
     provider = _Probeable([text("hi"), text("hi")], window=None)
     provider.model = "windowless-model"
     loop_mod._logged_once.clear()

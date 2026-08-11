@@ -14,6 +14,7 @@ production, piped, and file output are never colorized.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -22,6 +23,14 @@ from typing import TextIO
 
 # Attach a NullHandler at import time — see the module docstring.
 logging.getLogger("lovia").addHandler(logging.NullHandler())
+
+# Name of the agent running in the current task context. Set by the runtime
+# loop for the duration of a run (updated on handoff, restored on exit) so a
+# log filter can attribute every line to the agent that emitted it — see
+# ``lovia web``'s run-source filter.
+CURRENT_AGENT: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "lovia_current_agent", default=None
+)
 
 
 # ---------------------------------------------------------------------------

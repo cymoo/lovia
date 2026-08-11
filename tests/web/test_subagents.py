@@ -238,6 +238,7 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
 async def test_run_source_filter_tags_task_context_logs() -> None:
     import logging
 
+    from lovia.log_config import CURRENT_AGENT
     from lovia.web.supervisor import RUN_SOURCE, run_source_log_filter
 
     records: list[logging.LogRecord] = []
@@ -257,9 +258,22 @@ async def test_run_source_filter_tags_task_context_logs() -> None:
         async def inner() -> None:
             RUN_SOURCE.set("subagent:abc")  # what RunController._run does
             lg.info("inside")
+            CURRENT_AGENT.set("digger")  # what RunLoop.stream does
+            lg.info("inside-run")
 
-        # create_task copies the context, so the tag stays task-local.
+        async def agent_only() -> None:
+            CURRENT_AGENT.set("followups")  # a parentless helper run
+            lg.info("helper")
+
+        async def hostile_name() -> None:
+            # A free-form agent name must not split the one-line prefix.
+            CURRENT_AGENT.set("bad\nname")
+            lg.info("hostile")
+
+        # create_task copies the context, so the tags stay task-local.
         await asyncio.create_task(inner())
+        await asyncio.create_task(agent_only())
+        await asyncio.create_task(hostile_name())
         lg.info("outside-after")
     finally:
         lg.removeHandler(handler)
@@ -267,6 +281,9 @@ async def test_run_source_filter_tags_task_context_logs() -> None:
     assert tags == {
         "outside": "",
         "inside": "[subagent:abc] ",
+        "inside-run": "[subagent:abc/digger] ",
+        "helper": "[followups] ",
+        "hostile": "[bad name] ",
         "outside-after": "",
     }
 

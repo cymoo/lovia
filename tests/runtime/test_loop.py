@@ -127,3 +127,58 @@ async def test_policy_mutating_request_entries_cannot_corrupt_the_transcript() -
         "InputEntry",
         "AssistantTextEntry",
     ]
+
+
+async def test_current_agent_tag_set_during_run_and_restored() -> None:
+    """The loop tags its task context with the running agent's name for log
+    attribution, and restores the previous tag when the run ends."""
+    from lovia.log_config import CURRENT_AGENT
+
+    seen: list[str | None] = []
+
+    @tool
+    def peek() -> str:
+        """Record the tag as the model's tools observe it."""
+        seen.append(CURRENT_AGENT.get())
+        return "ok"
+
+    provider = ScriptedProvider([call("peek", {}), text("done")])
+    agent = Agent(name="tagged", model=provider, tools=[peek])
+    assert CURRENT_AGENT.get() is None
+    await Runner.run(agent, "go")
+    assert seen == ["tagged"]
+    assert CURRENT_AGENT.get() is None
+
+
+async def test_nested_run_shadows_and_restores_agent_tag() -> None:
+    """A side-run from within a run (memory curation, agent-as-tool) tags its
+    own lines and hands the host's tag back when it finishes."""
+    from lovia.log_config import CURRENT_AGENT
+
+    tags: list[tuple[str, str | None]] = []
+
+    @tool
+    def inner_peek() -> str:
+        """Record the nested run's tag."""
+        tags.append(("inner", CURRENT_AGENT.get()))
+        return "ok"
+
+    @tool
+    async def delegate() -> str:
+        """Run a nested agent, then record the restored tag."""
+        inner = Agent(
+            name="inner",
+            model=ScriptedProvider([call("inner_peek", {}), text("x")]),
+            tools=[inner_peek],
+        )
+        await Runner.run(inner, "hi")
+        tags.append(("after-nested", CURRENT_AGENT.get()))
+        return "ok"
+
+    agent = Agent(
+        name="outer",
+        model=ScriptedProvider([call("delegate", {}), text("done")]),
+        tools=[delegate],
+    )
+    await Runner.run(agent, "go")
+    assert tags == [("inner", "inner"), ("after-nested", "outer")]

@@ -358,9 +358,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 f"invalid log level: {level!r}",
                 hint=f"choose one of: {', '.join(lv.lower() for lv in LOG_LEVELS)}",
             )
-        # %(run_source)s tags every line emitted inside a supervised run's
-        # task with what started it — [user] / [schedule:<id>] /
-        # [subagent:<session>] — so parallel background work stays legible.
+        # %(run_source)s tags every line emitted inside a run's task context
+        # with what started it and who is running — [user/lovia],
+        # [subagent:<session>/<agent>], [followups] — so parallel background
+        # work stays legible.
         enable_logging(
             level,
             format="%(asctime)s %(levelname)-7s %(name)s: %(run_source)s%(message)s",

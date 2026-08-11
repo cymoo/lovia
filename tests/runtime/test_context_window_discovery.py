@@ -9,12 +9,15 @@ table's number.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
 from lovia import Agent, Compaction, Runner
 from lovia.context import NoopContextPolicy
 from lovia.providers.openai_chat import OpenAIChatProvider
+from lovia.runtime import loop as loop_mod
 from lovia.testing import ScriptedProvider, text
 
 
@@ -67,6 +70,21 @@ async def test_does_not_ask_for_a_policy_that_needs_no_window() -> None:
     provider = _Probeable([text("hi")], window=None)
     await _run(provider, context_policy=NoopContextPolicy())
     assert provider.probes == 0
+
+
+async def test_unknown_window_is_logged_once_per_model(caplog) -> None:
+    """The 'context.window: unknown' hint fires once per process, not per run."""
+    provider = _Probeable([text("hi"), text("hi")], window=None)
+    provider.model = "windowless-model"
+    loop_mod._logged_once.clear()
+    with caplog.at_level(logging.INFO, logger="lovia.runtime.loop"):
+        await _run(provider)
+        await _run(provider)
+    hints = [
+        r for r in caplog.records if "context.window: unknown" in r.getMessage()
+    ]
+    assert len(hints) == 1
+    assert "windowless-model" in hints[0].getMessage()
 
 
 async def test_a_provider_without_discovery_is_left_alone() -> None:

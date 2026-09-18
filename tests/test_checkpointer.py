@@ -342,6 +342,55 @@ async def test_replay_heals_session_lost_in_the_crash_window() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_on_success_waits_for_the_session_append() -> None:
+    # ``delete_on_success`` used to drop the snapshot *before* the session
+    # append. A store error in between then left the run nowhere — and the
+    # next re-issue of the same run_id started over, re-running the model and
+    # every tool. The snapshot must outlive the session append.
+    from lovia.stores import InMemorySession
+
+    class FlakySession(InMemorySession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_append = True
+
+        async def append(self, session_id, entries, *, run_id=None, meta=None):  # type: ignore[override]
+            if self.fail_next_append:
+                self.fail_next_append = False
+                raise ConnectionError("session store down")
+            return await super().append(session_id, entries, run_id=run_id, meta=meta)
+
+    cp = InMemoryCheckpointer()
+    session = FlakySession()
+    agent = Agent(name="a", model=ScriptedProvider([text("answer")]))
+
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            agent,
+            "q",
+            checkpoint=ckpt(cp, "rB", delete_on_success=True),
+            session=session,
+            session_id="s1",
+        )
+    snap = await cp.load("rB")
+    assert snap is not None and snap.status == "completed"
+    assert await session.segments("s1") == []
+
+    agent2 = Agent(name="a", model=ScriptedProvider([]))  # model must not run
+    result = await Runner.run(
+        agent2,
+        "q",
+        checkpoint=ckpt(cp, "rB", delete_on_success=True),
+        session=session,
+        session_id="s1",
+    )
+    assert result.output == "answer"
+    [seg] = await session.segments("s1")
+    assert seg.run_id == "rB"
+    assert await cp.load("rB") is None  # dropped once the session has the run
+
+
+@pytest.mark.asyncio
 async def test_run_idempotent_resumes_existing_run() -> None:
     # Re-issuing the same run(...) after a crash resumes the stored run rather
     # than restarting (if_run_exists defaults to "resume").

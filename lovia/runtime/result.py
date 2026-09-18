@@ -122,16 +122,19 @@ class RunHandle:
         if self._consumed:
             raise RuntimeError("RunHandle can only be iterated once")
         self._consumed = True
+        terminal_seen = False
         try:
             async for ev in self._stream:
                 if isinstance(ev, events.RunCompleted):
                     self._result = ev.result
+                    terminal_seen = True
                 elif isinstance(ev, events.RunFailed):
                     # Honor the terminal-event contract on its own: a producer
                     # that emits RunFailed and then ends cleanly (without also
                     # raising, as RunLoop happens to) must still make result()
                     # raise the run's error rather than report abandonment.
                     self._error = ev.error
+                    terminal_seen = True
                 yield ev
         except GeneratorExit:
             # The consumer broke out of iteration. Don't record this as the
@@ -140,11 +143,14 @@ class RunHandle:
             self._done.set()
             raise
         except Exception as exc:
-            # Terminal run failure. The loop already emitted RunFailed and
-            # persisted terminal state; end iteration cleanly and hold the
-            # exception for result().
+            # Terminal run failure: end iteration cleanly and hold the
+            # exception for result(). The loop emits RunFailed itself once a
+            # run is under way; a failure before that (bootstrap, snapshot
+            # load) reaches here with no terminal event, so supply it.
             self._error = exc
             self._done.set()
+            if not terminal_seen:
+                yield events.RunFailed(error=exc)
         except BaseException as exc:
             # asyncio.CancelledError, KeyboardInterrupt, ...: not a run
             # outcome — record for result() but let it propagate.

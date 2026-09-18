@@ -86,6 +86,7 @@ async def test_writer_is_noop_without_checkpointer() -> None:
     await writer.delete()
     await writer.save_running(_state())
     await writer.complete(_state(), "out")
+    await writer.discard_completed()
 
 
 async def test_complete_persists_serializable_output() -> None:
@@ -99,12 +100,38 @@ async def test_complete_persists_serializable_output() -> None:
     assert snap.error is None
 
 
-async def test_complete_with_delete_on_success_removes_snapshot() -> None:
+async def test_complete_records_completion_even_with_delete_on_success() -> None:
+    # Completion and cleanup are two steps: the loop appends the run to the
+    # Session between them, so a completed snapshot must exist until then.
     cp = InMemoryCheckpointer()
     await cp.append("r1", [], RunHead(agent_name="a", usage=Usage(), turns=1))
     writer = CheckpointWriter(checkpointer=cp, run_id="r1", delete_on_success=True)
     await writer.complete(_state(), "out")
+    snap = await cp.load("r1")
+    assert snap is not None and snap.status == "completed"
+    await writer.discard_completed()
     assert await cp.load("r1") is None
+
+
+async def test_discard_completed_keeps_snapshot_by_default() -> None:
+    cp = InMemoryCheckpointer()
+    writer = CheckpointWriter(checkpointer=cp, run_id="r1")
+    await writer.complete(_state(), "out")
+    await writer.discard_completed()
+    snap = await cp.load("r1")
+    assert snap is not None and snap.status == "completed"
+
+
+async def test_discard_completed_swallows_backend_failure() -> None:
+    class _BoomCheckpointer(InMemoryCheckpointer):
+        async def delete(self, run_id: str) -> None:
+            raise RuntimeError("store down")
+
+    writer = CheckpointWriter(
+        checkpointer=_BoomCheckpointer(), run_id="r1", delete_on_success=True
+    )
+    # The run is durably complete by now; a failed cleanup must not unmake it.
+    await writer.discard_completed()
 
 
 async def test_complete_flags_non_serializable_output() -> None:

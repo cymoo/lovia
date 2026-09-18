@@ -284,15 +284,13 @@ class RunLoop:
                     # ``run_id``, so when the original completion already
                     # persisted this is a no-op — and when it crashed first,
                     # the session would otherwise be missing this run forever.
-                    # Before the checkpoint delete, mirroring the normal
-                    # completion order (checkpoint finalized, then session).
+                    # Same order as normal completion: session, then discard.
                     await self._append_session_segment(
                         completed.entries,
                         context_state=self._completed_context_state or {},
                         notice=None,  # not persisted in snapshots
                     )
-                if self.checkpoints.delete_on_success:
-                    await self.checkpoints.delete()
+                await self.checkpoints.discard_completed()
                 yield events.RunStarted(agent=self.initial_agent)
                 yield events.RunCompleted(result=completed)
                 return
@@ -432,6 +430,11 @@ class RunLoop:
                 result = await self._finalize_run(state, output, span)
                 await self.checkpoints.complete(state, result.output)
                 run_completed = True
+                # The one settlement point for a successful sub-run; the
+                # failure path below settles only when ``run_completed`` is
+                # still False, so the two are mutually exclusive.
+                if self.parent_usage is not None:
+                    self.parent_usage.add(state.run_ctx.usage)
                 # Append to the Session only AFTER the checkpoint is finalized.
                 # Resume reloads history from the Session, so a run that is both
                 # persisted there AND still resumable would double-count on
@@ -439,9 +442,11 @@ class RunLoop:
                 # exactly one place; ``run_completed`` is already set, so a
                 # failure here can't un-complete the checkpoint (no save_terminal).
                 # A crash (or store error) between the two is healed on replay:
-                # the completed-snapshot path above re-appends idempotently.
+                # the completed-snapshot path above re-appends idempotently —
+                # which is why the ``delete_on_success`` discard comes last.
                 if self.session is not None:
                     await self._persist_session(state)
+                await self.checkpoints.discard_completed()
 
                 yield await self._emit(state, events.RunCompleted(result=result))
                 logger.info(
@@ -481,9 +486,8 @@ class RunLoop:
                     # be canceled and drop the checkpoint.
                     await asyncio.shield(self.checkpoints.save_terminal(state, exc))
                     # A failed sub-run's spend is still real spend: fold what
-                    # accumulated up to the failure into the parent's books
-                    # (``_finalize_run`` only does this on success), so an
-                    # agent-as-tool sub-run that trips its own budget doesn't
+                    # accumulated up to the failure into the parent's books, so
+                    # an agent-as-tool sub-run that trips its own budget doesn't
                     # vanish from the parent's usage and budget enforcement.
                     if self.parent_usage is not None:
                         self.parent_usage.add(state.run_ctx.usage)
@@ -1181,11 +1185,12 @@ class RunLoop:
     async def _finalize_run(
         self, state: RunState, output: object, span: Span
     ) -> RunResult:
-        """Run output guardrails and usage propagation, and build the result.
+        """Run output guardrails and build the result.
 
-        Session persistence is deliberately NOT done here — the loop appends to
-        the Session only after the checkpoint is finalized (see ``_stream_inner``)
-        so a crash between the two can't leave a run both persisted and resumable.
+        Session persistence and parent-usage settlement are deliberately NOT
+        done here — both happen in ``_stream_inner`` after the checkpoint is
+        finalized, so a failure in between can't leave a run both persisted and
+        resumable, or its spend counted twice.
         """
         output_guardrails = (
             state.agent.output_guardrails + state.active.plugins.output_guardrails
@@ -1206,10 +1211,6 @@ class RunLoop:
             finish_reason=state.last_finish_reason,
             last_input_tokens=state.last_input_tokens,
         )
-
-        if self.parent_usage is not None:
-            self.parent_usage.add(state.run_ctx.usage)
-
         record_run_end(
             span, turns=state.turns, total_tokens=state.run_ctx.usage.total_tokens
         )

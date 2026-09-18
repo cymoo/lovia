@@ -155,7 +155,8 @@ class TokenCounter:
     transcript entries are immutable in practice (the runner only appends),
     so identity is a safe cache key as long as we detect id reuse after
     garbage collection. It is bounded (LRU) at ``memo_size`` or the largest
-    transcript counted, whichever is larger; one counter may serve many runs.
+    transcript counted, whichever is larger; the tool-schema memo keeps the
+    fixed ``memo_size``. One counter may serve many runs.
     """
 
     def __init__(
@@ -172,6 +173,7 @@ class TokenCounter:
         self.file_tokens = file_tokens
         self.entry_overhead = entry_overhead
         self._memo_size = memo_size
+        self._entry_memo_size = memo_size
         self._memo: dict[int, tuple[weakref.ref[TranscriptEntry], int]] = {}
         self._tool_memo: dict[int, tuple[weakref.ref[object], int]] = {}
 
@@ -180,7 +182,7 @@ class TokenCounter:
         # A scan must fit the memo whole: with a transcript just over
         # capacity, each turn's misses would evict the head it is about to
         # re-read, and every entry would be measured again every turn.
-        self._memo_size = max(self._memo_size, len(entries))
+        self._entry_memo_size = max(self._entry_memo_size, len(entries))
         return sum(self.count_entry(entry) for entry in entries)
 
     def count_text(self, text: str) -> int:
@@ -249,7 +251,7 @@ class TokenCounter:
                 self._memo[key] = self._memo.pop(key)
                 return tokens
         tokens = self._measure(entry)
-        if len(self._memo) >= self._memo_size:
+        if len(self._memo) >= self._entry_memo_size:
             self._memo.pop(next(iter(self._memo)))
         try:
             self._memo[key] = (weakref.ref(entry), tokens)

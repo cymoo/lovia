@@ -443,8 +443,8 @@ class Compaction:
 
         # Policy-authored notice bullets, rendered verbatim by the UI. Only the
         # decisions worth surfacing — the calibration ratio stays internal.
-        # Counts are cumulative session state, and say so: a notice fires per
-        # burst, but its numbers describe everything decided up to now.
+        # The token numbers describe this call; the decision counts are
+        # cumulative session state, and say so.
         detail: list[str] = []
         if budget is not None:
             pct = round(budget.pressure(tokens_before) * 100)

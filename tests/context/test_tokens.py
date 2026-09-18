@@ -154,6 +154,10 @@ def test_count_grows_the_memo_to_the_transcript_it_scans():
     counter.count(entries)
     counter.count(entries)
     assert estimator.calls == 6  # measured once each, never again
+    # The tool-schema memo keeps its configured bound.
+    for i in range(6):
+        counter.count_tools([FakeTool(name=f"t{i}")])
+    assert len(counter._tool_memo) <= 4
 
 
 def test_memo_evicts_least_recently_used_not_first_inserted():

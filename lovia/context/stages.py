@@ -371,7 +371,46 @@ class SummarizeHistory:
             )
             return False
 
+        # The fold requests must fit every model involved, not just the
+        # budget: the aggressive budget is sized to the failed prompt, which
+        # can dwarf the run model's real window (``ctx.model_window``), and a
+        # summarizer wired to its own provider can run a *smaller* model than
+        # the run's — hand it run-sized chunks and every burst overflows the
+        # very model doing the folding, tripping the circuit breaker. The
+        # ``.provider`` attribute is the participation hook (LLMSummarizer has
+        # it; custom backends may expose one); unknown windows change nothing.
+        # Reuse the budget's own headroom rule: a learned window can be
+        # smaller than ``reserve_output`` (a 4K local model), and subtracting
+        # outright would collapse the cap to a single token per chunk.
+        usable = ctx.budget.usable
+        summarizer_window = _provider_context_window(
+            getattr(self.summarizer, "provider", None)
+        )
+        for window in (ctx.model_window, summarizer_window):
+            if window is not None:
+                usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
+        # The summary rides in every later view and fold request, so it may
+        # take at most a quarter of the usable window: ``usable // 4`` tokens,
+        # about ``usable`` chars. ``max_summary_chars`` is sized for large
+        # models; on a small one it would let the summary crowd out its own
+        # next fold.
+        max_chars = self.max_summary_chars
+        if max_chars is not None:
+            max_chars = min(max_chars, usable)
+
         prior = state.summary
+        if prior is not None and max_chars is not None and len(prior.text) > max_chars:
+            # Carried in from a larger window (a session moved to a smaller
+            # model): every fold on top of it would overflow. Re-cover the
+            # prefix from scratch instead — the sticky state is replaced only
+            # by the first successful fold, so a failed burst keeps it.
+            logger.info(
+                "context.summary: prior summary (%d chars) exceeds this window's "
+                "limit (%d); re-summarizing from scratch",
+                len(prior.text),
+                max_chars,
+            )
+            prior = None
         prior_covered = prior.covered if prior is not None else 0
         new_covered = ctx.protected_from
         if new_covered <= prior_covered:
@@ -400,32 +439,6 @@ class SummarizeHistory:
         # exists to protect. Each successful fold is committed to the sticky
         # state immediately, so a failure mid-way keeps the coverage already
         # gained.
-        # The chunks must fit every model involved in the fold, not just the
-        # budget: the aggressive budget is sized to the failed prompt, which
-        # can dwarf the run model's real window (``ctx.model_window``), and a
-        # summarizer wired to its own provider can run a *smaller* model than
-        # the run's — hand it run-sized chunks and every burst overflows the
-        # very model doing the folding, tripping the circuit breaker. The
-        # ``.provider`` attribute is the participation hook (LLMSummarizer has
-        # it; custom backends may expose one); unknown windows change nothing.
-        # Reuse the budget's own headroom rule: a learned window can be
-        # smaller than ``reserve_output`` (a 4K local model), and subtracting
-        # outright would collapse the cap to a single token per chunk.
-        usable = ctx.budget.usable
-        summarizer_window = _provider_context_window(
-            getattr(self.summarizer, "provider", None)
-        )
-        for window in (ctx.model_window, summarizer_window):
-            if window is not None:
-                usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
-        # The summary rides in every later view and fold request, so it may
-        # take at most a quarter of the usable window: ``usable // 4`` tokens,
-        # about ``usable`` chars. ``max_summary_chars`` is sized for large
-        # models; on a small one it would let the summary crowd out its own
-        # next fold.
-        max_chars = self.max_summary_chars
-        if max_chars is not None:
-            max_chars = min(max_chars, usable)
         # Each chunk end below is committed to ``covered`` and outlives this
         # call whenever a later fold fails or the run is cancelled mid-burst.
         # A boundary that split a tool call from its result would then render a
@@ -441,7 +454,11 @@ class SummarizeHistory:
             # overflows, falling back to that remembered fit — or, when even the
             # first unsplittable pair exceeds ``cap``, letting it be its own
             # oversized chunk (as a single oversized entry would).
-            carried = ctx.counter.count_text(running) if running is not None else 0
+            carried = (
+                ctx.calibrated(ctx.counter.count_text(running))
+                if running is not None
+                else 0
+            )
             cap = max(1, (usable - carried) // 2)
             end = start
             acc = 0

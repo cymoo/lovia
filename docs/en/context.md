@@ -191,9 +191,11 @@ required_sections=...)` rather than forking it).
 carries the entries (read-only), the provider, `last_input_tokens`, the
 `overflow` flag, `reported_window` (the limit the endpoint named while
 rejecting the last prompt — remember it, it outranks every other window
-source), and a `scratch` dict the runner round-trips through checkpoints
-for you. Return the view plus `changed`/`compacted` flags and
-optional token counts. An optional `tools()` method contributes tools —
+source), a `scratch` dict the runner round-trips through checkpoints for
+you, and a `usage` accumulator: add the spend of any model call the policy
+makes itself and the runner folds it into the run's usage and budget.
+Return the view plus `changed`/`compacted` flags and optional token
+counts. An optional `tools()` method contributes tools —
 `make_recall_tool(store)` from `lovia.tools.recall` is the factory
 `Compaction` uses to ship recall, reusable by any policy that drops
 content. `lovia/context/policy.py` is a one-screen read.
@@ -207,8 +209,10 @@ content. `lovia/context/policy.py` is a one-screen read.
 - **Summaries cost a model call** on the run's own provider (temperature
   0). Repeated summary failures trip a per-run circuit breaker (the
   aggressive path stays as the half-open probe), and a summary that
-  wouldn't save ≥10% is skipped — but budget-sensitive deployments should
-  know turn N can contain a hidden LLM call.
+  wouldn't save ≥10% is skipped. The spend is on the books — it counts in
+  `RunResult.usage` and against the `RunBudget`, checked before the turn's
+  main call goes out — but budget-sensitive deployments should know turn N
+  can contain a hidden LLM call.
 - **The first overflow on an unknown model is a real, failed request.**
   The endpoint's rejection is what teaches lovia the window, and the
   compaction burst that follows targets ~25% of the usable window instead

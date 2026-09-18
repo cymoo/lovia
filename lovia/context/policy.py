@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, Sequence
 
+from ..messages import Usage
 from ..providers.base import Provider
 from ..transcript import TranscriptEntry
 
@@ -64,6 +65,12 @@ class CompactionRequest:
     checkpoint for resume and persists it to the finished run's
     session-segment ``meta``, so the next run on the same session inherits it
     — no extra hook needed."""
+
+    usage: Usage = field(default_factory=Usage)
+    """Spend of the policy's **own** model calls on this request (the default
+    pipeline's summaries). Add to it from a summarizer or a custom policy;
+    the runner folds it into the run's usage and budget once ``compact``
+    returns, without touching the calibration it keeps for the main call."""
 
 
 @dataclass

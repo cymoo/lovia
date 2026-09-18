@@ -838,7 +838,7 @@ class RunLoop:
             overflow=False,
             scratch=state.context_state,
         )
-        ctx_result = await self.context_policy.compact(request)
+        ctx_result = await self._compact(state, request)
         view = await self._build_view(state, ctx_result)
         if ctx_result.compacted:
             yield await self._emit(
@@ -876,7 +876,7 @@ class RunLoop:
             request.last_input_tokens = None
             request.overflow = True
             request.reported_window = overflow.reported_window
-            ctx_result = await self.context_policy.compact(request)
+            ctx_result = await self._compact(state, request)
             # Retry only when the rebuilt view is meaningfully smaller than
             # the one that just failed (both numbers come from the same
             # estimator, so the comparison is scale-free). A near-identical
@@ -906,6 +906,25 @@ class RunLoop:
         turn.turn_entries = []
         async for ev in self._call_model(state, provider, view, turn, tracer):
             yield ev
+
+    async def _compact(
+        self, state: RunState, request: CompactionRequest
+    ) -> ContextResult:
+        """Run the context policy and settle the spend of its own model calls.
+
+        Summaries are real spend: folded into the run's usage — even when the
+        policy raises partway — and checked against the budget before the
+        main call goes out. ``last_input_tokens`` is left alone: it calibrates
+        the main call's estimate and a summary call would skew it.
+        """
+        try:
+            result = await self.context_policy.compact(request)
+        finally:
+            state.run_ctx.usage.add(request.usage)
+            request.usage = Usage()
+        if self.budget is not None:
+            self.budget.check(state.run_ctx.usage)
+        return result
 
     async def _augment_view(
         self, state: RunState, view: list[TranscriptEntry]

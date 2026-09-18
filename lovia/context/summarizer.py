@@ -19,6 +19,7 @@ from .prompts import (
     SUMMARY_FOLD_TEMPLATE,
     SUMMARY_SYSTEM_PROMPT,
 )
+from ..messages import Usage
 from ..parts import ContentPart, text_of
 from ..providers.base import ModelSettings, Provider
 from ..transcript import (
@@ -28,6 +29,7 @@ from ..transcript import (
     ToolCallEntry,
     ToolResultEntry,
     TranscriptEntry,
+    UsageDelta,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,7 +114,7 @@ class LLMSummarizer:
             InputEntry(role="system", content=self.prompt),
             InputEntry(role="user", content=user),
         ]
-        summary = await self._generate(provider, conversation)
+        summary = await self._generate(provider, conversation, req.usage)
 
         missing = self._missing_sections(summary)
         if missing:
@@ -128,7 +130,7 @@ class LLMSummarizer:
                     ),
                 ),
             ]
-            summary = await self._generate(provider, retry)
+            summary = await self._generate(provider, retry, req.usage)
             still_missing = self._missing_sections(summary)
             if still_missing:
                 # Formatting must never block compaction; ship it as-is.
@@ -139,7 +141,7 @@ class LLMSummarizer:
         return summary
 
     async def _generate(
-        self, provider: Provider, conversation: list[TranscriptEntry]
+        self, provider: Provider, conversation: list[TranscriptEntry], usage: Usage
     ) -> str:
         chunks: list[str] = []
         finish: str | None = None
@@ -148,6 +150,8 @@ class LLMSummarizer:
             text = getattr(delta, "text", None)
             if isinstance(text, str) and dtype == "text_delta":
                 chunks.append(text)
+            elif isinstance(delta, UsageDelta):
+                usage.add(delta.usage)
             elif dtype == "finish_delta":
                 finish = getattr(delta, "reason", None)
         if finish == "length":

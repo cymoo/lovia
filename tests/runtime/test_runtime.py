@@ -249,6 +249,40 @@ async def test_compacted_view_keeps_extra_instructions() -> None:
     assert "SECRET-ADDENDUM" in system_msg.content
 
 
+class _SpendingPolicy:
+    """A policy whose own model calls (summaries) cost tokens."""
+
+    async def compact(self, req: CompactionRequest) -> ContextResult:
+        req.usage.add(Usage(input_tokens=100, output_tokens=50))
+        return ContextResult(entries=list(req.entries))
+
+
+async def test_policy_usage_is_on_the_books_but_not_the_calibration() -> None:
+    # Two turns, one policy call each: the run's own model calls cost 1 in +
+    # 1 out per turn; the policy's spend rides along. ``last_input_tokens``
+    # calibrates the *main* call's estimate, so it must stay the provider's
+    # count for the turn.
+    provider = ScriptedProvider([call("ping", {}), text("done")])
+    agent = Agent(name="t", model=provider, tools=[ping])
+    result = await Runner.run(agent, "hi", context_policy=_SpendingPolicy())
+    assert result.usage.input_tokens == 202
+    assert result.usage.output_tokens == 102
+    assert result.last_input_tokens == 1
+
+
+async def test_policy_usage_counts_against_the_budget_before_the_model_call() -> None:
+    provider = ScriptedProvider([text("done")])
+    agent = Agent(name="t", model=provider)
+    with pytest.raises(BudgetExceeded):
+        await Runner.run(
+            agent,
+            "hi",
+            context_policy=_SpendingPolicy(),
+            budget=RunBudget(max_total_tokens=100),
+        )
+    assert provider.calls == []  # stopped at the safe point after compaction
+
+
 # ---------------------------------------------------------------------------
 # Budget-limited runs checkpoint as interrupted and can be resumed
 # ---------------------------------------------------------------------------

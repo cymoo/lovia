@@ -158,8 +158,9 @@ required_sections=...)`，不要 fork 这段实现。
 **自定义 `ContextPolicy`** 则替换全部机制：一个方法
 `async compact(req: CompactionRequest) -> ContextResult`。request 携带只读 entries、provider、
 `last_input_tokens`、`overflow` flag、`reported_window`（端点拒绝上一个 prompt 时点名的上限——
-请记住它，它的优先级压过所有其他窗口来源），以及 runner 会帮你在 checkpoint 中往返保存的
-`scratch` dict。
+请记住它，它的优先级压过所有其他窗口来源）、runner 会帮你在 checkpoint 中往返保存的
+`scratch` dict，以及一个 `usage` 累加器：策略自己发起的模型调用把开销加进去，runner 会并入
+本次运行的 usage 和预算。
 返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
 `lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
@@ -170,7 +171,8 @@ required_sections=...)`，不要 fork 这段实现。
   [工具输出截断](tools.md#输出截断)限制；那是有损的，且 `recall_tool_result` 也只能看到截断版本。
 - **summary 会花一次模型调用**，用的是本次运行自己的 provider（temperature 0）。连续 summary 失败会
   触发每次运行的 circuit breaker（aggressive 路径作为 half-open 探测保留），节省不到 ≥10% 时也会跳过。
-  预算敏感的部署需要注意：第 N 轮里可能包含一次额外的 LLM 调用。
+  这笔开销记在账上——计入 `RunResult.usage`，也计入 `RunBudget`，并在本轮主调用发出前检查——
+  但预算敏感的部署仍需注意：第 N 轮里可能包含一次额外的 LLM 调用。
 - **未知模型的第一次撞墙是一次真实的失败请求。** 正是端点的这次拒绝教会了 lovia 窗口大小；
   紧随其后的压缩会以可用窗口的 ~25% 为目标，而不是主动压缩的 60%——它下手重一倍多。
   知道窗口就请提前设置 `context_window=...`。Ollama 压根不会撞墙

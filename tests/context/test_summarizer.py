@@ -122,6 +122,19 @@ async def test_summarize_retries_once_when_a_section_is_missing() -> None:
     assert s._missing_sections(out) == []
 
 
+async def test_summarize_reports_usage_on_the_request() -> None:
+    # Every summary call is real spend; the request carries it back to the
+    # runner. Scripted turns report 1 in + 1 out, so one corrective retry
+    # doubles the bill.
+    incomplete = _full_summary().replace("## Next steps\nbody for ## Next steps", "")
+    provider = ScriptedProvider([text(incomplete), text(_full_summary())])
+    req = _req(provider)
+    await LLMSummarizer(provider).summarize(
+        [InputEntry(role="user", content="hi")], req=req
+    )
+    assert req.usage.input_tokens == 2 and req.usage.output_tokens == 2
+
+
 async def test_summarize_ships_incomplete_summary_after_failed_retry() -> None:
     incomplete = _full_summary().replace("## Artifacts\nbody for ## Artifacts", "")
     # Both attempts come back missing the same section.

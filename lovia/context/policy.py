@@ -99,7 +99,9 @@ class ContextResult:
     """Summary text newly produced during this call, if any."""
 
     tokens_before: int | None = None
-    """Estimated prompt tokens of the raw transcript."""
+    """Estimated prompt tokens this call would have sent without the
+    decisions it made — for a sticky policy, the view with earlier decisions
+    replayed. ``tokens_before → tokens_after`` is this call's own effect."""
 
     tokens_after: int | None = None
     """Estimated prompt tokens of the returned view."""

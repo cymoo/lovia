@@ -193,9 +193,9 @@ method handles both triggers:
   Decisions are monotonic, so the rendered prompt prefix is byte-stable
   across turns — that is what keeps provider prompt caches warm. Never make a
   stage "undo" a decision.
-- **Watermark hysteresis.** Nothing happens below `compact_at` (default 0.75
+- **Watermark hysteresis.** Nothing happens below `compact_at` (default 0.85
   of the usable window); a burst then shrinks the view to `compact_to`
-  (default 0.50). Both accept a fraction (float) or absolute tokens (int).
+  (default 0.60). Both accept a fraction (float) or absolute tokens (int).
   `TokenBudget` owns the math; `reserve_output_tokens` is subtracted first.
 - **Cheap-first stages**: `OffloadToolResults` (replace huge results with a
   preview marker; archive the full output to the result store when one is set,
@@ -223,10 +223,11 @@ method handles both triggers:
   narrow (~0.8–1.6 measured across content types), so the ratio only
   absorbs residual tokenizer error and stays valid as the transcript grows
   and across handoffs that swap the tool set.
-- **State location.** Sticky state serializes into the per-run
-  `ResumeState.compaction_scratch` (JSON-safe → survives checkpoint/resume).
-  `Compaction` additionally keeps a bounded in-process cache keyed by
-  `session_id` so a *new run* on the same session resumes prior decisions; a
+- **State location.** Sticky state lives in `CompactionRequest.scratch`, a
+  runner-owned dict: the loop round-trips it through the checkpoint head
+  (`RunHead.context_state`, JSON-safe → survives resume) and persists it into
+  the finished run's session-segment `meta`, so a *new run* on the same
+  session inherits the previous run's decisions with no in-process cache. A
   structural `fingerprint` of the covered prefix detects a rewritten prefix
   (e.g. history trimmed before a new run reuses a carried summary) and resets
   the summary while keeping call_id-keyed decisions.

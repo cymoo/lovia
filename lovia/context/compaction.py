@@ -239,7 +239,9 @@ class Compaction:
         view = render_view(req.entries, state)
         raw = counter.count(view)
         tokens = int((raw + overhead) * state.ratio)
-        tokens_before = int((counter.count(req.entries) + overhead) * state.ratio)
+        # What this call would send with only the sticky decisions replayed:
+        # the notice's "before", and the pressure that triggers a burst.
+        tokens_before = tokens
         logger.debug(
             "context.estimate: view %d + tools %d raw, ratio %.3f -> %d tokens",
             raw,
@@ -445,7 +447,8 @@ class Compaction:
         # burst, but its numbers describe everything decided up to now.
         detail: list[str] = []
         if budget is not None:
-            detail.append(f"context was {round(budget.pressure(tokens) * 100)}% full")
+            pct = round(budget.pressure(tokens_before) * 100)
+            detail.append(f"context was {pct}% full")
         if state.offloaded:
             detail.append(
                 f"{_plural(len(state.offloaded), 'tool result')} offloaded in total"

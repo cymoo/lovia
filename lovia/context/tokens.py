@@ -7,9 +7,10 @@ Two small pieces:
   multi-byte scripts weigh in proportionally — CJK prices at ~0.75
   tokens/char instead of the 4× under-count a naive chars/4 charges. Flat
   per-image/per-file costs so a base64 blob is not billed as text, an
-  ``id()``-keyed memo so a long transcript is re-counted in O(new entries)
-  per turn, and dispatch to a provider's own
-  :class:`~lovia.providers.base.TokenEstimator` when it ships a tokenizer.
+  ``id()``-keyed memo so a turn's re-count of a long transcript measures
+  only the new entries (the walk itself is still O(entries)), and dispatch
+  to a provider's own :class:`~lovia.providers.base.TokenEstimator` when it
+  ships a tokenizer.
   Tool schemas — the fixed additive payload every request carries alongside
   the entries — are counted separately via :meth:`TokenCounter.count_tools`.
 * :class:`TokenBudget` — the window math: usable space after reserving output
@@ -143,16 +144,18 @@ class TokenCounter:
     Estimates cost one C-speed UTF-8 ``encode`` per entry — the byte length
     weighs multi-byte scripts proportionally (CJK ≈ 0.75 tokens/char) where
     a plain character count would under-price them 4×. The memo makes that
-    a once-per-entry cost, so a turn still re-counts in O(new entries).
-    Multimodal parts get flat costs — a base64-embedded image is counted as
-    ``image_tokens``, not as megabytes of text. When ``provider`` implements
-    :class:`~lovia.providers.base.TokenEstimator` it is consulted per entry
-    instead (and still memoized, since real tokenizers are not free).
+    a once-per-entry cost, so a turn's re-count measures only the new
+    entries. Multimodal parts get flat costs — a base64-embedded image is
+    counted as ``image_tokens``, not as megabytes of text. When ``provider``
+    implements :class:`~lovia.providers.base.TokenEstimator` it is consulted
+    per entry instead (and still memoized, since real tokenizers are not
+    free).
 
     The memo is keyed by ``id(entry)`` with a weakref liveness guard:
     transcript entries are immutable in practice (the runner only appends),
     so identity is a safe cache key as long as we detect id reuse after
-    garbage collection. The memo is bounded; one counter may serve many runs.
+    garbage collection. It is bounded (LRU) at ``memo_size`` or the largest
+    transcript counted, whichever is larger; one counter may serve many runs.
     """
 
     def __init__(
@@ -174,6 +177,10 @@ class TokenCounter:
 
     def count(self, entries: Sequence[TranscriptEntry]) -> int:
         """Estimated prompt tokens for ``entries``."""
+        # A scan must fit the memo whole: with a transcript just over
+        # capacity, each turn's misses would evict the head it is about to
+        # re-read, and every entry would be measured again every turn.
+        self._memo_size = max(self._memo_size, len(entries))
         return sum(self.count_entry(entry) for entry in entries)
 
     def count_text(self, text: str) -> int:
@@ -236,10 +243,13 @@ class TokenCounter:
         if hit is not None:
             ref, tokens = hit
             if ref() is entry:
+                # Re-insert so eviction order is least-recently-used: a
+                # counter shared by several sessions then drops the coldest
+                # session's entries, not whichever came first.
+                self._memo[key] = self._memo.pop(key)
                 return tokens
         tokens = self._measure(entry)
         if len(self._memo) >= self._memo_size:
-            # Evict in insertion order; old runs' entries die first anyway.
             self._memo.pop(next(iter(self._memo)))
         try:
             self._memo[key] = (weakref.ref(entry), tokens)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from lovia import (
     Agent,
@@ -254,6 +254,103 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
 
 
 @pytest.mark.asyncio
+async def test_unserializable_completed_snapshot_still_heals_and_discards() -> None:
+    # The output can't be rehydrated, but the entries can: replay persists
+    # the session segment and applies delete_on_success *before* raising,
+    # so the run doesn't sit unreplayable forever.
+    from lovia.stores import InMemorySession
+
+    cp = InMemoryCheckpointer()
+    entries = [InputEntry(role="user", content="hi")]
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="bad-output",
+            agent_name="a",
+            entries=entries,
+            usage=Usage(),
+            turns=1,
+            status="completed",
+            output=None,
+            error={"type": "OutputNotSerializable", "message": "x"},
+        ),
+    )
+    session = InMemorySession()
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    with pytest.raises(Exception, match="not JSON-safe"):
+        await Runner.run(
+            agent,
+            [],
+            checkpoint=ckpt(cp, "bad-output", delete_on_success=True),
+            session=session,
+            session_id="s1",
+        )
+    [seg] = await session.segments("s1")
+    assert seg.run_id == "bad-output" and seg.entries == entries
+    assert await cp.load("bad-output") is None
+
+
+@pytest.mark.asyncio
+async def test_replay_keeps_snapshot_when_output_type_does_not_fit() -> None:
+    # A caller-side mistake (the wrong output_type on replay) is recoverable:
+    # the snapshot must survive delete_on_success so the corrected call
+    # replays instead of starting a new run.
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    await Runner.run(
+        Agent(name="a", model=ScriptedProvider([text("plain text")])),
+        "hi",
+        checkpoint=ckpt(cp, "mismatch"),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([]))
+    with pytest.raises(ValidationError):
+        await Runner.run(
+            agent,
+            [],
+            output_type=Out,
+            checkpoint=ckpt(cp, "mismatch", delete_on_success=True),
+        )
+    snap = await cp.load("mismatch")
+    assert snap is not None and snap.status == "completed"
+
+    result = await Runner.run(
+        agent, [], checkpoint=ckpt(cp, "mismatch", delete_on_success=True)
+    )
+    assert result.output == "plain text"
+    assert await cp.load("mismatch") is None
+
+
+@pytest.mark.asyncio
+async def test_replay_settles_parent_usage_even_when_it_fails() -> None:
+    from lovia.stores import InMemorySession
+
+    class DownSession(InMemorySession):
+        async def append(self, session_id, entries, *, run_id=None, meta=None):  # type: ignore[override]
+            raise ConnectionError("session store down")
+
+    cp = InMemoryCheckpointer()
+    await Runner.run(
+        Agent(name="a", model=ScriptedProvider([text("done")])),  # 1 in + 1 out
+        "hi",
+        checkpoint=ckpt(cp, "settle"),
+    )
+    parent_usage = Usage()
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            Agent(name="a", model=ScriptedProvider([])),
+            [],
+            checkpoint=ckpt(cp, "settle"),
+            session=DownSession(),
+            session_id="s1",
+            _parent_usage=parent_usage,
+        )
+    assert parent_usage.total_tokens == 2
+
+
+@pytest.mark.asyncio
 async def test_resume_completed_snapshot_appends_session_idempotently() -> None:
     # Replaying a completed snapshot re-applies session persistence keyed by
     # run_id. When the original completion already appended, that's a no-op;
@@ -339,6 +436,55 @@ async def test_replay_heals_session_lost_in_the_crash_window() -> None:
     [seg] = await session.segments("s1")
     assert seg.run_id == "rA"
     assert seg.entries == snap.entries
+
+
+@pytest.mark.asyncio
+async def test_delete_on_success_waits_for_the_session_append() -> None:
+    # ``delete_on_success`` used to drop the snapshot *before* the session
+    # append. A store error in between then left the run nowhere — and the
+    # next re-issue of the same run_id started over, re-running the model and
+    # every tool. The snapshot must outlive the session append.
+    from lovia.stores import InMemorySession
+
+    class FlakySession(InMemorySession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_append = True
+
+        async def append(self, session_id, entries, *, run_id=None, meta=None):  # type: ignore[override]
+            if self.fail_next_append:
+                self.fail_next_append = False
+                raise ConnectionError("session store down")
+            return await super().append(session_id, entries, run_id=run_id, meta=meta)
+
+    cp = InMemoryCheckpointer()
+    session = FlakySession()
+    agent = Agent(name="a", model=ScriptedProvider([text("answer")]))
+
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            agent,
+            "q",
+            checkpoint=ckpt(cp, "rB", delete_on_success=True),
+            session=session,
+            session_id="s1",
+        )
+    snap = await cp.load("rB")
+    assert snap is not None and snap.status == "completed"
+    assert await session.segments("s1") == []
+
+    agent2 = Agent(name="a", model=ScriptedProvider([]))  # model must not run
+    result = await Runner.run(
+        agent2,
+        "q",
+        checkpoint=ckpt(cp, "rB", delete_on_success=True),
+        session=session,
+        session_id="s1",
+    )
+    assert result.output == "answer"
+    [seg] = await session.segments("s1")
+    assert seg.run_id == "rB"
+    assert await cp.load("rB") is None  # dropped once the session has the run
 
 
 @pytest.mark.asyncio

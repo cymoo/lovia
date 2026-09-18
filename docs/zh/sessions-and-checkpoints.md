@@ -120,8 +120,9 @@ Worker 崩溃后，只需重新提交同一个调用：中断的运行会恢复�
   调用方；`finish_reason` 为 `None`（没有持久化）。session 持久化会重新应用，但因为幂等，
   可以修复“checkpoint 完成后、session 追加前”崩溃留下的窗口。
 
-`CheckpointOptions` 还接受 `delete_on_success=True`（运行完成后删除 snapshot，适合持久记录
-已经在 session 里的运行）和 `resume_from=`（从你自己拿到的 `RunSnapshot` 恢复）。
+`CheckpointOptions` 还接受 `delete_on_success=True`（运行写入 session 后删除 snapshot，适合持久记录
+已经在 session 里的运行；删除发生在 session 追加**之后**，两者之间的存储错误仍会留下可重放的
+snapshot）和 `resume_from=`（从你自己拿到的 `RunSnapshot` 恢复）。
 
 ### 恢复运行的过程
 

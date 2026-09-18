@@ -150,9 +150,9 @@ def result_from_completed_snapshot(
         output = ""
     return RunResult(
         output=output,
-        # Normalized: these entries feed the replay path's session heal, so
-        # non-wire-safe arguments persisted before normalization must not be
-        # re-published into the conversation history.
+        # Normalized like the replay path's session heal, so a caller that
+        # republishes ``result.entries`` never re-sends non-wire-safe
+        # arguments persisted before normalization existed.
         entries=normalize_replayed_entries(list(snapshot.entries)),
         final_agent=agent,
         usage=snapshot.usage.clone(),

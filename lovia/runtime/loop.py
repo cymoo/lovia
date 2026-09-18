@@ -48,7 +48,7 @@ from .utils import (
 from .tool_calls import PreflightResult, ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
-from ..checkpointer import CheckpointOptions
+from ..checkpointer import CheckpointOptions, RunSnapshot
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
 from ..exceptions import (
     BudgetExceeded,
@@ -197,14 +197,11 @@ class RunLoop:
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
         self.resume_from = checkpoint.resume_from if checkpoint is not None else None
-        # The active agent to resume as, resolved from ``initial_agent``'s
-        # handoff graph by ``_resolve_resume`` (the snapshot's agent may be a
-        # handoff target, not the entry agent). ``None`` for a fresh run.
+        # The active agent to resume or replay as, resolved from
+        # ``initial_agent``'s handoff graph by ``_resolve_resume`` (the
+        # snapshot's agent may be a handoff target, not the entry agent).
+        # ``None`` for a fresh run.
         self._resume_agent: Agent[Any] | None = None
-        # The context policy's carried state from a *completed* snapshot,
-        # stashed by ``_resolve_resume`` so the replay path can rebuild the
-        # session-segment ``meta`` when it heals a missed session append.
-        self._completed_context_state: dict[str, Any] | None = None
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
@@ -274,8 +271,8 @@ class RunLoop:
             if completed is not None:
                 # Already-completed run: replay terminal events only. No
                 # bootstrap, guardrails, or hooks — those ran on the original
-                # completion; replay folds usage, re-applies session
-                # persistence idempotently, and clears the checkpoint.
+                # completion. Spend is settled up front, like a failed run's:
+                # it is real whether or not the replay below succeeds.
                 if self.parent_usage is not None:
                     self.parent_usage.add(completed.usage)
                 if self.session is not None:
@@ -284,17 +281,30 @@ class RunLoop:
                     # ``run_id``, so when the original completion already
                     # persisted this is a no-op — and when it crashed first,
                     # the session would otherwise be missing this run forever.
-                    # Before the checkpoint delete, mirroring the normal
-                    # completion order (checkpoint finalized, then session).
+                    # Same order as normal completion: session, then discard.
                     await self._append_session_segment(
-                        completed.entries,
-                        context_state=self._completed_context_state or {},
+                        normalize_replayed_entries(list(completed.entries)),
+                        context_state=dict(completed.context_state),
                         notice=None,  # not persisted in snapshots
                     )
-                if self.checkpoints.delete_on_success:
-                    await self.checkpoints.delete()
+                assert self._resume_agent is not None  # set by _resolve_resume
+                try:
+                    result = result_from_completed_snapshot(
+                        self._resume_agent,
+                        completed,
+                        output_type=self.output_type_override,
+                    )
+                except UserError:
+                    # The output can never be rehydrated (not JSON-safe); the
+                    # session segment above was all the snapshot had left to
+                    # give, so apply ``delete_on_success`` rather than leave
+                    # the run stuck. Any other failure (an ``output_type``
+                    # the stored output doesn't fit) keeps it for a retry.
+                    await self.checkpoints.discard_completed()
+                    raise
+                await self.checkpoints.discard_completed()
                 yield events.RunStarted(agent=self.initial_agent)
-                yield events.RunCompleted(result=completed)
+                yield events.RunCompleted(result=result)
                 return
 
             state = await self._bootstrap(resources)
@@ -432,6 +442,11 @@ class RunLoop:
                 result = await self._finalize_run(state, output, span)
                 await self.checkpoints.complete(state, result.output)
                 run_completed = True
+                # The one settlement point for a successful sub-run; the
+                # failure path below settles only when ``run_completed`` is
+                # still False, so the two are mutually exclusive.
+                if self.parent_usage is not None:
+                    self.parent_usage.add(state.run_ctx.usage)
                 # Append to the Session only AFTER the checkpoint is finalized.
                 # Resume reloads history from the Session, so a run that is both
                 # persisted there AND still resumable would double-count on
@@ -439,9 +454,11 @@ class RunLoop:
                 # exactly one place; ``run_completed`` is already set, so a
                 # failure here can't un-complete the checkpoint (no save_terminal).
                 # A crash (or store error) between the two is healed on replay:
-                # the completed-snapshot path above re-appends idempotently.
+                # the completed-snapshot path above re-appends idempotently —
+                # which is why the ``delete_on_success`` discard comes last.
                 if self.session is not None:
                     await self._persist_session(state)
+                await self.checkpoints.discard_completed()
 
                 yield await self._emit(state, events.RunCompleted(result=result))
                 logger.info(
@@ -481,9 +498,8 @@ class RunLoop:
                     # be canceled and drop the checkpoint.
                     await asyncio.shield(self.checkpoints.save_terminal(state, exc))
                     # A failed sub-run's spend is still real spend: fold what
-                    # accumulated up to the failure into the parent's books
-                    # (``_finalize_run`` only does this on success), so an
-                    # agent-as-tool sub-run that trips its own budget doesn't
+                    # accumulated up to the failure into the parent's books, so
+                    # an agent-as-tool sub-run that trips its own budget doesn't
                     # vanish from the parent's usage and budget enforcement.
                     if self.parent_usage is not None:
                         self.parent_usage.add(state.run_ctx.usage)
@@ -495,12 +511,13 @@ class RunLoop:
     # Phases
     # ------------------------------------------------------------------ #
 
-    async def _resolve_resume(self) -> RunResult | None:
+    async def _resolve_resume(self) -> RunSnapshot | None:
         """Apply the ``if_run_exists`` policy, loading the snapshot by ``run_id``.
 
-        Returns a :class:`RunResult` when the target run already ``completed``
-        (the caller replays it); otherwise returns ``None`` and, for a resumable
+        Returns the snapshot when the target run already ``completed`` (the
+        caller replays it); otherwise returns ``None`` and, for a resumable
         snapshot, sets ``self.resume_from`` so :meth:`_bootstrap` rehydrates it.
+        Either way ``self._resume_agent`` is the snapshot's active agent.
         Raises :class:`UserError` for an unresumable snapshot or a policy
         conflict (``resume_only`` with nothing stored, or ``fail`` with a run already
         present).
@@ -540,7 +557,7 @@ class RunLoop:
             # error on finished runs. Resumable snapshots below keep the hard
             # error: continuing *execution* as the wrong agent is dangerous.
             try:
-                active_agent = resolve_resume_agent(self.initial_agent, snapshot)
+                self._resume_agent = resolve_resume_agent(self.initial_agent, snapshot)
             except UserError:
                 logger.warning(
                     "run.replay: recorded agent %r is no longer reachable from "
@@ -549,14 +566,10 @@ class RunLoop:
                     snapshot.agent_name,
                     self.initial_agent.name,
                 )
-                active_agent = self.initial_agent
-            self._completed_context_state = dict(snapshot.context_state)
-            return result_from_completed_snapshot(
-                active_agent, snapshot, output_type=self.output_type_override
-            )
-        active_agent = resolve_resume_agent(self.initial_agent, snapshot)
+                self._resume_agent = self.initial_agent
+            return snapshot
+        self._resume_agent = resolve_resume_agent(self.initial_agent, snapshot)
         self.resume_from = snapshot
-        self._resume_agent = active_agent
         return None
 
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:
@@ -1181,11 +1194,12 @@ class RunLoop:
     async def _finalize_run(
         self, state: RunState, output: object, span: Span
     ) -> RunResult:
-        """Run output guardrails and usage propagation, and build the result.
+        """Run output guardrails and build the result.
 
-        Session persistence is deliberately NOT done here — the loop appends to
-        the Session only after the checkpoint is finalized (see ``_stream_inner``)
-        so a crash between the two can't leave a run both persisted and resumable.
+        Session persistence and parent-usage settlement are deliberately NOT
+        done here — both happen in ``_stream_inner`` after the checkpoint is
+        finalized, so a failure in between can't leave a run both persisted and
+        resumable, or its spend counted twice.
         """
         output_guardrails = (
             state.agent.output_guardrails + state.active.plugins.output_guardrails
@@ -1206,10 +1220,6 @@ class RunLoop:
             finish_reason=state.last_finish_reason,
             last_input_tokens=state.last_input_tokens,
         )
-
-        if self.parent_usage is not None:
-            self.parent_usage.add(state.run_ctx.usage)
-
         record_run_end(
             span, turns=state.turns, total_tokens=state.run_ctx.usage.total_tokens
         )

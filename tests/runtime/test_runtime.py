@@ -778,6 +778,55 @@ async def test_replay_folds_usage_into_parent_accumulator() -> None:
     assert parent_usage.total_tokens == result.usage.total_tokens > 0
 
 
+async def test_parent_usage_settled_once_when_completion_save_fails() -> None:
+    # The success path folded the sub-run's usage into the parent, then the
+    # checkpoint completion failed and the failure path folded it again.
+    from lovia.checkpointer import RunHead
+    from lovia.transcript import TranscriptEntry
+
+    class _FailsOnComplete(InMemoryCheckpointer):
+        async def append(
+            self, run_id: str, entries: list[TranscriptEntry], head: RunHead
+        ) -> None:
+            if head.status == "completed":
+                raise ConnectionError("store down")
+            await super().append(run_id, entries, head)
+
+    provider = ScriptedProvider([text("done")])  # 1 in + 1 out token
+    agent = Agent(name="t", model=provider)
+    parent_usage = Usage()
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            agent,
+            "go",
+            checkpoint=CheckpointOptions(_FailsOnComplete(), "r1"),
+            _parent_usage=parent_usage,
+        )
+    assert parent_usage.total_tokens == 2
+
+
+async def test_bootstrap_failure_ends_the_stream_with_run_failed() -> None:
+    # Plugin setup runs before the loop's failure handling; the handle must
+    # still honor the terminal-event contract for consumers that only watch
+    # the stream.
+    from lovia import events
+    from lovia.plugins.base import PluginInstance
+
+    class _BrokenPlugin:
+        name = "broken"
+
+        async def setup(self) -> PluginInstance:
+            raise ValueError("setup exploded")
+
+    agent = Agent(name="t", model=ScriptedProvider([]), plugins=[_BrokenPlugin()])
+    handle = Runner.stream(agent, "go")
+    seen = [ev async for ev in handle]
+    assert len(seen) == 1 and isinstance(seen[0], events.RunFailed)
+    assert isinstance(seen[0].error, ValueError)
+    with pytest.raises(ValueError, match="setup exploded"):
+        await handle.result()
+
+
 async def test_resume_drains_pending_handoff_call() -> None:
     """A snapshot interrupted between persisting a handoff call and executing
     it: the resume drain must execute the transfer and continue as the target."""

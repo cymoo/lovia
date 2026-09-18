@@ -141,8 +141,10 @@ model, and either way the answer comes back. Two subtleties:
   checkpoint finalization and the session append.
 
 `CheckpointOptions` also takes `delete_on_success=True` (drop the snapshot
-once the run completes — for runs whose durable record is the session) and
-`resume_from=` (rehydrate a `RunSnapshot` you obtained yourself).
+once the run is in the session — for runs whose durable record is the
+session; the delete comes *after* the session append, so a store error in
+between still leaves a replayable snapshot) and `resume_from=` (rehydrate a
+`RunSnapshot` you obtained yourself).
 
 ### What resume actually does
 

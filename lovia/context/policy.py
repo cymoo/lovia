@@ -69,8 +69,9 @@ class CompactionRequest:
     usage: Usage = field(default_factory=Usage)
     """Spend of the policy's **own** model calls on this request (the default
     pipeline's summaries). Add to it from a summarizer or a custom policy;
-    the runner folds it into the run's usage and budget once ``compact``
-    returns, without touching the calibration it keeps for the main call."""
+    the runner folds it into the run's usage and budget when ``compact``
+    returns — or raises — without touching the calibration it keeps for the
+    main call."""
 
 
 @dataclass

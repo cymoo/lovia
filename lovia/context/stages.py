@@ -341,10 +341,11 @@ class SummarizeHistory:
                 this is a safety valve against a misbehaving summarizer growing
                 it without bound: ~16k chars is ~4k tokens of fixed overhead
                 per call — well past the point where a "summary" stops being
-                compression (the prompt asks for under 2000 words). On a
-                small window the effective limit is lower still — a quarter
-                of the usable tokens — so the summary can't crowd out its own
-                next fold. ``None`` disables the cap.
+                compression (the prompt asks for under 2000 words).
+                ``None`` disables this cap. Independently, a summary is
+                always bounded to a quarter of the usable window in
+                (estimated) tokens, so on a small model it can't crowd out
+                its own next fold.
         """
         if not 0 <= min_savings_ratio < 1:
             raise ValueError("min_savings_ratio must be in [0, 1)")
@@ -390,25 +391,28 @@ class SummarizeHistory:
             if window is not None:
                 usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
         # The summary rides in every later view and fold request, so it may
-        # take at most a quarter of the usable window: ``usable // 4`` tokens,
-        # about ``usable`` chars. ``max_summary_chars`` is sized for large
-        # models; on a small one it would let the summary crowd out its own
-        # next fold.
-        max_chars = self.max_summary_chars
-        if max_chars is not None:
-            max_chars = min(max_chars, usable)
+        # take at most a quarter of the usable window — measured in tokens,
+        # since ``max_summary_chars`` is sized for large models and a
+        # CJK-heavy summary weighs far more per char than the 4:1 that cap
+        # assumes.
+        max_tokens = usable // 4
+
+        def fits(text: str) -> bool:
+            if self.max_summary_chars is not None and len(text) > self.max_summary_chars:
+                return False
+            return ctx.calibrated(ctx.counter.count_text(text)) <= max_tokens
 
         prior = state.summary
-        if prior is not None and max_chars is not None and len(prior.text) > max_chars:
+        if prior is not None and not fits(prior.text):
             # Carried in from a larger window (a session moved to a smaller
             # model): every fold on top of it would overflow. Re-cover the
             # prefix from scratch instead — the sticky state is replaced only
             # by the first successful fold, so a failed burst keeps it.
             logger.info(
-                "context.summary: prior summary (%d chars) exceeds this window's "
-                "limit (%d); re-summarizing from scratch",
+                "context.summary: prior summary (%d chars) no longer fits this "
+                "window (limit %d tokens); re-summarizing from scratch",
                 len(prior.text),
-                max_chars,
+                max_tokens,
             )
             prior = None
         prior_covered = prior.covered if prior is not None else 0
@@ -500,13 +504,14 @@ class SummarizeHistory:
             # verbatim). Reject either like a failure — don't extend
             # coverage; the circuit breaker stops retries, and the prefix
             # stays for clear/offload or a surfaced overflow.
-            if not text.strip() or (max_chars is not None and len(text) > max_chars):
+            if not text.strip() or not fits(text):
                 state.summary_failures += 1
                 logger.warning(
-                    "context.summary: rejected summary (chars=%d, limit=%s, "
-                    "empty=%s); failure %d/%d",
+                    "context.summary: rejected summary (chars=%d, max_chars=%s, "
+                    "max_tokens=%d, empty=%s); failure %d/%d",
                     len(text),
-                    max_chars,
+                    self.max_summary_chars,
+                    max_tokens,
                     not text.strip(),
                     state.summary_failures,
                     self.max_failures,

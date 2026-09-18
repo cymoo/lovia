@@ -254,6 +254,44 @@ async def test_resume_completed_snapshot_rejects_unserializable_output() -> None
 
 
 @pytest.mark.asyncio
+async def test_unserializable_completed_snapshot_still_heals_and_discards() -> None:
+    # The output can't be rehydrated, but the entries can: replay persists
+    # the session segment and applies delete_on_success *before* raising,
+    # so the run doesn't sit unreplayable forever.
+    from lovia.stores import InMemorySession
+
+    cp = InMemoryCheckpointer()
+    entries = [InputEntry(role="user", content="hi")]
+    await _seed(
+        cp,
+        RunSnapshot(
+            run_id="bad-output",
+            agent_name="a",
+            entries=entries,
+            usage=Usage(),
+            turns=1,
+            status="completed",
+            output=None,
+            error={"type": "OutputNotSerializable", "message": "x"},
+        ),
+    )
+    session = InMemorySession()
+    agent = Agent(name="a", model=ScriptedProvider([]))
+
+    with pytest.raises(Exception, match="not JSON-safe"):
+        await Runner.run(
+            agent,
+            [],
+            checkpoint=ckpt(cp, "bad-output", delete_on_success=True),
+            session=session,
+            session_id="s1",
+        )
+    [seg] = await session.segments("s1")
+    assert seg.run_id == "bad-output" and seg.entries == entries
+    assert await cp.load("bad-output") is None
+
+
+@pytest.mark.asyncio
 async def test_resume_completed_snapshot_appends_session_idempotently() -> None:
     # Replaying a completed snapshot re-applies session persistence keyed by
     # run_id. When the original completion already appended, that's a no-op;

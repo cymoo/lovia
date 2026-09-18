@@ -48,7 +48,7 @@ from .utils import (
 from .tool_calls import PreflightResult, ToolCallProcessor
 from ..agent import Agent
 from ..approvals import ApprovalChannel
-from ..checkpointer import CheckpointOptions
+from ..checkpointer import CheckpointOptions, RunSnapshot
 from ..context import CompactionRequest, Compaction, ContextPolicy, ContextResult
 from ..exceptions import (
     BudgetExceeded,
@@ -197,14 +197,11 @@ class RunLoop:
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
         self.resume_from = checkpoint.resume_from if checkpoint is not None else None
-        # The active agent to resume as, resolved from ``initial_agent``'s
-        # handoff graph by ``_resolve_resume`` (the snapshot's agent may be a
-        # handoff target, not the entry agent). ``None`` for a fresh run.
+        # The active agent to resume or replay as, resolved from
+        # ``initial_agent``'s handoff graph by ``_resolve_resume`` (the
+        # snapshot's agent may be a handoff target, not the entry agent).
+        # ``None`` for a fresh run.
         self._resume_agent: Agent[Any] | None = None
-        # The context policy's carried state from a *completed* snapshot,
-        # stashed by ``_resolve_resume`` so the replay path can rebuild the
-        # session-segment ``meta`` when it heals a missed session append.
-        self._completed_context_state: dict[str, Any] | None = None
         self.if_run_exists = (
             checkpoint.if_run_exists if checkpoint is not None else "resume"
         )
@@ -274,10 +271,10 @@ class RunLoop:
             if completed is not None:
                 # Already-completed run: replay terminal events only. No
                 # bootstrap, guardrails, or hooks — those ran on the original
-                # completion; replay folds usage, re-applies session
-                # persistence idempotently, and clears the checkpoint.
-                if self.parent_usage is not None:
-                    self.parent_usage.add(completed.usage)
+                # completion. Persistence comes before the result is rebuilt:
+                # a snapshot whose output can't be rehydrated (not JSON-safe)
+                # raises below, and must still get its session segment and
+                # its ``delete_on_success`` rather than stay stuck.
                 if self.session is not None:
                     # Heal the crash window between checkpoint completion and
                     # session append: ``Session.append`` is idempotent on
@@ -286,13 +283,19 @@ class RunLoop:
                     # the session would otherwise be missing this run forever.
                     # Same order as normal completion: session, then discard.
                     await self._append_session_segment(
-                        completed.entries,
-                        context_state=self._completed_context_state or {},
+                        normalize_replayed_entries(list(completed.entries)),
+                        context_state=dict(completed.context_state),
                         notice=None,  # not persisted in snapshots
                     )
                 await self.checkpoints.discard_completed()
+                assert self._resume_agent is not None  # set by _resolve_resume
+                result = result_from_completed_snapshot(
+                    self._resume_agent, completed, output_type=self.output_type_override
+                )
+                if self.parent_usage is not None:
+                    self.parent_usage.add(result.usage)
                 yield events.RunStarted(agent=self.initial_agent)
-                yield events.RunCompleted(result=completed)
+                yield events.RunCompleted(result=result)
                 return
 
             state = await self._bootstrap(resources)
@@ -499,12 +502,13 @@ class RunLoop:
     # Phases
     # ------------------------------------------------------------------ #
 
-    async def _resolve_resume(self) -> RunResult | None:
+    async def _resolve_resume(self) -> RunSnapshot | None:
         """Apply the ``if_run_exists`` policy, loading the snapshot by ``run_id``.
 
-        Returns a :class:`RunResult` when the target run already ``completed``
-        (the caller replays it); otherwise returns ``None`` and, for a resumable
+        Returns the snapshot when the target run already ``completed`` (the
+        caller replays it); otherwise returns ``None`` and, for a resumable
         snapshot, sets ``self.resume_from`` so :meth:`_bootstrap` rehydrates it.
+        Either way ``self._resume_agent`` is the snapshot's active agent.
         Raises :class:`UserError` for an unresumable snapshot or a policy
         conflict (``resume_only`` with nothing stored, or ``fail`` with a run already
         present).
@@ -544,7 +548,7 @@ class RunLoop:
             # error on finished runs. Resumable snapshots below keep the hard
             # error: continuing *execution* as the wrong agent is dangerous.
             try:
-                active_agent = resolve_resume_agent(self.initial_agent, snapshot)
+                self._resume_agent = resolve_resume_agent(self.initial_agent, snapshot)
             except UserError:
                 logger.warning(
                     "run.replay: recorded agent %r is no longer reachable from "
@@ -553,14 +557,10 @@ class RunLoop:
                     snapshot.agent_name,
                     self.initial_agent.name,
                 )
-                active_agent = self.initial_agent
-            self._completed_context_state = dict(snapshot.context_state)
-            return result_from_completed_snapshot(
-                active_agent, snapshot, output_type=self.output_type_override
-            )
-        active_agent = resolve_resume_agent(self.initial_agent, snapshot)
+                self._resume_agent = self.initial_agent
+            return snapshot
+        self._resume_agent = resolve_resume_agent(self.initial_agent, snapshot)
         self.resume_from = snapshot
-        self._resume_agent = active_agent
         return None
 
     async def _bootstrap(self, resources: AsyncExitStack) -> RunState:

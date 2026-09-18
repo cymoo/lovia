@@ -26,7 +26,7 @@ from lovia.transcript import (
     entries_to_messages,
 )
 
-from ..scripted_provider import ScriptedProvider, call, text
+from ..scripted_provider import ScriptedProvider, batch, call, text
 
 
 @tool
@@ -564,6 +564,156 @@ async def test_resume_with_unreachable_entry_agent_raises() -> None:
             other,
             [],
             checkpoint=CheckpointOptions(cp, "h2", if_run_exists="resume_only"),
+        )
+
+
+async def test_resume_applies_a_handoff_that_fired_before_the_interrupt() -> None:
+    # The transfer executed (its result is in the transcript) but the loop
+    # applies handoffs only at the end of the turn, and the remaining tool
+    # tripped the budget first. The snapshot must carry the pending transfer,
+    # or the resume continues as the wrong agent with "Transferred to b" in
+    # its own history.
+    fired: list[str] = []
+
+    async def on_handoff(args: dict[str, Any], ctx: Any) -> None:
+        fired.append(args.get("reason", ""))
+
+    b = Agent(name="b", model=ScriptedProvider([text("from b")]))
+    a = Agent(
+        name="a",
+        model=ScriptedProvider([batch(("transfer_to_b", {"reason": "r"}), ("ping", {}))]),
+        tools=[ping],
+        handoffs=[Handoff(target=b, on_handoff=on_handoff)],
+    )
+    cp = InMemoryCheckpointer()
+    with pytest.raises(BudgetExceeded):
+        await Runner.run(
+            a,
+            "go",
+            checkpoint=CheckpointOptions(cp, "h3"),
+            budget=RunBudget(max_tool_calls=1),
+        )
+    snap = await cp.load("h3")
+    assert snap is not None and snap.status == "interrupted"
+    assert snap.agent_name == "a"  # not yet switched...
+    assert snap.pending_handoff == "b"  # ...but the switch is on record
+
+    result = await Runner.run(
+        a, [], checkpoint=CheckpointOptions(cp, "h3", if_run_exists="resume_only")
+    )
+    assert result.output == "from b"
+    assert result.final_agent.name == "b"
+    # ``ping`` was drained by ``a`` before the switch; the transfer itself
+    # (and its side effect) ran exactly once, in the original process.
+    tool_msgs = [m for m in result.messages if m.role == "tool"]
+    assert [m.content for m in tool_msgs] == ["Transferred to b (r)", "pong"]
+    assert fired == ["r"]
+
+
+async def test_resume_retries_a_handoff_whose_target_failed_to_activate() -> None:
+    # The transfer fired, then the target's plugin setup failed while the
+    # loop was switching agents. The pending transfer must survive that
+    # failure so a resume (after the cause is fixed) completes the switch.
+    from lovia.plugins.base import PluginInstance
+
+    class _FlakyPlugin:
+        name = "flaky"
+        failures = 1
+
+        async def setup(self) -> PluginInstance:
+            if self.failures:
+                self.failures -= 1
+                raise ValueError("plugin down")
+            return PluginInstance()
+
+    b = Agent(name="b", model=ScriptedProvider([text("from b")]), plugins=[_FlakyPlugin()])
+    a = Agent(
+        name="a",
+        model=ScriptedProvider([call("transfer_to_b", {})]),
+        handoffs=[b],
+    )
+    cp = InMemoryCheckpointer()
+    with pytest.raises(ValueError, match="plugin down"):
+        await Runner.run(a, "go", checkpoint=CheckpointOptions(cp, "h4"))
+    snap = await cp.load("h4")
+    assert snap is not None and snap.agent_name == "a" and snap.pending_handoff == "b"
+
+    result = await Runner.run(
+        a, [], checkpoint=CheckpointOptions(cp, "h4", if_run_exists="resume_only")
+    )
+    assert result.output == "from b"
+    assert result.final_agent.name == "b"
+
+
+async def test_resume_retries_a_handoff_whose_target_prompt_failed_to_render() -> None:
+    # Later failure point: the target activated, then its dynamic instructions
+    # raised while the switch rendered the new system prompt. The activation
+    # is rolled back so the snapshot still says "a, transfer to b pending".
+    attempts = 0
+
+    def instructions(ctx: Any) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("prompt down")
+        return "B-BASE"
+
+    b = Agent(name="b", instructions=instructions, model=ScriptedProvider([text("from b")]))
+    a = Agent(name="a", model=ScriptedProvider([call("transfer_to_b", {})]), handoffs=[b])
+    cp = InMemoryCheckpointer()
+    with pytest.raises(ValueError, match="prompt down"):
+        await Runner.run(a, "go", checkpoint=CheckpointOptions(cp, "h4b"))
+    snap = await cp.load("h4b")
+    assert snap is not None and snap.agent_name == "a" and snap.pending_handoff == "b"
+
+    result = await Runner.run(
+        a, [], checkpoint=CheckpointOptions(cp, "h4b", if_run_exists="resume_only")
+    )
+    assert result.output == "from b"
+    assert result.final_agent.name == "b"
+
+
+async def test_resume_rejects_a_pending_handoff_target_outside_the_graph() -> None:
+    from lovia.checkpointer import RunHead
+
+    cp = InMemoryCheckpointer()
+    await cp.append(
+        "h5",
+        [InputEntry(role="user", content="go")],
+        RunHead(
+            agent_name="a",
+            usage=Usage(),
+            turns=1,
+            status="interrupted",
+            pending_handoff="ghost",
+        ),
+    )
+    a = Agent(name="a", model=ScriptedProvider([]))
+    with pytest.raises(UserError, match="ghost"):
+        await Runner.run(
+            a, [], checkpoint=CheckpointOptions(cp, "h5", if_run_exists="resume_only")
+        )
+
+
+async def test_resume_rejects_distinct_agents_sharing_a_name() -> None:
+    # Two branches each end in a different agent called "worker": the
+    # snapshot's name alone can't say which one to continue as.
+    from lovia.checkpointer import RunHead
+
+    left = Agent(name="sales", handoffs=[Agent(name="worker", model=ScriptedProvider([]))])
+    right = Agent(
+        name="support", handoffs=[Agent(name="worker", model=ScriptedProvider([]))]
+    )
+    entry = Agent(name="triage", model=ScriptedProvider([]), handoffs=[left, right])
+    cp = InMemoryCheckpointer()
+    await cp.append(
+        "h6",
+        [InputEntry(role="user", content="go")],
+        RunHead(agent_name="worker", usage=Usage(), turns=1, status="interrupted"),
+    )
+    with pytest.raises(UserError, match="'worker'"):
+        await Runner.run(
+            entry, [], checkpoint=CheckpointOptions(cp, "h6", if_run_exists="resume_only")
         )
 
 

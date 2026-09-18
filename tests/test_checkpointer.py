@@ -1004,4 +1004,18 @@ def test_snapshot_from_dict_defaults_missing_optional_fields() -> None:
     assert snap.output is None and snap.error is None
     assert snap.last_input_tokens is None
     assert snap.context_state == {}
+    assert snap.pending_handoff is None
     assert snap.updated_at > 0
+
+
+def test_snapshot_round_trips_pending_handoff() -> None:
+    snap = RunSnapshot(
+        run_id="r",
+        agent_name="a",
+        entries=[],
+        usage=Usage(),
+        turns=1,
+        pending_handoff="b",
+    )
+    assert RunSnapshot.from_dict(snap.to_dict()).pending_handoff == "b"
+    assert RunHead.from_json(snap.head.to_json()).pending_handoff == "b"

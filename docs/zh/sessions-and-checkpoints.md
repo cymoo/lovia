@@ -91,8 +91,9 @@ result = await Runner.run(
 
 循环会在模型轮次后、**每个工具结果**后保存 snapshot，所以崩溃最多丢失正在执行中的工作。
 `RunSnapshot` 保存本次运行自己的 entries，再加一个小的可变 head（`RunHead`）：活跃 agent 名、
-usage、轮次计数、状态（`running` / `interrupted` / `completed` / `failed`），以及上下文策略
-携带的状态。你的 `context` 对象**不会**被 snapshot；恢复时需要重新传入。
+usage、轮次计数、状态（`running` / `interrupted` / `completed` / `failed`）、上下文策略
+携带的状态，以及已触发但尚未生效的转交目标。你的 `context` 对象**不会**被 snapshot；恢复时
+需要重新传入。
 
 ### `run_id` 是幂等键
 
@@ -132,8 +133,10 @@ snapshot）和 `resume_from=`（从你自己拿到的 `RunSnapshot` 恢复）。
 设计，或让它们幂等。
 
 恢复也支持 [Handoff](multi-agent.md)：snapshot 按名称记录**活跃** Agent，Runner 会从入口
-Agent 的 Handoff 图中重新解析。重命名或移除 Agent 会让在途运行无法恢复；已完成运行的
-**重放**则会退回入口 Agent，并记录 warning 日志。
+Agent 的 Handoff 图中重新解析——因此整张图里 Agent 名称必须唯一（两个不同 Agent 同名时恢复
+会直接报错）。已触发但尚未生效的转交也会记录下来，恢复时先完成切换，再由目标 Agent 开始
+它的第一轮。重命名或移除 Agent 会让在途运行无法恢复；已完成运行的**重放**则会退回入口
+Agent，并记录 warning 日志。
 
 ## 两个存储的关系
 

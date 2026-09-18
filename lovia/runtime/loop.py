@@ -34,6 +34,7 @@ from .. import events
 from .checkpoint import CheckpointWriter
 from .resume import (
     normalize_replayed_entries,
+    resolve_pending_handoff,
     resolve_resume_agent,
     result_from_completed_snapshot,
 )
@@ -667,6 +668,11 @@ class RunLoop:
                 snapshot.last_input_tokens if snapshot is not None else None
             ),
             context_state=context_state,
+            pending_handoff=(
+                resolve_pending_handoff(agent, snapshot)
+                if snapshot is not None
+                else None
+            ),
         )
 
     async def _resolve_active(
@@ -767,32 +773,36 @@ class RunLoop:
         resources: AsyncExitStack,
         tracer: Tracer,
     ) -> AsyncIterator[events.Event]:
-        """Execute tool calls a resumed snapshot left without results.
+        """Finish the turn a resumed snapshot was interrupted in.
 
         The interrupted turn already streamed its model output in the
         original process, so this re-enters that turn (same ``turn`` number)
-        for the tool-execution half only.
+        for what was left: tool calls without results, then a handoff that
+        fired but was never applied (restored from the snapshot, or drained
+        just now — a restored one wins over a drained second transfer, as in
+        the original turn).
         """
         pending = pending_tool_calls(state.transcript)
-        if not pending:
+        if not pending and state.pending_handoff is None:
             return
-        logger.info(
-            "run.resume: draining %d pending tool call(s) for turn %d",
-            len(pending),
-            state.turns,
-        )
-        # Mirror the restored turn counter onto the public context, exactly as
-        # a normal turn start does — tools draining here must see the turn
-        # they belong to, not the RunContext default of 0.
-        state.run_ctx.turn = state.turns
-        yield await self._emit(
-            state, events.TurnStarted(agent=state.agent, turn=state.turns)
-        )
-        async for ev in self._tool_phase(state, processor, pending, tracer):
-            yield ev
-        yield await self._emit(
-            state, events.TurnEnded(agent=state.agent, turn=state.turns)
-        )
+        if pending:
+            logger.info(
+                "run.resume: draining %d pending tool call(s) for turn %d",
+                len(pending),
+                state.turns,
+            )
+            # Mirror the restored turn counter onto the public context, exactly
+            # as a normal turn start does — tools draining here must see the
+            # turn they belong to, not the RunContext default of 0.
+            state.run_ctx.turn = state.turns
+            yield await self._emit(
+                state, events.TurnStarted(agent=state.agent, turn=state.turns)
+            )
+            async for ev in self._tool_phase(state, processor, pending, tracer):
+                yield ev
+            yield await self._emit(
+                state, events.TurnEnded(agent=state.agent, turn=state.turns)
+            )
         if state.pending_handoff is not None:
             async for ev in self._apply_handoff(state, resources, tracer):
                 yield ev
@@ -1139,13 +1149,23 @@ class RunLoop:
         """
         signal = state.pending_handoff
         assert signal is not None
-        state.pending_handoff = None
         prev_agent = state.agent
         target = signal.handoff.target
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
         with handoff_span(tracer, from_agent=prev_agent.name, to_agent=target.name):
-            state.activate(await self._resolve_active(target, resources))
-            await self._reset_transcript_for_handoff(state)
+            prev_active = state.active
+            try:
+                state.activate(await self._resolve_active(target, resources))
+                await self._reset_transcript_for_handoff(state)
+            except BaseException:
+                # Nothing durable changed (the transcript swap follows the
+                # render), so undo the in-memory switch and the log tag: the
+                # terminal snapshot then records the transfer as still
+                # pending on ``prev_agent``, and a resume retries it.
+                state.activate(prev_active)
+                CURRENT_AGENT.set(prev_agent.name)
+                raise
+        state.pending_handoff = None
 
         ev = events.HandoffOccurred(from_agent=prev_agent, to_agent=target)
         if prev_agent.hooks is not None and prev_agent.hooks is not target.hooks:

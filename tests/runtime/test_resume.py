@@ -60,6 +60,25 @@ def test_reachable_unwraps_handoff_objects() -> None:
     assert set(reachable_agents(a)) == {"a", "b"}
 
 
+def test_reachable_rejects_distinct_agents_sharing_a_name() -> None:
+    # A name resolves a snapshot to one agent; two candidates would make the
+    # choice depend on traversal order.
+    left = Agent(name="left", handoffs=[Agent(name="worker")])
+    right = Agent(name="right", handoffs=[Agent(name="worker")])
+    a = Agent(name="a", handoffs=[left, right])
+    with pytest.raises(UserError, match="'worker'") as info:
+        reachable_agents(a)
+    assert info.value.hint
+
+
+def test_reachable_allows_the_same_agent_via_two_paths() -> None:
+    worker = Agent(name="worker")
+    left = Agent(name="left", handoffs=[worker])
+    right = Agent(name="right", handoffs=[worker])
+    a = Agent(name="a", handoffs=[left, right])
+    assert reachable_agents(a)["worker"] is worker
+
+
 # ------------------------------------------------------ resolve_resume_agent
 
 

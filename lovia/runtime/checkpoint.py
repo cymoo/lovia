@@ -166,6 +166,7 @@ class CheckpointWriter:
             return
         run_entries = state.run_entries
         delta = run_entries[self._persisted :]
+        pending = state.pending_handoff
         head = RunHead(
             agent_name=state.agent.name,
             usage=state.run_ctx.usage.clone(),
@@ -175,6 +176,7 @@ class CheckpointWriter:
             error=error,
             last_input_tokens=state.last_input_tokens,
             context_state=state.context_state,
+            pending_handoff=pending.handoff.target.name if pending else None,
         )
         await self.checkpointer.append(self.run_id, delta, head)
         self._persisted = len(run_entries)

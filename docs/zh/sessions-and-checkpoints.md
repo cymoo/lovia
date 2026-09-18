@@ -132,8 +132,10 @@ snapshot）和 `resume_from=`（从你自己拿到的 `RunSnapshot` 恢复）。
 设计，或让它们幂等。
 
 恢复也支持 [Handoff](multi-agent.md)：snapshot 按名称记录**活跃** Agent，Runner 会从入口
-Agent 的 Handoff 图中重新解析。重命名或移除 Agent 会让在途运行无法恢复；已完成运行的
-**重放**则会退回入口 Agent，并记录 warning 日志。
+Agent 的 Handoff 图中重新解析——因此整张图里 Agent 名称必须唯一（两个不同 Agent 同名时恢复
+会直接报错）。已触发但尚未生效的转交也会记录下来，恢复时先完成切换，再由目标 Agent 开始
+它的第一轮。重命名或移除 Agent 会让在途运行无法恢复；已完成运行的**重放**则会退回入口
+Agent，并记录 warning 日志。
 
 ## 两个存储的关系
 

@@ -157,10 +157,13 @@ make them idempotent.
 
 Resume works across [handoffs](multi-agent.md): the snapshot records the
 *active* agent by name, and the runner re-resolves it from the entry
-agent's handoff graph. Renaming or removing an agent breaks resume for its
-in-flight runs (hard error); completed-run *replays* degrade gracefully to
-the entry agent with a warning instead — finished work must not error on a
-deploy.
+agent's handoff graph — so agent names must be unique across that graph
+(two distinct agents sharing a name is a hard error on resume). A transfer
+that fired but was not yet applied when the run stopped is recorded too, and
+the resume completes the switch before the target's first turn. Renaming or
+removing an agent breaks resume for its in-flight runs (hard error);
+completed-run *replays* degrade gracefully to the entry agent with a warning
+instead — finished work must not error on a deploy.
 
 ## How the two stores relate
 

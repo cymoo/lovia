@@ -17,7 +17,7 @@ from typing import Any
 from ..agent import Agent
 from ..checkpointer import IfRunExists, RunSnapshot
 from ..exceptions import UserError
-from ..handoff import Handoff
+from ..handoff import Handoff, _HandoffSignal
 from ..schema import coerce_output
 from ..transcript import ToolCallEntry, ToolResultEntry, TranscriptEntry
 from .result import RunResult
@@ -74,20 +74,60 @@ def reachable_agents(entry: Agent[Any]) -> dict[str, Agent[Any]]:
 
     Walks the static handoff graph (``Agent.handoffs``, each item an ``Agent``
     or a :class:`~lovia.handoff.Handoff`), following targets transitively and
-    guarding against cycles. ``entry`` itself is always included. When two
-    distinct agents share a name the first reached wins — the same ambiguity
-    already affects ``transfer_to_<name>`` tool naming.
+    guarding against cycles. ``entry`` itself is always included.
+
+    Raises :class:`UserError` when two *distinct* agents share a name: a
+    snapshot records the active agent by name, so the name must identify one
+    agent — otherwise which one a resume continues as would depend on
+    traversal order.
     """
     found: dict[str, Agent[Any]] = {}
     stack = [entry]
     while stack:
         agent = stack.pop()
-        if agent.name in found:
+        seen = found.get(agent.name)
+        if seen is agent:
             continue
+        if seen is not None:
+            raise UserError(
+                f"Two different agents named {agent.name!r} are reachable from "
+                f"the handoff graph of entry agent {entry.name!r}.",
+                hint=(
+                    "A checkpoint records the active agent by name, so names "
+                    "must be unique across the graph. Rename one of them."
+                ),
+            )
         found[agent.name] = agent
         for h in agent.handoffs:
             stack.append(h.target if isinstance(h, Handoff) else h)
     return found
+
+
+def resolve_pending_handoff(
+    agent: Agent[Any], snapshot: RunSnapshot
+) -> _HandoffSignal | None:
+    """Rebuild the handoff a snapshot recorded as fired but not yet applied.
+
+    ``agent`` is the snapshot's active agent (from :func:`resolve_resume_agent`);
+    the target is looked up among its own handoffs, the only place the
+    transfer tool could have come from. The reason is not persisted — it is
+    already in the tool result's text and plays no part in the switch.
+    """
+    name = snapshot.pending_handoff
+    if name is None:
+        return None
+    for h in agent.handoffs:
+        handoff = h if isinstance(h, Handoff) else Handoff(target=h)
+        if handoff.target.name == name:
+            return _HandoffSignal(handoff=handoff)
+    raise UserError(
+        f"Snapshot {snapshot.run_id!r} has a pending handoff to {name!r}, which "
+        f"is not among the handoffs of its active agent {agent.name!r}.",
+        hint=(
+            "Resume this run_id with the same handoff graph it was started "
+            "with, or restart it."
+        ),
+    )
 
 
 def resolve_resume_agent(entry: Agent[Any], snapshot: RunSnapshot) -> Agent[Any]:
@@ -165,6 +205,7 @@ __all__ = [
     "IfRunExists",
     "normalize_replayed_entries",
     "reachable_agents",
+    "resolve_pending_handoff",
     "resolve_resume_agent",
     "result_from_completed_snapshot",
 ]

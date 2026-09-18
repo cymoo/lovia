@@ -64,6 +64,12 @@ class RunHead:
     # inspects this — it round-trips it through checkpoints so the policy
     # can pick up where it left off after a resume.
     context_state: JsonObject = field(default_factory=dict)
+    # Name of the agent a fired-but-unapplied handoff targets. A transfer
+    # tool's result lands in the transcript as soon as it runs, while the
+    # switch itself happens at the end of the turn; an interrupt in between
+    # would otherwise resume as ``agent_name`` with "Transferred to …" in
+    # its own history.
+    pending_handoff: str | None = None
     updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> JsonObject:
@@ -76,6 +82,7 @@ class RunHead:
             "error": to_json_safe(self.error),
             "last_input_tokens": self.last_input_tokens,
             "context_state": to_json_safe(self.context_state) or {},
+            "pending_handoff": self.pending_handoff,
             "updated_at": self.updated_at,
         }
 
@@ -90,6 +97,7 @@ class RunHead:
             error=data.get("error"),
             last_input_tokens=data.get("last_input_tokens"),
             context_state=data.get("context_state", {}),
+            pending_handoff=data.get("pending_handoff"),
             updated_at=data.get("updated_at", time.time()),
         )
 
@@ -121,6 +129,7 @@ class RunSnapshot:
     error: JsonObject | None = None
     last_input_tokens: int | None = None
     context_state: JsonObject = field(default_factory=dict)
+    pending_handoff: str | None = None
     updated_at: float = field(default_factory=time.time)
 
     # ----- head <-> snapshot, used by store implementations -----
@@ -137,6 +146,7 @@ class RunSnapshot:
             error=self.error,
             last_input_tokens=self.last_input_tokens,
             context_state=self.context_state,
+            pending_handoff=self.pending_handoff,
             updated_at=self.updated_at,
         )
 
@@ -156,6 +166,7 @@ class RunSnapshot:
             error=head.error,
             last_input_tokens=head.last_input_tokens,
             context_state=head.context_state,
+            pending_handoff=head.pending_handoff,
             updated_at=head.updated_at,
         )
 

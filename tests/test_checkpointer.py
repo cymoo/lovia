@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from lovia import (
     Agent,
@@ -289,6 +289,65 @@ async def test_unserializable_completed_snapshot_still_heals_and_discards() -> N
     [seg] = await session.segments("s1")
     assert seg.run_id == "bad-output" and seg.entries == entries
     assert await cp.load("bad-output") is None
+
+
+@pytest.mark.asyncio
+async def test_replay_keeps_snapshot_when_output_type_does_not_fit() -> None:
+    # A caller-side mistake (the wrong output_type on replay) is recoverable:
+    # the snapshot must survive delete_on_success so the corrected call
+    # replays instead of starting a new run.
+    class Out(BaseModel):
+        value: int
+
+    cp = InMemoryCheckpointer()
+    await Runner.run(
+        Agent(name="a", model=ScriptedProvider([text("plain text")])),
+        "hi",
+        checkpoint=ckpt(cp, "mismatch"),
+    )
+    agent = Agent(name="a", model=ScriptedProvider([]))
+    with pytest.raises(ValidationError):
+        await Runner.run(
+            agent,
+            [],
+            output_type=Out,
+            checkpoint=ckpt(cp, "mismatch", delete_on_success=True),
+        )
+    snap = await cp.load("mismatch")
+    assert snap is not None and snap.status == "completed"
+
+    result = await Runner.run(
+        agent, [], checkpoint=ckpt(cp, "mismatch", delete_on_success=True)
+    )
+    assert result.output == "plain text"
+    assert await cp.load("mismatch") is None
+
+
+@pytest.mark.asyncio
+async def test_replay_settles_parent_usage_even_when_it_fails() -> None:
+    from lovia.stores import InMemorySession
+
+    class DownSession(InMemorySession):
+        async def append(self, session_id, entries, *, run_id=None, meta=None):  # type: ignore[override]
+            raise ConnectionError("session store down")
+
+    cp = InMemoryCheckpointer()
+    await Runner.run(
+        Agent(name="a", model=ScriptedProvider([text("done")])),  # 1 in + 1 out
+        "hi",
+        checkpoint=ckpt(cp, "settle"),
+    )
+    parent_usage = Usage()
+    with pytest.raises(ConnectionError):
+        await Runner.run(
+            Agent(name="a", model=ScriptedProvider([])),
+            [],
+            checkpoint=ckpt(cp, "settle"),
+            session=DownSession(),
+            session_id="s1",
+            _parent_usage=parent_usage,
+        )
+    assert parent_usage.total_tokens == 2
 
 
 @pytest.mark.asyncio

@@ -271,10 +271,10 @@ class RunLoop:
             if completed is not None:
                 # Already-completed run: replay terminal events only. No
                 # bootstrap, guardrails, or hooks — those ran on the original
-                # completion. Persistence comes before the result is rebuilt:
-                # a snapshot whose output can't be rehydrated (not JSON-safe)
-                # raises below, and must still get its session segment and
-                # its ``delete_on_success`` rather than stay stuck.
+                # completion. Spend is settled up front, like a failed run's:
+                # it is real whether or not the replay below succeeds.
+                if self.parent_usage is not None:
+                    self.parent_usage.add(completed.usage)
                 if self.session is not None:
                     # Heal the crash window between checkpoint completion and
                     # session append: ``Session.append`` is idempotent on
@@ -287,13 +287,22 @@ class RunLoop:
                         context_state=dict(completed.context_state),
                         notice=None,  # not persisted in snapshots
                     )
-                await self.checkpoints.discard_completed()
                 assert self._resume_agent is not None  # set by _resolve_resume
-                result = result_from_completed_snapshot(
-                    self._resume_agent, completed, output_type=self.output_type_override
-                )
-                if self.parent_usage is not None:
-                    self.parent_usage.add(result.usage)
+                try:
+                    result = result_from_completed_snapshot(
+                        self._resume_agent,
+                        completed,
+                        output_type=self.output_type_override,
+                    )
+                except UserError:
+                    # The output can never be rehydrated (not JSON-safe); the
+                    # session segment above was all the snapshot had left to
+                    # give, so apply ``delete_on_success`` rather than leave
+                    # the run stuck. Any other failure (an ``output_type``
+                    # the stored output doesn't fit) keeps it for a retry.
+                    await self.checkpoints.discard_completed()
+                    raise
+                await self.checkpoints.discard_completed()
                 yield events.RunStarted(agent=self.initial_agent)
                 yield events.RunCompleted(result=result)
                 return

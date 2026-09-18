@@ -1154,14 +1154,16 @@ class RunLoop:
         logger.info("run.handoff: %r → %r", prev_agent.name, target.name)
         with handoff_span(tracer, from_agent=prev_agent.name, to_agent=target.name):
             prev_active = state.active
-            state.activate(await self._resolve_active(target, resources))
             try:
+                state.activate(await self._resolve_active(target, resources))
                 await self._reset_transcript_for_handoff(state)
             except BaseException:
-                # The transcript is untouched (the swap follows the render),
-                # so undo the activation too: the terminal snapshot then
-                # records the transfer as still pending on ``prev_agent``.
+                # Nothing durable changed (the transcript swap follows the
+                # render), so undo the in-memory switch and the log tag: the
+                # terminal snapshot then records the transfer as still
+                # pending on ``prev_agent``, and a resume retries it.
                 state.activate(prev_active)
+                CURRENT_AGENT.set(prev_agent.name)
                 raise
         state.pending_handoff = None
 

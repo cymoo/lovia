@@ -64,13 +64,13 @@ class RunHead:
     # inspects this — it round-trips it through checkpoints so the policy
     # can pick up where it left off after a resume.
     context_state: JsonObject = field(default_factory=dict)
+    updated_at: float = field(default_factory=time.time)
     # Name of the agent a fired-but-unapplied handoff targets. A transfer
     # tool's result lands in the transcript as soon as it runs, while the
     # switch itself happens at the end of the turn; an interrupt in between
     # would otherwise resume as ``agent_name`` with "Transferred to …" in
-    # its own history.
+    # its own history. Last so positional construction keeps its meaning.
     pending_handoff: str | None = None
-    updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> JsonObject:
         return {
@@ -129,8 +129,8 @@ class RunSnapshot:
     error: JsonObject | None = None
     last_input_tokens: int | None = None
     context_state: JsonObject = field(default_factory=dict)
-    pending_handoff: str | None = None
     updated_at: float = field(default_factory=time.time)
+    pending_handoff: str | None = None
 
     # ----- head <-> snapshot, used by store implementations -----
 

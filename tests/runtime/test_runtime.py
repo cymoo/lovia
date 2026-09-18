@@ -645,6 +645,34 @@ async def test_resume_retries_a_handoff_whose_target_failed_to_activate() -> Non
     assert result.final_agent.name == "b"
 
 
+async def test_resume_retries_a_handoff_whose_target_prompt_failed_to_render() -> None:
+    # Later failure point: the target activated, then its dynamic instructions
+    # raised while the switch rendered the new system prompt. The activation
+    # is rolled back so the snapshot still says "a, transfer to b pending".
+    attempts = 0
+
+    def instructions(ctx: Any) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("prompt down")
+        return "B-BASE"
+
+    b = Agent(name="b", instructions=instructions, model=ScriptedProvider([text("from b")]))
+    a = Agent(name="a", model=ScriptedProvider([call("transfer_to_b", {})]), handoffs=[b])
+    cp = InMemoryCheckpointer()
+    with pytest.raises(ValueError, match="prompt down"):
+        await Runner.run(a, "go", checkpoint=CheckpointOptions(cp, "h4b"))
+    snap = await cp.load("h4b")
+    assert snap is not None and snap.agent_name == "a" and snap.pending_handoff == "b"
+
+    result = await Runner.run(
+        a, [], checkpoint=CheckpointOptions(cp, "h4b", if_run_exists="resume_only")
+    )
+    assert result.output == "from b"
+    assert result.final_agent.name == "b"
+
+
 async def test_resume_rejects_a_pending_handoff_target_outside_the_graph() -> None:
     from lovia.checkpointer import RunHead
 

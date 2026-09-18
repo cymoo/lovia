@@ -105,8 +105,9 @@ The loop snapshots after the model turn and after **every tool result**, so
 a crash loses at most the work in flight. A `RunSnapshot` holds the run's
 own entries plus a small mutable head (`RunHead`): active agent name,
 usage, turn count, status (`running` / `interrupted` / `completed` /
-`failed`), and the context policy's carried state. Your `context` object is
-*not* snapshotted — you re-supply it when resuming.
+`failed`), the context policy's carried state, and the target of a handoff
+that fired but has not been applied yet. Your `context` object is *not*
+snapshotted — you re-supply it when resuming.
 
 ### `run_id` is an idempotency key
 

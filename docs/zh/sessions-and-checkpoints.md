@@ -91,8 +91,9 @@ result = await Runner.run(
 
 循环会在模型轮次后、**每个工具结果**后保存 snapshot，所以崩溃最多丢失正在执行中的工作。
 `RunSnapshot` 保存本次运行自己的 entries，再加一个小的可变 head（`RunHead`）：活跃 agent 名、
-usage、轮次计数、状态（`running` / `interrupted` / `completed` / `failed`），以及上下文策略
-携带的状态。你的 `context` 对象**不会**被 snapshot；恢复时需要重新传入。
+usage、轮次计数、状态（`running` / `interrupted` / `completed` / `failed`）、上下文策略
+携带的状态，以及已触发但尚未生效的转交目标。你的 `context` 对象**不会**被 snapshot；恢复时
+需要重新传入。
 
 ### `run_id` 是幂等键
 

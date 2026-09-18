@@ -301,10 +301,11 @@ class SummarizeHistory:
 
     The summary is incremental: only the span between the previous coverage
     frontier and the protected tail is sent to the summarizer, together with
-    the prior summary text — in chunks bounded by half the usable window, so
-    the summary call itself cannot overflow even when a whole long prefix
-    must be (re)covered at once. Between bursts the existing summary is
-    replayed verbatim by the renderer at zero cost.
+    the prior summary text — in chunks bounded by half of what the usable
+    window has left after that prior summary, so the summary call itself
+    does not overflow even when a whole long prefix must be (re)covered at
+    once. Between bursts the existing summary is replayed verbatim by the
+    renderer at zero cost.
 
     Coverage is bounded only by the pipeline's protected token tail
     (``keep_recent_tokens``), not by other stages' ``keep_last``: a result
@@ -341,7 +342,10 @@ class SummarizeHistory:
                 it without bound: ~16k chars is ~4k tokens of fixed overhead
                 per call — well past the point where a "summary" stops being
                 compression (the prompt asks for under 2000 words).
-                ``None`` disables the cap.
+                ``None`` disables this cap. Independently, a summary is
+                always bounded to a quarter of the usable window in
+                (estimated) tokens, so on a small model it can't crowd out
+                its own next fold.
         """
         if not 0 <= min_savings_ratio < 1:
             raise ValueError("min_savings_ratio must be in [0, 1)")
@@ -368,7 +372,49 @@ class SummarizeHistory:
             )
             return False
 
+        # The fold requests must fit every model involved, not just the
+        # budget: the aggressive budget is sized to the failed prompt, which
+        # can dwarf the run model's real window (``ctx.model_window``), and a
+        # summarizer wired to its own provider can run a *smaller* model than
+        # the run's — hand it run-sized chunks and every burst overflows the
+        # very model doing the folding, tripping the circuit breaker. The
+        # ``.provider`` attribute is the participation hook (LLMSummarizer has
+        # it; custom backends may expose one); unknown windows change nothing.
+        # Reuse the budget's own headroom rule: a learned window can be
+        # smaller than ``reserve_output`` (a 4K local model), and subtracting
+        # outright would collapse the cap to a single token per chunk.
+        usable = ctx.budget.usable
+        summarizer_window = _provider_context_window(
+            getattr(self.summarizer, "provider", None)
+        )
+        for window in (ctx.model_window, summarizer_window):
+            if window is not None:
+                usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
+        # The summary rides in every later view and fold request, so it may
+        # take at most a quarter of the usable window — measured in tokens,
+        # since ``max_summary_chars`` is sized for large models and a
+        # CJK-heavy summary weighs far more per char than the 4:1 that cap
+        # assumes.
+        max_tokens = usable // 4
+
+        def fits(text: str) -> bool:
+            if self.max_summary_chars is not None and len(text) > self.max_summary_chars:
+                return False
+            return ctx.calibrated(ctx.counter.count_text(text)) <= max_tokens
+
         prior = state.summary
+        if prior is not None and not fits(prior.text):
+            # Carried in from a larger window (a session moved to a smaller
+            # model): every fold on top of it would overflow. Re-cover the
+            # prefix from scratch instead — the sticky state is replaced only
+            # by the first successful fold, so a failed burst keeps it.
+            logger.info(
+                "context.summary: prior summary (%d chars) no longer fits this "
+                "window (limit %d tokens); re-summarizing from scratch",
+                len(prior.text),
+                max_tokens,
+            )
+            prior = None
         prior_covered = prior.covered if prior is not None else 0
         new_covered = ctx.protected_from
         if new_covered <= prior_covered:
@@ -389,31 +435,14 @@ class SummarizeHistory:
         ):
             return False
 
-        # Fold in chunks bounded by half the usable window: the summary call
-        # itself goes through a model (by default the run's own), so an
-        # unbounded span — e.g. re-summarizing a long prefix after a summary
-        # reset — would overflow the very window this stage exists to protect.
-        # Each successful fold is committed to the sticky state immediately,
-        # so a failure mid-way keeps the coverage already gained.
-        # The chunks must fit every model involved in the fold, not just the
-        # budget: the aggressive budget is sized to the failed prompt, which
-        # can dwarf the run model's real window (``ctx.model_window``), and a
-        # summarizer wired to its own provider can run a *smaller* model than
-        # the run's — hand it run-sized chunks and every burst overflows the
-        # very model doing the folding, tripping the circuit breaker. The
-        # ``.provider`` attribute is the participation hook (LLMSummarizer has
-        # it; custom backends may expose one); unknown windows change nothing.
-        # Reuse the budget's own headroom rule: a learned window can be
-        # smaller than ``reserve_output`` (a 4K local model), and subtracting
-        # outright would collapse the cap to a single token per chunk.
-        usable = ctx.budget.usable
-        summarizer_window = _provider_context_window(
-            getattr(self.summarizer, "provider", None)
-        )
-        for window in (ctx.model_window, summarizer_window):
-            if window is not None:
-                usable = min(usable, usable_tokens(window, ctx.budget.reserve_output))
-        cap = max(1, usable // 2)
+        # Fold in chunks bounded by half the usable window left after the
+        # running summary: the summary call itself goes through a model (by
+        # default the run's own) and carries the prior summary alongside the
+        # chunk, so an unbounded span — e.g. re-summarizing a long prefix
+        # after a summary reset — would overflow the very window this stage
+        # exists to protect. Each successful fold is committed to the sticky
+        # state immediately, so a failure mid-way keeps the coverage already
+        # gained.
         # Each chunk end below is committed to ``covered`` and outlives this
         # call whenever a later fold fails or the run is cancelled mid-burst.
         # A boundary that split a tool call from its result would then render a
@@ -429,6 +458,12 @@ class SummarizeHistory:
             # overflows, falling back to that remembered fit — or, when even the
             # first unsplittable pair exceeds ``cap``, letting it be its own
             # oversized chunk (as a single oversized entry would).
+            carried = (
+                ctx.calibrated(ctx.counter.count_text(running))
+                if running is not None
+                else 0
+            )
+            cap = max(1, (usable - carried) // 2)
             end = start
             acc = 0
             fit = 0
@@ -469,15 +504,14 @@ class SummarizeHistory:
             # verbatim). Reject either like a failure — don't extend
             # coverage; the circuit breaker stops retries, and the prefix
             # stays for clear/offload or a surfaced overflow.
-            if not text.strip() or (
-                self.max_summary_chars is not None
-                and len(text) > self.max_summary_chars
-            ):
+            if not text.strip() or not fits(text):
                 state.summary_failures += 1
                 logger.warning(
-                    "context.summary: rejected summary (chars=%d, empty=%s); "
-                    "failure %d/%d",
+                    "context.summary: rejected summary (chars=%d, max_chars=%s, "
+                    "max_tokens=%d, empty=%s); failure %d/%d",
                     len(text),
+                    self.max_summary_chars,
+                    max_tokens,
                     not text.strip(),
                     state.summary_failures,
                     self.max_failures,

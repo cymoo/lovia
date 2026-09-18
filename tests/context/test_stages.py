@@ -423,6 +423,72 @@ async def test_summarize_chunks_survive_a_window_smaller_than_the_reserve():
     assert summarizer.calls == [body[:8]]
 
 
+async def test_summarize_chunk_cap_leaves_room_for_the_running_summary():
+    # The fold request carries the prior summary alongside the new chunk, so
+    # a long running summary must shrink the chunk — or the request overflows
+    # the very window the cap protects. Prior: 800 chars ≈ 208 tokens, so the
+    # first chunk fits (1000 - 208) // 2 = 396 tokens: three entries, not
+    # four. Each later chunk sizes against the short summary just produced.
+    summarizer = FakeSummarizer("S2")
+    body = _texts(20)
+    state = CompactionState(
+        summary=SummaryState(text="S" * 800, covered=4, fingerprint=fingerprint(body[:4]))
+    )
+    ctx = make_ctx(body, state=state, protected_from=16, aggressive=True)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert summarizer.calls == [body[4:7], body[7:11], body[11:15], body[15:16]]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "S" * 1500,  # 383 est. tokens: over a quarter of the 1000-token window
+        "字" * 400,  # 400 chars but 3 bytes each: ~308 est. tokens, also over
+    ],
+)
+async def test_summarize_rejects_summary_too_long_for_the_window(summary: str):
+    # ``max_summary_chars`` is sized for large models; on a small window the
+    # summary is bounded relative to it — a quarter of the usable tokens,
+    # measured the way the counter prices text — or a summary that fits the
+    # char cap would still crowd out its own next fold.
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)  # usable window: 1000 tokens
+    stage = SummarizeHistory(summarizer=FakeSummarizer(summary))
+    assert await stage.plan(body, ctx) is False
+    assert ctx.state.summary is None
+    assert ctx.state.summary_failures == 1
+
+
+async def test_summarize_window_bound_applies_even_without_the_char_cap():
+    body = _texts(10)
+    ctx = make_ctx(body, protected_from=8)
+    stage = SummarizeHistory(summarizer=FakeSummarizer("S" * 1500), max_summary_chars=None)
+    assert await stage.plan(body, ctx) is False
+    assert ctx.state.summary is None
+
+
+async def test_summarize_refolds_from_scratch_when_the_prior_outgrew_the_window():
+    # A summary carried in from a larger model (session state) can exceed
+    # what this window allows; folding on top of it would overflow every
+    # time. The prefix is re-covered from scratch — and the sticky state is
+    # replaced only by a successful fold.
+    body = _texts(10)
+    oversized = SummaryState(
+        text="S" * 1500, covered=4, fingerprint=fingerprint(body[:4])
+    )
+    summarizer = FakeSummarizer("S2")
+    ctx = make_ctx(body, state=CompactionState(summary=oversized), protected_from=8)
+    assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
+    assert summarizer.priors[0] is None and summarizer.calls[0] == body[:4]
+    assert ctx.state.summary is not None and ctx.state.summary.text == "S2"
+    assert ctx.state.summary.covered == 8
+
+    failing = CompactionState(summary=oversized)
+    ctx = make_ctx(body, state=failing, protected_from=8)
+    assert await SummarizeHistory(summarizer=FailingSummarizer()).plan(body, ctx) is False
+    assert failing.summary is oversized
+
+
 async def test_summarize_failure_mid_fold_keeps_partial_coverage():
     # A failure on a later chunk keeps the coverage already committed, so
     # the next burst resumes from the frontier instead of starting over.

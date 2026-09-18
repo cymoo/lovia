@@ -34,6 +34,12 @@ Cancellation cannot interrupt a synchronous tool's worker thread or retract a
 provider request already sent. The thread may finish and its side effects may
 still occur after the run ends.
 
+The safe points are the start of a turn, each tool call (before it runs and
+after its result lands), and the retry backoffs. A cancel that lands during
+the *final* model turn — one that answers without requesting tools — has no
+later safe point and lets the run complete: the answer is already paid for,
+and discarding it would only make a resume pay for it again.
+
 ## Steering a live run
 
 Use a `Mailbox` when the user refines the task while the Agent is working:

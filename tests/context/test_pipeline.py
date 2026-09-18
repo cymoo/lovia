@@ -221,6 +221,34 @@ async def test_sticky_replay_after_burst():
     assert [entry_to_dict(e) for e in second.entries] == [
         entry_to_dict(e) for e in first.entries
     ]
+    # The numbers describe *this call*: a replay changes nothing, so before
+    # equals after — not the raw transcript's size versus the view.
+    assert second.tokens_before == second.tokens_after
+
+
+async def test_notice_describes_the_burst_it_reports():
+    # The notice fires per burst, so its numbers are that burst's: the view
+    # at entry (sticky decisions replayed, before any new ones) versus the
+    # view it produced, and "% full" is the pressure that triggered it.
+    summarizer = FakeSummarizer()
+    pipeline = _pipeline(
+        context_window=1_000, compact_at=0.5, compact_to=0.3, summarizer=summarizer
+    )
+    scratch: dict = {}
+    entries = [user("x" * 100) for _ in range(30)]
+    first = await pipeline.compact(req(entries, scratch=scratch))
+    assert first.tokens_before is not None and first.tokens_after is not None
+    assert first.tokens_before > first.tokens_after
+    full = next(d for d in first.detail if d.startswith("context was "))
+    assert int(full.removeprefix("context was ").removesuffix("% full")) >= 50
+
+    grown = entries + [user("x" * 100) for _ in range(30)]
+    second = await pipeline.compact(req(grown, scratch=scratch))
+    assert second.compacted is True
+    # Not the raw transcript's size: the sticky view was already compacted.
+    assert second.tokens_before is not None
+    assert second.tokens_before < TokenCounter().count(grown)
+    assert second.tokens_before > second.tokens_after
 
 
 async def test_decisions_are_monotonic_and_prefix_stable_across_growth():

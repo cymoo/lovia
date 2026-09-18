@@ -239,7 +239,9 @@ class Compaction:
         view = render_view(req.entries, state)
         raw = counter.count(view)
         tokens = int((raw + overhead) * state.ratio)
-        tokens_before = int((counter.count(req.entries) + overhead) * state.ratio)
+        # What this call would send with only the sticky decisions replayed:
+        # the notice's "before", and the pressure that triggers a burst.
+        tokens_before = tokens
         logger.debug(
             "context.estimate: view %d + tools %d raw, ratio %.3f -> %d tokens",
             raw,
@@ -441,11 +443,12 @@ class Compaction:
 
         # Policy-authored notice bullets, rendered verbatim by the UI. Only the
         # decisions worth surfacing — the calibration ratio stays internal.
-        # Counts are cumulative session state, and say so: a notice fires per
-        # burst, but its numbers describe everything decided up to now.
+        # The token numbers describe this call; the decision counts are
+        # cumulative session state, and say so.
         detail: list[str] = []
         if budget is not None:
-            detail.append(f"context was {round(budget.pressure(tokens) * 100)}% full")
+            pct = round(budget.pressure(tokens_before) * 100)
+            detail.append(f"context was {pct}% full")
         if state.offloaded:
             detail.append(
                 f"{_plural(len(state.offloaded), 'tool result')} offloaded in total"

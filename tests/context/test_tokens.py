@@ -144,6 +144,35 @@ def test_memo_is_bounded():
     assert len(counter._memo) <= 4
 
 
+def test_count_grows_the_memo_to_the_transcript_it_scans():
+    # A transcript just over the memo's size used to thrash: each turn's scan
+    # evicted the head it was about to re-read, so every entry was measured
+    # again on every turn. A scan sizes the memo to itself.
+    estimator = _CountingEstimator()
+    counter = TokenCounter(estimator, memo_size=4)
+    entries = [user(f"m{i}") for i in range(6)]
+    counter.count(entries)
+    counter.count(entries)
+    assert estimator.calls == 6  # measured once each, never again
+    # The tool-schema memo keeps its configured bound.
+    for i in range(6):
+        counter.count_tools([FakeTool(name=f"t{i}")])
+    assert len(counter._tool_memo) <= 4
+
+
+def test_memo_evicts_least_recently_used_not_first_inserted():
+    # One counter serves many sessions; eviction must hit the coldest entry,
+    # not the earliest inserted — a hit refreshes the entry.
+    estimator = _CountingEstimator()
+    counter = TokenCounter(estimator, memo_size=4)
+    a = [user(f"a{i}") for i in range(4)]
+    counter.count(a)
+    counter.count_entry(a[0])  # hit: a0 is now the most recently used
+    counter.count_entry(user("b0"))  # miss: evicts a1, the coldest
+    counter.count_entry(a[0])
+    assert estimator.calls == 5  # a0 was still resident
+
+
 def test_broken_provider_estimator_falls_back_to_heuristic():
     class _Broken:
         def estimate_tokens(self, entries) -> int:

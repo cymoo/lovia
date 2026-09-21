@@ -497,7 +497,12 @@ class OpenAIChatProvider:
                     if text := delta.get("content"):
                         yield TextDelta(text=text)
 
-                    if reasoning := delta.get("reasoning_content"):
+                    # DeepSeek/Kimi/SGLang emit ``reasoning_content``; recent
+                    # vLLM (verified on v0.28) and OpenRouter emit ``reasoning``
+                    # — vLLM still sends the old key alongside it, as null.
+                    if reasoning := (
+                        delta.get("reasoning_content") or delta.get("reasoning")
+                    ):
                         reasoning_parts.append(reasoning)
                         yield ReasoningDelta(text=reasoning)
 

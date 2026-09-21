@@ -542,8 +542,20 @@ async def test_created_client_ignores_ambient_socks_proxy(monkeypatch: Any) -> N
     await provider.aclose()
 
 
+@pytest.mark.parametrize(
+    "reasoning_fields",
+    [
+        {"reasoning_content": "think"},
+        {"reasoning": "think"},
+        {"reasoning_content": None, "reasoning": "think"},
+        {"reasoning_content": "", "reasoning": "think"},
+        {"reasoning_content": "think", "reasoning": "duplicate"},
+    ],
+)
 @pytest.mark.asyncio
-async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None:
+async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish(
+    reasoning_fields: dict[str, str | None],
+) -> None:
     captured: dict[str, Any] = {}
     body = _sse(
         [
@@ -552,7 +564,7 @@ async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None
                     {
                         "delta": {
                             "content": "hel",
-                            "reasoning_content": "think",
+                            **reasoning_fields,
                         }
                     }
                 ]
@@ -633,6 +645,34 @@ async def test_chat_stream_parses_text_reasoning_tool_usage_and_finish() -> None
     assert entry.content == "think"
     assert entry.provider == "openai-chat"
     assert next(_deltas(deltas, FinishDelta)).reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_reads_reasoning_under_vllm_field_name() -> None:
+    # vLLM's chat completions carry thinking in ``reasoning`` and keep the
+    # ``reasoning_content`` key beside it as null (OpenRouter also uses
+    # ``reasoning``). Shape captured from vLLM v0.28.
+    body = _sse(
+        [
+            {"choices": [{"delta": {"reasoning_content": None, "reasoning": "thi"}}]},
+            {"choices": [{"delta": {"reasoning_content": None, "reasoning": "nk"}}]},
+            {"choices": [{"delta": {"content": "2"}, "finish_reason": "stop"}]},
+        ]
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body))
+    )
+    provider = OpenAIChatProvider(
+        model="qwen", base_url="http://localhost:8000/v1", client=client
+    )
+
+    deltas = await _collect(provider.stream([InputEntry(role="user", content="1+1=?")]))
+
+    assert "".join(delta.text for delta in _deltas(deltas, ReasoningDelta)) == "think"
+    assert "".join(delta.text for delta in _deltas(deltas, TextDelta)) == "2"
+    entry = next(_deltas(deltas, EntryCompletedDelta)).entry
+    assert isinstance(entry, ReasoningEntry)
+    assert entry.content == "think"
 
 
 @pytest.mark.asyncio

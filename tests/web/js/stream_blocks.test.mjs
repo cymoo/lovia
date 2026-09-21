@@ -61,6 +61,10 @@ const edge = {
   // Mid-stream, `npx -p typescript@7.0.2` is an open code span whose content
   // autolinks as an email until the closing backtick arrives.
   emailInOpenCode: 'run `npx -p typescript@7.0.2 tsc` now\n\nnext\n\nend\n',
+  // Looks like a link definition, isn't one to marked: inside a fence, and on
+  // the line after a paragraph (absorbed as text). Neither may fall back.
+  defInCode: '```\n[x]: http://e.com\n```\n\npara\n\nq\n',
+  defAfterParagraph: 'para\n[z]: http://g.com\n\nsee [z]\n\nend\n',
   // Model house style: heading, "intro:" line, list with no blank line before
   // it, fence, closing paragraph. Each next item's lone "-" momentarily reads
   // as a setext underline for the paragraph above — the stable count drops

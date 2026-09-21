@@ -4,22 +4,25 @@ Two modes, both driving the real page in headless Chromium so DOM and layout
 cost are included. Needs ``playwright`` with Chromium (``pip install playwright
 && playwright install chromium``) and a running ``lovia web``.
 
-``render`` (default) — per-flush cost of rendering a reply of N KB the way
-``flushRender`` does (markdown → sanitize → DOM replace → hljs), for a mixed
-document (prose, lists, fences, tables) and for the worst-case shapes a block
-incremental render cannot split (one huge fence / table / blank-line-free
-paragraph). No messages are sent; any model config will do::
+``render`` (default) — per-flush cost of rendering a reply of N KB exactly as
+``flushRender`` does (markdown → sanitize → DOM replace → hljs → copy buttons
+and language labels → mermaid scan), for a mixed document (prose, lists,
+fences, tables) and for the worst-case shapes a block-incremental render
+cannot split (one huge fence / table / blank-line-free paragraph). No
+messages are sent; any model config will do::
 
     python3 scripts/bench_stream_render.py --url http://127.0.0.1:8123
 
-``live`` — send one message and watch the reply stream in: renders, time to
-first visible text, rAF long frames. The server must be on the stub model
-(see .claude/skills/verify/SKILL.md); ``--emit-script`` prints a stub script
-for a mixed reply of the given size::
+``live`` — send one message and watch the reply stream in until the run
+settles: renders, time to first visible text, rAF long frames. The server
+must be on the stub model (see .claude/skills/verify/SKILL.md);
+``--emit-script`` prints a stub script for a mixed reply of the given size.
+The stub streams 12-char chunks, so ``--stall`` sets the cadence — 48 KB over
+40 s is ~10 ms per delta, a fast local model::
 
     python3 scripts/bench_stream_render.py --emit-script 48 > /tmp/reply.json
-    python3 .claude/skills/verify/stub_model.py --stall 8 --script "$(cat /tmp/reply.json)" &
-    python3 scripts/bench_stream_render.py --live --url http://127.0.0.1:8123
+    python3 .claude/skills/verify/stub_model.py --stall 40 --script "$(cat /tmp/reply.json)" &
+    python3 scripts/bench_stream_render.py --live --window 60 --url http://127.0.0.1:8123
 
 Output is markdown, ready to paste into the issue.
 """
@@ -75,19 +78,23 @@ SHAPES = {
 
 # ---- in-page probes ------------------------------------------------------------
 
-# Times one full flush the way chat.js does it (renderMarkdownInto + highlightIn
-# from util.js), `reps` times, with the stages timed separately once per rep.
-# hljs cache is warmed first for the mixed doc (steady-state streaming re-renders
-# unchanged blocks); the worst-case shapes append a char per rep so every rep is
-# a cache miss, like a block that is still growing.
+# Times one flush exactly as chat.js's flushRender does it — renderMarkdownInto,
+# highlightCode (hljs + copy buttons + language labels), renderMermaid — `reps`
+# times, with the stages timed separately once per rep. The hljs cache is
+# warmed first for the mixed doc (steady-state streaming re-renders unchanged
+# blocks); the worst-case shapes append a char per rep so every rep is a cache
+# miss, like a block that is still growing.
 RENDER_PROBE = """
 async ({ hash, text, reps, grow }) => {
   const util = await import(`/static/${hash}/js/util.js`);
+  const { highlightCode } = await import(`/static/${hash}/js/chat.js`);
+  const { renderMermaid } = await import(`/static/${hash}/js/diagrams.js`);
+  const flush = (body, src) => { util.renderMarkdownInto(body, src); highlightCode(body); renderMermaid(body); };
   const body = document.createElement('div');
   body.className = 'body';
   document.querySelector('#transcript').appendChild(body);
-  const t = { parse: [], purify: [], dom: [], hljs: [], flush: [] };
-  util.renderMarkdownInto(body, text); util.highlightIn(body);
+  const t = { parse: [], purify: [], dom: [], hljs: [], chrome: [], flush: [] };
+  flush(body, text);
   for (let r = 0; r < reps; r++) {
     const src = grow ? text + ' '.repeat(r + 1) : text;
     let t0 = performance.now(); const html = marked.parse(src); t.parse.push(performance.now() - t0);
@@ -97,9 +104,12 @@ async ({ hash, text, reps, grow }) => {
     body.replaceChildren(tmpl.content); body.offsetHeight;
     t.dom.push(performance.now() - t0);
     t0 = performance.now(); util.highlightIn(body); body.offsetHeight; t.hljs.push(performance.now() - t0);
+    // Copy buttons + labels (highlightIn is a no-op on already-highlighted
+    // blocks) and the mermaid scan.
+    t0 = performance.now(); highlightCode(body); renderMermaid(body); body.offsetHeight; t.chrome.push(performance.now() - t0);
     // The whole flush, on text the staged hljs pass above has not cached.
     const src2 = grow ? src + '.' : src;
-    t0 = performance.now(); util.renderMarkdownInto(body, src2); util.highlightIn(body); body.offsetHeight;
+    t0 = performance.now(); flush(body, src2); body.offsetHeight;
     t.flush.push(performance.now() - t0);
   }
   body.remove();
@@ -156,7 +166,10 @@ def bench_render(page, hash_: str, reps: int) -> None:
             RENDER_PROBE, {"hash": hash_, "text": text, "reps": reps, "grow": grow}
         )
         t = r["t"]
-        cells = [f"{pct(t[k], 0.5):.1f}" for k in ("parse", "purify", "dom", "hljs")]
+        cells = [
+            f"{pct(t[k], 0.5):.1f}"
+            for k in ("parse", "purify", "dom", "hljs", "chrome")
+        ]
         f = t["flush"]
         return (
             f"| {label} | {len(text) // 1024} KB | {r['blocks']} | "
@@ -165,10 +178,13 @@ def bench_render(page, hash_: str, reps: int) -> None:
         )
 
     print(
-        f"Full flush (current renderer), ms; stages are p50, flush is p50 / p95 / max over {reps} reps.\n"
+        "Full flush (current renderer: markdown → sanitize → DOM → hljs → copy buttons/labels + "
+        f"mermaid scan), ms; stages are p50, flush is p50 / p95 / max over {reps} reps.\n"
     )
-    print("| document | size | blocks | parse | purify | DOM+layout | hljs | flush |")
-    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    print(
+        "| document | size | blocks | parse | purify | DOM+layout | hljs | chrome | flush |"
+    )
+    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for kb in (1, 4, 12, 24, 48):
         print(row("mixed (hljs cache warm)", mixed(kb), grow=False))
     for name, gen in SHAPES.items():
@@ -182,9 +198,17 @@ def bench_live(page, window_s: float) -> None:
     page.keyboard.press("Enter")
     t0 = time.time()
     done = None
+    # The transcript carries aria-busy="true" from stream start until the run
+    # settles (exitStreamingUI in chat.js); follow-up chips are optional and
+    # come later, so they are not the signal.
+    busy = "() => document.getElementById('transcript')?.getAttribute('aria-busy') === 'true'"
+    started = False
     while time.time() - t0 < window_s:
-        if done is None and page.query_selector("#followups .followup"):
+        b = page.evaluate(busy)
+        started = started or b
+        if started and not b:
             done = time.time() - t0
+            break
         time.sleep(0.1)
     p = page.evaluate("() => window.__bench")
     n = page.evaluate(

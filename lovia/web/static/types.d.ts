@@ -24,6 +24,8 @@ interface MarkedStatic {
   lexer(src: string): MarkedToken[];
   Lexer: new (options?: object) => {
     blockTokens(src: string, tokens: MarkedToken[]): MarkedToken[];
+    /** Link-reference definitions the lexer collected (keyed by label). */
+    tokens: { links: Record<string, object> };
   };
   /** One instance de-duplicates heading ids across successive parse() calls. */
   Parser: new (options?: object) => {

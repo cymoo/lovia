@@ -27,8 +27,6 @@
 // also have to roll back cross-block parser state (heading-id de-duplication),
 // which is exactly what went wrong when it was tried.
 
-const LINK_DEF = /^ {0,3}\[[^\]]+\]:/m;
-
 /** marked's own line-ending normalization; block offsets live in this text. */
 export function normalize(text) {
   return text.replace(/\r\n?/g, '\n');
@@ -38,16 +36,21 @@ export function normalize(text) {
  * Block-only lex (no inline pass), with each `space` token folded into the
  * block before it so "ends with a blank line" is one uniform test: heading and
  * table tokens absorb their trailing blank lines, paragraph/list/code don't.
+ *
+ * `defs` is whether the lexer recorded any link-reference definition. That is
+ * marked's own classification, so `[x]: …` inside a fence, or on the line
+ * after a paragraph (which absorbs it as text), doesn't count.
  * @param {string} src
- * @returns {{ type: string, raw: string }[]}
+ * @returns {{ blocks: { type: string, raw: string }[], defs: boolean }}
  */
 export function lexBlocks(src) {
-  const out = [];
-  for (const t of new marked.Lexer(marked.defaults).blockTokens(src, [])) {
-    if (t.type === 'space' && out.length) out[out.length - 1].raw += t.raw;
-    else out.push({ type: t.type, raw: t.raw });
+  const lexer = new marked.Lexer(marked.defaults);
+  const blocks = [];
+  for (const t of lexer.blockTokens(src, [])) {
+    if (t.type === 'space' && blocks.length) blocks[blocks.length - 1].raw += t.raw;
+    else blocks.push({ type: t.type, raw: t.raw });
   }
-  return out;
+  return { blocks, defs: Object.keys(lexer.tokens.links).length > 0 };
 }
 
 /**
@@ -99,7 +102,6 @@ export class BlockStream {
   flush(rawText) {
     if (this.dead) return { fallback: this.dead };
     const text = normalize(rawText);
-    if (LINK_DEF.test(text)) return { fallback: (this.dead = 'linkdef') };
     // I1: is the committed prefix still literally there?
     let off = 0;
     for (const raw of this.committed) {
@@ -109,7 +111,10 @@ export class BlockStream {
       }
       off += raw.length;
     }
-    const tailBlocks = lexBlocks(text.slice(off));
+    const { blocks: tailBlocks, defs } = lexBlocks(text.slice(off));
+    // marked resolves reference links against definitions collected over the
+    // whole document; a tail-only lex can't see (or be seen by) the rest.
+    if (defs) return { fallback: (this.dead = 'linkdef') };
     // A raw HTML block can wrap later blocks (`<div>` … paragraphs … `</div>`)
     // and only the whole-document parse nests them correctly.
     if (tailBlocks.some((b) => b.type === 'html')) return { fallback: (this.dead = 'html') };

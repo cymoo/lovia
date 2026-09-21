@@ -123,20 +123,30 @@ function addCodeBlockControls(container) {
 // later ones ride along, so a model that never pauses for 60ms (a local vLLM
 // at 100+ tok/s) still repaints ~16×/s. A trailing debounce here (re-arming on
 // every delta) starves until the turn ends and dumps the whole reply at once.
+//
+// The window widens with the cost of the last flush: a flush re-renders the
+// whole reply (~0.9 ms per KB), so pacing the next one at 4× its cost keeps
+// the render's share of the main thread near 20 % as the reply grows, at the
+// price of coarser repaints. The 250 ms cap keeps the reply visibly alive
+// rather than bounding the share — past ~60 ms per flush it climbs again.
 let _renderTimer = null;
+let _lastFlushMs = 0;
 function scheduleRender() {
   if (_renderTimer) return;
+  const delay = Math.min(250, Math.max(60, 4 * _lastFlushMs));
   _renderTimer = setTimeout(() => {
     _renderTimer = null;
     flushRender();
-  }, 60);
+  }, delay);
 }
 
 // Nulling the id matters: a stale one would make scheduleRender() a no-op for
-// every later delta.
+// every later delta. The cost memo resets too: every caller is a turn
+// boundary, and the next reply starts small.
 function cancelRender() {
   clearTimeout(_renderTimer);
   _renderTimer = null;
+  _lastFlushMs = 0;
 }
 
 // True while the user has an active (non-collapsed) selection inside `node`.
@@ -155,10 +165,17 @@ function flushRender(force = false) {
   // (streaming keeps them coming) or the turn's final, forced flush repaints,
   // so no self-reschedule is needed while the selection is held.
   if (!force && selectionInside(store.body)) return;
+  const t0 = performance.now();
   store.body.dataset.raw = store.rawText;
   renderMarkdownInto(store.body, store.rawText, { agent: store.agent });
   highlightCode(store.body);
   renderMermaid(store.body);
+  // Layout is the largest part of a flush and would otherwise be paid in the
+  // next frame (scrollDown reads scrollHeight in a rAF), outside this timing.
+  // Forcing it here moves that work, not adds it: the frame then finds a
+  // clean layout.
+  void store.body.offsetHeight;
+  _lastFlushMs = performance.now() - t0;
   scrollDown();
 }
 

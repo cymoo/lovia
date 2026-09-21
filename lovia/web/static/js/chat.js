@@ -222,7 +222,6 @@ function flushRender(force = false) {
   // so no self-reschedule is needed while the selection is held.
   if (!force && selectionIntersects(st?.marker ? tailNodes(st) : [body])) return;
   const t0 = performance.now();
-  body.dataset.raw = store.rawText;
   const opts = { agent: store.agent };
   const incremental =
     !force &&
@@ -230,9 +229,15 @@ function flushRender(force = false) {
     typeof DOMPurify !== 'undefined' &&
     renderIncremental(body, store.rawText, opts);
   if (!incremental) {
+    // The parser just fell back (or this is the forced flush): the whole
+    // body is about to be replaced, which the tail-only guard above did not
+    // cover. Skipping here is safe — the stream's state already reads as
+    // "nothing rendered": dead, or reset by the mismatch.
+    if (!force && selectionIntersects([body])) return;
     if (force) _incremental.delete(body);
     renderMarkdownInto(body, store.rawText, opts);
   }
+  body.dataset.raw = store.rawText; // what the DOM now shows, for copy/export
   // The last block is the only one that can still grow. Highlighting it is an
   // hljs cache miss on every flush (a 48 KB fence: ~30 ms of a ~31 ms flush),
   // so it waits until a block follows it or the turn's forced flush — plain

@@ -134,21 +134,43 @@ def start_stream(page, url: str) -> None:
     page.wait_for_function(f"() => ({BODY})?.textContent.length > 50", timeout=15000)
 
 
+# Nodes before the tail marker — the committed region.
+COMMITTED = (
+    "(() => { const b = %s; const out = []; if (!b) return out;"
+    " for (const c of b.childNodes) { if (c.nodeType === 8 && c.data === 'tail') return out; out.push(c); }"
+    " return []; })()" % BODY
+)
+
+
+def select_committed_paragraph(page) -> None:
+    """Once a heading is committed, anchor window.__h / window.__p to the first
+    committed heading / paragraph and select the paragraph's text."""
+    page.wait_for_function(
+        f"() => {{ const cs = {COMMITTED}; return cs.some((n) => n.tagName === 'H2') && cs.some((n) => n.tagName === 'P'); }}",
+        timeout=20000,
+    )
+    page.evaluate(
+        f"() => {{ const cs = {COMMITTED}; window.__h = cs.find((n) => n.tagName === 'H2'); window.__p = cs.find((n) => n.tagName === 'P'); document.getSelection().selectAllChildren(window.__p); }}"
+    )
+
+
+SELECTION_ALIVE = "() => { const s = document.getSelection(); return !s.isCollapsed && window.__p.contains(s.anchorNode) && window.__p.contains(s.focusNode); }"
+
+
 def scenario_main(page, url: str, hash_: str, check: Check) -> None:
     print("stream 1: equivalence, identity, selection, mermaid")
     start_stream(page, url)
     # Wait until a heading is committed (sits before the tail marker), then
     # anchor identity to it and the selection to the first committed paragraph.
-    committed = (
-        "(() => { const b = %s; const out = []; if (!b) return out;"
-        " for (const c of b.childNodes) { if (c.nodeType === 8 && c.data === 'tail') return out; out.push(c); }"
-        " return []; })()" % BODY
-    )
+    select_committed_paragraph(page)
+    # The mermaid block is committed early; its render is async — wait for the
+    # swap, then anchor identity to the figure.
     page.wait_for_function(
-        f"() => {committed}.some((n) => n.tagName === 'H2')", timeout=20000
+        f"() => ({BODY}).querySelectorAll('figure.mermaid-diagram').length === 1",
+        timeout=15000,
     )
     page.evaluate(
-        f"() => {{ const cs = {committed}; window.__h = cs.find((n) => n.tagName === 'H2'); window.__p = cs.find((n) => n.tagName === 'P'); document.getSelection().selectAllChildren(window.__p); }}"
+        f"() => {{ window.__fig = ({BODY}).querySelector('figure.mermaid-diagram'); }}"
     )
     chars0 = page.evaluate(f"() => ({BODY}).textContent.length")
     equiv_checks, equiv_ok = 0, 0
@@ -170,9 +192,7 @@ def scenario_main(page, url: str, hash_: str, check: Check) -> None:
         f"() => {{ const b = {BODY}; return window.__h.isConnected && b.contains(window.__h) && b.querySelector('h2') === window.__h; }}"
     )
     check(ident, "first heading is the same node after later flushes")
-    sel = page.evaluate(
-        "() => { const s = document.getSelection(); return !s.isCollapsed && window.__p.contains(s.anchorNode) && window.__p.contains(s.focusNode); }"
-    )
+    sel = page.evaluate(SELECTION_ALIVE)
     chars1 = page.evaluate(f"() => ({BODY}).textContent.length")
     check(sel, "selection inside a committed paragraph survived")
     check(
@@ -180,20 +200,26 @@ def scenario_main(page, url: str, hash_: str, check: Check) -> None:
         f"flushes kept landing while the selection was held ({chars0} → {chars1} chars)",
     )
     page.evaluate("() => document.getSelection().removeAllRanges()")
-    diag = page.evaluate(
-        f"() => {{ const b = {BODY}; const f = b.querySelectorAll('figure.mermaid-diagram'); window.__fig = f[0] || null; return f.length; }}"
+    # Still streaming: the figure swapped in earlier must be the very same node.
+    same_fig = page.evaluate(
+        f"() => {{ const f = ({BODY}).querySelectorAll('figure.mermaid-diagram'); return f.length === 1 && f[0] === window.__fig && window.__fig.isConnected; }}"
     )
-    check(diag == 1, f"mermaid diagram rendered once mid-stream ({diag})")
+    check(
+        same_fig,
+        "mermaid diagram rendered once mid-stream and is the same node after later flushes",
+    )
     wait_settled(page)
     final = page.evaluate(EQUIV, {"hash": hash_, "forced": True})
     check(
         final["ok"] and not final["hasMarker"],
         "after settle: full render, no marker, equivalent",
     )
-    same_fig = page.evaluate(
-        f"() => {{ const f = ({BODY}).querySelectorAll('figure.mermaid-diagram'); return f.length === 1 && !!window.__fig; }}"
+    # The settle flush is a full render by design (fresh nodes), so identity
+    # is not expected to survive it — only the count.
+    one_fig = page.evaluate(
+        f"() => ({BODY}).querySelectorAll('figure.mermaid-diagram').length === 1"
     )
-    check(same_fig, "after settle: exactly one diagram")
+    check(one_fig, "after settle: exactly one diagram")
     all_hl = page.evaluate(
         f"() => [...({BODY}).querySelectorAll('pre code')].every((c) => c.classList.contains('language-mermaid') || c.dataset.highlighted)"
     )
@@ -235,7 +261,35 @@ def scenario_reload(page, url: str, hash_: str, check: Check) -> None:
 def scenario_fallback(page, url: str, hash_: str, check: Check) -> None:
     print("fallback stream: raw HTML block")
     start_stream(page, url)
-    page.wait_for_function(f"() => ({BODY})?.querySelector('details')", timeout=30000)
+    # Hold a selection in a committed block while the HTML block arrives: the
+    # first fallback replaces the whole body, so that flush must be skipped
+    # (selection survives, DOM stays on the last incremental render) until
+    # the selection is released.
+    select_committed_paragraph(page)
+    page.evaluate(
+        f"async () => {{ window.__store = (await import('/static/{hash_}/js/store.js')).store; }}"
+    )
+    page.wait_for_function(
+        f"() => window.__store.rawText.includes('</details>') && ({BODY}).innerHTML.includes('<!--tail-->') && !({BODY}).querySelector('details')",
+        timeout=30000,
+    )
+    time.sleep(0.5)  # a few more deltas: the flush keeps being skipped
+    check(
+        page.evaluate(SELECTION_ALIVE),
+        "selection in a committed block survived the parser's first fallback",
+    )
+    held = page.evaluate(
+        f"() => ({BODY}).innerHTML.includes('<!--tail-->') && !({BODY}).querySelector('details')"
+    )
+    check(
+        held, "DOM stayed on the last incremental render while the selection was held"
+    )
+    page.evaluate("() => document.getSelection().removeAllRanges()")
+    page.wait_for_function(
+        f"() => ({BODY})?.querySelector('details') && !({BODY}).innerHTML.includes('<!--tail-->')",
+        timeout=15000,
+    )
+    check(True, "released the selection → next flush is the full render")
     seen_marker, checks, ok = False, 0, 0
     for _ in range(20):
         r = page.evaluate(EQUIV, {"hash": hash_, "forced": False})

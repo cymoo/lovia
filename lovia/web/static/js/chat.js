@@ -16,8 +16,10 @@ import {
   highlightIn,
   isImagePath,
   renderMarkdownInto,
+  sanitizedFragment,
   toDate,
 } from './util.js';
+import { BlockStream } from './stream-blocks.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
 // marked / DOMPurify / hljs / mermaid arrive from CDN <script> tags and may
@@ -156,30 +158,100 @@ function selectionInside(node) {
   return node.contains(sel.getRangeAt(0).commonAncestorContainer);
 }
 
+// True while an active selection touches any of `nodes`.
+function selectionIntersects(nodes) {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  return nodes.some((n) => range.intersectsNode(n));
+}
+
+// ---- Incremental streaming render ----------------------------------------
+// A full re-render costs ~0.9 ms per KB of reply, every flush. The incremental
+// path (parse side: stream-blocks.js) renders each block once it can no longer
+// change and re-renders only the tail. One entry per streaming body: the parse
+// state and a comment node separating the two regions. While `marker` is set
+// the body is [committed blocks' nodes][marker][tail nodes], the committed
+// nodes matching stream.committed one block at a time; only nodes after the
+// marker are ever removed here. A full render (fallback, forced flush)
+// replaces everything and clears `marker`. Keyed by the body element, so every
+// path that opens a new body — a new turn, a snapshot, a discard — starts
+// fresh with no bookkeeping.
+const _incremental = new WeakMap();
+
+function tailNodes(st) {
+  const out = [];
+  for (let n = st.marker.nextSibling; n; n = n.nextSibling) out.push(n);
+  return out;
+}
+
+/** Take the incremental path if the parser allows it; false → render in full. */
+function renderIncremental(body, text, opts) {
+  let st = _incremental.get(body);
+  if (!st) _incremental.set(body, (st = { stream: new BlockStream(), marker: null }));
+  const r = st.stream.flush(text);
+  if ('fallback' in r) {
+    // The stream keeps its own state (a permanent fallback stays cheap; a
+    // mismatch has already reset it); the DOM is about to be a full render.
+    st.marker = null;
+    return false;
+  }
+  if (!st.marker) {
+    st.marker = document.createComment('tail');
+    body.replaceChildren(st.marker);
+  }
+  for (const html of r.committed) body.insertBefore(sanitizedFragment(html, opts), st.marker);
+  for (const n of tailNodes(st)) n.remove();
+  body.appendChild(sanitizedFragment(r.tail, opts));
+  return true;
+}
+
 // `force` bypasses the selection guard — end-of-turn flushes must land even
-// mid-selection, or the bubble would freeze on stale content.
+// mid-selection, or the bubble would freeze on stale content. A forced flush
+// is also always a full render: the turn's final DOM is byte-for-byte what a
+// reload renders, whatever the incremental path did.
 function flushRender(force = false) {
   if (!store.body || !store.rawText) return;
-  // Replacing innerHTML destroys a selection in progress — copying from a
-  // streaming reply would be impossible. Skip this flush: the next delta
-  // (streaming keeps them coming) or the turn's final, forced flush repaints,
+  const body = store.body;
+  const st = _incremental.get(body);
+  // Replacing nodes destroys a selection in progress — copying from a
+  // streaming reply would be impossible. Only the tail is replaced on the
+  // incremental path, so a selection in committed blocks survives; skip the
+  // flush when the selection reaches the region about to change. The next
+  // delta (streaming keeps them coming) or the turn's forced flush repaints,
   // so no self-reschedule is needed while the selection is held.
-  if (!force && selectionInside(store.body)) return;
+  if (!force && selectionIntersects(st?.marker ? tailNodes(st) : [body])) return;
   const t0 = performance.now();
-  store.body.dataset.raw = store.rawText;
-  renderMarkdownInto(store.body, store.rawText, { agent: store.agent });
+  const opts = { agent: store.agent };
+  const incremental =
+    !force &&
+    typeof marked !== 'undefined' &&
+    typeof DOMPurify !== 'undefined' &&
+    renderIncremental(body, store.rawText, opts);
+  if (!incremental) {
+    // The parser just fell back (or this is the forced flush): the whole
+    // body is about to be replaced, which the tail-only guard above did not
+    // cover. Skipping here is safe — the stream's state already reads as
+    // "nothing rendered": dead, or reset by the mismatch.
+    if (!force && selectionIntersects([body])) return;
+    if (force) _incremental.delete(body);
+    renderMarkdownInto(body, store.rawText, opts);
+  }
+  body.dataset.raw = store.rawText; // what the DOM now shows, for copy/export
   // The last block is the only one that can still grow. Highlighting it is an
   // hljs cache miss on every flush (a 48 KB fence: ~30 ms of a ~31 ms flush),
   // so it waits until a block follows it or the turn's forced flush — plain
   // monospace until then. Any type: a list ending in a fence would otherwise
-  // be re-highlighted whole.
-  highlightCode(store.body, { skip: force ? null : store.body.lastElementChild });
-  renderMermaid(store.body);
+  // be re-highlighted whole. Committed blocks were highlighted once, when
+  // they were committed; these passes skip them (data-highlighted, an
+  // existing copy button, a swapped-in diagram).
+  highlightCode(body, { skip: force ? null : body.lastElementChild });
+  renderMermaid(body);
   // Layout is the largest part of a flush and would otherwise be paid in the
   // next frame (scrollDown reads scrollHeight in a rAF), outside this timing.
   // Forcing it here moves that work, not adds it: the frame then finds a
   // clean layout.
-  void store.body.offsetHeight;
+  void body.offsetHeight;
   // A forced flush is the turn's last render, and its callers have just
   // reset the memo (cancelRender) for the next turn — keep it that way. It
   // also highlights everything, so its cost isn't representative anyway.

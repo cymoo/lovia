@@ -65,6 +65,8 @@ const edge = {
   // the line after a paragraph (absorbed as text). Neither may fall back.
   defInCode: '```\n[x]: http://e.com\n```\n\npara\n\nq\n',
   defAfterParagraph: 'para\n[z]: http://g.com\n\nsee [z]\n\nend\n',
+  // A leading blank line is a `space` token with nothing to fold into.
+  leadingBlank: '\n\nfirst\n\nsecond\n\nthird\n',
   // Model house style: heading, "intro:" line, list with no blank line before
   // it, fence, closing paragraph. Each next item's lone "-" momentarily reads
   // as a setext underline for the paragraph above — the stable count drops

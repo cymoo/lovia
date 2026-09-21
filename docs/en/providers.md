@@ -150,6 +150,44 @@ Adapters read their own key(s) — `"openai"` then `"openai-chat"`, or
 *removes* a field the adapter would have sent (e.g.
 `{"stream_options": None}`).
 
+### `extra_body`: connection-scoped fields
+
+The same raw fields can be bound to the *provider* instead of the agent:
+
+```python
+provider = OpenAIChatProvider(
+    "qwen3.8-flash-next",
+    base_url="http://l40:8000/v1",
+    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+)
+```
+
+`extra_body` (also a `provider_from_string` keyword) is for what the
+*endpoint* always needs — a vLLM deployment's template switches, a reasoning
+effort, a gateway's `service_tier` — and it reaches every call that goes
+through the provider: each agent sharing it, and the compaction summarizer,
+which builds its own settings. `provider_options` stays the per-agent knob.
+Both carry the same raw semantics, and a request renders in a fixed order:
+
+1. the typed `ModelSettings` fields,
+2. `extra_body`,
+3. `provider_options` for this adapter,
+
+each layer overriding the one before, top-level keys only — a nested object
+such as `chat_template_kwargs` replaces wholesale. So a raw `max_tokens`
+beats the typed one, and an agent can turn off the thinking the connection
+turned on. The one exception is the Anthropic adapter's `output_config`,
+which holds both structured output's `format` and the user's `effort`: an
+extras object joins ours instead of replacing it, while `None` still removes
+the whole field. Fields are merged as written — nothing is translated to the
+endpoint's dialect (the official OpenAI API wants `max_completion_tokens`
+where compatible endpoints want `max_tokens`, and rejects the wrong one). At
+`DEBUG`, the adapters log the raw field names and their scope, never values.
+
+The `lovia web` UI exposes `extra_body` per model profile as *Extra request
+fields*; see [Models and switching](web-ui.md#models-and-switching) for the
+per-vendor reasoning shapes.
+
 ## Prompt caching
 
 Provider caches make long agent loops affordable — the system prompt and

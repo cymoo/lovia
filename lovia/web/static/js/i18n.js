@@ -360,6 +360,7 @@ const MESSAGES = {
     'cfg.default': '默认',
     'cfg.visionBadge': '视觉',
     'cfg.makeDefault': '设为默认',
+    'cfg.duplicate': '复制',
     'cfg.delete': '删除',
     'cfg.deleteConfirm': '删除模型 "{name}"？',
     'cfg.emptyList': '还没有配置模型。',
@@ -386,6 +387,10 @@ const MESSAGES = {
     'cfg.visionOn': '支持',
     'cfg.visionOff': '不支持',
     'cfg.visionHint': '自动 = 按已知模型能力表判断；网关改名时可手动指定',
+    'cfg.extraBody': '额外请求参数',
+    'cfg.extraBodyHint':
+      '原样合并进发给该端点的每个请求（如 reasoning_effort、thinking、vLLM 的 chat_template_kwargs）；null 表示删除该字段。按端点自己的写法填，不做转换',
+    'cfg.extraBodyInvalid': '需要是一个 JSON 对象',
     'cfg.testNeedsModel': '先填写模型 ID',
     'cfg.test': '测试连接',
     'cfg.testing': '测试中…',
@@ -780,6 +785,7 @@ const EN = {
   'cfg.default': 'Default',
   'cfg.visionBadge': 'Vision',
   'cfg.makeDefault': 'Make default',
+  'cfg.duplicate': 'Duplicate',
   'cfg.delete': 'Delete',
   'cfg.deleteConfirm': 'Delete model "{name}"?',
   'cfg.emptyList': 'No models configured yet.',
@@ -807,6 +813,10 @@ const EN = {
   'cfg.visionOff': 'Not supported',
   'cfg.visionHint':
     'Auto follows the known-model table; set it for renamed gateway models',
+  'cfg.extraBody': 'Extra request fields',
+  'cfg.extraBodyHint':
+    "Merged verbatim into every request to this endpoint (reasoning_effort, thinking, vLLM's chat_template_kwargs…); null removes a field. Written in the endpoint's own dialect — nothing is translated",
+  'cfg.extraBodyInvalid': 'Must be a JSON object',
   'cfg.testNeedsModel': 'Enter a model ID first',
   'cfg.test': 'Test connection',
   'cfg.testing': 'Testing…',

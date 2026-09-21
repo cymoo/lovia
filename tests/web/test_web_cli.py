@@ -1129,7 +1129,7 @@ def test_main_default_db_lands_under_dot_lovia(
     assert ".lovia/lovia.db" in capsys.readouterr().out.replace("\\", "/")
 
 
-def test_main_wires_the_aux_role_into_followups(
+def test_main_wires_the_aux_role_into_titles_and_followups(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1143,9 +1143,33 @@ def test_main_wires_the_aux_role_into_followups(
     seen: dict[str, object] = {}
     monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
     assert cli.main([]) == 0
-    followup = seen["followup_model"]
-    assert followup is not None
-    assert getattr(followup, "model", None) == "gpt-small"
+    aux = seen["followup_model"]
+    assert aux is not None
+    assert getattr(aux, "model", None) == "gpt-small"
+    # One aux model serves both jobs, as the Settings hint promises.
+    assert seen["title_model"] is aux
+
+
+def test_main_boots_with_the_saved_extra_body(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, write_config: Callable[..., Path]
+) -> None:
+    """Boot builds through the same path as hot-reload, so a saved profile
+    field reaches the served provider on restart, not only after Settings."""
+    monkeypatch.chdir(tmp_path)
+    write_config(
+        models=[
+            {
+                "id": "chat",
+                "model": "openai:gpt-x",
+                "api_key": "sk-x",
+                "extra_body": {"reasoning_effort": "medium"},
+            }
+        ]
+    )
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda agent, **k: seen.update(agent=agent))
+    assert cli.main([]) == 0
+    assert seen["agent"].model._extra_body == {"reasoning_effort": "medium"}
 
 
 # ------------------------------------------------------------- followups -
@@ -1170,24 +1194,30 @@ def test_resolve_followups_flag_beats_env(monkeypatch: pytest.MonkeyPatch) -> No
     assert builder.resolve_followups(True) is False
 
 
-def test_resolve_followup_model_unassigned() -> None:
-    assert builder.resolve_followup_model(None) is None
+def test_resolve_aux_model_unassigned() -> None:
+    assert builder.resolve_aux_model(None) is None
 
 
-def test_resolve_followup_model_builds_a_provider() -> None:
-    profile = ModelProfile(id="s", model="openai:gpt-small", api_key="sk-small")
-    provider = builder.resolve_followup_model(profile)
+def test_resolve_aux_model_builds_a_provider_with_the_profile_extras() -> None:
+    profile = ModelProfile(
+        id="s",
+        model="openai:gpt-small",
+        api_key="sk-small",
+        extra_body={"reasoning_effort": "low"},
+    )
+    provider = builder.resolve_aux_model(profile)
     assert provider is not None
     assert provider.model == "gpt-small"
+    assert provider._extra_body == {"reasoning_effort": "low"}
 
 
-def test_resolve_followup_model_bad_spec_falls_back(
+def test_resolve_aux_model_bad_spec_falls_back(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An unusable profile must not take the whole server down with it."""
     profile = ModelProfile(id="s", model="no-such-vendor:whatever")
     with caplog.at_level("WARNING", logger="lovia.web.builder"):
-        assert builder.resolve_followup_model(profile) is None
+        assert builder.resolve_aux_model(profile) is None
     assert "falling back" in caplog.text
 
 

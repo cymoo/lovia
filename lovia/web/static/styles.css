@@ -5104,6 +5104,29 @@ body.files-splitting {
 .cfg-advanced .cfg-field {
   margin-bottom: 12px;
 }
+/* Extra request fields: a JSON textarea with snippet chips under it. */
+.cfg-extra textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.45;
+}
+.cfg-extra textarea.invalid {
+  border-color: var(--danger);
+}
+.cfg-extra-error {
+  color: var(--danger);
+}
+.cfg-extra-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cfg-extra-chips .chip {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+}
 .seg-control {
   display: inline-flex;
   gap: 2px;

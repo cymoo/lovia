@@ -64,7 +64,7 @@ from ._windows import (
     window_from_error,
 )
 from ._sse import iter_sse_json
-from .base import ModelSettings, provider_options
+from .base import ModelSettings, request_extras
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 _DEFAULT_VERSION = "2023-06-01"
@@ -111,6 +111,13 @@ class AnthropicProvider:
         # text-only model, so only the real Anthropic host is assumed
         # multimodal. Pass True/False to declare it explicitly.
         supports_vision: bool | None = None,
+        # Fields merged verbatim into every request body — what this endpoint
+        # always needs (``output_config.effort``, ``thinking``,
+        # ``cache_system``). The connection-scoped twin of
+        # ``ModelSettings.provider_options``: same raw semantics (``None``
+        # removes a field), rendered after the typed settings and before the
+        # agent's provider options, so the more specific scope wins.
+        extra_body: JsonObject | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -137,6 +144,7 @@ class AnthropicProvider:
         self._default_max_tokens = default_max_tokens
         self._extra_headers = dict(default_headers or {})
         self._trust_env = resolve_trust_env(trust_env)
+        self._extra_body = dict(extra_body or {})
 
     async def aclose(self) -> None:
         if self._owns_client and self._client is not None:
@@ -234,11 +242,7 @@ class AnthropicProvider:
         settings: ModelSettings | None,
         stream: bool,
     ) -> JsonObject:
-        extra = (
-            provider_options(settings, "claude", self.name)
-            if settings is not None
-            else {}
-        )
+        extra = request_extras(self._extra_body, settings, "claude", self.name)
         cache_system = bool(extra.pop("cache_system", False))
         thinking = extra.get("thinking")
         thinking_off = thinking is None or (
@@ -306,9 +310,16 @@ class AnthropicProvider:
                 payload["top_p"] = settings.top_p
             if settings.stop is not None:
                 payload["stop_sequences"] = settings.stop
-            # Provider-specific extras intentionally win over adapter defaults
-            # such as output_config/tool_choice.
-            payload.update(extra)
+        # Raw extras intentionally win over adapter defaults such as
+        # tool_choice. ``output_config`` is the one field both sides fill —
+        # structured output's ``format`` here, ``effort`` in the extras — so
+        # an extras object joins ours instead of replacing it (a None still
+        # removes the whole field).
+        extra_output = extra.get("output_config")
+        own_output = payload.get("output_config")
+        if isinstance(extra_output, dict) and isinstance(own_output, dict):
+            extra["output_config"] = {**own_output, **extra_output}
+        payload.update(extra)
         # None marks explicit removal (see provider_options), giving users a
         # way to strip adapter defaults for endpoints that reject them.
         return {k: v for k, v in payload.items() if v is not None}

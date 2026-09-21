@@ -70,6 +70,30 @@ an existing chat, scheduled runs, and background subagents. An in-flight reply
 continues on its original model. Vision and auxiliary work such as titles and
 follow-up suggestions can be assigned to separate profiles.
 
+**Extra request fields** (Advanced) is a JSON object merged verbatim into every
+request to that endpoint — the provider's
+[`extra_body`](providers.md#extra_body-connection-scoped-fields). It is how
+reasoning gets configured, in the endpoint's own dialect, since one
+OpenAI-compatible flavor hides many: `{"reasoning_effort": "medium"}` for
+OpenAI, DeepSeek, Qwen 3.8 and vLLM; `{"chat_template_kwargs":
+{"enable_thinking": false}}` for a vLLM/SGLang-served Qwen or GLM;
+`{"thinking": {"type": "disabled"}}` for the DeepSeek and Z.ai APIs;
+`{"output_config": {"effort": "medium"}}` for Anthropic. A `null` value removes
+a field the adapter would send (`{"stream_options": null}` for gateways that
+reject it). Nothing is translated, and the endpoint decides what it accepts —
+an official API rejects unknown fields on the next message, while vLLM may
+ignore them silently; the thinking trace in the chat is the real check. The
+chips under the editor insert these shapes; they claim nothing about the model.
+
+Every call through the profile carries the fields — the main reply, background
+subagents, compaction summaries, and, for a profile assigned the vision or aux
+role, image descriptions or titles and follow-ups. A second parameter set on the
+same endpoint is a second profile: **Duplicate** copies one server-side (key
+included, since the page never holds it), so "thinking off for titles" is a
+copy with `enable_thinking: false` assigned to the aux role. Thinking models
+need output room: a `max_tokens` here overrides `--max-tokens` for that
+endpoint, but the context policy's output reserve does not follow it.
+
 The search backend, Tavily key, and skill directories also live in
 `config.json`. Model connections, additional profiles, role assignments,
 search, and skills have no CLI flags; use Settings or maintain the file

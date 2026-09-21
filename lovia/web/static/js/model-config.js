@@ -119,6 +119,120 @@ function ghostBtn(label, onClick) {
   return btn;
 }
 
+/**
+ * Common request shapes per API flavor, offered as chips. Each chip writes
+ * its object into the JSON below — nothing here is a capability claim, and
+ * the endpoint's docs decide which apply. Kept to the two things people
+ * reach for (effort, thinking on/off) plus lovia's own Anthropic knob.
+ * @type {Record<string, [string, object][]>}
+ */
+const EXTRA_BODY_SNIPPETS = {
+  openai: [
+    ['reasoning_effort', { reasoning_effort: 'medium' }],
+    ['chat_template_kwargs', { chat_template_kwargs: { enable_thinking: false } }],
+    ['thinking', { thinking: { type: 'disabled' } }],
+  ],
+  anthropic: [
+    ['output_config.effort', { output_config: { effort: 'medium' } }],
+    ['thinking', { thinking: { type: 'adaptive' } }],
+    ['cache_system', { cache_system: true }],
+  ],
+};
+
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Set a snippet's leaves into `target`, keeping sibling keys of any nested
+ * object it touches (so adding `enable_thinking` under `chat_template_kwargs`
+ * doesn't drop a `reasoning_effort` already there).
+ */
+function setLeaves(target, snippet) {
+  for (const [key, value] of Object.entries(snippet)) {
+    if (isPlainObject(value) && isPlainObject(target[key])) {
+      setLeaves(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+/**
+ * The "extra request fields" editor: a JSON textarea plus snippet chips.
+ * `read()` returns the parsed object, `{}` for blank, or null (after marking
+ * the field invalid) when the text isn't a JSON object.
+ * @param {object | undefined} initial
+ * @param {() => string} flavor Current API flavor, read at click time.
+ */
+function extraBodyEditor(initial, flavor) {
+  const node = el('div', 'cfg-extra');
+  const area = /** @type {HTMLTextAreaElement} */ (el('textarea', 'dialog-input cfg-input mono'));
+  area.spellcheck = false;
+  area.placeholder = '{ }';
+  const hasInitial = initial && Object.keys(initial).length > 0;
+  area.value = hasInitial ? JSON.stringify(initial, null, 2) : '';
+  // Grow with the content (a pretty-printed object is one key per line),
+  // within a band that keeps the form scannable.
+  const fit = () => {
+    area.rows = Math.min(14, Math.max(3, area.value.split('\n').length + 1));
+  };
+  fit();
+  const err = el('div', 'cfg-hint cfg-extra-error');
+  err.hidden = true;
+
+  /** @returns {object | null} */
+  const parse = () => {
+    const raw = area.value.trim();
+    if (!raw) return {};
+    try {
+      const value = JSON.parse(raw);
+      if (isPlainObject(value)) return value;
+    } catch {
+      /* reported below */
+    }
+    return null;
+  };
+  const validate = () => {
+    const ok = parse() !== null;
+    area.classList.toggle('invalid', !ok);
+    err.hidden = ok;
+    err.textContent = ok ? '' : t('cfg.extraBodyInvalid');
+    return ok;
+  };
+  area.addEventListener('input', () => {
+    fit();
+    validate();
+  });
+
+  const chips = el('div', 'cfg-extra-chips');
+  const renderChips = () => {
+    chips.replaceChildren();
+    for (const [label, snippet] of EXTRA_BODY_SNIPPETS[flavor()] || []) {
+      const chip = el('button', 'chip', label);
+      chip.setAttribute('type', 'button');
+      chip.addEventListener('click', () => {
+        // Adding to broken JSON would silently discard it — fix that first.
+        if (!validate()) return;
+        const merged = setLeaves(parse() || {}, structuredClone(snippet));
+        area.value = JSON.stringify(merged, null, 2);
+        fit();
+        validate();
+        area.focus();
+      });
+      chips.appendChild(chip);
+    }
+  };
+  renderChips();
+  node.append(area, err, chips);
+  return {
+    node,
+    read: () => (validate() ? parse() : null),
+    focus: () => area.focus(),
+    // The chips follow the flavor control; the JSON itself is left alone.
+    syncFlavor: renderChips,
+  };
+}
+
 // ---- Models pane ----------------------------------------------------------
 
 /**
@@ -177,6 +291,21 @@ export function buildModelsPane() {
       row.appendChild(info);
 
       const actions = el('div', 'model-row-actions');
+      // A server-side copy (the key never reaches the page): the way to keep
+      // a second parameter set — say, thinking off for aux — on one endpoint.
+      actions.appendChild(
+        ghostBtn(t('cfg.duplicate'), async (e) => {
+          e.stopPropagation();
+          try {
+            const out = await api.duplicateModel(p.id);
+            await loadConfig();
+            view = { name: 'form', id: out.id };
+          } catch (err) {
+            toast(String(err.message || err), { type: 'error' });
+          }
+          render();
+        }),
+      );
       if (p.id !== c.roles.chat) {
         actions.appendChild(
           ghostBtn(t('cfg.makeDefault'), async (e) => {
@@ -304,6 +433,7 @@ export function buildModelsPane() {
       (val) => {
         flavor = val;
         urlIn.placeholder = flavorDefault(flavor);
+        extras.syncFlavor();
       },
     );
     form.appendChild(field(t('cfg.flavor'), flavorSeg));
@@ -399,7 +529,15 @@ export function buildModelsPane() {
         t('cfg.visionHint'),
       ),
     );
-    if (stored?.context_window || (stored && stored.vision !== 'auto')) adv.open = true;
+    // Extra request fields: raw JSON merged into every request to this
+    // endpoint, in the endpoint's own dialect. The textarea is the truth;
+    // the chips just write common shapes into it.
+    const extras = extraBodyEditor(stored?.extra_body, () => flavor);
+    adv.appendChild(field(t('cfg.extraBody'), extras.node, t('cfg.extraBodyHint')));
+    const hasExtras = stored && Object.keys(stored.extra_body || {}).length > 0;
+    if (stored?.context_window || (stored && stored.vision !== 'auto') || hasExtras) {
+      adv.open = true;
+    }
     form.appendChild(adv);
 
     // Test connection — the wizard's probe over HTTP, same classifications.
@@ -484,6 +622,12 @@ export function buildModelsPane() {
     const save = el('button', 'btn btn-primary', t('cfg.save'));
     save.setAttribute('type', 'button');
     save.addEventListener('click', async () => {
+      const extraBody = extras.read();
+      if (extraBody === null) {
+        adv.open = true;
+        extras.focus();
+        return;
+      }
       const body = {
         name: nameIn.value.trim() || null,
         model: modelIn.value.trim(),
@@ -491,6 +635,7 @@ export function buildModelsPane() {
         base_url: urlIn.value.trim() || null,
         context_window: parseWindow() ?? null,
         vision,
+        extra_body: extraBody,
       };
       if (keyMode === 'clear') body.api_key = '';
       else if (keyMode === 'edit' && keyIn.value) body.api_key = keyIn.value;

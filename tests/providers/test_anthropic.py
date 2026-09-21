@@ -664,6 +664,97 @@ def test_provider_options_canonical_key_beats_alias() -> None:
     assert payload["top_k"] == 1
 
 
+def _structured_payload(provider: AnthropicProvider, settings: ModelSettings | None):
+    return provider._build_payload(
+        entries=[InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "Answer", "schema": {"type": "object"}},
+        },
+        settings=settings,
+        stream=True,
+    )
+
+
+def test_extra_body_output_config_joins_structured_output_format() -> None:
+    """``output_config`` carries both structured output's ``format`` and the
+    user's ``effort``: absent leaves ours, an object joins it, None removes
+    the whole field (the raw-removal contract must survive the join)."""
+    plain = AnthropicProvider(model="claude-opus-5", api_key="x")
+    assert _structured_payload(plain, None)["output_config"] == {
+        "format": {"type": "json_schema", "schema": {"type": "object"}}
+    }
+
+    effort = AnthropicProvider(
+        model="claude-opus-5",
+        api_key="x",
+        extra_body={"output_config": {"effort": "medium"}},
+    )
+    assert _structured_payload(effort, None)["output_config"] == {
+        "format": {"type": "json_schema", "schema": {"type": "object"}},
+        "effort": "medium",
+    }
+
+    stripped = AnthropicProvider(
+        model="claude-opus-5", api_key="x", extra_body={"output_config": None}
+    )
+    assert "output_config" not in _structured_payload(stripped, None)
+
+
+def test_extra_body_is_overridden_by_agent_options_and_gates_thinking() -> None:
+    provider = AnthropicProvider(
+        model="claude-opus-5",
+        api_key="x",
+        extra_body={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+            "cache_system": True,
+        },
+    )
+    entries = [
+        InputEntry(role="user", content="hi"),
+        ReasoningEntry(
+            content="hmm", provider="anthropic", metadata={"signature": "s"}
+        ),
+        AssistantTextEntry(content="ok"),
+        InputEntry(role="user", content="more"),
+    ]
+
+    def build(settings: ModelSettings | None) -> dict:
+        return provider._build_payload(
+            entries, tools=None, response_format=None, settings=settings, stream=True
+        )
+
+    # The connection enables thinking, so the earlier thinking block replays;
+    # cache_system is consumed (not sent) and marks the system prompt.
+    payload = build(None)
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {"effort": "low"}
+    assert "cache_system" not in payload
+    assert any(
+        block.get("type") == "thinking"
+        for message in payload["messages"]
+        if message["role"] == "assistant"
+        for block in message["content"]
+    )
+
+    # An agent turning thinking off wins over the connection, and the strict
+    # official host then drops the stale thinking block.
+    payload = build(
+        ModelSettings(
+            provider_options={"anthropic": {"thinking": {"type": "disabled"}}}
+        )
+    )
+    assert payload["thinking"] == {"type": "disabled"}
+    assert not any(
+        block.get("type") == "thinking"
+        for message in payload["messages"]
+        if message["role"] == "assistant"
+        for block in message["content"]
+    )
+
+
 @pytest.mark.asyncio
 async def test_aclose_closes_owned_client_and_allows_reuse() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")

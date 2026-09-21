@@ -469,6 +469,57 @@ def test_provider_options_canonical_key_beats_alias() -> None:
     assert payload["seed"] == 1
 
 
+def test_extra_body_renders_after_typed_settings_and_before_agent_options() -> None:
+    provider = OpenAIChatProvider(
+        model="qwen",
+        base_url="http://localhost:8000/v1",
+        extra_body={
+            "chat_template_kwargs": {"enable_thinking": True},
+            "reasoning_effort": "medium",
+            "max_tokens": 65536,
+            "stream_options": None,
+        },
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=ModelSettings(
+            max_tokens=10,
+            provider_options={
+                "openai": {"chat_template_kwargs": {"enable_thinking": False}}
+            },
+        ),
+        stream=True,
+    )
+
+    # Connection field kept; raw beats the typed max_tokens; agent scope
+    # replaces the nested object wholesale; None strips the adapter default.
+    assert payload["reasoning_effort"] == "medium"
+    assert payload["max_tokens"] == 65536
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "stream_options" not in payload
+
+
+def test_extra_body_applies_without_settings() -> None:
+    provider = OpenAIChatProvider(
+        model="qwen",
+        base_url="http://localhost:8000/v1",
+        extra_body={"reasoning_effort": "low"},
+    )
+
+    payload = provider._build_payload(
+        [InputEntry(role="user", content="hi")],
+        tools=None,
+        response_format=None,
+        settings=None,
+        stream=False,
+    )
+
+    assert payload["reasoning_effort"] == "low"
+
+
 def test_entries_to_openai_messages_merges_adjacent_multimodal_user_entries() -> None:
     out = entries_to_openai_messages(
         [

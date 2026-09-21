@@ -37,7 +37,7 @@ def _seed(root: Path) -> None:
     (root / "blob.bin").write_bytes(b"\x00\x01\x02 junk")
     (root / "pic.png").write_bytes(PNG_BYTES)
     (root / "big.txt").write_text("line\n" * 60_000)  # > max_file_read_chars
-    # Environment junk the panel must hide (see _PANEL_IGNORES).
+    # Environment junk Recent must leave out (see _RECENT_SKIPS).
     (root / "__pycache__").mkdir()
     (root / "__pycache__" / "app.cpython-312.pyc").write_bytes(b"\x00pyc")
     (root / "orphan.pyc").write_bytes(b"\x00pyc")
@@ -46,12 +46,14 @@ def _seed(root: Path) -> None:
     (root / "node_modules" / "pkg").mkdir(parents=True)
     (root / "node_modules" / "pkg" / "index.js").write_text("module.exports = 1\n")
     # The instructed scratch dir (workspace instructions send intermediates
-    # here) — hidden like junk, deliverables only in the panel.
+    # here) — out of Recent like junk, but browsable and readable: the agent
+    # references what it writes there.
     (root / "tmp").mkdir()
     (root / "tmp" / "scratch.txt").write_text("half-done work\n")
+    (root / "tmp" / "chart.png").write_bytes(PNG_BYTES)
     # Deterministic recency order: report.csv is the newest file. The junk is
-    # made newer still, so if the panel filter broke it would visibly take
-    # over the top of Recent.
+    # made newer still, so if the Recent filter broke it would visibly take
+    # over the top of the list.
     now = time.time()
     for i, name in enumerate(
         [
@@ -65,6 +67,7 @@ def _seed(root: Path) -> None:
             "venv/bin/site.py",
             "node_modules/pkg/index.js",
             "tmp/scratch.txt",
+            "tmp/chart.png",
         ]
     ):
         import os
@@ -103,6 +106,7 @@ def test_workspace_info_and_no_workspace_agent(client: TestClient) -> None:
     info = client.get("/api/workspace", params={"agent": "bot"}).json()
     assert info["name"]  # the root's directory name, never the full path
     assert "/" not in info["name"]
+    assert info["scratch_dir"] == "tmp"  # the layout name the prompt teaches
     for ep in ("", "/files", "/recent"):
         assert (
             client.get(f"/api/workspace{ep}", params={"agent": "plain"}).status_code
@@ -129,7 +133,7 @@ def test_files_lists_one_level_dirs_first_dotfiles_hidden(
 ) -> None:
     entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
     paths = [e["path"] for e in entries]
-    assert paths[0] == "notes"  # dirs first
+    assert paths[0] == "__pycache__"  # dirs first
     assert "notes/plan.md" not in paths  # one level only
     assert ".secret" not in paths  # dotfiles hidden
     sizes = {e["path"]: e["size"] for e in entries}
@@ -160,36 +164,55 @@ def test_recent_is_files_only_newest_first(client: TestClient) -> None:
     assert [e["path"] for e in limited] == ["report.csv", "blob.bin"]
 
 
-# The seeded junk (all newer than report.csv — it would top Recent if the
-# filter broke) must be invisible in every panel view: Recent, browsing,
-# preview, and download alike.
+# The seeded junk and scratch (all newer than report.csv — they would top
+# Recent if the filter broke) stay out of Recent only: browsing, preview and
+# download follow the agent's read access, not the list's presentation.
 
 
-def test_recent_hides_environment_junk(client: TestClient) -> None:
+def test_recent_skips_environment_junk_and_scratch(client: TestClient) -> None:
     entries = client.get("/api/workspace/recent", params={"agent": "bot"}).json()
     paths = [e["path"] for e in entries]
-    assert "report.csv" in paths  # real files still there
+    assert paths[0] == "report.csv"  # the newest *deliverable* leads
     for path in paths:
         assert not path.endswith(".pyc")
         assert not path.startswith(("venv/", "node_modules/", "__pycache__/", "tmp/"))
 
 
-def test_browse_hides_junk_dirs(client: TestClient) -> None:
+def test_browse_shows_what_recent_skips(client: TestClient) -> None:
+    """The Recent filter is presentation only: a directory listing is one
+    level and can't be crowded, so it tells the truth — scratch included."""
     entries = client.get("/api/workspace/files", params={"agent": "bot"}).json()
     paths = {e["path"] for e in entries}
-    junk = {"__pycache__", "venv", "node_modules", "orphan.pyc", "tmp"}
-    assert paths.isdisjoint(junk)
+    assert {"__pycache__", "venv", "node_modules", "orphan.pyc", "tmp"} <= paths
+    scratch = client.get(
+        "/api/workspace/files", params={"agent": "bot", "path": "tmp"}
+    ).json()
+    assert {e["path"] for e in scratch} == {"tmp/chart.png", "tmp/scratch.txt"}
 
 
-def test_junk_paths_refused_like_denied_ones(client: TestClient) -> None:
-    for ep, params in (
-        ("/api/workspace/files", {"path": "__pycache__"}),
-        ("/api/workspace/file", {"path": "__pycache__/app.cpython-312.pyc"}),
-        ("/api/workspace/raw", {"path": "orphan.pyc", "download": 1}),
-        ("/api/workspace/file", {"path": "tmp/scratch.txt"}),
-    ):
-        r = client.get(ep, params={"agent": "bot", **params})
-        assert r.status_code == 403, (ep, params, r.status_code)
+def test_skipped_paths_still_open_by_name(client: TestClient) -> None:
+    """What the agent writes under tmp/ it also references — an inline image,
+    a tool card's "open in Files" — and those must open, unlike the agent's
+    own ``denied_paths``, which stay a real deny."""
+    text = client.get(
+        "/api/workspace/file", params={"agent": "bot", "path": "tmp/scratch.txt"}
+    )
+    assert text.status_code == 200
+    assert "half-done" in text.json()["content"]
+    image = client.get(
+        "/api/workspace/raw", params={"agent": "bot", "path": "tmp/chart.png"}
+    )
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    pyc = client.get(
+        "/api/workspace/raw",
+        params={"agent": "bot", "path": "orphan.pyc", "download": 1},
+    )
+    assert pyc.status_code == 200
+    denied = client.get(
+        "/api/workspace/file", params={"agent": "bot", "path": "secrets.env"}
+    )
+    assert denied.status_code == 403
 
 
 # --------------------------------------------------------------- reading -

@@ -39,7 +39,13 @@ if TYPE_CHECKING:
     from ..plugins.base import ViewInjector
     from ..tools import Tool
 
-__all__ = ["LocalWorkspace", "Workspace"]
+__all__ = ["LocalWorkspace", "Workspace", "SCRATCH_DIR"]
+
+# The one fixed name in the workspace layout the prompt fragment teaches:
+# scratch and intermediates go under it, so it is disposable by convention.
+# The web Files panel keys its "not a deliverable" treatment off the same
+# name — one source, so the prompt and the panel can't drift.
+SCRATCH_DIR = "tmp"
 
 
 def _has_tool_table(text: str, tool: str) -> bool:
@@ -216,21 +222,21 @@ class LocalWorkspace:
                 "related edits rather than asking one line at a time."
             )
         if policy.write != "deny":
-            # Layout, not just permission: 'tmp/' is the one fixed name
+            # Layout, not just permission: SCRATCH_DIR is the one fixed name
             # (intermediates are junk in any workspace), while deliverable
             # placement follows what the root is — a git repo brings its own
             # conventions (.git may be a worktree's *file*, hence exists()).
             lines.append(
                 "Keep the workspace tidy: scratch and intermediate files go "
-                "under 'tmp/' (disposable — it may be cleaned at any time), "
-                "and never write files nobody asked for — put the answer in "
-                "your reply unless a file is the actual deliverable."
+                f"under '{SCRATCH_DIR}/' (disposable — it may be cleaned at "
+                "any time), and never write files nobody asked for — put the "
+                "answer in your reply unless a file is the actual deliverable."
             )
             if (root / ".git").exists():
                 lines.append(
                     "The workspace is a git repository: follow its layout "
                     "and conventions, keep the tree clean, and never commit "
-                    "anything under 'tmp/'."
+                    f"anything under '{SCRATCH_DIR}/'."
                 )
             else:
                 lines.append(

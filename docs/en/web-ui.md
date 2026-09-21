@@ -186,8 +186,12 @@ must match the built-in allowlist; override it with
 `LOVIA_UPLOAD_ALLOWED_EXT`, separated by commas or spaces, or use `*` for any.
 
 A file uploaded from the Files panel is not automatically attached to the next
-message. Directories such as `tmp/`, `node_modules/`, `venv/`, and
-`__pycache__/` are hidden by default. Deleting a chat does not remove files
+message. The Recent list leaves out environment noise (`node_modules/`,
+`venv/`, `__pycache__/`, `*.pyc`) and the agent's scratch dir `tmp/`, and the
+"new files" badge counts only writes Recent would show; that is presentation
+only — browsing shows every directory, and any path the agent references (an
+inline image under `tmp/`, a tool card's *open in Files*) opens as long as
+the agent itself could read it. Deleting a chat does not remove files
 under `uploads/`; the application or user must clean them up.
 
 Background processes belong to the chat rather than one Run. Finishing a Run

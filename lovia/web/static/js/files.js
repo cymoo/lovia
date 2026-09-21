@@ -20,6 +20,7 @@ import {
   formatTimeSmart,
   highlightIn,
   IMAGE_EXT,
+  normalizeRel,
   renderMarkdownInto,
   workspaceImageUrl,
 } from './util.js';
@@ -36,10 +37,6 @@ const CSV_MAX_ROWS = 500;
 const els = {};
 const state = {
   available: false, // current agent has a workspace
-  // The agent's instructed scratch dir (from /api/workspace). Writes under
-  // it are intermediates: Recent doesn't list them, so the badge doesn't
-  // count them. Null until the info request lands — then nothing is scratch.
-  scratchDir: null,
   open: false,
   mode: 'recent', // 'recent' | 'browse'
   browsePath: '', // '' = workspace root
@@ -323,32 +320,41 @@ function clearUnseen() {
   renderBadge();
 }
 
-/** True for a path under the agent's scratch dir (tool args may say `./tmp/x`). */
-function isScratch(path) {
-  const dir = state.scratchDir;
-  if (!dir) return false;
-  const rel = path.replace(/^(\.\/)+/, '');
-  return rel === dir || rel.startsWith(`${dir}/`);
+/**
+ * One key per file for `touched` / `revs` / `unseen`: tool args spell the
+ * same path as `report.md`, `./report.md` or `a/../report.md`. Absolute
+ * paths stay as written — the page never learns the root to relativize them.
+ */
+function touchKey(path) {
+  return path.startsWith('/') ? path : normalizeRel(path);
 }
 
-let _infoFor = null; // the agent whose /api/workspace answer is in state
-async function loadWorkspaceInfo() {
-  const agent = store.agent;
-  if (_infoFor === agent) return;
-  _infoFor = agent;
-  try {
-    const info = await api.workspaceInfo({ agent });
-    if (store.agent === agent) state.scratchDir = info.scratch_dir || null;
-  } catch {
-    _infoFor = null; // retry on the next visibility pass
+/** True for a path under the agent's scratch dir (root-relative, like the
+ * server's Recent filter). `null` scratch dir means nothing is scratch. */
+function isScratch(key, dir) {
+  return !!dir && (key === dir || key.startsWith(`${dir}/`));
+}
+
+// The scratch dir comes from /api/workspace, per agent. Classification awaits
+// this promise rather than reading a field, so a write that lands before the
+// answer does is still judged by it — a failed request settles to null.
+let _info = null; // { agent, promise: Promise<string | null> }
+function scratchDirFor(agent) {
+  if (_info?.agent !== agent) {
+    const promise = api.workspaceInfo({ agent }).then(
+      (info) => info.scratch_dir || null,
+      () => null,
+    );
+    _info = { agent, promise };
   }
+  return _info.promise;
 }
 
 function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('hidden', !state.available);
-  if (state.available) loadWorkspaceInfo();
+  if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
     setOpen(false, { persist: false });
@@ -1233,18 +1239,21 @@ export function initFiles() {
     renderProcs();
     refreshProcs();
   });
-  store.on('workspace-file-touched', ({ path }) => {
-    state.touched.add(path);
-    state.revs.set(path, (state.revs.get(path) || 0) + 1);
+  store.on('workspace-file-touched', async ({ path }) => {
+    const key = touchKey(path);
+    state.touched.add(key);
+    state.revs.set(key, (state.revs.get(key) || 0) + 1);
+    if (state.open) refresh();
+    maybeReloadViewing(key);
     // Badge only live-run writes of deliverables: replayed history re-emits
     // old touches, and a scratch write never reaches the Recent list the
-    // badge invites the user to open.
-    if (!state.open && store.streaming && !isScratch(path)) {
-      state.unseen.add(path);
-      renderBadge();
-    }
-    if (state.open) refresh();
-    maybeReloadViewing(path);
+    // badge invites the user to open. Decided once the scratch dir is known.
+    if (state.open || !store.streaming) return;
+    const agent = store.agent;
+    const scratch = await scratchDirFor(agent);
+    if (store.agent !== agent || state.open || isScratch(key, scratch)) return;
+    state.unseen.add(key);
+    renderBadge();
   });
   store.on('workspace-maybe-stale', () => {
     state.stale = true;

@@ -76,15 +76,18 @@ def workspace_cfg(agent: Agent[Any]) -> LocalWorkspace | None:
 # dotfile rule, and build *outputs* (dist/ etc.) stay listed: "take the file
 # the assistant made" is the panel's job. Same pattern language as
 # ``denied_paths``: a bare name matches the file or directory (and everything
-# beneath it) at any depth. Browsing and reading are not filtered: a directory
-# listing is one level and can't be crowded, and a path the user asks for by
-# name — a tool card, an inline image — must open regardless.
+# beneath it) at any depth, while the scratch pattern carries a slash so it
+# anchors to the root — the convention is "under tmp/", and the panel's badge
+# applies the same root-relative test client-side. Browsing and reading are
+# not filtered: a directory listing is one level and can't be crowded, and a
+# path the user asks for by name — a tool card, an inline image — must open
+# regardless.
 _RECENT_SKIPS: tuple[str, ...] = (
     "__pycache__",
     "*.pyc",
     "venv",
     "node_modules",
-    SCRATCH_DIR,
+    f"{SCRATCH_DIR}/*",
 )
 
 

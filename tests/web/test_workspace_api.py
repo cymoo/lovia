@@ -51,6 +51,9 @@ def _seed(root: Path) -> None:
     (root / "tmp").mkdir()
     (root / "tmp" / "scratch.txt").write_text("half-done work\n")
     (root / "tmp" / "chart.png").write_bytes(PNG_BYTES)
+    # A nested directory that merely shares the name is not the scratch dir.
+    (root / "reports" / "tmp").mkdir(parents=True)
+    (root / "reports" / "tmp" / "nested.txt").write_text("a deliverable\n")
     # Deterministic recency order: report.csv is the newest file. The junk is
     # made newer still, so if the Recent filter broke it would visibly take
     # over the top of the list.
@@ -58,6 +61,7 @@ def _seed(root: Path) -> None:
     for i, name in enumerate(
         [
             "notes/plan.md",
+            "reports/tmp/nested.txt",
             "big.txt",
             "pic.png",
             "blob.bin",
@@ -176,6 +180,8 @@ def test_recent_skips_environment_junk_and_scratch(client: TestClient) -> None:
     for path in paths:
         assert not path.endswith(".pyc")
         assert not path.startswith(("venv/", "node_modules/", "__pycache__/", "tmp/"))
+    # The scratch rule is root-relative ("under tmp/"), unlike the junk names.
+    assert "reports/tmp/nested.txt" in paths
 
 
 def test_browse_shows_what_recent_skips(client: TestClient) -> None:

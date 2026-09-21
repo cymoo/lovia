@@ -45,7 +45,7 @@ function renderMarkdown(text) {
 const EXTERNAL_REF = /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/(?:api|static)\/)/i;
 
 /** Collapse `.` / `..` / empty segments into a plain relative path. */
-function normalizeRel(path) {
+export function normalizeRel(path) {
   const parts = [];
   for (const part of path.split('/')) {
     if (!part || part === '.') continue;

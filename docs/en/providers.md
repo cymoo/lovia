@@ -65,8 +65,9 @@ inference guesses wrong (a proxy in front of the official API, say),
 `official_dialect=` overrides it; auth stays with the real host, so a
 keyless gateway keeps working.
 
-**Reasoning models** (DeepSeek-style `reasoning_content`): thinking streams
-as [`ReasoningDelta`](streaming.md#model-output) events and is stored as
+**Reasoning models** (DeepSeek-style `reasoning_content`, or the `reasoning`
+field vLLM and OpenRouter use): thinking streams as
+[`ReasoningDelta`](streaming.md#model-output) events and is stored as
 reasoning entries. On the next request, some hosts *require* those entries
 echoed back (DeepSeek's thinking models return 400 otherwise) while the
 official API rejects the field — so replay defaults per host:

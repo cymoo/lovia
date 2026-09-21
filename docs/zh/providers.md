@@ -56,8 +56,9 @@ trust_env=None, replay_reasoning=None, official_dialect=None)`
 端点可以直接工作。如果方言判断错了（比如官方 API 前面有代理），用 `official_dialect=`
 覆盖——方言只关乎请求形状，鉴权仍然跟随真实 host，所以无 key 的网关照常工作。
 
-**Reasoning 模型**（DeepSeek 风格的 `reasoning_content`）：thinking 会作为
-[`ReasoningDelta`](streaming.md#模型输出) 事件流出，并保存成 reasoning entry。下一次请求时，
+**Reasoning 模型**（DeepSeek 风格的 `reasoning_content`，或 vLLM、OpenRouter 用的
+`reasoning` 字段）：thinking 会作为 [`ReasoningDelta`](streaming.md#模型输出) 事件流出，
+并保存成 reasoning entry。下一次请求时，
 有些端点要求把这些 entry 回放回去（DeepSeek thinking 模型否则会返回 400），而官方 API
 拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开启，官方 API 关闭，其他兼容端点开启。
 `replay_reasoning=` 可以强制指定行为。只会回放由这个 provider 产出的 entry。

@@ -180,7 +180,10 @@ function flushRender(force = false) {
   // Forcing it here moves that work, not adds it: the frame then finds a
   // clean layout.
   void store.body.offsetHeight;
-  _lastFlushMs = performance.now() - t0;
+  // A forced flush is the turn's last render, and its callers have just
+  // reset the memo (cancelRender) for the next turn — keep it that way. It
+  // also highlights everything, so its cost isn't representative anyway.
+  if (!force) _lastFlushMs = performance.now() - t0;
   scrollDown();
 }
 

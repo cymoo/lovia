@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -164,6 +165,84 @@ def test_update_key_keep_replace_clear(served) -> None:
     assert client.put("/api/config/models/nope", json=base).status_code == 404
 
 
+def test_extra_body_round_trips_and_reaches_the_served_provider(served) -> None:
+    client, runtime, app = served
+    extras = {"reasoning_effort": "medium", "stream_options": None}
+    _add_model(client, id="m", extra_body=extras)
+
+    # Stored and echoed as written — a null value is a removal, not absence.
+    assert client.get("/api/config").json()["models"][0]["extra_body"] == extras
+    assert runtime.config.profile("m").extra_body == extras  # type: ignore[union-attr]
+    assert app.state.deps.agents["lovia"].model._extra_body == extras
+
+    # An update replaces the whole object; omitting the field clears it.
+    base = {"model": "deepseek-v4-pro", "base_url": "https://gw.example/v1"}
+    client.put("/api/config/models/m", json={**base, "extra_body": {"top_k": 1}})
+    assert app.state.deps.agents["lovia"].model._extra_body == {"top_k": 1}
+    client.put("/api/config/models/m", json=base)
+    assert app.state.deps.agents["lovia"].model._extra_body == {}
+
+
+def test_extra_body_rejects_runtime_owned_fields_and_non_objects(served) -> None:
+    client, _runtime, _app = served
+    res = client.post(
+        "/api/config/models",
+        json={"model": "m", "extra_body": {"messages": [], "reasoning_effort": "low"}},
+    )
+    assert res.status_code == 400
+    assert "messages" in res.text
+    res = client.post("/api/config/models", json={"model": "m", "extra_body": []})
+    assert res.status_code == 422
+
+
+def test_aux_role_serves_titles_and_followups_with_its_extras(served) -> None:
+    client, _runtime, app = served
+    _add_model(client, id="chat")
+    _add_model(
+        client,
+        id="quiet",
+        model="openai:gpt-small",
+        api_key="sk-quiet-abcdefgh",
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    client.put("/api/config/roles", json={"aux": "quiet"})
+    deps = app.state.deps
+    assert deps.title_model is deps.followup_model
+    assert getattr(deps.title_model, "model", None) == "gpt-small"
+    assert deps.title_model._extra_body == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    retired = deps.title_model
+    closed = threading.Event()
+
+    async def aclose() -> None:
+        closed.set()
+
+    retired.aclose = aclose  # type: ignore[method-assign]
+    client.put("/api/config/roles", json={"aux": None})
+    assert deps.title_model is None and deps.followup_model is None
+    # The replaced aux provider is retired like the main one (after the
+    # grace period for a title/follow-up call caught mid-swap).
+    assert closed.wait(timeout=5.0)
+
+
+def test_duplicate_copies_the_profile_with_its_key(served) -> None:
+    client, runtime, _app = served
+    _add_model(client, id="m", name="Main", extra_body={"reasoning_effort": "high"})
+    res = client.post("/api/config/models/m/duplicate")
+    assert res.status_code == 201, res.text
+    assert res.json()["id"] == "m-copy"
+    copy = runtime.config.profile("m-copy")
+    assert copy is not None
+    assert copy.name == "Main copy"
+    assert copy.api_key == "sk-secret-1234567890"  # never left the server
+    assert copy.extra_body == {"reasoning_effort": "high"}
+    assert runtime.config.roles.chat == "m"  # roles untouched
+    # A second copy gets a unique id; unknown ids 404.
+    assert client.post("/api/config/models/m/duplicate").json()["id"] == "m-copy-2"
+    assert client.post("/api/config/models/nope/duplicate").status_code == 404
+
+
 def test_delete_guards_the_default_and_nulls_role_refs(served) -> None:
     client, runtime, _app = served
     _add_model(client, id="chat-m")
@@ -257,7 +336,9 @@ def test_search_backend_rebuilds_tools(served) -> None:
 # --------------------------------------------------------------- skills -
 
 
-def _write_skill(root: Path, name: str, description: str = "Does a useful thing.") -> None:
+def _write_skill(
+    root: Path, name: str, description: str = "Does a useful thing."
+) -> None:
     d = root / name
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(
@@ -313,7 +394,9 @@ def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
     _write_skill(project, "greet")
     broken = project / "broken"
     broken.mkdir(parents=True)
-    (broken / "SKILL.md").write_text("---\nname: broken\n---\nBody.\n", encoding="utf-8")
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\n---\nBody.\n", encoding="utf-8"
+    )
     team = tmp_path / "team-skills"
     _write_skill(team, "greet", "A shadowed duplicate.")
     _add_model(client)
@@ -344,7 +427,9 @@ def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:
 
     team_root = roots[str(team)]
     assert team_root["kind"] == "custom"
-    assert [(s["name"], s["shadowed"]) for s in team_root["skills"]] == [("greet", True)]
+    assert [(s["name"], s["shadowed"]) for s in team_root["skills"]] == [
+        ("greet", True)
+    ]
 
 
 def test_skills_scan_keeps_identity_duplicates_visible(served, tmp_path: Path) -> None:
@@ -353,7 +438,9 @@ def test_skills_scan_keeps_identity_duplicates_visible(served, tmp_path: Path) -
     client, _runtime, _app = served
     _write_skill(tmp_path / "x", "greet")
     _add_model(client)
-    assert client.put("/api/config/skills", json={"dirs": ["x", "./x"]}).status_code == 200
+    assert (
+        client.put("/api/config/skills", json={"dirs": ["x", "./x"]}).status_code == 200
+    )
     roots = client.get("/api/config/skills").json()["roots"]
     assert [r["path"] for r in roots] == ["x", "./x"]
     assert [s["shadowed"] for s in roots[1]["skills"]] == [True]

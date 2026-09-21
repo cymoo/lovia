@@ -23,6 +23,7 @@ from importlib.metadata import EntryPoint
 from typing import Callable, cast
 
 from ..exceptions import UserError
+from ..types import JsonObject
 from .base import ModelSettings, Provider, supports_vision
 from .anthropic import AnthropicProvider
 from .openai_chat import OpenAIChatProvider
@@ -126,6 +127,7 @@ def provider_from_string(
     api_key: str | None = None,
     base_url: str | None = None,
     supports_vision: bool | None = None,
+    extra_body: JsonObject | None = None,
 ) -> Provider:
     """Build a provider from a ``"<vendor>:<model>"`` string.
 
@@ -138,10 +140,11 @@ def provider_from_string(
     looks like an Anthropic model is almost certainly a missing ``anthropic:``
     prefix, so we log a warning rather than silently misroute it.
 
-    ``api_key``/``base_url``/``supports_vision`` override the provider's
-    environment- or host-derived defaults; a third-party factory that doesn't
-    accept an override raises :class:`~lovia.UserError` (only when that
-    override is actually given).
+    ``api_key``/``base_url``/``supports_vision``/``extra_body`` override the
+    provider's environment- or host-derived defaults; a third-party factory
+    that doesn't accept an override raises :class:`~lovia.UserError` (only
+    when that override is actually given — an empty ``extra_body`` counts as
+    not given).
     """
     kwargs: dict[str, object] = {}
     if api_key is not None:
@@ -150,6 +153,8 @@ def provider_from_string(
         kwargs["base_url"] = base_url
     if supports_vision is not None:
         kwargs["supports_vision"] = supports_vision
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     if ":" not in spec:
         if spec.lower().startswith("claude"):
             logger.warning(
@@ -165,6 +170,7 @@ def provider_from_string(
             api_key=api_key,
             base_url=base_url,
             supports_vision=supports_vision,
+            extra_body=extra_body,
         )
     vendor, model = spec.split(":", 1)
     vendor = vendor.lower()
@@ -183,7 +189,7 @@ def provider_from_string(
         except TypeError as exc:
             raise UserError(
                 f"provider plugin {vendor!r} does not accept "
-                f"api_key/base_url/supports_vision overrides: {exc}"
+                f"api_key/base_url/supports_vision/extra_body overrides: {exc}"
             ) from exc
     raise UserError(
         f"Unknown model spec: {spec!r}",

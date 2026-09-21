@@ -136,8 +136,21 @@ def test_registered_factory_without_kwargs_rejects_overrides() -> None:
         register_provider("plainco", lambda model: _FakeProvider(model))
         with pytest.raises(UserError, match="does not accept api_key/base_url"):
             provider_from_string("plainco:m1", api_key="sk-x")
+        # An empty extra_body is "not given": no kwarg reaches the factory.
+        assert isinstance(
+            provider_from_string("plainco:m1", extra_body={}), _FakeProvider
+        )
     finally:
         _REGISTRY.pop("plainco", None)
+
+
+@pytest.mark.parametrize("spec", ["openai:m1", "anthropic:m1", "bare-model"])
+def test_extra_body_reaches_the_builtin_providers(spec: str) -> None:
+    p = provider_from_string(
+        spec, api_key="sk-test", extra_body={"reasoning_effort": "low"}
+    )
+
+    assert p._extra_body == {"reasoning_effort": "low"}
 
 
 def test_entry_point_provider_class_receives_overrides(

@@ -128,6 +128,37 @@ ModelSettings(provider_options={
 `"claude"`，后面的 key 覆盖前面的；值为 `None` 会**移除**适配器本来要发送的字段
 （例如 `{"stream_options": None}`）。
 
+### `extra_body`：连接级的请求字段
+
+同样的原始字段也可以绑在 *provider* 上而不是 agent 上：
+
+```python
+provider = OpenAIChatProvider(
+    "qwen3.8-flash-next",
+    base_url="http://l40:8000/v1",
+    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+)
+```
+
+`extra_body`（`provider_from_string` 也接受这个关键字）放的是*端点*永远需要的东西——vLLM
+部署的模板开关、推理强度、网关的 `service_tier`——并且会到达经过这个 provider 的每一次调用：
+共用它的每个 agent，以及自建 settings 的上下文压缩摘要器。`provider_options` 仍是按 agent
+的旋钮。两者语义相同，一个请求按固定顺序渲染：
+
+1. `ModelSettings` 的类型化字段，
+2. `extra_body`，
+3. 本适配器的 `provider_options`，
+
+后一层覆盖前一层，只看顶层 key——`chat_template_kwargs` 这样的嵌套对象整体替换。所以原始的
+`max_tokens` 胜过类型化的那个，agent 也能关掉连接打开的思考。唯一的例外是 Anthropic 适配器的
+`output_config`：它同时装着结构化输出的 `format` 和用户的 `effort`，extras 里的对象会与之合并
+而不是替换，`None` 仍然删除整个字段。字段原样合并——不会翻译成端点的方言（官方 OpenAI API 要
+`max_completion_tokens`，兼容端点要 `max_tokens`，写错会被拒绝）。`DEBUG` 级别下适配器只记录
+原始字段名和来源，不记录值。
+
+`lovia web` 的界面把 `extra_body` 作为每个模型档案的*额外请求参数*暴露出来；各家推理参数的
+写法见[模型配置与切换](web-ui.md#模型配置与切换)。
+
 ## 提示词缓存
 
 Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和工具 schema 每轮都会重新发送，

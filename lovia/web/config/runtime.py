@@ -107,15 +107,15 @@ class ConfigRuntime:
     ) -> tuple[Agent[Any], Provider, Compaction, Provider | None]:
         """Construct the served pieces for ``config`` (no side effects).
 
-        Returns ``(agent, provider, context_policy, followup_model)``.
-        Raises :class:`UserError` when the configuration cannot serve and
+        Returns ``(agent, provider, context_policy, aux_model)`` — the aux
+        model serves both titles and follow-ups, or is ``None`` for "the
+        agent's own". The CLI boot and ``apply`` both build through here, so
+        a profile field can't reach one path and miss the other. Raises
+        :class:`UserError` when the configuration cannot serve and
         ``ValueError`` for an unknown vendor prefix — callers turn both into
         their surface's error shape.
         """
-        from ..builder import (
-            build_default_agent,
-            resolve_followup_model,
-        )
+        from ..builder import build_default_agent, resolve_aux_model
 
         config = config if config is not None else self.config
         missing = self.serveable(config)
@@ -130,6 +130,7 @@ class ConfigRuntime:
             api_key=conn.api_key,
             base_url=conn.base_url,
             supports_vision=profile.vision_override(),
+            extra_body=profile.extra_body,
         )
         agent = build_default_agent(
             self.args,
@@ -139,7 +140,7 @@ class ConfigRuntime:
             config=config,
         )
         policy = Compaction(context_window=conn.context_window)
-        return agent, provider, policy, resolve_followup_model(config.aux_profile())
+        return agent, provider, policy, resolve_aux_model(config.aux_profile())
 
     # ---------------------------------------------------------- applying -
 
@@ -152,7 +153,7 @@ class ConfigRuntime:
         still holds it. Serialized — concurrent writes apply one at a time.
         """
         async with self._lock:
-            agent, provider, policy, followup_model = self.build(config)
+            agent, provider, policy, aux_model = self.build(config)
             self.loaded.config = config
             if persist:
                 save_config(config, self.loaded.path)
@@ -161,6 +162,7 @@ class ConfigRuntime:
             if deps is None:  # not bound yet (boot builds its own agent)
                 return
             old = deps.agents.get(self.agent_key)
+            old_aux = deps.followup_model
             deps.agents[self.agent_key] = agent
             # The fresh Subagents plugin has empty seams; give it the app's
             # supervised delivery (create_app wired only the boot-time one).
@@ -168,12 +170,18 @@ class ConfigRuntime:
 
             _wire(deps)
             deps.context_policy = policy
-            deps.followup_model = followup_model
+            deps.title_model = aux_model
+            deps.followup_model = aux_model
             # Endpoint-window memos are keyed by (endpoint, model): a changed
             # connection must not inherit a stale probe result.
             clear_endpoint_cache()
             if old is not None and old.model is not provider:
                 self._retire(old.model)
+            # The aux provider only ever serves transient title/follow-up
+            # calls, which no supervisor entry holds — the retire grace
+            # period is what covers one caught mid-swap.
+            if old_aux is not None and old_aux is not aux_model:
+                self._retire(old_aux)
             profile = config.default_profile()
             assert profile is not None
             deps.emit(

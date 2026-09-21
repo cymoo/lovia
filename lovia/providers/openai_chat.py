@@ -46,7 +46,7 @@ from ._windows import (
     window_from_error,
 )
 from ._sse import iter_sse_json
-from .base import ModelSettings, provider_options
+from .base import ModelSettings, request_extras
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
@@ -270,6 +270,13 @@ class OpenAIChatProvider:
             compatible endpoints vary and it can't be inferred from the model
             id. Pass True/False to declare it; the web CLI wires ``LOVIA_VISION``
             here.
+        extra_body: Fields merged verbatim into every request body — what
+            this *endpoint* always needs (vLLM's ``chat_template_kwargs``, a
+            ``reasoning_effort``, a gateway's ``service_tier``). The
+            connection-scoped twin of ``ModelSettings.provider_options``:
+            same raw semantics (``None`` removes a field), rendered after the
+            typed settings and before the agent's provider options, so the
+            more specific scope wins.
     """
 
     name = "openai-chat"
@@ -288,6 +295,7 @@ class OpenAIChatProvider:
         replay_reasoning: bool | None = None,
         official_dialect: bool | None = None,
         supports_vision: bool | None = None,
+        extra_body: JsonObject | None = None,
     ) -> None:
         self.model = model
         self.base_url = (
@@ -312,6 +320,7 @@ class OpenAIChatProvider:
         self._replay_reasoning = replay_reasoning
         self._official_dialect = official_dialect
         self._supports_vision = supports_vision
+        self._extra_body = dict(extra_body or {})
 
     @property
     def supports_json_schema(self) -> bool:
@@ -430,7 +439,8 @@ class OpenAIChatProvider:
                 payload["stop"] = settings.stop
             if settings.parallel_tool_calls is not None:
                 payload["parallel_tool_calls"] = settings.parallel_tool_calls
-            payload.update(provider_options(settings, "openai", self.name))
+        # Raw fields win over the typed ones above: they are the escape hatch.
+        payload.update(request_extras(self._extra_body, settings, "openai", self.name))
         if stream:
             # Asking for usage in the stream requires opt-in.
             payload.setdefault("stream_options", {"include_usage": True})

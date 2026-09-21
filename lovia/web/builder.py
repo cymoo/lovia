@@ -212,6 +212,7 @@ def resolve_vision_tool(
             api_key=profile.api_key,
             base_url=profile.base_url,
             supports_vision=profile.vision_override(),
+            extra_body=profile.extra_body,
         )
     except (UserError, ValueError) as exc:
         log.warning(
@@ -224,7 +225,7 @@ def resolve_vision_tool(
     return make_describe_image_tool(vision_provider)
 
 
-def resolve_followup_model(profile: ModelProfile | None) -> Provider | None:
+def resolve_aux_model(profile: ModelProfile | None) -> Provider | None:
     """The aux-role model for titles and follow-up suggestions, if assigned.
 
     ``None`` falls back to the agent's own model. An unusable profile must
@@ -237,6 +238,7 @@ def resolve_followup_model(profile: ModelProfile | None) -> Provider | None:
             profile.spec(),
             api_key=profile.api_key,
             base_url=profile.base_url,
+            extra_body=profile.extra_body,
         )
     except (UserError, ValueError) as exc:
         log.warning(

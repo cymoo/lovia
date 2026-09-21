@@ -16,6 +16,7 @@ from lovia.plugins import Subagents
 from lovia.tools.human import HumanChannel
 from lovia.web import QuestionRegistry, RouterDeps, build_api_router, create_app
 from lovia.web.approvals import ApprovalRegistry
+from lovia.web.builder import build_default_agent
 from lovia.web.store import ChatStore
 
 from ..scripted_provider import ScriptedProvider
@@ -192,7 +193,7 @@ def test_build_default_agent_wires_ask_human_parent_only(
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     args = cli.build_parser().parse_args([])
     channel = HumanChannel()
-    agent = cli.build_default_agent(
+    agent = build_default_agent(
         args,
         ChatStore.in_memory(),
         provider_from_string("test-model"),
@@ -214,7 +215,7 @@ def test_build_default_agent_without_channel_has_no_ask_human(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("LOVIA_MEMORY_DIR", raising=False)
     args = cli.build_parser().parse_args([])
-    agent = cli.build_default_agent(
+    agent = build_default_agent(
         args, ChatStore.in_memory(), provider_from_string("test-model")
     )
     assert "ask_human" not in {t.name for t in agent.tools}

@@ -29,11 +29,14 @@ fails at call time, not at registration.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Protocol, runtime_checkable
 
 from ..types import JsonObject
 from ..transcript import TranscriptEntry, ModelDelta
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -80,6 +83,29 @@ def provider_options(settings: ModelSettings, *keys: str) -> JsonObject:
     for key in keys:
         out.update(settings.provider_options.get(key, {}))
     return out
+
+
+def request_extras(
+    connection: JsonObject, settings: ModelSettings | None, *keys: str
+) -> JsonObject:
+    """The raw fields one request carries: the provider's ``extra_body``
+    (``connection``) under the agent's :func:`provider_options` for ``keys``.
+
+    Same-name keys resolve to the agent's value — the more specific scope
+    wins — and nested objects replace wholesale, so the result is predictable
+    without a merge protocol. Logged by field name only: the values are
+    arbitrary user JSON.
+    """
+
+    agent = provider_options(settings, *keys) if settings is not None else {}
+    if connection or agent:
+        logger.debug(
+            "request extras for %s: connection=%s agent=%s",
+            keys[-1],
+            sorted(connection),
+            sorted(agent),
+        )
+    return {**connection, **agent}
 
 
 class Provider(Protocol):

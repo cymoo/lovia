@@ -27,11 +27,11 @@ from typing import Any, NoReturn, cast
 
 from .. import __version__
 from ..agent import Agent
-from ..context import Compaction, ContextPolicy
+from ..context import ContextPolicy
 from ..exceptions import UserError
 from ..http_config import DEFAULT_TIMEOUT
 from ..log_config import enable_logging
-from ..providers import provider_from_string
+from ..providers import Provider
 from ..reliability import RetryPolicy
 from ..tools import HumanChannel
 from . import config as webconfig
@@ -45,8 +45,6 @@ from .builder import (
     INSTRUCTIONS_FILES,
     _first,
     _mode_flag,
-    build_default_agent,
-    resolve_followup_model,
     resolve_followups,
     resolve_max_retries,
     resolve_max_turns,
@@ -409,7 +407,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # agents; wiring their channel is the library API's job (create_app's
         # question_channel=), so it stays None here.
         question_channel: HumanChannel | None = None
-        followup_model = None
+        # The aux-role model (titles + follow-ups); None means the agent's own.
+        aux_model: Provider | None = None
         # The runtime-reconfiguration surface behind /api/config — built for
         # the default agent only (a custom --app configures itself in code).
         config_runtime: webconfig.ConfigRuntime | None = None
@@ -466,30 +465,13 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     version=__version__, url=url, db_desc=db_desc
                 )
             else:
-                assert conn.model is not None
-                active_profile = loaded.config.default_profile()
+                # The same build hot-reload uses, so boot and Settings can't
+                # drift. Eager construction also surfaces vendor-prefix typos
+                # at startup instead of on the first chat message.
                 try:
-                    provider = provider_from_string(
-                        conn.model,
-                        api_key=conn.api_key,
-                        base_url=conn.base_url,
-                        supports_vision=(
-                            active_profile.vision_override() if active_profile else None
-                        ),
-                    )
-                except ValueError as exc:
-                    # Eager construction also surfaces vendor-prefix typos at
-                    # startup instead of on the first chat message.
+                    agent, _provider, context_policy, aux_model = config_runtime.build()
+                except (UserError, ValueError) as exc:
                     raise CliError(str(exc)) from exc
-                agent = build_default_agent(
-                    args,
-                    store,
-                    provider,
-                    question_channel=question_channel,
-                    config=loaded.config,
-                )
-                followup_model = resolve_followup_model(loaded.config.aux_profile())
-                context_policy = Compaction(context_window=conn.context_window)
                 _warn_if_exposed(host, agent.workspace)
                 summary = webconfig.format_summary(
                     conn,
@@ -520,7 +502,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             retry=retry,
             token=token,
             followups=resolve_followups(args.no_followups),
-            followup_model=followup_model,
+            title_model=aux_model,
+            followup_model=aux_model,
             # Deny an unanswered tool approval after 10 minutes. Without it a
             # clientless run (a scheduled fire, a subagent task) parked on an
             # approval holds one of the concurrency slots forever; for a chat

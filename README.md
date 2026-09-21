@@ -483,7 +483,9 @@ lovia web --check                          # inspect the saved connection
 
 The model connection (model name, Base URL, API key) is configured once,
 in the browser — Settings → Models: multiple profiles, a vision/aux role per
-task, connection testing, live switching from the composer — and saved to
+task, extra request fields per endpoint (reasoning effort, thinking on/off,
+in the endpoint's own dialect), connection testing, live switching from the
+composer — and saved to
 `~/.lovia/config.json` (owner-only, git-ignored). A project-local `./.lovia/config.json` overrides it wholesale;
 changes apply live, no restart. Diagnose with `lovia web --check`; server
 and agent options stay flags/env vars.

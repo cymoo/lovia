@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -65,6 +65,11 @@ def flavor_for_model(spec: str) -> ProviderFlavor:
 # ``auto`` defers to the provider's own capability table.
 VISION_OVERRIDES: dict[str, bool | None] = {"auto": None, "on": True, "off": False}
 
+# Request fields the runtime composes from the conversation; a profile's
+# ``extra_body`` overriding one would only produce a confusing request.
+# Everything else — ``max_tokens`` included — is the user's call.
+RESERVED_BODY_FIELDS = frozenset({"model", "messages", "system", "stream", "tools"})
+
 _SLUG = re.compile(r"[^a-z0-9._-]+")
 
 
@@ -93,6 +98,10 @@ class ModelProfile(BaseModel):
     api_key: str | None = None
     context_window: int | None = Field(default=None, ge=1)
     vision: VisionMode = "auto"
+    # Raw fields merged into every request to this endpoint — the provider's
+    # ``extra_body`` (reasoning knobs, vLLM's ``chat_template_kwargs``, ...).
+    # Stored as written: the endpoint's own dialect, no translation.
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _normalise(self) -> "ModelProfile":
@@ -103,6 +112,12 @@ class ModelProfile(BaseModel):
         else:
             flavor = self.flavor
         base_url = self.base_url.rstrip("/") or None if self.base_url else None
+        reserved = sorted(RESERVED_BODY_FIELDS & self.extra_body.keys())
+        if reserved:
+            raise ValueError(
+                f"extra_body cannot set {', '.join(reserved)}: "
+                "the runtime composes these from the conversation"
+            )
         # Assign via __dict__: plain assignment would re-enter validation.
         self.__dict__["flavor"] = flavor
         self.__dict__["base_url"] = base_url

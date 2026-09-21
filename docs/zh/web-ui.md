@@ -56,6 +56,23 @@ API Key 只写不读：服务端只返回是否已设置及脱敏提示，不会
 切换模型从**下一条消息**开始生效，包括旧对话的后续消息、定时任务和后台子 Agent；已经开始的
 回复仍使用原模型。视觉理解以及标题、追问建议等辅助任务，可以分别指派给其他模型档案。
 
+**额外请求参数**（高级）是一个 JSON 对象，原样合并进发给该端点的每个请求——即 provider 的
+[`extra_body`](providers.md#extra_body连接级的请求字段)。推理相关的配置就靠它，按端点自己的
+写法填，因为一个 OpenAI 兼容格式背后藏着许多方言：OpenAI、DeepSeek、Qwen 3.8 和 vLLM 用
+`{"reasoning_effort": "medium"}`；vLLM/SGLang 部署的 Qwen、GLM 用
+`{"chat_template_kwargs": {"enable_thinking": false}}`；DeepSeek 与智谱官方 API 用
+`{"thinking": {"type": "disabled"}}`；Anthropic 用 `{"output_config": {"effort": "medium"}}`。
+值为 `null` 表示删除适配器本来会发的字段（拒绝 `stream_options` 的网关可写
+`{"stream_options": null}`）。不做任何转换，端点接受什么由端点决定——官方 API 会在下一条消息
+时拒绝不认识的字段，vLLM 则可能静默忽略；对话里有没有思考痕迹才是真正的检验。编辑框下方的
+快捷片段只负责写入这些形状，不代表模型支持。
+
+经过这个档案的每一次调用都会带上这些字段——主回复、后台子 Agent、上下文压缩摘要，以及被指派为
+视觉或辅助角色时的图片描述、标题和追问。同一端点想要第二套参数，就是第二个档案：**复制**在服务端
+完成（连密钥一起，因为页面从不持有它），所以"标题不思考"就是复制一份、写上
+`enable_thinking: false`、指派给辅助角色。思考模型需要输出空间：这里的 `max_tokens` 对该端点
+优先于 `--max-tokens`，但上下文策略的输出预留不会跟着变。
+
 搜索后端、Tavily Key 与 Skill 目录也保存在 `config.json` 中。模型连接、多模型档案、
 角色指派、搜索和 Skills 配置没有对应的 CLI 参数；请通过设置页或直接维护配置文件。
 

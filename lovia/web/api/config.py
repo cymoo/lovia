@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError
@@ -72,6 +72,7 @@ class ProfileIn(BaseModel):
     api_key: str | None = None
     context_window: int | None = Field(default=None, ge=1)
     vision: VisionMode = "auto"
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
     def to_profile(self, *, profile_id: str, stored_key: str | None) -> ModelProfile:
         if self.api_key is None:
@@ -87,6 +88,7 @@ class ProfileIn(BaseModel):
             api_key=key,
             context_window=self.context_window,
             vision=self.vision,
+            extra_body=self.extra_body,
         )
 
 
@@ -185,6 +187,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                     "api_key": _mask(p.api_key),
                     "context_window": p.context_window,
                     "vision": p.vision,
+                    "extra_body": p.extra_body,
                 }
                 for p in cfg.models
             ],
@@ -263,6 +266,25 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         ]
         await _apply(_copy(models=models))
         return {"id": profile_id, "config": _config_out()}
+
+    @router.post("/models/{profile_id}/duplicate", status_code=201)
+    async def duplicate_model(profile_id: str, request: Request) -> dict[str, object]:
+        """A server-side copy, API key included — the key never reaches the
+        browser, so a variant of the same endpoint (say, thinking off for the
+        aux role) can't be made by copying the form."""
+        _guard_host(request)
+        cfg = runtime.config
+        stored = cfg.profile(profile_id)
+        if stored is None:
+            raise HTTPException(status_code=404, detail=f"unknown model {profile_id!r}")
+        taken = {p.id for p in cfg.models}
+        copy_id = slugify(f"{profile_id}-copy", taken)
+        copy = stored.model_copy(
+            update={"id": copy_id, "name": f"{stored.display_name} copy"}
+        )
+        models = [p.model_dump() for p in cfg.models] + [copy.model_dump()]
+        await _apply(_copy(models=models))
+        return {"id": copy_id, "config": _config_out()}
 
     @router.delete("/models/{profile_id}")
     async def delete_model(profile_id: str, request: Request) -> dict[str, object]:

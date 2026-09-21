@@ -246,7 +246,7 @@ export const api = {
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
   getConfig: () => fetch('/api/config').then(_jsonOrDetail),
-  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision? }. */
+  /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision?, extra_body? }. */
   createModel: (body) =>
     fetch('/api/config/models', {
       method: 'POST',
@@ -262,6 +262,11 @@ export const api = {
   deleteModel: (id) =>
     fetch(`/api/config/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    }).then(_jsonOrDetail),
+  // A server-side copy, API key included; resolves to { id, config }.
+  duplicateModel: (id) =>
+    fetch(`/api/config/models/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
     }).then(_jsonOrDetail),
   // Role assignment; sending { chat } switches the served model live.
   /** @param {{ chat?: string, vision?: string | null, aux?: string | null }} body */

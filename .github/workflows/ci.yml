@@ -52,6 +52,10 @@ jobs:
           node-version: "22"
       - name: Type-check (tsc --checkJs)
         run: npx --yes --package typescript@7.0.2 tsc --noEmit -p lovia/web/static/jsconfig.json
+      # Pure-JS unit tests on node's built-in runner (no npm packages): the
+      # streaming render's parse layer against the vendored marked build.
+      - name: JS unit tests (node --test)
+        run: node --test tests/web/js/*.test.mjs
 
   # Validate the docs build on pull requests so broken links and anchors are
   # caught before merge. No deployment here (that is the `docs` job below), so

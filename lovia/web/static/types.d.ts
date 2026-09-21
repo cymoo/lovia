@@ -12,9 +12,26 @@
 // the `interface Error`/`interface Window` blocks merge into the built-ins.
 
 /** Minimal surface of marked (https://marked.js.org) used by the UI. */
+interface MarkedToken {
+  type: string;
+  raw: string;
+}
 interface MarkedStatic {
   parse(src: string): string;
   setOptions(opts: { gfm?: boolean; breaks?: boolean }): void;
+  defaults: object;
+  /** Block + inline lex; the result carries the `links` a Parser needs. */
+  lexer(src: string): MarkedToken[];
+  Lexer: new (options?: object) => {
+    blockTokens(src: string, tokens: MarkedToken[]): MarkedToken[];
+    /** Link-reference definitions the lexer collected (keyed by label). */
+    tokens: { links: Record<string, object> };
+  };
+  /** One instance de-duplicates heading ids across successive parse() calls. */
+  Parser: new (options?: object) => {
+    parse(tokens: MarkedToken[]): string;
+    slugger: { seen: Record<string, number> };
+  };
 }
 
 /** Minimal surface of DOMPurify (https://github.com/cure53/DOMPurify). */

@@ -43,7 +43,8 @@ function linkifyText(text) {
   return out;
 }
 
-function highlightCode(container) {
+// Exported for scripts/bench_stream_render.py, which times the real flush.
+export function highlightCode(container) {
   highlightIn(container); // shared cached hljs pass (util.js)
   // Copy buttons + language labels don't need hljs — keep them offline.
   addCodeBlockControls(container);

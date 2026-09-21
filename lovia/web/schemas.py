@@ -55,13 +55,18 @@ class MemoryUpdate(BaseModel):
 
 
 class WorkspaceInfo(BaseModel):
-    """The browsable workspace of one agent — just its display name.
+    """The browsable workspace of one agent: its display name and the layout
+    convention the panel needs to share with the agent.
 
     Deliberately NOT the absolute root path: the UI doesn't need it and a
-    served page shouldn't advertise server filesystem layout.
+    served page shouldn't advertise server filesystem layout. ``scratch_dir``
+    is the agent's instructed home for intermediates — writes under it are
+    not deliverables, so the panel neither lists them in Recent nor counts
+    them as "new files" for the user.
     """
 
     name: str
+    scratch_dir: str
 
 
 class WorkspaceEntry(BaseModel):

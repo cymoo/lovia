@@ -53,12 +53,9 @@ export function highlightCode(container, opts = {}) {
 }
 
 // Tell the Files panel a workspace tool wrote a file (decoupled via store).
-function emitWorkspaceTouch(name, args) {
+function emitWorkspaceTouch(name, path) {
   if (name !== 'write_file' && name !== 'edit_file') return;
-  try {
-    const path = JSON.parse(args || '{}').path;
-    if (path) store.emit('workspace-file-touched', { path });
-  } catch { /* malformed args — nothing to signal */ }
+  if (path) store.emit('workspace-file-touched', { path });
 }
 
 // ---- Code block copy buttons -------------------------------------------
@@ -2151,7 +2148,7 @@ function renderHistoryWindow({ stickBottom }) {
         for (const call of it.tool_calls) {
           // Replayed history counts too: "touched" means files THIS chat
           // produced, whether live or reloaded.
-          emitWorkspaceTouch(call.name, call.arguments);
+          emitWorkspaceTouch(call.name, toolPath(call.arguments));
           const todos = parseTodos(call.arguments);
           if (todos) {
             upsertTodoCard(todos); // render/update the session's checklist panel
@@ -2481,7 +2478,6 @@ async function handleEvent({ event, data }) {
     }
 
     case 'tool_call':
-      emitWorkspaceTouch(data.name, data.arguments);
       {
         const todos = parseTodos(data.arguments);
         if (todoNames.has(data.name) || todos) {
@@ -2516,6 +2512,11 @@ async function handleEvent({ event, data }) {
         );
       }
       updateToolResult(data.id, data.result, data.is_error, data.images);
+      // A write counts as "touched" once it landed — not at the call, which
+      // a denied approval or a failing tool may never turn into a file.
+      if (!data.is_error) {
+        emitWorkspaceTouch(data.name, store.toolNodes.get(data.id)?.dataset.toolPath);
+      }
       break;
 
     case 'todo':

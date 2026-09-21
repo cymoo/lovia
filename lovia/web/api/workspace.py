@@ -10,9 +10,11 @@ approval-gated operations, but a web GET has no approval flow — under the
 readonly preset everything outside the root (and everything the agent's
 ``denied_paths`` hide, e.g. ``.env*``) is a plain ``deny``, which the session
 raises as :class:`PermissionDeniedError`. The panel can never see more than
-the agent itself could read without asking — and strictly less: regenerable
-environment junk (:data:`_PANEL_IGNORES`) is hidden panel-wide so recency
-stays about the user's actual files.
+the agent itself could read without asking. That is the only access rule:
+what Recent *lists* is a separate, presentation-only filter
+(:data:`_RECENT_SKIPS`), so a path the panel doesn't surface — an inline
+image the assistant wrote under ``tmp/``, a tool card's "open in Files" —
+still opens when asked for by name.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ...exceptions import UserError
 from ...workspace import (
+    SCRATCH_DIR,
     LocalWorkspace,
     LocalWorkspaceSession,
     PermissionDeniedError,
@@ -65,38 +68,44 @@ def workspace_cfg(agent: Agent[Any]) -> LocalWorkspace | None:
     return cfg if isinstance(cfg, LocalWorkspace) else None
 
 
-# Junk the panel hides everywhere (Recent, browsing, preview): regenerable
-# environment/cache noise whose ever-fresh mtimes would otherwise dominate
-# the recency sort — and eat the walk's result cap before real files do.
-# Dot-prefixed junk (.git, .venv) is already hidden by the dotfile rule, and
-# build *outputs* (dist/ etc.) stay visible: "take the file the assistant
-# made" is the panel's job. Same pattern language as ``denied_paths``: a bare
-# name matches the file or directory (and everything beneath it) at any depth.
-# "tmp" is the scratch dir the workspace instructions point the agent at —
-# instructed intermediates, not deliverables, so they don't crowd Recent.
-_PANEL_IGNORES: tuple[str, ...] = (
+# What the Recent list leaves out — a presentation rule, not an access one:
+# regenerable environment/cache noise whose ever-fresh mtimes would otherwise
+# dominate the recency sort (and eat the walk's result cap before real files
+# do), plus the agent's scratch dir — instructed intermediates, not
+# deliverables. Dot-prefixed junk (.git, .venv) is already hidden by the
+# dotfile rule, and build *outputs* (dist/ etc.) stay listed: "take the file
+# the assistant made" is the panel's job. Same pattern language as
+# ``denied_paths``: a bare name matches the file or directory (and everything
+# beneath it) at any depth, while the scratch pattern carries a slash so it
+# anchors to the root — the convention is "under tmp/", and the panel's badge
+# applies the same root-relative test client-side. Browsing and reading are
+# not filtered: a directory listing is one level and can't be crowded, and a
+# path the user asks for by name — a tool card, an inline image — must open
+# regardless.
+_RECENT_SKIPS: tuple[str, ...] = (
     "__pycache__",
     "*.pyc",
     "venv",
     "node_modules",
-    "tmp",
+    f"{SCRATCH_DIR}/*",
 )
 
 
-def _view_session(cfg: LocalWorkspace) -> LocalWorkspaceSession:
+def _view_session(
+    cfg: LocalWorkspace, *, skip: tuple[str, ...] = ()
+) -> LocalWorkspaceSession:
     """A per-request session locked to readonly.
 
     Carries over only ``denied_paths`` from the agent's policy — never its
     ``path_rules``, which could *widen* access (e.g. allow reads outside the
-    root that plain readonly denies) — and adds the panel's own junk filter
-    (``_PANEL_IGNORES``). Denied entries are skipped before the walk's result
-    cap, so junk cannot crowd real files out of the Recent list either.
+    root that plain readonly denies). ``skip`` adds paths for a listing to
+    leave out: the readonly policy's deny is the one pre-cap filter the walk
+    has, and for a listing "skipped" and "denied" look the same — so only
+    the Recent walk passes it, never a read.
     """
     return LocalWorkspaceSession(
         root=cfg.root,
-        policy=WorkspacePolicy.readonly(
-            denied_paths=cfg.policy.denied_paths + _PANEL_IGNORES
-        ),
+        policy=WorkspacePolicy.readonly(denied_paths=cfg.policy.denied_paths + skip),
         limits=cfg.limits,
     )
 
@@ -224,7 +233,9 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
     @router.get("/api/workspace", response_model=WorkspaceInfo)
     async def workspace_info(agent: str | None = Query(None)) -> WorkspaceInfo:
         cfg = require_cfg(agent)
-        return WorkspaceInfo(name=_root_of(cfg).name or "workspace")
+        return WorkspaceInfo(
+            name=_root_of(cfg).name or "workspace", scratch_dir=SCRATCH_DIR
+        )
 
     @router.get("/api/workspace/files", response_model=list[WorkspaceEntry])
     async def list_dir(
@@ -258,7 +269,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         """
         cfg = require_cfg(agent)
         try:
-            async with _view_session(cfg) as session:
+            async with _view_session(cfg, skip=_RECENT_SKIPS) as session:
                 entries = await session.list_files(".", pattern="**/*")
         except PermissionDeniedError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

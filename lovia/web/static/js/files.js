@@ -20,6 +20,7 @@ import {
   formatTimeSmart,
   highlightIn,
   IMAGE_EXT,
+  normalizeRel,
   renderMarkdownInto,
   workspaceImageUrl,
 } from './util.js';
@@ -47,7 +48,9 @@ const state = {
   // HTTP cache (revalidated via the server's ETag/no-cache) does its job.
   revs: new Map(),
   stale: false, // a shell run may have changed files
-  unseen: 0, // live-run writes since the panel was last open (the button badge)
+  // Deliverable paths written by the live run since the panel was last open
+  // (the button badge). A set: three edits to one file are one new file.
+  unseen: new Set(),
   filter: '', // case-insensitive substring over listed paths
   wrap: localStorage.getItem('lovia-files-wrap') !== '0', // wrap long lines
   viewing: null, // { path, kind, raw, name, end, totalLines, truncated }
@@ -284,7 +287,7 @@ function setOpen(open, { persist = true } = {}) {
   if (persist) localStorage.setItem('lovia-files-open', state.open ? '1' : '0');
   claimSpace();
   if (state.open) {
-    setUnseen(0); // the badge's job is done — the user is looking
+    clearUnseen(); // the badge's job is done — the user is looking
     refresh();
     refreshProcs();
   } else {
@@ -296,8 +299,8 @@ function setOpen(open, { persist = true } = {}) {
 // "n files written since you last looked" — a small count on the Files button.
 // Counts only live-run writes: history replay re-emits every past touch on
 // each chat open, which would inflate a naive counter.
-function setUnseen(n) {
-  state.unseen = n;
+function renderBadge() {
+  const n = state.unseen.size;
   let badge = els.btn?.querySelector('.files-badge');
   if (!n) {
     badge?.remove();
@@ -312,10 +315,46 @@ function setUnseen(n) {
   badge.textContent = n > 9 ? '9+' : String(n);
 }
 
+function clearUnseen() {
+  state.unseen.clear();
+  renderBadge();
+}
+
+/**
+ * One key per file for `touched` / `revs` / `unseen`: tool args spell the
+ * same path as `report.md`, `./report.md` or `a/../report.md`. Absolute
+ * paths stay as written — the page never learns the root to relativize them.
+ */
+function touchKey(path) {
+  return path.startsWith('/') ? path : normalizeRel(path);
+}
+
+/** True for a path under the agent's scratch dir (root-relative, like the
+ * server's Recent filter). `null` scratch dir means nothing is scratch. */
+function isScratch(key, dir) {
+  return !!dir && (key === dir || key.startsWith(`${dir}/`));
+}
+
+// The scratch dir comes from /api/workspace, per agent. Classification awaits
+// this promise rather than reading a field, so a write that lands before the
+// answer does is still judged by it — a failed request settles to null.
+let _info = null; // { agent, promise: Promise<string | null> }
+function scratchDirFor(agent) {
+  if (_info?.agent !== agent) {
+    const promise = api.workspaceInfo({ agent }).then(
+      (info) => info.scratch_dir || null,
+      () => null,
+    );
+    _info = { agent, promise };
+  }
+  return _info.promise;
+}
+
 function updateVisibility() {
   const agent = store.agents.find((a) => a.name === store.agent);
   state.available = !!agent?.workspace;
   els.btn?.classList.toggle('hidden', !state.available);
+  if (state.available) scratchDirFor(store.agent); // warm it for the first write
   const phone = window.matchMedia('(max-width: 720px)').matches;
   if (!state.available) {
     setOpen(false, { persist: false });
@@ -1174,7 +1213,7 @@ export function initFiles() {
     state.browsePath = '';
     state.filter = '';
     if (els.filter) els.filter.value = '';
-    setUnseen(0);
+    clearUnseen();
     closeViewer();
     updateVisibility();
     if (state.open) {
@@ -1187,7 +1226,7 @@ export function initFiles() {
   store.on('session-switched', () => {
     state.touched.clear();
     state.revs.clear();
-    setUnseen(0);
+    clearUnseen();
     state.procs = [];
     renderProcs();
     refreshProcs();
@@ -1195,18 +1234,26 @@ export function initFiles() {
   store.on('reset-chat-view', () => {
     state.touched.clear();
     state.revs.clear();
-    setUnseen(0);
+    clearUnseen();
     state.procs = [];
     renderProcs();
     refreshProcs();
   });
-  store.on('workspace-file-touched', ({ path }) => {
-    state.touched.add(path);
-    state.revs.set(path, (state.revs.get(path) || 0) + 1);
-    // Badge only live-run writes — replayed history re-emits old touches.
-    if (!state.open && store.streaming) setUnseen(state.unseen + 1);
+  store.on('workspace-file-touched', async ({ path }) => {
+    const key = touchKey(path);
+    state.touched.add(key);
+    state.revs.set(key, (state.revs.get(key) || 0) + 1);
     if (state.open) refresh();
-    maybeReloadViewing(path);
+    maybeReloadViewing(key);
+    // Badge only live-run writes of deliverables: replayed history re-emits
+    // old touches, and a scratch write never reaches the Recent list the
+    // badge invites the user to open. Decided once the scratch dir is known.
+    if (state.open || !store.streaming) return;
+    const agent = store.agent;
+    const scratch = await scratchDirFor(agent);
+    if (store.agent !== agent || state.open || isScratch(key, scratch)) return;
+    state.unseen.add(key);
+    renderBadge();
   });
   store.on('workspace-maybe-stale', () => {
     state.stale = true;

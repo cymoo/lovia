@@ -43,7 +43,12 @@ from .types import (
 # ``WorkspaceSessionBinding`` is the return type of ``LocalWorkspace.bind`` /
 # ``.session()`` — importable for typing, but out of ``__all__`` like the
 # protocols above (callers construct it via those methods, never directly).
-from .workspace import LocalWorkspace, Workspace, WorkspaceSessionBinding  # noqa: F401
+from .workspace import (  # noqa: F401
+    SCRATCH_DIR,
+    LocalWorkspace,
+    Workspace,
+    WorkspaceSessionBinding,
+)
 
 __all__ = [
     "CommandResult",
@@ -64,6 +69,7 @@ __all__ = [
     "ProcessOutput",
     "ProcessStart",
     "ProcessStatus",
+    "SCRATCH_DIR",
     "Workspace",
     "WorkspaceClosedError",
     "WorkspaceError",

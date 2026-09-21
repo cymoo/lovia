@@ -162,6 +162,7 @@ class ConfigRuntime:
             if deps is None:  # not bound yet (boot builds its own agent)
                 return
             old = deps.agents.get(self.agent_key)
+            old_aux = deps.followup_model
             deps.agents[self.agent_key] = agent
             # The fresh Subagents plugin has empty seams; give it the app's
             # supervised delivery (create_app wired only the boot-time one).
@@ -176,6 +177,11 @@ class ConfigRuntime:
             clear_endpoint_cache()
             if old is not None and old.model is not provider:
                 self._retire(old.model)
+            # The aux provider only ever serves transient title/follow-up
+            # calls, which no supervisor entry holds — the retire grace
+            # period is what covers one caught mid-swap.
+            if old_aux is not None and old_aux is not aux_model:
+                self._retire(old_aux)
             profile = config.default_profile()
             assert profile is not None
             deps.emit(

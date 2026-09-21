@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -211,8 +212,18 @@ def test_aux_role_serves_titles_and_followups_with_its_extras(served) -> None:
     assert deps.title_model._extra_body == {
         "chat_template_kwargs": {"enable_thinking": False}
     }
+    retired = deps.title_model
+    closed = threading.Event()
+
+    async def aclose() -> None:
+        closed.set()
+
+    retired.aclose = aclose  # type: ignore[method-assign]
     client.put("/api/config/roles", json={"aux": None})
     assert deps.title_model is None and deps.followup_model is None
+    # The replaced aux provider is retired like the main one (after the
+    # grace period for a title/follow-up call caught mid-swap).
+    assert closed.wait(timeout=5.0)
 
 
 def test_duplicate_copies_the_profile_with_its_key(served) -> None:

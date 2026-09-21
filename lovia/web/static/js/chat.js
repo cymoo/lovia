@@ -118,11 +118,24 @@ function addCodeBlockControls(container) {
   });
 }
 
-// Debounced streaming render
+// Throttled streaming render: the first delta in a window arms the timer and
+// later ones ride along, so a model that never pauses for 60ms (a local vLLM
+// at 100+ tok/s) still repaints ~16×/s. A trailing debounce here (re-arming on
+// every delta) starves until the turn ends and dumps the whole reply at once.
 let _renderTimer = null;
 function scheduleRender() {
+  if (_renderTimer) return;
+  _renderTimer = setTimeout(() => {
+    _renderTimer = null;
+    flushRender();
+  }, 60);
+}
+
+// Nulling the id matters: a stale one would make scheduleRender() a no-op for
+// every later delta.
+function cancelRender() {
   clearTimeout(_renderTimer);
-  _renderTimer = setTimeout(flushRender, 60);
+  _renderTimer = null;
 }
 
 // True while the user has an active (non-collapsed) selection inside `node`.
@@ -2318,7 +2331,7 @@ async function handleEvent({ event, data }) {
       // reasoning can be live here — tool_call events fire after the model
       // stream — and store.reasoningNode is null between turns, so it only
       // ever refers to the current interrupted turn.
-      clearTimeout(_renderTimer);
+      cancelRender();
       if (store.body) { store.body.remove(); store.body = null; }
       store.rawText = '';
       if (store.reasoningNode) { store.reasoningNode.remove(); store.reasoningNode = null; }
@@ -2328,7 +2341,7 @@ async function handleEvent({ event, data }) {
       break;
 
     case 'message_completed':
-      clearTimeout(_renderTimer);
+      cancelRender();
       if (store.body && store.rawText) flushRender(true);
       store.body = null;
       store.rawText = '';
@@ -2844,7 +2857,7 @@ export async function runStream(message, attachments = null) {
       appendRetry();
     }
   } finally {
-    clearTimeout(_renderTimer);
+    cancelRender();
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
@@ -2948,7 +2961,7 @@ export async function runReconnect(sessionId) {
       flushRender(true);
     }
   } finally {
-    clearTimeout(_renderTimer);
+    cancelRender();
     // A switch superseded this reconnect: its DOM/UI belong to another view now.
     if (store.chatEpoch === streamEpoch) {
       if (store.body && store.rawText) {
@@ -3000,7 +3013,7 @@ export function detachStream() {
     _streamAbortController.abort();
     _streamAbortController = null;
   }
-  clearTimeout(_renderTimer);
+  cancelRender();
   // The superseded run's finally is now epoch-guarded off, so any *global* state
   // it would have reset has to be reset here or it leaks into the next view:
   //  - queued/pending buffers, else a later run's finally flushes stale bubbles

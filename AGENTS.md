@@ -26,6 +26,7 @@ Python 3.10+. Run every Python command through the repo virtualenv: `.venv/bin/p
 | Coverage | `pytest --cov=lovia --cov-report=term-missing` |
 | Lint / format | `ruff check .` / `ruff format .` |
 | Type-check | `mypy lovia` |
+| Web JS (type-check / unit tests) | `npx -p typescript@7.0.2 tsc -p lovia/web/static/jsconfig.json` / `node --test tests/web/js/*.test.mjs` |
 
 `asyncio_mode = auto` — async tests need no `@pytest.mark.asyncio`. Tests use `ScriptedProvider`
 (`tests/scripted_provider.py`): deterministic, no network. Live-endpoint tests are gated behind

@@ -10,6 +10,10 @@
 // A green run cannot hide behind fallbacks: documents without raw HTML or
 // link definitions must run incrementally on every flush.
 //
+// The repo's own markdown is part of the corpus on purpose. If an edit to
+// one of those files turns this red, a construct the edge cases don't cover
+// has appeared — pin it as an edge case, then fix (or explain) the parser.
+//
 //   node --test tests/web/js/        (also runs in CI's typecheck-web job)
 //   EVERY_PREFIX=1 node --test ...   every prefix of the repo docs too
 //                                    (default: every prefix of the edge cases,
@@ -28,7 +32,12 @@ const STATIC = join(ROOT, 'lovia', 'web', 'static');
 // The UI loads marked as a CDN-style global; the vendored UMD build is the
 // same one the browser gets (tests/web/test_vendor_integrity.py pins it).
 globalThis.marked = createRequire(import.meta.url)(join(STATIC, 'vendor', 'marked.min.js'));
-marked.setOptions({ gfm: true, breaks: false }); // chat.js's options
+// chat.js's options, plus mangle off: marked v4 obfuscates mailto autolinks
+// with a per-parse *random* mix of decimal and hex entities, so two parses of
+// "typescript@7.0.2" (an email, while its `code span` is still unterminated)
+// give different HTML strings for the same DOM. Rendering is unaffected; this
+// comparison is on strings.
+marked.setOptions({ gfm: true, breaks: false, mangle: false });
 
 const { BlockStream, normalize } = await import(join(STATIC, 'js', 'stream-blocks.js'));
 
@@ -49,6 +58,9 @@ const edge = {
   hr: 'a\n\n---\n\nb\n\n***\n\nc\n\nd\n',
   crlf: 'a\r\n\r\nb\r\n\r\n- c\r\n- d\r\n\r\ne\r\n\r\nf\r\n',
   inlineOpen: 'text with **bold that\n\nnever closes and `code\n\nend\n\nx\n',
+  // Mid-stream, `npx -p typescript@7.0.2` is an open code span whose content
+  // autolinks as an email until the closing backtick arrives.
+  emailInOpenCode: 'run `npx -p typescript@7.0.2 tsc` now\n\nnext\n\nend\n',
   // Model house style: heading, "intro:" line, list with no blank line before
   // it, fence, closing paragraph. Each next item's lone "-" momentarily reads
   // as a setext underline for the paragraph above — the stable count drops

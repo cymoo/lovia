@@ -44,8 +44,8 @@ function linkifyText(text) {
 }
 
 // Exported for scripts/bench_stream_render.py, which times the real flush.
-export function highlightCode(container) {
-  highlightIn(container); // shared cached hljs pass (util.js)
+export function highlightCode(container, opts = {}) {
+  highlightIn(container, opts); // shared cached hljs pass (util.js)
   // Copy buttons + language labels don't need hljs — keep them offline.
   addCodeBlockControls(container);
 }
@@ -168,7 +168,12 @@ function flushRender(force = false) {
   const t0 = performance.now();
   store.body.dataset.raw = store.rawText;
   renderMarkdownInto(store.body, store.rawText, { agent: store.agent });
-  highlightCode(store.body);
+  // The last block is the only one that can still grow. Highlighting it is an
+  // hljs cache miss on every flush (a 48 KB fence: ~30 ms of a ~31 ms flush),
+  // so it waits until a block follows it or the turn's forced flush — plain
+  // monospace until then. Any type: a list ending in a fence would otherwise
+  // be re-highlighted whole.
+  highlightCode(store.body, { skip: force ? null : store.body.lastElementChild });
   renderMermaid(store.body);
   // Layout is the largest part of a flush and would otherwise be paid in the
   // next frame (scrollDown reads scrollHeight in a rAF), outside this timing.

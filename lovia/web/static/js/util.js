@@ -195,10 +195,28 @@ function resolveWorkspaceRefs(root, { agent, base = '' } = {}) {
  *   the markdown lives in — '' (the workspace root) for chat replies.
  */
 export function renderMarkdownInto(el, text, opts = {}) {
+  el.replaceChildren(fragmentFromHtml(renderMarkdown(text), opts));
+}
+
+/**
+ * Sanitize rendered markdown HTML and build the same inert, ref-resolved
+ * fragment `renderMarkdownInto` would — for callers that parsed the markdown
+ * themselves (the streaming render's incremental path). Each fragment is
+ * sanitized on its own, which is at least as strict as sanitizing the whole
+ * document: there is no cross-fragment context to exploit.
+ * @param {string} html Output of marked for one or more blocks.
+ * @param {{ agent?: string, base?: string }} [opts]
+ * @returns {DocumentFragment}
+ */
+export function sanitizedFragment(html, opts = {}) {
+  return fragmentFromHtml(DOMPurify.sanitize(html), opts);
+}
+
+function fragmentFromHtml(html, opts) {
   const tmpl = document.createElement('template');
-  tmpl.innerHTML = renderMarkdown(text);
+  tmpl.innerHTML = html;
   resolveWorkspaceRefs(tmpl.content, opts);
-  el.replaceChildren(tmpl.content);
+  return tmpl.content;
 }
 
 // ---- Syntax highlighting ---------------------------------------------------

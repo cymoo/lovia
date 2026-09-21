@@ -4,11 +4,13 @@ Two modes, both driving the real page in headless Chromium so DOM and layout
 cost are included. Needs ``playwright`` with Chromium (``pip install playwright
 && playwright install chromium``) and a running ``lovia web``.
 
-``render`` (default) — per-flush cost of rendering a reply of N KB exactly as
-``flushRender`` does (markdown → sanitize → DOM replace → hljs → copy buttons
-and language labels → mermaid scan), for a mixed document (prose, lists,
-fences, tables) and for the worst-case shapes a block-incremental render
-cannot split (one huge fence / table / blank-line-free paragraph). No
+``render`` (default) — per-flush cost of rendering a reply of N KB the way
+``flushRender``'s forced (end-of-turn) flush does: markdown → sanitize → DOM
+replace → hljs → copy buttons and language labels → mermaid scan, for a
+mixed document (prose, lists, fences, tables) and for the worst-case shapes a
+block-incremental render cannot split (one huge fence / table /
+blank-line-free paragraph). Streaming flushes skip hljs on the last block,
+so for the single-fence shape they cost about the "DOM+layout" column. No
 messages are sent; any model config will do::
 
     python3 scripts/bench_stream_render.py --url http://127.0.0.1:8123
@@ -119,8 +121,8 @@ async ({ hash, text, reps, grow }) => {
 
 LIVE_PROBE = """
 () => {
-  const p = (window.__bench = { renders: 0, firstText: null, frames: 0, longFrames: 0, maxGap: 0, longTaskMs: 0 });
-  const t0 = performance.now();
+  const p = (window.__bench = { renders: 0, firstText: null, frames: 0, longFrames: 0, maxGap: 0, longTaskMs: 0, blockedMs: 0, t0: performance.now(), end: null });
+  const t0 = p.t0;
   let last = t0;
   const tick = (now) => {
     const gap = now - last; last = now; p.frames++;
@@ -131,6 +133,18 @@ LIVE_PROBE = """
   requestAnimationFrame(tick);
   new PerformanceObserver((l) => { for (const e of l.getEntries()) p.longTaskMs += e.duration; })
     .observe({ entryTypes: ['longtask'] });
+  // Event-loop lag sampler: a MessageChannel task re-posts itself as soon as
+  // it runs (no setTimeout clamping), so any gap beyond ~1 ms is time the
+  // main thread spent on other work — flushes, style/layout/paint. The sum is
+  // the "main thread busy" figure; stops when the harness sets p.end.
+  const ch = new MessageChannel();
+  let sent = performance.now();
+  ch.port1.onmessage = () => {
+    const now = performance.now();
+    if (now - sent > 1) p.blockedMs += now - sent;
+    if (p.end === null) { sent = performance.now(); ch.port2.postMessage(0); }
+  };
+  ch.port2.postMessage(0);
   new MutationObserver((muts) => {
     for (const m of muts) {
       if (!m.target.classList?.contains('body')) continue;
@@ -210,10 +224,13 @@ def bench_live(page, window_s: float) -> None:
             done = time.time() - t0
             break
         time.sleep(0.1)
-    p = page.evaluate("() => window.__bench")
+    p = page.evaluate(
+        "() => { const p = window.__bench; p.end = performance.now(); return p; }"
+    )
     n = page.evaluate(
         "() => document.querySelector('#transcript .turn.assistant .body')?.textContent.length ?? 0"
     )
+    elapsed = p["end"] - p["t0"]
     print("| metric | value |\n| --- | ---: |")
     print(f"| reply length | {n} chars |")
     print(
@@ -222,6 +239,9 @@ def bench_live(page, window_s: float) -> None:
     print(f"| renders | {p['renders']} |")
     print(
         f"| time to first visible text | {p['firstText'] and '%.0f ms' % p['firstText']} |"
+    )
+    print(
+        f"| main thread busy | {p['blockedMs']:.0f} ms of {elapsed:.0f} ({100 * p['blockedMs'] / elapsed:.0f} %) |"
     )
     print(f"| rAF frames / long (>50 ms) | {p['frames']} / {p['longFrames']} |")
     print(f"| max frame gap | {p['maxGap']:.0f} ms |")
@@ -248,12 +268,24 @@ def main() -> None:
         "--emit-script",
         type=int,
         metavar="KB",
-        help="print a stub-model script for a mixed reply",
+        help="print a stub-model script for a reply of this size",
+    )
+    ap.add_argument(
+        "--shape",
+        choices=["mixed", "code", "table", "para"],
+        default="mixed",
+        help="--emit-script: document shape (default mixed; others are one growing block)",
     )
     args = ap.parse_args()
 
     if args.emit_script:
-        print(json.dumps([{"text": mixed(args.emit_script)}]))
+        gen = {
+            "mixed": mixed,
+            "code": SHAPES["one fenced code block"],
+            "table": SHAPES["one table"],
+            "para": SHAPES["one paragraph, no blank lines"],
+        }[args.shape]
+        print(json.dumps([{"text": gen(args.emit_script)}]))
         return
 
     from playwright.sync_api import sync_playwright

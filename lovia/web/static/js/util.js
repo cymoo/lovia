@@ -212,12 +212,15 @@ const _hljsCache = new Map();
  * Cached syntax-highlight pass over every `<pre><code>` in `container` (no
  * chrome — callers add their own copy buttons etc.; mermaid blocks are skipped).
  * @param {Element} container
+ * @param {{ skip?: Element | null }} [opts] `skip`: leave code inside this
+ *   element alone — the streaming render passes the block still being typed.
  */
-export function highlightIn(container) {
+export function highlightIn(container, { skip = null } = {}) {
   if (typeof hljs === 'undefined') return;
   container.querySelectorAll('pre code').forEach((/** @type {HTMLElement} */ el) => {
     if (el.classList.contains('language-mermaid')) return; // rendered as a diagram instead
     if (el.dataset.highlighted) return;
+    if (skip && skip.contains(el)) return;
     const key = `${el.className}\u0000${el.textContent}`;
     const hit = _hljsCache.get(key);
     if (hit) {

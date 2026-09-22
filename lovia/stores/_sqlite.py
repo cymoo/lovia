@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, TypeVar
+
+from .._fdlimit import out_of_file_descriptors
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -14,6 +19,48 @@ T = TypeVar("T")
 # process, or a sibling store writing to the same file) before raising
 # "database is locked". Only applied when ``wal=True``.
 _BUSY_TIMEOUT_MS = 5_000
+
+# SQLite folds several transient conditions into OperationalError with nothing
+# but the message to tell them apart, and only the ones that are provably
+# *pre-commit* may be retried: CANTOPEN ("unable to open database file") comes
+# from connect(), before a statement has run, and SQLITE_BUSY ("database is
+# locked") leaves the transaction active and uncommitted.
+#
+# SQLITE_IOERR ("disk i/o error") is deliberately absent. It can surface from
+# commit() after the writes already reached the file, and a retried
+# SQLiteCheckpointer.append computes a fresh MAX(seq) + 1 and inserts the same
+# entries under a second seq — a duplicated turn in whatever the run resumes
+# from. Anything else — no such table, a malformed schema — is a bug, and
+# retrying only delays the report.
+_TRANSIENT = ("unable to open database file", "database is locked")
+_RETRY_DELAYS = (0.05, 0.2, 0.5)
+
+
+def _is_transient(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _TRANSIENT)
+
+
+def _explain_open_failure(exc: sqlite3.OperationalError) -> sqlite3.OperationalError:
+    """Name the cause behind SQLite's catch-all open failure, when we can.
+
+    SQLITE_CANTOPEN reads "unable to open database file" whether the directory
+    is missing, the disk is full, or the process simply has no descriptor left
+    — and the last is the one nobody guesses from the message. Returns ``exc``
+    unchanged when that is not what happened. Which file it was stays with
+    :meth:`SQLiteStore._run`, which logs it for every transient failure, not
+    just this one.
+
+    The original message stays as the prefix, so :func:`_is_transient` still
+    recognizes the enriched error and :meth:`SQLiteStore._run` still retries it.
+    """
+    soft = out_of_file_descriptors()
+    if soft is None:
+        return exc
+    return sqlite3.OperationalError(
+        f"{exc} — the process is out of file descriptors "
+        f"(soft limit {soft}); raise it with 'ulimit -n'"
+    )
 
 
 class SQLiteStore:
@@ -53,7 +100,10 @@ class SQLiteStore:
     def _connect(self) -> sqlite3.Connection:
         if self._shared is not None:
             return self._shared
-        conn = sqlite3.connect(self._path, check_same_thread=False)
+        try:
+            conn = sqlite3.connect(self._path, check_same_thread=False)
+        except sqlite3.OperationalError as exc:
+            raise _explain_open_failure(exc) from exc
         conn.row_factory = sqlite3.Row
         if self._wal:
             # journal_mode is sticky on the file (re-setting is a cheap no-op);
@@ -101,5 +151,29 @@ class SQLiteStore:
             self._release(conn)
 
     async def _run(self, fn: Callable[[], T]) -> T:
+        """Run ``fn`` off the event loop, riding out a transient store failure.
+
+        ``fn`` must be exactly one transaction — every caller here goes through
+        :meth:`_tx` or :meth:`_conn` — and every retried condition is one that
+        cannot have committed (see :data:`_TRANSIENT`), so a failed attempt
+        left nothing behind and re-running it is safe. Without this, a resource
+        squeeze lasting milliseconds is fatal well beyond the statement that
+        met it: the run loop treats a failed checkpoint as unrecoverable and
+        aborts the run, and its terminal snapshot then fails on the same
+        squeeze, so a transcript that was only *stale* is lost instead.
+
+        The retries hold the store's lock, which is the point: a squeeze is a
+        good moment for the rest of the process to wait rather than pile on.
+        """
         async with self._lock:
+            for delay in _RETRY_DELAYS:
+                try:
+                    return await asyncio.to_thread(fn)
+                except sqlite3.OperationalError as exc:
+                    if not _is_transient(exc):
+                        raise
+                    logger.warning(
+                        "sqlite (%s): %s — retrying in %.2fs", self._path, exc, delay
+                    )
+                    await asyncio.sleep(delay)
             return await asyncio.to_thread(fn)

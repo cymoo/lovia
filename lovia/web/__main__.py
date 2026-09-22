@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, NoReturn, cast
 
 from .. import __version__
+from .._fdlimit import raise_soft_limit
 from ..agent import Agent
 from ..context import ContextPolicy
 from ..exceptions import UserError
@@ -368,6 +369,10 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
 
         for handler in logging.getLogger("lovia").handlers:
             handler.addFilter(run_source_log_filter())
+
+        # Before anything opens a socket: agents running in parallel outrun a
+        # default soft limit (256 on macOS) in a single burst of tool calls.
+        raise_soft_limit()
 
         if args.provider_timeout is not None:
             if args.provider_timeout <= 0:

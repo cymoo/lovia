@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -568,3 +570,119 @@ async def test_rewind_survives_sqlite_reopen(tmp_path) -> None:
     reopened = SQLiteSession(path)
     entries = await reopened.load("s")
     assert [e.content for e in entries] == ["u0", "a0"]
+
+
+# ------------------------------------------------- transient store failures ---
+
+
+def _flaky_connect(
+    failures: list[Exception], calls: list[int]
+) -> Callable[..., sqlite3.Connection]:
+    """A ``sqlite3.connect`` that raises ``failures`` in order, then connects."""
+    real = sqlite3.connect
+
+    def connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        calls.append(1)
+        if failures:
+            raise failures.pop(0)
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    return connect
+
+
+async def test_sqlite_retries_a_transient_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = SQLiteSession(tmp_path / "flaky.db")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        _flaky_connect(
+            [sqlite3.OperationalError("unable to open database file")], calls
+        ),
+    )
+    await s.append("u1", [InputEntry(role="user", content="hi")])
+    assert len(calls) == 2
+
+    monkeypatch.undo()
+    entries = await s.load("u1")
+    assert [e.content for e in entries] == ["hi"]  # type: ignore[union-attr]
+
+
+async def test_sqlite_gives_up_after_the_retry_budget(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = SQLiteSession(tmp_path / "dead.db")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        _flaky_connect(
+            [sqlite3.OperationalError("unable to open database file")] * 9, calls
+        ),
+    )
+    with pytest.raises(sqlite3.OperationalError, match="unable to open database file"):
+        await s.append("u1", [InputEntry(role="user", content="hi")])
+    # Three retries, then one last attempt whose failure propagates.
+    assert len(calls) == 4
+
+
+async def test_sqlite_does_not_retry_a_bug(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = SQLiteSession(tmp_path / "broken.db")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        _flaky_connect(
+            [sqlite3.OperationalError("no such table: segments")] * 9, calls
+        ),
+    )
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        await s.append("u1", [InputEntry(role="user", content="hi")])
+    assert len(calls) == 1
+
+
+async def test_sqlite_does_not_retry_what_may_have_committed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SQLITE_IOERR can surface from commit() after the writes landed, and a
+    # retried checkpoint append would store the same entries under a second
+    # seq. It stays out of the retry set for that reason alone.
+    s = SQLiteSession(tmp_path / "ioerr.db")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        _flaky_connect([sqlite3.OperationalError("disk I/O error")] * 9, calls),
+    )
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        await s.append("u1", [InputEntry(role="user", content="hi")])
+    assert len(calls) == 1
+
+
+def test_open_failure_names_descriptor_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.stores import _sqlite
+
+    monkeypatch.setattr(_sqlite, "out_of_file_descriptors", lambda: 256)
+    enriched = _sqlite._explain_open_failure(
+        sqlite3.OperationalError("unable to open database file")
+    )
+    assert "out of file descriptors" in str(enriched)
+    assert "soft limit 256" in str(enriched)
+    # The enriched message must stay recognizable, or _run would stop retrying it.
+    assert _sqlite._is_transient(enriched)
+
+
+def test_open_failure_left_alone_when_descriptors_are_fine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.stores import _sqlite
+
+    monkeypatch.setattr(_sqlite, "out_of_file_descriptors", lambda: None)
+    original = sqlite3.OperationalError("unable to open database file")
+    assert _sqlite._explain_open_failure(original) is original

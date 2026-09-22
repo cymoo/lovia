@@ -918,6 +918,18 @@ def test_main_check_missing_config_is_exit_2_without_serving(
     assert "missing: model" in capsys.readouterr().out
 
 
+def test_main_raises_the_open_file_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    raised: list[int] = []
+    monkeypatch.setattr(cli, "raise_soft_limit", lambda: raised.append(1))
+    monkeypatch.setattr(cli, "serve", lambda *a, **k: None)
+    cli.main(["--check"])
+    capsys.readouterr()
+    assert raised == [1]
+
+
 def test_main_configured_run_prints_summary_and_skips_wizard(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

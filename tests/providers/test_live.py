@@ -528,9 +528,7 @@ async def test_openai_chat_live_tool_result_image_reaches_vision_model() -> None
         settings=ModelSettings(parallel_tool_calls=False),
     )
     try:
-        result = await Runner.run(
-            agent, "What color is the screenshot? Use the tool."
-        )
+        result = await Runner.run(agent, "What color is the screenshot? Use the tool.")
     finally:
         await provider.aclose()
 

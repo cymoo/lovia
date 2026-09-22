@@ -164,9 +164,7 @@ def event_to_sse(ev: events.Event) -> dict[str, str] | None:
         if parts:
             images = [
                 {"index": i, "mime_type": p.mime_type}
-                for i, p in enumerate(
-                    p for p in parts if isinstance(p, ImagePart)
-                )
+                for i, p in enumerate(p for p in parts if isinstance(p, ImagePart))
             ]
             if images:
                 payload["images"] = images

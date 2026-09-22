@@ -577,9 +577,7 @@ async def test_view_image_returns_path_and_image_parts(session, tmp_path) -> Non
 
     assert parts == [
         TextPart("shot.png"),
-        ImagePart(
-            data=base64.b64encode(png).decode("ascii"), mime_type="image/png"
-        ),
+        ImagePart(data=base64.b64encode(png).decode("ascii"), mime_type="image/png"),
     ]
     assert view_image.returns_images is True
 
@@ -624,9 +622,7 @@ async def test_view_image_denied_outside_root_under_readonly(tmp_path) -> None:
 def test_view_image_outside_read_asks_under_coding_policy(tmp_path) -> None:
     from lovia.workspace import WorkspacePolicy
 
-    session = LocalWorkspaceSession(
-        root=str(tmp_path), policy=WorkspacePolicy.coding()
-    )
+    session = LocalWorkspaceSession(root=str(tmp_path), policy=WorkspacePolicy.coding())
     ctx = _ctx(session)
     # Same read pipeline as read_file: outside-root reads ask, inside don't.
     assert view_image.requires_approval({"path": "/tmp/shot.png"}, ctx) is True

@@ -209,9 +209,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     and entry.call_id == call_id
                     and entry.parts
                 ):
-                    images = [
-                        p for p in entry.parts if isinstance(p, ImagePart)
-                    ]
+                    images = [p for p in entry.parts if isinstance(p, ImagePart)]
                     if 0 <= index < len(images):
                         return images[index]
                     # Keep scanning: providers have been seen reusing call

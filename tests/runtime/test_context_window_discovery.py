@@ -80,9 +80,7 @@ async def test_unknown_window_is_logged_once_per_model(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="lovia.runtime.loop"):
         await _run(provider)
         await _run(provider)
-    hints = [
-        r for r in caplog.records if "context.window: unknown" in r.getMessage()
-    ]
+    hints = [r for r in caplog.records if "context.window: unknown" in r.getMessage()]
     assert len(hints) == 1
     assert "windowless-model" in hints[0].getMessage()
 

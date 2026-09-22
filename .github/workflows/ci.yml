@@ -18,6 +18,11 @@ jobs:
         run: uv sync --extra dev --extra mcp --extra web --extra ddg
       - name: Ruff
         run: uv run ruff check lovia tests
+      # Formatting is checked, never applied: `uv run ruff format lovia tests`
+      # is the fix. Same paths as the lint above, so the two cannot disagree
+      # about what they cover.
+      - name: Ruff format
+        run: uv run ruff format --check lovia tests
       - name: Mypy (strict)
         run: uv run mypy
 

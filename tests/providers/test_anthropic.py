@@ -169,7 +169,9 @@ def test_tool_result_file_part_degrades_to_text_marker() -> None:
         ToolResultEntry(
             call_id="c1",
             output="[file doc.pdf: application/pdf, 3 B]",
-            parts=[FilePart(data="cGRm", mime_type="application/pdf", filename="doc.pdf")],
+            parts=[
+                FilePart(data="cGRm", mime_type="application/pdf", filename="doc.pdf")
+            ],
         ),
     ]
 

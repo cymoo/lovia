@@ -1482,8 +1482,7 @@ class RunLoop:
                 return True
             if _log_once("returns_images", t.name, getattr(provider, "model", None)):
                 logger.info(
-                    "tool %r (%s) returns images the model cannot see; "
-                    "not offering it",
+                    "tool %r (%s) returns images the model cannot see; not offering it",
                     t.name,
                     source,
                 )

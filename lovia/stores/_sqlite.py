@@ -20,12 +20,19 @@ T = TypeVar("T")
 # "database is locked". Only applied when ``wal=True``.
 _BUSY_TIMEOUT_MS = 5_000
 
-# SQLite folds several genuinely transient conditions into OperationalError
-# with nothing but the message to tell them apart: a momentary descriptor
-# shortage arrives as "unable to open database file", a collision with another
-# writer as "database is locked". Anything else — no such table, a malformed
-# schema — is a bug, and retrying it only delays the report.
-_TRANSIENT = ("unable to open database file", "database is locked", "disk i/o error")
+# SQLite folds several transient conditions into OperationalError with nothing
+# but the message to tell them apart, and only the ones that are provably
+# *pre-commit* may be retried: CANTOPEN ("unable to open database file") comes
+# from connect(), before a statement has run, and SQLITE_BUSY ("database is
+# locked") leaves the transaction active and uncommitted.
+#
+# SQLITE_IOERR ("disk i/o error") is deliberately absent. It can surface from
+# commit() after the writes already reached the file, and a retried
+# SQLiteCheckpointer.append computes a fresh MAX(seq) + 1 and inserts the same
+# entries under a second seq — a duplicated turn in whatever the run resumes
+# from. Anything else — no such table, a malformed schema — is a bug, and
+# retrying only delays the report.
+_TRANSIENT = ("unable to open database file", "database is locked")
 _RETRY_DELAYS = (0.05, 0.2, 0.5)
 
 
@@ -147,8 +154,9 @@ class SQLiteStore:
         """Run ``fn`` off the event loop, riding out a transient store failure.
 
         ``fn`` must be exactly one transaction — every caller here goes through
-        :meth:`_tx` or :meth:`_conn`, so a failed attempt left nothing
-        half-applied and re-running it is safe. Without this, a resource
+        :meth:`_tx` or :meth:`_conn` — and every retried condition is one that
+        cannot have committed (see :data:`_TRANSIENT`), so a failed attempt
+        left nothing behind and re-running it is safe. Without this, a resource
         squeeze lasting milliseconds is fatal well beyond the statement that
         met it: the run loop treats a failed checkpoint as unrecoverable and
         aborts the run, and its terminal snapshot then fails on the same

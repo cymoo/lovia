@@ -645,6 +645,24 @@ async def test_sqlite_does_not_retry_a_bug(
     assert len(calls) == 1
 
 
+async def test_sqlite_does_not_retry_what_may_have_committed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SQLITE_IOERR can surface from commit() after the writes landed, and a
+    # retried checkpoint append would store the same entries under a second
+    # seq. It stays out of the retry set for that reason alone.
+    s = SQLiteSession(tmp_path / "ioerr.db")
+    calls: list[int] = []
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        _flaky_connect([sqlite3.OperationalError("disk I/O error")] * 9, calls),
+    )
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        await s.append("u1", [InputEntry(role="user", content="hi")])
+    assert len(calls) == 1
+
+
 def test_open_failure_names_descriptor_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

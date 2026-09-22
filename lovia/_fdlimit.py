@@ -50,19 +50,29 @@ def raise_soft_limit(target: int = DEFAULT_SOFT_LIMIT) -> None:
     # An unlimited hard cap is normal on macOS; the kernel still enforces
     # kern.maxfilesperproc, far above anything asked for here.
     want = target if hard == resource.RLIM_INFINITY else min(target, hard)
-    try:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
-    except (OSError, ValueError) as exc:
-        logger.warning(
-            "could not raise the open-file limit above %d (%s) — parallel tool "
-            "calls may fail with 'unable to open database file'; raise it in "
-            "the shell with: ulimit -n %d",
-            soft,
-            exc,
-            target,
-        )
+    refusal = ""
+    if want > soft:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        except (OSError, ValueError) as exc:
+            refusal = f": {exc}"
+    # What the process actually ended up with, not what was asked for: a hard
+    # cap at or below the soft limit leaves it untouched without failing, which
+    # is the same predicament as a refusal and deserves the same warning.
+    now = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    if now >= target:
+        logger.debug("open-file soft limit raised %d -> %d", soft, now)
         return
-    logger.debug("open-file soft limit raised %d -> %d", soft, want)
+    logger.warning(
+        "open-file limit is %d, short of %d%s — parallel tool calls may fail "
+        "with 'unable to open database file'; raise the shell's limit before "
+        "starting (ulimit -n %d), or its hard cap (%s) if that is what pins it",
+        now,
+        target,
+        refusal,
+        target,
+        "unlimited" if hard == resource.RLIM_INFINITY else hard,
+    )
 
 
 def out_of_file_descriptors() -> int | None:

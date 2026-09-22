@@ -146,9 +146,7 @@ async def test_multi_select_without_options_is_normalized_away() -> None:
             channel.close()
 
     op = asyncio.create_task(operator())
-    out = await run_tool(
-        the_tool, {"question": "which?", "multi_select": True}, ctx
-    )
+    out = await run_tool(the_tool, {"question": "which?", "multi_select": True}, ctx)
     assert out == "free text then"
     await asyncio.wait_for(op, timeout=1)
 

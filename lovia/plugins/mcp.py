@@ -672,9 +672,7 @@ def _make_call_tool(catalog: dict[str, Tool]) -> Tool:
         # ``arguments``. Judge that as {} rather than crash: the call itself
         # still fails argument validation with a correctable error.
         raw = args.get("arguments")
-        return target.requires_approval(
-            dict(raw) if isinstance(raw, dict) else {}, ctx
-        )
+        return target.requires_approval(dict(raw) if isinstance(raw, dict) else {}, ctx)
 
     @tool(
         name="call_mcp_tool",

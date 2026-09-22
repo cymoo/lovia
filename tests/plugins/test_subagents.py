@@ -564,9 +564,7 @@ async def test_send_reaches_the_child_at_its_next_turn_start() -> None:
     # parent's `release` tool opens the gate — send strictly before release,
     # because the parent's turns are sequential.
     gate = asyncio.Event()
-    child_provider = ScriptedProvider(
-        [call("nap", {}, call_id="n1"), text("adjusted")]
-    )
+    child_provider = ScriptedProvider([call("nap", {}, call_id="n1"), text("adjusted")])
     child = Agent(name="worker", model=child_provider, tools=[_nap_tool(gate)])
     parent = Agent(
         name="parent",

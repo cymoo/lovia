@@ -517,13 +517,10 @@ class LocalWorkspaceSession:
                 try:
                     size = p.stat().st_size
                 except OSError as exc:
-                    raise WorkspaceError(
-                        f"Cannot stat {rp.display()}: {exc}"
-                    ) from exc
+                    raise WorkspaceError(f"Cannot stat {rp.display()}: {exc}") from exc
                 if size > max_bytes:
                     raise FileTooLargeError(
-                        f"{rp.display()} is {size:,} bytes "
-                        f"(limit {max_bytes:,} bytes)."
+                        f"{rp.display()} is {size:,} bytes (limit {max_bytes:,} bytes)."
                     )
             return FileBytes(path=rp.display(), data=p.read_bytes())
 

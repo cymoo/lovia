@@ -398,7 +398,10 @@ class SummarizeHistory:
         max_tokens = usable // 4
 
         def fits(text: str) -> bool:
-            if self.max_summary_chars is not None and len(text) > self.max_summary_chars:
+            if (
+                self.max_summary_chars is not None
+                and len(text) > self.max_summary_chars
+            ):
                 return False
             return ctx.calibrated(ctx.counter.count_text(text)) <= max_tokens
 

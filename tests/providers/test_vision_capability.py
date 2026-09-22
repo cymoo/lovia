@@ -45,7 +45,9 @@ def test_helper_reads_flag_and_defaults_false_for_unaware_objects() -> None:
 
 def test_provider_from_string_threads_supports_vision() -> None:
     bare = provider_from_string("qwen-vl", base_url=DEEPSEEK, supports_vision=True)
-    vendor = provider_from_string("openai:qwen-vl", base_url=DEEPSEEK, supports_vision=True)
+    vendor = provider_from_string(
+        "openai:qwen-vl", base_url=DEEPSEEK, supports_vision=True
+    )
     anth = provider_from_string("anthropic:claude", base_url=DEEPSEEK_ANT)
     assert bare.supports_vision is True
     assert vendor.supports_vision is True

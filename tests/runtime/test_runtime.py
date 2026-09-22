@@ -615,7 +615,9 @@ async def test_resume_applies_a_handoff_that_fired_before_the_interrupt() -> Non
     b = Agent(name="b", model=ScriptedProvider([text("from b")]))
     a = Agent(
         name="a",
-        model=ScriptedProvider([batch(("transfer_to_b", {"reason": "r"}), ("ping", {}))]),
+        model=ScriptedProvider(
+            [batch(("transfer_to_b", {"reason": "r"}), ("ping", {}))]
+        ),
         tools=[ping],
         handoffs=[Handoff(target=b, on_handoff=on_handoff)],
     )
@@ -660,7 +662,9 @@ async def test_resume_retries_a_handoff_whose_target_failed_to_activate() -> Non
                 raise ValueError("plugin down")
             return PluginInstance()
 
-    b = Agent(name="b", model=ScriptedProvider([text("from b")]), plugins=[_FlakyPlugin()])
+    b = Agent(
+        name="b", model=ScriptedProvider([text("from b")]), plugins=[_FlakyPlugin()]
+    )
     a = Agent(
         name="a",
         model=ScriptedProvider([call("transfer_to_b", {})]),
@@ -692,8 +696,12 @@ async def test_resume_retries_a_handoff_whose_target_prompt_failed_to_render() -
             raise ValueError("prompt down")
         return "B-BASE"
 
-    b = Agent(name="b", instructions=instructions, model=ScriptedProvider([text("from b")]))
-    a = Agent(name="a", model=ScriptedProvider([call("transfer_to_b", {})]), handoffs=[b])
+    b = Agent(
+        name="b", instructions=instructions, model=ScriptedProvider([text("from b")])
+    )
+    a = Agent(
+        name="a", model=ScriptedProvider([call("transfer_to_b", {})]), handoffs=[b]
+    )
     cp = InMemoryCheckpointer()
     with pytest.raises(ValueError, match="prompt down"):
         await Runner.run(a, "go", checkpoint=CheckpointOptions(cp, "h4b"))
@@ -734,7 +742,9 @@ async def test_resume_rejects_distinct_agents_sharing_a_name() -> None:
     # snapshot's name alone can't say which one to continue as.
     from lovia.checkpointer import RunHead
 
-    left = Agent(name="sales", handoffs=[Agent(name="worker", model=ScriptedProvider([]))])
+    left = Agent(
+        name="sales", handoffs=[Agent(name="worker", model=ScriptedProvider([]))]
+    )
     right = Agent(
         name="support", handoffs=[Agent(name="worker", model=ScriptedProvider([]))]
     )
@@ -747,7 +757,9 @@ async def test_resume_rejects_distinct_agents_sharing_a_name() -> None:
     )
     with pytest.raises(UserError, match="'worker'"):
         await Runner.run(
-            entry, [], checkpoint=CheckpointOptions(cp, "h6", if_run_exists="resume_only")
+            entry,
+            [],
+            checkpoint=CheckpointOptions(cp, "h6", if_run_exists="resume_only"),
         )
 
 

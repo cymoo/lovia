@@ -432,7 +432,9 @@ async def test_summarize_chunk_cap_leaves_room_for_the_running_summary():
     summarizer = FakeSummarizer("S2")
     body = _texts(20)
     state = CompactionState(
-        summary=SummaryState(text="S" * 800, covered=4, fingerprint=fingerprint(body[:4]))
+        summary=SummaryState(
+            text="S" * 800, covered=4, fingerprint=fingerprint(body[:4])
+        )
     )
     ctx = make_ctx(body, state=state, protected_from=16, aggressive=True)
     assert await SummarizeHistory(summarizer=summarizer).plan(body, ctx) is True
@@ -462,7 +464,9 @@ async def test_summarize_rejects_summary_too_long_for_the_window(summary: str):
 async def test_summarize_window_bound_applies_even_without_the_char_cap():
     body = _texts(10)
     ctx = make_ctx(body, protected_from=8)
-    stage = SummarizeHistory(summarizer=FakeSummarizer("S" * 1500), max_summary_chars=None)
+    stage = SummarizeHistory(
+        summarizer=FakeSummarizer("S" * 1500), max_summary_chars=None
+    )
     assert await stage.plan(body, ctx) is False
     assert ctx.state.summary is None
 
@@ -485,7 +489,9 @@ async def test_summarize_refolds_from_scratch_when_the_prior_outgrew_the_window(
 
     failing = CompactionState(summary=oversized)
     ctx = make_ctx(body, state=failing, protected_from=8)
-    assert await SummarizeHistory(summarizer=FailingSummarizer()).plan(body, ctx) is False
+    assert (
+        await SummarizeHistory(summarizer=FailingSummarizer()).plan(body, ctx) is False
+    )
     assert failing.summary is oversized
 
 

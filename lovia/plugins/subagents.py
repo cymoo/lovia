@@ -651,10 +651,7 @@ class Subagents:
             if rec.token.is_cancelled:
                 return f"Subagent {rec.id} is stopping; the message would be lost."
             rec.mailbox.push(body)
-            return (
-                f"Delivered to {rec.id}; it sees the message at its next "
-                "turn start."
-            )
+            return f"Delivered to {rec.id}; it sees the message at its next turn start."
 
         return send_to_subagent
 

@@ -439,10 +439,7 @@ async def test_defer_swaps_tools_for_search_and_call() -> None:
     assert "## Deferred MCP tools" in instructions
     # Names are listed sorted, whatever order the server returned them in —
     # an order-unstable fragment would churn the provider's prompt cache.
-    assert (
-        "gh (3 tools): gh__create_issue, gh__get_pr, gh__list_issues"
-        in instructions
-    )
+    assert "gh (3 tools): gh__create_issue, gh__get_pr, gh__list_issues" in instructions
 
 
 async def test_defer_mixes_with_regular_servers() -> None:

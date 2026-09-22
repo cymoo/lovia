@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +34,12 @@ _BUSY_TIMEOUT_MS = 5_000
 # from. Anything else — no such table, a malformed schema — is a bug, and
 # retrying only delays the report.
 _TRANSIENT = ("unable to open database file", "database is locked")
+
+# Databases already reported as refusing WAL, by absolute path. The journal
+# mode belongs to the file, not to a store or a connection, and one file
+# routinely has several stores on it (``ChatStore.sqlite`` gives it three) —
+# each of which would otherwise announce the same refusal.
+_WAL_REFUSED: set[str] = set()
 _RETRY_DELAYS = (0.05, 0.2, 0.5)
 
 
@@ -78,9 +85,19 @@ class SQLiteStore:
     ``wal=True`` opts a file-backed store into SQLite's WAL journal mode plus
     an explicit busy timeout: readers no longer block on a writer, and
     concurrent writers (another process, or several stores sharing one file)
-    wait for the lock instead of failing fast. Off by default — a
-    single-process store serialized by the asyncio lock does not need it.
-    Ignored for ``:memory:`` (a private in-memory DB has no second writer).
+    wait for the lock instead of failing fast. Off by default, which suits a
+    lone store whose asyncio lock already serializes everything reaching the
+    file; a *shared* file wants it on, because the stores sharing it hold
+    separate locks and only the database sees the collision (see
+    :meth:`~lovia.web.store.ChatStore.sqlite`, which turns it on for exactly
+    that reason). Ignored for ``:memory:`` — a private in-memory DB has no
+    second writer.
+
+    WAL needs shared memory that a few filesystems (some network mounts) do
+    not provide. SQLite keeps the old journal mode rather than failing there,
+    so the store still works; the mode is read back and a refusal is logged
+    once per database file — not once per store, since several of them share
+    one file and the journal mode belongs to the file.
     """
 
     def __init__(self, path: str | Path, schema: str, *, wal: bool = False) -> None:
@@ -108,8 +125,23 @@ class SQLiteStore:
         if self._wal:
             # journal_mode is sticky on the file (re-setting is a cheap no-op);
             # busy_timeout is per-connection and must be set on every one.
-            conn.execute("PRAGMA journal_mode=WAL")
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
             conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            if str(mode).lower() != "wal":
+                # A refusal degrades to the old journal mode silently, and the
+                # symptom is only slower reads under load. Say it once per
+                # database: connections here are per-operation, and the stores
+                # sharing one file would each repeat it.
+                key = os.path.abspath(self._path)
+                if key not in _WAL_REFUSED:
+                    _WAL_REFUSED.add(key)
+                    logger.warning(
+                        "sqlite (%s): WAL was refused, journal mode is %r — "
+                        "reads will block on writes; a filesystem without "
+                        "shared memory (some network mounts) does this",
+                        self._path,
+                        mode,
+                    )
         if not self._schema_ready:
             conn.executescript(self._schema)
             conn.commit()

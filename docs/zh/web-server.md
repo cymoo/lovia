@@ -40,6 +40,14 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 `serve()` 固定使用 `max_background_runs=8`；如需调整，请通过 `create_app()` 创建应用，
 再交给 ASGI 服务器运行。
 
+Transcript、聊天元数据和 Run 检查点共用同一个 SQLite 文件，并以 **WAL 模式**打开，
+使界面的读取不必排在检查点写入之后。已有的数据库会在首次打开时完成迁移。
+`<name>.db-wal` 和 `<name>.db-shm` 两个伴随文件只在有连接打开时存在，最后一个连接
+关闭时会把 WAL 折回主库 —— 因此从运行中的服务器复制需要三个文件都带上，而已停止的
+服务器仍然只留下一个文件。若文件系统不支持共享内存（部分网络挂载），SQLite 会拒绝
+WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直接传
+`store=ChatStore.sqlite(path, wal=False)` 显式关闭。
+
 端点契约与 `ChatStore` 接口见 [HTTP API](http-api.md)。
 
 ## 追问建议

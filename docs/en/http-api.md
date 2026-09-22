@@ -160,7 +160,9 @@ it is intentionally small.
 `ChatStore` is the storage bundle behind the API: a `Session` for transcripts,
 a metadata table for `ChatMeta` rows (titles, timestamps, pins, and the
 resumable `active_run_id`), a checkpointer, and schedule and run-record tables.
-`ChatStore.sqlite(path, wal=False)` keeps everything in one file;
+`ChatStore.sqlite(path, wal=True)` keeps everything in one file, in WAL mode so
+the stores sharing it do not queue behind each other (see
+[Web server](web-server.md));
 `ChatStore.in_memory()` is for tests and demos; `ChatStore(session=...,
 meta_path=...)` wraps a custom `Session` backend while keeping the
 metadata features.

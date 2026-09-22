@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -15,6 +16,7 @@ from lovia.transcript import (
     ToolResultEntry,
 )
 from lovia.stores import InMemorySession, SQLiteSession
+from lovia.stores.checkpointer import SQLiteCheckpointer
 
 
 async def test_in_memory_session() -> None:
@@ -661,6 +663,74 @@ async def test_sqlite_does_not_retry_what_may_have_committed(
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         await s.append("u1", [InputEntry(role="user", content="hi")])
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------- WAL mode ---
+
+
+class _WalRefusingConnection:
+    """A real connection that reports WAL as refused, as a network mount would.
+
+    ``PRAGMA journal_mode=WAL`` without the assignment reports the *current*
+    mode, so the store reads back something other than "wal" — exactly what
+    SQLite does on a filesystem with no shared memory — while every other
+    statement runs for real.
+    """
+
+    def __init__(self, real: sqlite3.Connection) -> None:
+        object.__setattr__(self, "_real", real)
+
+    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+        real: sqlite3.Connection = object.__getattribute__(self, "_real")
+        if "journal_mode=wal" in sql.lower().replace(" ", ""):
+            return real.execute("PRAGMA journal_mode")
+        return real.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_real"), name, value)
+
+
+def _refuse_wal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every new connection report WAL as refused, from a clean slate."""
+    from lovia.stores import _sqlite
+
+    real = sqlite3.connect
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **k: _WalRefusingConnection(real(*a, **k))
+    )
+    monkeypatch.setattr(_sqlite, "_WAL_REFUSED", set())
+
+
+async def test_sqlite_warns_once_when_wal_is_refused(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _refuse_wal(monkeypatch)
+    s = SQLiteSession(tmp_path / "nowal.db", wal=True)
+    with caplog.at_level(logging.WARNING, logger="lovia.stores._sqlite"):
+        await s.append("u1", [InputEntry(role="user", content="one")])
+        await s.append("u1", [InputEntry(role="user", content="two")])
+    # Connections are per-operation; the refusal is a property of the file.
+    assert caplog.text.count("WAL was refused") == 1
+    # And the store still works, just without concurrent readers.
+    assert [e.content for e in await s.load("u1")] == ["one", "two"]  # type: ignore[union-attr]
+
+
+async def test_wal_refusal_is_announced_once_per_file_not_per_store(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The shape ChatStore.sqlite builds: several stores, one file. The journal
+    # mode belongs to the file, so only one of them gets to report it.
+    _refuse_wal(monkeypatch)
+    path = tmp_path / "shared.db"
+    session = SQLiteSession(path, wal=True)
+    checkpointer = SQLiteCheckpointer(path, wal=True)
+    with caplog.at_level(logging.WARNING, logger="lovia.stores._sqlite"):
+        await session.append("u1", [InputEntry(role="user", content="one")])
+        await checkpointer.load("r1")
+    assert caplog.text.count("WAL was refused") == 1
 
 
 def test_open_failure_names_descriptor_exhaustion(

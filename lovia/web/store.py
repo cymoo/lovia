@@ -365,12 +365,25 @@ class ChatStore:
     # ---- factories ------------------------------------------------------
 
     @classmethod
-    def sqlite(cls, path: str | Path, *, wal: bool = False) -> "ChatStore":
+    def sqlite(cls, path: str | Path, *, wal: bool = True) -> "ChatStore":
         """Persistent store: transcripts, metadata, and checkpoints in one file.
 
-        Three stores share that file; pass ``wal=True`` when running multiple
-        workers (or to let readers proceed during writes) — it enables WAL
-        journal mode and a busy timeout on all three.
+        Three stores share that file, each with its own asyncio lock, so only
+        the database sees them collide — and they collide constantly: the
+        checkpointer writes after every model message and every tool result,
+        once per running agent, while the UI, the scheduler and the run
+        supervisor read. WAL is therefore on by default here: a rollback
+        journal makes those readers wait for the writer, which on the serving
+        shape (five agents writing, one reader) measured ~6x the median read
+        latency and a third of the read throughput.
+
+        The mode is a property of the file, so an existing database migrates
+        on first open. Its ``-wal`` and ``-shm`` companions exist only while a
+        connection is open — every call here opens and closes its own, and the
+        last close folds the WAL back in — so a stopped server still leaves one
+        file. Pass ``wal=False`` for a filesystem that cannot host those two;
+        SQLite also declines WAL on its own there, with a warning, so this is
+        belt-and-braces rather than a requirement.
         """
         # The default path nests under ./.lovia, and sqlite3.connect cannot
         # create parent directories.

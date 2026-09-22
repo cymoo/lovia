@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -661,6 +662,51 @@ async def test_sqlite_does_not_retry_what_may_have_committed(
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         await s.append("u1", [InputEntry(role="user", content="hi")])
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------- WAL mode ---
+
+
+class _WalRefusingConnection:
+    """A real connection that reports WAL as refused, as a network mount would.
+
+    ``PRAGMA journal_mode=WAL`` without the assignment reports the *current*
+    mode, so the store reads back something other than "wal" — exactly what
+    SQLite does on a filesystem with no shared memory — while every other
+    statement runs for real.
+    """
+
+    def __init__(self, real: sqlite3.Connection) -> None:
+        object.__setattr__(self, "_real", real)
+
+    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+        real: sqlite3.Connection = object.__getattribute__(self, "_real")
+        if "journal_mode=wal" in sql.lower().replace(" ", ""):
+            return real.execute("PRAGMA journal_mode")
+        return real.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(object.__getattribute__(self, "_real"), name, value)
+
+
+async def test_sqlite_warns_once_when_wal_is_refused(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    real = sqlite3.connect
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *a, **k: _WalRefusingConnection(real(*a, **k))
+    )
+    s = SQLiteSession(tmp_path / "nowal.db", wal=True)
+    with caplog.at_level(logging.WARNING, logger="lovia.stores._sqlite"):
+        await s.append("u1", [InputEntry(role="user", content="one")])
+        await s.append("u1", [InputEntry(role="user", content="two")])
+    # Connections are per-operation; the refusal is a property of the file.
+    assert caplog.text.count("WAL was refused") == 1
+    # And the store still works, just without concurrent readers.
+    assert [e.content for e in await s.load("u1")] == ["one", "two"]  # type: ignore[union-attr]
 
 
 def test_open_failure_names_descriptor_exhaustion(

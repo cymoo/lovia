@@ -42,6 +42,16 @@ application without starting a process.
 `serve()` always uses `max_background_runs=8`. To change it, build the app with
 `create_app()` and run it with an ASGI server.
 
+Transcripts, chat metadata and run checkpoints share one SQLite file, opened in
+**WAL mode** so the UI's reads never wait behind a checkpoint write. An existing
+database migrates on first open. Its `<name>.db-wal` and `<name>.db-shm`
+companions exist only while a connection is open, and the last one to close
+folds the WAL back into the database — so copy all three from a running server,
+but a stopped one still leaves a single file. On a filesystem without shared
+memory (some network mounts) SQLite declines WAL and logs a warning, keeping the
+old journal mode; pass `store=ChatStore.sqlite(path, wal=False)` to opt out up
+front.
+
 For endpoint contracts and the `ChatStore` interface, see
 [HTTP API](http-api.md).
 

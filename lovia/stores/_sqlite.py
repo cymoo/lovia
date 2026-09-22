@@ -78,15 +78,25 @@ class SQLiteStore:
     ``wal=True`` opts a file-backed store into SQLite's WAL journal mode plus
     an explicit busy timeout: readers no longer block on a writer, and
     concurrent writers (another process, or several stores sharing one file)
-    wait for the lock instead of failing fast. Off by default — a
-    single-process store serialized by the asyncio lock does not need it.
-    Ignored for ``:memory:`` (a private in-memory DB has no second writer).
+    wait for the lock instead of failing fast. Off by default, which suits a
+    lone store whose asyncio lock already serializes everything reaching the
+    file; a *shared* file wants it on, because the stores sharing it hold
+    separate locks and only the database sees the collision (see
+    :meth:`~lovia.web.store.ChatStore.sqlite`, which turns it on for exactly
+    that reason). Ignored for ``:memory:`` — a private in-memory DB has no
+    second writer.
+
+    WAL needs shared memory that a few filesystems (some network mounts) do
+    not provide. SQLite keeps the old journal mode rather than failing there,
+    so the store still works; the mode is read back on the first connection
+    and a refusal is logged once.
     """
 
     def __init__(self, path: str | Path, schema: str, *, wal: bool = False) -> None:
         self._path = str(path)
         self._schema = schema
         self._wal = wal and self._path != ":memory:"
+        self._wal_checked = False
         self._schema_ready = False
         self._lock = asyncio.Lock()
         self._shared: sqlite3.Connection | None = None
@@ -108,8 +118,21 @@ class SQLiteStore:
         if self._wal:
             # journal_mode is sticky on the file (re-setting is a cheap no-op);
             # busy_timeout is per-connection and must be set on every one.
-            conn.execute("PRAGMA journal_mode=WAL")
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
             conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            if not self._wal_checked:
+                self._wal_checked = True
+                if str(mode).lower() != "wal":
+                    # A refusal degrades to the old journal mode silently, and
+                    # the symptom is only slower reads under load. Connections
+                    # are per-operation, so say it once, not per call.
+                    logger.warning(
+                        "sqlite (%s): WAL was refused, journal mode is %r — "
+                        "reads will block on writes; a filesystem without "
+                        "shared memory (some network mounts) does this",
+                        self._path,
+                        mode,
+                    )
         if not self._schema_ready:
             conn.executescript(self._schema)
             conn.commit()

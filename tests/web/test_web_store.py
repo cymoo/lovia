@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -10,6 +11,28 @@ import pytest
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
 from lovia.web.store import RunRow, ScheduleRow
+
+
+def _journal_mode(path: Path) -> str:
+    conn = sqlite3.connect(path)
+    try:
+        return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        conn.close()
+
+
+async def test_sqlite_uses_wal_by_default(tmp_path: Path) -> None:
+    # Three stores share this file with three separate locks; WAL is what
+    # keeps the UI's reads off the checkpointer's write lock.
+    path = tmp_path / "chat.db"
+    await ChatStore.sqlite(path).upsert("s1", agent="bot")
+    assert _journal_mode(path) == "wal"
+
+
+async def test_sqlite_can_opt_out_of_wal(tmp_path: Path) -> None:
+    path = tmp_path / "chat.db"
+    await ChatStore.sqlite(path, wal=False).upsert("s1", agent="bot")
+    assert _journal_mode(path) != "wal"
 
 
 async def test_in_memory_roundtrip() -> None:

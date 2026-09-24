@@ -463,7 +463,8 @@ lovia web --check                          # 查看已保存的连接
 
 所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的
-FastAPI 应用中，在同一套端点上做自定义前端。
+FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流式 `error` 事件中的错误
+都带有稳定的 `code`，客户端可据此判断错误类型。
 
 → [Web UI](https://cymoo.github.io/lovia/zh/web-ui/) · [Web 服务端](https://cymoo.github.io/lovia/zh/web-server/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)
 

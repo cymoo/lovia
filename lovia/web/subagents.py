@@ -35,13 +35,6 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
-try:
-    from fastapi import FastAPI
-except ImportError as exc:  # pragma: no cover - depends on optional env
-    from ._deps import raise_missing_web_extra
-
-    raise_missing_web_extra(exc)
-
 from ..exceptions import RunCancelled
 from ..plugins.subagents import (
     ChildSpec,
@@ -275,17 +268,16 @@ def _wire(deps: "RouterDeps") -> int:
     return len(wired)
 
 
-def wire_subagents(target: "RouterDeps | FastAPI") -> int:
+def wire_subagents(deps: "RouterDeps") -> int:
     """Adapt served ``Subagents`` plugins to web semantics; returns how many.
 
     ``create_app`` calls this automatically (disable with
     ``create_app(..., wire_subagents=False)``); the helper exists for apps
     that mount :func:`~lovia.web.build_api_router` into their own FastAPI
-    app — pass the same :class:`~lovia.web.RouterDeps` (a ``create_app``
-    app works too). See :func:`subagent_runner` and :func:`subagent_deliver`
-    for what the wiring does.
+    app, passing the same :class:`~lovia.web.RouterDeps`. See
+    :func:`subagent_runner` and :func:`subagent_deliver` for what the wiring
+    does.
     """
-    deps = target.state.deps if isinstance(target, FastAPI) else target
     return _wire(deps)
 
 

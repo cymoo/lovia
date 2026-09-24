@@ -226,9 +226,11 @@ API 路由抛出的错误都使用同一种响应体：
 ## 内置浏览器客户端
 
 `lovia/web/static/js/api.js` 是零依赖客户端，封装了聊天、Session、定时任务、Workspace 和
-Memory 等接口。请求失败时抛出的 `Error` 带有 `status`、`code` 和 `hint`（由 `apiError(response)`
-构造，该函数也已导出，可用于自己的 `fetch` 调用）。它还提供 `readSSE(response)`，用于异步遍历
-`{event, data}`。
+Memory 等接口。解析 JSON 的方法在请求失败时抛出带有 `status`、`code` 和 `hint` 的 `Error`。
+流式方法（`streamChat`、`reconnect`）和不返回数据的操作（`approve`、`answer`、`cancel`、
+`deleteSession`、`deleteAllSessions`）则直接返回原始 `Response`；失败时可用
+`apiError(response)` 构造同样的 `Error`，该函数也已导出，可用于自己的 `fetch` 调用。
+`readSSE(response)` 用于异步遍历流中的 `{event, data}`。
 
 ```js
 import { api, readSSE } from "./api.js";

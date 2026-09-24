@@ -233,10 +233,13 @@ Comment lines (`:`) are keep-alives and should be ignored.
 ## The bundled browser client
 
 `lovia/web/static/js/api.js` is a dependency-free client for chat, Session,
-scheduling, Workspace, Memory, and related endpoints. Its methods reject with
-an `Error` carrying `status`, `code`, and `hint` (built by `apiError(response)`,
-exported for your own `fetch` calls). It also provides `readSSE(response)`, an
-async generator over `{event, data}` pairs:
+scheduling, Workspace, Memory, and related endpoints. Methods that decode JSON
+reject with an `Error` carrying `status`, `code`, and `hint`. The streams
+(`streamChat`, `reconnect`) and the bodiless actions (`approve`, `answer`,
+`cancel`, `deleteSession`, `deleteAllSessions`) resolve to the raw `Response`
+instead; turn a failed one into the same `Error` with `apiError(response)`,
+which is exported for your own `fetch` calls too. `readSSE(response)` is an
+async generator over a stream's `{event, data}` pairs:
 
 ```js
 import { api, readSSE } from "./api.js";

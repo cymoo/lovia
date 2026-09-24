@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import mimetypes
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -352,10 +354,19 @@ def create_app(
     app.state.context_policy = context_policy
     app.state.tracer = tracer
     app.state.deps = deps
-    # Read by serve(): the printed UI link, and its off-loopback safety check.
-    app.state.token = token
-    app.state.auth_guarded = guard is not None
+    app.state.lovia_serving = _Serving(token=token, guarded=guard is not None)
     return app
+
+
+@dataclass(frozen=True)
+class _Serving:
+    """What :func:`serve` needs to know about an app :func:`create_app` built.
+
+    A private type, so a foreign app's ``app.state`` can never pass for one.
+    """
+
+    token: str | None
+    guarded: bool
 
 
 def _generated_token(host: str) -> str | None:
@@ -398,19 +409,32 @@ def serve(
 
         raise_missing_web_extra(exc)
 
-    if isinstance(target, FastAPI):
-        app = target
-        # An app not built by create_app carries no marker; its auth is its own.
-        if not is_loopback(host) and not getattr(app.state, "auth_guarded", True):
+    misplaced = sorted(set(uvicorn_kwargs) & _CREATE_APP_OPTIONS)
+    if misplaced:
+        raise TypeError(
+            f"serve() got create_app() options {misplaced}; build the app with "
+            f"them: serve(create_app(agent, {misplaced[0]}=...), host=...)"
+        )
+    app = (
+        target
+        if isinstance(target, FastAPI)
+        else create_app(target, token=_generated_token(host))
+    )
+    # Only an app create_app built is judged; any other brings its own auth.
+    serving = getattr(app.state, "lovia_serving", None)
+    if isinstance(serving, _Serving):
+        if not serving.guarded and not is_loopback(host):
             raise UserError(
                 f"refusing to serve an app without authentication on {host!r}",
                 hint="build it with create_app(..., token=...) or auth=..., "
                 "or bind to 127.0.0.1",
             )
-    else:
-        app = create_app(target, token=_generated_token(host))
-    token = getattr(app.state, "token", None)
-    if token:
-        ui_url = f"http://{_display_host(host)}:{port}/?token={token}"
-        print(f"web API auth enabled — UI: {ui_url}", flush=True)
+        if serving.token:
+            ui_url = f"http://{_display_host(host)}:{port}/?token={serving.token}"
+            print(f"web API auth enabled — UI: {ui_url}", flush=True)
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)
+
+
+_CREATE_APP_OPTIONS = frozenset(inspect.signature(create_app).parameters) - {
+    "agent_or_agents"
+}

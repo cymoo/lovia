@@ -206,17 +206,33 @@ def test_serve_refuses_an_unauthenticated_app_off_loopback(
     assert "create_app(..., token=...)" in str(exc.value)
 
 
-def test_serve_trusts_a_foreign_apps_own_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An app not built by create_app (e.g. build_api_router behind the
-    # host app's own middleware) carries no marker — serve can't judge it.
+def test_serve_trusts_a_foreign_apps_own_auth(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An app not built by create_app (e.g. build_api_router behind the host
+    # app's own middleware) is run as is — even when its state happens to use
+    # the same names, its credential is never printed.
     from fastapi import FastAPI
 
     from lovia.web import serve
 
     captured = _fake_uvicorn(monkeypatch)
     app = FastAPI()
+    app.state.token = "host-app-secret"
+    app.state.auth_guarded = False
     serve(app, host="0.0.0.0")
     assert captured["app"] is app
+    assert "host-app-secret" not in capsys.readouterr().out
+
+
+def test_serve_points_create_app_options_to_create_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.web import serve
+
+    _fake_uvicorn(monkeypatch)
+    with pytest.raises(TypeError, match=r"create_app\(\) options \['db_path'\]"):
+        serve(_agent(), db_path="x.db", log_level="info")
 
 
 def test_serve_explicit_token_wins_and_is_printed(

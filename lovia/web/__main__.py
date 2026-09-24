@@ -417,13 +417,6 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             os.environ["LOVIA_PROVIDER_TIMEOUT"] = str(args.provider_timeout)
         if args.trust_env:
             os.environ["LOVIA_PROVIDER_TRUST_ENV"] = "1"
-        # None = no override: the agent's own retry posture applies.
-        max_retries = resolve_max_retries(args.max_retries)
-        retry = (
-            RetryPolicy(max_attempts=max_retries + 1)
-            if max_retries is not None
-            else None
-        )
 
         host = _first(args.host, os.getenv("LOVIA_HOST")) or "127.0.0.1"
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)
@@ -538,6 +531,14 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # level, while log lines keep flowing to stderr.
         print(summary, flush=True)
         if built_app is None:
+            # Resolved only here: a built --app ignores these, bad values too.
+            max_retries = resolve_max_retries(args.max_retries)
+            # None = no override: the agent's own retry posture applies.
+            retry = (
+                RetryPolicy(max_attempts=max_retries + 1)
+                if max_retries is not None
+                else None
+            )
             built_app = create_app(
                 agent_or_agents,
                 title=title,

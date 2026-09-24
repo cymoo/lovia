@@ -390,6 +390,11 @@ def test_main_serves_a_built_app_as_is(
     err = capsys.readouterr().err
     assert "ignoring options it was built without: --title" in err
 
+    # Ignored means ignored: a value that would fail validation doesn't block.
+    rc = cli.main(["--app", "appmod_b:app", "--max-retries", "-1"])
+    assert rc == 0
+    assert "--max-retries" in capsys.readouterr().err
+
 
 def _unexpected_create_app(*a: object, **k: object) -> None:
     raise AssertionError("a built --app must not be rebuilt")

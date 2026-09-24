@@ -146,7 +146,7 @@ function _schedulePoll() {
 export function initEventStream() {
   if (typeof EventSource === 'undefined') return; // keep polling instead
   const refresh = () => loadSessions();
-  const es = new EventSource('/api/events');
+  const es = new EventSource(api.eventsUrl());
   es.onopen = () => {
     _eventsLive = true;
     clearTimeout(_pollTimer);
@@ -905,7 +905,7 @@ export async function exportSession(format = 'md') {
   const title = store.sessions.find((s) => s.id === store.sessionId)?.title || '';
   if (format === 'html') return exportSessionHtml(store.sessionId, title);
   try {
-    const res = await fetch(api.exportUrl(store.sessionId, format));
+    const res = await api.exportChat(store.sessionId, format);
     if (!res.ok) throw await apiError(res);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);

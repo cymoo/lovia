@@ -20,8 +20,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 `serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` runs an app
 from `create_app()`, or builds one with the defaults when given an Agent (or a
 `{name: agent}` mapping) directly — `serve(agent)` is the quickest start.
-Server options such as `log_level`, `ssl_certfile`, and `workers` pass through
-to uvicorn. To run the app under another ASGI server, skip `serve()`.
+Server options such as `log_level`, `ssl_certfile`, `workers`, and `root_path`
+([behind a proxy](#serving-under-a-path-prefix)) pass through to uvicorn. To
+run the app under another ASGI server, skip `serve()`.
 
 `create_app(agent_or_agents, ...)` options:
 
@@ -35,11 +36,28 @@ to uvicorn. To run the app under another ASGI server, skip `serve()`.
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
 | `approval_timeout` | `None` | Auto-deny unresolved approvals after N seconds |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
-| `ui` | `True` | Set `False` for API-only serving |
+| `ui` | `True` | `False` serves the API only; a `ChatUI` customizes the bundled page (below) |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
-| `title` / `empty_title` / `empty_description` | lovia defaults | UI copy and branding |
-| `empty_examples` | `None` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
+| `title` | `"lovia"` | Page title and the API's reported title |
+
+`ChatUI` options, for `ui=ChatUI(...)`:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `empty_title` / `empty_description` | lovia defaults | Blank chat state copy; the description may be a list of short lines |
+| `empty_examples` | `()` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
+| `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
+
+```python
+from lovia.web import ChatUI, create_app
+
+app = create_app(
+    agent,
+    title="Acme",
+    ui=ChatUI(empty_title="Ask Acme", empty_examples=["Summarize today's tickets"]),
+)
+```
 
 Transcripts, chat metadata and run checkpoints share one SQLite file, opened in
 **WAL mode** so the UI's reads never wait behind a checkpoint write. An existing
@@ -157,10 +175,42 @@ endpoints (cancel, run a schedule now, upload) are body-less or multipart
 POSTs — "simple" requests that skip the CORS preflight. The token cookie is
 `SameSite=Strict` and unaffected.
 
+**Signing in.** The bundled page can't show your login form, so tell it where
+the form lives. With `ui=ChatUI(login_url="/login?next={next}")`, an API call
+your dependency answers with 401 sends the browser there, `{next}` replaced by
+the URL-encoded path (and query) of the current page. Without `login_url` the
+page only says the user is signed out. A burst of 401s acts once, and the
+token check's own 401 (code `server_token`) keeps its token prompt.
+
 `create_app()` alone enables no authentication; under another ASGI server,
 pass `token` or `auth` yourself. `serve()` only judges apps built by
 `create_app()` — an app of your own that mounts `build_api_router` keeps its
 own middleware and is run as is.
+
+## Serving under a path prefix
+
+Behind a reverse proxy that serves the app at `/lovia/` and strips the prefix
+before forwarding, tell uvicorn the prefix:
+
+```nginx
+location /lovia/ {
+    proxy_pass http://127.0.0.1:8000/;   # the trailing slash strips /lovia
+}
+```
+
+```python
+serve(app, root_path="/lovia")           # or: lovia web --root-path /lovia
+```
+
+The page takes the prefix from each request, so its assets, API calls, event
+stream, and token cookie all stay under it; two instances under one host keep
+separate tokens. Asset URLs carry no scheme or host, so a proxy that
+terminates TLS never turns them into blocked `http://` loads. The server
+itself still answers at the root: open the page through the proxy.
+
+To host a `create_app()` app inside an existing FastAPI app instead, mount it
+([HTTP API](http-api.md#mounting-a-create_app-app)); the prefix works the same
+way.
 
 ## Supervised Run lifecycle
 

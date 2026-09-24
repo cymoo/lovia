@@ -212,6 +212,7 @@ flag, environment variable, then default.
 | Flag | Environment | Default |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--root-path` | `LOVIA_ROOT_PATH` | None; the prefix a proxy serves the app under ([details](web-server.md#serving-under-a-path-prefix)) |
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |

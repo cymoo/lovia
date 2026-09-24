@@ -35,7 +35,7 @@ from .store import ChatStore
 
 if TYPE_CHECKING:
     from .config import ConfigRuntime
-from .ui import build_ui_router
+from .ui import ChatUI, build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -163,13 +163,10 @@ def create_app(
     question_timeout: float | None = None,
     scheduler_poll: float = 1.0,
     wire_subagents: bool = True,
-    ui: bool = True,
+    ui: bool | ChatUI = True,
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
     auth: Callable[..., Any] | None = None,
-    empty_title: str = "Where shall we begin?",
-    empty_description: str | Sequence[str] | None = None,
-    empty_examples: Sequence[str] | None = None,
     config_runtime: ConfigRuntime | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
@@ -218,9 +215,10 @@ def create_app(
     around), so a clientless run never parks forever.
 
     ``ui`` controls the bundled single-page chat UI: when ``True`` (default) the
-    app also serves ``GET /`` and ``/static``; set it to ``False`` for a pure
-    JSON + SSE server you drive from your own front-end (see
-    :func:`lovia.web.build_api_router`). ``cors_origins`` lists the origins such
+    app also serves ``GET /`` and ``/static``; a :class:`~lovia.web.ChatUI`
+    serves it customized (blank-state copy, starter prompts, ``login_url``);
+    ``False`` makes a pure JSON + SSE server you drive from your own front-end
+    (see :func:`lovia.web.build_api_router`). ``cors_origins`` lists the origins such
     a front-end is served from (e.g. ``["http://localhost:5173"]``) — omitted,
     no CORS headers are sent and cross-origin browsers are refused.
 
@@ -231,11 +229,6 @@ def create_app(
     open under either. Neither is set by default: :func:`create_app` alone
     imposes no auth, while :func:`serve` refuses to run such an app on a
     non-loopback host.
-
-    ``empty_title`` and ``empty_description`` customize the blank chat state;
-    ``empty_description`` may be a string or a list of short lines, and
-    ``empty_examples`` lists clickable starter prompts (clicking fills the
-    composer without sending).
 
     ``config_runtime`` is the CLI's runtime-reconfiguration surface (a
     :class:`lovia.web.config.ConfigRuntime`); passing one mounts the
@@ -334,14 +327,8 @@ def create_app(
         dependencies=[Depends(guard)] if guard is not None else None,
     )
     if ui:
-        app.include_router(
-            build_ui_router(
-                title=title,
-                empty_title=empty_title,
-                empty_description=empty_description,
-                empty_examples=empty_examples,
-            )
-        )
+        chat_ui = ui if isinstance(ui, ChatUI) else ChatUI()
+        app.include_router(build_ui_router(chat_ui, title=title))
         # Version-stamp the static URL prefix so `url_for('static', …)` (and the
         # relative ES-module imports resolved beneath it) change on every build —
         # the cache-busting seam. Assets under it are served immutable; the HTML
@@ -396,7 +383,8 @@ def serve(
     ``target`` is an app from :func:`create_app` — every serving option is
     configured there — or an agent (or ``{name: agent}`` mapping) to serve
     with ``create_app``'s defaults. Remaining keyword arguments go to
-    ``uvicorn.run`` (e.g. ``log_level``, ``ssl_certfile``, ``workers``).
+    ``uvicorn.run`` (e.g. ``log_level``, ``ssl_certfile``, ``workers``, or
+    ``root_path`` behind a proxy that serves the app under a path prefix).
 
     Safe by default off-loopback: agents get a generated token, printed with
     a ready ``/?token=...`` UI link, and an app built with neither ``token``
@@ -430,7 +418,11 @@ def serve(
                 "or bind to 127.0.0.1",
             )
         if serving.token:
-            ui_url = f"http://{_display_host(host)}:{port}/?token={serving.token}"
+            # Under a root_path the page is reachable only through the proxy
+            # that strips it, and this process doesn't know that proxy's address.
+            root = str(uvicorn_kwargs.get("root_path") or "").rstrip("/")
+            origin = "<your proxy>" if root else f"http://{_display_host(host)}:{port}"
+            ui_url = f"{origin}{root}/?token={serving.token}"
             print(f"web API auth enabled — UI: {ui_url}", flush=True)
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)
 

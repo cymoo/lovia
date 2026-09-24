@@ -62,7 +62,7 @@ Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
 lifespan，被挂载应用的 lifespan 永远不会启动，而且没有任何提示，因此要在外层 lifespan 中进入它：
 
 ```python
-lovia_app = create_app(agent, ui=False)   # 内置页面要求部署在根路径
+lovia_app = create_app(agent)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
         yield
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/lovia", lovia_app)            # API 位于 /lovia/api/...
+app.mount("/lovia", lovia_app)            # 页面位于 /lovia/，API 位于 /lovia/api/...
 ```
 
 ## 认证

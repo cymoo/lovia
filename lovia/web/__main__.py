@@ -213,6 +213,12 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         "--port", type=int, help="port to listen on (env LOVIA_PORT, default 8000)"
     )
     server.add_argument(
+        "--root-path",
+        metavar="PATH",
+        help="path prefix a reverse proxy serves the app under (and strips), "
+        "e.g. /lovia (env LOVIA_ROOT_PATH)",
+    )
+    server.add_argument(
         "--token",
         metavar="TOKEN",
         help="API auth token; not needed on loopback, generated and printed "
@@ -424,8 +430,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         db_path = _first(args.db, os.getenv("LOVIA_DB"))
         # None on a non-loopback bind → one is generated (and printed) below.
         token = _first(args.token, os.getenv("LOVIA_WEB_TOKEN"))
+        root = (_first(args.root_path, os.getenv("LOVIA_ROOT_PATH")) or "").strip("/")
+        root_path = f"/{root}" if root else ""
         # A wildcard bind is not a browsable address: show one that is.
         url = f"http://{_display_host(host)}:{port}"
+        if root_path:
+            url += f" (proxied under {root_path})"
 
         agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]] = {}
         # An --app that is already an app: served as built, no create_app here.
@@ -566,7 +576,13 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                 question_timeout=600,
                 config_runtime=config_runtime,
             )
-        serve(built_app, host=host, port=port, log_level=level.lower())
+        serve(
+            built_app,
+            host=host,
+            port=port,
+            log_level=level.lower(),
+            root_path=root_path,
+        )
     except UserError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

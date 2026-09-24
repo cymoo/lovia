@@ -6,7 +6,10 @@
   <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#0d0e12" media="(prefers-color-scheme: dark)" />
   <title>{{ title }}</title>
-  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='favicon.svg') }}" />
+  <!-- Asset URLs are root-relative (`.path`): they carry the mount prefix but
+       no scheme or host, so a TLS-terminating proxy the server doesn't trust
+       for X-Forwarded-Proto can't turn them into blocked http:// loads. -->
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='favicon.svg').path }}" />
   <script>
     // Apply the saved (or OS) theme before first paint — without this, dark-
     // mode users get a white flash on every load. Key mirrors js/store.js.
@@ -18,7 +21,7 @@
       document.documentElement.setAttribute('data-theme', t);
     } catch (e) { /* no storage access: keep the light default */ }
   </script>
-  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css').path }}" />
   <!-- Renderers (markdown / sanitizer / syntax highlight / diagrams),
        vendored under static/vendor (exact versions + licenses in its
        README). Self-hosted so the UI needs no CDN or font origin — it works
@@ -29,10 +32,10 @@
        stay optional — if one fails to load (or fails its hash), chat.js
        falls back to escaped plain text and skips highlighting/diagrams
        instead of dying. -->
-  <script defer src="{{ url_for('static', path='vendor/purify.min.js') }}" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"></script>
-  <script defer src="{{ url_for('static', path='vendor/marked.min.js') }}" integrity="sha384-QsSpx6a0USazT7nK7w8qXDgpSAPhFsb2XtpoLFQ5+X2yFN6hvCKnwEzN8M5FWaJb"></script>
-  <script defer src="{{ url_for('static', path='vendor/highlight.min.js') }}" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"></script>
-  <script defer src="{{ url_for('static', path='vendor/mermaid.min.js') }}" integrity="sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV"></script>
+  <script defer src="{{ url_for('static', path='vendor/purify.min.js').path }}" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"></script>
+  <script defer src="{{ url_for('static', path='vendor/marked.min.js').path }}" integrity="sha384-QsSpx6a0USazT7nK7w8qXDgpSAPhFsb2XtpoLFQ5+X2yFN6hvCKnwEzN8M5FWaJb"></script>
+  <script defer src="{{ url_for('static', path='vendor/highlight.min.js').path }}" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"></script>
+  <script defer src="{{ url_for('static', path='vendor/mermaid.min.js').path }}" integrity="sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV"></script>
 </head>
 <body>
 <script id="app-config" type="application/json">{{ app_config | tojson }}</script>
@@ -330,6 +333,6 @@
   </div>
 </template>
 
-<script type="module" src="{{ url_for('static', path='js/main.js') }}"></script>
+<script type="module" src="{{ url_for('static', path='js/main.js').path }}"></script>
 </body>
 </html>

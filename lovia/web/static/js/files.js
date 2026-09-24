@@ -821,9 +821,7 @@ async function openFile(path, { silent = false } = {}) {
     // piece (fetch ignores the download Content-Disposition).
     let text;
     try {
-      const res = await fetch(
-        api.workspaceRawUrl({ agent: store.agent, path, download: true }),
-      );
+      const res = await api.workspaceRaw({ agent: store.agent, path, download: true });
       // Carries the status, so a refusal reads as the boundary it is.
       if (!res.ok) throw await apiError(res);
       text = await res.text();

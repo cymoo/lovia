@@ -8,6 +8,7 @@ Serves the single-page app at ``GET /``. Keep this separate from
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,42 +44,57 @@ Defined next to the UI it describes so the two change together.
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
-def build_ui_router(
-    *,
-    title: str = "lovia",
-    empty_title: str = "Where shall we begin?",
-    empty_description: str | Sequence[str] | None = None,
-    empty_examples: Sequence[str] | None = None,
-) -> APIRouter:
-    """Router that serves the bundled single-page chat UI.
+@dataclass(frozen=True)
+class ChatUI:
+    """Options for the bundled chat UI: ``create_app(agent, ui=ChatUI(...))``.
 
-    ``empty_examples`` are clickable starter prompts on the blank chat state —
-    clicking one fills the composer (it doesn't send).
+    ``empty_title`` and ``empty_description`` (a string or a list of short
+    lines) fill the blank chat state; ``empty_examples`` are clickable starter
+    prompts on it — clicking one fills the composer, it doesn't send.
+
+    ``login_url`` is where the page sends a signed-out user: an API call that
+    a custom ``auth=`` dependency answers with 401 navigates there. A
+    ``{next}`` in it becomes the current page's URL-encoded path, for the
+    login flow to return to. Unset, the page only says the user is signed
+    out. The token check (``token=``) keeps its own prompt either way.
     """
+
+    empty_title: str = "Where shall we begin?"
+    empty_description: str | Sequence[str] = (
+        "A good question is already half the answer."
+    )
+    empty_examples: Sequence[str] = ()
+    login_url: str | None = None
+
+
+def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
+    """Router that serves the bundled single-page chat UI."""
     router = APIRouter()
+    # A bare string is one example, not an iterable of characters.
+    examples = (
+        [ui.empty_examples]
+        if isinstance(ui.empty_examples, str)
+        else list(ui.empty_examples)
+    )
 
     @router.get("/", include_in_schema=False)
     async def index(request: Request) -> Any:
-        description = empty_description
-        if description is None:
-            description = "A good question is already half the answer."
-        # A bare string is one example, not an iterable of characters.
-        if isinstance(empty_examples, str):
-            examples = [empty_examples]
-        else:
-            examples = list(empty_examples) if empty_examples else []
         response = _TEMPLATES.TemplateResponse(
             request,
             "index.html",
             {
                 "title": title,
-                "empty_title": empty_title,
-                "empty_description": description,
+                "empty_title": ui.empty_title,
+                "empty_description": ui.empty_description,
                 "empty_examples": examples,
                 "app_config": {
-                    "empty_title": empty_title,
-                    "empty_description": description,
+                    "empty_title": ui.empty_title,
+                    "empty_description": ui.empty_description,
                     "empty_examples": examples,
+                    # The mount prefix (a proxy's root_path, or app.mount's):
+                    # the client prepends it to every /api call.
+                    "base_path": request.scope.get("root_path", "").rstrip("/"),
+                    "login_url": ui.login_url,
                 },
             },
         )

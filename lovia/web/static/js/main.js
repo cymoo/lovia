@@ -1,7 +1,7 @@
 // Entry point — wires together all modules.
 import { applyStaticI18n, t } from './i18n.js';
 import { store } from './store.js';
-import { api } from './api.js';
+import { api, configureApi } from './api.js';
 import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
 import {
   cancelStream,
@@ -26,19 +26,44 @@ import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 
+// ---- Page config --------------------------------------------------------
+// Server-rendered settings (lovia/web/ui.py): the path prefix the app is
+// served under, and where a signed-out user logs in.
+let basePath = '';
+let loginUrl = null;
+
+function loadPageConfig() {
+  const node = document.getElementById('app-config');
+  if (!node?.textContent) return;
+  try {
+    const cfg = JSON.parse(node.textContent);
+    if (typeof cfg.empty_title === 'string') store.emptyTitle = cfg.empty_title;
+    if (typeof cfg.empty_description === 'string' || Array.isArray(cfg.empty_description)) {
+      store.emptyDescription = cfg.empty_description;
+    }
+    if (Array.isArray(cfg.empty_examples)) store.emptyExamples = cfg.empty_examples;
+    if (typeof cfg.base_path === 'string') basePath = cfg.base_path;
+    if (typeof cfg.login_url === 'string' && cfg.login_url) loginUrl = cfg.login_url;
+  } catch (err) {
+    console.error('app-config:', err);
+  }
+}
+
 // ---- Auth ---------------------------------------------------------------
 // The server may guard /api/* with a token (see lovia/web/auth.py). The UI
 // holds it in a cookie so requests the browser makes without JS headers
 // (<img> previews, download links) carry it too. Two ways in: the printed
 // /?token=... link (adopted here, then stripped from the URL), or the prompt
-// shown when the first API call answers 401.
+// shown when an API call answers 401. A 401 from a custom auth= dependency
+// instead sends the user to the configured login page.
 const TOKEN_COOKIE = 'lovia_token';
 
 function saveToken(token) {
   const secure = location.protocol === 'https:' ? '; Secure' : '';
+  // Scoped to the mount prefix: two instances under one host keep apart.
   document.cookie =
     `${TOKEN_COOKIE}=${encodeURIComponent(token)}` +
-    `; path=/; SameSite=Strict; Max-Age=31536000${secure}`;
+    `; path=${basePath}/; SameSite=Strict; Max-Age=31536000${secure}`;
 }
 
 function adoptTokenFromURL() {
@@ -60,19 +85,16 @@ async function promptForToken() {
   location.reload();
 }
 
-// ---- Page config --------------------------------------------------------
-function loadPageConfig() {
-  const node = document.getElementById('app-config');
-  if (!node?.textContent) return;
-  try {
-    const cfg = JSON.parse(node.textContent);
-    if (typeof cfg.empty_title === 'string') store.emptyTitle = cfg.empty_title;
-    if (typeof cfg.empty_description === 'string' || Array.isArray(cfg.empty_description)) {
-      store.emptyDescription = cfg.empty_description;
-    }
-    if (Array.isArray(cfg.empty_examples)) store.emptyExamples = cfg.empty_examples;
-  } catch (err) {
-    console.error('app-config:', err);
+// The first 401 only (api.js dedupes a burst of them). `server_token` is the
+// built-in token check; anything else is a custom auth= dependency.
+function onUnauthorized(err) {
+  if (err.code === 'server_token') {
+    promptForToken(); // reloads on success
+  } else if (loginUrl) {
+    const next = encodeURIComponent(location.pathname + location.search);
+    location.assign(loginUrl.replace('{next}', next));
+  } else {
+    toast(t('toast.signedOut'), { type: 'error' });
   }
 }
 
@@ -88,6 +110,7 @@ function syncAgentTooltip(select) {
   select.title = agentHint(store.agents.find((a) => a.name === store.agent));
 }
 
+/** @returns {Promise<boolean>} false when signed out (onUnauthorized took over). */
 async function loadAgents() {
   const select = /** @type {HTMLSelectElement | null} */ (
     document.getElementById('agent-select')
@@ -121,13 +144,11 @@ async function loadAgents() {
     }
     store.emit('agents-loaded', store.agents);
   } catch (err) {
-    if (err.status === 401) {
-      await promptForToken(); // reloads on success
-      return;
-    }
+    if (err.status === 401) return false;
     console.error('loadAgents:', err);
     toast(t('toast.loadAgentsFailed'), { type: 'error' });
   }
+  return true;
 }
 
 // A chat opened from the sidebar belongs to the agent it was created with —
@@ -270,9 +291,10 @@ function initKeyboardShortcuts() {
 
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
+  loadPageConfig();
+  configureApi({ base: basePath, onUnauthorized });
   adoptTokenFromURL(); // before the first API call
   applyStaticI18n(); // before init code reads/sets any labels
-  loadPageConfig();
   initTheme();
   initSidebarToggle();
   initComposer();
@@ -286,7 +308,7 @@ function initKeyboardShortcuts() {
   // BEFORE any chat history renders — edit/regenerate affordances must not
   // flash in on servers whose store can't rewind.
   const infoPromise = api.info().catch(() => null);
-  await loadAgents();
+  if (!(await loadAgents())) return;
   document.getElementById('prompt')?.focus();
 
   const info = await infoPromise;

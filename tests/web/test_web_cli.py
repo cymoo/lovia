@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -350,6 +351,66 @@ def test_load_app_calls_factory(
     obj = cli.load_app_target("agentmod_b:make")
     assert isinstance(obj, Agent)
     assert obj.name == "made"
+
+
+_BUILT_APP_MODULE = (
+    "from lovia import Agent\n"
+    "from lovia.testing import ScriptedProvider\n"
+    "from lovia.web import create_app\n"
+    "from lovia.web.store import ChatStore\n"
+    "agent = Agent(name='built', model=ScriptedProvider([]))\n"
+    "app = create_app(agent, store=ChatStore.in_memory(), title='Mine')\n"
+    "def make():\n    return app\n"
+)
+
+
+def test_load_app_returns_a_built_app_uncalled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A FastAPI app is callable (ASGI); it must not be taken for a factory.
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "appmod_a", _BUILT_APP_MODULE)
+    app = cli.load_app_target("appmod_a:app")
+    assert app is sys.modules["appmod_a"].app
+    assert cli.load_app_target("appmod_a:make") is app  # an app factory
+
+
+def test_main_serves_a_built_app_as_is(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "appmod_b", _BUILT_APP_MODULE)
+    served: dict[str, object] = {}
+    monkeypatch.setattr(cli, "create_app", _unexpected_create_app)
+    monkeypatch.setattr(cli, "serve", lambda app, **k: served.update(app=app, **k))
+    rc = cli.main(["--app", "appmod_b:app", "--title", "Other", "--port", "9124"])
+    assert rc == 0
+    assert served["app"] is sys.modules["appmod_b"].app
+    assert served["port"] == 9124
+    err = capsys.readouterr().err
+    assert "ignoring options it was built without: --title" in err
+
+    # Ignored means ignored: a value that would fail validation doesn't block.
+    rc = cli.main(["--app", "appmod_b:app", "--max-retries", "-1"])
+    assert rc == 0
+    assert "--max-retries" in capsys.readouterr().err
+
+
+def _unexpected_create_app(*a: object, **k: object) -> None:
+    raise AssertionError("a built --app must not be rebuilt")
+
+
+def test_main_refuses_a_built_app_without_auth_off_loopback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import uvicorn
+
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "appmod_c", _BUILT_APP_MODULE)
+    monkeypatch.setattr(uvicorn, "run", _unexpected_create_app)
+    rc = cli.main(["--app", "appmod_c:app", "--host", "0.0.0.0"])
+    assert rc == 2
+    assert "without authentication" in capsys.readouterr().err
 
 
 def test_load_app_bad_module() -> None:

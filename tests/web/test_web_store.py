@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from lovia.stores import InMemorySession
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
 from lovia.web.store import RunRow, ScheduleRow
@@ -287,6 +288,92 @@ async def test_migration_backfills_pinned_on_legacy_db(tmp_path: Path) -> None:
     again = ChatStore.sqlite(path)
     meta = await again.get("legacy")
     assert meta is not None and meta.pinned is True
+
+
+def _shape(path: Path) -> tuple[dict[str, set[tuple]], set[str]]:
+    """Each chat table's columns (name, type, notnull, default, pk) + indexes."""
+    conn = sqlite3.connect(path)
+    tables = {
+        t: {tuple(r[1:]) for r in conn.execute(f"PRAGMA table_info({t})")}
+        for t in ("chat_sessions", "chat_schedules", "chat_runs")
+    }
+    indexes = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name NOT LIKE 'sqlite_autoindex%'"
+        )
+    }
+    conn.close()
+    return tables, indexes
+
+
+# Each chat table's columns as it first shipped. Frozen history, deliberately
+# independent of ``_ADDED_COLUMNS``: a column added to the schema since must
+# reach older databases through that list, and this is what proves it.
+_SHIPPED_COLUMNS = {
+    "chat_sessions": {
+        "id",
+        "title",
+        "agent",
+        "created_at",
+        "updated_at",
+        "active_run_id",
+    },
+    "chat_schedules": {
+        "id",
+        "agent",
+        "input",
+        "session_id",
+        "trigger_kind",
+        "trigger_expr",
+        "next_fire",
+        "active",
+        "last_session_id",
+        "created_at",
+        "updated_at",
+    },
+    "chat_runs": {
+        "id",
+        "session_id",
+        "agent",
+        "source",
+        "status",
+        "error",
+        "started_at",
+        "finished_at",
+        "usage_json",
+    },
+}
+
+
+def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
+    """A database from when each table shipped migrates to exactly a fresh
+    one's columns and indexes — failing on a column added to the schema but
+    not to ``_ADDED_COLUMNS``, or declared differently in each."""
+    fresh = tmp_path / "fresh.db"
+    ChatStore(InMemorySession(), meta_path=fresh)
+    fresh_shape = _shape(fresh)
+
+    old = tmp_path / "old.db"
+    conn = sqlite3.connect(old)
+    for table, columns in fresh_shape[0].items():
+        defs = [
+            f"{name} {type_}"
+            + (" NOT NULL" if notnull else "")
+            + (f" DEFAULT {default}" if default is not None else "")
+            + (" PRIMARY KEY" if pk else "")
+            for name, type_, notnull, default, pk in sorted(columns)
+            if name in _SHIPPED_COLUMNS[table]
+        ]
+        conn.execute(f"CREATE TABLE {table} ({', '.join(defs)})")
+    conn.commit()
+    conn.close()
+
+    ChatStore(InMemorySession(), meta_path=old)
+    assert _shape(old) == fresh_shape
+    ChatStore(InMemorySession(), meta_path=old)  # a second open is a no-op
+    assert _shape(old) == fresh_shape
 
 
 async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:

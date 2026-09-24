@@ -862,7 +862,7 @@ async def test_delete_session_stops_live_run_without_orphan_transcript() -> None
         # included) has executed — safe to assert "nothing re-appeared" after.
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=5)
-    store = app.state.store
+    store = app.state.deps.store
     assert await store.get("s1") is None  # metadata stays gone
     assert await store.session.load("s1") == []  # no orphan transcript rows
     assert len(provider.calls) == 1  # the run never reached turn 2
@@ -885,7 +885,7 @@ async def test_delete_all_sessions_stops_live_runs() -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=5)
         assert (await ac.get("/api/sessions")).json() == []
-    assert await app.state.store.session.load("s1") == []
+    assert await app.state.deps.store.session.load("s1") == []
 
 
 @pytest.mark.asyncio
@@ -991,7 +991,7 @@ async def test_completed_run_leaves_a_completed_record() -> None:
     provider = ScriptedProvider([text("done")])
     agent = Agent(name="bot", model=provider)
     app = _app(agent)
-    store = app.state.store
+    store = app.state.deps.store
     async with _client(app) as ac:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
@@ -1026,7 +1026,7 @@ async def test_cancelled_run_leaves_a_cancelled_record() -> None:
     provider = ScriptedProvider([call("block", {}, call_id="c1"), text("done")])
     agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
     app = _app(agent)
-    store = app.state.store
+    store = app.state.deps.store
     async with _client(app) as ac:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
@@ -1046,7 +1046,7 @@ async def test_failed_run_leaves_a_failed_record() -> None:
     provider = _ScriptThenFail([])  # fails on the very first model call
     agent = Agent(name="bot", model=provider)
     app = _app(agent, retry=RetryPolicy(max_attempts=1))
-    store = app.state.store
+    store = app.state.deps.store
     async with _client(app) as ac:
         task, _ = _spawn(
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}

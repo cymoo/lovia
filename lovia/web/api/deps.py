@@ -20,9 +20,8 @@ from typing import TYPE_CHECKING, Any
 from ...agent import Agent
 from ...context import ContextPolicy
 from ...providers import Provider
-from ...reliability import CancelToken, RetryPolicy, RunBudget
+from ...reliability import RetryPolicy, RunBudget
 from ...session import Session
-from ...steering import Mailbox
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
 from ..errors import WebError
@@ -52,10 +51,11 @@ class RouterDeps:
     That state has a lifecycle — enter :meth:`lifespan` around the app's
     lifetime (``create_app`` does it for you).
 
-    ``cancel_tokens`` and ``_bg_tasks`` are per-process: under multiple uvicorn
-    workers each process has its own copies, so a cancel issued to one worker
-    won't reach a stream running on another. Run a single worker if you rely on
-    cooperative stop / reconnect across requests.
+    The supervisor (live runs, with their cancel tokens and mailboxes) and
+    ``_bg_tasks`` are per-process: under multiple uvicorn workers each process
+    has its own copies, so a cancel issued to one worker won't reach a stream
+    running on another. Run a single worker if you rely on cooperative stop /
+    reconnect across requests.
     """
 
     agents: dict[str, Agent[Any]]
@@ -191,16 +191,6 @@ class RouterDeps:
                 if plugin is not None:
                     with suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(plugin.drain(), timeout=15.0)
-
-    @property
-    def cancel_tokens(self) -> dict[str, CancelToken]:
-        """Read-through view of live runs' cancel tokens (back-compat shim)."""
-        return {sid: c.cancel for sid, c in self.supervisor}
-
-    @property
-    def mailboxes(self) -> dict[str, Mailbox]:
-        """Read-through view of live runs' mailboxes (back-compat shim)."""
-        return {sid: c.mailbox for sid, c in self.supervisor}
 
     def fresh_budget(self) -> RunBudget | None:
         """A per-run copy of ``budget`` (``None`` when unset), so a ``RunBudget``'s

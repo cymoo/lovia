@@ -102,6 +102,30 @@ CREATE INDEX IF NOT EXISTS idx_chat_runs_source
     ON chat_runs(source, started_at DESC);
 """
 
+# Columns added after their table first shipped, as (table, column definition).
+# ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so
+# ``ChatStore._migrate`` ALTERs each one into an older database. A new column
+# goes in ``_META_SCHEMA`` *and* here.
+_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0"),
+    # Subagent child sessions (0.9.17): a task session points at the chat that
+    # spawned it, so the UI can group tasks out of the list.
+    ("chat_sessions", "parent_id TEXT"),
+    # Schedule stop conditions (0.8.34).
+    ("chat_schedules", "until TEXT"),
+    ("chat_schedules", "max_fires INTEGER"),
+    ("chat_schedules", "expires_at REAL"),
+    ("chat_schedules", "fire_count INTEGER NOT NULL DEFAULT 0"),
+    ("chat_schedules", "finished_reason TEXT"),
+)
+
+# Indexes over an added column. They can't live in ``_META_SCHEMA``: that
+# script also runs against an older database, before its columns exist.
+_ADDED_INDEXES: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
+    "ON chat_sessions(pinned DESC, updated_at DESC)",
+)
+
 
 @dataclass(frozen=True)
 class ChatMeta:
@@ -286,51 +310,28 @@ class ChatStore:
         self._migrate()
 
     def _migrate(self) -> None:
-        """Apply schema additions made after the initial release (idempotent).
+        """Bring an older database up to ``_META_SCHEMA`` (idempotent).
 
-        ``SQLiteStore`` ensures the base schema on first connect, but ``CREATE
-        TABLE IF NOT EXISTS`` never adds a column to a table that already
-        exists — so a column added later needs a guarded ``ALTER TABLE`` for
-        pre-existing databases. The ``pinned`` index lives here (not in
-        ``_META_SCHEMA``) because that script also runs against legacy DBs
-        before this migration adds the column.
+        Adds each of :data:`_ADDED_COLUMNS` a table lacks, then
+        :data:`_ADDED_INDEXES`. A fresh database already has them all.
         """
-
-        def add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
-            try:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
-            except sqlite3.OperationalError as exc:
-                # Another worker added the column between our PRAGMA check and
-                # this ALTER (concurrent multi-worker startup). Tolerate that
-                # one case; re-raise anything else.
-                if "duplicate column" not in str(exc).lower():
-                    raise
-
         with self._meta._tx() as conn:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
-            if "pinned" not in cols:
-                add_column(conn, "chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0")
-            # Subagent child sessions (0.9.17): a task session points at the
-            # chat that spawned it, so the UI can group tasks out of the list.
-            if "parent_id" not in cols:
-                add_column(conn, "chat_sessions", "parent_id TEXT")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
-                "ON chat_sessions(pinned DESC, updated_at DESC)"
-            )
-            # Stop-condition columns (0.8.34). NOTE: the pre-chat_-prefix
-            # ``schedules`` table fold (lovia <= 0.8.26) was retired here —
-            # those legacy rows are no longer migrated.
-            scols = {r[1] for r in conn.execute("PRAGMA table_info(chat_schedules)")}
-            for column_def in (
-                "until TEXT",
-                "max_fires INTEGER",
-                "expires_at REAL",
-                "fire_count INTEGER NOT NULL DEFAULT 0",
-                "finished_reason TEXT",
-            ):
-                if column_def.split(" ", 1)[0] not in scols:
-                    add_column(conn, "chat_schedules", column_def)
+            present: dict[str, set[str]] = {}
+            for table, column_def in _ADDED_COLUMNS:
+                if table not in present:
+                    rows = conn.execute(f"PRAGMA table_info({table})")
+                    present[table] = {r[1] for r in rows}
+                if column_def.split(" ", 1)[0] in present[table]:
+                    continue
+                try:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+                except sqlite3.OperationalError as exc:
+                    # Another worker added it between our PRAGMA and this ALTER
+                    # (concurrent multi-worker startup) — only that is fine.
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            for statement in _ADDED_INDEXES:
+                conn.execute(statement)
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.

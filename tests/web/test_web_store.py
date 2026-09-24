@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from lovia.stores import InMemorySession
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
-from lovia.web.store import RunRow, ScheduleRow
+from lovia.web.store import _ADDED_COLUMNS, RunRow, ScheduleRow
 
 
 def _journal_mode(path: Path) -> str:
@@ -287,6 +288,55 @@ async def test_migration_backfills_pinned_on_legacy_db(tmp_path: Path) -> None:
     again = ChatStore.sqlite(path)
     meta = await again.get("legacy")
     assert meta is not None and meta.pinned is True
+
+
+def _shape(path: Path) -> tuple[dict[str, set[tuple]], set[str]]:
+    """Each chat table's columns (name, type, notnull, default, pk) + indexes."""
+    conn = sqlite3.connect(path)
+    tables = {
+        t: {tuple(r[1:]) for r in conn.execute(f"PRAGMA table_info({t})")}
+        for t in ("chat_sessions", "chat_schedules", "chat_runs")
+    }
+    indexes = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name NOT LIKE 'sqlite_autoindex%'"
+        )
+    }
+    conn.close()
+    return tables, indexes
+
+
+def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
+    """Every added column/index reaches an older database, exactly as a fresh
+    one declares it — the guard against a column added to the schema but not
+    to ``_ADDED_COLUMNS`` (or declared differently in each)."""
+    fresh = tmp_path / "fresh.db"
+    ChatStore(InMemorySession(), meta_path=fresh)
+    fresh_shape = _shape(fresh)
+
+    # Rebuild each table as it shipped: the fresh columns minus the added ones.
+    added = {(t, d.split(" ", 1)[0]) for t, d in _ADDED_COLUMNS}
+    old = tmp_path / "old.db"
+    conn = sqlite3.connect(old)
+    for table, columns in fresh_shape[0].items():
+        defs = [
+            f"{name} {type_}"
+            + (" NOT NULL" if notnull else "")
+            + (f" DEFAULT {default}" if default is not None else "")
+            + (" PRIMARY KEY" if pk else "")
+            for name, type_, notnull, default, pk in sorted(columns)
+            if (table, name) not in added
+        ]
+        conn.execute(f"CREATE TABLE {table} ({', '.join(defs)})")
+    conn.commit()
+    conn.close()
+
+    ChatStore(InMemorySession(), meta_path=old)
+    assert _shape(old) == fresh_shape
+    ChatStore(InMemorySession(), meta_path=old)  # a second open is a no-op
+    assert _shape(old) == fresh_shape
 
 
 async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:

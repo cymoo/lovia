@@ -9,6 +9,7 @@ exposes the interactive schema at `/api/docs`.
 | `create_app(agent, ui=False)` | You want a standalone service without the bundled page |
 | `create_app(...)` | You want a complete ASGI app but will start the server yourself |
 | `build_api_router(...)` | An existing FastAPI app already owns middleware and lifecycle |
+| `app.mount(prefix, create_app(...))` | An existing app should host a complete lovia app under a prefix |
 
 ## Serving the API without the UI
 
@@ -60,6 +61,24 @@ app = FastAPI(lifespan=lifespan)
 Agents carrying the `Subagents` Plugin also need `wire_subagents(deps)`
 once (see [Web UI](web-ui.md#background-subagents)).
 
+### Mounting a `create_app()` app
+
+An app built by `create_app()` can also be mounted under a prefix of yours.
+Starlette runs only the outer app's lifespan — a mounted app's never starts,
+and nothing reports it — so enter it from yours:
+
+```python
+lovia_app = create_app(agent, ui=False)   # the bundled page expects the root
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with lovia_app.state.deps.lifespan():
+        yield
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/lovia", lovia_app)            # API at /lovia/api/...
+```
+
 ## Authentication
 
 With `create_app(token=...)`, every business route registered by
@@ -69,13 +88,15 @@ host generates one when none was supplied.
 Plain requests, `POST /api/chat/stream`, and `POST /api/chat/reconnect` send
 `Authorization: Bearer <token>`. `GET /api/events` uses `EventSource`, which
 cannot set custom headers, so the bundled UI authenticates it with the
-`lovia_token` cookie. `GET /healthz` stays open. Missing or invalid credentials
+`lovia_token` cookie. `GET /healthz` is served by `create_app` outside the
+guard, so it stays open under `token` and `auth` alike. Missing or invalid credentials
 return `401` with code `server_token` — distinct from a model provider
 rejecting its API key, which arrives as a run error (`provider_auth`).
 
 Apps mounting `build_api_router` themselves must add their own dependency,
 such as `token_dependency(token)` from `lovia.web.auth` or any FastAPI
-authentication dependency. `/api/docs` and `/api/openapi.json` belong to the
+authentication dependency — and their own health probe, since `/healthz` is
+not part of the router. `/api/docs` and `/api/openapi.json` belong to the
 FastAPI app rather than this router and remain public by default.
 
 ## Errors
@@ -124,7 +145,7 @@ normalizes all three.
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET /healthz` | liveness |
+| `GET /healthz` | liveness (served by `create_app`, not `build_api_router`) |
 | `GET /api/info` | title, agents, default agent, version, feature flags |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities) |
 | `POST /api/chat` | one **blocking** Run → `{output, session_id, usage}` |

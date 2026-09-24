@@ -10,7 +10,7 @@
 
 | 边界 | 生产环境选择 |
 | --- | --- |
-| 身份认证 | 在 Web/API 服务前接入认证网关；lovia 本身不提供认证 |
+| 身份认证 | `serve()` 在非回环地址上从不匿名开放 API（自动生成或固定的 `token`）；按用户区分身份需要 `auth=` 或带认证的网关 |
 | 网络 | 除非前方已有受保护的代理，否则保持默认的 Loopback 绑定 |
 | Workspace | 从 `readonly` 或关闭状态开始；本地可写 Workspace 等同于宿主机代码执行能力 |
 | 密钥 | 只传入必要的环境变量；Workspace Shell 默认使用最小环境，除非设置 `inherit_env=True` |
@@ -55,10 +55,12 @@ result = await agent.run(
 
 ## 安全地提供服务
 
-!!! danger "内置服务不提供身份认证"
+!!! danger "token 是一份共享凭据"
 
-    `lovia web` 和 `create_app()` 信任所有请求。请绑定 Loopback，或部署在带认证和限流的
-    反向代理之后。公网服务一旦结合可写 Workspace，就等同于以服务端用户身份远程执行代码。
+    `create_app()` 本身信任所有请求；`serve()` 拒绝在非回环地址上运行这样的应用，并为直接传入的
+    Agent 自动生成 token。这个 token 是一份共享密钥：持有它就能访问全部 API，若 Workspace 可写，
+    还等于能以服务端用户身份执行代码。需要按用户区分身份时，请使用 `auth=`（见
+    [Web 服务端](web-server.md#认证)）或带认证的反向代理，并加上限流。
 
 内置服务按单进程设计。SQLite 数据可以持久化，但正在运行的 Run、审批、SSE 订阅者和定时任务
 协调状态都保存在进程内。请使用 `workers=1`；需要扩展时，应运行相互隔离的应用实例，并明确

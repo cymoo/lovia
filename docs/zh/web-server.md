@@ -116,6 +116,35 @@ async def my_auth(request: Request) -> None:
 serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
+它保护的范围和 token 完全相同，由此带来三点影响：
+
+- **内置 UI 需要 cookie。** `EventSource`、`<img>` 预览和下载链接都无法携带自定义请求头，
+  只读取 `Authorization` 的依赖会把它们挡在外面，因此还要接受你的会话 cookie。
+- **自己添加的路由需要自己保护。** 挂载时加上 `dependencies=[Depends(my_auth)]`。
+  UI 页面和 `/api/docs` 仍然公开；如需保护整个站点，请使用中间件或反向代理。
+- **跨域前端使用 cookie 认证时**，需要允许携带凭据的 CORS，而 `cors_origins` 不会开启这一项
+  （见下文）。
+
+跨域场景下，请不要设置 `cors_origins`，自行添加中间件：
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app = create_app(agent, auth=my_auth)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://chat.example.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+如果前后端属于不同的站点（而不只是同一站点的不同子域名），cookie 必须设为
+`SameSite=None`，此时需要自行防范 CSRF：取消运行、立即执行定时任务、上传文件等接口是
+无请求体或 multipart 的 POST，属于不触发 CORS 预检的“简单请求”。内置 token cookie 使用
+`SameSite=Strict`，不受影响。
+
 `create_app()` 本身默认不启用认证；交给其他 ASGI 服务器运行时，请自行传入 `token` 或
 `auth`。`serve()` 只检查由 `create_app()` 构建的应用；自行挂载 `build_api_router` 的应用
 沿用自身的中间件，按原样运行。

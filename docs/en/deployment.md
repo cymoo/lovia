@@ -11,7 +11,7 @@ at the same time as each capability is opened—not as a final hardening pass.
 
 | Boundary | Production choice |
 | --- | --- |
-| Authentication | Put the Web/API server behind your authentication gateway; lovia does not provide auth |
+| Authentication | `serve()` never exposes the API anonymously off loopback (a generated or fixed `token`); per-user identity needs `auth=` or an authenticating gateway |
 | Network | Keep the default loopback bind unless a protected proxy is in front |
 | Workspace | Start with `readonly` or disabled; a writable local Workspace is host-level code execution |
 | Secrets | Pass only required environment variables; Workspace Shell uses a minimal environment unless `inherit_env=True` |
@@ -57,12 +57,15 @@ before traffic arrives.
 
 ## Serving safely
 
-!!! danger "The bundled server has no authentication"
+!!! danger "A token is one shared credential"
 
-    `lovia web` and `create_app()` trust every request. Bind to loopback, or
-    deploy behind an authenticated reverse proxy with rate limits. A public
-    server combined with a writable Workspace is remote code execution as the
-    server user.
+    `create_app()` on its own trusts every request; `serve()` refuses to run
+    such an app off loopback and gives a bare Agent a generated token. That
+    token is a single shared secret: whoever holds it gets the whole API —
+    with a writable Workspace, code execution as the server user. For
+    per-user identity use `auth=` (see
+    [Web server](web-server.md#authentication)) or an authenticating reverse
+    proxy, and add rate limits.
 
 The bundled server is designed for one process. SQLite data is durable, but
 live Runs, approvals, SSE subscribers, and scheduling coordination are held in

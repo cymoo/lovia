@@ -81,8 +81,15 @@ def test_chat_post_and_stream_honor_token() -> None:
     assert ok.status_code == 200
 
 
-def test_healthz_and_ui_shell_stay_open() -> None:
-    c = _client(token=TOKEN)
+async def _deny_all(request: Request) -> None:
+    raise HTTPException(status_code=401, detail="login required")
+
+
+@pytest.mark.parametrize("guard", [{"token": TOKEN}, {"auth": _deny_all}])
+def test_healthz_and_ui_shell_stay_open(guard: dict) -> None:
+    c = _client(**guard)
+    assert c.get("/api/agents").status_code == 401
+    # Probes must not need credentials, whatever the guard is.
     assert c.get("/healthz").status_code == 200
     # The UI shell is public — it carries no data and must be able to load so
     # it can collect the token client-side.

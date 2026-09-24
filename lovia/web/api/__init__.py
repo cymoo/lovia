@@ -47,10 +47,6 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
     """Assemble the complete JSON + SSE API (no HTML UI)."""
     router = APIRouter()
 
-    @router.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
-
     @router.get("/api/info", response_model=ServerInfo)
     async def info() -> ServerInfo:
         return ServerInfo(

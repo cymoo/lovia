@@ -1115,7 +1115,8 @@ def test_build_api_router_is_embeddable() -> None:
     app = FastAPI()
     app.include_router(build_api_router(deps))
     c = TestClient(app)
-    assert c.get("/healthz").json() == {"status": "ok"}
+    # The probe belongs to the app (create_app serves it), not the API.
+    assert c.get("/healthz").status_code == 404
     assert c.get("/api/agents").json() == [
         {
             "name": "bot",

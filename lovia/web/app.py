@@ -226,10 +226,11 @@ def create_app(
 
     ``token`` guards every ``/api/*`` route with bearer-token auth (see
     :mod:`lovia.web.auth`: ``Authorization: Bearer`` header or the UI's token
-    cookie; ``/healthz`` stays open). ``auth`` replaces that check with your
-    own FastAPI dependency (sessions, OAuth, …) — pass one or the other, not
-    both. Neither is set by default: :func:`create_app` alone imposes no auth,
-    while :func:`serve` refuses to run such an app on a non-loopback host.
+    cookie). ``auth`` replaces that check with your own FastAPI dependency
+    (sessions, OAuth, …) — pass one or the other, not both; ``/healthz`` stays
+    open under either. Neither is set by default: :func:`create_app` alone
+    imposes no auth, while :func:`serve` refuses to run such an app on a
+    non-loopback host.
 
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines, and
@@ -315,8 +316,13 @@ def create_app(
         from .subagents import _wire
 
         _wire(deps)
-    # Auth guards the API router only: static assets and the UI shell carry no
-    # data, and serving them lets the UI collect the token client-side.
+
+    # Auth guards the API router only. The probe, the UI shell and the static
+    # assets carry no data; serving the shell lets the UI collect the token.
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
     guard = auth if auth is not None else (token_dependency(token) if token else None)
     if config_runtime is not None:
         config_runtime.bind(deps)

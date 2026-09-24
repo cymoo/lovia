@@ -131,8 +131,13 @@ Then run:
 lovia web --app app:assistant
 ```
 
-`--app MODULE:ATTR` accepts one Agent or a `{name: agent}` mapping. For Python
-deployment and ASGI integration, see [Web server](web-server.md).
+`--app MODULE:ATTR` accepts one Agent, a `{name: agent}` mapping, or an app
+built with `create_app()` (or a zero-argument factory returning any of them).
+An app is served as built — your own auth, storage, and UI options — with the
+CLI still handling host, port, logging, and the startup banner; options it
+would otherwise pass to `create_app()` (`--token`, `--db`, `--title`, …) are
+ignored with a warning. For Python deployment and ASGI integration, see
+[Web server](web-server.md).
 
 The interface renders GitHub-flavored Markdown, highlighted code, Mermaid, and
 inline images. The default Agent is told about these capabilities; a custom
@@ -209,7 +214,7 @@ flag, environment variable, then default.
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--token` | `LOVIA_WEB_TOKEN` | Not needed on loopback; generated otherwise |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
-| `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent |
+| `--app MODULE:ATTR` | `LOVIA_APP` | Build the default Agent (or: an Agent, mapping, or app of your own) |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |

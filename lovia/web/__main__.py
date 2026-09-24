@@ -3,7 +3,8 @@
 Builds a ready-made agent (model, skills, long-term memory, a todo checklist,
 current-date awareness, model-driven scheduled runs, built-in tools — time,
 HTTP fetch, web search — and a workspace) and serves it with the bundled web
-UI. ``--app module:attribute`` serves your own ``Agent`` instead.
+UI. ``--app module:attribute`` serves your own ``Agent`` — or a whole app
+from :func:`~lovia.web.create_app`, as built — instead.
 
 The model connection is not a flag: it lives in ``config.json`` (see
 :mod:`lovia.web.config`) and is managed in one place — the web UI's
@@ -43,6 +44,9 @@ from .app import (
     create_app,
     serve,
 )
+from fastapi import FastAPI  # after .app: its import names a missing [web] extra
+
+from .api import RouterDeps
 from .auth import is_loopback
 from .builder import (
     DEFAULT_MAX_TURNS,
@@ -77,6 +81,7 @@ examples:
   lovia web --port 9000
   lovia web --workspace ~/notes --readonly # let it read, not write
   lovia web --app myagents:assistant       # serve your own agent
+  lovia web --app myserver:app             # ... or your own create_app() app
 
 configuration:
   The model connection (model, base URL, API key, context window), extra
@@ -148,7 +153,8 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     agent.add_argument(
         "--app",
         metavar="MODULE:ATTR",
-        help="serve your own Agent (or mapping/factory) instead (env LOVIA_APP)",
+        help="serve your own Agent, mapping, or create_app() app (or a factory "
+        "of one) instead (env LOVIA_APP)",
     )
     agent.add_argument(
         "--instructions-file",
@@ -268,11 +274,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     return p
 
 
-def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
-    """Import ``module:attribute`` and return the Agent (or mapping) it names.
+def load_app_target(
+    target: str,
+) -> Agent[Any] | Mapping[str, Agent[Any]] | FastAPI:
+    """Import ``module:attribute`` and return the Agent, mapping, or app it names.
 
-    If the attribute is a callable that is not itself an Agent/mapping, it is
-    treated as a factory and called with no arguments.
+    An app (from :func:`~lovia.web.create_app`, or any FastAPI app) is served
+    as built. Any other callable is a factory, called with no arguments.
     """
     if ":" not in target:
         raise CliError(
@@ -291,14 +299,15 @@ def load_app_target(target: str) -> Agent[Any] | Mapping[str, Agent[Any]]:
         obj = getattr(module, attr)
     except AttributeError as exc:
         raise CliError(f"module {module_name!r} has no attribute {attr!r}") from exc
-    if callable(obj) and not isinstance(obj, (Agent, Mapping)):
+    # An app is itself callable (ASGI) — it must not be mistaken for a factory.
+    if callable(obj) and not isinstance(obj, (Agent, Mapping, FastAPI)):
         obj = obj()
-    if not isinstance(obj, (Agent, Mapping)):
+    if not isinstance(obj, (Agent, Mapping, FastAPI)):
         raise CliError(
-            f"--app target {target!r} is not an Agent or a mapping of agents "
-            f"(got {type(obj).__name__})"
+            f"--app target {target!r} is not an Agent, a mapping of agents, or "
+            f"an app (got {type(obj).__name__})"
         )
-    return cast("Agent[Any] | Mapping[str, Agent[Any]]", obj)
+    return cast("Agent[Any] | Mapping[str, Agent[Any]] | FastAPI", obj)
 
 
 def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
@@ -317,6 +326,25 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
     ignored = [name for name, given in flags if given]
     if ignored:
         log.warning("--app set; ignoring default-agent options: %s", ", ".join(ignored))
+
+
+def _warn_ignored_app_flags(args: argparse.Namespace) -> None:
+    """An ``--app`` that is already an app was configured by create_app()."""
+    flags = [
+        ("--token", args.token is not None),
+        ("--title", args.title is not None),
+        ("--db", args.db is not None),
+        ("--no-followups", args.no_followups),
+        ("--max-turns", args.max_turns is not None),
+        ("--max-retries", args.max_retries is not None),
+    ]
+    ignored = [name for name, given in flags if given]
+    if ignored:
+        log.warning(
+            "--app is a built app; ignoring options it was built without: %s "
+            "(pass them to create_app instead)",
+            ", ".join(ignored),
+        )
 
 
 def _warn_if_exposed(host: str, workspace: object) -> None:
@@ -406,7 +434,9 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # A wildcard bind is not a browsable address: show one that is.
         url = f"http://{_display_host(host)}:{port}"
 
-        agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]]
+        agent_or_agents: Agent[Any] | Mapping[str, Agent[Any]] = {}
+        # An --app that is already an app: served as built, no create_app here.
+        built_app: FastAPI | None = None
         # For the default agent we build the store up front (rather than letting
         # create_app build it) so the schedule_run tool can close over the same
         # ChatStore the scheduler polls. Custom --app agents keep using db_path.
@@ -431,20 +461,28 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
                     "a custom --app brings its own"
                 )
             _warn_ignored_agent_flags(args)
-            agent_or_agents = load_app_target(app_target)
-            custom_agents = (
-                agent_or_agents.values()
-                if isinstance(agent_or_agents, Mapping)
-                else [agent_or_agents]
-            )
+            loaded_target = load_app_target(app_target)
+            if isinstance(loaded_target, FastAPI):
+                _warn_ignored_app_flags(args)
+                built_app = loaded_target
+                deps = getattr(built_app.state, "deps", None)
+                custom_agents = (
+                    list(deps.agents.values()) if isinstance(deps, RouterDeps) else []
+                )
+                db_desc = "(configured by the app)"
+            else:
+                agent_or_agents = loaded_target
+                custom_agents = (
+                    list(agent_or_agents.values())
+                    if isinstance(agent_or_agents, Mapping)
+                    else [agent_or_agents]
+                )
+                # Without --db, create_app derives the file from the agent name.
+                db_desc = db_path or "(./.lovia/<agent>.db, from the agent's name)"
             for custom_agent in custom_agents:
                 _warn_if_exposed(host, custom_agent.workspace)
             summary = webconfig.format_app_summary(
-                version=__version__,
-                app_target=app_target,
-                # Without --db, create_app derives the file from the agent name.
-                db_desc=db_path or "(./.lovia/<agent>.db, from the agent's name)",
-                url=url,
+                version=__version__, app_target=app_target, db_desc=db_desc, url=url
             )
         else:
             db_desc = db_path or str(_default_db_path("lovia"))
@@ -499,33 +537,35 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # stdout, not the logger: the summary must be visible at every log
         # level, while log lines keep flowing to stderr.
         print(summary, flush=True)
-        app = create_app(
-            agent_or_agents,
-            title=title,
-            # `store` wins when set (default agent); otherwise create_app builds
-            # one from db_path (the custom --app path).
-            store=store,
-            db_path=db_path,
-            context_policy=context_policy,
-            max_turns=resolve_max_turns(args.max_turns),
-            retry=retry,
-            token=token or _generated_token(host),
-            followups=resolve_followups(args.no_followups),
-            title_model=aux_model,
-            followup_model=aux_model,
-            # Deny an unanswered tool approval after 10 minutes. Without it a
-            # clientless run (a scheduled fire, a subagent task) parked on an
-            # approval holds one of the concurrency slots forever; for a chat
-            # the user is watching, ten idle minutes means the answer is no.
-            approval_timeout=600,
-            # Same policy for the ask_human tool: an unanswered question is
-            # cancelled after 10 minutes (the model gets a tool error and
-            # continues), so a scheduled run that asks can never park forever.
-            question_channel=question_channel,
-            question_timeout=600,
-            config_runtime=config_runtime,
-        )
-        serve(app, host=host, port=port, log_level=level.lower())
+        if built_app is None:
+            built_app = create_app(
+                agent_or_agents,
+                title=title,
+                # `store` wins when set (default agent); otherwise create_app
+                # builds one from db_path (the custom --app path).
+                store=store,
+                db_path=db_path,
+                context_policy=context_policy,
+                max_turns=resolve_max_turns(args.max_turns),
+                retry=retry,
+                token=token or _generated_token(host),
+                followups=resolve_followups(args.no_followups),
+                title_model=aux_model,
+                followup_model=aux_model,
+                # Deny an unanswered tool approval after 10 minutes. Without it
+                # a clientless run (a scheduled fire, a subagent task) parked on
+                # an approval holds one of the concurrency slots forever; for a
+                # chat the user is watching, ten idle minutes means the answer
+                # is no.
+                approval_timeout=600,
+                # Same policy for the ask_human tool: an unanswered question is
+                # cancelled after 10 minutes (the model gets a tool error and
+                # continues), so a scheduled run that asks can never park.
+                question_channel=question_channel,
+                question_timeout=600,
+                config_runtime=config_runtime,
+            )
+        serve(built_app, host=host, port=port, log_level=level.lower())
     except UserError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

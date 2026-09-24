@@ -105,7 +105,10 @@ assistant = Agent(
 lovia web --app app:assistant
 ```
 
-`--app MODULE:ATTR` 接受一个 Agent，或 `{name: agent}` 映射。Python 部署和 ASGI 集成详见
+`--app MODULE:ATTR` 接受一个 Agent、`{name: agent}` 映射，或由 `create_app()` 构建的应用
+（也可以是返回其中任意一种的无参工厂函数）。应用会按构建时的配置原样运行，沿用自定义的认证、
+存储和 UI 选项；CLI 仍负责 host、port、日志和启动信息。原本会传给 `create_app()` 的选项
+（`--token`、`--db`、`--title` 等）会被忽略并给出警告。Python 部署和 ASGI 集成详见
 [Web 服务端](web-server.md)。
 
 界面支持 GitHub 风格 Markdown、代码高亮、Mermaid 和内嵌图片。默认 Agent 已知道这些能力；
@@ -166,7 +169,7 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
-| `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent |
+| `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |
 | `--memory-dir` / `--no-memory` | `LOVIA_MEMORY_DIR` | `./.lovia/memory` |
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |

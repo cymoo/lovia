@@ -13,12 +13,15 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import jinja2
     from fastapi import APIRouter, Request
     from fastapi.templating import Jinja2Templates
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
+
+from ..exceptions import UserError
 
 SURFACE_NOTE = (
     "Replies render as GitHub-flavored Markdown in the chat UI, including "
@@ -41,7 +44,7 @@ via ``--app`` or :func:`~lovia.web.serve` opt in::
 Defined next to the UI it describes so the two change together.
 """
 
-_TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,11 @@ class ChatUI:
     ``{next}`` in it becomes the current page's URL-encoded path, for the
     login flow to return to. Unset, the page only says the user is signed
     out. The token check (``token=``) keeps its own prompt either way.
+
+    ``templates`` is a directory of your own Jinja templates. An
+    ``index.html`` there replaces the page; start it with
+    ``{% extends "lovia/index.html" %}`` and fill only the blocks you need —
+    ``head``, ``sidebar_footer``, ``body_end``.
     """
 
     empty_title: str = "Where shall we begin?"
@@ -65,11 +73,36 @@ class ChatUI:
     )
     empty_examples: Sequence[str] = ()
     login_url: str | None = None
+    templates: str | Path | None = None
+
+
+def _templates(directory: str | Path | None) -> Jinja2Templates:
+    if directory is None:
+        return Jinja2Templates(directory=_TEMPLATE_DIR)
+    root = Path(directory).expanduser().resolve()
+    if not root.is_dir():
+        raise UserError(
+            f"ChatUI templates directory not found: {directory}",
+            hint="pass an existing directory holding your index.html",
+        )
+    builtin = jinja2.FileSystemLoader(_TEMPLATE_DIR)
+    # Yours first; the bundled page stays reachable as "lovia/index.html" so
+    # an override can extend it without extending itself.
+    loader = jinja2.ChoiceLoader(
+        [
+            jinja2.FileSystemLoader(root),
+            jinja2.PrefixLoader({"lovia": builtin}),
+            builtin,
+        ]
+    )
+    env = jinja2.Environment(loader=loader, autoescape=jinja2.select_autoescape())
+    return Jinja2Templates(env=env)
 
 
 def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
     """Router that serves the bundled single-page chat UI."""
     router = APIRouter()
+    templates = _templates(ui.templates)
     # A bare string is one example, not an iterable of characters.
     examples = (
         [ui.empty_examples]
@@ -79,7 +112,7 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
 
     @router.get("/", include_in_schema=False)
     async def index(request: Request) -> Any:
-        response = _TEMPLATES.TemplateResponse(
+        response = templates.TemplateResponse(
             request,
             "index.html",
             {

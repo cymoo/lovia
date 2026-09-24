@@ -1107,12 +1107,10 @@ def test_build_api_router_is_embeddable() -> None:
     from fastapi import FastAPI
 
     from lovia.web import RouterDeps, build_api_router
-    from lovia.web.approvals import ApprovalRegistry
 
     deps = RouterDeps(
         agents={"bot": _make_agent([text("hi")])},
         store=ChatStore.in_memory(),
-        approvals=ApprovalRegistry(),
     )
     app = FastAPI()
     app.include_router(build_api_router(deps))

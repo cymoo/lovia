@@ -89,6 +89,20 @@ def test_create_app_auto_wires_and_manual_wire_is_idempotent() -> None:
     assert wire_subagents(app2) == 1  # the manual helper still works
 
 
+def test_wire_subagents_takes_router_deps_for_embedding_apps() -> None:
+    # An app mounting build_api_router has no app.state.deps — it wires
+    # through the RouterDeps it built.
+    from lovia.web import RouterDeps
+
+    plugin = Subagents()
+    deps = RouterDeps(
+        agents={"bot": Agent(name="bot", model=None, plugins=[plugin])},
+        store=ChatStore.in_memory(),
+    )
+    assert wire_subagents(deps) == 1
+    assert plugin.deliver is not None and plugin.run_child is not None
+
+
 async def test_deliver_injects_into_live_run_and_autochain_consumes() -> None:
     gate = asyncio.Event()
     provider = ScriptedProvider([text("first"), text("reacted to the report")])

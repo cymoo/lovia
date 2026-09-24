@@ -272,7 +272,7 @@ cannot spawn recursively.
 A custom Agent must attach the `Subagents` Plugin. `create_app()` wires a
 Plugin using its default execution mode into Web supervision; disable that with
 `create_app(..., wire_subagents=False)`. An app mounting `build_api_router`
-directly must call `wire_subagents(app)` once.
+directly must call `wire_subagents(deps)` once.
 
 Each background task has an independent Session. When it completes, its report
 enters the parent's next Turn if the parent Run is active; otherwise the server

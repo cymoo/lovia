@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +44,7 @@ from ..titles import generate_title, provisional_title
 from ..workspaces import WorkspaceSessions
 
 if TYPE_CHECKING:
+    from ..config import ConfigRuntime
     from ..questions import QuestionRegistry
     from ..supervisor import EventHub, RunSupervisor
 
@@ -52,6 +55,9 @@ log = logging.getLogger(__name__)
 class RouterDeps:
     """Everything the API routers need, plus process-wide mutable state.
 
+    That state has a lifecycle — enter :meth:`lifespan` around the app's
+    lifetime (``create_app`` does it for you).
+
     ``cancel_tokens`` and ``_bg_tasks`` are per-process: under multiple uvicorn
     workers each process has its own copies, so a cancel issued to one worker
     won't reach a stream running on another. Run a single worker if you rely on
@@ -60,7 +66,7 @@ class RouterDeps:
 
     agents: dict[str, Agent[Any]]
     store: ChatStore
-    approvals: ApprovalRegistry
+    approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
     title: str = "lovia"
     context_policy: ContextPolicy | None = None
     title_model: str | Provider | None = None
@@ -85,6 +91,9 @@ class RouterDeps:
     # forever). Without it a clientless (scheduled) run parked on an approval
     # holds one of the ``max_background_runs`` slots indefinitely.
     approval_timeout: float | None = None
+    # How often (seconds) the scheduler started by ``lifespan`` checks for due
+    # schedules.
+    scheduler_poll: float = 1.0
     # Bridge for the ``ask_human`` tool (None = the app serves no question
     # channel and ``POST /api/chat/answer`` 404s). Built by ``create_app``
     # when a ``question_channel`` is supplied.
@@ -94,11 +103,10 @@ class RouterDeps:
     # end. Bound by the supervisor at run start; closed on chat deletion and
     # at app shutdown. Per-process, like the supervisor.
     workspaces: WorkspaceSessions = field(default_factory=WorkspaceSessions)
-    # The CLI's runtime-reconfiguration surface (a
-    # :class:`lovia.web.config.ConfigRuntime`), set by ``create_app`` when it
+    # The CLI's runtime-reconfiguration surface, set by ``create_app`` when it
     # received one. ``None`` — the embedder case — means no ``/api/config``
     # routes and no ``model_config`` feature flag.
-    config_runtime: Any | None = None
+    config_runtime: "ConfigRuntime | None" = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
@@ -142,6 +150,51 @@ class RouterDeps:
         stream, which stays on each run's own hub.
         """
         self.bus.publish({"event": event, "data": json.dumps(data, ensure_ascii=False)})
+
+    @asynccontextmanager
+    async def lifespan(self, _app: Any = None) -> AsyncIterator[None]:
+        """Run the API's background machinery for the app's lifetime.
+
+        On entry: settles runs a dead process left "running", starts the
+        schedule poller and the ``ask_human`` bridge. On exit: winds down live
+        runs cooperatively (leaving resumable checkpoints), closes chat
+        workspaces with their background processes, ends ``/api/events``
+        streams, and gives memory curation a bounded window to land.
+
+        :func:`~lovia.web.create_app` enters it for you. An app mounting
+        :func:`~lovia.web.build_api_router` passes it straight to FastAPI —
+        ``FastAPI(lifespan=deps.lifespan)`` — or enters it inside its own::
+
+            async with deps.lifespan():
+                yield
+        """
+        from ..scheduler import Scheduler
+        from .memory import memory_plugin
+
+        await self.store.sweep_stale_runs()
+        scheduler = Scheduler(self, poll_interval=self.scheduler_poll)
+        scheduler.start()
+        if self.questions is not None:
+            self.questions.start()
+        try:
+            yield
+        finally:
+            if self.questions is not None:
+                # Before supervisor shutdown: cancelling parked ask_human
+                # calls lets their runs wind down instead of being killed.
+                await self.questions.aclose()
+            await scheduler.stop()
+            await self.supervisor.shutdown()
+            # After the runs: workspace processes deliberately outlive run
+            # ends, so only this closes them (kill -9 orphans them).
+            await self.workspaces.aclose()
+            if self._bus is not None:
+                self._bus.close()
+            for agent in self.agents.values():
+                plugin = memory_plugin(agent)
+                if plugin is not None:
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(plugin.drain(), timeout=15.0)
 
     @property
     def cancel_tokens(self) -> dict[str, CancelToken]:

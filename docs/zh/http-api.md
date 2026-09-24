@@ -25,20 +25,35 @@ app = create_app(agent, ui=False)   # 没有 GET /，也没有 /static；只有 
 from fastapi import FastAPI
 
 from lovia.web import ChatStore, RouterDeps, build_api_router
-from lovia.web.approvals import ApprovalRegistry
 
-deps = RouterDeps(
-    agents={"bot": agent},
-    store=ChatStore.in_memory(),
-    approvals=ApprovalRegistry(),
-)
-app = FastAPI()
+deps = RouterDeps(agents={"bot": agent}, store=ChatStore.in_memory())
+app = FastAPI(lifespan=deps.lifespan)
 app.include_router(build_api_router(deps))
 ```
 
-`RouterDeps` 是普通 dataclass，`agents`、`store` 和 `approvals` 为必填字段。
-`max_turns`、`budget`、`retry`、`tracer`、`approval_timeout`、`max_background_runs`
-及标题设置均有与 `create_app()` 相同的默认值。
+`RouterDeps` 是普通 dataclass，只有 `agents` 和 `store` 为必填字段。
+`max_turns`、`budget`、`retry`、`tracer`、`approval_timeout`、`max_background_runs`、
+`scheduler_poll` 及标题设置均有与 `create_app()` 相同的默认值。
+
+`deps.lifespan` 负责 API 背后的后台机制：启动时把上个进程遗留的 `running` 运行记录标记为中断，
+并启动定时任务轮询；关闭时让进行中的 Run 停在可恢复的 checkpoint，并关闭各对话的工作区及其
+后台进程。不接入它，定时任务永远不会触发。应用已有自己的 lifespan 时，在其中嵌套进入：
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 自己的启动逻辑
+    async with deps.lifespan():
+        yield
+    # 自己的关闭逻辑
+
+app = FastAPI(lifespan=lifespan)
+```
+
+Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
+（见 [Web UI](web-ui.md#后台子-agent)）。
 
 ## 认证
 

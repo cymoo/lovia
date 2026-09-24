@@ -271,16 +271,18 @@ def _wire(deps: "RouterDeps") -> int:
     return len(wired)
 
 
-def wire_subagents(app: FastAPI) -> int:
+def wire_subagents(target: "RouterDeps | FastAPI") -> int:
     """Adapt served ``Subagents`` plugins to web semantics; returns how many.
 
     ``create_app`` calls this automatically (disable with
     ``create_app(..., wire_subagents=False)``); the helper exists for apps
     that mount :func:`~lovia.web.build_api_router` into their own FastAPI
-    app. See :func:`subagent_runner` and :func:`subagent_deliver` for what
-    the wiring does.
+    app — pass the same :class:`~lovia.web.RouterDeps` (a ``create_app``
+    app works too). See :func:`subagent_runner` and :func:`subagent_deliver`
+    for what the wiring does.
     """
-    return _wire(app.state.deps)
+    deps = target.state.deps if isinstance(target, FastAPI) else target
+    return _wire(deps)
 
 
 __all__ = ["subagent_deliver", "subagent_runner", "wire_subagents"]

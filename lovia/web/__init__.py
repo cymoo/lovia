@@ -18,14 +18,9 @@ Bring your own UI: mount the UI-free API router into your own FastAPI app::
 
     from fastapi import FastAPI
     from lovia.web import RouterDeps, build_api_router, ChatStore
-    from lovia.web.approvals import ApprovalRegistry
 
-    deps = RouterDeps(
-        agents={"bot": agent},
-        store=ChatStore.in_memory(),
-        approvals=ApprovalRegistry(),
-    )
-    app = FastAPI()
+    deps = RouterDeps(agents={"bot": agent}, store=ChatStore.in_memory())
+    app = FastAPI(lifespan=deps.lifespan)  # or enter it inside your own
     app.include_router(build_api_router(deps))
 """
 

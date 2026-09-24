@@ -221,7 +221,7 @@ Run。附件不会排队，需要等当前 Run 结束后再发送。
 
 自定义 Agent 需要自行添加 `Subagents` Plugin。`create_app()` 会把使用默认执行方式的 Plugin
 接入 Web 托管；可用 `create_app(..., wire_subagents=False)` 禁用。直接挂载
-`build_api_router` 时，需要调用一次 `wire_subagents(app)`。
+`build_api_router` 时，需要调用一次 `wire_subagents(deps)`。
 
 每个后台任务都有独立 Session。任务完成后，报告会送回父对话：父 Run 仍在执行时进入下一 Turn；
 父对话空闲时，服务端会自动启动一次 Run 处理报告。浏览器无需保持在线。

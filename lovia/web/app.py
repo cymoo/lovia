@@ -346,13 +346,7 @@ def create_app(
             name="static",
         )
 
-    # Stash for tests / introspection.
-    app.state.agents = agents
-    app.state.store = chat_store
-    app.state.session = chat_store.session
-    app.state.approvals = deps.approvals
-    app.state.context_policy = context_policy
-    app.state.tracer = tracer
+    # The app's served agents, store, and live runs, for introspection.
     app.state.deps = deps
     app.state.lovia_serving = _Serving(token=token, guarded=guard is not None)
     return app

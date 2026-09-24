@@ -292,7 +292,7 @@ def test_denied_paths_apply_to_the_panel(client: TestClient) -> None:
 
 
 def test_symlink_escaping_root_is_denied(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.agents["bot"].workspace.root)
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
     outside = root.parent / "outside.txt"
     outside.write_text("nope")
     (root / "sneaky.txt").symlink_to(outside)
@@ -439,7 +439,7 @@ def test_raw_revalidation_etag_304(client: TestClient, ws_app) -> None:
     assert r3b.status_code == 304
 
     # Changed file → validator no longer matches, full bytes again.
-    root = Path(ws_app.state.agents["bot"].workspace.root)
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
     (root / "pic.png").write_bytes(PNG_BYTES + b"\x00")
     import os
 
@@ -454,8 +454,8 @@ def test_raw_revalidation_etag_304(client: TestClient, ws_app) -> None:
 
 
 def test_raw_size_cap(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.agents["bot"].workspace.root)
-    limit = ws_app.state.agents["bot"].workspace.limits.max_file_read_bytes
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
+    limit = ws_app.state.deps.agents["bot"].workspace.limits.max_file_read_bytes
     (root / "huge.bin").write_bytes(b"x" * (limit + 1))
     r = client.get(
         "/api/workspace/raw",
@@ -468,7 +468,7 @@ def test_raw_size_cap(client: TestClient, ws_app) -> None:
 
 
 def test_upload_writes_to_uploads_and_serves_back(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.agents["bot"].workspace.root)
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
     r = client.post(
         "/api/workspace/upload",
         params={"agent": "bot"},
@@ -499,7 +499,7 @@ def test_upload_requires_a_workspace(client: TestClient) -> None:
 
 
 def test_upload_sanitizes_filename_no_traversal(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.agents["bot"].workspace.root)
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
     r = client.post(
         "/api/workspace/upload",
         params={"agent": "bot"},
@@ -638,7 +638,7 @@ def test_chat_rejects_request_whose_attachments_are_all_invalid(
 
 
 def test_chat_accepts_a_valid_attachment(client: TestClient, ws_app) -> None:
-    root = Path(ws_app.state.agents["bot"].workspace.root)
+    root = Path(ws_app.state.deps.agents["bot"].workspace.root)
     (root / "uploads").mkdir(exist_ok=True)
     (root / "uploads" / "a.png").write_bytes(PNG_BYTES)
     r = client.post(

@@ -1026,7 +1026,7 @@ async def test_reconnect_view_does_not_duplicate_user_message() -> None:
     from lovia.transcript import AssistantTextEntry, InputEntry
 
     app = _app(_make_agent([text("done")]))
-    store: ChatStore = app.state.store
+    store: ChatStore = app.state.deps.store
     sid = "sess-reconnect"
 
     # A prior, already-persisted exchange.
@@ -1225,7 +1225,7 @@ async def test_leftover_message_auto_chains_into_next_run() -> None:
             if self.n == 1:
                 # Pushed after this run's turn-start drain → a leftover that
                 # seeds the next run over the same connection.
-                self.deps.mailboxes[self.sid].push("again")
+                self.deps.supervisor.get(self.sid).mailbox.push("again")
                 yield TextDelta(text="first")
             else:
                 yield TextDelta(text="second")
@@ -1255,8 +1255,8 @@ async def test_leftover_message_auto_chains_into_next_run() -> None:
     # The leftover reaches the next run as a rendered user turn (not silent input).
     injected = [d["content"] for (e, d) in evs if e == "user_injected"]
     assert injected == ["again"]
-    # The mailbox was torn down once the chain finished.
-    assert "s1" not in app.state.deps.mailboxes
+    # The run (and its mailbox) was torn down once the chain finished.
+    assert app.state.deps.supervisor.get("s1") is None
 
 
 @pytest.mark.asyncio
@@ -1306,7 +1306,7 @@ async def test_inject_then_cancel_does_not_chain() -> None:
 
     # Only the first turn ran; the mailbox was cleaned up; no second run.
     assert len(provider.calls) == 1
-    assert "s1" not in app.state.deps.mailboxes
+    assert app.state.deps.supervisor.get("s1") is None
 
 
 @pytest.mark.asyncio

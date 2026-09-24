@@ -146,7 +146,7 @@ function _schedulePoll() {
 export function initEventStream() {
   if (typeof EventSource === 'undefined') return; // keep polling instead
   const refresh = () => loadSessions();
-  const es = new EventSource('/api/events');
+  const es = new EventSource(api.eventsUrl());
   es.onopen = () => {
     _eventsLive = true;
     clearTimeout(_pollTimer);

@@ -68,7 +68,7 @@ Starlette runs only the outer app's lifespan — a mounted app's never starts,
 and nothing reports it — so enter it from yours:
 
 ```python
-lovia_app = create_app(agent, ui=False)   # the bundled page expects the root
+lovia_app = create_app(agent)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
         yield
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/lovia", lovia_app)            # API at /lovia/api/...
+app.mount("/lovia", lovia_app)            # page at /lovia/, API at /lovia/api/...
 ```
 
 ## Authentication

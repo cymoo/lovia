@@ -19,8 +19,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 
 `serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` 运行由 `create_app()`
 构建的应用；直接传入 Agent（或 `{name: agent}` 映射）时，则按默认选项构建应用，
-`serve(agent)` 是最快的启动方式。`log_level`、`ssl_certfile`、`workers` 等选项会原样传给
-uvicorn。改用其他 ASGI 服务器时，不必经过 `serve()`。
+`serve(agent)` 是最快的启动方式。`log_level`、`ssl_certfile`、`workers`、`root_path`
+（[部署在代理后面时](#部署在路径前缀下)）等选项会原样传给 uvicorn。改用其他 ASGI 服务器时，
+不必经过 `serve()`。
 
 `create_app(agent_or_agents, ...)` 的选项：
 
@@ -34,11 +35,28 @@ uvicorn。改用其他 ASGI 服务器时，不必经过 `serve()`。
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
 | `approval_timeout` | `None` | 超过指定秒数后自动拒绝未处理的审批 |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
-| `ui` | `True` | 设为 `False` 时只提供 API |
+| `ui` | `True` | 设为 `False` 时只提供 API；传入 `ChatUI` 可定制内置页面（见下文） |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
 | `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
-| `title` / `empty_title` / `empty_description` | lovia 默认文案 | UI 文案和品牌 |
-| `empty_examples` | `None` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
+| `title` | `"lovia"` | 页面标题，也是 API 报告的标题 |
+
+`ChatUI` 的选项（用于 `ui=ChatUI(...)`）：
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `empty_title` / `empty_description` | lovia 默认文案 | 空白聊天页的文案；说明可以是若干短句组成的列表 |
+| `empty_examples` | `()` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
+| `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
+
+```python
+from lovia.web import ChatUI, create_app
+
+app = create_app(
+    agent,
+    title="Acme",
+    ui=ChatUI(empty_title="问问 Acme", empty_examples=["总结今天的工单"]),
+)
+```
 
 Transcript、聊天元数据和 Run 检查点共用同一个 SQLite 文件，并以 **WAL 模式**打开，
 使界面的读取不必排在检查点写入之后。已有的数据库会在首次打开时完成迁移。
@@ -145,9 +163,36 @@ app.add_middleware(
 无请求体或 multipart 的 POST，属于不触发 CORS 预检的“简单请求”。内置 token cookie 使用
 `SameSite=Strict`，不受影响。
 
+**登录跳转。** 内置页面无法显示你的登录表单，需要告诉它登录页在哪里。设置
+`ui=ChatUI(login_url="/login?next={next}")` 后，只要 API 请求被你的依赖以 401 拒绝，浏览器
+就会跳转到该地址，其中 `{next}` 会替换为当前页面经过 URL 编码的路径（含查询参数）。未设置
+`login_url` 时，页面只提示用户未登录。短时间内多个 401 只会触发一次处理；内置 token 校验
+返回的 401（错误码 `server_token`）仍然弹出 token 输入框。
+
 `create_app()` 本身默认不启用认证；交给其他 ASGI 服务器运行时，请自行传入 `token` 或
 `auth`。`serve()` 只检查由 `create_app()` 构建的应用；自行挂载 `build_api_router` 的应用
 沿用自身的中间件，按原样运行。
+
+## 部署在路径前缀下
+
+反向代理把应用发布在 `/lovia/` 下、转发前剥掉该前缀时，需要把前缀告诉 uvicorn：
+
+```nginx
+location /lovia/ {
+    proxy_pass http://127.0.0.1:8000/;   # 末尾的斜杠会剥掉 /lovia
+}
+```
+
+```python
+serve(app, root_path="/lovia")           # 或：lovia web --root-path /lovia
+```
+
+页面从每个请求中取得前缀，因此静态资源、API 请求、事件流和 token cookie 都限定在该前缀下；
+同一主机上的两个实例各自保存 token，互不覆盖。静态资源地址不含协议和主机名，终止 TLS 的
+代理也不会让它们变成被拦截的 `http://` 请求。服务端本身仍在根路径响应，请通过代理打开页面。
+
+如果要把 `create_app()` 应用放进已有的 FastAPI 应用，可以直接挂载
+（见 [HTTP API](http-api.md#挂载-create_app-应用)），前缀的处理方式相同。
 
 ## 托管 Run 生命周期
 

@@ -93,6 +93,7 @@ const MESSAGES = {
     'toast.memorySaved': '记忆已保存',
     'toast.memoryDreamed': '记忆已整理：{before} → {after} 条',
     'toast.unauthorized': '未授权——请刷新页面并输入服务器令牌',
+    'toast.signedOut': '未登录，或登录已过期',
     // ---- auth
     'auth.tokenPrompt': '此服务器需要访问令牌（见服务器启动日志）：',
     // ---- chat body
@@ -525,6 +526,7 @@ const EN = {
   'toast.memorySaved': 'Memory saved',
   'toast.memoryDreamed': 'Memory tidied: {before} → {after} notes',
   'toast.unauthorized': 'Unauthorized — reload and enter the server token',
+  'toast.signedOut': 'Not signed in, or your sign-in has expired',
   'auth.tokenPrompt':
     'This server requires an access token (see the server startup log):',
   'chat.followups': 'Suggested follow-ups',

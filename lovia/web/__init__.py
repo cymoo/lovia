@@ -14,6 +14,7 @@ Public surface::
     app = create_app(agents, db_path="chats.db")  # every option lives here
     serve(app, host="0.0.0.0")         # ... or run it with any ASGI server
     app = create_app(agents, ui=False) # JSON + SSE only — bring your own UI
+    app = create_app(agent, ui=ChatUI(empty_title="Ask me"))  # customize it
 
 Bring your own UI: mount the UI-free API router into your own FastAPI app::
 
@@ -36,7 +37,7 @@ try:
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .subagents import subagent_deliver, wire_subagents
-    from .ui import SURFACE_NOTE
+    from .ui import SURFACE_NOTE, ChatUI
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
@@ -45,6 +46,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 __all__ = [
     "ChatMeta",
     "ChatStore",
+    "ChatUI",
     "FollowupFn",
     "FollowupRequest",
     "QuestionRegistry",

@@ -183,6 +183,18 @@ def test_serve_token_link_brackets_an_ipv6_bind(
     assert "http://[fd00::1]:1234/?token=" in capsys.readouterr().out
 
 
+def test_serve_token_link_under_a_root_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Under a root_path only the stripping proxy reaches the page."""
+    from lovia.web import serve
+
+    captured = _fake_uvicorn(monkeypatch)
+    serve(_app(token=TOKEN), host="0.0.0.0", port=1234, root_path="/lovia")
+    assert f"UI: <your proxy>/lovia/?token={TOKEN}" in capsys.readouterr().out
+    assert captured["root_path"] == "/lovia"
+
+
 def test_blank_token_fails_fast() -> None:
     # `token=""` must not thread the needle between "auth on" and "no guard
     # installed" — it fails fast instead.

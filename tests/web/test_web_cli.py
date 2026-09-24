@@ -400,6 +400,23 @@ def _unexpected_create_app(*a: object, **k: object) -> None:
     raise AssertionError("a built --app must not be rebuilt")
 
 
+def test_main_serves_under_a_root_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_module(tmp_path, "appmod_c", _BUILT_APP_MODULE)
+    served: dict[str, object] = {}
+    monkeypatch.setattr(cli, "serve", lambda app, **k: served.update(k))
+    # Normalized to one leading slash, none trailing.
+    assert cli.main(["--app", "appmod_c:app", "--root-path", "lovia/"]) == 0
+    assert served["root_path"] == "/lovia"
+    assert "(proxied under /lovia)" in capsys.readouterr().out
+
+    monkeypatch.setenv("LOVIA_ROOT_PATH", "/chat")
+    assert cli.main(["--app", "appmod_c:app"]) == 0
+    assert served["root_path"] == "/chat"
+
+
 def test_main_refuses_a_built_app_without_auth_off_loopback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

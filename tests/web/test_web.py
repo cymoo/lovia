@@ -12,7 +12,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent, Todo, tool  # noqa: E402
-from lovia.web import create_app  # noqa: E402
+from lovia.web import ChatUI, create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -83,8 +83,10 @@ def test_healthz_and_index() -> None:
 def test_index_accepts_custom_empty_state() -> None:
     app = _app(
         _make_agent([text("hi")]),
-        empty_title="Mission control",
-        empty_description=["Tune the array", "Listen for the reply"],
+        ui=ChatUI(
+            empty_title="Mission control",
+            empty_description=["Tune the array", "Listen for the reply"],
+        ),
     )
     res = TestClient(app).get("/")
     assert res.status_code == 200
@@ -96,7 +98,7 @@ def test_index_accepts_custom_empty_state() -> None:
 def test_index_renders_example_prompts() -> None:
     app = _app(
         _make_agent([text("hi")]),
-        empty_examples=["Summarize my inbox", "Plan a weekend trip"],
+        ui=ChatUI(empty_examples=["Summarize my inbox", "Plan a weekend trip"]),
     )
     res = TestClient(app).get("/")
     assert res.status_code == 200
@@ -108,6 +110,31 @@ def test_index_renders_example_prompts() -> None:
     # matter — a follow-up chip wears `chip` but must NOT wear `empty-example`.
     assert 'class="chip empty-example"' in res.text
     assert "empty_examples" in res.text
+
+
+def _app_config(page: str) -> dict:
+    m = re.search(r'<script id="app-config"[^>]*>(.*?)</script>', page)
+    assert m, "page should embed its app-config"
+    return json.loads(m.group(1))
+
+
+def test_index_under_a_root_path() -> None:
+    """Behind a prefix-stripping proxy (or ``app.mount``) the assets and the
+    client's API base carry the prefix. Asset URLs stay root-relative: no
+    scheme or host for a TLS-terminating proxy to get wrong."""
+    app = _app(_make_agent([text("hi")]), ui=ChatUI(login_url="/login?next={next}"))
+    page = TestClient(app, root_path="/lovia").get("/").text
+    assets = [r for r in re.findall(r'(?:src|href)="([^"]+)"', page) if "/static/" in r]
+    assert assets and all(r.startswith("/lovia/static/") for r in assets)
+    cfg = _app_config(page)
+    assert cfg["base_path"] == "/lovia"
+    assert cfg["login_url"] == "/login?next={next}"
+
+
+def test_index_at_the_root_has_no_base_path() -> None:
+    cfg = _app_config(TestClient(_app(_make_agent([text("hi")]))).get("/").text)
+    assert cfg["base_path"] == ""
+    assert cfg["login_url"] is None
 
 
 def test_shell_assets_get_executable_content_types(monkeypatch) -> None:
@@ -1097,7 +1124,7 @@ def test_ui_true_serves_bundled_page_and_static() -> None:
     api_js = c.get(f"/static/{token}/js/api.js")
     assert api_js.status_code == 200
     assert "immutable" in api_js.headers["cache-control"]  # cache forever
-    assert f'href="http://testserver/static/{token}/favicon.svg"' in page
+    assert f'href="/static/{token}/favicon.svg"' in page
     favicon = c.get(f"/static/{token}/favicon.svg")
     assert favicon.status_code == 200
     assert favicon.headers["content-type"].startswith("image/svg+xml")

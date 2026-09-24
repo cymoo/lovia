@@ -167,6 +167,7 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 | 命令行选项 | 环境变量 | 默认值 |
 | --- | --- | --- |
 | `--host` / `--port` | `LOVIA_HOST` / `LOVIA_PORT` | `127.0.0.1` / `8000` |
+| `--root-path` | `LOVIA_ROOT_PATH` | 无；代理发布应用时使用的路径前缀（[详见](web-server.md#部署在路径前缀下)） |
 | `--token` | `LOVIA_WEB_TOKEN` | 回环地址无需设置；其他地址自动生成 |
 | `--db` | `LOVIA_DB` | `./.lovia/<agent>.db` |
 | `--app MODULE:ATTR` | `LOVIA_APP` | 创建默认 Agent（或使用自己的 Agent、映射或应用） |

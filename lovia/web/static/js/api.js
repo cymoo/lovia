@@ -4,9 +4,40 @@
 // as a reference implementation: import `api` (and `readSSE` for streaming) to
 // build your own front-end against the same endpoints. Every method returns a
 // Promise; `streamChat`/`reconnect` resolve to the raw `Response` so the caller
-// controls how the SSE body is consumed (see `readSSE`).
+// controls how the SSE body is consumed (see `readSSE`). Behind a path prefix,
+// or to react to a 401 in one place, call `configureApi` first.
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+
+let _base = '';
+/** @type {((err: Error & { status?: number, code?: string }) => void) | null} */
+let _onUnauthorized = null;
+let _unauthorized = false;
+
+/**
+ * Point the client at a mounted server and route auth failures.
+ *
+ * `base` is the path prefix the server is served under ('' — the default — at
+ * the root). `onUnauthorized` gets the first 401's error (see `apiError`) and
+ * no later one, so a burst of failing calls prompts or redirects once; the
+ * calls still reject as usual.
+ * @param {{ base?: string, onUnauthorized?: (err: Error & { status?: number, code?: string }) => void }} [opts]
+ */
+export function configureApi({ base, onUnauthorized } = {}) {
+  if (base !== undefined) _base = base.replace(/\/+$/, '');
+  if (onUnauthorized !== undefined) _onUnauthorized = onUnauthorized;
+}
+
+const url = (path) => _base + path;
+
+async function request(path, init) {
+  const res = await fetch(url(path), init);
+  if (res.status === 401 && _onUnauthorized && !_unauthorized) {
+    _unauthorized = true;
+    _onUnauthorized(await apiError(res.clone()));
+  }
+  return res;
+}
 
 /**
  * The Error for a failed response. API routes answer
@@ -54,14 +85,14 @@ function qs(params) {
 
 export const api = {
   // ---- agents / server info ----
-  listAgents: () => fetch('/api/agents').then(_json),
-  getAgent: (name) => fetch(`/api/agents/${encodeURIComponent(name)}`).then(_json),
-  info: () => fetch('/api/info').then(_json),
+  listAgents: () => request('/api/agents').then(_json),
+  getAgent: (name) => request(`/api/agents/${encodeURIComponent(name)}`).then(_json),
+  info: () => request('/api/info').then(_json),
 
   // ---- chat ----
   // Non-streaming turn. `body`: { message, agent?, session_id? }.
   chat: (body) =>
-    fetch('/api/chat', {
+    request('/api/chat', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -73,7 +104,7 @@ export const api = {
    * @returns {Promise<Response>} SSE stream — consume with `readSSE`.
    */
   streamChat: (body, { signal } = {}) =>
-    fetch('/api/chat/stream', {
+    request('/api/chat/stream', {
       method: 'POST',
       headers: { ...JSON_HEADERS, accept: 'text/event-stream' },
       body: JSON.stringify(body),
@@ -86,36 +117,36 @@ export const api = {
    * @returns {Promise<Response>} SSE stream — consume with `readSSE`.
    */
   reconnect: (sessionId, { signal } = {}) =>
-    fetch(`/api/chat/reconnect${qs({ session_id: sessionId })}`, {
+    request(`/api/chat/reconnect${qs({ session_id: sessionId })}`, {
       method: 'POST',
       headers: { accept: 'text/event-stream' },
       signal,
     }),
   // Resolve a pending approval. `body`: { session_id, call_id, decision }.
   approve: (body) =>
-    fetch('/api/chat/approve', {
+    request('/api/chat/approve', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }),
   answer: (body) =>
-    fetch('/api/chat/answer', {
+    request('/api/chat/answer', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }),
   cancel: (sessionId) =>
-    fetch(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }),
+    request(`/api/chat/cancel${qs({ session_id: sessionId })}`, { method: 'POST' }),
   // Queue a message into the active run. `body`: { session_id, message }.
   inject: (body) =>
-    fetch('/api/chat/inject', {
+    request('/api/chat/inject', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   // Withdraw a still-queued message. `body`: { session_id, id }.
   uninject: (body) =>
-    fetch('/api/chat/uninject', {
+    request('/api/chat/uninject', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -124,131 +155,135 @@ export const api = {
   // ---- sessions ----
   /** @param {{ q?: string, limit?: number, offset?: number, parent?: string }} [opts] */
   listSessions: ({ q = '', limit, offset, parent } = {}) =>
-    fetch(`/api/sessions${qs({ q, limit, offset, parent })}`).then(_json),
+    request(`/api/sessions${qs({ q, limit, offset, parent })}`).then(_json),
   // Currently-live background runs: [{ session_id, run_id, agent, status, turns }].
-  listRuns: () => fetch('/api/runs').then(_json),
+  listRuns: () => request('/api/runs').then(_json),
   // Persisted run records, newest first. `since` keeps only runs finished
   // after that timestamp — the missed-completion catch-up on page load.
   // `session_id` scopes to one chat — the context-ring restore on reload.
   /** @param {{ session_id?: string, since?: number, limit?: number }} [opts] */
   runHistory: ({ session_id, since, limit } = {}) =>
-    fetch(`/api/runs/history${qs({ session_id, since, limit })}`).then(_json),
-  getSession: (id) => fetch(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
+    request(`/api/runs/history${qs({ session_id, since, limit })}`).then(_json),
+  getSession: (id) => request(`/api/sessions/${encodeURIComponent(id)}`).then(_json),
   renameSession: (id, title) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ title }),
     }).then(_json),
   setPinned: (id, pinned) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+    request(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ pinned }),
     }).then(_json),
   deleteSession: (id) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  deleteAllSessions: () => fetch('/api/sessions', { method: 'DELETE' }),
+    request(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteAllSessions: () => request('/api/sessions', { method: 'DELETE' }),
   getTodos: (id) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/todos`).then(_json),
+    request(`/api/sessions/${encodeURIComponent(id)}/todos`).then(_json),
   // Questions the user might ask next → { followups: string[] }. POST because
   // it spends model tokens; `[]` whenever the server has nothing to suggest.
   /** @param {string} id @param {{ signal?: AbortSignal }} [opts] */
   getFollowups: (id, { signal } = {}) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/followups`, {
+    request(`/api/sessions/${encodeURIComponent(id)}/followups`, {
       method: 'POST',
       signal,
     }).then(_json),
   // Rewind to just before the userTurn-th user message (edit / regenerate);
   // resolves to { removed, entries } — the authoritative post-rewind view.
   rewindSession: (id, userTurn) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/rewind`, {
+    request(`/api/sessions/${encodeURIComponent(id)}/rewind`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ user_turn: userTurn }),
     }).then(_json),
   exportUrl: (id, format = 'md') =>
-    `/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`,
+    url(`/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`),
+  // The lifecycle stream, for an `EventSource` (which can't use `request`).
+  eventsUrl: () => url('/api/events'),
 
   // ---- schedules ----
-  listSchedules: () => fetch('/api/schedules').then(_json),
+  listSchedules: () => request('/api/schedules').then(_json),
   // Create a scheduled run. `body`: { input, agent?, session_id?, trigger_kind,
   // trigger_expr, until?, max_fires?, expires_at? }.
   createSchedule: (body) =>
-    fetch('/api/schedules', {
+    request('/api/schedules', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   deleteSchedule: (id) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
+    request(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
       _json,
     ),
   // Partial update: any subset of { input, agent, session_id, trigger_kind,
   // trigger_expr, active, until, max_fires, expires_at } — the server
   // revalidates and recomputes next_fire; explicit null clears a field.
   updateSchedule: (id, body) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}`, {
+    request(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   setScheduleActive: (id, active) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}`, {
+    request(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ active }),
     }).then(_json),
   // Fire a schedule immediately; 409 `schedule_not_fired` when it can't run now.
   runSchedule: (id) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
+    request(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
       _json,
     ),
   // A schedule's fire history, newest first: [{ run_id, session_id, status,
   // error, started_at, finished_at, usage }].
   /** @param {string} id @param {{ limit?: number }} [opts] */
   scheduleRuns: (id, { limit } = {}) =>
-    fetch(`/api/schedules/${encodeURIComponent(id)}/runs${qs({ limit })}`).then(
+    request(`/api/schedules/${encodeURIComponent(id)}/runs${qs({ limit })}`).then(
       _json,
     ),
 
   // ---- workspace (Files panel; read-only) ----
   /** @param {{ agent?: string }} [opts] */
   workspaceInfo: ({ agent } = {}) =>
-    fetch(`/api/workspace${qs({ agent })}`).then(_json),
+    request(`/api/workspace${qs({ agent })}`).then(_json),
   // One directory level, dirs first. `path` is workspace-relative.
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
-    fetch(`/api/workspace/files${qs({ agent, path })}`).then(_json),
+    request(`/api/workspace/files${qs({ agent, path })}`).then(_json),
   // Whole-workspace flat list, newest first.
   /** @param {{ agent?: string, limit?: number }} [opts] */
   workspaceRecent: ({ agent, limit } = {}) =>
-    fetch(`/api/workspace/recent${qs({ agent, limit })}`).then(_json),
+    request(`/api/workspace/recent${qs({ agent, limit })}`).then(_json),
   // Paginated text content; `binary: true` means "don't render me".
   /** @param {{ agent?: string, path?: string, start?: number }} [opts] */
   workspaceFile: ({ agent, path, start } = {}) =>
-    fetch(`/api/workspace/file${qs({ agent, path, start })}`).then(_json),
+    request(`/api/workspace/file${qs({ agent, path, start })}`).then(_json),
   // Raw bytes URL — inline image preview, or any file with download=true.
   /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
   workspaceRawUrl: ({ agent, path, download } = {}) =>
-    `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`,
+    url(`/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`),
   // Bytes of one image a tool result carried — served from the transcript,
   // so it shows exactly what the model saw. `index` is 0-based over that
   // result's image parts (the SSE / history `images` stubs).
   /** @param {string} sessionId @param {string} callId @param {number} index @returns {string} */
   toolImageUrl: (sessionId, callId, index) =>
-    `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
+    url(
+      `/api/sessions/${encodeURIComponent(sessionId)}/tool-images/${encodeURIComponent(callId)}/${index}`,
+    ),
   // ---- background processes (chat-scoped; the panel's Processes strip) ----
   // Keyed by session id: processes belong to the chat's live workspace
   // session, not to the agent. `[]` when nothing ran yet (or after a server
   // restart — background processes never survive one).
   /** @param {string} sessionId */
   sessionProcesses: (sessionId) =>
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_json),
+    request(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_json),
   // Kill one process; resolves to the refreshed process list.
   /** @param {string} sessionId @param {string} processId */
   killProcess: (sessionId, processId) =>
-    fetch(
+    request(
       `/api/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/kill`,
       { method: 'POST' },
     ).then(_json),
@@ -259,7 +294,7 @@ export const api = {
   uploadFile: (file, { agent, signal } = {}) => {
     const form = new FormData();
     form.append('file', file);
-    return fetch(`/api/workspace/upload${qs({ agent })}`, {
+    return request(`/api/workspace/upload${qs({ agent })}`, {
       method: 'POST',
       body: form,
       signal,
@@ -269,40 +304,40 @@ export const api = {
   // ---- model configuration (Settings → Models/Search; CLI default agent) ----
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
-  getConfig: () => fetch('/api/config').then(_json),
+  getConfig: () => request('/api/config').then(_json),
   /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision?, extra_body? }. */
   createModel: (body) =>
-    fetch('/api/config/models', {
+    request('/api/config/models', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   updateModel: (id, body) =>
-    fetch(`/api/config/models/${encodeURIComponent(id)}`, {
+    request(`/api/config/models/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   deleteModel: (id) =>
-    fetch(`/api/config/models/${encodeURIComponent(id)}`, {
+    request(`/api/config/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }).then(_json),
   // A server-side copy, API key included; resolves to { id, config }.
   duplicateModel: (id) =>
-    fetch(`/api/config/models/${encodeURIComponent(id)}/duplicate`, {
+    request(`/api/config/models/${encodeURIComponent(id)}/duplicate`, {
       method: 'POST',
     }).then(_json),
   // Role assignment; sending { chat } switches the served model live.
   /** @param {{ chat?: string, vision?: string | null, aux?: string | null }} body */
   setRoles: (body) =>
-    fetch('/api/config/roles', {
+    request('/api/config/roles', {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   /** @param {{ backend?: string, tavily_api_key?: string }} body */
   setSearch: (body) =>
-    fetch('/api/config/search', {
+    request('/api/config/search', {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -310,18 +345,18 @@ export const api = {
   // Skill directories: full-list replacement, order = precedence.
   /** @param {{ dirs: string[] }} body */
   setSkills: (body) =>
-    fetch('/api/config/skills', {
+    request('/api/config/skills', {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
     }).then(_json),
   // Per-directory discovery report (live filesystem scan) for the pane.
-  getSkills: () => fetch('/api/config/skills').then(_json),
+  getSkills: () => request('/api/config/skills').then(_json),
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.
   testConnection: (body) =>
-    fetch('/api/config/test', {
+    request('/api/config/test', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
@@ -329,10 +364,10 @@ export const api = {
 
   // ---- memory (the agent's editable Notes) ----
   /** @param {{ agent?: string }} [opts] */
-  getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_json),
+  getMemory: ({ agent } = {}) => request(`/api/memory${qs({ agent })}`).then(_json),
   // Replaces the notes wholesale; returns the canonical stored form.
   putMemory: ({ agent, content }) =>
-    fetch(`/api/memory${qs({ agent })}`, {
+    request(`/api/memory${qs({ agent })}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({ content }),
@@ -341,7 +376,7 @@ export const api = {
   // returns {before, after} counts plus the fresh canonical body.
   /** @param {{ agent?: string }} [opts] */
   dreamMemory: ({ agent } = {}) =>
-    fetch(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_json),
+    request(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_json),
 };
 
 // Parse one SSE chunk ("event: x\ndata: y") into { event, data }, or null.

@@ -36,7 +36,13 @@ from ..providers import Provider
 from ..reliability import RetryPolicy
 from ..tools import HumanChannel
 from . import config as webconfig
-from .app import _default_db_path, _display_host, serve
+from .app import (
+    _default_db_path,
+    _display_host,
+    _generated_token,
+    create_app,
+    serve,
+)
 from .auth import is_loopback
 from .builder import (
     DEFAULT_MAX_TURNS,
@@ -316,8 +322,8 @@ def _warn_ignored_agent_flags(args: argparse.Namespace) -> None:
 def _warn_if_exposed(host: str, workspace: object) -> None:
     """Warn when a write/shell-capable workspace is reachable off-host.
 
-    Non-loopback binds are always token-guarded (``serve`` generates one when
-    none is given), but a leaked or shared token then grants file edits and
+    Non-loopback binds are always token-guarded (one is generated when none
+    is given), but a leaked or shared token then grants file edits and
     shell — worth a heads-up whenever such a workspace leaves loopback.
     """
     policy = getattr(workspace, "policy", None)
@@ -395,7 +401,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         port = args.port if args.port is not None else _env_int("LOVIA_PORT", 8000)
         title = _first(args.title, os.getenv("LOVIA_TITLE")) or "lovia"
         db_path = _first(args.db, os.getenv("LOVIA_DB"))
-        # None on a non-loopback bind → serve() generates and prints one.
+        # None on a non-loopback bind → one is generated (and printed) below.
         token = _first(args.token, os.getenv("LOVIA_WEB_TOKEN"))
         # A wildcard bind is not a browsable address: show one that is.
         url = f"http://{_display_host(host)}:{port}"
@@ -493,10 +499,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         # stdout, not the logger: the summary must be visible at every log
         # level, while log lines keep flowing to stderr.
         print(summary, flush=True)
-        serve(
+        app = create_app(
             agent_or_agents,
-            host=host,
-            port=port,
             title=title,
             # `store` wins when set (default agent); otherwise create_app builds
             # one from db_path (the custom --app path).
@@ -505,7 +509,7 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             context_policy=context_policy,
             max_turns=resolve_max_turns(args.max_turns),
             retry=retry,
-            token=token,
+            token=token or _generated_token(host),
             followups=resolve_followups(args.no_followups),
             title_model=aux_model,
             followup_model=aux_model,
@@ -520,8 +524,8 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
             question_channel=question_channel,
             question_timeout=600,
             config_runtime=config_runtime,
-            log_level=level.lower(),
         )
+        serve(app, host=host, port=port, log_level=level.lower())
     except UserError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

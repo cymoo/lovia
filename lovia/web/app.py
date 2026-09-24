@@ -18,6 +18,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from .. import __version__
 from ..agent import Agent
+from ..exceptions import UserError
 from ..context import ContextPolicy
 from ..providers import Provider
 from ..reliability import RetryPolicy, RunBudget
@@ -226,7 +227,7 @@ def create_app(
     cookie; ``/healthz`` stays open). ``auth`` replaces that check with your
     own FastAPI dependency (sessions, OAuth, …) — pass one or the other, not
     both. Neither is set by default: :func:`create_app` alone imposes no auth,
-    while :func:`serve` refuses non-loopback binds without one.
+    while :func:`serve` refuses to run such an app on a non-loopback host.
 
     ``empty_title`` and ``empty_description`` customize the blank chat state;
     ``empty_description`` may be a string or a list of short lines, and
@@ -351,52 +352,44 @@ def create_app(
     app.state.context_policy = context_policy
     app.state.tracer = tracer
     app.state.deps = deps
+    # Read by serve(): the printed UI link, and its off-loopback safety check.
+    app.state.token = token
+    app.state.auth_guarded = guard is not None
     return app
 
 
+def _generated_token(host: str) -> str | None:
+    """A fresh token for a non-loopback ``host``, printed; ``None`` on loopback."""
+    if is_loopback(host):
+        return None
+    token = generate_token()
+    # stdout on purpose: this must be visible at every log level — it is the
+    # only copy of the credential.
+    print(
+        f"web API token (generated): {token}\n"
+        "  fix it with create_app(token=...), --token, or LOVIA_WEB_TOKEN",
+        flush=True,
+    )
+    return token
+
+
 def serve(
-    agent_or_agents: "Agent[Any] | Mapping[str, Agent[Any]]",
+    target: "FastAPI | Agent[Any] | Mapping[str, Agent[Any]]",
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
-    db_path: str | Path | None = None,
-    session: Session | None = None,
-    store: ChatStore | None = None,
-    context_policy: ContextPolicy | None = None,
-    title_model: str | Provider | None = None,
-    generate_titles: bool = True,
-    followups: bool | FollowupFn = False,
-    followup_model: str | Provider | None = None,
-    title: str = "lovia",
-    max_turns: int = 50,
-    budget: RunBudget | None = None,
-    retry: RetryPolicy | None = None,
-    tracer: Tracer | None = None,
-    approval_timeout: float | None = None,
-    question_channel: HumanChannel | None = None,
-    question_timeout: float | None = None,
-    wire_subagents: bool = True,
-    ui: bool = True,
-    cors_origins: Sequence[str] | None = None,
-    token: str | None = None,
-    auth: Callable[..., Any] | None = None,
-    empty_title: str = "Where shall we begin?",
-    empty_description: str | Sequence[str] | None = None,
-    empty_examples: Sequence[str] | None = None,
-    config_runtime: ConfigRuntime | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:
-    """Convenience: build the app and run it under uvicorn (blocking).
+    """Run a lovia app under uvicorn (blocking).
 
-    ``max_turns`` / ``budget`` set the per-request run limits and ``retry``
-    overrides the agent's retry posture (see :func:`create_app`); ``ui=False``
-    serves the JSON + SSE API only; any remaining keyword arguments are
-    forwarded to ``uvicorn.run`` (e.g. ``log_level``, ``reload``, ``workers``).
+    ``target`` is an app from :func:`create_app` — every serving option is
+    configured there — or an agent (or ``{name: agent}`` mapping) to serve
+    with ``create_app``'s defaults. Remaining keyword arguments go to
+    ``uvicorn.run`` (e.g. ``log_level``, ``ssl_certfile``, ``workers``).
 
-    Safe by default off-loopback: binding a non-loopback ``host`` with neither
-    ``token`` nor ``auth`` generates a token and prints it (with a ready
-    ``/?token=...`` UI link) — the API is never exposed unauthenticated.
-    Loopback binds stay credential-free unless a ``token`` is passed.
+    Safe by default off-loopback: agents get a generated token, printed with
+    a ready ``/?token=...`` UI link, and an app built with neither ``token``
+    nor ``auth`` is refused — the API is never exposed unauthenticated.
     """
     try:
         import uvicorn
@@ -405,47 +398,19 @@ def serve(
 
         raise_missing_web_extra(exc)
 
-    token = _clean_token(token)  # "" must not skip the generation below
-    ui_url = f"http://{_display_host(host)}:{port}/?token="
-    if token is None and auth is None and not is_loopback(host):
-        token = generate_token()
-        # stdout on purpose: this must be visible at every log level — it is
-        # the only copy of the credential.
-        print(
-            f"web API token (generated): {token}\n"
-            f"  fix it with serve(token=...), --token, or LOVIA_WEB_TOKEN\n"
-            f"  UI: {ui_url}{token}",
-            flush=True,
-        )
-    elif token:
-        print(f"web API auth enabled — UI: {ui_url}{token}", flush=True)
-
-    app = create_app(
-        agent_or_agents,
-        db_path=db_path,
-        session=session,
-        store=store,
-        context_policy=context_policy,
-        title_model=title_model,
-        generate_titles=generate_titles,
-        followups=followups,
-        followup_model=followup_model,
-        title=title,
-        max_turns=max_turns,
-        budget=budget,
-        retry=retry,
-        tracer=tracer,
-        approval_timeout=approval_timeout,
-        question_channel=question_channel,
-        question_timeout=question_timeout,
-        wire_subagents=wire_subagents,
-        ui=ui,
-        cors_origins=cors_origins,
-        token=token,
-        auth=auth,
-        empty_title=empty_title,
-        empty_description=empty_description,
-        empty_examples=empty_examples,
-        config_runtime=config_runtime,
-    )
+    if isinstance(target, FastAPI):
+        app = target
+        # An app not built by create_app carries no marker; its auth is its own.
+        if not is_loopback(host) and not getattr(app.state, "auth_guarded", True):
+            raise UserError(
+                f"refusing to serve an app without authentication on {host!r}",
+                hint="build it with create_app(..., token=...) or auth=..., "
+                "or bind to 127.0.0.1",
+            )
+    else:
+        app = create_app(target, token=_generated_token(host))
+    token = getattr(app.state, "token", None)
+    if token:
+        ui_url = f"http://{_display_host(host)}:{port}/?token={token}"
+        print(f"web API auth enabled — UI: {ui_url}", flush=True)
     uvicorn.run(app, host=host, port=port, **uvicorn_kwargs)

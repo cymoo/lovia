@@ -303,6 +303,21 @@ def _write_module(tmp_path: Path, name: str, body: str) -> None:
     (tmp_path / f"{name}.py").write_text(body, encoding="utf-8")
 
 
+def _capture_serving(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Stub ``create_app`` + ``serve``: the dict collects the served agent(s)
+    under ``"agent"`` plus both calls' keyword arguments."""
+    captured: dict[str, object] = {}
+
+    def fake_create_app(agent_or_agents: object, **kwargs: object) -> object:
+        captured["agent"] = agent_or_agents
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "create_app", fake_create_app)
+    monkeypatch.setattr(cli, "serve", lambda app, **kwargs: captured.update(kwargs))
+    return captured
+
+
 def test_load_app_requires_colon() -> None:
     with pytest.raises(UserError, match="MODULE:ATTRIBUTE"):
         cli.load_app_target("noColonHere")
@@ -590,13 +605,7 @@ def test_main_serves_custom_app(
         "agentmod_main",
         "from lovia import Agent\nagent = Agent(name='served', model='m')\n",
     )
-    captured: dict[str, object] = {}
-
-    def fake_serve(agent_or_agents: object, **kwargs: object) -> None:
-        captured["agent"] = agent_or_agents
-        captured.update(kwargs)
-
-    monkeypatch.setattr(cli, "serve", fake_serve)
+    captured = _capture_serving(monkeypatch)
     rc = cli.main(
         ["--app", "agentmod_main:agent", "--host", "0.0.0.0", "--port", "9123"]
     )
@@ -604,6 +613,8 @@ def test_main_serves_custom_app(
     assert isinstance(captured["agent"], Agent)
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 9123
+    # Off loopback with no --token: the CLI generated one for the app.
+    assert isinstance(captured["token"], str) and captured["token"]
 
 
 def test_main_missing_model_serves_the_setup_ui(
@@ -614,8 +625,7 @@ def test_main_missing_model_serves_the_setup_ui(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "stdin", _FakeTty())  # a TTY changes nothing
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a, **k}))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
     assert captured["agent"] == {}  # nothing to chat with yet
@@ -634,8 +644,7 @@ def test_main_port_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
         "from lovia import Agent\nagent = Agent(name='p', model='m')\n",
     )
     monkeypatch.setenv("LOVIA_PORT", "7777")
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main(["--app", "agentmod_port:agent"])
     assert rc == 0
     assert captured["port"] == 7777
@@ -650,8 +659,7 @@ def test_main_token_flag_env_precedence(
         "agentmod_token",
         "from lovia import Agent\nagent = Agent(name='t', model='m')\n",
     )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    captured = _capture_serving(monkeypatch)
 
     # Default: no token — serve() decides (loopback = open, else generated).
     assert cli.main(["--app", "agentmod_token:agent"]) == 0
@@ -696,8 +704,7 @@ def test_main_passes_db_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
         "agentmod_db",
         "from lovia import Agent\nagent = Agent(name='d', model='m')\n",
     )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main(["--app", "agentmod_db:agent", "--db", "chats.sqlite"])
     assert rc == 0
     assert captured["db_path"] == "chats.sqlite"
@@ -843,8 +850,7 @@ def test_main_missing_api_key_serves_the_setup_ui(
     monkeypatch.chdir(tmp_path)
     write_config(model="openai:gpt-5.5", api_key=None)
     monkeypatch.setattr(sys, "stdin", io.StringIO())
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
     assert captured["agent"] == {}
@@ -855,8 +861,7 @@ def test_main_configured_run_passes_the_runtime(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     write_config()
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    captured = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     runtime = captured["config_runtime"]
     assert runtime is not None and runtime.configured  # type: ignore[union-attr]
@@ -1029,8 +1034,7 @@ def test_main_injects_profile_endpoint_into_the_provider(
         base_url="https://api.deepseek.com/",
         api_key="sk-deep",
     )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
     agent = captured["agent"]
@@ -1052,8 +1056,7 @@ def test_main_injects_anthropic_profile_endpoint(
         base_url="https://gw.example/anthropic",
         api_key="sk-anth",
     )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update({"agent": a}))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main([])
     assert rc == 0
     agent = captured["agent"]
@@ -1083,8 +1086,7 @@ def test_main_passes_retry_and_context_policy(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     write_config(context_window=111_111)
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda a, **k: captured.update(k))
+    captured = _capture_serving(monkeypatch)
     rc = cli.main(["--max-retries", "1", "--max-turns", "7"])
     assert rc == 0
     retry = captured["retry"]
@@ -1152,8 +1154,7 @@ def test_main_wires_the_aux_role_into_titles_and_followups(
         ],
         roles={"chat": "chat", "aux": "small"},
     )
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
+    seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     aux = seen["followup_model"]
     assert aux is not None
@@ -1178,8 +1179,7 @@ def test_main_boots_with_the_saved_extra_body(
             }
         ]
     )
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda agent, **k: seen.update(agent=agent))
+    seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     assert seen["agent"].model._extra_body == {"reasoning_effort": "medium"}
 
@@ -1238,8 +1238,7 @@ def test_main_passes_followups_to_serve(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     write_config()
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(cli, "serve", lambda *a, **k: seen.update(k))
+    seen = _capture_serving(monkeypatch)
     assert cli.main([]) == 0
     assert seen["followups"] is True
     assert seen["followup_model"] is None

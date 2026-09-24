@@ -62,9 +62,9 @@ once (see [Web UI](web-ui.md#background-subagents)).
 
 ## Authentication
 
-With `create_app(token=...)` or `serve(token=...)`, every business route
-registered by `build_api_router` requires authentication. A non-loopback
-`serve()` bind also generates a token when no authentication was supplied.
+With `create_app(token=...)`, every business route registered by
+`build_api_router` requires authentication. `serve(agent)` on a non-loopback
+host generates one when none was supplied.
 
 Plain requests, `POST /api/chat/stream`, and `POST /api/chat/reconnect` send
 `Authorization: Bearer <token>`. `GET /api/events` uses `EventSource`, which
@@ -268,9 +268,8 @@ metadata features.
 ## Sharp edges
 
 - **`build_api_router` alone has no authentication or rate limits.**
-  `create_app(token=...)` and `serve(token=...)` add token authentication;
-  `serve()` also generates a token automatically for non-loopback binds
-  ([Authentication](#authentication)). User identities, permissions, quotas,
+  `create_app(token=...)` adds token authentication, and `serve()` never
+  exposes the API anonymously off loopback ([Authentication](#authentication)). User identities, permissions, quotas,
   and other multi-user concerns belong in your gateway. `cors_origins` stays
   unset (no CORS) until configured.
 - **Chat SSE responses are POST-initiated.** Use `fetch` + a reader for

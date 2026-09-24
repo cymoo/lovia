@@ -233,11 +233,11 @@ A custom Agent must share one `HumanChannel` between the Tool and the Web app:
 ```python
 from lovia import Agent
 from lovia.tools import HumanChannel, ask_human
-from lovia.web import serve
+from lovia.web import create_app, serve
 
 channel = HumanChannel()
 agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
-serve(agent, question_channel=channel, question_timeout=600)
+serve(create_app(agent, question_channel=channel, question_timeout=600))
 ```
 
 ## Follow-up suggestions

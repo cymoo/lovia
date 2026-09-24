@@ -188,11 +188,11 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 ```python
 from lovia import Agent
 from lovia.tools import HumanChannel, ask_human
-from lovia.web import serve
+from lovia.web import create_app, serve
 
 channel = HumanChannel()
 agent = Agent(name="bot", model="<model>", tools=[ask_human(channel)])
-serve(agent, question_channel=channel, question_timeout=600)
+serve(create_app(agent, question_channel=channel, question_timeout=600))
 ```
 
 ## 追问建议

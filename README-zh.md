@@ -444,9 +444,9 @@ Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
 浏览器断开后，未完成的对话仍会在服务端继续：
 
 ```python
-from lovia.web import serve
+from lovia.web import create_app, serve
 
-serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
+serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
 ```bash

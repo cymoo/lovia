@@ -1,9 +1,9 @@
 """Bearer-token authentication for the web API.
 
 The default posture is friction-free locally and safe by default remotely:
-binding to loopback needs no credentials, while ``serve()`` refuses to expose
-the API on a non-loopback host without a token — generating and printing one
-when the caller didn't provide it.
+binding to loopback needs no credentials, while ``serve()`` never exposes the
+API on a non-loopback host without one — it generates and prints a token for
+a bare agent, and refuses an app built without ``token`` or ``auth``.
 
 One token, two carriers:
 

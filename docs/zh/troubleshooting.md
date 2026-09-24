@@ -81,7 +81,8 @@ Provider 客户端默认忽略环境中的 `HTTP_PROXY` / `HTTPS_PROXY`。如果
 ## Web 服务无法访问或不适合暴露
 
 - 默认绑定 `127.0.0.1:8000`，只能从本机访问。
-- `serve()` 绑定非回环地址时会要求或自动生成 Bearer token；`create_app()` 不会自动生成。
+- `serve()` 在非回环地址上为直接传入的 Agent 生成 Bearer token，并拒绝运行未设置认证的
+  应用；`create_app()` 本身不会自动生成。
   内置服务仍不提供限流，多用户部署还需要自行接入认证和授权。
 - 使用单 Worker；实时 Run 托管和审批状态属于进程内状态。
 - 暴露服务前，关闭或严格限制可写 Workspace。

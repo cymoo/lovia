@@ -131,6 +131,40 @@ def test_index_under_a_root_path() -> None:
     assert cfg["login_url"] == "/login?next={next}"
 
 
+_OVERRIDE = """{% extends "lovia/index.html" %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">{% endblock %}
+{% block sidebar_footer %}<a id="signout" href="/logout">Sign out</a>{% endblock %}
+{% block body_end %}<script src="/extra.js"></script>{% endblock %}
+"""
+
+
+def test_templates_override_fills_the_blocks(tmp_path) -> None:
+    from starlette.staticfiles import StaticFiles
+
+    (tmp_path / "index.html").write_text(_OVERRIDE, encoding="utf-8")
+    ui = ChatUI(empty_title="<b>Acme</b>", templates=tmp_path)
+    app = _app(_make_agent([text("hi")]), ui=ui)
+    app.mount("/brand", StaticFiles(directory=tmp_path), name="brand")
+    page = TestClient(app, root_path="/lovia").get("/").text
+
+    head, body = page.split("</head>", 1)
+    assert 'href="/lovia/brand/theme.css"' in head
+    sidebar = body.split("</aside>", 1)[0]
+    assert sidebar.index('id="sessions-list"') < sidebar.index('id="signout"')
+    assert page.index("js/main.js") < page.index('src="/extra.js"')
+    # The bundled page is intact around the blocks, and still autoescaped.
+    for anchor in ('id="composer"', 'id="app-config"', 'id="files-panel"'):
+        assert anchor in page
+    assert "&lt;b&gt;Acme&lt;/b&gt;" in page
+
+
+def test_templates_directory_must_exist(tmp_path) -> None:
+    from lovia.exceptions import UserError
+
+    with pytest.raises(UserError, match="templates directory not found"):
+        _app(_make_agent([text("hi")]), ui=ChatUI(templates=tmp_path / "nope"))
+
+
 def test_index_at_the_root_has_no_base_path() -> None:
     cfg = _app_config(TestClient(_app(_make_agent([text("hi")]))).get("/").text)
     assert cfg["base_path"] == ""

@@ -495,9 +495,10 @@ API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
 mounting the router into your own FastAPI app — lets you build a custom
 front-end on the same endpoints. Errors carry a stable `code` to branch on,
 in HTTP responses and stream `error` events alike. Keeping the page?
-`ui=ChatUI(...)` sets its blank-state copy and a `login_url` for your own
-`auth=`, and it works under a path prefix — behind a proxy
-(`--root-path`) or mounted in your own app.
+`ui=ChatUI(...)` sets its blank-state copy, a `login_url` for your own
+`auth=`, and template overrides for your own head, sidebar, and scripts; it
+works under a path prefix — behind a proxy (`--root-path`) or mounted in your
+own app.
 
 → [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 

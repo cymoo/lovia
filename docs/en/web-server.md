@@ -48,6 +48,7 @@ run the app under another ASGI server, skip `serve()`.
 | `empty_title` / `empty_description` | lovia defaults | Blank chat state copy; the description may be a list of short lines |
 | `empty_examples` | `()` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
 | `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
+| `templates` | `None` | A directory of your own templates (see [Customizing the page](#customizing-the-page)) |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -71,6 +72,48 @@ front.
 
 For endpoint contracts and the `ChatStore` interface, see
 [HTTP API](http-api.md).
+
+## Customizing the page
+
+`ChatUI(templates="ui")` points at a directory of your own Jinja templates.
+An `index.html` there replaces the page. Extend the bundled one and fill only
+the blocks you need:
+
+```html+jinja
+{# ui/index.html #}
+{% extends "lovia/index.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
+{% endblock %}
+
+{% block sidebar_footer %}
+<a class="signout" href="/logout">Sign out</a>
+{% endblock %}
+```
+
+| Block | Where it renders |
+| --- | --- |
+| `head` | End of `<head>`: stylesheets, meta tags |
+| `sidebar_footer` | Bottom of the sidebar: a user menu, a sign-out link |
+| `body_end` | After the app's script: scripts of your own |
+
+Serve your own files from a static mount on the app, and link them with
+`url_for(...).path` so they keep working under a
+[path prefix](#serving-under-a-path-prefix):
+
+```python
+from fastapi.staticfiles import StaticFiles
+
+app = create_app(agent, ui=ChatUI(templates="ui"))
+app.mount("/brand", StaticFiles(directory="brand"), name="brand")
+```
+
+To retheme, override the design tokens at the top of the bundled
+`styles.css` (`--bg`, `--surface`, `--ink`, `--accent`, …; the dark theme
+sets its own under `[data-theme="dark"]`). Class names, element ids, and the
+JavaScript modules are internal and may change between releases. There is no
+front-end plugin API: `api.js` is the documented client.
 
 ## Follow-up suggestions
 

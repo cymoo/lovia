@@ -47,6 +47,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 | `empty_title` / `empty_description` | lovia 默认文案 | 空白聊天页的文案；说明可以是若干短句组成的列表 |
 | `empty_examples` | `()` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
 | `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
+| `templates` | `None` | 自定义模板所在的目录（见[定制页面](#定制页面)） |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -67,6 +68,45 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 `store=ChatStore.sqlite(path, wal=False)` 显式关闭。
 
 端点契约与 `ChatStore` 接口见 [HTTP API](http-api.md)。
+
+## 定制页面
+
+`ChatUI(templates="ui")` 指向一个存放自定义 Jinja 模板的目录，其中的 `index.html` 会替换
+内置页面。继承内置页面，只填写需要的 block 即可：
+
+```html+jinja
+{# ui/index.html #}
+{% extends "lovia/index.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
+{% endblock %}
+
+{% block sidebar_footer %}
+<a class="signout" href="/logout">退出登录</a>
+{% endblock %}
+```
+
+| Block | 渲染位置 |
+| --- | --- |
+| `head` | `<head>` 末尾：样式表、meta 标签 |
+| `sidebar_footer` | 侧栏底部：用户菜单、退出登录链接 |
+| `body_end` | 应用脚本之后：你自己的脚本 |
+
+自己的静态文件可以挂载到应用上提供，并用 `url_for(...).path` 引用，这样部署在
+[路径前缀下](#部署在路径前缀下)时链接仍然有效：
+
+```python
+from fastapi.staticfiles import StaticFiles
+
+app = create_app(agent, ui=ChatUI(templates="ui"))
+app.mount("/brand", StaticFiles(directory="brand"), name="brand")
+```
+
+更换主题时，覆盖内置 `styles.css` 开头的设计变量即可（`--bg`、`--surface`、`--ink`、
+`--accent` 等；深色主题在 `[data-theme="dark"]` 下另有一套）。CSS 类名、元素 id 和
+JavaScript 模块都属于内部实现，可能随版本变化。前端没有插件 API，`api.js` 是唯一有文档的
+客户端。
 
 ## 追问建议
 

@@ -36,6 +36,9 @@
   <script defer src="{{ url_for('static', path='vendor/marked.min.js').path }}" integrity="sha384-QsSpx6a0USazT7nK7w8qXDgpSAPhFsb2XtpoLFQ5+X2yFN6hvCKnwEzN8M5FWaJb"></script>
   <script defer src="{{ url_for('static', path='vendor/highlight.min.js').path }}" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp"></script>
   <script defer src="{{ url_for('static', path='vendor/mermaid.min.js').path }}" integrity="sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV"></script>
+  <!-- Extension blocks (head, sidebar_footer, body_end): empty here, filled
+       by a ChatUI(templates=...) override that extends "lovia/index.html". -->
+  {% block head %}{% endblock %}
 </head>
 <body>
 <script id="app-config" type="application/json">{{ app_config | tojson }}</script>
@@ -81,6 +84,7 @@
     <input type="search" id="session-search" class="search-input" placeholder="Filter…" aria-label="Filter chats" autocomplete="off" />
   </div>
   <nav id="sessions-list" class="sessions-list" aria-label="Chat sessions"></nav>
+  {% block sidebar_footer %}{% endblock %}
 </aside>
 
 <!-- Main -->
@@ -334,5 +338,6 @@
 </template>
 
 <script type="module" src="{{ url_for('static', path='js/main.js').path }}"></script>
+{% block body_end %}{% endblock %}
 </body>
 </html>

@@ -141,7 +141,8 @@ def test_create_rejects_duplicate_and_bad_vendor(served, tmp_path: Path) -> None
     before = (tmp_path / ".lovia" / "config.json").read_text()
     res = client.put("/api/config/models/one", json={"model": "nosuchvendor:m"})
     assert res.status_code == 400
-    assert "Unknown model spec" in res.json()["detail"]
+    assert res.json()["detail"]["code"] == "invalid_request"
+    assert "Unknown model spec" in res.json()["detail"]["message"]
     assert (tmp_path / ".lovia" / "config.json").read_text() == before
 
 
@@ -266,7 +267,7 @@ def test_role_switch_hot_swaps_the_served_agent(served) -> None:
     deps = app.state.deps
     old = deps.agents["lovia"]
     events: list[tuple[str, dict]] = []
-    deps.emit = lambda event, **data: events.append((event, data))  # type: ignore[method-assign]
+    deps.emit = lambda event, data: events.append((event, dict(data)))  # type: ignore[method-assign]
     assert client.put("/api/config/roles", json={"chat": "b"}).status_code == 200
     new = deps.agents["lovia"]
     assert new is not old  # atomically replaced, old runs keep their copy
@@ -384,8 +385,9 @@ def test_skills_blank_entry_is_rejected(served) -> None:
     _add_model(client)
     res = client.put("/api/config/skills", json={"dirs": ["  "]})
     assert res.status_code == 400
-    assert "skills" in res.json()["detail"]
-    assert "non-empty" in res.json()["detail"]
+    message = res.json()["detail"]["message"]
+    assert "skills" in message
+    assert "non-empty" in message
 
 
 def test_skills_scan_reports_each_root(served, tmp_path: Path) -> None:

@@ -35,13 +35,6 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
-try:
-    from fastapi import FastAPI, HTTPException
-except ImportError as exc:  # pragma: no cover - depends on optional env
-    from ._deps import raise_missing_web_extra
-
-    raise_missing_web_extra(exc)
-
 from ..exceptions import RunCancelled
 from ..plugins.subagents import (
     ChildSpec,
@@ -50,6 +43,8 @@ from ..plugins.subagents import (
     SubagentReport,
     Subagents,
 )
+from .errors import WebError
+from .sse import SessionCreatedData
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -94,7 +89,7 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 return
             try:
                 agent = deps.pick(row.agent)
-            except HTTPException:
+            except WebError:
                 log.warning(
                     "subagent %s: agent %r is not served anymore; report dropped",
                     report.id,
@@ -117,11 +112,11 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     sid,
                 )
                 return
-            except HTTPException as exc:
-                # 409: another run claimed the session between get() and
-                # start() — the next attempt injects into it. 429: at the
-                # concurrency cap — wait for a slot.
-                if exc.status_code not in (409, 429):
+            except WebError as exc:
+                # run_active: another run claimed the session between get() and
+                # start() — the next attempt injects into it. too_many_runs: at
+                # the concurrency cap — wait for a slot.
+                if exc.code not in ("run_active", "too_many_runs"):
                     raise
         log.warning(
             "subagent %s: could not deliver to session %s "
@@ -184,13 +179,13 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # joining whatever the task chat's own /inject sends.
                 mailbox=spec.mailbox,
             )
-        except HTTPException as exc:
+        except WebError as exc:
             # No-op for today's 409/429 (both raise before the workspace
             # binding), but keeps "delete session ⇒ close its workspace"
             # airtight if start()'s failure points ever move.
             await deps.workspaces.close(child_sid)
             await deps.store.delete(child_sid)
-            if exc.status_code == 429:
+            if exc.code == "too_many_runs":
                 raise RuntimeError(
                     "the server is at its concurrent-run limit; "
                     "wait for other work to finish and spawn again"
@@ -206,9 +201,11 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         )
         deps.emit(
             "session_created",
-            session_id=child_sid,
-            agent=agent_key,
-            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            SessionCreatedData(
+                session_id=child_sid,
+                agent=agent_key,
+                title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            ),
         )
 
         async def watch_token() -> None:
@@ -271,17 +268,16 @@ def _wire(deps: "RouterDeps") -> int:
     return len(wired)
 
 
-def wire_subagents(target: "RouterDeps | FastAPI") -> int:
+def wire_subagents(deps: "RouterDeps") -> int:
     """Adapt served ``Subagents`` plugins to web semantics; returns how many.
 
     ``create_app`` calls this automatically (disable with
     ``create_app(..., wire_subagents=False)``); the helper exists for apps
     that mount :func:`~lovia.web.build_api_router` into their own FastAPI
-    app — pass the same :class:`~lovia.web.RouterDeps` (a ``create_app``
-    app works too). See :func:`subagent_runner` and :func:`subagent_deliver`
-    for what the wiring does.
+    app, passing the same :class:`~lovia.web.RouterDeps`. See
+    :func:`subagent_runner` and :func:`subagent_deliver` for what the wiring
+    does.
     """
-    deps = target.state.deps if isinstance(target, FastAPI) else target
     return _wire(deps)
 
 

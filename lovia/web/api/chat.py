@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Query
     from sse_starlette.sse import EventSourceResponse
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -21,6 +21,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ...runner import Runner
 from ..attachments import build_user_input
+from ..errors import WebError
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
@@ -29,7 +30,7 @@ from ..schemas import (
     InjectCancelRequest,
     InjectRequest,
 )
-from ..sse import _coerce, usage_dict
+from ..sse import SessionCreatedData, _coerce, usage_dict
 from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
@@ -48,7 +49,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         title = provisional_title(message) if is_new else None
         await store.upsert(sid, agent=agent_name, title=title)
         if is_new:
-            deps.emit("session_created", session_id=sid, agent=agent_name, title=title)
+            deps.emit(
+                "session_created",
+                SessionCreatedData(session_id=sid, agent=agent_name, title=title),
+            )
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).
@@ -68,7 +72,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # Blocking, non-streaming turn — runs to completion inside the request
         # and is NOT supervised (not detachable).
         if not req.message.strip() and not req.attachments:
-            raise HTTPException(status_code=422, detail="empty message")
+            raise WebError(422, "invalid_request", "empty message")
         sid = req.session_id or uuid.uuid4().hex
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
@@ -76,16 +80,17 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if deps.supervisor.get(sid) is not None:
             # A supervised run owns this session; a second concurrent run would
             # interleave two transcripts. Stream endpoints attach/inject instead.
-            raise HTTPException(
-                status_code=409,
-                detail="a streaming run is active for this session; "
-                "use /api/chat/stream to attach or inject",
+            raise WebError(
+                409,
+                "run_active",
+                "a streaming run is active for this session",
+                hint="use /api/chat/stream to attach or inject",
             )
         user_input = build_user_input(req, agent)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
-            raise HTTPException(status_code=422, detail="empty message")
+            raise WebError(422, "invalid_request", "empty message")
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
         # Same chat-scoped workspace binding the supervised path applies in
         # RunSupervisor.start(): background processes belong to the chat, no
@@ -124,7 +129,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # An empty turn is only meaningful as a pure attach to a live run;
         # rejecting it otherwise before the upsert avoids littering empty rows.
         if empty and deps.supervisor.get(sid) is None:
-            raise HTTPException(status_code=422, detail="empty message")
+            raise WebError(422, "invalid_request", "empty message")
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
 
         def attach(live: RunController) -> EventSourceResponse:
@@ -141,7 +146,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             return attach(live)
         if empty:
             # The live run we would have attached to ended mid-request.
-            raise HTTPException(status_code=422, detail="empty message")
+            raise WebError(422, "invalid_request", "empty message")
 
         # No live run → start a fresh supervised run. Delete any stranded
         # checkpoint first so a later reconnect won't pick up a stale snapshot.
@@ -158,11 +163,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 is_new=is_new,
                 title_message=req.message,
             )
-        except HTTPException as exc:
+        except WebError as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
             # winner owns the run, so deliver this message by injecting into it.
             live = deps.supervisor.get(sid)
-            if exc.status_code == 409 and live is not None:
+            if exc.code == "run_active" and live is not None:
                 return attach(live)
             raise
         return EventSourceResponse(
@@ -180,7 +185,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         """
         message = req.message.strip()
         if not message:
-            raise HTTPException(status_code=422, detail="empty message")
+            raise WebError(422, "invalid_request", "empty message")
         ctrl = deps.supervisor.get(req.session_id)
         if ctrl is None:
             return {"accepted": False}
@@ -201,7 +206,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             req.session_id, req.call_id, req.decision == "approve"
         )
         if not ok:
-            raise HTTPException(status_code=404, detail="no pending approval matches")
+            raise WebError(404, "approval_not_found", "no pending approval matches")
         return {"ok": True}
 
     @router.post("/api/chat/answer")
@@ -213,9 +218,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         the card as expired and the tool-error result follows in the stream.
         """
         if deps.questions is None:
-            raise HTTPException(status_code=404, detail="no question channel")
+            raise WebError(404, "feature_unavailable", "no question channel")
         if not deps.questions.resolve(req.session_id, req.answer):
-            raise HTTPException(status_code=404, detail="no pending question matches")
+            raise WebError(404, "question_not_found", "no pending question matches")
         return {"ok": True}
 
     @router.post("/api/chat/cancel")
@@ -240,7 +245,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 await store.checkpointer.delete(run_id)
             await store.clear_active_run_id(session_id)
             return {"ok": True}
-        raise HTTPException(status_code=404, detail="no active stream")
+        raise WebError(404, "run_not_found", "no active stream")
 
     @router.post("/api/chat/reconnect")
     async def chat_reconnect(session_id: str = Query(...)) -> EventSourceResponse:
@@ -260,20 +265,21 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             )
 
         if store.checkpointer is None:
-            raise HTTPException(status_code=404, detail="no checkpointer configured")
+            raise WebError(404, "feature_unavailable", "no checkpointer configured")
         run_id = await store.get_active_run_id(session_id)
         if run_id is None:
-            raise HTTPException(status_code=404, detail="no interrupted run")
+            raise WebError(404, "run_not_found", "no interrupted run")
         snapshot = await store.checkpointer.load(run_id)
         if snapshot is None or snapshot.status not in ("interrupted", "running"):
             await store.clear_active_run_id(session_id)
-            raise HTTPException(status_code=404, detail="no resumable run")
+            raise WebError(404, "run_not_found", "no resumable run")
         if snapshot.agent_name not in deps.agents:
             await store.checkpointer.delete(run_id)
             await store.clear_active_run_id(session_id)
-            raise HTTPException(
-                status_code=409,
-                detail=f"agent {snapshot.agent_name!r} is no longer registered",
+            raise WebError(
+                409,
+                "agent_unregistered",
+                f"agent {snapshot.agent_name!r} is no longer registered",
             )
 
         # Built BEFORE start_resume: that call registers the controller, and
@@ -293,10 +299,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 agent=deps.agents[snapshot.agent_name],
                 snapshot=snapshot,
             )
-        except HTTPException as exc:
+        except WebError as exc:
             # Lost a concurrent-reconnect race: attach to the winner's run.
             live = deps.supervisor.get(session_id)
-            if exc.status_code == 409 and live is not None:
+            if exc.code == "run_active" and live is not None:
                 return EventSourceResponse(
                     forward(
                         live.attach(with_snapshot=True),

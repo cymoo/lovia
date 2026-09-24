@@ -180,7 +180,7 @@ async def test_answer_endpoint_404_without_question_channel() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.post("/api/chat/answer", json={"session_id": "s1", "answer": "x"})
         assert r.status_code == 404
-        assert "no question channel" in r.json()["detail"]
+        assert r.json()["detail"]["code"] == "feature_unavailable"
 
 
 # ------------------------------------------------------------ CLI wiring ---

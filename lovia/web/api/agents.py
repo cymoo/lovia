@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
@@ -13,6 +13,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
 from ...agent import Agent
 from ...providers.base import context_window as provider_context_window
+from ..errors import WebError
 from ..schemas import AgentInfo
 from .deps import RouterDeps
 from .memory import memory_plugin
@@ -82,7 +83,7 @@ def build_agents_router(deps: RouterDeps) -> APIRouter:
     async def get_agent(name: str) -> AgentInfo:
         agent = deps.agents.get(name)
         if agent is None:
-            raise HTTPException(status_code=404, detail=f"unknown agent {name!r}")
+            raise WebError(404, "agent_not_found", f"unknown agent {name!r}")
         return info(name, agent)
 
     return router

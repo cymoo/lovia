@@ -11,19 +11,11 @@ API from the bundled UI.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
-
-try:
-    from fastapi import HTTPException
-except ImportError as exc:  # pragma: no cover - depends on optional env
-    from .._deps import raise_missing_web_extra
-
-    raise_missing_web_extra(exc)
 
 from ...agent import Agent
 from ...context import ContextPolicy
@@ -33,12 +25,14 @@ from ...session import Session
 from ...steering import Mailbox
 from ...tracing import Tracer
 from ..approvals import ApprovalRegistry
+from ..errors import WebError
 from ..followups import (
     FollowupFn,
     FollowupRequest,
     coerce_suggestions,
     generate_followups,
 )
+from ..sse import SessionRetitledData, frame
 from ..store import ChatStore
 from ..titles import generate_title, provisional_title
 from ..workspaces import WorkspaceSessions
@@ -143,13 +137,15 @@ class RouterDeps:
             self._bus = EventHub()
         return self._bus
 
-    def emit(self, event: str, **data: Any) -> None:
+    def emit(self, event: str, data: Mapping[str, object]) -> None:
         """Publish one lifecycle fact to the bus, pre-encoded as an SSE dict.
 
-        Payloads are small JSON facts (ids, status, title) — never the per-token
-        stream, which stays on each run's own hub.
+        ``data`` is the event's payload type from
+        :data:`~lovia.web.sse.LIFECYCLE_EVENTS` — small JSON facts (ids,
+        status, title), never the per-token stream, which stays on each run's
+        own hub.
         """
-        self.bus.publish({"event": event, "data": json.dumps(data, ensure_ascii=False)})
+        self.bus.publish(frame(event, data))
 
     @asynccontextmanager
     async def lifespan(self, _app: Any = None) -> AsyncIterator[None]:
@@ -222,12 +218,14 @@ class RouterDeps:
         if name is None:
             if len(self.agents) == 1:
                 return next(iter(self.agents.values()))
-            raise HTTPException(
-                status_code=400,
-                detail=f"agent must be specified; available: {list(self.agents)}",
+            raise WebError(
+                400,
+                "invalid_request",
+                "agent must be specified",
+                hint=f"available: {list(self.agents)}",
             )
         if name not in self.agents:
-            raise HTTPException(status_code=404, detail=f"unknown agent {name!r}")
+            raise WebError(404, "agent_not_found", f"unknown agent {name!r}")
         return self.agents[name]
 
     def name_of(self, agent: Agent[Any]) -> str:
@@ -284,7 +282,10 @@ class RouterDeps:
             # user's rename the CAS protected) so sidebars catch up either way.
             meta = await self.store.get(session_id)
             if meta is not None and meta.title:
-                self.emit("session_retitled", session_id=session_id, title=meta.title)
+                self.emit(
+                    "session_retitled",
+                    SessionRetitledData(session_id=session_id, title=meta.title),
+                )
         except Exception as exc:  # pragma: no cover - defensive
             log.warning("title generation for %s failed: %s", session_id, exc)
 

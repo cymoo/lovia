@@ -27,13 +27,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-try:
-    from fastapi import HTTPException
-except ImportError as exc:  # pragma: no cover - depends on optional env
-    from ._deps import raise_missing_web_extra
-
-    raise_missing_web_extra(exc)
-
+from .errors import WebError
+from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
 
@@ -281,8 +276,8 @@ class Scheduler:
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
             )
-        except HTTPException as exc:
-            if exc.status_code == 429:
+        except WebError as exc:
+            if exc.code == "too_many_runs":
                 # At the concurrency cap: defer (leave next_fire due → retried).
                 # Drop the freshly-created session row so repeated 429s on a
                 # fresh-session schedule don't leak empty chats (each retry mints
@@ -297,7 +292,8 @@ class Scheduler:
             # After start() succeeded — a 429-deferred fire deletes its fresh
             # session above, which must not have been announced.
             self.deps.emit(
-                "session_created", session_id=target, agent=agent_name, title=title
+                "session_created",
+                SessionCreatedData(session_id=target, agent=agent_name, title=title),
             )
         await self._advance(sched, now, last_session_id=target)
         return target

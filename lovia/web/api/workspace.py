@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+    from fastapi import APIRouter, File, Query, Request, UploadFile
     from fastapi.responses import FileResponse, Response
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -45,6 +45,7 @@ from ...workspace import (
     WorkspacePolicy,
 )
 from ...workspace.paths import resolve_path
+from ..errors import WebError
 from ..media import is_preview_image, preview_image_mime
 from ..schemas import (
     ProcessInfo,
@@ -218,7 +219,7 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         agent = deps.pick(agent_name)
         cfg = workspace_cfg(agent)
         if cfg is None:
-            raise HTTPException(status_code=404, detail="agent has no workspace")
+            raise WebError(404, "feature_unavailable", "agent has no workspace")
         return cfg
 
     def entry_out(e: Any) -> WorkspaceEntry:
@@ -248,12 +249,12 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             async with _view_session(cfg) as session:
                 entries = await session.list_files(path)
         except PermissionDeniedError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise WebError.from_exc(403, "path_denied", exc) from exc
         except (FileNotFoundError, NotADirectoryError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         # "Not a directory: …" / a vanished workspace root both land here.
         except (WorkspaceError, UserError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         return [entry_out(e) for e in entries]
 
     @router.get("/api/workspace/recent", response_model=list[WorkspaceEntry])
@@ -272,9 +273,9 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
             async with _view_session(cfg, skip=_RECENT_SKIPS) as session:
                 entries = await session.list_files(".", pattern="**/*")
         except PermissionDeniedError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise WebError.from_exc(403, "path_denied", exc) from exc
         except (WorkspaceError, UserError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         files = [e for e in entries if not e.is_dir]
         files.sort(key=lambda e: e.mtime or 0.0, reverse=True)
         return [entry_out(e) for e in files[:limit]]
@@ -296,10 +297,10 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         try:
             async with _view_session(cfg) as session:
                 if session.decide_path(path) != "allow":
-                    raise HTTPException(status_code=403, detail="path not readable")
+                    raise WebError(403, "path_denied", "path not readable")
                 resolved = resolve_path(_root_of(cfg), path)
                 if not resolved.abs.is_file():
-                    raise HTTPException(status_code=404, detail="no such file")
+                    raise WebError(404, "file_not_found", "no such file")
                 if await _sniff_binary(resolved.abs):
                     return WorkspaceFile(
                         path=resolved.display(), content="", binary=True
@@ -308,11 +309,11 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
                     path, start=start, end=start + _PAGE_LINES - 1
                 )
         except PermissionDeniedError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            raise WebError.from_exc(403, "path_denied", exc) from exc
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         except (IsADirectoryError, WorkspaceError, UserError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         return WorkspaceFile(
             path=content.path,
             content=content.content,
@@ -336,18 +337,18 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         try:
             async with _view_session(cfg) as session:
                 if session.decide_path(path) != "allow":
-                    raise HTTPException(status_code=403, detail="path not readable")
+                    raise WebError(403, "path_denied", "path not readable")
         except UserError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "file_not_found", exc) from exc
         resolved = resolve_path(_root_of(cfg), path)
         if not resolved.abs.is_file():
-            raise HTTPException(status_code=404, detail="no such file")
+            raise WebError(404, "file_not_found", "no such file")
         try:
             stat_result = resolved.abs.stat()
         except OSError as exc:  # vanished between the is_file check and here
-            raise HTTPException(status_code=404, detail="no such file") from exc
+            raise WebError(404, "file_not_found", "no such file") from exc
         if stat_result.st_size > cfg.limits.max_file_read_bytes:
-            raise HTTPException(status_code=413, detail="file too large")
+            raise WebError(413, "file_too_large", "file too large")
         # Prefer the explicit preview map so a nosniff'd inline image carries a
         # correct, OS-stable Content-Type; fall back to mimetypes for non-images
         # (only served via download=1 anyway).
@@ -365,8 +366,8 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         # it stays reachable via download=1. See lovia/web/media.py.
         inline_ok = is_preview_image(resolved.abs.name) or is_pdf
         if not download and not inline_ok:
-            raise HTTPException(
-                status_code=415, detail="inline preview is images and PDFs only"
+            raise WebError(
+                415, "unsupported_file_type", "inline preview is images and PDFs only"
             )
         # `no-cache` = cache but revalidate: the viewer re-opens the same URL
         # constantly (and re-renders after every agent edit), so unchanged
@@ -442,11 +443,11 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         """Kill one background process; returns the refreshed process list."""
         session = deps.workspaces.get(session_id)
         if session is None:
-            raise HTTPException(status_code=404, detail="no live workspace session")
+            raise WebError(404, "process_not_found", "no live workspace session")
         try:
             await session.kill_process(process_id)
         except WorkspaceError as exc:  # unknown id (or a closed session)
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise WebError.from_exc(404, "process_not_found", exc) from exc
         return _process_list(session_id)
 
     @router.post("/api/workspace/upload", response_model=UploadedFile)
@@ -471,16 +472,16 @@ def build_workspace_router(deps: RouterDeps) -> APIRouter:
         ext = Path(name).suffix.lower().lstrip(".")
         try:
             if allowed is not None and ext and ext not in allowed:
-                raise HTTPException(
-                    status_code=415, detail=f"file type '.{ext}' is not allowed"
+                raise WebError(
+                    415, "unsupported_file_type", f"file type '.{ext}' is not allowed"
                 )
             data = bytearray()
             while chunk := await file.read(1 << 20):
                 data.extend(chunk)
                 if len(data) > max_bytes:
-                    raise HTTPException(status_code=413, detail="file too large")
+                    raise WebError(413, "file_too_large", "file too large")
             if not data:
-                raise HTTPException(status_code=422, detail="empty file")
+                raise WebError(422, "invalid_request", "empty file")
             target = await asyncio.to_thread(_write_upload, uploads, name, bytes(data))
         finally:
             await file.close()

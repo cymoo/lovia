@@ -80,4 +80,8 @@ interface Error {
    * branch on it (e.g. 401 → prompt for a token, 404 → not-found copy).
    */
   status?: number;
+  /** The API's machine-readable error code (see lovia/web/errors.py). */
+  code?: string;
+  /** The API's suggested fix, when it sent one (also folded into `message`). */
+  hint?: string;
 }

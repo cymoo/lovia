@@ -1,7 +1,7 @@
 // Session sidebar: list, search, switch, rename, delete, export.
 import { t } from './i18n.js';
 import { store } from './store.js';
-import { api } from './api.js';
+import { api, apiError } from './api.js';
 import { promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
@@ -906,7 +906,7 @@ export async function exportSession(format = 'md') {
   if (format === 'html') return exportSessionHtml(store.sessionId, title);
   try {
     const res = await fetch(api.exportUrl(store.sessionId, format));
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) throw await apiError(res);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

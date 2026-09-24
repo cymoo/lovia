@@ -17,7 +17,7 @@ import asyncio
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field, ValidationError
 
 from ...exceptions import UserError
@@ -38,6 +38,7 @@ from ..config.schema import (
 )
 from ..config.skills import scan_skills_status
 from ..config.storage import PROJECT_CONFIG_LABEL, USER_CONFIG_LABEL
+from ..errors import WebError
 
 # Loopback names a same-machine browser legitimately uses. Anything else in
 # the Host header of an *unauthenticated* config write is a DNS-rebinding
@@ -155,10 +156,11 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
         if host in _LOCAL_HOSTS or host.endswith(".localhost"):
             return
-        raise HTTPException(
-            status_code=403,
-            detail="configuration changes require a local origin; "
-            "set --token to configure through a proxy",
+        raise WebError(
+            403,
+            "local_origin_required",
+            "configuration changes require a local origin",
+            hint="set --token to configure through a proxy",
         )
 
     def _config_out() -> dict[str, object]:
@@ -204,7 +206,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         try:
             await runtime.apply(config)
         except (UserError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
 
     def _copy(**overrides: object) -> WebConfig:
         """A validated deep copy of the current document with edits applied."""
@@ -216,8 +218,8 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         except ValidationError as exc:
             first = exc.errors()[0]
             where = ".".join(str(p) for p in first.get("loc", ()))
-            raise HTTPException(
-                status_code=400, detail=f"{where}: {first.get('msg', 'invalid')}"
+            raise WebError(
+                400, "invalid_request", f"{where}: {first.get('msg', 'invalid')}"
             ) from exc
 
     @router.get("")
@@ -233,13 +235,11 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         taken = {p.id for p in cfg.models}
         profile_id = body.id or slugify(body.name or body.model, taken)
         if profile_id in taken:
-            raise HTTPException(
-                status_code=409, detail=f"model id {profile_id!r} exists"
-            )
+            raise WebError(409, "model_exists", f"model id {profile_id!r} exists")
         try:
             profile = body.to_profile(profile_id=profile_id, stored_key=None)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
         models = [p.model_dump() for p in cfg.models] + [profile.model_dump()]
         roles = cfg.roles.model_dump()
         if roles.get("chat") is None:
@@ -255,11 +255,11 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         cfg = runtime.config
         stored = cfg.profile(profile_id)
         if stored is None:
-            raise HTTPException(status_code=404, detail=f"unknown model {profile_id!r}")
+            raise WebError(404, "model_not_found", f"unknown model {profile_id!r}")
         try:
             profile = body.to_profile(profile_id=profile_id, stored_key=stored.api_key)
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
         models = [
             profile.model_dump() if p.id == profile_id else p.model_dump()
             for p in cfg.models
@@ -276,7 +276,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         cfg = runtime.config
         stored = cfg.profile(profile_id)
         if stored is None:
-            raise HTTPException(status_code=404, detail=f"unknown model {profile_id!r}")
+            raise WebError(404, "model_not_found", f"unknown model {profile_id!r}")
         taken = {p.id for p in cfg.models}
         copy_id = slugify(f"{profile_id}-copy", taken)
         copy = stored.model_copy(
@@ -291,12 +291,13 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         _guard_host(request)
         cfg = runtime.config
         if cfg.profile(profile_id) is None:
-            raise HTTPException(status_code=404, detail=f"unknown model {profile_id!r}")
+            raise WebError(404, "model_not_found", f"unknown model {profile_id!r}")
         if cfg.roles.chat == profile_id:
-            raise HTTPException(
-                status_code=409,
-                detail="this is the default chat model; make another model the "
-                "default first",
+            raise WebError(
+                409,
+                "model_in_use",
+                "this is the default chat model",
+                hint="make another model the default first",
             )
         models = [p.model_dump() for p in cfg.models if p.id != profile_id]
         roles = {
@@ -315,7 +316,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         for role in body.model_fields_set:
             roles[role] = getattr(body, role)
         if roles.get("chat") is None:
-            raise HTTPException(status_code=400, detail="roles.chat cannot be cleared")
+            raise WebError(400, "invalid_request", "roles.chat cannot be cleared")
         await _apply(_copy(roles=roles))
         return {"config": _config_out()}
 
@@ -360,12 +361,10 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
         _guard_host(request)
         stored = runtime.config.profile(body.profile_id) if body.profile_id else None
         if body.profile_id is not None and stored is None:
-            raise HTTPException(
-                status_code=404, detail=f"unknown model {body.profile_id!r}"
-            )
+            raise WebError(404, "model_not_found", f"unknown model {body.profile_id!r}")
         model = body.model or (stored.model if stored else None)
         if not model:
-            raise HTTPException(status_code=400, detail="model is required")
+            raise WebError(400, "invalid_request", "model is required")
         # Key selection mirrors the write endpoints' keep/clear convention:
         # None falls back to the stored profile's key, while an explicit ""
         # means "probe keyless" — it must never silently substitute the
@@ -386,7 +385,7 @@ def build_config_router(runtime: ConfigRuntime) -> APIRouter:
                 context_window=body.context_window,
             )
         except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
         conn = Connection.from_profile(probe_profile)
         # The probe is synchronous httpx (shared with the terminal wizard);
         # keep the event loop free while it waits on the network.

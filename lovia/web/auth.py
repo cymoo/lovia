@@ -27,11 +27,13 @@ import secrets
 from collections.abc import Awaitable, Callable
 
 try:
-    from fastapi import HTTPException, Request
+    from fastapi import Request
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
+
+from .errors import WebError
 
 #: Cookie the bundled UI stores its token in (see ``static/js/main.js``).
 TOKEN_COOKIE = "lovia_token"
@@ -75,14 +77,12 @@ def token_dependency(token: str) -> Callable[[Request], Awaitable[None]]:
         candidate = supplied(request)
         if candidate is not None and secrets.compare_digest(candidate, token):
             return
-        raise HTTPException(
-            status_code=401,
-            # "server token" (not just "unauthorized") so clients — including
-            # the bundled UI's error mapping — can tell this apart from a
-            # model-provider auth failure.
-            detail="missing or invalid server token: pass it as "
-            "'Authorization: Bearer <token>', or open the UI via its "
-            "/?token=... link",
+        raise WebError(
+            401,
+            "server_token",
+            "missing or invalid server token",
+            hint="pass it as 'Authorization: Bearer <token>', or open the UI "
+            "via its /?token=... link",
             headers={"www-authenticate": "Bearer"},
         )
 

@@ -75,23 +75,21 @@ def test_create_app_auto_wires_and_manual_wire_is_idempotent() -> None:
     # create_app adapted the plugin: supervised children + web delivery.
     assert plugin.deliver is not None
     assert plugin.run_child is not None
-    assert wire_subagents(app) == 0  # already wired — left untouched
+    assert wire_subagents(app.state.deps) == 0  # already wired — left untouched
 
     # Opting out keeps core (bounded, in-process) semantics.
     plugin2 = Subagents()
-    app2 = create_app(
+    create_app(
         Agent(name="bot", model=None, plugins=[plugin2]),
         store=ChatStore.in_memory(),
         generate_titles=False,
         wire_subagents=False,
     )
     assert plugin2.deliver is None and plugin2.run_child is None
-    assert wire_subagents(app2) == 1  # the manual helper still works
 
 
-def test_wire_subagents_takes_router_deps_for_embedding_apps() -> None:
-    # An app mounting build_api_router has no app.state.deps — it wires
-    # through the RouterDeps it built.
+def test_wire_subagents_for_embedding_apps() -> None:
+    # An app mounting build_api_router wires through the RouterDeps it built.
     from lovia.web import RouterDeps
 
     plugin = Subagents()
@@ -193,9 +191,9 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     deps = app.state.deps  # auto-wired by create_app
     emitted: list[tuple[str, dict]] = []
     orig_emit = deps.emit
-    deps.emit = lambda name, **data: (
-        emitted.append((name, data)),
-        orig_emit(name, **data),
+    deps.emit = lambda name, data: (
+        emitted.append((name, dict(data))),
+        orig_emit(name, data),
     )[1]  # type: ignore[method-assign]
 
     await deps.store.upsert("s3", agent="bot", title="chat")

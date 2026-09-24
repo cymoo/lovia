@@ -70,13 +70,55 @@ Plain requests, `POST /api/chat/stream`, and `POST /api/chat/reconnect` send
 `Authorization: Bearer <token>`. `GET /api/events` uses `EventSource`, which
 cannot set custom headers, so the bundled UI authenticates it with the
 `lovia_token` cookie. `GET /healthz` stays open. Missing or invalid credentials
-return `401`; the `detail` names the *server token* so clients can distinguish
-this from model-provider authentication failures.
+return `401` with code `server_token` — distinct from a model provider
+rejecting its API key, which arrives as a run error (`provider_auth`).
 
 Apps mounting `build_api_router` themselves must add their own dependency,
 such as `token_dependency(token)` from `lovia.web.auth` or any FastAPI
 authentication dependency. `/api/docs` and `/api/openapi.json` belong to the
 FastAPI app rather than this router and remain public by default.
+
+## Errors
+
+Every error an API route raises has one body:
+
+```json
+{"detail": {"code": "session_not_found", "message": "session not found", "hint": "..."}}
+```
+
+Branch on `code`, never on `message` wording; `hint`, when present, is a
+suggested fix. Two exceptions keep FastAPI's own shapes: request validation
+(422, `detail` is a list) and a custom `auth=` dependency (whatever it
+raises). `apiError(response)` in the [bundled client](#the-bundled-browser-client)
+normalizes all three.
+
+| Error code | Status | Meaning |
+| --- | --- | --- |
+| `invalid_request` | 400 / 422 | a malformed or empty input the route rejected |
+| `server_token` | 401 | missing or invalid server token |
+| `local_origin_required` | 403 | a config write without auth from a non-local `Host` |
+| `path_denied` | 403 | the workspace policy refuses the path |
+| `agent_not_found` | 404 | no served agent by that name |
+| `session_not_found` | 404 | no such chat |
+| `schedule_not_found` | 404 | no such schedule |
+| `model_not_found` | 404 | no such model profile |
+| `file_not_found` | 404 | no such workspace file or directory |
+| `turn_not_found` | 404 | rewind named a user turn the chat doesn't have |
+| `image_not_found` | 404 | no servable image at that tool-result index |
+| `approval_not_found` | 404 | no pending approval matches |
+| `question_not_found` | 404 | no pending `ask_human` question matches |
+| `process_not_found` | 404 | no such background process |
+| `run_not_found` | 404 | no live or resumable run to cancel or reconnect to |
+| `feature_unavailable` | 404 / 501 | the server or agent lacks it (no workspace, memory, checkpointer, question channel, or `rewind`) |
+| `run_active` | 409 | a run owns this chat |
+| `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
+| `agent_unregistered` | 409 | the interrupted run's agent is no longer served |
+| `schedule_not_fired` | 409 | the schedule couldn't fire right now |
+| `model_exists` | 409 | a model profile with that id exists |
+| `model_in_use` | 409 | the default chat model can't be deleted |
+| `file_too_large` | 413 | over the workspace read or upload limit |
+| `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
+| `too_many_runs` | 429 | at the concurrent-run cap |
 
 ## Endpoints
 
@@ -108,10 +150,17 @@ FastAPI app rather than this router and remain public by default.
 
 ### Lifecycle events
 
-`GET /api/events` uses GET + `EventSource` to publish `run_started`,
-`run_finished`, `session_created`, `session_retitled`, and `config_changed`
-(the model configuration was edited — refetch `/api/config`). It does not replay
-history. On every connection or reconnection, fetch current state from
+`GET /api/events` uses GET + `EventSource` to publish:
+
+| Lifecycle event | Payload |
+| --- | --- |
+| `run_started` | `{session_id, run_id, agent, source}` |
+| `run_finished` | `{session_id, run_id, status, error, source}` |
+| `session_created` | `{session_id, agent, title}` |
+| `session_retitled` | `{session_id, title}` |
+| `config_changed` | `{configured, model, profile_id, name}` — refetch `/api/config` |
+
+It does not replay history. On every connection or reconnection, fetch current state from
 `/api/sessions` and `/api/runs` before processing new events. The server closes
 subscribers that fall behind; recover them with the same snapshot-first flow.
 To find Runs that finished while disconnected, query `/api/runs/history` with
@@ -133,20 +182,47 @@ To find Runs that finished while disconnected, query `/api/runs/history` with
 of `event:` / `data:` pairs: the Runner's
 [typed events](streaming.md#event-catalog), with JSON-encoded data.
 
+`?` marks a field that may be absent.
+
 | SSE event | Payload |
 | --- | --- |
 | `session` | `{session_id}` — first frame of a new stream |
-| `snapshot` | `{session_id, status, entries[]}` — re-attach prologue: the completed turns so far |
-| `text_delta` / `reasoning_delta` | `{delta}` |
+| `snapshot` | `{session_id, status, entries}` — re-attach prologue: the completed turns so far |
+| `text_delta` | `{delta}` |
+| `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}` — clear the current turn's rendered deltas |
 | `message_completed` | `{message}` — one assistant turn, assembled |
 | `user_injected` | `{content, turn}` |
-| `tool_call` / `tool_result` | `{id, name, arguments}` / `{id, name, result, is_error}` |
-| `todo` | `{call_id, todos: [...]}` — structured todo updates |
+| `tool_call` | `{id, name, arguments}` — `arguments` is the raw JSON string |
+| `tool_result` | `{id, name, result, is_error, images?}` — `images` lists `{index, mime_type}` stubs served by `GET /api/sessions/{id}/tool-images/{call_id}/{index}` |
+| `todo` | `{call_id, name, todos}` — a structured todo update, in place of that call's `tool_result` |
 | `approval_required` | `{id, name, arguments}` → answer via `POST /api/chat/approve` |
-| `handoff` / `turn_started` / `context_compacted` | transitions and [compaction notices](context.md) |
-| `error` | `{type, message}` — tool-scoped, or terminal when the stream then ends |
+| `handoff` | `{from, to}` |
+| `turn_started` | `{turn, agent}` |
+| `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}` — a [compaction notice](context.md) |
+| `error` | `{type, message, code, status_code?, retryable?, hint?}` — tool-scoped, or terminal when the stream then ends |
 | `done` | `{output, usage}` — terminal success |
+
+An `error` event's `code` classifies the failure; `status_code` and
+`retryable` come from a provider error, `hint` from any lovia error carrying
+one:
+
+| Run error code | Meaning |
+| --- | --- |
+| `tool_error` | a tool call failed; the model sees the error and usually carries on |
+| `provider_auth` | the provider rejected the credentials (401 / 403) |
+| `rate_limited` | the provider rate-limited the request (429) |
+| `overloaded` | the provider is overloaded (503 / 529) |
+| `timeout` | the provider request timed out |
+| `network` | the connection to the provider failed |
+| `provider_error` | any other provider failure |
+| `context_overflow` | the prompt exceeds the model's context window |
+| `budget_exceeded` | a `RunBudget` limit tripped |
+| `max_turns` | the run hit `max_turns` without finishing |
+| `cancelled` | the run was cancelled |
+| `guardrail` | a guardrail rejected the input or output |
+| `output_invalid` | the output didn't parse into the agent's `output_type` |
+| `internal` | anything else |
 
 Chat streams do not use Last-Event-Id. After a disconnect, POST
 `/api/chat/reconnect` again to receive the latest `snapshot`, a replay of the
@@ -157,8 +233,13 @@ Comment lines (`:`) are keep-alives and should be ignored.
 ## The bundled browser client
 
 `lovia/web/static/js/api.js` is a dependency-free client for chat, Session,
-scheduling, Workspace, Memory, and related endpoints. It also provides
-`readSSE(response)`, an async generator over `{event, data}` pairs:
+scheduling, Workspace, Memory, and related endpoints. Methods that decode JSON
+reject with an `Error` carrying `status`, `code`, and `hint`. The streams
+(`streamChat`, `reconnect`) and the bodiless actions (`approve`, `answer`,
+`cancel`, `deleteSession`, `deleteAllSessions`) resolve to the raw `Response`
+instead; turn a failed one into the same `Error` with `apiError(response)`,
+which is exported for your own `fetch` calls too. `readSSE(response)` is an
+async generator over a stream's `{event, data}` pairs:
 
 ```js
 import { api, readSSE } from "./api.js";

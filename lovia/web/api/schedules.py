@@ -13,12 +13,13 @@ from dataclasses import replace
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Query
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
     raise_missing_web_extra(exc)
 
+from ..errors import WebError
 from ..scheduler import Scheduler, initial_next_fire, validate_trigger
 from ..schemas import RunRecordInfo, ScheduleInfo, SchedulePatch, ScheduleSpec
 from ..store import RunRow, ScheduleRow
@@ -63,15 +64,17 @@ def _info(row: ScheduleRow, last: RunRow | None = None) -> ScheduleInfo:
 def _resolve_agent_name(deps: RouterDeps, name: str | None) -> str:
     """Validate an explicit agent name, or fall back to the server default."""
     agent_name = name or deps.default_agent
-    if agent_name is None or agent_name not in deps.agents:
-        # Distinguish "named an unknown agent" from "named none and there's no
-        # default" (multi-agent server) — the latter reported a useless `None`.
-        detail = (
-            f"unknown agent {agent_name!r}"
-            if agent_name is not None
-            else "no agent specified and no default is available"
+    if agent_name is None:
+        # Multi-agent server, none named — distinct from an unknown name, which
+        # used to report a useless `None`.
+        raise WebError(
+            400,
+            "invalid_request",
+            "no agent specified and no default is available",
+            hint=f"available: {list(deps.agents)}",
         )
-        raise HTTPException(status_code=404, detail=detail)
+    if agent_name not in deps.agents:
+        raise WebError(404, "agent_not_found", f"unknown agent {agent_name!r}")
     return agent_name
 
 
@@ -81,7 +84,7 @@ def _validated_next_fire(kind: str, expr: str) -> float:
         validate_trigger(kind, expr)
         return initial_next_fire(kind, expr, now=time.time())
     except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise WebError.from_exc(422, "invalid_request", exc) from exc
 
 
 def build_schedules_router(deps: RouterDeps) -> APIRouter:
@@ -102,7 +105,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     async def get_schedule(schedule_id: str) -> ScheduleInfo:
         row = await store.get_schedule(schedule_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
+            raise WebError(404, "schedule_not_found", "schedule not found")
         return await _with_last(row)
 
     @router.get("/api/schedules/{schedule_id}/runs", response_model=list[RunRecordInfo])
@@ -111,7 +114,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     ) -> list[RunRecordInfo]:
         """This schedule's fire history, newest first (its run records)."""
         if await store.get_schedule(schedule_id) is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
+            raise WebError(404, "schedule_not_found", "schedule not found")
         rows = await store.list_runs(source=f"schedule:{schedule_id}", limit=limit)
         return [run_record(r) for r in rows]
 
@@ -119,7 +122,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     async def create_schedule(spec: ScheduleSpec) -> ScheduleInfo:
         message = spec.input.strip()
         if not message:
-            raise HTTPException(status_code=422, detail="empty input")
+            raise WebError(422, "invalid_request", "empty input")
         agent_name = _resolve_agent_name(deps, spec.agent)
         next_fire = _validated_next_fire(spec.trigger_kind, spec.trigger_expr)
 
@@ -146,21 +149,21 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
     @router.delete("/api/schedules/{schedule_id}")
     async def delete_schedule(schedule_id: str) -> dict[str, bool]:
         if not await store.delete_schedule(schedule_id):
-            raise HTTPException(status_code=404, detail="schedule not found")
+            raise WebError(404, "schedule_not_found", "schedule not found")
         return {"ok": True}
 
     @router.patch("/api/schedules/{schedule_id}", response_model=ScheduleInfo)
     async def patch_schedule(schedule_id: str, patch: SchedulePatch) -> ScheduleInfo:
         row = await store.get_schedule(schedule_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
+            raise WebError(404, "schedule_not_found", "schedule not found")
         provided = patch.model_fields_set
 
         changes: dict[str, Any] = {}
         if patch.input is not None:
             message = patch.input.strip()
             if not message:
-                raise HTTPException(status_code=422, detail="empty input")
+                raise WebError(422, "invalid_request", "empty input")
             changes["input"] = message
         if patch.agent is not None:
             changes["agent"] = _resolve_agent_name(deps, patch.agent)
@@ -203,12 +206,13 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
         paused). 409 when skipped — previous run still live or at capacity."""
         row = await store.get_schedule(schedule_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="schedule not found")
+            raise WebError(404, "schedule_not_found", "schedule not found")
         target = await fire_scheduler.fire_now(row)
         if target is None:
-            raise HTTPException(
-                status_code=409,
-                detail="not fired: previous run still active, agent unavailable, "
+            raise WebError(
+                409,
+                "schedule_not_fired",
+                "not fired: previous run still active, agent unavailable, "
                 "or at the concurrency cap",
             )
         return {"ok": True, "session_id": target}

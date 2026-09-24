@@ -806,7 +806,7 @@ async def test_rewind_refuses_when_the_wind_down_outlasts_the_drain() -> None:
         deps.supervisor.drain = lambda sid, **kw: drain(sid, timeout=0.05)
         res = await ac.post("/api/sessions/s1/rewind", json={"user_turn": 0})
         assert res.status_code == 409
-        assert "still stopping" in res.json()["detail"]
+        assert res.json()["detail"]["code"] == "run_stopping"
         # The timed-out wait left the run alone rather than killing it.
         deps.supervisor.drain = drain
         release.set()

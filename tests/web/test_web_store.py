@@ -11,7 +11,7 @@ import pytest
 from lovia.stores import InMemorySession
 from lovia.transcript import TranscriptEntry, AssistantTextEntry
 from lovia.web import ChatStore
-from lovia.web.store import _ADDED_COLUMNS, RunRow, ScheduleRow
+from lovia.web.store import RunRow, ScheduleRow
 
 
 def _journal_mode(path: Path) -> str:
@@ -308,16 +308,53 @@ def _shape(path: Path) -> tuple[dict[str, set[tuple]], set[str]]:
     return tables, indexes
 
 
+# Each chat table's columns as it first shipped. Frozen history, deliberately
+# independent of ``_ADDED_COLUMNS``: a column added to the schema since must
+# reach older databases through that list, and this is what proves it.
+_SHIPPED_COLUMNS = {
+    "chat_sessions": {
+        "id",
+        "title",
+        "agent",
+        "created_at",
+        "updated_at",
+        "active_run_id",
+    },
+    "chat_schedules": {
+        "id",
+        "agent",
+        "input",
+        "session_id",
+        "trigger_kind",
+        "trigger_expr",
+        "next_fire",
+        "active",
+        "last_session_id",
+        "created_at",
+        "updated_at",
+    },
+    "chat_runs": {
+        "id",
+        "session_id",
+        "agent",
+        "source",
+        "status",
+        "error",
+        "started_at",
+        "finished_at",
+        "usage_json",
+    },
+}
+
+
 def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
-    """Every added column/index reaches an older database, exactly as a fresh
-    one declares it — the guard against a column added to the schema but not
-    to ``_ADDED_COLUMNS`` (or declared differently in each)."""
+    """A database from when each table shipped migrates to exactly a fresh
+    one's columns and indexes — failing on a column added to the schema but
+    not to ``_ADDED_COLUMNS``, or declared differently in each."""
     fresh = tmp_path / "fresh.db"
     ChatStore(InMemorySession(), meta_path=fresh)
     fresh_shape = _shape(fresh)
 
-    # Rebuild each table as it shipped: the fresh columns minus the added ones.
-    added = {(t, d.split(" ", 1)[0]) for t, d in _ADDED_COLUMNS}
     old = tmp_path / "old.db"
     conn = sqlite3.connect(old)
     for table, columns in fresh_shape[0].items():
@@ -327,7 +364,7 @@ def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
             + (f" DEFAULT {default}" if default is not None else "")
             + (" PRIMARY KEY" if pk else "")
             for name, type_, notnull, default, pk in sorted(columns)
-            if (table, name) not in added
+            if name in _SHIPPED_COLUMNS[table]
         ]
         conn.execute(f"CREATE TABLE {table} ({', '.join(defs)})")
     conn.commit()

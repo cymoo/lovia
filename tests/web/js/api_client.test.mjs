@@ -23,8 +23,11 @@ test('the base prefixes fetched and built URLs, trailing slash dropped', async (
   configureApi({ base: '/lovia/' });
   await api.listAgents();
   assert.equal(requested.at(-1), '/lovia/api/agents');
+  await api.exportChat('s1', 'json');
+  assert.equal(requested.at(-1), '/lovia/api/sessions/s1/export?format=json');
+  await api.workspaceRaw({ path: 'a.png' });
+  assert.equal(requested.at(-1), '/lovia/api/workspace/raw?path=a.png');
   assert.equal(api.eventsUrl(), '/lovia/api/events');
-  assert.equal(api.exportUrl('s1', 'json'), '/lovia/api/sessions/s1/export?format=json');
   assert.equal(api.workspaceRawUrl({ path: 'a.png' }), '/lovia/api/workspace/raw?path=a.png');
   assert.equal(api.toolImageUrl('s1', 'c1', 0), '/lovia/api/sessions/s1/tool-images/c1/0');
 });
@@ -47,7 +50,8 @@ test('a burst of 401s calls the handler once, with the error code', async () => 
   for (const call of calls) await assert.rejects(call, { status: 401 });
   assert.equal(seen.length, 1);
   assert.equal(seen[0].code, 'server_token');
-  // Raw-Response methods go through the same gate.
+  // Raw-Response methods (cancel, export, raw bytes) go through the same gate.
   assert.equal((await api.cancel('s1')).status, 401);
+  assert.equal((await api.exportChat('s1')).status, 401);
   assert.equal(seen.length, 1);
 });

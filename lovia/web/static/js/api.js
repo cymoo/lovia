@@ -83,6 +83,11 @@ function qs(params) {
   return s ? `?${s}` : '';
 }
 
+/** @typedef {{ agent?: string, path?: string, download?: boolean }} RawOpts */
+/** @param {RawOpts} [opts] */
+const rawPath = ({ agent, path, download } = {}) =>
+  `/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`;
+
 export const api = {
   // ---- agents / server info ----
   listAgents: () => request('/api/agents').then(_json),
@@ -198,8 +203,9 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ user_turn: userTurn }),
     }).then(_json),
-  exportUrl: (id, format = 'md') =>
-    url(`/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`),
+  // The chat as a file → Response (`json` feeds the client-side HTML export).
+  exportChat: (id, format = 'md') =>
+    request(`/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`),
   // The lifecycle stream, for an `EventSource` (which can't use `request`).
   eventsUrl: () => url('/api/events'),
 
@@ -262,9 +268,11 @@ export const api = {
   workspaceFile: ({ agent, path, start } = {}) =>
     request(`/api/workspace/file${qs({ agent, path, start })}`).then(_json),
   // Raw bytes URL — inline image preview, or any file with download=true.
-  /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
-  workspaceRawUrl: ({ agent, path, download } = {}) =>
-    url(`/api/workspace/raw${qs({ agent, path, download: download ? 1 : '' })}`),
+  /** @param {RawOpts} [opts] @returns {string} */
+  workspaceRawUrl: (opts) => url(rawPath(opts)),
+  // The same bytes as a Response, for code that reads them.
+  /** @param {RawOpts} [opts] */
+  workspaceRaw: (opts) => request(rawPath(opts)),
   // Bytes of one image a tool result carried — served from the transcript,
   // so it shows exactly what the model saw. `index` is 0-based over that
   // result's image parts (the SSE / history `images` stubs).

@@ -141,7 +141,7 @@ export function buildExportDoc(data, theme = 'light') {
 export async function exportSessionHtml(sessionId, title) {
   if (!sessionId) return;
   try {
-    const data = await fetch(api.exportUrl(sessionId, 'json')).then(async (r) => {
+    const data = await api.exportChat(sessionId, 'json').then(async (r) => {
       if (!r.ok) throw await apiError(r);
       return r.json();
     });

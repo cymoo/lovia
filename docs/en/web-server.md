@@ -124,6 +124,39 @@ async def my_auth(request: Request) -> None:
 serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
+It guards exactly what the token would, which has three consequences:
+
+- **The bundled UI needs a cookie.** `EventSource`, `<img>` previews, and
+  download links cannot send custom headers, so a dependency that reads only
+  `Authorization` locks them out. Accept your session cookie as well.
+- **Routes you add are yours to guard.** Include them with
+  `dependencies=[Depends(my_auth)]`. The UI shell and `/api/docs` stay
+  public; to gate the whole site, use middleware or your reverse proxy.
+- **A front end on another origin** that authenticates with cookies needs
+  credentialed CORS, which `cors_origins` does not enable (see below).
+
+For that cross-origin case, leave `cors_origins` unset and add the middleware
+yourself:
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app = create_app(agent, auth=my_auth)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://chat.example.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+If the two origins are different *sites* (not just subdomains of one), the
+cookie must be `SameSite=None`, so defend against CSRF yourself: several
+endpoints (cancel, run a schedule now, upload) are body-less or multipart
+POSTs — "simple" requests that skip the CORS preflight. The token cookie is
+`SameSite=Strict` and unaffected.
+
 `create_app()` alone enables no authentication; under another ASGI server,
 pass `token` or `auth` yourself. `serve()` only judges apps built by
 `create_app()` — an app of your own that mounts `build_api_router` keeps its

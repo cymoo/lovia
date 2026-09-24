@@ -11,6 +11,7 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 exclude_docs: |
   ratio-calibration.md
+  design/
 hooks:
   - scripts/mkdocs_hooks.py
 extra_css:

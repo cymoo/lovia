@@ -13,8 +13,8 @@ One token, two carriers:
   its ``/?token=...`` link. Requests the browser makes *without* JS headers
   (``<img>`` previews, download links) carry credentials this way.
 
-``/healthz`` stays open for probes. The static assets and the UI shell are
-public by design — they contain no data; every ``/api/*`` route is guarded.
+Only the API router is guarded: ``create_app`` serves ``/healthz``, the UI
+shell and the static assets outside it — they contain no data.
 
 For any richer scheme (sessions, OAuth, per-user identity), pass a FastAPI
 dependency as ``create_app(auth=...)`` instead of a token — it replaces this
@@ -37,9 +37,6 @@ from .errors import WebError
 
 #: Cookie the bundled UI stores its token in (see ``static/js/main.js``).
 TOKEN_COOKIE = "lovia_token"
-
-#: Paths exempt from token auth — health probes must not need credentials.
-OPEN_PATHS = frozenset({"/healthz"})
 
 
 def is_loopback(host: str) -> bool:
@@ -72,8 +69,6 @@ def token_dependency(token: str) -> Callable[[Request], Awaitable[None]]:
         return request.cookies.get(TOKEN_COOKIE)
 
     async def dependency(request: Request) -> None:
-        if request.url.path in OPEN_PATHS:
-            return
         candidate = supplied(request)
         if candidate is not None and secrets.compare_digest(candidate, token):
             return

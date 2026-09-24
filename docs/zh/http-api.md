@@ -8,6 +8,7 @@
 | `create_app(agent, ui=False)` | 独立服务，只关闭内置页面 |
 | `create_app(...)` | 需要完整 ASGI 应用，但由自己启动服务器 |
 | `build_api_router(...)` | 已有 FastAPI 应用，需要复用其中间件和生命周期 |
+| `app.mount(prefix, create_app(...))` | 已有应用，需要把完整的 lovia 应用挂在某个路径前缀下 |
 
 ## 只提供 API
 
@@ -55,6 +56,23 @@ app = FastAPI(lifespan=lifespan)
 Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
 （见 [Web UI](web-ui.md#后台子-agent)）。
 
+### 挂载 `create_app()` 应用
+
+`create_app()` 构建的应用也可以挂在你自己应用的某个路径前缀下。Starlette 只运行外层应用的
+lifespan，被挂载应用的 lifespan 永远不会启动，而且没有任何提示，因此要在外层 lifespan 中进入它：
+
+```python
+lovia_app = create_app(agent, ui=False)   # 内置页面要求部署在根路径
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with lovia_app.state.deps.lifespan():
+        yield
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/lovia", lovia_app)            # API 位于 /lovia/api/...
+```
+
 ## 认证
 
 通过 `create_app(token=...)` 配置 token 后，`build_api_router` 注册的业务路由都需要认证。
@@ -62,12 +80,14 @@ Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
 
 普通请求以及 `POST /api/chat/stream`、`POST /api/chat/reconnect` 应发送
 `Authorization: Bearer <token>`。`GET /api/events` 使用 `EventSource`，无法自定义请求头，
-内置 UI 因此通过 `lovia_token` cookie 认证。`GET /healthz` 始终开放。凭据缺失或错误时，
+内置 UI 因此通过 `lovia_token` cookie 认证。`GET /healthz` 由 `create_app` 在认证依赖之外提供，
+无论使用 `token` 还是 `auth` 都保持开放。凭据缺失或错误时，
 服务端返回 `401`，错误码为 `server_token`；模型 Provider 拒绝 API Key 则是另一回事，
 会以运行错误 `provider_auth` 出现。
 
 直接挂载 `build_api_router` 时，需要自行添加认证依赖，例如
-`lovia.web.auth.token_dependency(token)` 或其他 FastAPI 依赖。
+`lovia.web.auth.token_dependency(token)` 或其他 FastAPI 依赖；健康检查也需要自己提供，
+因为 `/healthz` 不属于该 router。
 
 `/api/docs` 和 `/api/openapi.json` 由 FastAPI 应用本身提供，不属于上述业务路由，默认保持
 公开；其中只包含接口定义，不包含会话或工作区数据。如需限制访问，请在应用层另行处理。
@@ -117,7 +137,7 @@ API 路由抛出的错误都使用同一种响应体：
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `GET /healthz` | 存活检查 |
+| `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
 | `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关 |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力 |
 | `POST /api/chat` | 执行一次**阻塞式** Run → `{output, session_id, usage}` |

@@ -5,14 +5,9 @@ mount into your own FastAPI app to build a custom front-end::
 
     from fastapi import FastAPI
     from lovia.web import RouterDeps, build_api_router, ChatStore
-    from lovia.web.approvals import ApprovalRegistry
 
-    deps = RouterDeps(
-        agents={"bot": agent},
-        store=ChatStore.in_memory(),
-        approvals=ApprovalRegistry(),
-    )
-    app = FastAPI()
+    deps = RouterDeps(agents={"bot": agent}, store=ChatStore.in_memory())
+    app = FastAPI(lifespan=deps.lifespan)
     app.include_router(build_api_router(deps))
 """
 

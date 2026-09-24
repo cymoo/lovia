@@ -1085,6 +1085,46 @@ def test_lifespan_sweeps_stale_running_records(tmp_path) -> None:
     assert recs[0]["status"] == "interrupted"
 
 
+def test_embedding_app_enters_deps_lifespan_inside_its_own(tmp_path) -> None:
+    import sqlite3
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from lovia.web import RouterDeps, build_api_router
+
+    path = tmp_path / "app.db"
+    store = ChatStore.sqlite(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO chat_runs (id, session_id, agent, source, status, started_at) "
+        "VALUES ('stale', 's1', 'bot', 'user', 'running', 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    deps = RouterDeps(
+        agents={"bot": Agent(name="bot", model=ScriptedProvider([]))},
+        store=store,
+    )
+    phases: list[str] = []
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        phases.append("own startup")
+        async with deps.lifespan():
+            yield
+        phases.append("own shutdown")
+
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(build_api_router(deps))
+    with TestClient(app) as c:
+        recs = c.get("/api/runs/history").json()
+    assert recs[0]["status"] == "interrupted"
+    assert phases == ["own startup", "own shutdown"]
+
+
 @pytest.mark.asyncio
 async def test_start_accepts_an_external_mailbox() -> None:
     # The subagents plugin steers children via ChildSpec.mailbox; the web

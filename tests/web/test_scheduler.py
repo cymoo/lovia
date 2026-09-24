@@ -506,14 +506,36 @@ async def test_scheduler_advances_past_unavailable_agent() -> None:
     assert not deps.supervisor._controllers  # nothing fired
 
 
-def test_scheduler_lifespan_fires_end_to_end() -> None:
-    """The real loop (started by create_app's lifespan) fires a due schedule."""
-    app = create_app(
-        _agent([text("fired")]),
+def _embedded_app(agent, *, scheduler_poll: float):
+    from fastapi import FastAPI
+
+    from lovia.web import RouterDeps, build_api_router
+
+    deps = RouterDeps(
+        agents={agent.name: agent},
         store=ChatStore.in_memory(),
         generate_titles=False,
-        scheduler_poll=0.05,  # tick fast so the test doesn't dawdle
+        scheduler_poll=scheduler_poll,
     )
+    app = FastAPI(lifespan=deps.lifespan)
+    app.include_router(build_api_router(deps))
+    return app
+
+
+@pytest.mark.parametrize("embedded", [False, True], ids=["create_app", "embedded"])
+def test_scheduler_lifespan_fires_end_to_end(embedded: bool) -> None:
+    """The real loop (started by the lifespan) fires a due schedule — whether
+    create_app wires the lifespan or an embedding app passes ``deps.lifespan``."""
+    agent = _agent([text("fired")])
+    if embedded:
+        app = _embedded_app(agent, scheduler_poll=0.05)
+    else:
+        app = create_app(
+            agent,
+            store=ChatStore.in_memory(),
+            generate_titles=False,
+            scheduler_poll=0.05,  # tick fast so the test doesn't dawdle
+        )
     with TestClient(app) as c:  # entering the context runs the lifespan
         # An 'at' schedule in the past is due on the very next tick.
         r = c.post(

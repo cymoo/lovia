@@ -27,21 +27,38 @@ your lifecycle):
 from fastapi import FastAPI
 
 from lovia.web import ChatStore, RouterDeps, build_api_router
-from lovia.web.approvals import ApprovalRegistry
 
-deps = RouterDeps(
-    agents={"bot": agent},
-    store=ChatStore.in_memory(),
-    approvals=ApprovalRegistry(),
-)
-app = FastAPI()
+deps = RouterDeps(agents={"bot": agent}, store=ChatStore.in_memory())
+app = FastAPI(lifespan=deps.lifespan)
 app.include_router(build_api_router(deps))
 ```
 
-`RouterDeps` is a plain dataclass — `agents`, `store`, and `approvals` are
-required; run settings (`max_turns`, `budget`, `retry`, `tracer`,
-`approval_timeout`, `max_background_runs`, title options) are fields with
-the same defaults `create_app` uses.
+`RouterDeps` is a plain dataclass — only `agents` and `store` are required;
+run settings (`max_turns`, `budget`, `retry`, `tracer`, `approval_timeout`,
+`max_background_runs`, `scheduler_poll`, title options) are fields with the
+same defaults `create_app` uses.
+
+`deps.lifespan` runs the machinery behind the API: on startup it settles runs
+a dead process left `running` and starts the schedule poller; on shutdown it
+winds live runs down to resumable checkpoints and closes chat workspaces with
+their background processes. Without it, schedules never fire. If your app
+already has a lifespan, enter it inside yours:
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # your own startup
+    async with deps.lifespan():
+        yield
+    # your own shutdown
+
+app = FastAPI(lifespan=lifespan)
+```
+
+Agents carrying the `Subagents` Plugin also need `wire_subagents(deps)`
+once (see [Web UI](web-ui.md#background-subagents)).
 
 ## Authentication
 

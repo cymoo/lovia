@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import mimetypes
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager, suppress
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 try:
     from fastapi import Depends, FastAPI
@@ -26,14 +24,14 @@ from ..reliability import RetryPolicy, RunBudget
 from ..session import Session
 from ..tracing import Tracer
 from .api import RouterDeps, build_api_router
-from .api.memory import memory_plugin
 from ..tools.human import HumanChannel
-from .approvals import ApprovalRegistry
 from .questions import QuestionRegistry
 from .auth import generate_token, is_loopback, token_dependency
 from .followups import FollowupFn
-from .scheduler import Scheduler
 from .store import ChatStore
+
+if TYPE_CHECKING:
+    from .config import ConfigRuntime
 from .ui import build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
@@ -165,11 +163,11 @@ def create_app(
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
-    auth: Any = None,
+    auth: Callable[..., Any] | None = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     empty_examples: Sequence[str] | None = None,
-    config_runtime: Any = None,
+    config_runtime: ConfigRuntime | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -263,7 +261,6 @@ def create_app(
     else:
         chat_store = ChatStore.sqlite(_default_db_path(next(iter(agents), "lovia")))
 
-    approvals = ApprovalRegistry()
     questions = (
         QuestionRegistry(question_channel, timeout=question_timeout)
         if question_channel is not None
@@ -273,7 +270,6 @@ def create_app(
     deps = RouterDeps(
         agents=agents,
         store=chat_store,
-        approvals=approvals,
         config_runtime=config_runtime,
         title=title,
         # ``None`` = no server-level override: each agent's own context_policy
@@ -289,50 +285,13 @@ def create_app(
         tracer=tracer,
         max_background_runs=max_background_runs,
         approval_timeout=approval_timeout,
+        scheduler_poll=scheduler_poll,
         questions=questions,
     )
 
-    @asynccontextmanager
-    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        # Run records left "running" belong to a previous process that died
-        # with them — settle them before anything new starts.
-        await chat_store.sweep_stale_runs()
-        # Start the scheduler loop; on shutdown stop it, then wind down any live
-        # background runs cooperatively (leaving resumable checkpoints).
-        scheduler = Scheduler(deps, poll_interval=scheduler_poll)
-        _app.state.scheduler = scheduler
-        scheduler.start()
-        if questions is not None:
-            questions.start()
-        try:
-            yield
-        finally:
-            if questions is not None:
-                # Before supervisor shutdown: cancelling parked ask_human
-                # calls lets their runs wind down instead of being killed.
-                await questions.aclose()
-            await scheduler.stop()
-            await deps.supervisor.shutdown()
-            # After the runs: close every chat's workspace session, killing
-            # the background processes that deliberately outlive run ends.
-            # (kill -9 / a crash skips this — those orphan the processes, as
-            # documented; Ctrl+C lands here.)
-            await deps.workspaces.aclose()
-            # End any open /api/events streams so shutdown doesn't wait on them.
-            if deps._bus is not None:
-                deps._bus.close()
-            # Background memory curation (curate_in_background) gets a bounded
-            # window to land — a clean stop shouldn't drop the last run's
-            # curation, but must not hang shutdown on a stuck model call.
-            for agent in deps.agents.values():
-                plugin = memory_plugin(agent)
-                if plugin is not None:
-                    with suppress(asyncio.TimeoutError):
-                        await asyncio.wait_for(plugin.drain(), timeout=15.0)
-
     app = FastAPI(
         title=title,
-        lifespan=_lifespan,
+        lifespan=deps.lifespan,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
@@ -388,7 +347,7 @@ def create_app(
     app.state.agents = agents
     app.state.store = chat_store
     app.state.session = chat_store.session
-    app.state.approvals = approvals
+    app.state.approvals = deps.approvals
     app.state.context_policy = context_policy
     app.state.tracer = tracer
     app.state.deps = deps
@@ -420,11 +379,11 @@ def serve(
     ui: bool = True,
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
-    auth: Any = None,
+    auth: Callable[..., Any] | None = None,
     empty_title: str = "Where shall we begin?",
     empty_description: str | Sequence[str] | None = None,
     empty_examples: Sequence[str] | None = None,
-    config_runtime: Any = None,
+    config_runtime: ConfigRuntime | None = None,
     **uvicorn_kwargs: Any,
 ) -> None:
     """Convenience: build the app and run it under uvicorn (blocking).

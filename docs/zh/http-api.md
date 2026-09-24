@@ -64,14 +64,55 @@ Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
 普通请求以及 `POST /api/chat/stream`、`POST /api/chat/reconnect` 应发送
 `Authorization: Bearer <token>`。`GET /api/events` 使用 `EventSource`，无法自定义请求头，
 内置 UI 因此通过 `lovia_token` cookie 认证。`GET /healthz` 始终开放。凭据缺失或错误时，
-服务端返回 `401`；`detail` 中会包含 *server token*，便于客户端区分服务端认证失败和模型
-Provider 认证失败。
+服务端返回 `401`，错误码为 `server_token`；模型 Provider 拒绝 API Key 则是另一回事，
+会以运行错误 `provider_auth` 出现。
 
 直接挂载 `build_api_router` 时，需要自行添加认证依赖，例如
 `lovia.web.auth.token_dependency(token)` 或其他 FastAPI 依赖。
 
 `/api/docs` 和 `/api/openapi.json` 由 FastAPI 应用本身提供，不属于上述业务路由，默认保持
 公开；其中只包含接口定义，不包含会话或工作区数据。如需限制访问，请在应用层另行处理。
+
+## 错误
+
+API 路由抛出的错误都使用同一种响应体：
+
+```json
+{"detail": {"code": "session_not_found", "message": "session not found", "hint": "..."}}
+```
+
+客户端应根据 `code` 判断错误类型，不要匹配 `message` 的文字；`hint` 出现时是建议的处理方式。
+有两类例外沿用 FastAPI 自身的格式：请求校验失败（422，`detail` 是列表），以及自定义
+`auth=` 依赖抛出的错误。[内置浏览器客户端](#内置浏览器客户端)的 `apiError(response)`
+会把这三种格式统一处理。
+
+| 错误码 | 状态码 | 含义 |
+| --- | --- | --- |
+| `invalid_request` | 400 / 422 | 输入格式错误或为空，被路由拒绝 |
+| `server_token` | 401 | 缺少 server token，或 token 无效 |
+| `local_origin_required` | 403 | 未配置认证时，从非本机 `Host` 修改配置 |
+| `path_denied` | 403 | 工作区策略拒绝访问该路径 |
+| `agent_not_found` | 404 | 没有以该名称提供服务的 Agent |
+| `session_not_found` | 404 | 聊天不存在 |
+| `schedule_not_found` | 404 | 定时任务不存在 |
+| `model_not_found` | 404 | 模型配置不存在 |
+| `file_not_found` | 404 | 工作区文件或目录不存在 |
+| `turn_not_found` | 404 | rewind 指定的用户 Turn 不存在 |
+| `image_not_found` | 404 | 该 Tool 结果位置没有可提供的图片 |
+| `approval_not_found` | 404 | 没有匹配的待审批请求 |
+| `question_not_found` | 404 | 没有匹配的待回答 `ask_human` 问题 |
+| `process_not_found` | 404 | 后台进程不存在 |
+| `run_not_found` | 404 | 没有可取消或可重连的 Run |
+| `feature_unavailable` | 404 / 501 | 服务端或 Agent 不具备该功能（工作区、Memory、checkpointer、提问通道或 `rewind`） |
+| `run_active` | 409 | 该聊天已有 Run 在执行 |
+| `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
+| `agent_unregistered` | 409 | 中断的 Run 所属 Agent 已不再提供服务 |
+| `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
+| `model_exists` | 409 | 该 id 的模型配置已存在 |
+| `model_in_use` | 409 | 默认聊天模型不能删除 |
+| `file_too_large` | 413 | 超过工作区读取或上传上限 |
+| `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
+| `too_many_runs` | 429 | 已达到并发 Run 上限 |
 
 ## 端点
 
@@ -105,9 +146,17 @@ Provider 认证失败。
 
 ### 生命周期事件
 
-`GET /api/events` 使用 GET + `EventSource`，推送 `run_started`、`run_finished`、
-`session_created`、`session_retitled` 和 `config_changed`（模型配置被修改——
-重新拉取 `/api/config` 即可同步）。事件流不重放历史；客户端每次连接或重连时，
+`GET /api/events` 使用 GET + `EventSource`，推送以下事件：
+
+| 生命周期事件 | 数据 |
+| --- | --- |
+| `run_started` | `{session_id, run_id, agent, source}` |
+| `run_finished` | `{session_id, run_id, status, error, source}` |
+| `session_created` | `{session_id, agent, title}` |
+| `session_retitled` | `{session_id, title}` |
+| `config_changed` | `{configured, model, profile_id, name}`：重新拉取 `/api/config` 即可同步 |
+
+事件流不重放历史；客户端每次连接或重连时，
 应先通过 `/api/sessions` 和 `/api/runs` 获取一次当前状态，再处理后续事件。订阅者处理过慢时，
 服务端会关闭连接，客户端仍按上述流程恢复。如需补查断线期间已经结束的 Run，可调用
 `/api/runs/history` 并传入 `since`。
@@ -128,20 +177,46 @@ Provider 认证失败。
 `event:` 和 `data:` 组成，对应 Runner 的[类型化事件](streaming.md#事件清单)；`data:`
 使用 JSON 编码。
 
+字段后的 `?` 表示该字段可能不存在。
+
 | SSE 事件 | 数据 |
 | --- | --- |
 | `session` | `{session_id}`：新聊天流的第一条事件 |
-| `snapshot` | `{session_id, status, entries[]}`：重连时的当前状态，包含已完成的 Turn |
-| `text_delta` / `reasoning_delta` | `{delta}` |
+| `snapshot` | `{session_id, status, entries}`：重连时的当前状态，包含已完成的 Turn |
+| `text_delta` | `{delta}` |
+| `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}`：清除当前 Turn 已显示的增量内容 |
 | `message_completed` | `{message}`：完整的模型回复 |
 | `user_injected` | `{content, turn}` |
-| `tool_call` / `tool_result` | `{id, name, arguments}` / `{id, name, result, is_error}` |
-| `todo` | `{call_id, todos: [...]}`：结构化 todo 更新 |
+| `tool_call` | `{id, name, arguments}`：`arguments` 是原始 JSON 字符串 |
+| `tool_result` | `{id, name, result, is_error, images?}`：`images` 列出 `{index, mime_type}`，图片本身通过 `GET /api/sessions/{id}/tool-images/{call_id}/{index}` 获取 |
+| `todo` | `{call_id, name, todos}`：结构化 todo 更新，替代该调用的 `tool_result` |
 | `approval_required` | `{id, name, arguments}` → 通过 `POST /api/chat/approve` 回答 |
-| `handoff` / `turn_started` / `context_compacted` | Handoff、Turn 开始和[上下文压缩](context.md) |
-| `error` | `{type, message}`：Tool 错误，或聊天流终止前的运行错误 |
+| `handoff` | `{from, to}` |
+| `turn_started` | `{turn, agent}` |
+| `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}`：[上下文压缩](context.md)通知 |
+| `error` | `{type, message, code, status_code?, retryable?, hint?}`：Tool 错误，或聊天流终止前的运行错误 |
 | `done` | `{output, usage}`：Run 成功结束 |
+
+`error` 事件的 `code` 标明错误类别；`status_code` 和 `retryable` 来自 Provider 错误，
+`hint` 来自带有提示的 lovia 错误：
+
+| 运行错误码 | 含义 |
+| --- | --- |
+| `tool_error` | Tool 调用失败；模型会看到错误，通常能继续处理 |
+| `provider_auth` | Provider 拒绝了凭据（401 / 403） |
+| `rate_limited` | Provider 限流（429） |
+| `overloaded` | Provider 过载（503 / 529） |
+| `timeout` | Provider 请求超时 |
+| `network` | 与 Provider 的连接失败 |
+| `provider_error` | 其他 Provider 错误 |
+| `context_overflow` | 提示词超出模型的上下文窗口 |
+| `budget_exceeded` | 触发了 `RunBudget` 限制 |
+| `max_turns` | Run 达到 `max_turns` 仍未完成 |
+| `cancelled` | Run 被取消 |
+| `guardrail` | Guardrail 拒绝了输入或输出 |
+| `output_invalid` | 输出无法解析为 Agent 的 `output_type` |
+| `internal` | 其他错误 |
 
 聊天流不使用 Last-Event-Id。连接中断后，客户端重新 POST `/api/chat/reconnect`，会依次收到
 最新的 `snapshot`、当前 Turn 的事件回放和后续实时事件；尚未处理的 `approval_required`
@@ -151,7 +226,9 @@ Provider 认证失败。
 ## 内置浏览器客户端
 
 `lovia/web/static/js/api.js` 是零依赖客户端，封装了聊天、Session、定时任务、Workspace 和
-Memory 等接口，并提供 `readSSE(response)`，用于异步遍历 `{event, data}`。
+Memory 等接口。请求失败时抛出的 `Error` 带有 `status`、`code` 和 `hint`（由 `apiError(response)`
+构造，该函数也已导出，可用于自己的 `fetch` 调用）。它还提供 `readSSE(response)`，用于异步遍历
+`{event, data}`。
 
 ```js
 import { api, readSSE } from "./api.js";

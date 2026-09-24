@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Query
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
 
@@ -23,6 +23,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ...exceptions import UserError
 from ...plugins.memory import Memory
+from ..errors import WebError
 from ..schemas import MemoryDreamResult, MemoryNotes, MemoryUpdate
 from .deps import RouterDeps
 
@@ -42,7 +43,7 @@ def build_memory_router(deps: RouterDeps) -> APIRouter:
         host = deps.pick(agent_name)
         plugin = memory_plugin(host)
         if plugin is None:
-            raise HTTPException(status_code=404, detail="agent has no memory")
+            raise WebError(404, "feature_unavailable", "agent has no memory")
         return host, plugin
 
     def notes_out(plugin: Memory, body: str) -> MemoryNotes:
@@ -78,7 +79,7 @@ def build_memory_router(deps: RouterDeps) -> APIRouter:
         try:
             before, after = await plugin.dream(model=plugin.model or host.model)
         except UserError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise WebError.from_exc(400, "invalid_request", exc) from exc
         body = await plugin.notes_body()
         base = notes_out(plugin, body)
         return MemoryDreamResult(**base.model_dump(), before=before, after=after)

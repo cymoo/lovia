@@ -36,7 +36,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
 
@@ -50,6 +50,8 @@ from ..plugins.subagents import (
     SubagentReport,
     Subagents,
 )
+from .errors import WebError
+from .sse import SessionCreatedData
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
@@ -94,7 +96,7 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 return
             try:
                 agent = deps.pick(row.agent)
-            except HTTPException:
+            except WebError:
                 log.warning(
                     "subagent %s: agent %r is not served anymore; report dropped",
                     report.id,
@@ -117,11 +119,11 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     sid,
                 )
                 return
-            except HTTPException as exc:
-                # 409: another run claimed the session between get() and
-                # start() — the next attempt injects into it. 429: at the
-                # concurrency cap — wait for a slot.
-                if exc.status_code not in (409, 429):
+            except WebError as exc:
+                # run_active: another run claimed the session between get() and
+                # start() — the next attempt injects into it. too_many_runs: at
+                # the concurrency cap — wait for a slot.
+                if exc.code not in ("run_active", "too_many_runs"):
                     raise
         log.warning(
             "subagent %s: could not deliver to session %s "
@@ -184,13 +186,13 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # joining whatever the task chat's own /inject sends.
                 mailbox=spec.mailbox,
             )
-        except HTTPException as exc:
+        except WebError as exc:
             # No-op for today's 409/429 (both raise before the workspace
             # binding), but keeps "delete session ⇒ close its workspace"
             # airtight if start()'s failure points ever move.
             await deps.workspaces.close(child_sid)
             await deps.store.delete(child_sid)
-            if exc.status_code == 429:
+            if exc.code == "too_many_runs":
                 raise RuntimeError(
                     "the server is at its concurrent-run limit; "
                     "wait for other work to finish and spawn again"
@@ -206,9 +208,11 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
         )
         deps.emit(
             "session_created",
-            session_id=child_sid,
-            agent=agent_key,
-            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            SessionCreatedData(
+                session_id=child_sid,
+                agent=agent_key,
+                title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            ),
         )
 
         async def watch_token() -> None:

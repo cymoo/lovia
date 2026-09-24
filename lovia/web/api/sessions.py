@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query
+    from fastapi import APIRouter, Query
     from fastapi.responses import JSONResponse, PlainTextResponse, Response
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -18,7 +18,9 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...parts import ImagePart
 from ...plugins import todos_from_entries
 from ...transcript import InputEntry, ToolResultEntry, entries_to_messages
+from ..errors import WebError
 from ..followups import FollowupRequest
+from ..sse import SessionRetitledData
 from ..schemas import (
     ChatSessionInfo,
     FollowupsResponse,
@@ -230,15 +232,17 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 if snapshot is not None:
                     image = find(list(snapshot.entries))
         if image is None:
-            raise HTTPException(404, "no such tool image")
+            raise WebError(404, "image_not_found", "no such tool image")
         if image.data is None:
             # A URL-sourced part has no bytes to serve; the client falls back
             # to its chip. 404 keeps the route contract simple.
-            raise HTTPException(404, "image part is a URL reference")
+            raise WebError(404, "image_not_found", "image part is a URL reference")
         try:
             payload = base64.b64decode(image.data, validate=True)
         except binascii.Error:
-            raise HTTPException(404, "image part is not valid base64") from None
+            raise WebError(
+                404, "image_not_found", "image part is not valid base64"
+            ) from None
         return Response(
             content=payload,
             media_type=image.mime_type or "application/octet-stream",
@@ -254,16 +258,19 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         """Rename and/or (un)pin a session — applies whichever fields are set."""
         meta = await store.get(session_id)
         if meta is None:
-            raise HTTPException(status_code=404, detail="session not found")
+            raise WebError(404, "session_not_found", "session not found")
         if req.title is not None:
             await store.set_title(session_id, req.title)
         if req.pinned is not None:
             await store.set_pinned(session_id, req.pinned)
         meta = await store.get(session_id)
         if meta is None:  # deleted concurrently between the update and re-read
-            raise HTTPException(status_code=404, detail="session not found")
+            raise WebError(404, "session_not_found", "session not found")
         if req.title is not None:
-            deps.emit("session_retitled", session_id=session_id, title=meta.title)
+            deps.emit(
+                "session_retitled",
+                SessionRetitledData(session_id=session_id, title=meta.title),
+            )
         return session_info(meta)
 
     @router.delete("/api/sessions/{session_id}")
@@ -288,9 +295,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         run is live — its in-flight state would resurrect the tail.
         """
         if deps.supervisor.get(session_id) is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="a run is active for this session; stop it first",
+            raise WebError(
+                409,
+                "run_active",
+                "a run is active for this session",
+                hint="stop it first",
             )
         # A run the user just stopped is evicted from the supervisor at once,
         # but its task is still winding down — and that task's `finally` is
@@ -301,15 +310,18 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # back after the cut. Cancellation is cooperative, so this waits out
         # whatever tool was mid-flight.
         if not await deps.supervisor.drain(session_id):
-            raise HTTPException(
-                status_code=409,
-                detail="a run is still stopping for this session; try again shortly",
+            raise WebError(
+                409,
+                "run_stopping",
+                "a run is still stopping for this session",
+                hint="try again shortly",
             )
         rewind = getattr(session, "rewind", None)
         if rewind is None:
-            raise HTTPException(
-                status_code=501,
-                detail="the configured session store does not support rewind",
+            raise WebError(
+                501,
+                "feature_unavailable",
+                "the configured session store does not support rewind",
             )
         # A resumable checkpoint's snapshot may hold user turns the client
         # rendered (the spliced view) that the store doesn't — count them so
@@ -338,8 +350,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         if cut is None and req.user_turn > seen + ckpt_user_turns:
             # Out of range (e.g. a stale client): refuse BEFORE touching the
             # checkpoint — a bad ordinal must not cost a resumable run.
-            raise HTTPException(
-                status_code=404, detail=f"user turn {req.user_turn} not found"
+            raise WebError(
+                404, "turn_not_found", f"user turn {req.user_turn} not found"
             )
         # Validated — now the destructive part. The resume pointer dies with
         # every rewind (its snapshot replays a tail that no longer exists);
@@ -387,7 +399,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         """
         meta = await store.get(session_id)
         if meta is None:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id}")
+            raise WebError(404, "session_not_found", f"unknown session {session_id}")
         request = FollowupRequest(
             session_id=session_id,
             agent=meta.agent or deps.default_agent or "",

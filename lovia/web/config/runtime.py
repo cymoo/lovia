@@ -25,6 +25,7 @@ from ...exceptions import UserError
 from ...providers import Provider, provider_from_string
 from ...providers._windows import clear_endpoint_cache
 from ...tools import HumanChannel
+from ..sse import ConfigChangedData
 from .check import mask_key
 from .schema import Connection, WebConfig
 from .storage import LoadedConfig, save_config
@@ -186,10 +187,12 @@ class ConfigRuntime:
             assert profile is not None
             deps.emit(
                 "config_changed",
-                configured=True,
-                model=profile.model,
-                profile_id=profile.id,
-                name=profile.display_name,
+                ConfigChangedData(
+                    configured=True,
+                    model=profile.model,
+                    profile_id=profile.id,
+                    name=profile.display_name,
+                ),
             )
             log.info(
                 "configuration applied: model %s (%s)",

@@ -11,7 +11,7 @@
 // shell run; this module owns everything else.
 import { t } from './i18n.js';
 import { store } from './store.js';
-import { api } from './api.js';
+import { api, apiError } from './api.js';
 import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
@@ -824,12 +824,8 @@ async function openFile(path, { silent = false } = {}) {
       const res = await fetch(
         api.workspaceRawUrl({ agent: store.agent, path, download: true }),
       );
-      if (!res.ok) {
-        // Carry the status so a refusal reads as the boundary it is.
-        throw Object.assign(new Error(`${res.status} ${res.statusText}`), {
-          status: res.status,
-        });
-      }
+      // Carries the status, so a refusal reads as the boundary it is.
+      if (!res.ok) throw await apiError(res);
       text = await res.text();
     } catch (err) {
       els.viewerBody.replaceChildren(viewerNote(viewerErrorText(err)));

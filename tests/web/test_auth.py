@@ -34,9 +34,11 @@ def test_api_requires_token() -> None:
     r = c.get("/api/agents")
     assert r.status_code == 401
     assert r.headers["www-authenticate"] == "Bearer"
-    # The detail names the *server* token so the UI's error mapping can tell
-    # it apart from a model-provider auth failure.
-    assert "server token" in r.json()["detail"]
+    # Its own code, so clients tell it apart from a model-provider auth failure.
+    detail = r.json()["detail"]
+    assert detail["code"] == "server_token"
+    assert "server token" in detail["message"]
+    assert "Authorization: Bearer" in detail["hint"]
 
 
 def test_bearer_header_accepted() -> None:

@@ -193,9 +193,9 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
     deps = app.state.deps  # auto-wired by create_app
     emitted: list[tuple[str, dict]] = []
     orig_emit = deps.emit
-    deps.emit = lambda name, **data: (
-        emitted.append((name, data)),
-        orig_emit(name, **data),
+    deps.emit = lambda name, data: (
+        emitted.append((name, dict(data))),
+        orig_emit(name, data),
     )[1]  # type: ignore[method-assign]
 
     await deps.store.upsert("s3", agent="bot", title="chat")

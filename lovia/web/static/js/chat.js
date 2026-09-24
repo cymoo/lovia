@@ -2,7 +2,7 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { toast } from './toast.js';
-import { api, readSSE } from './api.js';
+import { api, apiError, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
@@ -1736,11 +1736,19 @@ function announce(text, { assertive = false } = {}) {
 // mean nothing to most users. Map the recognizable ones onto a sentence that
 // says what happened and what to do; the original text stays visible in
 // small print — friendly must never mean information destroyed.
+// The server classifies what it can (lovia/web/errors.py); the patterns below
+// cover what it can't (quota wording) and servers that send no code.
+/** @type {Record<string, string>} */
+const ERROR_CODE_HINTS = {
+  server_token: t('err.serverToken'),
+  rate_limited: t('err.rateLimit'),
+  provider_auth: t('err.auth'),
+  overloaded: t('err.overloaded'),
+  timeout: t('err.timeout'),
+  network: t('err.network'),
+};
 /** @type {Array<[RegExp, string]>} */
 const ERROR_HINTS = [
-  // Before the provider-auth pattern: the server's own 401 mentions "server
-  // token" precisely so it doesn't read as an API-key problem.
-  [/server token/i, t('err.serverToken')],
   [/rate.?limit|too many requests|\b429\b/i, t('err.rateLimit')],
   [/unauthorized|forbidden|api.?key|authenticat|\b401\b|\b403\b/i, t('err.auth')],
   [/quota|billing|insufficient|credit/i, t('err.quota')],
@@ -1751,7 +1759,12 @@ const ERROR_HINTS = [
 
 // The friendly sentence for a raw error, or null when it's unrecognized
 // (callers then show the raw message alone).
-function humanizeError(message) {
+/**
+ * @param {unknown} message
+ * @param {string} [code] the server's error code, when it sent one
+ */
+function humanizeError(message, code) {
+  if (code && ERROR_CODE_HINTS[code]) return ERROR_CODE_HINTS[code];
   const msg = String(message ?? '');
   for (const [re, hint] of ERROR_HINTS) {
     if (re.test(msg)) return hint;
@@ -1763,11 +1776,15 @@ function humanizeError(message) {
 // raising, which lovia feeds back to the model to handle. Show it as a quiet
 // inline notice (no Retry: re-sending the whole turn doesn't retry the tool,
 // and the model usually copes on its own).
-function appendErrorNotice(message) {
+/**
+ * @param {string} message
+ * @param {string} [code]
+ */
+function appendErrorNotice(message, code) {
   if (!store.bubble) return;
   const note = document.createElement('div');
   note.className = 'error-notice';
-  const hint = humanizeError(message);
+  const hint = humanizeError(message, code);
   if (hint) {
     const head = document.createElement('div');
     head.textContent = `⚠️ ${hint}`;
@@ -2546,11 +2563,13 @@ async function handleEvent({ event, data }) {
       appendContextCompacted(store.bubble, data);
       break;
 
-    case 'error':
+    case 'error': {
       // `message` can arrive empty (older servers didn't fall back for
       // message-less exceptions); the class name in `type` beats a bare ⚠️.
-      appendErrorNotice(data.message || data.type);
+      const message = data.message || data.type;
+      appendErrorNotice(data.hint ? `${message} — ${data.hint}` : message, data.code);
       break;
+    }
 
     case 'done': {
       _sawDone = true;
@@ -2912,14 +2931,11 @@ export async function runStream(message, attachments = null) {
 
     if (!res.ok || !res.body) {
       terminal = true;
-      // Prefer the server's {detail} (e.g. "too many concurrent runs") over
-      // a bare status line.
-      let detail = `${res.status} ${res.statusText}`;
-      try {
-        const body = await res.json();
-        if (body?.detail) detail = String(body.detail);
-      } catch { /* not JSON */ }
-      const hint = humanizeError(detail);
+      // The server's message (e.g. "too many concurrent runs") beats a bare
+      // status line.
+      const err = await apiError(res);
+      const detail = err.message;
+      const hint = humanizeError(detail, err.code);
       ensureBody().innerHTML =
         `<span class="error-text">${t('chat.error')}: ${escapeHtml(hint ?? detail)}</span>` +
         (hint ? `<div class="error-notice-detail">${escapeHtml(detail)}</div>` : '');
@@ -2950,7 +2966,7 @@ export async function runStream(message, attachments = null) {
     } else {
       ensureBody();
       const raw = err.message ?? String(err);
-      const hint = humanizeError(raw);
+      const hint = humanizeError(raw, err.code);
       store.rawText += `\n\n> ⚠️ **${t('chat.error')}:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender(true);
       appendRetry();
@@ -3055,7 +3071,7 @@ export async function runReconnect(sessionId) {
     if (err.name !== 'AbortError') {
       ensureBody();
       const raw = err.message ?? String(err);
-      const hint = humanizeError(raw);
+      const hint = humanizeError(raw, err.code);
       store.rawText += `\n\n> ⚠️ **${t('chat.error')}:** ${hint ? `${hint} (${raw})` : raw}`;
       flushRender(true);
     }

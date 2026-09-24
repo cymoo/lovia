@@ -5,7 +5,7 @@
 // DOMPurify + highlight.js, so the output matches what the user sees with no new
 // server dependency. Source data is the existing JSON export endpoint, which
 // carries reasoning + tool calls per message.
-import { api } from './api.js';
+import { api, apiError } from './api.js';
 import { toast } from './toast.js';
 import { escapeHtml } from './util.js';
 
@@ -141,8 +141,8 @@ export function buildExportDoc(data, theme = 'light') {
 export async function exportSessionHtml(sessionId, title) {
   if (!sessionId) return;
   try {
-    const data = await fetch(api.exportUrl(sessionId, 'json')).then((r) => {
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    const data = await fetch(api.exportUrl(sessionId, 'json')).then(async (r) => {
+      if (!r.ok) throw await apiError(r);
       return r.json();
     });
     const heading = data.title || title || 'Chat';

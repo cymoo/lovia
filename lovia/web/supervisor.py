@@ -16,20 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import json
 import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
-
-try:
-    from fastapi import HTTPException
-except ImportError as exc:  # pragma: no cover - depends on optional env
-    from ._deps import raise_missing_web_extra
-
-    raise_missing_web_extra(exc)
 
 from .. import events
 from ..checkpointer import CheckpointOptions
@@ -48,8 +40,17 @@ from ..transcript import (
     input_to_entries,
 )
 from .api.serialization import drop_system_entries, view_messages
+from .errors import WebError
 from .schemas import MessageOut
-from .sse import event_to_sse, usage_dict
+from .sse import (
+    RunFinishedData,
+    RunStartedData,
+    SessionData,
+    SnapshotData,
+    event_to_sse,
+    frame,
+    usage_dict,
+)
 from .store import RunRow
 
 if TYPE_CHECKING:
@@ -519,10 +520,12 @@ class RunController:
         log.info("run started: session=%s agent=%s", sid, deps.name_of(self.agent))
         deps.emit(
             "run_started",
-            session_id=sid,
-            run_id=record_id,
-            agent=deps.name_of(self.agent),
-            source=self.source,
+            RunStartedData(
+                session_id=sid,
+                run_id=record_id,
+                agent=deps.name_of(self.agent),
+                source=self.source,
+            ),
         )
         try:
             while True:
@@ -712,11 +715,13 @@ class RunController:
             )
             deps.emit(
                 "run_finished",
-                session_id=sid,
-                run_id=record_id,
-                status=status,
-                error=None if succeeded else final_error,
-                source=self.source,
+                RunFinishedData(
+                    session_id=sid,
+                    run_id=record_id,
+                    status=status,
+                    error=None if succeeded else final_error,
+                    source=self.source,
+                ),
             )
 
 
@@ -773,11 +778,11 @@ class RunSupervisor:
         mailbox: Mailbox | None = None,
     ) -> RunController:
         if session_id in self._controllers:
-            raise HTTPException(
-                status_code=409, detail="a run is already active for this session"
+            raise WebError(
+                409, "run_active", "a run is already active for this session"
             )
         if len(self._controllers) >= self.max_background_runs:
-            raise HTTPException(status_code=429, detail="too many concurrent runs")
+            raise WebError(429, "too_many_runs", "too many concurrent runs")
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -832,8 +837,8 @@ class RunSupervisor:
         self, *, session_id: str, agent: Agent[Any], snapshot: RunSnapshot
     ) -> RunController:
         if session_id in self._controllers:
-            raise HTTPException(
-                status_code=409, detail="a run is already active for this session"
+            raise WebError(
+                409, "run_active", "a run is already active for this session"
             )
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
@@ -952,19 +957,17 @@ async def forward(
     unsubscribes (the entire **detach** mechanism); the run is never touched.
     """
     if emit_session:
-        yield {"event": "session", "data": json.dumps({"session_id": sid})}
+        yield frame("session", SessionData(session_id=sid))
     if isinstance(source, _Attachment):
         sub = source.subscription
-        yield {
-            "event": "snapshot",
-            "data": json.dumps(
-                {
-                    "session_id": sid,
-                    "status": source.status,
-                    "entries": [m.model_dump() for m in source.snapshot],
-                }
+        yield frame(
+            "snapshot",
+            SnapshotData(
+                session_id=sid,
+                status=source.status,
+                entries=[m.model_dump() for m in source.snapshot],
             ),
-        }
+        )
         for ev in source.buffered:
             payload = event_to_sse(ev)
             if payload is not None:

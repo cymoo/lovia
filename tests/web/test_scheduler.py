@@ -665,14 +665,16 @@ def test_api_create_requires_agent_when_ambiguous() -> None:
         "beta": _agent([text("b")], name="beta"),
     }
     app = create_app(agents, store=ChatStore.in_memory(), generate_titles=False)
-    # Omitting `agent` with >1 agent (no default) → 404 with a clear message,
+    # Omitting `agent` with >1 agent (no default) → 400 with a clear message,
     # not a confusing "unknown agent None".
     r = TestClient(app).post(
         "/api/schedules",
         json={"input": "x", "trigger_kind": "every", "trigger_expr": "60"},
     )
-    assert r.status_code == 404
-    assert "no agent specified" in r.json()["detail"]
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["code"] == "invalid_request"
+    assert "no agent specified" in detail["message"]
 
 
 # --------------------------------------------------------------------------- #

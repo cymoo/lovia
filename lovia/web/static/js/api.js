@@ -8,12 +8,37 @@
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
-async function _json(res) {
-  if (!res.ok) {
-    const err = new Error(`${res.status} ${res.statusText}`);
-    err.status = res.status; // callers branch on 401 (token prompt)
-    throw err;
+/**
+ * The Error for a failed response. API routes answer
+ * `{detail: {code, message, hint?}}` (lovia/web/errors.py); FastAPI's own 422
+ * (`detail` is a list) and a custom auth dependency (often a string) don't,
+ * so every shape degrades to a readable message. Branch on `.code` or
+ * `.status`, never on the message text.
+ * @param {Response} res
+ * @returns {Promise<Error>}
+ */
+export async function apiError(res) {
+  const detail = (await res.json().catch(() => null))?.detail;
+  let message = `${res.status} ${res.statusText}`;
+  let code, hint;
+  if (Array.isArray(detail)) {
+    message = detail.map((e) => e?.msg ?? String(e)).join('; ') || message;
+  } else if (detail && typeof detail === 'object') {
+    ({ code, hint } = detail);
+    message = detail.message || message;
+  } else if (typeof detail === 'string' && detail) {
+    message = detail;
   }
+  // The hint rides in the message too: it's what a toast should show.
+  return Object.assign(new Error(hint ? `${message} — ${hint}` : message), {
+    status: res.status,
+    code,
+    hint,
+  });
+}
+
+async function _json(res) {
+  if (!res.ok) throw await apiError(res);
   return res.json();
 }
 
@@ -141,24 +166,23 @@ export const api = {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ user_turn: userTurn }),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   exportUrl: (id, format = 'md') =>
     `/api/sessions/${encodeURIComponent(id)}/export${qs({ format })}`,
 
   // ---- schedules ----
   listSchedules: () => fetch('/api/schedules').then(_json),
   // Create a scheduled run. `body`: { input, agent?, session_id?, trigger_kind,
-  // trigger_expr, until?, max_fires?, expires_at? }. Surfaces the server's
-  // validation `detail` on 4xx.
+  // trigger_expr, until?, max_fires?, expires_at? }.
   createSchedule: (body) =>
     fetch('/api/schedules', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   deleteSchedule: (id) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(
-      _jsonOrDetail,
+      _json,
     ),
   // Partial update: any subset of { input, agent, session_id, trigger_kind,
   // trigger_expr, active, until, max_fires, expires_at } — the server
@@ -168,17 +192,17 @@ export const api = {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   setScheduleActive: (id, active) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ active }),
-    }).then(_jsonOrDetail),
-  // Fire a schedule immediately; 409 (with detail) when it can't run now.
+    }).then(_json),
+  // Fire a schedule immediately; 409 `schedule_not_fired` when it can't run now.
   runSchedule: (id) =>
     fetch(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }).then(
-      _jsonOrDetail,
+      _json,
     ),
   // A schedule's fire history, newest first: [{ run_id, session_id, status,
   // error, started_at, finished_at, usage }].
@@ -191,19 +215,19 @@ export const api = {
   // ---- workspace (Files panel; read-only) ----
   /** @param {{ agent?: string }} [opts] */
   workspaceInfo: ({ agent } = {}) =>
-    fetch(`/api/workspace${qs({ agent })}`).then(_jsonOrDetail),
+    fetch(`/api/workspace${qs({ agent })}`).then(_json),
   // One directory level, dirs first. `path` is workspace-relative.
   /** @param {{ agent?: string, path?: string }} [opts] */
   workspaceFiles: ({ agent, path } = {}) =>
-    fetch(`/api/workspace/files${qs({ agent, path })}`).then(_jsonOrDetail),
+    fetch(`/api/workspace/files${qs({ agent, path })}`).then(_json),
   // Whole-workspace flat list, newest first.
   /** @param {{ agent?: string, limit?: number }} [opts] */
   workspaceRecent: ({ agent, limit } = {}) =>
-    fetch(`/api/workspace/recent${qs({ agent, limit })}`).then(_jsonOrDetail),
+    fetch(`/api/workspace/recent${qs({ agent, limit })}`).then(_json),
   // Paginated text content; `binary: true` means "don't render me".
   /** @param {{ agent?: string, path?: string, start?: number }} [opts] */
   workspaceFile: ({ agent, path, start } = {}) =>
-    fetch(`/api/workspace/file${qs({ agent, path, start })}`).then(_jsonOrDetail),
+    fetch(`/api/workspace/file${qs({ agent, path, start })}`).then(_json),
   // Raw bytes URL — inline image preview, or any file with download=true.
   /** @param {{ agent?: string, path?: string, download?: boolean }} [opts] @returns {string} */
   workspaceRawUrl: ({ agent, path, download } = {}) =>
@@ -220,14 +244,14 @@ export const api = {
   // restart — background processes never survive one).
   /** @param {string} sessionId */
   sessionProcesses: (sessionId) =>
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_jsonOrDetail),
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/processes`).then(_json),
   // Kill one process; resolves to the refreshed process list.
   /** @param {string} sessionId @param {string} processId */
   killProcess: (sessionId, processId) =>
     fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(processId)}/kill`,
       { method: 'POST' },
-    ).then(_jsonOrDetail),
+    ).then(_json),
 
   // Upload a file into the workspace `uploads/` dir → { path, name, mime, kind,
   // size }. Multipart; the browser sets the boundary, so we send no headers.
@@ -239,35 +263,35 @@ export const api = {
       method: 'POST',
       body: form,
       signal,
-    }).then(_jsonOrDetail);
+    }).then(_json);
   },
 
   // ---- model configuration (Settings → Models/Search; CLI default agent) ----
   // Only served when /api/info reports features.model_config. API keys never
   // round-trip: reads carry { set, hint }; writes use null=keep, ''=clear.
-  getConfig: () => fetch('/api/config').then(_jsonOrDetail),
+  getConfig: () => fetch('/api/config').then(_json),
   /** @param {object} body Profile fields: { id?, name?, model, flavor?, base_url?, api_key?, context_window?, vision?, extra_body? }. */
   createModel: (body) =>
     fetch('/api/config/models', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   updateModel: (id, body) =>
     fetch(`/api/config/models/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   deleteModel: (id) =>
     fetch(`/api/config/models/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-    }).then(_jsonOrDetail),
+    }).then(_json),
   // A server-side copy, API key included; resolves to { id, config }.
   duplicateModel: (id) =>
     fetch(`/api/config/models/${encodeURIComponent(id)}/duplicate`, {
       method: 'POST',
-    }).then(_jsonOrDetail),
+    }).then(_json),
   // Role assignment; sending { chat } switches the served model live.
   /** @param {{ chat?: string, vision?: string | null, aux?: string | null }} body */
   setRoles: (body) =>
@@ -275,14 +299,14 @@ export const api = {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   /** @param {{ backend?: string, tavily_api_key?: string }} body */
   setSearch: (body) =>
     fetch('/api/config/search', {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   // Skill directories: full-list replacement, order = precedence.
   /** @param {{ dirs: string[] }} body */
   setSkills: (body) =>
@@ -290,9 +314,9 @@ export const api = {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   // Per-directory discovery report (live filesystem scan) for the pane.
-  getSkills: () => fetch('/api/config/skills').then(_jsonOrDetail),
+  getSkills: () => fetch('/api/config/skills').then(_json),
   // Probe a connection (a real /models request server-side). Either free-form
   // fields or { profile_id } — the stored key is reused server-side, so the
   // page never holds it.
@@ -301,36 +325,24 @@ export const api = {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(body),
-    }).then(_jsonOrDetail),
+    }).then(_json),
 
   // ---- memory (the agent's editable Notes) ----
   /** @param {{ agent?: string }} [opts] */
-  getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_jsonOrDetail),
+  getMemory: ({ agent } = {}) => fetch(`/api/memory${qs({ agent })}`).then(_json),
   // Replaces the notes wholesale; returns the canonical stored form.
   putMemory: ({ agent, content }) =>
     fetch(`/api/memory${qs({ agent })}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify({ content }),
-    }).then(_jsonOrDetail),
+    }).then(_json),
   // Runs the dream pass (merge duplicates, resolve conflicts, prune stale);
   // returns {before, after} counts plus the fresh canonical body.
   /** @param {{ agent?: string }} [opts] */
   dreamMemory: ({ agent } = {}) =>
-    fetch(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_jsonOrDetail),
+    fetch(`/api/memory/dream${qs({ agent })}`, { method: 'POST' }).then(_json),
 };
-
-// Like `_json`, but raises the server's `{detail}` message (422/404) so the
-// schedule form can show *why* a trigger was rejected.
-async function _jsonOrDetail(res) {
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const err = new Error(body?.detail || `${res.status} ${res.statusText}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
-}
 
 // Parse one SSE chunk ("event: x\ndata: y") into { event, data }, or null.
 function parseSSE(chunk) {

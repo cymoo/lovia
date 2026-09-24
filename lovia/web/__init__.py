@@ -11,7 +11,8 @@ Public surface::
     serve(agent)                       # single agent on 127.0.0.1:8000
     serve({"writer": a, "researcher": b})
 
-    app = create_app(agents)           # raw ASGI app — run with any server
+    app = create_app(agents, db_path="chats.db")  # every option lives here
+    serve(app, host="0.0.0.0")         # ... or run it with any ASGI server
     app = create_app(agents, ui=False) # JSON + SSE only — bring your own UI
 
 Bring your own UI: mount the UI-free API router into your own FastAPI app::

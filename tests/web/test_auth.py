@@ -138,19 +138,20 @@ def _agent() -> Agent:
     return Agent(name="bot", model=ScriptedProvider([text("hi")]))
 
 
+def _app(**kw) -> object:
+    kw.setdefault("store", ChatStore.in_memory())
+    kw.setdefault("generate_titles", False)
+    return create_app(_agent(), **kw)
+
+
 def test_serve_generates_token_off_loopback(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
 ) -> None:
     from lovia.web import serve
 
+    monkeypatch.chdir(tmp_path)  # a bare agent gets create_app's default db
     captured = _fake_uvicorn(monkeypatch)
-    serve(
-        _agent(),
-        host="0.0.0.0",
-        port=1234,
-        store=ChatStore.in_memory(),
-        generate_titles=False,
-    )
+    serve(_agent(), host="0.0.0.0", port=1234)
     out = capsys.readouterr().out
     assert "web API token (generated):" in out
     # Wildcard binds aren't browsable — the printed link uses loopback.
@@ -171,32 +172,15 @@ def test_serve_token_link_brackets_an_ipv6_bind(
     from lovia.web import serve
 
     _fake_uvicorn(monkeypatch)
-    serve(
-        _agent(),
-        host="fd00::1",
-        port=1234,
-        store=ChatStore.in_memory(),
-        generate_titles=False,
-    )
+    serve(_app(token=TOKEN), host="fd00::1", port=1234)
     assert "http://[fd00::1]:1234/?token=" in capsys.readouterr().out
 
 
-def test_serve_blank_token_off_loopback_still_generates(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # `token=""` must not thread the needle between "skip generation" and
-    # "no guard installed" — it fails fast instead.
-    from lovia.web import serve
-
-    _fake_uvicorn(monkeypatch)
+def test_blank_token_fails_fast() -> None:
+    # `token=""` must not thread the needle between "auth on" and "no guard
+    # installed" — it fails fast instead.
     with pytest.raises(ValueError, match="non-empty"):
-        serve(
-            _agent(),
-            host="0.0.0.0",
-            token="   ",
-            store=ChatStore.in_memory(),
-            generate_titles=False,
-        )
+        _app(token="   ")
 
 
 def test_serve_loopback_stays_open(
@@ -205,9 +189,50 @@ def test_serve_loopback_stays_open(
     from lovia.web import serve
 
     captured = _fake_uvicorn(monkeypatch)
-    serve(_agent(), store=ChatStore.in_memory(), generate_titles=False)
+    serve(_app())
     assert "web API token" not in capsys.readouterr().out
     assert TestClient(captured["app"]).get("/api/agents").status_code == 200
+
+
+def test_serve_refuses_an_unauthenticated_app_off_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.exceptions import UserError
+    from lovia.web import serve
+
+    _fake_uvicorn(monkeypatch)
+    with pytest.raises(UserError, match="without authentication") as exc:
+        serve(_app(), host="0.0.0.0")
+    assert "create_app(..., token=...)" in str(exc.value)
+
+
+def test_serve_trusts_a_foreign_apps_own_auth(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # An app not built by create_app (e.g. build_api_router behind the host
+    # app's own middleware) is run as is — even when its state happens to use
+    # the same names, its credential is never printed.
+    from fastapi import FastAPI
+
+    from lovia.web import serve
+
+    captured = _fake_uvicorn(monkeypatch)
+    app = FastAPI()
+    app.state.token = "host-app-secret"
+    app.state.auth_guarded = False
+    serve(app, host="0.0.0.0")
+    assert captured["app"] is app
+    assert "host-app-secret" not in capsys.readouterr().out
+
+
+def test_serve_points_create_app_options_to_create_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from lovia.web import serve
+
+    _fake_uvicorn(monkeypatch)
+    with pytest.raises(TypeError, match=r"create_app\(\) options \['db_path'\]"):
+        serve(_agent(), db_path="x.db", log_level="info")
 
 
 def test_serve_explicit_token_wins_and_is_printed(
@@ -216,13 +241,7 @@ def test_serve_explicit_token_wins_and_is_printed(
     from lovia.web import serve
 
     captured = _fake_uvicorn(monkeypatch)
-    serve(
-        _agent(),
-        host="0.0.0.0",
-        token=TOKEN,
-        store=ChatStore.in_memory(),
-        generate_titles=False,
-    )
+    serve(_app(token=TOKEN), host="0.0.0.0")
     out = capsys.readouterr().out
     assert "generated" not in out
     assert f"?token={TOKEN}" in out
@@ -242,13 +261,7 @@ def test_serve_custom_auth_suppresses_generation(
         raise HTTPException(status_code=401, detail="nope")
 
     captured = _fake_uvicorn(monkeypatch)
-    serve(
-        _agent(),
-        host="0.0.0.0",
-        auth=always_deny,
-        store=ChatStore.in_memory(),
-        generate_titles=False,
-    )
+    serve(_app(auth=always_deny), host="0.0.0.0")
     assert "web API token" not in capsys.readouterr().out
     assert TestClient(captured["app"]).get("/api/agents").status_code == 401
 

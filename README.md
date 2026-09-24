@@ -471,9 +471,9 @@ suggestions, approvals, schedules, a memory editor, image & file attachments —
 whose runs survive browser disconnects:
 
 ```python
-from lovia.web import serve
+from lovia.web import create_app, serve
 
-serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
+serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
 ```bash

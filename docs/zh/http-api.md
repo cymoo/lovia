@@ -57,9 +57,8 @@ Agent 带有 `Subagents` Plugin 时，还需调用一次 `wire_subagents(deps)`
 
 ## 认证
 
-通过 `create_app(token=...)` 或 `serve(token=...)` 配置 token 后，
-`build_api_router` 注册的业务路由都需要认证。`serve()` 绑定非回环地址且未指定认证方式时，
-还会自动生成 token。
+通过 `create_app(token=...)` 配置 token 后，`build_api_router` 注册的业务路由都需要认证。
+`serve(agent)` 绑定非回环地址且未指定认证方式时，会自动生成 token。
 
 普通请求以及 `POST /api/chat/stream`、`POST /api/chat/reconnect` 应发送
 `Authorization: Bearer <token>`。`GET /api/events` 使用 `EventSource`，无法自定义请求头，
@@ -254,9 +253,8 @@ for await (const { event, data } of readSSE(res)) {
 
 ## 使用建议
 
-- **`build_api_router` 本身不包含认证或限流。** `create_app(token=...)` 和
-  `serve(token=...)` 可以加上 token 验证，`serve()` 在非回环地址上还会自动生成 token
-  （见[认证](#认证)）。单一共享 token 只适合单用户场景；多用户身份、权限和配额应由网关
+- **`build_api_router` 本身不包含认证或限流。** `create_app(token=...)` 可以加上 token
+  验证，`serve()` 在非回环地址上从不匿名开放 API（见[认证](#认证)）。单一共享 token 只适合单用户场景；多用户身份、权限和配额应由网关
   负责。`cors_origins` 默认为空，只有显式配置后才会发送 CORS 响应头。
 - **聊天 SSE 由 POST 发起。** `/api/chat/stream` 和 `/api/chat/reconnect` 需要使用
   `fetch` + reader，不能使用原生 `EventSource`；`GET /api/events` 则专门供

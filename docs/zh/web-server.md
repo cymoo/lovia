@@ -1,7 +1,7 @@
 # Web 服务端
 
-Web 包基于 FastAPI。独立启动 Agent 服务时用 `serve()`；接入现有 ASGI 应用时用
-`create_app()`。
+Web 包基于 FastAPI。`create_app()` 构建 ASGI 应用，所有服务选项都在这里配置；
+`serve()` 负责用 uvicorn 运行它。
 
 ```bash
 pip install "lovia[web]"
@@ -9,17 +9,20 @@ pip install "lovia[web]"
 
 ```python
 from lovia import Agent
-from lovia.web import serve
+from lovia.web import create_app, serve
 
 agent = Agent(name="assistant", model="<model>")
-serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
+serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
-## `serve()` 与 `create_app()`
+## `create_app()` 与 `serve()`
 
-`serve(agent_or_agents, *, host="127.0.0.1", port=8000, ...)` 创建应用并交给 uvicorn
-运行，`log_level`、`ssl_certfile`、`workers` 等选项会原样传给 uvicorn。
-`create_app(...)` 只返回 ASGI 应用，不启动服务进程。
+`serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` 运行由 `create_app()`
+构建的应用；直接传入 Agent（或 `{name: agent}` 映射）时，则按默认选项构建应用，
+`serve(agent)` 是最快的启动方式。`log_level`、`ssl_certfile`、`workers` 等选项会原样传给
+uvicorn。改用其他 ASGI 服务器时，不必经过 `serve()`。
+
+`create_app(agent_or_agents, ...)` 的选项：
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -30,15 +33,12 @@ serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
 | `generate_titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
 | `approval_timeout` | `None` | 超过指定秒数后自动拒绝未处理的审批 |
-| `max_background_runs`（仅 `create_app()`） | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
+| `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
 | `ui` | `True` | 设为 `False` 时只提供 API |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
 | `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
 | `title` / `empty_title` / `empty_description` | lovia 默认文案 | UI 文案和品牌 |
 | `empty_examples` | `None` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
-
-`serve()` 固定使用 `max_background_runs=8`；如需调整，请通过 `create_app()` 创建应用，
-再交给 ASGI 服务器运行。
 
 Transcript、聊天元数据和 Run 检查点共用同一个 SQLite 文件，并以 **WAL 模式**打开，
 使界面的读取不必排在检查点写入之后。已有的数据库会在首次打开时完成迁移。
@@ -86,13 +86,14 @@ Transcript 转换而来的聊天消息列表 `messages`。返回字符串序列�
 
 ## 认证
 
-`serve()` 绑定回环地址时默认不要求凭据。绑定非回环地址时，如果既未传入 `token`，
-也未传入 `auth`，服务会自动生成 token，并在启动时打印一次，同时给出可直接打开的
-`/?token=...` UI 链接。因此，通过 `serve()` 启动的业务 API 不会在非回环地址上匿名开放。
+`serve()` 绑定回环地址时默认不要求凭据。绑定非回环地址时，直接传入的 Agent 会自动获得
+一个生成的 token，启动时打印一次，同时给出可直接打开的 `/?token=...` UI 链接；
+而既未设置 `token` 也未设置 `auth` 的应用会被拒绝运行。因此，通过 `serve()` 启动的业务
+API 不会在非回环地址上匿名开放。
 
 ```python
-serve(agent, host="0.0.0.0", token="s3cret")        # 固定 token
-serve(agent, host="0.0.0.0")                        # 自动生成并打印
+serve(create_app(agent, token="s3cret"), host="0.0.0.0")   # 固定 token
+serve(agent, host="0.0.0.0")                                # 自动生成并打印
 ```
 
 token 会保护 `build_api_router` 注册的业务路由。`/healthz`、`/api/docs`、
@@ -112,11 +113,12 @@ async def my_auth(request: Request) -> None:
     if not valid(request):
         raise HTTPException(status_code=401)
 
-serve(agent, host="0.0.0.0", auth=my_auth)
+serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
-`create_app()` 也接受 `token` 和 `auth`，但默认不启用认证。自行管理应用时，请显式传入
-其中一个。
+`create_app()` 本身默认不启用认证；交给其他 ASGI 服务器运行时，请自行传入 `token` 或
+`auth`。`serve()` 只检查由 `create_app()` 构建的应用；自行挂载 `build_api_router` 的应用
+沿用自身的中间件，按原样运行。
 
 ## 托管 Run 生命周期
 
@@ -160,7 +162,7 @@ Web 包会持久化定时任务，支持三种触发方式：
 
 ## 安全检查
 
-- 个人使用时保持 `host="127.0.0.1"`。`serve()` 绑定非回环地址时会自动启用 token 验证；
+- 个人使用时保持 `host="127.0.0.1"`。`serve()` 在非回环地址上从不匿名开放 API；
   请妥善保管 token，将其视同密码。
 - 面向不可信用户时，应限制或关闭可写 Workspace。任何持有 token 的人都可以让 Agent
   修改文件或执行 Shell 命令。

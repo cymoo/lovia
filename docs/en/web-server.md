@@ -1,8 +1,7 @@
 # Web server
 
-The Web package is built on FastAPI. Use `serve()` for a standalone Agent
-service and `create_app()` when an existing application owns the ASGI
-lifecycle.
+The Web package is built on FastAPI. `create_app()` builds the ASGI
+application and holds every serving option; `serve()` runs it under uvicorn.
 
 ```bash
 pip install "lovia[web]"
@@ -10,18 +9,21 @@ pip install "lovia[web]"
 
 ```python
 from lovia import Agent
-from lovia.web import serve
+from lovia.web import create_app, serve
 
 agent = Agent(name="assistant", model="<model>")
-serve(agent, host="127.0.0.1", port=8000, db_path="lovia.db")
+serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
-## `serve()` and `create_app()`
+## `create_app()` and `serve()`
 
-`serve(agent_or_agents, *, host="127.0.0.1", port=8000, ...)` creates the
-application and runs uvicorn. Extra server options such as `log_level`,
-`ssl_certfile`, and `workers` pass through. `create_app(...)` returns the ASGI
-application without starting a process.
+`serve(target, *, host="127.0.0.1", port=8000, **uvicorn_kwargs)` runs an app
+from `create_app()`, or builds one with the defaults when given an Agent (or a
+`{name: agent}` mapping) directly — `serve(agent)` is the quickest start.
+Server options such as `log_level`, `ssl_certfile`, and `workers` pass through
+to uvicorn. To run the app under another ASGI server, skip `serve()`.
+
+`create_app(agent_or_agents, ...)` options:
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -32,15 +34,12 @@ application without starting a process.
 | `generate_titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
 | `approval_timeout` | `None` | Auto-deny unresolved approvals after N seconds |
-| `max_background_runs` (`create_app()` only) | `8` | Concurrent supervised Runs; excess starts return 429 |
+| `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
 | `ui` | `True` | Set `False` for API-only serving |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
 | `title` / `empty_title` / `empty_description` | lovia defaults | UI copy and branding |
 | `empty_examples` | `None` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
-
-`serve()` always uses `max_background_runs=8`. To change it, build the app with
-`create_app()` and run it with an ASGI server.
 
 Transcripts, chat metadata and run checkpoints share one SQLite file, opened in
 **WAL mode** so the UI's reads never wait behind a checkpoint write. An existing
@@ -93,13 +92,14 @@ never load-bearing.
 ## Authentication
 
 Loopback binds need no credentials. `serve()` is safe by default beyond that:
-binding a non-loopback host with neither `token` nor `auth` generates a token
-and prints it once, together with a ready `/?token=...` UI link. This prevents
-the business API from being exposed anonymously on a non-loopback address.
+an Agent served on a non-loopback host gets a generated token, printed once
+together with a ready `/?token=...` UI link, and an app built with neither
+`token` nor `auth` is refused there. The business API is never exposed
+anonymously on a non-loopback address.
 
 ```python
-serve(agent, host="0.0.0.0", token="s3cret")        # fixed token
-serve(agent, host="0.0.0.0")                        # generated + printed
+serve(create_app(agent, token="s3cret"), host="0.0.0.0")   # fixed token
+serve(agent, host="0.0.0.0")                                # generated + printed
 ```
 
 The token guards the business routes registered by `build_api_router`.
@@ -121,11 +121,13 @@ async def my_auth(request: Request) -> None:
     if not valid(request):
         raise HTTPException(status_code=401)
 
-serve(agent, host="0.0.0.0", auth=my_auth)
+serve(create_app(agent, auth=my_auth), host="0.0.0.0")
 ```
 
-`create_app()` accepts the same two parameters but enables no authentication
-by default. Pass either `token` or `auth` explicitly when you own the app.
+`create_app()` alone enables no authentication; under another ASGI server,
+pass `token` or `auth` yourself. `serve()` only judges apps built by
+`create_app()` — an app of your own that mounts `build_api_router` keeps its
+own middleware and is run as is.
 
 ## Supervised Run lifecycle
 

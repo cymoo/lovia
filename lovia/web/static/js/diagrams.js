@@ -15,7 +15,7 @@ const EXPAND_ICON = icon('maximize-2', { size: 14 });
 const CLOSE_ICON = icon('x', { size: 16 });
 
 const _cache = new Map(); // diagram source -> rendered SVG
-const _inflight = new Set(); // sources currently being rendered
+const _pending = new Map(); // diagram source -> in-flight render (SVG, or null if invalid)
 let _seq = 0;
 let _ready = false;
 
@@ -28,42 +28,58 @@ function ensureMermaid() {
       theme: 'default',
       fontFamily: FONT,
     });
+    // Delegated, not per-figure: a cloned figure (the Files reader mirrors its
+    // viewer) carries no listeners of its own and must still expand.
+    document.addEventListener('click', (e) => {
+      const fig = e.target instanceof Element ? e.target.closest('figure.mermaid-diagram') : null;
+      if (fig) openLightbox(fig);
+    });
     _ready = true;
   }
   return true;
 }
 
-// figure > <svg> + expand button. The svg is swapped in place (not via the
-// figure's innerHTML) so the button and its listeners survive a re-render.
-function makeFigure(src) {
+// figure > <svg> + expand button; clicks on either reach the listener above.
+function makeFigure(src, svg) {
   const fig = document.createElement('figure');
   fig.className = 'mermaid-diagram';
   fig.dataset.mermaidSrc = src;
+  fig.innerHTML = svg;
   const expand = document.createElement('button');
   expand.type = 'button';
   expand.className = 'mermaid-expand';
   expand.title = 'Expand (zoom & pan)';
   expand.setAttribute('aria-label', 'Expand diagram');
   expand.innerHTML = EXPAND_ICON;
-  expand.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openLightbox(fig);
-  });
-  fig.addEventListener('click', () => openLightbox(fig));
   fig.appendChild(expand);
   return fig;
 }
 
-function setFigureSvg(fig, svg) {
-  fig.querySelector('svg')?.remove();
-  fig.insertAdjacentHTML('afterbegin', svg); // svg sits before the expand button
-}
-
 function swapDiagram(pre, svg) {
   if (!pre || !pre.isConnected) return;
-  const fig = makeFigure(pre.querySelector('code')?.textContent?.trim() || '');
-  setFigureSvg(fig, svg);
-  pre.replaceWith(fig);
+  pre.replaceWith(makeFigure(pre.querySelector('code')?.textContent?.trim() || '', svg));
+}
+
+// One render per source, shared by every container waiting on it — the same
+// diagram can sit in two places at once (the Files viewer and its reader copy).
+function renderSvg(src) {
+  let p = _pending.get(src);
+  if (!p) {
+    // Validate first: while streaming, the fenced block may not be closed yet.
+    p = mermaid
+      .parse(src, { suppressErrors: true })
+      .then((ok) => {
+        if (!ok) return null; // incomplete or invalid — retry on a later call
+        return mermaid.render(`lovia-mmd-${++_seq}`, src).then(({ svg }) => {
+          _cache.set(src, svg);
+          return svg;
+        });
+      })
+      .catch(() => null) // unparseable diagram: leave the raw code block visible
+      .finally(() => _pending.delete(src));
+    _pending.set(src, p);
+  }
+  return p;
 }
 
 /**
@@ -83,24 +99,14 @@ export function renderMermaid(container) {
       swapDiagram(pre, cached); // synchronous: no flicker for a known diagram
       return;
     }
-    if (_inflight.has(src)) return; // this exact source is already rendering
-    _inflight.add(src);
-    // Validate first: while streaming, the fenced block may not be closed yet.
-    mermaid
-      .parse(src, { suppressErrors: true })
-      .then((ok) => {
-        if (!ok) return; // incomplete or invalid — retry on a later flush
-        return mermaid.render(`lovia-mmd-${++_seq}`, src).then(({ svg }) => {
-          _cache.set(src, svg);
-          // A newer streaming flush may have replaced the original <pre>, so
-          // swap whichever live block currently holds this source.
-          container.querySelectorAll('pre > code.language-mermaid').forEach((c) => {
-            if ((c.textContent || '').trim() === src) swapDiagram(c.parentElement, svg);
-          });
-        });
-      })
-      .catch(() => {}) // unparseable diagram: leave the raw code block visible
-      .finally(() => _inflight.delete(src));
+    renderSvg(src).then((svg) => {
+      if (!svg) return;
+      // A newer streaming flush may have replaced the original <pre>, so
+      // swap whichever live block currently holds this source.
+      container.querySelectorAll('pre > code.language-mermaid').forEach((c) => {
+        if ((c.textContent || '').trim() === src) swapDiagram(c.parentElement, svg);
+      });
+    });
   });
 }
 
@@ -118,7 +124,7 @@ function naturalSize(svg) {
 }
 
 function openLightbox(fig) {
-  const svgEl = fig.querySelector('svg');
+  const svgEl = fig.querySelector(':scope > svg'); // not the expand button's icon
   if (!svgEl) return;
 
   const { w: natW, h: natH } = naturalSize(svgEl);
@@ -133,7 +139,9 @@ function openLightbox(fig) {
   sheet.style.transformOrigin = '0 0';
   sheet.appendChild(clone);
 
-  const overlay = document.createElement('div');
+  // A modal <dialog>: it stacks above another one (the Files reader), and
+  // everything that yields Escape to an open dialog yields it here too.
+  const overlay = document.createElement('dialog');
   overlay.className = 'mermaid-lightbox';
   const stage = document.createElement('div');
   stage.className = 'mermaid-lightbox-stage';
@@ -212,18 +220,17 @@ function openLightbox(fig) {
   });
   stage.addEventListener('pointercancel', endDrag);
 
-  function onKey(e) {
-    if (e.key === 'Escape') close();
-    else if (e.key === '+' || e.key === '=') { const [x, y] = center(); zoomAt(1.25, x, y); }
+  overlay.addEventListener('keydown', (e) => { // Escape is the dialog's own
+    if (e.key === '+' || e.key === '=') { const [x, y] = center(); zoomAt(1.25, x, y); }
     else if (e.key === '-' || e.key === '_') { const [x, y] = center(); zoomAt(1 / 1.25, x, y); }
     else if (e.key === '0') fit();
-  }
+  });
   function close() {
-    document.removeEventListener('keydown', onKey);
-    overlay.remove();
+    overlay.close();
   }
-  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('close', () => overlay.remove());
 
   document.body.appendChild(overlay);
+  overlay.showModal();
   requestAnimationFrame(fit); // size known only once the stage is laid out
 }

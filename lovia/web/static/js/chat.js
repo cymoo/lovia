@@ -2144,7 +2144,8 @@ function renderHistoryWindow({ stickBottom }) {
         const details = document.createElement('details');
         details.className = 'reasoning done';
         const summary = document.createElement('summary');
-        summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thinking')}</span>`;
+        // History keeps no reasoning duration, hence not 'chat.thought'.
+        summary.innerHTML = `<span class="reasoning-icon">💭</span><span class="reasoning-label">${t('chat.thoughtDone')}</span>`;
         details.appendChild(summary);
         const rc = document.createElement('div');
         rc.className = 'reasoning-content';

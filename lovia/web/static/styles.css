@@ -1314,11 +1314,18 @@ body.sidebar-collapsed .sidebar-expand-btn {
   border-color: var(--border-strong);
 }
 
-/* Fullscreen diagram viewer (zoom + pan) */
+/* Fullscreen diagram viewer (zoom + pan) — a modal <dialog> sized to the viewport */
 .mermaid-lightbox {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  overflow: hidden;
   background: rgba(8, 9, 12, 0.66); /* fixed dark scrim — the light paper pops in both themes */
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
@@ -1326,6 +1333,9 @@ body.sidebar-collapsed .sidebar-expand-btn {
   /* a pan viewer, not a text surface: dragging must never start a selection */
   user-select: none;
   -webkit-user-select: none;
+}
+.mermaid-lightbox::backdrop {
+  background: transparent; /* the dialog paints the scrim itself */
 }
 @keyframes fade-in {
   from {

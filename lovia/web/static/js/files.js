@@ -15,6 +15,7 @@ import { api, apiError } from './api.js';
 import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
+import { renderMermaid } from './diagrams.js';
 import {
   formatBytes,
   formatTimeSmart,
@@ -889,12 +890,14 @@ async function followViewerLink(href) {
  * A clone, not a move: the panel keeps its own DOM (and listeners) intact, so
  * closing the reader can never leave it blank. Markdown, CSV, text, and
  * images all clone faithfully; the one interactive control inside — "load
- * more" — is delegated back to the panel above.
+ * more" — is delegated back to the panel above. A diagram still rendering
+ * when the panel was cloned renders into the copy too.
  */
 function syncModal() {
   const copy = /** @type {HTMLElement} */ (els.viewerBody.cloneNode(true));
   copy.removeAttribute('id');
   els.modalBody.replaceChildren(copy);
+  renderMermaid(copy);
 }
 
 function syncWrapButton() {
@@ -942,6 +945,7 @@ function renderViewerContent() {
     renderMarkdownInto(body, v.content, { agent: store.agent, base: dirname(v.path) });
     highlightIn(body);
     els.viewerBody.appendChild(turn);
+    renderMermaid(body); // attached first: a cached diagram swaps only into a live <pre>
     return;
   }
   if (v.kind === 'html' && !v.raw) {
@@ -1193,9 +1197,9 @@ export function initFiles() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !state.open) return;
-    // The reader dialog owns Escape while it is up (it closes itself) —
+    // An open dialog (the reader, a lightbox) owns Escape — it closes itself —
     // otherwise one keypress would close the viewer underneath it too.
-    if (els.modal?.open) return;
+    if (document.querySelector('dialog[open]')) return;
     if (state.viewing) closeViewer();
     else if (window.matchMedia('(max-width: 720px)').matches) setOpen(false);
   });

@@ -72,6 +72,8 @@ declare var mermaid: MermaidStatic | undefined;
 interface Window {
   /** Safari's prefixed AudioContext — probed as a fallback in settings.js. */
   webkitAudioContext?: typeof AudioContext;
+  /** The page's extension API: UI component renderers register here (components.js). */
+  lovia?: { registerRenderer: typeof import('./js/components.js').registerRenderer };
 }
 
 interface Error {

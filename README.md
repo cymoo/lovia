@@ -498,7 +498,9 @@ in HTTP responses and stream `error` events alike. Keeping the page?
 `ui=ChatUI(...)` sets its blank-state copy, a `login_url` for your own
 `auth=`, and template overrides for your own head, sidebar, and scripts; it
 works under a path prefix — behind a proxy (`--root-path`) or mounted in your
-own app.
+own app. A tool can return `ui_result(kind, props)` to render as UI — a
+sortable table, say — drawn by a renderer you load with
+`ChatUI(scripts=[...])`.
 
 → [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 

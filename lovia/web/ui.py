@@ -65,6 +65,12 @@ class ChatUI:
     ``index.html`` there replaces the page; start it with
     ``{% extends "lovia/index.html" %}`` and fill only the blocks you need —
     ``head``, ``sidebar_footer``, ``body_end``.
+
+    ``scripts`` are JS modules loaded after the app's own — where custom UI
+    component renderers register (``window.lovia.registerRenderer``; see
+    :func:`~lovia.web.ui_result`). An absolute URL is used as is; anything
+    else is relative to the app, so it follows a mount prefix. Serving the
+    files is yours: ``app.mount("/ext", StaticFiles(directory="ext"))``.
     """
 
     empty_title: str = "Where shall we begin?"
@@ -74,6 +80,7 @@ class ChatUI:
     empty_examples: Sequence[str] = ()
     login_url: str | None = None
     templates: str | Path | None = None
+    scripts: Sequence[str] = ()
 
 
 def _templates(directory: str | Path | None) -> Jinja2Templates:
@@ -99,19 +106,27 @@ def _templates(directory: str | Path | None) -> Jinja2Templates:
     return Jinja2Templates(env=env)
 
 
+def _as_list(value: str | Sequence[str]) -> list[str]:
+    # A bare string is one item, not an iterable of characters.
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _script_url(src: str, base_path: str) -> str:
+    if "://" in src or src.startswith("//"):
+        return src
+    return f"{base_path}/{src.lstrip('/')}"
+
+
 def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
     """Router that serves the bundled single-page chat UI."""
     router = APIRouter()
     templates = _templates(ui.templates)
-    # A bare string is one example, not an iterable of characters.
-    examples = (
-        [ui.empty_examples]
-        if isinstance(ui.empty_examples, str)
-        else list(ui.empty_examples)
-    )
+    examples = _as_list(ui.empty_examples)
+    scripts = _as_list(ui.scripts)
 
     @router.get("/", include_in_schema=False)
     async def index(request: Request) -> Any:
+        base_path = request.scope.get("root_path", "").rstrip("/")
         response = templates.TemplateResponse(
             request,
             "index.html",
@@ -120,13 +135,14 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
                 "empty_title": ui.empty_title,
                 "empty_description": ui.empty_description,
                 "empty_examples": examples,
+                "scripts": [_script_url(s, base_path) for s in scripts],
                 "app_config": {
                     "empty_title": ui.empty_title,
                     "empty_description": ui.empty_description,
                     "empty_examples": examples,
                     # The mount prefix (a proxy's root_path, or app.mount's):
                     # the client prepends it to every /api call.
-                    "base_path": request.scope.get("root_path", "").rstrip("/"),
+                    "base_path": base_path,
                     "login_url": ui.login_url,
                 },
             },

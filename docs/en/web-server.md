@@ -49,6 +49,7 @@ run the app under another ASGI server, skip `serve()`.
 | `empty_examples` | `()` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
 | `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
 | `templates` | `None` | A directory of your own templates (see [Customizing the page](#customizing-the-page)) |
+| `scripts` | `()` | JS modules loaded after the app's own, e.g. component renderers (see [UI components](#ui-components)) |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -112,8 +113,80 @@ app.mount("/brand", StaticFiles(directory="brand"), name="brand")
 To retheme, override the design tokens at the top of the bundled
 `styles.css` (`--bg`, `--surface`, `--ink`, `--accent`, …; the dark theme
 sets its own under `[data-theme="dark"]`). Class names, element ids, and the
-JavaScript modules are internal and may change between releases. There is no
-front-end plugin API: `api.js` is the documented client.
+JavaScript modules are internal and may change between releases. The
+documented front-end surfaces are `api.js` (the client) and
+`window.lovia.registerRenderer` ([UI components](#ui-components)).
+
+## UI components
+
+A tool result can render as UI — a sortable table, a KPI strip — instead of
+text. The tool returns `ui_result(kind, props)`, and a renderer registered for
+`kind` draws it inside the tool card, live and when the chat is reopened.
+
+```python
+from lovia import tool
+from lovia.web import ui_result
+
+@tool
+def top_products(n: int = 10) -> str:
+    """Best sellers, shown to the user as a table."""
+    rows = query_top_products(n)
+    return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
+```
+
+The envelope is the tool's output, so the model sees the props as well. When
+the call's own arguments already are the data (a presentational tool), pass
+`from_args=True` — or a field name — instead of `props`, so the data isn't
+echoed back a second time. For bulk data, return a summary plus a URL of your
+own endpoint and let the renderer fetch it: components run in the page, so
+same-origin requests carry the user's cookie, and the endpoint can reuse your
+`auth=` dependency.
+
+Renderers are JS modules, loaded with `ChatUI(scripts=[...])`:
+
+```js
+// ext/table.js
+window.lovia.registerRenderer('table', (el, props, ctx) => {
+  const table = document.createElement('table');
+  for (const row of props.rows) {
+    const tr = table.insertRow();
+    for (const v of row) tr.insertCell().textContent = String(v); // never innerHTML
+  }
+  el.append(table);
+  // Optionally return a cleanup function (observers, timers, chart instances).
+});
+```
+
+```python
+from fastapi.staticfiles import StaticFiles
+
+app = create_app(agent, ui=ChatUI(scripts=["ext/table.js"]))
+app.mount("/ext", StaticFiles(directory="ext"))
+```
+
+A relative script URL follows a [path prefix](#serving-under-a-path-prefix);
+an absolute one is used as is. The renderer gets the element to draw into, the
+props, and a context:
+
+| `ctx` field | Description |
+| --- | --- |
+| `theme` / `lang` | `'light'` or `'dark'`; `'en'` or `'zh'`. On a theme switch the component is cleaned up and rendered again |
+| `basePath` | The mount prefix, for requests to your own endpoints |
+| `sessionId` / `callId` | The chat and the tool call the component belongs to |
+| `send(text)` | Post a user message, e.g. from a "drill into March" button. It works only inside a real click or keypress, and returns `false` otherwise |
+
+A renderer may be async. If it throws, the card says so, and the raw output
+stays behind the card's Source toggle. A kind with no renderer shows a notice
+until one registers, so load order doesn't matter. Registering a kind again
+replaces its renderer.
+
+!!! warning "Props are untrusted"
+    Props come from the model, tools, MCP servers, or remote content. Write
+    them with `textContent` (or sanitize with the page's `DOMPurify`), never
+    as HTML.
+
+A runnable version with sorting, filtering and an "Ask" button is
+`examples/31_web_components.py`.
 
 ## Follow-up suggestions
 

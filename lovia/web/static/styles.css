@@ -4316,7 +4316,8 @@ body.files-splitting {
     opacity: 1;
   }
   .tool .tool-result-actions,
-  .tool summary .tool-open-file {
+  .tool summary .tool-open-file,
+  .tool summary .tool-source {
     opacity: 1;
   }
 }
@@ -4468,6 +4469,38 @@ body.files-splitting {
 .tool summary:hover .tool-open-file,
 .tool summary .tool-open-file:focus-visible {
   opacity: 1;
+}
+
+/* ---- UI components (components.js) ------------------------------------------------------------------ */
+/* A result carrying a UI envelope renders as its component; the raw output,
+   the params, and their actions stay behind the summary's Source toggle. */
+.tool .tool-ui {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  overflow-x: auto;
+}
+.tool.tool--ui:not(.show-source) > .tool-params,
+.tool.tool--ui:not(.show-source) .tool-result,
+.tool.tool--ui:not(.show-source) .tool-result-meta,
+.tool.tool--ui:not(.show-source) .tool-result-actions {
+  display: none;
+}
+.tool .tool-ui-notice {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tool summary .tool-source {
+  opacity: 0;
+  flex-shrink: 0;
+}
+.tool summary:hover .tool-source,
+.tool summary .tool-source:focus-visible,
+.tool.show-source summary .tool-source {
+  opacity: 1;
+}
+.tool.show-source summary .tool-source {
+  color: var(--accent-text);
 }
 
 /* ---- Date separators -------------------------------------------------------------------------------- */

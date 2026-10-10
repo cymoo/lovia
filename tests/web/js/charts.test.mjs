@@ -55,6 +55,27 @@ test('drops link/sublink, image keys, and image:// strings anywhere', () => {
   });
 });
 
+test('drops CSS/SVG paint URLs, which an SVG fill would fetch', () => {
+  const out = sanitizeOption({
+    series: [
+      {
+        type: 'bar',
+        itemStyle: { color: 'url(https://tracker.test/p.svg#x)', borderColor: ' URL ("x")' },
+        lineStyle: { color: '#2a78d6' },
+      },
+    ],
+  });
+  assert.deepEqual(out.series[0], { type: 'bar', itemStyle: {}, lineStyle: { color: '#2a78d6' } });
+});
+
+test('a dropped array cell becomes null, keeping dataset rows aligned', () => {
+  const out = sanitizeOption({
+    dataset: { source: [['m', 'v', 'w'], ['image://x', 1, 2], ['Feb', 3, 4]] },
+    series: [bar],
+  });
+  assert.deepEqual(out.dataset.source, [['m', 'v', 'w'], [null, 1, 2], ['Feb', 3, 4]]);
+});
+
 test('tooltips are forced to rich text and confined', () => {
   const out = sanitizeOption({
     tooltip: { trigger: 'axis', formatter: '<img src=x onerror=alert(1)>' },

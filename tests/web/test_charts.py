@@ -83,6 +83,13 @@ def test_an_oversize_option_is_a_tool_error() -> None:
     assert "the limit is 64 KiB" in tr["result"]
 
 
+def test_non_finite_numbers_are_a_tool_error() -> None:
+    """Python parses NaN/Infinity out of the arguments; the browser can't."""
+    tr = _run({**BAR, "dataset": {"source": [["m", "v"], ["Jan", float("nan")]]}})
+    assert tr["is_error"]
+    assert "NaN or Infinity" in tr["result"]
+
+
 def test_series_allowlist_matches_the_client() -> None:
     source = CHARTS_JS.read_text(encoding="utf-8")
     block = re.search(r"SERIES_TYPES = new Set\(\[(.*?)\]\)", source, re.S)

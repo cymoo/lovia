@@ -30,6 +30,9 @@ const COMPONENTS = new Set([
 // `link`/`sublink` reach window.open (a javascript: URL would run); `image`
 // (pattern fills, backgrounds) fetches remote URLs — a tracking pixel.
 const DROP_KEYS = new Set(['link', 'sublink', 'image']);
+// Strings that make the renderer fetch: `image://` symbols, and CSS/SVG paint
+// URLs — a `url(...)` colour lands in an SVG `fill` attribute as is.
+const FETCHING = /^\s*(?:image:\/\/|url\s*\()/i;
 const MAX_DEPTH = 32;
 
 const ECHARTS_FILE = 'vendor/echarts.min.js';
@@ -43,9 +46,10 @@ const ECHARTS_SRI = 'sha384-C2iskrW/uPW46KzOjrvJIQo4YkV8lkD+QS0CrDN18IIPIpT/g2US
  */
 function clean(value, depth) {
   if (depth > MAX_DEPTH) return undefined;
-  if (typeof value === 'string') return value.startsWith('image://') ? undefined : value;
+  if (typeof value === 'string') return FETCHING.test(value) ? undefined : value;
   if (Array.isArray(value)) {
-    return value.map((v) => clean(v, depth + 1)).filter((v) => v !== undefined);
+    // null, not removal: a dropped cell must not shift a dataset row.
+    return value.map((v) => clean(v, depth + 1) ?? null);
   }
   if (value && typeof value === 'object') {
     /** @type {Record<string, unknown>} */

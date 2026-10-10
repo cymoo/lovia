@@ -86,7 +86,15 @@ def show_chart(
                 f"option.series[{i}].type {kind!r} is not supported",
                 hint="use one of: " + ", ".join(sorted(SERIES_TYPES)),
             )
-    size = len(json.dumps(option, ensure_ascii=False).encode())
+    try:
+        # allow_nan=False: Python parsed NaN/Infinity out of the arguments,
+        # but the browser's JSON.parse rejects them — the chart would vanish.
+        size = len(json.dumps(option, ensure_ascii=False, allow_nan=False).encode())
+    except ValueError as exc:
+        raise ToolError(
+            "the option contains NaN or Infinity",
+            hint="use null for missing values, or drop the point",
+        ) from exc
     if size > MAX_OPTION_BYTES:
         raise ToolError(
             f"the option is {size // 1024} KiB; the limit is {MAX_OPTION_BYTES // 1024} KiB",

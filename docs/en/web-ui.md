@@ -204,6 +204,37 @@ does not stop them; deleting the chat or stopping the Web server reaps them,
 and a server restart does not restore them. See
 [Workspace](workspace.md#background-processes) for the full lifecycle.
 
+## Charts
+
+The `show_chart` tool draws interactive charts in the chat — line, bar, pie,
+scatter, heatmap, candlestick, sankey and the other
+[Apache ECharts](https://echarts.apache.org/) series types. The model writes an
+ECharts option as the call's argument, and the card renders it, live and when
+the chat is reopened. It is off by default; turn it on in `config.json`:
+
+```json
+{ "charts": true }
+```
+
+For your own agent, add the tool: `tools=[show_chart]` (from `lovia.web`).
+Any tool can produce a chart too: `return ui_result("chart", option)`, which
+draws from real data without the model copying numbers (see
+[UI components](web-server.md#ui-components)).
+
+Good to know:
+
+- ECharts (about 1 MB, bundled) loads with the first chart, so chats without
+  charts never fetch it.
+- The option is sanitized before it is drawn. Images, links, the `graphic`
+  and `toolbox` components, and HTML tooltips are removed, and so are series
+  types that need code or map data (`custom`, `map`).
+- For house conventions — preferred chart types, units, titles — write them
+  into the instructions or a Skill. No code is needed.
+- The palette and inks are CSS variables (`--chart-1` … `--chart-8`,
+  `--chart-text`, `--chart-title`, `--chart-axis`, `--chart-grid`). Override
+  them in the `head` block of
+  [your own template](web-server.md#customizing-the-page) to match a brand.
+
 ## Useful CLI options
 
 Apart from model, search, and skills configuration, options resolve as CLI

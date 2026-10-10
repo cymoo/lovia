@@ -160,6 +160,32 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 后台进程属于聊天而不是单次 Run：Run 结束不会终止它们；删除聊天或停止 Web 服务时会统一清理，
 服务重启后也不会恢复。更完整的生命周期见[工作区](workspace.md#后台进程)。
 
+## 图表
+
+`show_chart` 工具可以在聊天中绘制交互式图表，支持折线、柱状、饼图、散点、热力图、K 线、
+桑基图等 [Apache ECharts](https://echarts.apache.org/) 的系列类型。模型把 ECharts option
+写成调用参数，卡片负责渲染；实时对话和重新打开会话时都会显示。默认关闭，在 `config.json`
+中开启：
+
+```json
+{ "charts": true }
+```
+
+使用自己的 Agent 时，把工具加进去：`tools=[show_chart]`（从 `lovia.web` 导入）。任何工具也都
+可以产出图表：`return ui_result("chart", option)`，直接用真实数据作图，不需要模型抄写数字
+（见[UI 组件](web-server.md#ui-组件)）。
+
+须知：
+
+- ECharts（约 1 MB，已随包内置）在出现第一张图时才加载，没有图表的会话不会请求它。
+- option 在绘制前会经过过滤：图片、链接、`graphic` 和 `toolbox` 组件、HTML 形式的
+  tooltip 都会被去掉；需要代码或地图数据的系列类型（`custom`、`map`）也不支持。
+- 团队的作图约定（偏好的图表类型、单位、标题写法等）写进 instructions 或一个 Skill 即可，
+  不需要写代码。
+- 配色和文字颜色都是 CSS 变量（`--chart-1` … `--chart-8`、`--chart-text`、
+  `--chart-title`、`--chart-axis`、`--chart-grid`），在[自定义模板](web-server.md#定制页面)
+  的 `head` 块中覆盖即可匹配品牌风格。
+
 ## 常用 CLI 选项
 
 除模型、搜索和 Skills 配置外，其余选项按“命令行参数 → 环境变量 → 默认值”解析。

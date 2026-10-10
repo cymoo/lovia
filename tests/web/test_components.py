@@ -56,6 +56,8 @@ def test_ui_result_from_args(ref) -> None:
         (("table", {}), {"from_args": True}, "exactly one"),
         (("table",), {"from_args": ""}, "invalid from_args"),
         (("table", {"when": object()}), {}, "not JSON-serializable"),
+        (("table", {"rows": [[float("nan")]]}), {}, "not JSON-serializable"),
+        (("table", {"max": float("inf")}), {}, "not JSON-serializable"),
     ],
 )
 def test_ui_result_rejects(args, kwargs, match) -> None:

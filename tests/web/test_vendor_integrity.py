@@ -21,6 +21,8 @@ WEB = Path(__file__).resolve().parents[2] / "lovia" / "web"
 VENDOR = WEB / "static" / "vendor"
 TEMPLATE = WEB / "templates" / "index.html"
 MANIFEST = VENDOR / "README.md"
+# Loaded on demand by a module (not a template <script>), which pins the hash.
+LAZY = {"echarts.min.js": WEB / "static" / "js" / "charts.js"}
 
 
 def sha384_sri(path: Path) -> str:
@@ -39,6 +41,8 @@ def test_vendor_directory_is_not_empty() -> None:
 def test_template_pins_every_vendored_file_with_its_actual_hash() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
     for path in vendored_files():
+        if path.name in LAZY:
+            continue
         tag = re.search(rf"""<script[^>]*vendor/{re.escape(path.name)}[^>]*>""", html)
         assert tag, f"{path.name} is vendored but not referenced by index.html"
         expected = sha384_sri(path)
@@ -50,6 +54,17 @@ def test_template_pins_every_vendored_file_with_its_actual_hash() -> None:
             f"  actual:   {expected}\n"
             "Update the integrity attribute in templates/index.html and the "
             "manifest in static/vendor/README.md."
+        )
+
+
+def test_lazy_loaders_pin_their_file_with_its_actual_hash() -> None:
+    for name, module in LAZY.items():
+        source = module.read_text(encoding="utf-8")
+        assert f"vendor/{name}" in source, f"{module.name} does not load {name}"
+        expected = sha384_sri(VENDOR / name)
+        assert expected in source, (
+            f"{name}: the integrity pinned in {module.name} is stale; "
+            f"actual is {expected}"
         )
 
 

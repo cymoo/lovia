@@ -65,9 +65,11 @@ def ui_result(kind: str, props: Any = _UNSET, *, from_args: bool | str = False) 
     else:
         body["props"] = props
     try:
-        return json.dumps({ENVELOPE_KEY: body}, ensure_ascii=False)
+        # allow_nan=False: NaN/Infinity aren't JSON — the browser can't parse them.
+        return json.dumps({ENVELOPE_KEY: body}, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise UserError(
             f"ui_result props are not JSON-serializable: {exc}",
-            hint="convert values to plain dict/list/str/number/bool/None first",
+            hint="convert values to plain dict/list/str/number/bool/None "
+            "first (finite numbers only — use None for NaN)",
         ) from exc

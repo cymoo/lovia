@@ -188,6 +188,10 @@ replaces its renderer.
 A runnable version with sorting, filtering and an "Ask" button is
 `examples/31_web_components.py`.
 
+One kind is built in: `chart`, an Apache ECharts option, which the
+`show_chart` tool produces (see [Charts](web-ui.md#charts)). Register your own
+`chart` renderer to draw it with another library.
+
 ## Follow-up suggestions
 
 After a Run produces an answer, the built-in suggester makes a separate small

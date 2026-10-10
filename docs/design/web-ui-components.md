@@ -1,6 +1,6 @@
 # Web UI components: tool results that render as UI
 
-> Status: in progress · 2026-10-10 · Scope: `lovia/web` only (core untouched)
+> Status: implemented (v0.9.76: seam, v0.9.77: charts) · 2026-10-10 · Scope: `lovia/web` only (core untouched)
 >
 > Line numbers refer to v0.9.75 (`616fa7a`).
 
@@ -348,9 +348,12 @@ it uses the same API users get.
   (`clamp(240px, 45vw, 360px)`) at full card width.
 - **Theme.** Colours are read from CSS variables at render time: `--chart-1`
   … `--chart-8` for the categorical palette, plus `--chart-text`,
-  `--chart-axis` and `--chart-grid`. `styles.css` defines both light and dark
-  sets. Users override them in the `head` template block. The registry's
-  re-render on theme change does the rest.
+  `--chart-title`, `--chart-axis` and `--chart-grid`. `styles.css` defines
+  both light and dark sets. The palette was validated as an 8-slot
+  categorical set (CVD-separated in order) against lovia's own surfaces.
+  Users override the variables in the `head` template block. The registry's
+  re-render on theme change does the rest. Slices and tiles part with a 2px
+  line of the card surface.
 - **Lifecycle.**
   - Initialise when the chart scrolls into view (IntersectionObserver), so
     replaying a session with dozens of charts stays cheap.

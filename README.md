@@ -500,7 +500,8 @@ in HTTP responses and stream `error` events alike. Keeping the page?
 works under a path prefix — behind a proxy (`--root-path`) or mounted in your
 own app. A tool can return `ui_result(kind, props)` to render as UI — a
 sortable table, say — drawn by a renderer you load with
-`ChatUI(scripts=[...])`.
+`ChatUI(scripts=[...])`; charts come built in (`show_chart`, Apache ECharts;
+`"charts": true` in `lovia web`'s config).
 
 → [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 

@@ -173,6 +173,9 @@ app.mount("/ext", StaticFiles(directory="ext"))
 
 带排序、筛选和"追问"按钮的完整示例见 `examples/31_web_components.py`。
 
+内置了一种 kind：`chart`，内容是一个 Apache ECharts option，由 `show_chart` 工具产出
+（见[图表](web-ui.md#图表)）。如果想换一个图表库来画它，注册你自己的 `chart` 渲染器即可。
+
 ## 追问建议
 
 内置建议器会在 Run 成功产出回答后单独调用一次模型；这次请求不会写入主对话的

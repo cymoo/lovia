@@ -19,9 +19,11 @@ from ..exceptions import UserError
 ENVELOPE_KEY = "lovia_ui"
 # Mirrored by KIND_RE in static/js/components.js.
 _KIND_RE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
+# "props omitted" — distinct from None, a valid (JSON null) prop.
+_UNSET: Any = object()
 
 
-def ui_result(kind: str, props: Any = None, *, from_args: bool | str = False) -> str:
+def ui_result(kind: str, props: Any = _UNSET, *, from_args: bool | str = False) -> str:
     """Wrap a component as a tool output the chat UI renders as ``kind``.
 
     Pass the data inline as ``props`` (a tool that *computes* it — the model
@@ -44,7 +46,7 @@ def ui_result(kind: str, props: Any = None, *, from_args: bool | str = False) ->
             hint="use 1-64 chars of [a-z0-9_.-], starting with a letter, e.g. 'table'",
         )
     has_ref = from_args is not False
-    if (props is None) == (not has_ref):
+    if (props is _UNSET) == (not has_ref):
         raise UserError(
             "ui_result needs exactly one of `props` and `from_args`",
             hint="pass the data as props, or from_args=True / a field name to "

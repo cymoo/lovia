@@ -3587,7 +3587,8 @@ configureComponents({
   }),
   send: (text) => {
     const message = typeof text === 'string' ? text.trim() : '';
-    if (!message || navigator.userActivation?.isActive === false) return false;
+    // Fail closed: a browser without UserActivation can't vouch for a gesture.
+    if (!message || navigator.userActivation?.isActive !== true) return false;
     void sendText(message);
     return true;
   },

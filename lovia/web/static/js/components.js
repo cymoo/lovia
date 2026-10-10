@@ -60,7 +60,10 @@ export function parseEnvelope(text, args) {
   } catch {
     return null;
   }
-  if (!env || typeof env !== 'object' || !KIND_RE.test(env.kind)) return null;
+  // typeof first: RegExp.test would coerce undefined/null/true to a string.
+  if (!env || typeof env !== 'object' || typeof env.kind !== 'string' || !KIND_RE.test(env.kind)) {
+    return null;
+  }
   if ('props' in env) return { kind: env.kind, props: env.props };
   const ref = env.from_args;
   if (ref !== true && (typeof ref !== 'string' || !ref)) return null;

@@ -193,9 +193,10 @@ into March". It goes through `sendText` (G5):
 - The composer draft and pending attachments are untouched.
 
 It requires **transient user activation**
-(`navigator.userActivation?.isActive !== false`), so a buggy or looping
-component can't send on render. It returns `false` when the send is refused
-(no activation, empty text, no session view).
+(`navigator.userActivation?.isActive === true`; a browser without the API
+fails closed), so a buggy or looping component can't send on render. It
+returns `false` when the send is refused (no activation, empty text, no
+session view).
 
 ### `ChatUI(scripts=...)`
 

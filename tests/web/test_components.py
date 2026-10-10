@@ -33,6 +33,12 @@ def test_ui_result_inline_props() -> None:
     }
 
 
+def test_ui_result_null_props_are_props() -> None:
+    assert json.loads(ui_result("empty", None)) == {
+        "lovia_ui": {"kind": "empty", "props": None}
+    }
+
+
 @pytest.mark.parametrize("ref", [True, "option"])
 def test_ui_result_from_args(ref) -> None:
     assert json.loads(ui_result("chart", from_args=ref)) == {

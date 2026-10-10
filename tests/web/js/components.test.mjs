@@ -59,6 +59,9 @@ test('ordinary or malformed output is not a component', () => {
     ' {"lovia_ui" broken',
     '{"lovia_ui": null}',
     '{"lovia_ui": {"kind": "Bad Kind", "props": 1}}',
+    '{"lovia_ui": {"props": 1}}', // RegExp.test(undefined) would match "undefined"
+    '{"lovia_ui": {"kind": null, "props": 1}}',
+    '{"lovia_ui": {"kind": true, "props": 1}}',
     '{"lovia_ui": {"kind": "x"}}',
     '{"lovia_ui": {"kind": "x", "from_args": ""}}',
   ]) {

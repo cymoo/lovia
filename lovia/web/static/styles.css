@@ -53,6 +53,23 @@
   --user-border: color-mix(in srgb, var(--accent) 20%, var(--border-strong));
   --user-shadow: 0 1px 2px rgba(20, 24, 33, 0.05);
 
+  /* charts (charts.js reads these at render time) — the one place hues are
+     plural: series need identity. Validated as an 8-slot categorical palette
+     (CVD-separated in this order) against --surface; three slots sit under 3:1
+     here, so charts keep a legend/tooltip and the Source table view. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+  --chart-text: var(--muted);
+  --chart-title: var(--ink);
+  --chart-axis: var(--border-strong);
+  --chart-grid: var(--border);
+
   /* status */
   --warn: #b06413;
   --warn-soft: #fbf3e6;
@@ -124,6 +141,16 @@
   --user-surface: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
   --user-border: color-mix(in srgb, var(--accent) 22%, var(--border-strong));
   --user-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  /* the same eight hues, stepped for the dark surface (all ≥ 3:1) */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
 
   --warn: #e2a54e;
   --warn-soft: #241c0f;
@@ -4489,6 +4516,11 @@ body.files-splitting {
 .tool .tool-ui-notice {
   font-size: 13px;
   color: var(--muted);
+}
+/* The built-in chart component (charts.js): full card width, steady height. */
+.tool .chart-box {
+  width: 100%;
+  height: clamp(240px, 45vw, 360px);
 }
 .tool summary .tool-source {
   opacity: 0;

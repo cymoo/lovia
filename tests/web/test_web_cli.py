@@ -600,6 +600,27 @@ def test_build_default_agent_no_subagents(
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
+def test_build_default_agent_charts_are_opt_in_and_parent_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from lovia import Subagents
+    from lovia.web.config import WebConfig
+
+    monkeypatch.chdir(tmp_path)
+    args = cli.build_parser().parse_args(["--no-memory"])
+    store = ChatStore.in_memory()
+    off = builder.build_default_agent(args, store, _provider())
+    assert "show_chart" not in {t.name for t in off.tools}
+
+    on = builder.build_default_agent(
+        args, store, _provider(), config=WebConfig(charts=True)
+    )
+    assert "show_chart" in {t.name for t in on.tools}
+    (plugin,) = [p for p in on.plugins if isinstance(p, Subagents)]
+    (child,) = plugin._catalog.values()
+    assert "show_chart" not in {t.name for t in child.tools}
+
+
 def test_build_default_agent_wires_the_vision_role(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

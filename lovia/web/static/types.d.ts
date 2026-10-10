@@ -68,6 +68,8 @@ declare var marked: MarkedStatic | undefined;
 declare var DOMPurify: DOMPurifyStatic | undefined;
 declare var hljs: HLJSStatic | undefined;
 declare var mermaid: MermaidStatic | undefined;
+/** Apache ECharts — injected on demand by charts.js, so usually absent. */
+declare var echarts: any;
 
 interface Window {
   /** Safari's prefixed AudioContext — probed as a fallback in settings.js. */

@@ -143,6 +143,9 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
                     # The mount prefix (a proxy's root_path, or app.mount's):
                     # the client prepends it to every /api call.
                     "base_path": base_path,
+                    # The versioned asset prefix, for vendored files a module
+                    # loads on demand (charts.js → echarts).
+                    "static_base": request.url_for("static", path="").path,
                     "login_url": ui.login_url,
                 },
             },

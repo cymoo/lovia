@@ -1,8 +1,8 @@
 // Chat streaming, SSE handling, message rendering.
-import { t } from './i18n.js';
+import { currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { toast } from './toast.js';
-import { api, apiError, readSSE } from './api.js';
+import { api, apiError, basePath, readSSE } from './api.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
@@ -20,6 +20,14 @@ import {
   toDate,
 } from './util.js';
 import { BlockStream } from './stream-blocks.js';
+import {
+  configureComponents,
+  mountComponent,
+  parseEnvelope,
+  rerenderComponents,
+  unmountComponent,
+  watchComponents,
+} from './components.js';
 
 // ---- Markdown & Highlighting -------------------------------------------
 // marked / DOMPurify / hljs / mermaid arrive from CDN <script> tags and may
@@ -808,6 +816,11 @@ function toolDescription(call) {
   }
 }
 
+// Raw call arguments per tool card, for `from_args` UI components.
+/** @type {WeakMap<HTMLElement, string>} */
+const toolArgs = new WeakMap();
+const ARGS_KEEP_MAX = 256 * 1024;
+
 function buildToolNode(call) {
   const node = cloneTemplate('tmpl-tool');
   node.querySelector('.tool-name').textContent = call.name;
@@ -827,6 +840,11 @@ function buildToolNode(call) {
   // The result renderer only needs the name and the path — stash those
   // instead of the full arguments (write_file args can be megabytes).
   node.dataset.toolName = call.name;
+  // ...except a UI component may render from its call's arguments
+  // (`from_args`): keep them off the DOM, and only when modest in size.
+  if (call.arguments && call.arguments.length <= ARGS_KEEP_MAX) {
+    toolArgs.set(node, call.arguments);
+  }
   // Identity, so a card already on screen can be recognised rather than drawn
   // twice — see appendTool.
   if (call.id) node.dataset.callId = call.id;
@@ -951,11 +969,50 @@ function renderToolImages(node, images) {
   }
 }
 
+// A result carrying a UI envelope renders as its component, just above the
+// result box (the raw output and params stay one "Source" toggle away). Idempotent
+// across repeated result updates; any other result tears a component down.
+function syncToolComponent(node, result, isError) {
+  const box = node.querySelector('.tool-result-box');
+  if (!box) return;
+  const comp = isError ? null : parseEnvelope(String(result ?? ''), toolArgs.get(node));
+  let el = /** @type {HTMLElement | null} */ (node.querySelector(':scope > .tool-ui'));
+  if (!comp) {
+    if (el) {
+      unmountComponent(el);
+      el.remove();
+    }
+    node.classList.remove('tool--ui', 'show-source');
+    node.querySelector('.tool-source')?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'tool-ui';
+    box.before(el); // outside the box, clear of its hover actions
+  }
+  node.classList.add('tool--ui');
+  node.open = true; // the component IS the payload, like the image strip
+  if (!node.querySelector('.tool-source')) {
+    const src = toolActionBtn('code', t('tool.source'));
+    src.classList.add('tool-source');
+    src.addEventListener('click', (e) => {
+      e.preventDefault(); // inside <summary>: don't toggle the card
+      e.stopPropagation();
+      node.open = true;
+      node.classList.toggle('show-source');
+    });
+    node.querySelector('summary')?.appendChild(src);
+  }
+  mountComponent(el, comp, { callId: node.dataset.callId ?? null });
+}
+
 // The one renderer behind both the live tool_result event and history replay:
-// content (highlighted or linkified), error styling, the image strip, and the
-// hover actions (copy, expand when clipped).
+// content (highlighted or linkified), error styling, the image strip, UI
+// components, and the hover actions (copy, expand when clipped).
 function setToolResult(node, result, isError, images) {
   renderToolImages(node, images);
+  syncToolComponent(node, result, isError);
   const pre = node.querySelector('.tool-result');
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
@@ -1029,6 +1086,7 @@ function updateToolResult(id, result, isError, images) {
   const node = store.toolNodes.get(id);
   if (!node) return;
   setToolResult(node, result, isError, images);
+  if (node.classList.contains('tool--ui')) scrollDown(); // a component adds height
 }
 
 function removeToolNode(id) {
@@ -2174,6 +2232,8 @@ function renderHistoryWindow({ stickBottom }) {
           }
           const node = buildToolNode(call);
           const result = pendingResults.get(call.id);
+          // Attached first, so a UI component renders into a laid-out card.
+          appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
           // the copy/expand actions all match; absent results hide the <pre>.
           setToolResult(
@@ -2182,7 +2242,6 @@ function renderHistoryWindow({ stickBottom }) {
             result?.isError ?? false,
             result?.images,
           );
-          appendBubbleContent(currentBubble, node);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -3481,6 +3540,62 @@ function splitAttachmentNote(text) {
 }
 
 /** Wire up the composer: submit, Enter-to-send behavior, attachments, and drag-and-drop. */
+/**
+ * Send a text-only user message as the composer would — queued into a live
+ * run, or as a fresh turn — without touching the draft or pending
+ * attachments. The composer and UI components (`ctx.send`) share it.
+ * @param {string} message Trimmed, non-empty.
+ */
+async function sendText(message) {
+  _resumeAutoScroll();
+  if (!store.streaming) {
+    document.getElementById('empty-state')?.remove();
+    appendUserTurn(message);
+    await runStream(message);
+    return;
+  }
+  // Queue it: the server drains it at the next turn start, or seeds the
+  // next run if this one ends first. Show a muted bubble (with a cancel
+  // affordance) until the run confirms it or the user withdraws it.
+  const node = appendUserTurn(message, { queued: true });
+  if (node) _queuedTurns.push(node);
+  let res = null;
+  try {
+    res = await api.inject({ session_id: store.sessionId, message });
+  } catch { /* network error → treat as no active run */ }
+  if (res?.accepted) {
+    if (node) addWithdrawButton(node, res.id);
+  } else {
+    // Raced the run's end: keep the bubble muted and deliver the message
+    // as its own turn once the stream settles — the next run re-injects it
+    // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
+    const i = _queuedTurns.indexOf(node);
+    if (i >= 0) _queuedTurns.splice(i, 1);
+    _pendingResend.push({ message, node });
+  }
+}
+
+// UI components (components.js) see the page through this context, and may
+// post a message for the user — only from a real click/keypress, so a
+// component can never send on its own (e.g. while rendering).
+configureComponents({
+  context: () => ({
+    theme: store.theme === 'dark' ? 'dark' : 'light',
+    lang: currentLang(),
+    basePath: basePath(),
+    sessionId: store.sessionId ?? null,
+  }),
+  send: (text) => {
+    const message = typeof text === 'string' ? text.trim() : '';
+    if (!message || navigator.userActivation?.isActive === false) return false;
+    void sendText(message);
+    return true;
+  },
+  label: (key, kind) => t(key === 'missing' ? 'ui.missing' : 'ui.failed', { kind }),
+});
+watchComponents(document.getElementById('transcript'));
+store.on('theme-changed', rerenderComponents);
+
 export function initComposer() {
   initContextRing();
 
@@ -3604,26 +3719,7 @@ export function initComposer() {
       autoresize();
       updateSendEnabled();
       clearDraft();
-      _resumeAutoScroll();
-      // Queue it: the server drains it at the next turn start, or seeds the
-      // next run if this one ends first. Show a muted bubble (with a cancel
-      // affordance) until the run confirms it or the user withdraws it.
-      const node = appendUserTurn(message, { queued: true });
-      if (node) _queuedTurns.push(node);
-      let res = null;
-      try {
-        res = await api.inject({ session_id: store.sessionId, message });
-      } catch { /* network error → treat as no active run */ }
-      if (res?.accepted) {
-        if (node) addWithdrawButton(node, res.id);
-      } else {
-        // Raced the run's end: keep the bubble muted and deliver the message
-        // as its own turn once the stream settles — the next run re-injects it
-        // (drainPendingResend) or it seeds a fresh run (resumePendingResend).
-        const i = _queuedTurns.indexOf(node);
-        if (i >= 0) _queuedTurns.splice(i, 1);
-        _pendingResend.push({ message, node });
-      }
+      await sendText(message);
       return;
     }
 

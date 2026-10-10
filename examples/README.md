@@ -85,6 +85,7 @@ Two examples run fully offline, no key needed: `10_custom_provider.py` and
 | `28_eval.py` | offline evals: checks, LLM judge, baseline diff |
 | `29_data_analysis.py` | data-analysis agent over SQLite + chart report |
 | `30_support_bot.py` | capstone: interactive terminal support bot |
+| `31_web_components.py` | a tool result rendered as an interactive table in the chat UI (`ui_result` + `ChatUI(scripts=...)`) |
 
 ## Subdirectories
 

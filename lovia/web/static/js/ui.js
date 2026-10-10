@@ -49,6 +49,7 @@ function applyResolved(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   store.theme = theme;
   syncThemeColor();
+  store.emit('theme-changed', theme);
 }
 
 /**

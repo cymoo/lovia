@@ -32,6 +32,7 @@ try:
     from .api import RouterDeps, build_api_router
     from .app import create_app, serve
     from .auth import generate_token, is_loopback, token_dependency
+    from .components import ui_result
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .questions import QuestionRegistry
     from .scheduling import Scheduling
@@ -61,5 +62,6 @@ __all__ = [
     "serve",
     "subagent_deliver",
     "token_dependency",
+    "ui_result",
     "wire_subagents",
 ]

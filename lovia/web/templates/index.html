@@ -338,6 +338,9 @@
 </template>
 
 <script type="module" src="{{ url_for('static', path='js/main.js').path }}"></script>
+{%- for src in scripts | default([]) %}
+<script type="module" src="{{ src }}"></script>
+{%- endfor %}
 {% block body_end %}{% endblock %}
 </body>
 </html>

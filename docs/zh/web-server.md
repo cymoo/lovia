@@ -48,6 +48,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 | `empty_examples` | `()` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
 | `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
 | `templates` | `None` | 自定义模板所在的目录（见[定制页面](#定制页面)） |
+| `scripts` | `()` | 在应用自身脚本之后加载的 JS 模块，例如组件渲染器（见[UI 组件](#ui-组件)） |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -105,8 +106,72 @@ app.mount("/brand", StaticFiles(directory="brand"), name="brand")
 
 更换主题时，覆盖内置 `styles.css` 开头的设计变量即可（`--bg`、`--surface`、`--ink`、
 `--accent` 等；深色主题在 `[data-theme="dark"]` 下另有一套）。CSS 类名、元素 id 和
-JavaScript 模块都属于内部实现，可能随版本变化。前端没有插件 API，`api.js` 是唯一有文档的
-客户端。
+JavaScript 模块都属于内部实现，可能随版本变化。有文档的前端接口只有两个：客户端 `api.js`，
+以及 `window.lovia.registerRenderer`（见[UI 组件](#ui-组件)）。
+
+## UI 组件
+
+工具结果可以渲染成 UI（可排序的表格、指标卡片等），而不只是文本。工具返回
+`ui_result(kind, props)`，前端由注册给该 `kind` 的渲染器把它画在工具卡片里；实时对话和重新
+打开会话时都一样。
+
+```python
+from lovia import tool
+from lovia.web import ui_result
+
+@tool
+def top_products(n: int = 10) -> str:
+    """畅销商品，以表格形式展示给用户。"""
+    rows = query_top_products(n)
+    return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
+```
+
+这个信封就是工具的输出，所以模型同样能看到 props。如果调用参数本身就是要展示的数据（纯展示型
+工具），就用 `from_args=True`（或某个字段名）代替 `props`，数据就不会再回传一遍。数据量大时，
+返回摘要和一个指向你自己接口的 URL，由渲染器去取：组件运行在页面内，同源请求会带上用户的
+cookie，接口可以复用你传给 `auth=` 的依赖。
+
+渲染器是 JS 模块，通过 `ChatUI(scripts=[...])` 加载：
+
+```js
+// ext/table.js
+window.lovia.registerRenderer('table', (el, props, ctx) => {
+  const table = document.createElement('table');
+  for (const row of props.rows) {
+    const tr = table.insertRow();
+    for (const v of row) tr.insertCell().textContent = String(v); // 不要用 innerHTML
+  }
+  el.append(table);
+  // 可以返回一个清理函数（释放 observer、定时器、图表实例等）。
+});
+```
+
+```python
+from fastapi.staticfiles import StaticFiles
+
+app = create_app(agent, ui=ChatUI(scripts=["ext/table.js"]))
+app.mount("/ext", StaticFiles(directory="ext"))
+```
+
+相对路径的脚本 URL 会跟随[路径前缀](#部署在路径前缀下)，绝对 URL 原样使用。渲染器收到三个
+参数：要绘制的元素、props 和一个上下文：
+
+| `ctx` 字段 | 说明 |
+| --- | --- |
+| `theme` / `lang` | `'light'` 或 `'dark'`；`'en'` 或 `'zh'`。切换主题时，组件会先清理再重新渲染 |
+| `basePath` | 挂载前缀，用于请求你自己的接口 |
+| `sessionId` / `callId` | 组件所属的会话和工具调用 |
+| `send(text)` | 以用户身份发送一条消息，例如"下钻 3 月"按钮。只在真实的点击或按键中生效，其他情况返回 `false` |
+
+渲染器可以是 async 函数。渲染出错时卡片会提示，原始输出仍可通过卡片上的"查看原始数据"按钮
+查看。某个 kind 还没有渲染器时先显示提示，等渲染器注册后自动补上，所以加载顺序无所谓。重复
+注册同一个 kind 会替换原来的渲染器。
+
+!!! warning "props 不可信"
+    props 可能来自模型、工具、MCP 服务器或远程内容。请用 `textContent` 输出（或用页面上的
+    `DOMPurify` 过滤），不要当作 HTML 插入。
+
+带排序、筛选和"追问"按钮的完整示例见 `examples/31_web_components.py`。
 
 ## 追问建议
 

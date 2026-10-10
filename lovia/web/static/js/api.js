@@ -30,6 +30,9 @@ export function configureApi({ base, onUnauthorized } = {}) {
 
 const url = (path) => _base + path;
 
+/** @returns {string} The mount prefix set by `configureApi` ('' at the root). */
+export const basePath = () => _base;
+
 async function request(path, init) {
   const res = await fetch(url(path), init);
   if (res.status === 401 && _onUnauthorized && !_unauthorized) {

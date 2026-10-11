@@ -221,6 +221,12 @@ Any tool can produce a chart too: `return ui_result("chart", option)`, which
 draws from real data without the model copying numbers (see
 [UI components](web-server.md#ui-components)).
 
+The chart's title is shown as the card's heading, above the chart, so it
+never collides with the legend. A toolbar beside it (shown on hover)
+downloads the chart as PNG or SVG (title included), downloads its data as CSV
+(JSON for trees, sankeys and graphs, which have no table shape), and opens the
+chart full screen.
+
 Good to know:
 
 - ECharts (about 1 MB, bundled) loads with the first chart, so chats without

@@ -1,12 +1,18 @@
-// The chart component's sanitizer (charts.js): what an untrusted ECharts
-// option may and may not carry into the page.
+// The chart component's pure helpers (charts.js): the sanitizer — what an
+// untrusted ECharts option may and may not carry into the page — the title
+// lift, and the data export.
 //
 //   node --test tests/web/js/
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { sanitizeOption } from '../../../lovia/web/static/js/charts.js';
+import {
+  liftTitle,
+  optionRows,
+  sanitizeOption,
+  toCsv,
+} from '../../../lovia/web/static/js/charts.js';
 
 const bar = { type: 'bar' };
 
@@ -83,6 +89,7 @@ test('tooltips are forced to rich text and confined', () => {
   });
   assert.equal(out.tooltip.renderMode, 'richText');
   assert.equal(out.tooltip.confine, true);
+  assert.equal(out.tooltip.hideDelay, 0);
   const many = sanitizeOption({ tooltip: [{}, { renderMode: 'html' }], series: [bar] });
   assert.deepEqual(
     many.tooltip.map((t) => t.renderMode),
@@ -107,4 +114,130 @@ test('pathologically deep values are cut, not recursed forever', () => {
   let depth = 0;
   for (let node = out.series[0].data; node?.n; node = node.n) depth++;
   assert.ok(depth < 40, `depth ${depth}`);
+});
+
+// ---- liftTitle --------------------------------------------------------------
+
+test('lifts a top-anchored title into the heading', () => {
+  for (const top of [undefined, 'top', 0, 10, '20', '8px', '5%']) {
+    const opt = { title: { text: 'Revenue', subtext: 'FY26', left: 'center', top }, series: [bar] };
+    const { heading, option } = liftTitle(opt);
+    assert.deepEqual(heading, { text: 'Revenue', subtext: 'FY26' }, `top=${top}`);
+    assert.deepEqual(option, { series: [bar] });
+    assert.ok(opt.title, 'the input is not mutated');
+  }
+  assert.deepEqual(liftTitle({ title: [{ text: 'T' }], series: [bar] }).heading, {
+    text: 'T',
+    subtext: '',
+  });
+});
+
+test('leaves titles placed in the plot, hidden, empty, or several', () => {
+  const kept = [
+    { text: '75%', left: 'center', top: 'center' }, // a donut's centre label
+    { text: 'T', top: 'middle' },
+    { text: 'T', top: '40%' },
+    { text: 'T', top: 200 },
+    { text: 'T', bottom: 0 },
+    { text: 'T', show: false },
+    { text: '  ' },
+    { subtext: 'only a subtext' },
+    [{ text: 'A', left: '25%' }, { text: 'B', left: '75%' }], // one per pie
+  ];
+  for (const title of kept) {
+    const opt = { title, series: [bar] };
+    const { heading, option } = liftTitle(opt);
+    assert.equal(heading, null, JSON.stringify(title));
+    assert.equal(option, opt);
+  }
+});
+
+// ---- optionRows / toCsv -------------------------------------------------------
+
+test('rows from dataset.source: arrays, objects, columns', () => {
+  const arrays = [['m', 'v'], ['Jan', 1]];
+  assert.deepEqual(optionRows({ dataset: { source: arrays }, series: [bar] }), arrays);
+  assert.deepEqual(
+    optionRows({ dataset: [{ dimensions: ['m', { name: 'v' }], source: [['Jan', 1]] }], series: [bar] }),
+    [['m', 'v'], ['Jan', 1]],
+  );
+  // An all-text first row is a header, unless sourceHeader says otherwise.
+  const text = [['Jan', 'open']];
+  assert.deepEqual(optionRows({ dataset: { dimensions: ['m', 's'], source: text }, series: [bar] }), text);
+  assert.deepEqual(
+    optionRows({ dataset: { dimensions: ['m', 's'], sourceHeader: false, source: text }, series: [bar] }),
+    [['m', 's'], ['Jan', 'open']],
+  );
+  assert.deepEqual(
+    optionRows({ dataset: { source: [{ m: 'Jan', v: 1 }, { m: 'Feb', w: 2 }] }, series: [bar] }),
+    [['m', 'v', 'w'], ['Jan', 1, null], ['Feb', null, 2]],
+  );
+  assert.deepEqual(
+    optionRows({ dataset: { source: { m: ['Jan', 'Feb'], v: [1] } }, series: [bar] }),
+    [['m', 'v'], ['Jan', 1], ['Feb', null]],
+  );
+});
+
+test('rows from series over a category axis: one column per series', () => {
+  const rows = optionRows({
+    xAxis: { type: 'category', name: 'month', data: ['Jan', { value: 'Feb' }] },
+    yAxis: {},
+    series: [
+      { type: 'line', name: 'Portfolio', data: [1, { value: 1.02 }] },
+      { type: 'line', name: 'S&P 500', data: [1] },
+    ],
+  });
+  assert.deepEqual(rows, [['month', 'Portfolio', 'S&P 500'], ['Jan', 1, 1], ['Feb', 1.02, null]]);
+  // Horizontal bars: the categories are on the y axis.
+  assert.deepEqual(
+    optionRows({ xAxis: {}, yAxis: [{ data: ['a'] }], series: [{ type: 'bar', data: [3] }] }),
+    [['', 'value'], ['a', 3]],
+  );
+});
+
+test('rows from series items otherwise: one row per item', () => {
+  // A pie: names and values.
+  assert.deepEqual(
+    optionRows({ series: { type: 'pie', data: [{ name: 'A', value: 3 }, { name: 'B', value: 5 }] } }),
+    [['name', 'value'], ['A', 3], ['B', 5]],
+  );
+  // Scatter, two series: no names, so no name column.
+  assert.deepEqual(
+    optionRows({
+      series: [
+        { type: 'scatter', name: 's1', data: [[1, 2]] },
+        { type: 'scatter', data: [[3, 4, 5]] },
+      ],
+    }),
+    [['series', 'value1', 'value2', 'value3'], ['s1', 1, 2], ['series 2', 3, 4, 5]],
+  );
+  // Candlestick: array values, named by the category axis.
+  assert.deepEqual(
+    optionRows({ xAxis: { data: ['d1'] }, series: [{ type: 'candlestick', data: [[1, 2, 0, 3]] }] }),
+    [['name', 'value1', 'value2', 'value3', 'value4'], ['d1', 1, 2, 0, 3]],
+  );
+});
+
+test('no rows for data without a table shape', () => {
+  assert.equal(optionRows({ series: [{ type: 'sankey', data: [], links: [] }] }), null);
+  assert.equal(optionRows({ series: [{ type: 'tree', data: [{ name: 'r', children: [] }] }] }), null);
+  assert.equal(optionRows({ series: [{ type: 'line' }] }), null); // data lives elsewhere
+  assert.equal(optionRows({ series: [{ type: 'scatter', data: [[{ a: 1 }]] }] }), null);
+});
+
+test('toCsv quotes per RFC 4180 and defuses spreadsheet formulas', () => {
+  assert.equal(
+    toCsv([
+      ['name', 'note', 'v'],
+      ['a,b', 'say "hi"', -1],
+      ['=HYPERLINK("x")', '@cmd', null],
+      ['line\nbreak', '+1', { k: 1 }],
+    ]),
+    [
+      'name,note,v',
+      '"a,b","say ""hi""",-1',
+      `"'=HYPERLINK(""x"")",'@cmd,`,
+      `"line\nbreak",'+1,"{""k"":1}"`,
+    ].join('\r\n'),
+  );
 });

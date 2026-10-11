@@ -158,8 +158,12 @@ function datasetRows(ds) {
     : null;
   if (Array.isArray(src)) {
     if (src.every(Array.isArray)) {
-      // Dimensions name the columns unless the first row already does.
-      const headed = !src[0]?.some((/** @type {unknown} */ v) => typeof v === 'number');
+      // Dimensions name the columns unless the first row already does —
+      // `sourceHeader` says so, or, like ECharts, guess: no numbers in it.
+      const headed =
+        ds.sourceHeader != null
+          ? !!ds.sourceHeader
+          : !src[0]?.some((/** @type {unknown} */ v) => typeof v === 'number');
       return dims && !headed ? [dims, ...src] : src;
     }
     const keys = dims ?? [...new Set(src.flatMap((r) => (r && typeof r === 'object' ? Object.keys(r) : [])))];
@@ -322,6 +326,7 @@ const LABELS = {
     csv: 'Download data (CSV)',
     json: 'Download data (JSON)',
     full: 'Full screen',
+    exitFull: 'Exit full screen',
     saveFailed: 'Download failed',
   },
   zh: {
@@ -331,6 +336,7 @@ const LABELS = {
     csv: '下载数据（CSV）',
     json: '下载数据（JSON）',
     full: '全屏查看',
+    exitFull: '退出全屏',
     saveFailed: '下载失败',
   },
 };
@@ -481,14 +487,14 @@ function renderChart(el, props, ctx) {
     return b;
   };
   const filename = (/** @type {string} */ ext) => exportFilename(heading?.text || 'chart', ext);
-  // Images need the drawn chart (drawn once scrolled into view, so it is
-  // there by the time its toolbar can be clicked).
-  tool(L.png, 'PNG', async () => {
-    if (chart) save(await svgToPng(chartSvg(chart, heading)), filename('png'));
-  });
-  tool(L.svg, 'SVG', () => {
-    if (chart) save(new Blob([chartSvg(chart, heading).svg], { type: 'image/svg+xml' }), filename('svg'));
-  });
+  // Images need the drawn chart: disabled until ECharts has loaded and drawn it.
+  const images = [
+    tool(L.png, 'PNG', async () => save(await svgToPng(chartSvg(chart, heading)), filename('png'))),
+    tool(L.svg, 'SVG', () =>
+      save(new Blob([chartSvg(chart, heading).svg], { type: 'image/svg+xml' }), filename('svg')),
+    ),
+  ];
+  for (const b of images) b.disabled = true;
   const rows = optionRows(option);
   tool(rows ? L.csv : L.json, rows ? 'CSV' : 'JSON', () => {
     if (!rows) {
@@ -496,12 +502,21 @@ function renderChart(el, props, ctx) {
       return;
     }
     // The BOM makes spreadsheet apps read the file as UTF-8 (CJK labels).
-    save(new Blob(['﻿', toCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename('csv'));
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+    save(new Blob([bom, toCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename('csv'));
   });
   if (document.fullscreenEnabled) {
-    tool(L.full, '', () =>
+    const full = tool(L.full, '', () =>
       document.fullscreenElement === fig ? document.exitFullscreen() : fig.requestFullscreen(),
-    ).innerHTML = icon('maximize-2', { size: 12 });
+    );
+    const sync = () => {
+      const on = document.fullscreenElement === fig;
+      full.title = on ? L.exitFull : L.full;
+      full.setAttribute('aria-label', full.title);
+      full.innerHTML = icon(on ? 'minimize-2' : 'maximize-2', { size: 12 });
+    };
+    fig.addEventListener('fullscreenchange', sync);
+    sync();
   }
 
   const start = async () => {
@@ -512,6 +527,7 @@ function renderChart(el, props, ctx) {
       locale: ctx.lang === 'zh' ? 'ZH' : 'EN',
     });
     chart.setOption(option);
+    for (const b of images) b.disabled = false;
     ro = new ResizeObserver(() => chart?.resize());
     ro.observe(box);
   };

@@ -161,6 +161,13 @@ test('rows from dataset.source: arrays, objects, columns', () => {
     optionRows({ dataset: [{ dimensions: ['m', { name: 'v' }], source: [['Jan', 1]] }], series: [bar] }),
     [['m', 'v'], ['Jan', 1]],
   );
+  // An all-text first row is a header, unless sourceHeader says otherwise.
+  const text = [['Jan', 'open']];
+  assert.deepEqual(optionRows({ dataset: { dimensions: ['m', 's'], source: text }, series: [bar] }), text);
+  assert.deepEqual(
+    optionRows({ dataset: { dimensions: ['m', 's'], sourceHeader: false, source: text }, series: [bar] }),
+    [['m', 's'], ['Jan', 'open']],
+  );
   assert.deepEqual(
     optionRows({ dataset: { source: [{ m: 'Jan', v: 1 }, { m: 'Feb', w: 2 }] }, series: [bar] }),
     [['m', 'v', 'w'], ['Jan', 1, null], ['Feb', null, 2]],

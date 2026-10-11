@@ -4554,6 +4554,10 @@ body.files-splitting {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
+.tool .chart-tools .tool-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 /* Revealed on hover where there is hover; always shown on touch screens. */
 @media (hover: hover) {
   .tool .chart-tools {

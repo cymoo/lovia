@@ -346,6 +346,14 @@ it uses the same API users get.
 - **Rendering.** The SVG renderer, `aria.enabled`, and the ECharts locale set
   from `ctx.lang`. Height is a fixed responsive height
   (`clamp(240px, 45vw, 360px)`) at full card width.
+- **Heading and toolbar** (v0.9.78). A single title anchored at the top is
+  lifted out of the option into an HTML heading: ECharts has no title/legend
+  collision avoidance, and models hard-code `legend.top` offsets that assume
+  a font size. Titles placed elsewhere (a donut's centre label, one per pie)
+  stay in ECharts. Beside the heading, a toolbar downloads PNG / SVG (the
+  heading drawn back in; the tooltip hidden first, hence `hideDelay: 0`), the
+  data as CSV (from `dataset.source`, else the series; JSON for trees and
+  networks), and opens the chart full screen.
 - **Theme.** Colours are read from CSS variables at render time: `--chart-1`
   … `--chart-8` for the categorical palette, plus `--chart-text`,
   `--chart-title`, `--chart-axis` and `--chart-grid`. `styles.css` defines

@@ -9,9 +9,16 @@
 // here, the trust boundary: replays of old data and non-show_chart tools never
 // passed the server-side checks.
 //
-// No DOM access at import time (sanitizeOption is unit-tested under node).
+// The card around the chart is HTML: a heading (the option's title, lifted out
+// — see liftTitle) and a toolbar to download the chart (PNG / SVG), its data
+// (CSV), or view it full screen.
+//
+// No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { registerRenderer } from './components.js';
+import { exportFilename } from './export.js';
+import { icon } from './icons.js';
+import { toast } from './toast.js';
 
 // Same as SERIES_TYPES in lovia/web/charts.py (a test keeps them equal).
 export const SERIES_TYPES = new Set([
@@ -86,13 +93,149 @@ export function sanitizeOption(option) {
   }
   out.series = series;
   // An HTML-mode tooltip renders formatter strings as markup; rich text
-  // doesn't. `confine` keeps it inside the card.
+  // doesn't. `confine` keeps it inside the card. A rich-text tooltip is part
+  // of the drawing: no `hideDelay`, so an image export can hide it at once.
   if (out.tooltip) {
-    const rich = (/** @type {any} */ t) => ({ ...t, renderMode: 'richText', confine: true });
+    const rich = (/** @type {any} */ t) => ({ ...t, renderMode: 'richText', confine: true, hideDelay: 0 });
     out.tooltip = Array.isArray(out.tooltip) ? out.tooltip.map(rich) : rich(out.tooltip);
   }
   out.aria = { enabled: true, ...out.aria };
   return out;
+}
+
+// ---- Heading ------------------------------------------------------------------
+
+// A `top` this close to the edge is padding, not a placement in the plot.
+const TOP_BAND = { px: 60, '%': 10 };
+
+/** @param {unknown} v */
+function atTop(v) {
+  if (v == null || v === 'top') return true;
+  const m = /^(\d+(?:\.\d+)?)(px|%)?$/.exec(String(v).trim());
+  return !!m && Number(m[1]) <= TOP_BAND[/** @type {'px' | '%'} */ (m[2] || 'px')];
+}
+
+/**
+ * Lift a top-anchored title out of `option`, to show as the card's HTML
+ * heading. ECharts has no title/legend collision avoidance, and models
+ * hard-code `legend.top` offsets that assume a font size — they overlap. A
+ * title placed elsewhere (a donut's centre label, one per pie) stays put.
+ * @param {Record<string, any>} option A sanitized option; not mutated.
+ * @returns {{ heading: { text: string, subtext: string } | null, option: Record<string, any> }}
+ */
+export function liftTitle(option) {
+  const all = option.title;
+  const t = Array.isArray(all) ? (all.length === 1 ? all[0] : null) : all;
+  if (
+    !t || typeof t !== 'object' || typeof t.text !== 'string' || !t.text.trim() ||
+    t.show === false || t.bottom != null || !atTop(t.top)
+  ) {
+    return { heading: null, option };
+  }
+  const { title: _, ...rest } = option;
+  const subtext = typeof t.subtext === 'string' ? t.subtext : '';
+  return { heading: { text: t.text, subtext }, option: rest };
+}
+
+// ---- Data export ----------------------------------------------------------------
+
+// Hierarchies and networks have no table shape; their data downloads as JSON.
+const NON_TABULAR = new Set(['tree', 'treemap', 'sunburst', 'sankey', 'graph']);
+
+/** @param {unknown} v */
+const first = (v) => (Array.isArray(v) ? v[0] : v);
+/** @param {unknown} v */
+const isScalar = (v) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+/** A data item's value: `{value, name}` items unwrap; bare values pass. */
+const valueOf = (/** @type {any} */ d) =>
+  d && typeof d === 'object' && !Array.isArray(d) ? d.value : d;
+
+/** @param {Record<string, any>} ds @returns {unknown[][] | null} */
+function datasetRows(ds) {
+  const src = ds.source;
+  const dims = Array.isArray(ds.dimensions)
+    ? ds.dimensions.map((/** @type {any} */ d) => (d && typeof d === 'object' ? d.name : d))
+    : null;
+  if (Array.isArray(src)) {
+    if (src.every(Array.isArray)) {
+      // Dimensions name the columns unless the first row already does.
+      const headed = !src[0]?.some((/** @type {unknown} */ v) => typeof v === 'number');
+      return dims && !headed ? [dims, ...src] : src;
+    }
+    const keys = dims ?? [...new Set(src.flatMap((r) => (r && typeof r === 'object' ? Object.keys(r) : [])))];
+    return [keys, ...src.map((r) => keys.map((/** @type {string} */ k) => r?.[k] ?? null))];
+  }
+  if (src && typeof src === 'object') {
+    // Column-major: {"month": [...], "sales": [...]}.
+    const keys = Object.keys(src);
+    const cols = keys.map((k) => (Array.isArray(src[k]) ? src[k] : []));
+    const n = Math.max(0, ...cols.map((c) => c.length));
+    return [keys, ...Array.from({ length: n }, (_, i) => cols.map((c) => c[i] ?? null))];
+  }
+  return null;
+}
+
+/**
+ * The chart's data as a table — header row first — or null when it has no
+ * table shape. Read from `dataset.source` when present; otherwise from the
+ * series: wide (one column per series) over a category axis, else long (one
+ * row per data item: series, name, value…).
+ * @param {Record<string, any>} option A sanitized option.
+ * @returns {unknown[][] | null}
+ */
+export function optionRows(option) {
+  const ds = first(option.dataset);
+  if (ds?.source) return datasetRows(ds);
+  /** @type {any[]} */
+  const series = [option.series].flat().filter(Boolean);
+  if (!series.length || series.some((s) => NON_TABULAR.has(s.type) || !Array.isArray(s.data))) {
+    return null;
+  }
+  const names = series.map((s, i) => s.name ?? (series.length > 1 ? `series ${i + 1}` : 'value'));
+  const axis = [first(option.xAxis), first(option.yAxis)].find((a) => Array.isArray(a?.data));
+  const cats = axis ? axis.data.map(valueOf) : null;
+  const values = series.map((s) => s.data.map(valueOf));
+  if (cats && values.every((vs) => vs.every(isScalar))) {
+    return [
+      [axis.name ?? '', ...names],
+      ...cats.map((/** @type {unknown} */ c, /** @type {number} */ i) => [
+        c,
+        ...values.map((vs) => vs[i] ?? null),
+      ]),
+    ];
+  }
+  /** @type {unknown[][]} */
+  const rows = [];
+  let width = 1;
+  for (const [k, s] of series.entries()) {
+    for (const [i, d] of s.data.entries()) {
+      const v = valueOf(d);
+      const vals = Array.isArray(v) ? v : [v];
+      if (!vals.every(isScalar)) return null;
+      width = Math.max(width, vals.length);
+      rows.push([names[k], d?.name ?? cats?.[i] ?? null, ...vals]);
+    }
+  }
+  // Drop the series column for one series, the name column when unnamed.
+  const keep = [series.length > 1, rows.some((r) => r[1] != null && r[1] !== '')];
+  const pick = (/** @type {unknown[]} */ r) => r.filter((_, j) => j > 1 || keep[j]);
+  const valueHead = width === 1 ? ['value'] : Array.from({ length: width }, (_, i) => `value${i + 1}`);
+  return [pick(['series', 'name', ...valueHead]), ...rows.map(pick)];
+}
+
+/**
+ * RFC 4180 CSV. Strings that a spreadsheet would run as a formula are
+ * prefixed with `'` — the data is untrusted.
+ * @param {unknown[][]} rows
+ * @returns {string}
+ */
+export function toCsv(rows) {
+  const cell = (/** @type {unknown} */ v) => {
+    let s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  };
+  return rows.map((r) => r.map(cell).join(',')).join('\r\n');
 }
 
 // ---- Loading ----------------------------------------------------------------
@@ -150,7 +293,9 @@ function themeFromCss() {
   return {
     ...(color.length ? { color } : {}),
     backgroundColor: 'transparent',
-    textStyle: { color: text, fontFamily: getComputedStyle(document.body).fontFamily },
+    // Single quotes: ECharts writes the family into a double-quoted SVG
+    // `style` attribute unescaped, which breaks the exported SVG's XML.
+    textStyle: { color: text, fontFamily: getComputedStyle(document.body).fontFamily.replaceAll('"', "'") },
     title: { textStyle: { color: strong }, subtextStyle: { color: text } },
     legend: { textStyle: { color: text } },
     categoryAxis: axisTheme,
@@ -169,14 +314,129 @@ function themeFromCss() {
 
 // ---- Renderer -----------------------------------------------------------------
 
-const FAILED = { en: "Couldn't draw this chart", zh: '无法绘制该图表' };
+const LABELS = {
+  en: {
+    failed: "Couldn't draw this chart",
+    png: 'Download PNG',
+    svg: 'Download SVG',
+    csv: 'Download data (CSV)',
+    json: 'Download data (JSON)',
+    full: 'Full screen',
+    saveFailed: 'Download failed',
+  },
+  zh: {
+    failed: '无法绘制该图表',
+    png: '下载 PNG 图片',
+    svg: '下载 SVG 图片',
+    csv: '下载数据（CSV）',
+    json: '下载数据（JSON）',
+    full: '全屏查看',
+    saveFailed: '下载失败',
+  },
+};
+
+const XML_ESC = /** @type {Record<string, string>} */ ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+});
+const xml = (/** @type {string} */ s) => s.replace(/[&<>"]/g, (c) => XML_ESC[c]);
+
+/**
+ * The drawn chart as a standalone SVG on the card surface, with the heading
+ * (lifted out of the option) drawn back in above it.
+ * @param {any} chart
+ * @param {{ text: string, subtext: string } | null} heading
+ */
+function chartSvg(chart, heading) {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (/** @type {string} */ name) => xml(cs.getPropertyValue(name).trim());
+  const font = xml(getComputedStyle(document.body).fontFamily);
+  const style = (/** @type {string} */ text, size = 12, weight = 400, fill = v('--chart-text')) =>
+    text.split('\n').filter(Boolean).map((s) => ({ s, size, weight, fill }));
+  const lines = [
+    ...style(heading?.text ?? '', 14, 600, v('--chart-title')),
+    ...style(heading?.subtext ?? ''),
+  ];
+  let y = 0;
+  const text = lines
+    .map(({ s, size, weight, fill }) => {
+      y += Math.round(size * 1.5);
+      return `<text x="16" y="${y}" font-family="${font}" font-size="${size}" font-weight="${weight}" fill="${fill}">${xml(s)}</text>`;
+    })
+    .join('');
+  const top = lines.length ? y + 12 : 0;
+  chart.dispatchAction({ type: 'hideTip' }); // an open tooltip is part of the SVG
+  const width = chart.getWidth();
+  const height = chart.getHeight() + top;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<rect width="100%" height="100%" fill="${v('--surface')}"/>${text}` +
+    chart.renderToSVGString().replace(/<svg\b/, `<svg y="${top}"`) +
+    '</svg>';
+  return { svg, width, height };
+}
+
+/**
+ * Rasterize an SVG at 2× for a crisp PNG.
+ * @param {{ svg: string, width: number, height: number }} img
+ * @returns {Promise<Blob>}
+ */
+async function svgToPng({ svg, width, height }) {
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = width * 2;
+  canvas.height = height * 2;
+  canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encoding failed'))), 'image/png'),
+  );
+}
+
+/**
+ * @param {Blob} blob
+ * @param {string} filename
+ */
+function save(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url));
+}
 
 /** @type {import('./components.js').Renderer} */
 function renderChart(el, props, ctx) {
-  const option = sanitizeOption(props); // throws → the registry's failure notice
+  const clean = sanitizeOption(props); // throws → the registry's failure notice
+  const { heading, option } = liftTitle(clean);
+  const L = LABELS[ctx.lang] || LABELS.en;
+
+  const fig = document.createElement('div');
+  fig.className = 'chart';
+  const head = document.createElement('div');
+  head.className = 'chart-head';
+  if (heading) {
+    const titles = document.createElement('div');
+    titles.className = 'chart-heading';
+    for (const [cls, text] of [['chart-title', heading.text], ['chart-subtitle', heading.subtext]]) {
+      if (!text) continue;
+      const div = document.createElement('div');
+      div.className = cls;
+      div.textContent = text;
+      titles.append(div);
+    }
+    head.append(titles);
+    fig.setAttribute('role', 'figure');
+    fig.setAttribute('aria-label', heading.text);
+  }
+  const tools = document.createElement('div');
+  tools.className = 'chart-tools';
+  head.append(tools);
   const box = document.createElement('div');
   box.className = 'chart-box';
-  el.append(box);
+  fig.append(head, box);
+  el.append(fig);
 
   let disposed = false;
   /** @type {any} */
@@ -193,9 +453,56 @@ function renderChart(el, props, ctx) {
     chart = null;
     const div = document.createElement('div');
     div.className = 'tool-ui-notice';
-    div.textContent = FAILED[ctx.lang] || FAILED.en;
-    box.replaceWith(div);
+    div.textContent = L.failed;
+    fig.replaceWith(div);
   };
+
+  /**
+   * @param {string} label Tooltip and accessible name.
+   * @param {string} text Button face.
+   * @param {() => unknown} action
+   */
+  const tool = (label, text, action) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tool-action';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.textContent = text;
+    b.addEventListener('click', () => {
+      Promise.resolve()
+        .then(action)
+        .catch((err) => {
+          console.error('lovia chart download failed:', err);
+          toast(L.saveFailed, { type: 'error' });
+        });
+    });
+    tools.append(b);
+    return b;
+  };
+  const filename = (/** @type {string} */ ext) => exportFilename(heading?.text || 'chart', ext);
+  // Images need the drawn chart (drawn once scrolled into view, so it is
+  // there by the time its toolbar can be clicked).
+  tool(L.png, 'PNG', async () => {
+    if (chart) save(await svgToPng(chartSvg(chart, heading)), filename('png'));
+  });
+  tool(L.svg, 'SVG', () => {
+    if (chart) save(new Blob([chartSvg(chart, heading).svg], { type: 'image/svg+xml' }), filename('svg'));
+  });
+  const rows = optionRows(option);
+  tool(rows ? L.csv : L.json, rows ? 'CSV' : 'JSON', () => {
+    if (!rows) {
+      save(new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' }), filename('json'));
+      return;
+    }
+    // The BOM makes spreadsheet apps read the file as UTF-8 (CJK labels).
+    save(new Blob(['﻿', toCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename('csv'));
+  });
+  if (document.fullscreenEnabled) {
+    tool(L.full, '', () =>
+      document.fullscreenElement === fig ? document.exitFullscreen() : fig.requestFullscreen(),
+    ).innerHTML = icon('maximize-2', { size: 12 });
+  }
 
   const start = async () => {
     const ec = await loadEcharts();

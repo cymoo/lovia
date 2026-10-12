@@ -289,7 +289,9 @@ function renderTable(el, props, ctx) {
 
     ths.forEach((th, i) => {
       const dir = i === sortCol ? sortDir : 0;
-      th.setAttribute('aria-sort', dir === 1 ? 'ascending' : dir === -1 ? 'descending' : 'none');
+      // Only the sorted column declares it; the others omit the attribute.
+      if (dir) th.setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+      else th.removeAttribute('aria-sort');
       /** @type {HTMLElement} */ (th.querySelector('.sort-arrow')).textContent =
         dir === 1 ? '↑' : dir === -1 ? '↓' : '';
     });

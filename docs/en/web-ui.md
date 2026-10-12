@@ -267,6 +267,8 @@ numbers, booleans, or null, and values are shown as given. Keys the table
 doesn't know are ignored, so the same props can carry extras meant for the
 model, such as a total row count or the SQL that produced them.
 
+## Useful CLI options
+
 Apart from model, search, and skills configuration, options resolve as CLI
 flag, environment variable, then default.
 

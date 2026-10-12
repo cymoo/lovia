@@ -244,6 +244,29 @@ Good to know:
   them in the `head` block of
   [your own template](web-server.md#customizing-the-page) to match a brand.
 
+## Tables
+
+The `show_table` tool shows the user an interactive table instead of a
+Markdown one: click a heading to sort (again to reverse, a third time to
+restore the order), type to filter longer tables, and page through 20 rows at
+a time. Numbers align right and sort as numbers. A toolbar copies the table
+(tab-separated, ready to paste into a spreadsheet), downloads it as CSV, or
+opens it full screen; both exports take the current view, filtered and sorted.
+It is off by default; turn it on in `config.json`:
+
+```json
+{ "tables": true }
+```
+
+For your own agent, add the tool: `tools=[show_table]` (from `lovia.web`). The
+more useful path is often a tool of your own that returns
+`ui_result("table", {"title": ..., "columns": [...], "rows": [[...], ...]})`:
+the rows come from your data — a query, an API — and the model never writes
+the numbers out, which is faster, cheaper, and exact. Cells are strings,
+numbers, booleans, or null, and values are shown as given. Keys the table
+doesn't know are ignored, so the same props can carry extras meant for the
+model, such as a total row count or the SQL that produced them.
+
 ## Useful CLI options
 
 Apart from model, search, and skills configuration, options resolve as CLI

@@ -84,7 +84,7 @@ OpenAI-compatible 服务
 | `28_eval.py` | 离线评测：检查项、LLM 评审、基线对比 |
 | `29_data_analysis.py` | 基于 SQLite 的数据分析 agent + 图表报告 |
 | `30_support_bot.py` | 综合练习：交互式终端客服 bot |
-| `31_web_components.py` | 在聊天 UI 中把工具结果渲染成可交互的表格（`ui_result` + `ChatUI(scripts=...)`） |
+| `31_web_components.py` | 在聊天 UI 中把工具结果渲染成表格，并用自定义渲染器替换内置的表格渲染器（`ui_result` + `ChatUI(scripts=...)`） |
 
 ## 子目录
 

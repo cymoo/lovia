@@ -7,10 +7,11 @@ Run::
     # open http://127.0.0.1:8000 and ask "top 10 products in the EU"
 
 The ``top_products`` tool returns ``ui_result("table", ...)`` — a UI envelope
-— instead of text. ``examples/web_components/table.js`` registers a renderer
-for kind ``table`` (sort by clicking a header, filter, "Ask" posts a follow-up
-message), loaded through ``ChatUI(scripts=[...])``. The model still sees the
-rows as the tool output, so it can talk about them.
+— instead of text. ``table`` is a built-in kind, so that alone draws a
+sortable table; ``examples/web_components/table.js``, loaded through
+``ChatUI(scripts=[...])``, *replaces* the built-in renderer with one that adds
+an "Ask" button to each row (it posts a follow-up message via ``ctx.send``).
+The model still sees the rows as the tool output, so it can talk about them.
 """
 
 from __future__ import annotations

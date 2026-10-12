@@ -26,6 +26,7 @@ import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import './charts.js'; // registers the built-in `chart` UI component
+import './tables.js'; // … and `table`
 
 // ---- Page config --------------------------------------------------------
 // Server-rendered settings (lovia/web/ui.py): the path prefix the app is

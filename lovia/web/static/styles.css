@@ -4517,36 +4517,42 @@ body.files-splitting {
   font-size: 13px;
   color: var(--muted);
 }
-/* The built-in chart component (charts.js): an HTML heading + toolbar row, the
-   chart below at full card width and a steady height. */
-.tool .chart-head {
+/* The card of the built-in components (figure.js): an HTML heading + toolbar
+   row, the component's body below at full card width. */
+.tool .figure-head {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 4px;
 }
-.tool .chart-heading {
+.tool .figure-heading {
   flex: 1;
   min-width: 0;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
-.tool .chart-title {
+.tool .figure-title {
   font-size: 14px;
   font-weight: 600;
+  color: var(--ink);
+}
+.tool .figure-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tool .chart .figure-title {
   color: var(--chart-title);
 }
-.tool .chart-subtitle {
-  font-size: 12px;
+.tool .chart .figure-subtitle {
   color: var(--chart-text);
 }
-.tool .chart-tools {
+.tool .figure-tools {
   display: flex;
   gap: 4px;
   margin-left: auto;
   flex-shrink: 0;
 }
-.tool .chart-tools .tool-action {
+.tool .figure-tools .tool-action {
   width: auto;
   min-width: 22px;
   padding: 0 5px;
@@ -4554,38 +4560,142 @@ body.files-splitting {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
-.tool .chart-tools .tool-action:disabled {
+.tool .figure-tools .tool-action:disabled {
   opacity: 0.45;
   cursor: default;
 }
 /* Revealed on hover where there is hover; always shown on touch screens. */
 @media (hover: hover) {
-  .tool .chart-tools {
+  .tool .figure-tools {
     opacity: 0;
     transition: opacity 0.15s;
   }
-  .tool .chart:hover .chart-tools,
-  .tool .chart-tools:focus-within {
+  .tool .figure:hover .figure-tools,
+  .tool .figure-tools:focus-within {
     opacity: 1;
   }
 }
-.tool .chart-box {
-  width: 100%;
-  height: clamp(240px, 45vw, 360px);
-}
-.tool .chart:fullscreen {
+.tool .figure:fullscreen {
   display: flex;
   flex-direction: column;
   padding: 24px;
   background: var(--surface);
 }
-.tool .chart:fullscreen .chart-tools {
+.tool .figure:fullscreen .figure-tools {
   opacity: 1;
 }
-.tool .chart:fullscreen .chart-box {
+.tool .figure:fullscreen .figure-body {
   flex: 1;
-  height: auto;
   min-height: 0;
+}
+/* Charts (charts.js): a steady height, filling the screen when full. */
+.tool .chart .figure-body {
+  width: 100%;
+  height: clamp(240px, 45vw, 360px);
+}
+.tool .chart:fullscreen .figure-body {
+  height: auto;
+}
+/* Tables (tables.js): a filter row, the table (scrolling sideways when wide),
+   and a pager. */
+.tool .table .figure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool .table-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tool .table-bar input {
+  width: min(240px, 100%);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+.tool .table-count,
+.tool .table-pager span {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.tool .table-scroll {
+  overflow-x: auto;
+}
+.tool .table:fullscreen .table-scroll {
+  flex: 1;
+  overflow: auto;
+}
+.tool .data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tool .data-table th,
+.tool .data-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+/* break-word, not anywhere: the latter shrinks min-content, so a long text
+   column would squeeze short words ("Sapporo") into breaking mid-word. */
+.tool .data-table td {
+  max-width: 32em;
+  overflow-wrap: break-word;
+}
+.tool .data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tool .data-table th {
+  padding: 0;
+  white-space: nowrap;
+}
+.tool .data-table th button {
+  display: inline-flex;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tool .data-table th.num button {
+  justify-content: flex-end;
+}
+.tool .data-table th button:hover {
+  color: var(--ink);
+}
+.tool .data-table .sort-arrow {
+  min-width: 0.7em;
+  color: var(--ink);
+}
+.tool .data-table tbody tr:hover {
+  background: var(--surface-2);
+}
+.tool .data-table .table-empty {
+  max-width: none;
+  color: var(--muted);
+  text-align: center;
+}
+.tool .table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.tool .table-pager[hidden] {
+  display: none;
 }
 .tool summary .tool-source {
   opacity: 0;

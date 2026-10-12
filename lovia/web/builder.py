@@ -36,6 +36,7 @@ from .charts import show_chart
 from .config import ModelProfile, SearchConfig, WebConfig, resolve_skills_dirs
 from .scheduling import Scheduling
 from .store import ChatStore
+from .tables import show_table
 from .ui import SURFACE_NOTE
 from .vision import make_describe_image_tool
 
@@ -357,6 +358,8 @@ def build_default_agent(
     # Parent-only too: a background child's transcript has no one watching.
     if config.charts:
         tools = [*tools, show_chart]
+    if config.tables:
+        tools = [*tools, show_table]
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,

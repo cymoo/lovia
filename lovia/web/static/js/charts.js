@@ -9,16 +9,14 @@
 // here, the trust boundary: replays of old data and non-show_chart tools never
 // passed the server-side checks.
 //
-// The card around the chart is HTML: a heading (the option's title, lifted out
-// — see liftTitle) and a toolbar to download the chart (PNG / SVG), its data
-// (CSV), or view it full screen.
+// The card around the chart (figure.js) is HTML: a heading (the option's
+// title, lifted out — see liftTitle) and a toolbar to download the chart
+// (PNG / SVG), its data (CSV), or view it full screen.
 //
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { registerRenderer } from './components.js';
-import { exportFilename } from './export.js';
-import { icon } from './icons.js';
-import { toast } from './toast.js';
+import { csvBlob, figure, save } from './figure.js';
 
 // Same as SERIES_TYPES in lovia/web/charts.py (a test keeps them equal).
 export const SERIES_TYPES = new Set([
@@ -227,21 +225,6 @@ export function optionRows(option) {
   return [pick(['series', 'name', ...valueHead]), ...rows.map(pick)];
 }
 
-/**
- * RFC 4180 CSV. Strings that a spreadsheet would run as a formula are
- * prefixed with `'` — the data is untrusted.
- * @param {unknown[][]} rows
- * @returns {string}
- */
-export function toCsv(rows) {
-  const cell = (/** @type {unknown} */ v) => {
-    let s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-    return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
-  };
-  return rows.map((r) => r.map(cell).join(',')).join('\r\n');
-}
-
 // ---- Loading ----------------------------------------------------------------
 
 /** @type {Promise<any> | null} */
@@ -325,9 +308,6 @@ const LABELS = {
     svg: 'Download SVG',
     csv: 'Download data (CSV)',
     json: 'Download data (JSON)',
-    full: 'Full screen',
-    exitFull: 'Exit full screen',
-    saveFailed: 'Download failed',
   },
   zh: {
     failed: '无法绘制该图表',
@@ -335,9 +315,6 @@ const LABELS = {
     svg: '下载 SVG 图片',
     csv: '下载数据（CSV）',
     json: '下载数据（JSON）',
-    full: '全屏查看',
-    exitFull: '退出全屏',
-    saveFailed: '下载失败',
   },
 };
 
@@ -399,50 +376,12 @@ async function svgToPng({ svg, width, height }) {
   );
 }
 
-/**
- * @param {Blob} blob
- * @param {string} filename
- */
-function save(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url));
-}
-
 /** @type {import('./components.js').Renderer} */
 function renderChart(el, props, ctx) {
   const clean = sanitizeOption(props); // throws → the registry's failure notice
   const { heading, option } = liftTitle(clean);
   const L = LABELS[ctx.lang] || LABELS.en;
-
-  const fig = document.createElement('div');
-  fig.className = 'chart';
-  const head = document.createElement('div');
-  head.className = 'chart-head';
-  if (heading) {
-    const titles = document.createElement('div');
-    titles.className = 'chart-heading';
-    for (const [cls, text] of [['chart-title', heading.text], ['chart-subtitle', heading.subtext]]) {
-      if (!text) continue;
-      const div = document.createElement('div');
-      div.className = cls;
-      div.textContent = text;
-      titles.append(div);
-    }
-    head.append(titles);
-    fig.setAttribute('role', 'figure');
-    fig.setAttribute('aria-label', heading.text);
-  }
-  const tools = document.createElement('div');
-  tools.className = 'chart-tools';
-  head.append(tools);
-  const box = document.createElement('div');
-  box.className = 'chart-box';
-  fig.append(head, box);
-  el.append(fig);
+  const { fig, body: box, tool, filename } = figure(el, { kind: 'chart', heading, lang: ctx.lang });
 
   let disposed = false;
   /** @type {any} */
@@ -463,30 +402,6 @@ function renderChart(el, props, ctx) {
     fig.replaceWith(div);
   };
 
-  /**
-   * @param {string} label Tooltip and accessible name.
-   * @param {string} text Button face.
-   * @param {() => unknown} action
-   */
-  const tool = (label, text, action) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'tool-action';
-    b.title = label;
-    b.setAttribute('aria-label', label);
-    b.textContent = text;
-    b.addEventListener('click', () => {
-      Promise.resolve()
-        .then(action)
-        .catch((err) => {
-          console.error('lovia chart download failed:', err);
-          toast(L.saveFailed, { type: 'error' });
-        });
-    });
-    tools.append(b);
-    return b;
-  };
-  const filename = (/** @type {string} */ ext) => exportFilename(heading?.text || 'chart', ext);
   // Images need the drawn chart: disabled until ECharts has loaded and drawn it.
   const images = [
     tool(L.png, 'PNG', async () => save(await svgToPng(chartSvg(chart, heading)), filename('png'))),
@@ -497,27 +412,9 @@ function renderChart(el, props, ctx) {
   for (const b of images) b.disabled = true;
   const rows = optionRows(option);
   tool(rows ? L.csv : L.json, rows ? 'CSV' : 'JSON', () => {
-    if (!rows) {
-      save(new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' }), filename('json'));
-      return;
-    }
-    // The BOM makes spreadsheet apps read the file as UTF-8 (CJK labels).
-    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
-    save(new Blob([bom, toCsv(rows)], { type: 'text/csv;charset=utf-8' }), filename('csv'));
+    if (rows) save(csvBlob(rows), filename('csv'));
+    else save(new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' }), filename('json'));
   });
-  if (document.fullscreenEnabled) {
-    const full = tool(L.full, '', () =>
-      document.fullscreenElement === fig ? document.exitFullscreen() : fig.requestFullscreen(),
-    );
-    const sync = () => {
-      const on = document.fullscreenElement === fig;
-      full.title = on ? L.exitFull : L.full;
-      full.setAttribute('aria-label', full.title);
-      full.innerHTML = icon(on ? 'minimize-2' : 'maximize-2', { size: 12 });
-    };
-    fig.addEventListener('fullscreenchange', sync);
-    sync();
-  }
 
   const start = async () => {
     const ec = await loadEcharts();

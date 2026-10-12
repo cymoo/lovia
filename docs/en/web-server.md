@@ -153,6 +153,10 @@ def top_products(n: int = 10) -> str:
     return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
 ```
 
+Two kinds are built in: `table` (above, see [Tables](web-ui.md#tables)) and
+`chart` (see [Charts](web-ui.md#charts)). The numbers in that table come
+straight from the query; the model never writes them out.
+
 The envelope is the tool's output, so the model sees the props as well. When
 the call's own arguments already are the data (a presentational tool), pass
 `from_args=True` — or a field name — instead of `props`, so the data isn't
@@ -163,17 +167,18 @@ same-origin requests carry the user's cookie, and the endpoint can reuse your
 (200K characters by default): a longer output is truncated, which breaks its
 JSON, and the card shows it as text instead.
 
-Renderers are JS modules, loaded with `ChatUI(scripts=[...])`:
+For a kind of your own — say `return ui_result("kpis", {"items": [...]})` —
+write a renderer: a JS module loaded with `ChatUI(scripts=[...])`:
 
 ```js
-// ext/table.js
-window.lovia.registerRenderer('table', (el, props, ctx) => {
-  const table = document.createElement('table');
-  for (const row of props.rows) {
-    const tr = table.insertRow();
-    for (const v of row) tr.insertCell().textContent = String(v); // never innerHTML
+// ext/kpis.js
+window.lovia.registerRenderer('kpis', (el, props, ctx) => {
+  for (const item of props.items) {
+    const card = document.createElement('div');
+    card.className = 'kpi';
+    card.textContent = `${item.label}: ${item.value}`; // never innerHTML
+    el.append(card);
   }
-  el.append(table);
   // Optionally return a cleanup function (observers, timers, chart instances).
 });
 ```
@@ -181,7 +186,7 @@ window.lovia.registerRenderer('table', (el, props, ctx) => {
 ```python
 from fastapi.staticfiles import StaticFiles
 
-app = create_app(agent, ui=ChatUI(scripts=["ext/table.js"]))
+app = create_app(agent, ui=ChatUI(scripts=["ext/kpis.js"]))
 app.mount("/ext", StaticFiles(directory="ext"))
 ```
 
@@ -206,12 +211,10 @@ replaces its renderer.
     them with `textContent` (or sanitize with the page's `DOMPurify`), never
     as HTML.
 
-A runnable version with sorting, filtering and an "Ask" button is
-`examples/31_web_components.py`.
-
-One kind is built in: `chart`, an Apache ECharts option, which the
-`show_chart` tool produces (see [Charts](web-ui.md#charts)). Register your own
-`chart` renderer to draw it with another library.
+Registering a built-in kind replaces it: your own `chart` renderer can draw
+charts with another library. `examples/31_web_components.py` replaces the
+built-in `table` with a version that adds an "Ask" button to each row, which
+posts a follow-up through `ctx.send`.
 
 ### Wrapping a renderer
 

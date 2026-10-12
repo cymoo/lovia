@@ -144,23 +144,27 @@ def top_products(n: int = 10) -> str:
     return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
 ```
 
+内置了两种 kind：`table`（上例，见[表格](web-ui.md#表格)）和 `chart`（见[图表](web-ui.md#图表)）。
+上面表格里的数字直接来自查询，模型不需要把它们写出来。
+
 这个信封就是工具的输出，所以模型同样能看到 props。如果调用参数本身就是要展示的数据（纯展示型
 工具），就用 `from_args=True`（或某个字段名）代替 `props`，数据就不会再回传一遍。数据量大时，
 返回摘要和一个指向你自己接口的 URL，由渲染器去取：组件运行在页面内，同源请求会带上用户的
 cookie，接口可以复用你传给 `auth=` 的依赖。信封要控制在 Agent 的 `max_tool_output_chars`
 之内（默认 20 万字符）：超长的输出会被截断，JSON 随之损坏，卡片就只能按文本显示。
 
-渲染器是 JS 模块，通过 `ChatUI(scripts=[...])` 加载：
+自定义的 kind（比如 `return ui_result("kpis", {"items": [...]})`）需要你写一个渲染器：一个通过
+`ChatUI(scripts=[...])` 加载的 JS 模块：
 
 ```js
-// ext/table.js
-window.lovia.registerRenderer('table', (el, props, ctx) => {
-  const table = document.createElement('table');
-  for (const row of props.rows) {
-    const tr = table.insertRow();
-    for (const v of row) tr.insertCell().textContent = String(v); // 不要用 innerHTML
+// ext/kpis.js
+window.lovia.registerRenderer('kpis', (el, props, ctx) => {
+  for (const item of props.items) {
+    const card = document.createElement('div');
+    card.className = 'kpi';
+    card.textContent = `${item.label}: ${item.value}`; // 不要用 innerHTML
+    el.append(card);
   }
-  el.append(table);
   // 可以返回一个清理函数（释放 observer、定时器、图表实例等）。
 });
 ```
@@ -168,7 +172,7 @@ window.lovia.registerRenderer('table', (el, props, ctx) => {
 ```python
 from fastapi.staticfiles import StaticFiles
 
-app = create_app(agent, ui=ChatUI(scripts=["ext/table.js"]))
+app = create_app(agent, ui=ChatUI(scripts=["ext/kpis.js"]))
 app.mount("/ext", StaticFiles(directory="ext"))
 ```
 
@@ -190,10 +194,9 @@ app.mount("/ext", StaticFiles(directory="ext"))
     props 可能来自模型、工具、MCP 服务器或远程内容。请用 `textContent` 输出（或用页面上的
     `DOMPurify` 过滤），不要当作 HTML 插入。
 
-带排序、筛选和"追问"按钮的完整示例见 `examples/31_web_components.py`。
-
-内置了一种 kind：`chart`，内容是一个 Apache ECharts option，由 `show_chart` 工具产出
-（见[图表](web-ui.md#图表)）。如果想换一个图表库来画它，注册你自己的 `chart` 渲染器即可。
+注册内置的 kind 会替换它：比如注册你自己的 `chart` 渲染器，就能换一个图表库来画图。
+`examples/31_web_components.py` 把内置的 `table` 换成了自己的版本，给每一行加了一个"追问"
+按钮，通过 `ctx.send` 发出后续问题。
 
 ### 包装已有的渲染器
 

@@ -39,6 +39,7 @@ try:
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .subagents import subagent_deliver, wire_subagents
+    from .tables import show_table
     from .ui import SURFACE_NOTE, ChatUI
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -62,6 +63,7 @@ __all__ = [
     "is_loopback",
     "serve",
     "show_chart",
+    "show_table",
     "subagent_deliver",
     "token_dependency",
     "ui_result",

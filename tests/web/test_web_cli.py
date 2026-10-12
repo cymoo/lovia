@@ -600,8 +600,11 @@ def test_build_default_agent_no_subagents(
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
-def test_build_default_agent_charts_are_opt_in_and_parent_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("switch", "tool_name"), [("charts", "show_chart"), ("tables", "show_table")]
+)
+def test_build_default_agent_ui_tools_are_opt_in_and_parent_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, switch: str, tool_name: str
 ) -> None:
     from lovia import Subagents
     from lovia.web.config import WebConfig
@@ -610,15 +613,15 @@ def test_build_default_agent_charts_are_opt_in_and_parent_only(
     args = cli.build_parser().parse_args(["--no-memory"])
     store = ChatStore.in_memory()
     off = builder.build_default_agent(args, store, _provider())
-    assert "show_chart" not in {t.name for t in off.tools}
+    assert tool_name not in {t.name for t in off.tools}
 
     on = builder.build_default_agent(
-        args, store, _provider(), config=WebConfig(charts=True)
+        args, store, _provider(), config=WebConfig(**{switch: True})
     )
-    assert "show_chart" in {t.name for t in on.tools}
+    assert tool_name in {t.name for t in on.tools}
     (plugin,) = [p for p in on.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
-    assert "show_chart" not in {t.name for t in child.tools}
+    assert tool_name not in {t.name for t in child.tools}
 
 
 def test_build_default_agent_wires_the_vision_role(

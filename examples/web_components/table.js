@@ -1,9 +1,13 @@
-// A sortable, filterable table component for the lovia chat UI.
+// A sortable, filterable table component for the lovia chat UI, with an "Ask"
+// button per row.
 //
 // Loaded by examples/31_web_components.py via ChatUI(scripts=[...]). Renders
 // any tool output made with
 //
 //   ui_result("table", {"title": ..., "columns": [...], "rows": [[...], ...]})
+//
+// `table` is a built-in kind; registering it here replaces the built-in
+// renderer, which shows how to swap one out.
 //
 // Props come from the model / tools — untrusted — so every value is written
 // with textContent, never as HTML.

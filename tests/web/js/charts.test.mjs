@@ -7,12 +7,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import {
-  liftTitle,
-  optionRows,
-  sanitizeOption,
-  toCsv,
-} from '../../../lovia/web/static/js/charts.js';
+import { liftTitle, optionRows, sanitizeOption } from '../../../lovia/web/static/js/charts.js';
+import { toCsv } from '../../../lovia/web/static/js/figure.js';
 
 const bar = { type: 'bar' };
 

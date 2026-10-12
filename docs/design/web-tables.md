@@ -1,6 +1,7 @@
 # Web UI: built-in tables, and seams for data-backed components
 
-> Status: proposed · 2026-10-13 · Scope: `lovia/web` only (core untouched)
+> Status: implemented (v0.9.79: seams, #230; v0.9.80: tables) · 2026-10-13 ·
+> Scope: `lovia/web` only (core untouched)
 >
 > Follows [web-ui-components.md](web-ui-components.md) (the UI envelope, the
 > renderer registry, charts). Line numbers refer to v0.9.78 (`5f87588`).
@@ -187,18 +188,21 @@ Registered for kind `table` through the public `registerRenderer`, like
 
 - **Head**: the title and a toolbar (shown on hover, always on touch):
   *Copy* (tab-separated, pastes into spreadsheets), *CSV*, *Full screen*.
-  Copy and CSV export the current view — filtered and sorted, every page.
+  Copy and CSV export the current view — filtered and sorted, every page —
+  and both defuse cells a spreadsheet would run as a formula (a leading `'`).
 - **Filter**: a text box, shown above tables of more than 10 rows. It matches
   any cell, case-insensitively, and reports `n of m rows`.
 - **Sort**: header cells are buttons; a click cycles ascending, descending,
   original order. Nulls sort last either way. `aria-sort` marks the column.
-- **Pages** of 50 rows, with a pager when the view is longer. Paging keeps the
-  DOM small; a 10k-row table is 200 pages, not 10k `<tr>`s.
+- **Pages** of 20 rows (about a screenful inside a chat card, with no nested
+  scroll area), with a pager when the view is longer. Paging also keeps the
+  DOM small: a 10k-row table is 500 pages, not 10k `<tr>`s.
 - **Cells** are written with `textContent` only. Values are shown as given:
   no locale grouping, because a "year" or an id column would read as
   `2,026`. A tool that wants `1,234.50` sends the string. Null is an empty cell.
-  Long text wraps within a capped column width; a wide table scrolls sideways
-  inside the card.
+  Long text wraps at word boundaries within a capped column width
+  (`overflow-wrap: break-word`; `anywhere` would shrink min-content and break
+  short words in narrow columns); a wide table scrolls sideways inside the card.
 - **Full screen** shows the whole table area scrollable, toolbar visible.
 - Labels in English and Chinese, from `ctx.lang`, as in `charts.js`.
 
@@ -208,10 +212,10 @@ Registered for kind `table` through the public `registerRenderer`, like
 CSV escaping, and the full-screen toggle (`charts.js:229`, `:383-466`). Tables
 need the same, so they move to `static/js/figure.js`:
 
-- `figure(el, {title, subtitle, lang})` → `{ fig, body, tool(label, face, action) }`
-  builds the card and its toolbar; `tool` reports failures with a toast.
-- `toCsv`, `csvBlob` (UTF-8 BOM for spreadsheet apps), `save(blob, filename)`,
-  and the full-screen button.
+- `figure(el, {kind, heading, lang})` → `{ fig, body, tool(label, face, action), filename(ext) }`
+  builds the card, its toolbar and the full-screen button; `tool` reports
+  failures with a toast.
+- `toCsv`, `csvBlob` (UTF-8 BOM for spreadsheet apps), `save(blob, filename)`.
 
 The CSS classes become `.figure`, `.figure-head`, `.figure-title`,
 `.figure-tools`. They were internal (`docs/en/web-server.md`: class names may

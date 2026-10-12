@@ -219,7 +219,10 @@ the chat is reopened. It is off by default; turn it on in `config.json`:
 For your own agent, add the tool: `tools=[show_chart]` (from `lovia.web`).
 Any tool can produce a chart too: `return ui_result("chart", option)`, which
 draws from real data without the model copying numbers (see
-[UI components](web-server.md#ui-components)).
+[UI components](web-server.md#ui-components)). A tool that takes the option
+from the model — say one that runs a query and puts the rows into the option's
+`dataset` — checks it with `validate_chart_option(option)` first: it raises the
+same tool errors as `show_chart`, so the model can fix the option and retry.
 
 The chart's title is shown as the card's heading, above the chart, so it
 never collides with the legend. A toolbar beside it (shown on hover)

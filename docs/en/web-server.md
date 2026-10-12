@@ -39,7 +39,26 @@ run the app under another ASGI server, skip `serve()`.
 | `ui` | `True` | `False` serves the API only; a `ChatUI` customizes the bundled page (below) |
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
+| `lifespan` | `None` | Your own resources' lifespan, as for `FastAPI(lifespan=...)` (see below) |
 | `title` | `"lovia"` | Page title and the API's reported title |
+
+`create_app` sets the app's FastAPI `lifespan` itself, to start and stop its
+scheduler and wind down live runs. Pass your own as `lifespan=` to open
+resources your tools use — a database pool, an HTTP client — with the app.
+Yours wraps lovia's: the resources are up before the first run and close only
+after live runs wound down. State you yield reaches `request.state`.
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    await db.connect()
+    yield
+    await db.close()
+
+app = create_app(agent, lifespan=lifespan)
+```
 
 `ChatUI` options, for `ui=ChatUI(...)`:
 
@@ -115,7 +134,7 @@ To retheme, override the design tokens at the top of the bundled
 sets its own under `[data-theme="dark"]`). Class names, element ids, and the
 JavaScript modules are internal and may change between releases. The
 documented front-end surfaces are `api.js` (the client) and
-`window.lovia.registerRenderer` ([UI components](#ui-components)).
+`window.lovia.registerRenderer` / `getRenderer` ([UI components](#ui-components)).
 
 ## UI components
 
@@ -140,7 +159,9 @@ the call's own arguments already are the data (a presentational tool), pass
 echoed back a second time. For bulk data, return a summary plus a URL of your
 own endpoint and let the renderer fetch it: components run in the page, so
 same-origin requests carry the user's cookie, and the endpoint can reuse your
-`auth=` dependency.
+`auth=` dependency. Keep an envelope under the Agent's `max_tool_output_chars`
+(200K characters by default): a longer output is truncated, which breaks its
+JSON, and the card shows it as text instead.
 
 Renderers are JS modules, loaded with `ChatUI(scripts=[...])`:
 
@@ -191,6 +212,34 @@ A runnable version with sorting, filtering and an "Ask" button is
 One kind is built in: `chart`, an Apache ECharts option, which the
 `show_chart` tool produces (see [Charts](web-ui.md#charts)). Register your own
 `chart` renderer to draw it with another library.
+
+### Wrapping a renderer
+
+`window.lovia.getRenderer(kind)` returns the renderer registered for `kind`
+(or `undefined`), so one renderer can build on another. The built-in renderers
+are registered before your scripts run. A common use: the tool returns a small
+envelope pointing at data behind your own endpoint, and a wrapper fetches the
+data and hands it to the built-in chart:
+
+```js
+const chart = window.lovia.getRenderer('chart');
+const cache = new Map(); // components re-render on a theme switch
+
+window.lovia.registerRenderer('sales.chart', async (el, props, ctx) => {
+  const url = `${ctx.basePath}/${props.data_url}`;
+  if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
+  const source = await cache.get(url);
+  if (!source) {
+    el.textContent = 'This chart has expired.';
+    return;
+  }
+  return chart(el, { ...props.option, dataset: { source } }, ctx);
+});
+```
+
+The function you get is the one registered at the time of the call, so a
+wrapper may also replace the kind it wraps — re-register `chart` around the
+built-in one, say — without calling itself.
 
 ## Follow-up suggestions
 

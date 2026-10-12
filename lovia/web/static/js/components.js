@@ -94,14 +94,26 @@ const host = {
 
 /**
  * Wire the registry to the page: render context, message sending, notice
- * labels. Also publishes `window.lovia.registerRenderer`.
+ * labels. Also publishes `window.lovia.registerRenderer` / `getRenderer`.
  * @param {Partial<typeof host>} opts
  */
 export function configureComponents(opts) {
   Object.assign(host, opts);
   if (typeof window !== 'undefined') {
-    window.lovia = Object.assign(window.lovia || {}, { registerRenderer });
+    window.lovia = Object.assign(window.lovia || {}, { registerRenderer, getRenderer });
   }
+}
+
+/**
+ * The renderer registered for `kind` right now, so another can wrap it — e.g.
+ * fetch data, then draw it with the built-in `chart`. Deliberately the current
+ * function, not a lookup at call time: a wrapper re-registered under the same
+ * kind must call the renderer it replaced, not itself.
+ * @param {string} kind
+ * @returns {Renderer | undefined}
+ */
+export function getRenderer(kind) {
+  return renderers.get(kind);
 }
 
 /**

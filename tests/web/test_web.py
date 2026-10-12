@@ -9,10 +9,11 @@ import pytest
 
 pytest.importorskip("fastapi")
 
+from fastapi import Request  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lovia import Agent, Todo, tool  # noqa: E402
-from lovia.web import ChatUI, create_app  # noqa: E402
+from lovia.web import ChatUI, RouterDeps, create_app  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
@@ -1605,3 +1606,40 @@ def test_rewind_reaches_into_a_stale_resumable_checkpoint() -> None:
     assert (
         c.post(f"/api/sessions/{sid}/rewind", json={"user_turn": 5}).status_code == 404
     )
+
+
+def test_lifespan_wraps_lovias_own(monkeypatch) -> None:
+    """The app's resources open before lovia's machinery and close after it."""
+    from contextlib import asynccontextmanager
+
+    log: list[str] = []
+    real = RouterDeps.lifespan
+
+    @asynccontextmanager
+    async def lovia_lifespan(self, app=None):
+        log.append("lovia up")
+        async with real(self, app):
+            yield
+        log.append("lovia down")
+
+    monkeypatch.setattr(RouterDeps, "lifespan", lovia_lifespan)
+
+    @asynccontextmanager
+    async def resources(app):
+        log.append("open")
+        yield {"pool": "the-pool"}
+        log.append("close")
+
+    agent = Agent(name="bot", model=ScriptedProvider([]))
+    app = create_app(
+        agent, generate_titles=False, store=ChatStore.in_memory(), lifespan=resources
+    )
+
+    @app.get("/probe")
+    async def probe(request: Request) -> dict[str, str]:
+        return {"pool": request.state.pool}
+
+    with TestClient(app) as c:
+        assert log == ["open", "lovia up"]
+        assert c.get("/probe").json() == {"pool": "the-pool"}
+    assert log == ["open", "lovia up", "lovia down", "close"]

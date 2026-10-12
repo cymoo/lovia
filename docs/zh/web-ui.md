@@ -173,7 +173,9 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 
 使用自己的 Agent 时，把工具加进去：`tools=[show_chart]`（从 `lovia.web` 导入）。任何工具也都
 可以产出图表：`return ui_result("chart", option)`，直接用真实数据作图，不需要模型抄写数字
-（见[UI 组件](web-server.md#ui-组件)）。
+（见[UI 组件](web-server.md#ui-组件)）。如果工具的 option 来自模型（比如执行查询后把结果行放进
+option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛出与 `show_chart` 相同的
+工具错误，模型可以据此修正 option 后重试。
 
 图表标题显示为卡片标题，位于图表上方，不会与图例重叠。标题旁的工具栏（鼠标悬停时显示）可以
 把图表下载为 PNG 或 SVG（包含标题）、把数据下载为 CSV（树图、桑基图、关系图没有表格结构，

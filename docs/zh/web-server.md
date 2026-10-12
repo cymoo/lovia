@@ -38,7 +38,25 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 | `ui` | `True` | 设为 `False` 时只提供 API；传入 `ChatUI` 可定制内置页面（见下文） |
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
 | `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
+| `lifespan` | `None` | 你自己资源的生命周期，写法同 `FastAPI(lifespan=...)`（见下文） |
 | `title` | `"lovia"` | 页面标题，也是 API 报告的标题 |
+
+`create_app` 自己占用了应用的 FastAPI `lifespan`，用来启停调度器、收尾仍在运行的 Run。
+工具要用的资源（数据库连接池、HTTP 客户端）想随应用一起打开和关闭，就把你自己的
+lifespan 传给 `lifespan=`。它包在 lovia 的外层：资源在第一个 Run 之前就绪，并且等运行中的
+Run 都收尾之后才关闭。你 yield 的 state 会照常出现在 `request.state` 上。
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    await db.connect()
+    yield
+    await db.close()
+
+app = create_app(agent, lifespan=lifespan)
+```
 
 `ChatUI` 的选项（用于 `ui=ChatUI(...)`）：
 
@@ -107,7 +125,7 @@ app.mount("/brand", StaticFiles(directory="brand"), name="brand")
 更换主题时，覆盖内置 `styles.css` 开头的设计变量即可（`--bg`、`--surface`、`--ink`、
 `--accent` 等；深色主题在 `[data-theme="dark"]` 下另有一套）。CSS 类名、元素 id 和
 JavaScript 模块都属于内部实现，可能随版本变化。有文档的前端接口只有两个：客户端 `api.js`，
-以及 `window.lovia.registerRenderer`（见[UI 组件](#ui-组件)）。
+以及 `window.lovia.registerRenderer` / `getRenderer`（见[UI 组件](#ui-组件)）。
 
 ## UI 组件
 
@@ -129,7 +147,8 @@ def top_products(n: int = 10) -> str:
 这个信封就是工具的输出，所以模型同样能看到 props。如果调用参数本身就是要展示的数据（纯展示型
 工具），就用 `from_args=True`（或某个字段名）代替 `props`，数据就不会再回传一遍。数据量大时，
 返回摘要和一个指向你自己接口的 URL，由渲染器去取：组件运行在页面内，同源请求会带上用户的
-cookie，接口可以复用你传给 `auth=` 的依赖。
+cookie，接口可以复用你传给 `auth=` 的依赖。信封要控制在 Agent 的 `max_tool_output_chars`
+之内（默认 20 万字符）：超长的输出会被截断，JSON 随之损坏，卡片就只能按文本显示。
 
 渲染器是 JS 模块，通过 `ChatUI(scripts=[...])` 加载：
 
@@ -175,6 +194,31 @@ app.mount("/ext", StaticFiles(directory="ext"))
 
 内置了一种 kind：`chart`，内容是一个 Apache ECharts option，由 `show_chart` 工具产出
 （见[图表](web-ui.md#图表)）。如果想换一个图表库来画它，注册你自己的 `chart` 渲染器即可。
+
+### 包装已有的渲染器
+
+`window.lovia.getRenderer(kind)` 返回当前注册给 `kind` 的渲染器（没有则为 `undefined`），
+于是一个渲染器可以建立在另一个之上。内置渲染器在你的脚本运行之前就已注册。常见用法：工具只
+返回一个很小的信封，指向你自己接口后面的数据，包装渲染器把数据取回来，再交给内置的 chart：
+
+```js
+const chart = window.lovia.getRenderer('chart');
+const cache = new Map(); // 切换主题时组件会重新渲染
+
+window.lovia.registerRenderer('sales.chart', async (el, props, ctx) => {
+  const url = `${ctx.basePath}/${props.data_url}`;
+  if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
+  const source = await cache.get(url);
+  if (!source) {
+    el.textContent = '图表数据已过期。';
+    return;
+  }
+  return chart(el, { ...props.option, dataset: { source } }, ctx);
+});
+```
+
+拿到的是调用那一刻注册的函数，所以包装渲染器也可以替换它所包装的 kind（比如围绕内置的
+`chart` 重新注册 `chart`），而不会调用到自己。
 
 ## 追问建议
 

@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any
 
-from ..exceptions import UserError
+from ..exceptions import ToolError, UserError
 
 ENVELOPE_KEY = "lovia_ui"
 # Mirrored by KIND_RE in static/js/components.js.
@@ -39,6 +39,10 @@ def ui_result(kind: str, props: Any = _UNSET, *, from_args: bool | str = False) 
 
     Props reach the browser as untrusted data: a renderer must write text with
     ``textContent`` (or sanitize), never as raw HTML.
+
+    Keep the envelope under the agent's ``max_tool_output_chars`` (200K chars
+    by default): a longer output is truncated, which breaks its JSON, and the
+    card falls back to showing it as text.
     """
     if not isinstance(kind, str) or not _KIND_RE.fullmatch(kind):
         raise UserError(
@@ -73,3 +77,25 @@ def ui_result(kind: str, props: Any = _UNSET, *, from_args: bool | str = False) 
             hint="convert values to plain dict/list/str/number/bool/None "
             "first (finite numbers only — use None for NaN)",
         ) from exc
+
+
+def _check_json_size(value: Any, *, what: str, limit: int, hint: str) -> None:
+    """Raise :class:`ToolError` unless ``value`` is finite JSON of ≤ ``limit`` bytes.
+
+    The shared check of the presentational tools (``show_chart``, ``show_table``):
+    a model-written argument the page will draw. ``hint`` says how to shrink it.
+    """
+    try:
+        # Python parses NaN/Infinity out of a model's arguments, but the
+        # browser's JSON.parse rejects them — the component would vanish.
+        size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
+    except ValueError as exc:
+        raise ToolError(
+            f"the {what} contains NaN or Infinity",
+            hint="use null for missing values",
+        ) from exc
+    if size > limit:
+        raise ToolError(
+            f"the {what} is {size // 1024} KiB; the limit is {limit // 1024} KiB",
+            hint=hint,
+        )

@@ -468,9 +468,11 @@ FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流�
 `ui=ChatUI(...)` 设置空白页文案、为自定义 `auth=` 指定 `login_url`，还可以用自己的模板
 往页头、侧栏和脚本位置追加内容；页面也支持部署在路径前缀下，无论是在代理后面
 （`--root-path`）还是挂载到你自己的应用中。工具还可以返回 `ui_result(kind, props)`，
-把结果渲染成 UI（比如可排序的表格），渲染器通过 `ChatUI(scripts=[...])` 加载；图表已内置
-（`show_chart`，基于 Apache ECharts；`lovia web` 在配置中设置 `"charts": true` 即可开启），
-支持下载 PNG / SVG / CSV 和全屏查看。
+把结果渲染成 UI（比如可排序的表格），渲染器通过 `ChatUI(scripts=[...])` 加载
+（`lovia.getRenderer` 可以让一个渲染器包装另一个）；图表已内置（`show_chart`，基于
+Apache ECharts；`lovia web` 在配置中设置 `"charts": true` 即可开启），支持下载
+PNG / SVG / CSV 和全屏查看。工具共用的资源（比如数据库连接池）可以通过
+`create_app(lifespan=...)` 随应用一起打开和关闭。
 
 → [Web UI](https://cymoo.github.io/lovia/zh/web-ui/) · [Web 服务端](https://cymoo.github.io/lovia/zh/web-server/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)
 

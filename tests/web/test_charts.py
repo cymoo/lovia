@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,8 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from lovia import Agent  # noqa: E402
-from lovia.web import create_app, show_chart, ui_result  # noqa: E402
+from lovia import Agent, ToolError  # noqa: E402
+from lovia.web import create_app, show_chart, ui_result, validate_chart_option  # noqa: E402
 from lovia.web.charts import MAX_OPTION_BYTES, SERIES_TYPES  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
@@ -88,6 +89,20 @@ def test_non_finite_numbers_are_a_tool_error() -> None:
     tr = _run({**BAR, "dataset": {"source": [["m", "v"], ["Jan", float("nan")]]}})
     assert tr["is_error"]
     assert "NaN or Infinity" in tr["result"]
+
+
+def test_validate_chart_option_is_public_for_your_own_tools() -> None:
+    """The show_chart checks, callable from an L2 tool before ui_result."""
+    validate_chart_option(BAR)
+    with pytest.raises(ToolError, match="series is missing") as exc:
+        validate_chart_option({"dataset": BAR["dataset"]})
+    assert exc.value.hint
+    with pytest.raises(ToolError, match="NaN or Infinity"):
+        validate_chart_option({**BAR, "dataset": {"source": [["v"], [float("inf")]]}})
+    # Database rows carry values JSON can't hold; an L2 tool gets a hinted error.
+    with pytest.raises(ToolError, match="not JSON") as exc:
+        validate_chart_option({**BAR, "dataset": {"source": [["v"], [Decimal("1.5")]]}})
+    assert "Decimal" in (exc.value.hint or "")
 
 
 def test_series_allowlist_matches_the_client() -> None:

@@ -8,19 +8,20 @@ option through — instead of a lovia chart schema — means every ECharts chart
 type works with no code here, in a format models already know.
 
 Off by default in ``lovia web`` (``"charts": true`` in config.json); add it to
-your own agent with ``tools=[show_chart]``.
+your own agent with ``tools=[show_chart]``. A tool of your own that takes an
+option from the model checks it with :func:`validate_chart_option`.
 """
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from ..exceptions import ToolError
 from ..tools.base import tool
-from .components import ui_result
+from .components import _check_json_size, ui_result
 
-__all__ = ["SERIES_TYPES", "show_chart"]
+__all__ = ["MAX_OPTION_BYTES", "SERIES_TYPES", "show_chart", "validate_chart_option"]
 
 # Mirrored by SERIES_TYPES in static/js/charts.js (a test keeps them equal).
 # Left out: `custom` (needs a renderItem function), `map` / geo `lines` (need
@@ -50,6 +51,36 @@ SERIES_TYPES = frozenset(
 MAX_OPTION_BYTES = 64 * 1024
 
 
+def validate_chart_option(option: Mapping[str, Any]) -> None:
+    """Raise :class:`ToolError` unless the chat UI can draw ``option``.
+
+    The checks behind ``show_chart``, for a tool of your own that takes an
+    option from the model — say one that fills ``dataset.source`` from a
+    query — before it returns ``ui_result("chart", option)``. Each error
+    carries a hint, so the model can fix the option and retry.
+    """
+    series = option.get("series")
+    items = [series] if isinstance(series, dict) else series
+    if not isinstance(items, list) or not items:
+        raise ToolError(
+            "option.series is missing or empty",
+            hint='add at least one series, e.g. "series": [{"type": "bar"}]',
+        )
+    for i, s in enumerate(items):
+        kind = s.get("type") if isinstance(s, dict) else None
+        if kind not in SERIES_TYPES:
+            raise ToolError(
+                f"option.series[{i}].type {kind!r} is not supported",
+                hint="use one of: " + ", ".join(sorted(SERIES_TYPES)),
+            )
+    _check_json_size(
+        option,
+        what="option",
+        limit=MAX_OPTION_BYTES,
+        hint="aggregate or sample the data before charting it",
+    )
+
+
 @tool
 def show_chart(
     option: Annotated[
@@ -72,32 +103,5 @@ def show_chart(
     treemap, sunburst, boxplot, candlestick, heatmap, parallel, funnel,
     gauge, sankey, graph, themeRiver.
     """
-    series = option.get("series")
-    items = [series] if isinstance(series, dict) else series
-    if not isinstance(items, list) or not items:
-        raise ToolError(
-            "option.series is missing or empty",
-            hint='add at least one series, e.g. "series": [{"type": "bar"}]',
-        )
-    for i, s in enumerate(items):
-        kind = s.get("type") if isinstance(s, dict) else None
-        if kind not in SERIES_TYPES:
-            raise ToolError(
-                f"option.series[{i}].type {kind!r} is not supported",
-                hint="use one of: " + ", ".join(sorted(SERIES_TYPES)),
-            )
-    try:
-        # allow_nan=False: Python parsed NaN/Infinity out of the arguments,
-        # but the browser's JSON.parse rejects them — the chart would vanish.
-        size = len(json.dumps(option, ensure_ascii=False, allow_nan=False).encode())
-    except ValueError as exc:
-        raise ToolError(
-            "the option contains NaN or Infinity",
-            hint="use null for missing values, or drop the point",
-        ) from exc
-    if size > MAX_OPTION_BYTES:
-        raise ToolError(
-            f"the option is {size // 1024} KiB; the limit is {MAX_OPTION_BYTES // 1024} KiB",
-            hint="aggregate or sample the data before charting it",
-        )
+    validate_chart_option(option)
     return ui_result("chart", from_args="option")

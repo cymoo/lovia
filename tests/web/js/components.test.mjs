@@ -8,6 +8,7 @@ import { test } from 'node:test';
 
 import {
   configureComponents,
+  getRenderer,
   mountComponent,
   parseEnvelope,
   registerRenderer,
@@ -105,6 +106,29 @@ test('re-registering a kind re-renders it, after the old cleanup', () => {
     assert.deepEqual(log, ['old cleanup', 'new render']);
     unmountComponent(/** @type {any} */ (e));
   });
+});
+
+test('getRenderer: the current renderer, or undefined', () => {
+  assert.equal(getRenderer('nobody'), undefined);
+  const first = () => {};
+  registerRenderer('got', first);
+  const held = getRenderer('got');
+  assert.equal(held, first);
+  registerRenderer('got', () => {});
+  assert.equal(held, first); // a held reference keeps the renderer it was given
+});
+
+test('a renderer can wrap the one it replaces, without recursion', () => {
+  const log = [];
+  registerRenderer('wrapped', (_el, props) => {
+    log.push(`base:${props}`);
+  });
+  const base = getRenderer('wrapped');
+  registerRenderer('wrapped', (target, props, ctx) => base(target, `${props}+`, ctx));
+  const e = el();
+  mountComponent(/** @type {any} */ (e), { kind: 'wrapped', props: 'p' });
+  assert.deepEqual(log, ['base:p+']);
+  unmountComponent(/** @type {any} */ (e));
 });
 
 test('a throwing or rejecting renderer shows the failure notice', async () => {

@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import mimetypes
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
@@ -133,6 +134,21 @@ def _clean_token(token: str | None) -> str | None:
     return cleaned
 
 
+Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[Any]]
+"""FastAPI's ``lifespan`` shape: the app in, an async context manager out."""
+
+
+def _around(outer: Lifespan, inner: Lifespan) -> Lifespan:
+    """``outer`` entered first and exited last, yielding its state."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[Any]:
+        async with outer(app) as state, inner(app):
+            yield state
+
+    return lifespan
+
+
 def _display_host(host: str) -> str:
     """A browsable form of ``host`` for printed URLs — wildcards aren't one."""
     if host in {"0.0.0.0", "::"}:
@@ -167,6 +183,7 @@ def create_app(
     cors_origins: Sequence[str] | None = None,
     token: str | None = None,
     auth: Callable[..., Any] | None = None,
+    lifespan: Lifespan | None = None,
     config_runtime: ConfigRuntime | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
@@ -230,6 +247,12 @@ def create_app(
     imposes no auth, while :func:`serve` refuses to run such an app on a
     non-loopback host.
 
+    ``lifespan`` opens and closes your own resources (a database pool, a
+    client) with the app — the same callable you would pass to
+    ``FastAPI(lifespan=...)``. It wraps lovia's own lifespan, so the resources
+    are up before the first run and close only after live runs wound down; a
+    state mapping it yields reaches ``request.state`` as usual.
+
     ``config_runtime`` is the CLI's runtime-reconfiguration surface (a
     :class:`lovia.web.config.ConfigRuntime`); passing one mounts the
     ``/api/config`` routes and allows an *empty* agents mapping — the
@@ -286,9 +309,11 @@ def create_app(
         questions=questions,
     )
 
+    if lifespan is not None:
+        lifespan = _around(lifespan, deps.lifespan)
     app = FastAPI(
         title=title,
-        lifespan=deps.lifespan,
+        lifespan=lifespan or deps.lifespan,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )

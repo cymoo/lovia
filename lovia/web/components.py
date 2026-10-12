@@ -82,8 +82,9 @@ def ui_result(kind: str, props: Any = _UNSET, *, from_args: bool | str = False) 
 def _check_json_size(value: Any, *, what: str, limit: int, hint: str) -> None:
     """Raise :class:`ToolError` unless ``value`` is finite JSON of ≤ ``limit`` bytes.
 
-    The shared check of the presentational tools (``show_chart``, ``show_table``):
-    a model-written argument the page will draw. ``hint`` says how to shrink it.
+    The shared check of the presentational tools (``show_chart``, ``show_table``)
+    and :func:`~lovia.web.validate_chart_option`: data the page will draw.
+    ``hint`` says how to shrink it.
     """
     try:
         # Python parses NaN/Infinity out of a model's arguments, but the
@@ -93,6 +94,12 @@ def _check_json_size(value: Any, *, what: str, limit: int, hint: str) -> None:
         raise ToolError(
             f"the {what} contains NaN or Infinity",
             hint="use null for missing values",
+        ) from exc
+    except TypeError as exc:  # e.g. Decimal or datetime from a database row
+        raise ToolError(
+            f"the {what} is not JSON: {exc}",
+            hint="convert values to str/number/bool/None first "
+            "(Decimal → float, datetime → ISO string)",
         ) from exc
     if size > limit:
         raise ToolError(

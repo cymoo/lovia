@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,10 @@ def test_validate_chart_option_is_public_for_your_own_tools() -> None:
     assert exc.value.hint
     with pytest.raises(ToolError, match="NaN or Infinity"):
         validate_chart_option({**BAR, "dataset": {"source": [["v"], [float("inf")]]}})
+    # Database rows carry values JSON can't hold; an L2 tool gets a hinted error.
+    with pytest.raises(ToolError, match="not JSON") as exc:
+        validate_chart_option({**BAR, "dataset": {"source": [["v"], [Decimal("1.5")]]}})
+    assert "Decimal" in (exc.value.hint or "")
 
 
 def test_series_allowlist_matches_the_client() -> None:

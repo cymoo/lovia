@@ -1,6 +1,6 @@
 # Web components: static export, and bulk data outside the model's context
 
-> Status: PR 1 implemented (v0.9.81); PR 2 proposed · 2026-10-14 · Scope: `lovia/web` only (core untouched)
+> Status: implemented (v0.9.81: static export, v0.9.82: component data) · 2026-10-14 · Scope: `lovia/web` only (core untouched)
 >
 > Line numbers refer to v0.9.80 (`3cd3bb3`).
 
@@ -198,7 +198,8 @@ valid props of its kind.
 ### Python API
 
 ```python
-# put_ui_data and ui_result come from lovia.web.
+from lovia.web import put_ui_data, ui_result
+
 @tool
 async def query_table(sql: str) -> str:
     columns, rows = await run_query(sql)
@@ -216,11 +217,12 @@ async def query_table(sql: str) -> str:
   plain envelope. The same tool therefore works everywhere and degrades to
   the preview. It is not an error: the tool did nothing wrong.
 - **How a tool reaches the store** (the issue's first open question): a
-  `ContextVar` holding `(store, session_id)`, set at the top of every
-  supervised task next to the existing `RUN_SOURCE`
-  ([supervisor.py:489](../../lovia/web/supervisor.py#L489)). That one place
-  covers chat, scheduled and subagent runs, and each subagent task has its
-  own session. `create_task` copies the context, so tool tasks inherit it.
+  `ContextVar` holding `(store, session_id)`, set wherever the web app starts
+  a run. One place is the top of every supervised task, next to the existing
+  `RUN_SOURCE` ([supervisor.py:489](../../lovia/web/supervisor.py#L489)),
+  which covers chat, scheduled and subagent runs; each subagent task has its
+  own session. The other is the non-streaming `POST /api/chat`.
+  `create_task` copies the context, so tool tasks inherit it.
   Core stays untouched: the var lives in `lovia.web`, and only tools that
   opt in import it.
 - The write completes **inside the tool, before it returns**. So the data
@@ -247,7 +249,7 @@ CREATE TABLE IF NOT EXISTS chat_ui_data (
     created_at REAL NOT NULL,
     payload BLOB NOT NULL         -- zlib-compressed JSON (tabular JSON shrinks ~5–10×)
 );
-CREATE INDEX IF NOT EXISTS chat_ui_data_session ON chat_ui_data (session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_ui_data_session ON chat_ui_data (session_id);
 ```
 
 - `ChatStore.delete` and `delete_all` remove the session's rows alongside its
@@ -286,9 +288,10 @@ There is no size cap or pruning job for now (see *Deferred*).
   The promise is kept on the `Mount`, so a theme re-render doesn't refetch,
   and it is garbage-collected with the mount (no global cache to bound).
   - On success, render with the fetched props.
-  - On failure (404, network), render the preview (or nothing, when the
-    preview is `null`) and append a `.tool-ui-notice` (new label
-    `'partial'`): "The full data is no longer available. Showing a preview."
+  - On failure (404, network), show a `.tool-ui-notice` (new label
+    `'partial'`: "The full data is no longer available; showing a preview."),
+    then the preview below it (nothing more when the preview is `null`). The
+    failed fetch is dropped, so the next render (a theme switch) retries.
 - The existing `gen` counter already discards a fetch that resolves after a
   re-render or an unmount.
 - Renderers are unchanged and never see the ref.

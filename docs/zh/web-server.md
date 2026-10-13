@@ -148,9 +148,8 @@ def top_products(n: int = 10) -> str:
 上面表格里的数字直接来自查询，模型不需要把它们写出来。
 
 这个信封就是工具的输出，所以模型同样能看到 props。如果调用参数本身就是要展示的数据（纯展示型
-工具），就用 `from_args=True`（或某个字段名）代替 `props`，数据就不会再回传一遍。数据量大时，
-返回摘要和一个指向你自己接口的 URL，由渲染器去取：组件运行在页面内，同源请求会带上用户的
-cookie，接口可以复用你传给 `auth=` 的依赖。信封要控制在 Agent 的 `max_tool_output_chars`
+工具），就用 `from_args=True`（或某个字段名）代替 `props`，数据就不会再回传一遍。大块数据可以用
+[`put_ui_data`](#大块数据) 挡在模型上下文之外。信封要控制在 Agent 的 `max_tool_output_chars`
 之内（默认 20 万字符）：超长的输出会被截断，JSON 随之损坏，卡片就只能按文本显示。
 
 自定义的 kind（比如 `return ui_result("kpis", {"items": [...]})`）需要你写一个渲染器：一个通过
@@ -215,28 +214,55 @@ window.lovia.registerRenderer('kpis', {
 `examples/31_web_components.py` 把内置的 `table` 换成了自己的版本，给每一行加了一个"追问"
 按钮，通过 `ctx.send` 发出后续问题。
 
+### 大块数据
+
+信封是模型上下文的一部分，每一轮都会带上。结果太大时（比如一万行的查询结果），可以把完整
+props 随聊天存起来，信封里只放一份预览：
+
+```python
+from lovia import tool
+from lovia.web import put_ui_data, ui_result
+
+@tool
+async def run_query(sql: str) -> str:
+    """执行只读查询，并以表格展示结果。"""
+    columns, rows = await db.fetch(sql)
+    ref = await put_ui_data({"columns": columns, "rows": rows})
+    preview = {"columns": columns, "rows": rows[:20], "row_count": len(rows)}
+    return ui_result("table", preview, data=ref)
+```
+
+模型只看得到预览，所以要在预览里放上它谈论那些没看到的行时需要的信息，比如总行数或合计。
+页面会通过 `GET /api/sessions/{id}/ui-data/{ref}` 取回完整 props（与其他 API 使用同样的
+鉴权），再交给渲染器。内置的和你自己的 kind 都能这样用，渲染器无需任何改动；导出的 HTML
+也会画出完整数据。
+
+- 数据与所属聊天同生命周期：删除聊天时一并删除。数据不在了，卡片会先显示提示，再显示预览
+  （预览为 `None` 时只显示提示）。
+- 在 `lovia web` 之外运行时（比如脚本或评测），`put_ui_data` 返回 `None`，信封就只是预览。
+- 单份数据上限为 8 MiB 的 JSON。超出时抛出工具错误，模型可以据此缩小查询范围。
+
 ### 包装已有的渲染器
 
 `window.lovia.getRenderer(kind)` 返回当前注册给 `kind` 的渲染器，即它的
-`{ render, snapshot }`（没有则为 `undefined`），
-于是一个渲染器可以建立在另一个之上。内置渲染器在你的脚本运行之前就已注册。常见用法：工具只
-返回一个很小的信封，指向你自己接口后面的数据，包装渲染器把数据取回来，再交给内置的 chart：
+`{ render, snapshot }`（没有则为 `undefined`），于是一个渲染器可以建立在另一个之上。内置渲染器
+在你的脚本运行之前就已注册。例如，你自己定义的一个精简 kind 可以交给内置的 chart 来画，实时
+对话和导出中都能显示：
 
 ```js
 const chart = window.lovia.getRenderer('chart');
-const cache = new Map(); // 切换主题时组件会重新渲染
+// {label, points: [[x, y], ...]} → 一个 ECharts option。
+const option = (p) => ({
+  title: { text: p.label },
+  dataset: { source: p.points },
+  xAxis: { type: 'category' },
+  yAxis: {},
+  series: [{ type: 'line' }],
+});
 
-window.lovia.registerRenderer('sales.chart', {
-  async render(el, props, ctx) {
-    const url = `${ctx.basePath}/${props.data_url}`;
-    if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
-    const source = await cache.get(url);
-    if (!source) {
-      el.textContent = '图表数据已过期。';
-      return;
-    }
-    return chart.render(el, { ...props.option, dataset: { source } }, ctx);
-  },
+window.lovia.registerRenderer('trend', {
+  render: (el, props, ctx) => chart.render(el, option(props), ctx),
+  snapshot: (props, ctx) => chart.snapshot(option(props), ctx),
 });
 ```
 

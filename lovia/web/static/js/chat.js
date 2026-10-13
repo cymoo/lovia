@@ -3592,7 +3592,7 @@ configureComponents({
     void sendText(message);
     return true;
   },
-  label: (key, kind) => t(key === 'missing' ? 'ui.missing' : 'ui.failed', { kind }),
+  label: (key, kind) => t(`ui.${key}`, { kind }),
 });
 watchComponents(document.getElementById('transcript'));
 store.on('theme-changed', rerenderComponents);

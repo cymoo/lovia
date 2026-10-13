@@ -190,6 +190,24 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
             parent_id=meta.parent_id if meta else None,
         )
 
+    @router.get("/api/sessions/{session_id}/ui-data/{ref}")
+    async def get_ui_data(session_id: str, ref: str) -> Response:
+        """A UI component's full props, kept out of the model's context by
+        ``put_ui_data`` during a run of this chat. A ref never changes."""
+        data = await store.get_ui_data(session_id, ref)
+        if data is None:
+            raise WebError(
+                404,
+                "ui_data_not_found",
+                "no such component data in this chat",
+                hint="the chat or its data was deleted; the page shows the preview",
+            )
+        return Response(
+            data,
+            media_type="application/json",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
     @router.get("/api/sessions/{session_id}/tool-images/{call_id}/{index}")
     async def get_tool_image(session_id: str, call_id: str, index: int) -> Response:
         """Serve one image part of a tool result, straight from the transcript.

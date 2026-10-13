@@ -81,6 +81,15 @@ test('ordinary or malformed output is not a component', () => {
   }
 });
 
+test('a data ref rides beside the props; a malformed one is ignored', () => {
+  const ref = 'A'.repeat(22);
+  const env = (data) => JSON.stringify({ lovia_ui: { kind: 'table', props: 1, data } });
+  assert.deepEqual(parseEnvelope(env(ref)), { kind: 'table', props: 1, data: ref });
+  for (const bad of ['short', 'a/b'.repeat(8), 7, null]) {
+    assert.deepEqual(parseEnvelope(env(bad)), { kind: 'table', props: 1 }, String(bad));
+  }
+});
+
 test('from_args with missing, unparsable, or non-object arguments', () => {
   const env = '{"lovia_ui": {"kind": "chart", "from_args": "option"}}';
   assert.equal(parseEnvelope(env, undefined), null);
@@ -283,6 +292,87 @@ test('snapshotComponent: null without a snapshot, an unknown kind, or on failure
   assert.equal(await snapshotComponent({ kind: 'nosnap', props: 1 }), null);
   assert.equal(await snapshotComponent({ kind: 'nobody', props: 1 }), null);
   assert.equal(await quietly(() => snapshotComponent({ kind: 'badsnap', props: 1 })), null);
+});
+
+// ---- component data ----------------------------------------------------------
+
+const REF = 'R'.repeat(22);
+
+/** Serve `body` (or a 404 when undefined) for every fetch; record the URLs. */
+function serve(body) {
+  const urls = [];
+  globalThis.fetch = /** @type {any} */ (async (url) => {
+    urls.push(url);
+    return body === undefined
+      ? new Response('{}', { status: 404 })
+      : new Response(JSON.stringify(body), { status: 200 });
+  });
+  return urls;
+}
+
+test('with data, the renderer draws the fetched props, fetched once per mount', async () => {
+  configureComponents({ context: () => ({ theme: 'light', lang: 'en', basePath: '/p', sessionId: 's 1' }) });
+  const urls = serve({ rows: 'all' });
+  const seen = [];
+  registerRenderer('bulk', {
+    render(_el, props) {
+      seen.push(props);
+    },
+  });
+  const e = el();
+  mountComponent(/** @type {any} */ (e), { kind: 'bulk', props: { rows: 'few' }, data: REF });
+  assert.deepEqual(seen, []); // nothing until the data arrives
+  await tick();
+  rerenderComponents(); // e.g. a theme switch
+  await tick();
+  assert.deepEqual(seen, [{ rows: 'all' }, { rows: 'all' }]);
+  assert.deepEqual(urls, [`/p/api/sessions/s%201/ui-data/${REF}`]);
+  unmountComponent(/** @type {any} */ (e));
+});
+
+test('data gone: a notice, then the preview; a null preview shows the notice alone', async () => {
+  const urls = serve(undefined);
+  const seen = [];
+  registerRenderer('gone', {
+    render(_el, props) {
+      seen.push(props);
+    },
+  });
+  const a = el();
+  const b = el();
+  mountComponent(/** @type {any} */ (a), { kind: 'gone', props: 'preview', data: REF });
+  mountComponent(/** @type {any} */ (b), { kind: 'gone', props: null, data: REF });
+  await tick();
+  assert.equal(noticeOf(a), 'partial:gone');
+  assert.equal(noticeOf(b), 'partial:gone');
+  assert.deepEqual(seen, ['preview']);
+  rerenderComponents(); // a failed fetch is retried on the next render
+  await tick();
+  assert.equal(urls.length, 4);
+  unmountComponent(/** @type {any} */ (a));
+  unmountComponent(/** @type {any} */ (b));
+});
+
+test('a fetch that lands after unmount draws nothing', async () => {
+  serve({ rows: 'all' });
+  const seen = [];
+  registerRenderer('late-data', { render: (_el, props) => void seen.push(props) });
+  const e = el();
+  mountComponent(/** @type {any} */ (e), { kind: 'late-data', props: 1, data: REF });
+  unmountComponent(/** @type {any} */ (e));
+  await tick();
+  assert.deepEqual(seen, []);
+});
+
+test('snapshotComponent draws the full data for the exported chat, else the preview', async () => {
+  registerRenderer('snapdata', { render() {}, snapshot: (props) => `<p>${JSON.stringify(props)}</p>` });
+  const urls = serve({ rows: 'all' });
+  const comp = { kind: 'snapdata', props: { rows: 'few' }, data: REF };
+  assert.equal(await snapshotComponent(comp, { sessionId: 'exported' }), '<p>{"rows":"all"}</p>');
+  assert.equal(urls[0], `/p/api/sessions/exported/ui-data/${REF}`);
+  serve(undefined);
+  assert.equal(await snapshotComponent(comp, { sessionId: 'exported' }), '<p>{"rows":"few"}</p>');
+  assert.equal(await snapshotComponent({ ...comp, props: null }, { sessionId: 'exported' }), null);
 });
 
 test('re-registering a kind without a snapshot drops the old one', async () => {

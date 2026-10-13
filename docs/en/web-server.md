@@ -160,10 +160,8 @@ straight from the query; the model never writes them out.
 The envelope is the tool's output, so the model sees the props as well. When
 the call's own arguments already are the data (a presentational tool), pass
 `from_args=True` — or a field name — instead of `props`, so the data isn't
-echoed back a second time. For bulk data, return a summary plus a URL of your
-own endpoint and let the renderer fetch it: components run in the page, so
-same-origin requests carry the user's cookie, and the endpoint can reuse your
-`auth=` dependency. Keep an envelope under the Agent's `max_tool_output_chars`
+echoed back a second time. Bulk data stays out of the model's context with
+[`put_ui_data`](#bulk-data). Keep an envelope under the Agent's `max_tool_output_chars`
 (200K characters by default): a longer output is truncated, which breaks its
 JSON, and the card shows it as text instead.
 
@@ -235,29 +233,62 @@ charts with another library. `examples/31_web_components.py` replaces the
 built-in `table` with a version that adds an "Ask" button to each row, which
 posts a follow-up through `ctx.send`.
 
+### Bulk data
+
+The envelope is part of the model's context, turn after turn. For a result
+too big for that — a 10,000-row query — store the full props with the chat,
+and put a preview in the envelope:
+
+```python
+from lovia import tool
+from lovia.web import put_ui_data, ui_result
+
+@tool
+async def run_query(sql: str) -> str:
+    """Run a read-only query and show the result as a table."""
+    columns, rows = await db.fetch(sql)
+    ref = await put_ui_data({"columns": columns, "rows": rows})
+    preview = {"columns": columns, "rows": rows[:20], "row_count": len(rows)}
+    return ui_result("table", preview, data=ref)
+```
+
+The model reads only the preview, so give it what it needs to talk about rows
+it hasn't seen, such as a row count or totals. The page fetches the full props
+from `GET /api/sessions/{id}/ui-data/{ref}`, behind the same auth as the rest
+of the API, and hands them to the renderer. Any kind works this way, built-in
+or your own, with no change to its renderer, and the HTML export draws the
+full data too.
+
+- The data lives as long as its chat: deleting the chat deletes it. If it is
+  gone, the card shows a notice and then the preview (only the notice when
+  the preview is `None`).
+- Outside a `lovia web` run, such as a script or an eval, `put_ui_data`
+  returns `None`, and the envelope is just the preview.
+- A stored value is limited to 8 MiB of JSON. Larger values raise a tool error,
+  so the model can narrow the query.
+
 ### Wrapping a renderer
 
 `window.lovia.getRenderer(kind)` returns the renderer registered for `kind` —
-its `{ render, snapshot }` — or `undefined`, so one renderer can build on another. The built-in renderers
-are registered before your scripts run. A common use: the tool returns a small
-envelope pointing at data behind your own endpoint, and a wrapper fetches the
-data and hands it to the built-in chart:
+its `{ render, snapshot }` — or `undefined`, so one renderer can build on
+another. The built-in renderers are registered before your scripts run. For
+example, a compact kind of your own can be drawn by the built-in chart, live
+and in the export:
 
 ```js
 const chart = window.lovia.getRenderer('chart');
-const cache = new Map(); // components re-render on a theme switch
+// {label, points: [[x, y], ...]} → an ECharts option.
+const option = (p) => ({
+  title: { text: p.label },
+  dataset: { source: p.points },
+  xAxis: { type: 'category' },
+  yAxis: {},
+  series: [{ type: 'line' }],
+});
 
-window.lovia.registerRenderer('sales.chart', {
-  async render(el, props, ctx) {
-    const url = `${ctx.basePath}/${props.data_url}`;
-    if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
-    const source = await cache.get(url);
-    if (!source) {
-      el.textContent = 'This chart has expired.';
-      return;
-    }
-    return chart.render(el, { ...props.option, dataset: { source } }, ctx);
-  },
+window.lovia.registerRenderer('trend', {
+  render: (el, props, ctx) => chart.render(el, option(props), ctx),
+  snapshot: (props, ctx) => chart.snapshot(option(props), ctx),
 });
 ```
 

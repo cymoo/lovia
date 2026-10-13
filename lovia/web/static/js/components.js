@@ -1,9 +1,11 @@
 // UI components: a tool result rendered as UI instead of text.
 //
 // A tool opts in by returning a UI envelope (lovia/web/components.py
-// `ui_result`) — {"lovia_ui": {"kind", "props" | "from_args"}} — and the
-// renderer registered for `kind` draws it into the tool card, and optionally
-// as static HTML into the chat's HTML export. Renderers come from the page
+// `ui_result`) — {"lovia_ui": {"kind", "props" | "from_args", "data"?}} — and
+// the renderer registered for `kind` draws it into the tool card, and
+// optionally as static HTML into the chat's HTML export. With `data` (a ref
+// from `put_ui_data`), the renderer gets the full props fetched from the chat
+// store, and `props` — the preview — only when they are gone. Renderers come from the page
 // itself or from `ChatUI(scripts=...)` modules calling
 // `window.lovia.registerRenderer(kind, { render, snapshot })`. Design notes:
 // docs/design/web-ui-components.md, docs/design/web-component-data.md.
@@ -12,7 +14,12 @@
 // labels and the render context through `configureComponents`, which keeps
 // this module unit-testable under node.
 
-/** @typedef {{ kind: string, props: unknown }} UiComponent */
+/**
+ * @typedef {object} UiComponent
+ * @property {string} kind
+ * @property {unknown} props The preview, when `data` is set.
+ * @property {string} [data] Ref to the full props, stored with the chat.
+ */
 /** @typedef {() => void} Cleanup */
 /**
  * @typedef {object} RenderContext
@@ -45,13 +52,16 @@
  * @property {string} kind
  * @property {unknown} props
  * @property {string | null} callId
+ * @property {string | undefined} data
+ * @property {Promise<unknown> | null} full The fetch of `data`, kept across re-renders.
  * @property {Cleanup | null} cleanup
  * @property {number} gen Bumped per render/teardown, so a late async cleanup
  *   knows it was superseded.
  */
 
-// Mirrors _KIND_RE in lovia/web/components.py.
+// Mirror _KIND_RE / _REF_RE in lovia/web/components.py.
 const KIND_RE = /^[a-z][a-z0-9_.-]{0,63}$/;
+const REF_RE = /^[A-Za-z0-9_-]{16,64}$/;
 // json.dumps output of a one-key {"lovia_ui": ...} dict always starts so:
 // a cheap test before JSON.parse on every tool result.
 const PREFIX = '{"lovia_ui"';
@@ -76,7 +86,10 @@ export function parseEnvelope(text, args) {
   if (!env || typeof env !== 'object' || typeof env.kind !== 'string' || !KIND_RE.test(env.kind)) {
     return null;
   }
-  if ('props' in env) return { kind: env.kind, props: env.props };
+  if ('props' in env) {
+    const data = typeof env.data === 'string' && REF_RE.test(env.data) ? env.data : undefined;
+    return data ? { kind: env.kind, props: env.props, data } : { kind: env.kind, props: env.props };
+  }
   const ref = env.from_args;
   if (ref !== true && (typeof ref !== 'string' || !ref)) return null;
   let obj;
@@ -100,9 +113,33 @@ const host = {
   context: () => ({ theme: 'light', lang: 'en', basePath: '', sessionId: null }),
   /** @type {(text: string) => boolean} */
   send: () => false,
-  /** @type {(key: 'missing' | 'failed', kind: string) => string} */
-  label: (key, kind) => (key === 'missing' ? `No renderer for “${kind}”` : 'Render failed'),
+  /** @type {(key: 'missing' | 'failed' | 'partial', kind: string) => string} */
+  label: (key, kind) =>
+    key === 'missing'
+      ? `No renderer for “${kind}”`
+      : key === 'partial'
+        ? 'The full data is no longer available; showing a preview.'
+        : 'Render failed',
 };
+
+/**
+ * The full props stored under `ref` with the chat, or undefined when they're
+ * gone (deleted with the chat, or unreachable).
+ * @param {string} basePath
+ * @param {string | null} sessionId
+ * @param {string} ref
+ * @returns {Promise<unknown>}
+ */
+async function loadData(basePath, sessionId, ref) {
+  if (!sessionId) return undefined;
+  const url = `${basePath}/api/sessions/${encodeURIComponent(sessionId)}/ui-data/${ref}`;
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    return res.ok ? await res.json() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Wire the registry to the page: render context, message sending, notice
@@ -150,8 +187,9 @@ export function registerRenderer(kind, renderer) {
 }
 
 /**
- * `comp` as static HTML for the HTML export, or null when its kind has no
- * snapshot or the snapshot fails — the export then keeps the raw output.
+ * `comp` as static HTML for the HTML export — from its full data when it has
+ * some, else its preview — or null when its kind has no snapshot, there is
+ * nothing to draw, or the snapshot fails: the export then keeps the raw output.
  * @param {UiComponent} comp
  * @param {{ callId?: string | null, sessionId?: string | null }} [opts]
  *   `sessionId`: the exported chat, which need not be the one on screen.
@@ -162,7 +200,13 @@ export async function snapshotComponent(comp, { callId = null, sessionId = null 
   if (!renderer?.snapshot) return null;
   try {
     const ctx = { ...host.context(), kind: comp.kind, callId, sessionId };
-    return String(await renderer.snapshot(comp.props, ctx));
+    let props = comp.props;
+    if (comp.data) {
+      const full = await loadData(ctx.basePath, sessionId, comp.data);
+      if (full !== undefined) props = full;
+      else if (props === null) return null;
+    }
+    return String(await renderer.snapshot(props, ctx));
   } catch (err) {
     console.error(`lovia component "${comp.kind}" failed to snapshot:`, err);
     return null;
@@ -215,23 +259,41 @@ function run(m) {
     // Only a live, on-screen component may speak for the user.
     send: (/** @type {string} */ text) => el.isConnected && host.send(text),
   };
+  const current = () => m.gen === gen && mounts.has(m);
   const fail = (/** @type {unknown} */ err) => {
     console.error(`lovia component "${m.kind}" failed to render:`, err);
-    if (m.gen === gen && mounts.has(m)) notice(m, host.label('failed', m.kind));
+    if (current()) notice(m, host.label('failed', m.kind));
   };
-  let out;
-  try {
-    out = renderer.render(el, m.props, ctx);
-  } catch (err) {
-    fail(err);
+  const draw = (/** @type {unknown} */ props) => {
+    let out;
+    try {
+      out = renderer.render(el, props, ctx);
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    Promise.resolve(out).then((cleanup) => {
+      if (typeof cleanup !== 'function') return;
+      // Superseded (re-render, unmount) while an async render was in flight.
+      if (current()) m.cleanup = cleanup;
+      else safeCleanup(cleanup);
+    }, fail);
+  };
+  if (!m.data) {
+    draw(m.props);
     return;
   }
-  Promise.resolve(out).then((cleanup) => {
-    if (typeof cleanup !== 'function') return;
-    // Superseded (re-render, unmount) while an async render was in flight.
-    if (m.gen !== gen || !mounts.has(m)) safeCleanup(cleanup);
-    else m.cleanup = cleanup;
-  }, fail);
+  const full = (m.full ??= loadData(ctx.basePath, ctx.sessionId, m.data));
+  full.then((props) => {
+    if (!current()) return;
+    if (props !== undefined) {
+      draw(props);
+      return;
+    }
+    m.full = null; // a later render (a theme switch) may find it reachable again
+    notice(m, host.label('partial', m.kind));
+    if (m.props !== null) draw(m.props);
+  });
 }
 
 /**
@@ -243,7 +305,16 @@ function run(m) {
 export function mountComponent(el, comp, { callId = null } = {}) {
   unmountComponent(el);
   /** @type {Mount} */
-  const m = { el, kind: comp.kind, props: comp.props, callId, cleanup: null, gen: 0 };
+  const m = {
+    el,
+    kind: comp.kind,
+    props: comp.props,
+    callId,
+    data: comp.data,
+    full: null,
+    cleanup: null,
+    gen: 0,
+  };
   mounts.add(m);
   run(m);
 }

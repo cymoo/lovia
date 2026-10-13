@@ -40,6 +40,7 @@ from ..transcript import (
     input_to_entries,
 )
 from .api.serialization import drop_system_entries, view_messages
+from .components import UI_DATA_SINK
 from .errors import WebError
 from .schemas import MessageOut
 from .sse import (
@@ -489,6 +490,7 @@ class RunController:
         RUN_SOURCE.set(self.source)  # tag every log line under this task
         deps, sid = self.deps, self.session_id
         session, store = deps.session, deps.store
+        UI_DATA_SINK.set((store, sid))
         next_input: str | list[Message] = self._first_input
         ckpt = self._first_ckpt
         seed = self._seed_entries

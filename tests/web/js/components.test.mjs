@@ -1,5 +1,6 @@
-// UI components (components.js): envelope parsing, and the renderer registry's
-// lifecycle — late registration, replacement, failures, async cleanup.
+// UI components (components.js): envelope parsing, the renderer registry's
+// lifecycle — late registration, replacement, failures, async cleanup — and
+// export snapshots.
 //
 //   node --test tests/web/js/
 
@@ -13,6 +14,7 @@ import {
   parseEnvelope,
   registerRenderer,
   rerenderComponents,
+  snapshotComponent,
   sweepComponents,
   unmountComponent,
 } from '../../../lovia/web/static/js/components.js';
@@ -31,6 +33,15 @@ const el = () => ({
 });
 const noticeOf = (e) => e.children[0]?.textContent;
 const tick = () => new Promise((r) => setTimeout(r, 0));
+const quietly = async (fn) => {
+  const error = console.error;
+  console.error = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.error = error;
+  }
+};
 
 configureComponents({ label: (key, kind) => `${key}:${kind}` });
 
@@ -86,22 +97,40 @@ test('an unknown kind shows a notice, then upgrades once registered', () => {
   assert.equal(noticeOf(e), 'missing:late');
   /** @type {any[]} */
   const seen = [];
-  registerRenderer('late', (target, props, ctx) => {
-    seen.push([target, props, ctx.kind]);
+  registerRenderer('late', {
+    render(target, props, ctx) {
+      seen.push([target, props, ctx.kind]);
+    },
   });
   assert.deepEqual(seen, [[e, { n: 1 }, 'late']]);
   assert.deepEqual(e.children, []); // the notice was cleared for the renderer
   unmountComponent(/** @type {any} */ (e));
 });
 
+test('render is called as a method of its renderer', () => {
+  const e = el();
+  const renderer = {
+    seen: /** @type {unknown[]} */ ([]),
+    render(/** @type {any} */ _el, /** @type {unknown} */ props) {
+      this.seen.push(props);
+    },
+  };
+  registerRenderer('method', renderer);
+  mountComponent(/** @type {any} */ (e), { kind: 'method', props: 1 });
+  assert.deepEqual(renderer.seen, [1]);
+  unmountComponent(/** @type {any} */ (e));
+});
+
 test('re-registering a kind re-renders it, after the old cleanup', () => {
   const log = [];
-  registerRenderer('swap', () => () => log.push('old cleanup'));
+  registerRenderer('swap', { render: () => () => log.push('old cleanup') });
   const e = el();
   mountComponent(/** @type {any} */ (e), { kind: 'swap', props: null });
   return tick().then(() => {
-    registerRenderer('swap', () => {
-      log.push('new render');
+    registerRenderer('swap', {
+      render() {
+        log.push('new render');
+      },
     });
     assert.deepEqual(log, ['old cleanup', 'new render']);
     unmountComponent(/** @type {any} */ (e));
@@ -110,21 +139,25 @@ test('re-registering a kind re-renders it, after the old cleanup', () => {
 
 test('getRenderer: the current renderer, or undefined', () => {
   assert.equal(getRenderer('nobody'), undefined);
-  const first = () => {};
+  const first = { render() {} };
   registerRenderer('got', first);
   const held = getRenderer('got');
   assert.equal(held, first);
-  registerRenderer('got', () => {});
+  registerRenderer('got', { render() {} });
   assert.equal(held, first); // a held reference keeps the renderer it was given
 });
 
 test('a renderer can wrap the one it replaces, without recursion', () => {
   const log = [];
-  registerRenderer('wrapped', (_el, props) => {
-    log.push(`base:${props}`);
+  registerRenderer('wrapped', {
+    render(_el, props) {
+      log.push(`base:${props}`);
+    },
   });
-  const base = getRenderer('wrapped');
-  registerRenderer('wrapped', (target, props, ctx) => base(target, `${props}+`, ctx));
+  const base = /** @type {any} */ (getRenderer('wrapped'));
+  registerRenderer('wrapped', {
+    render: (target, props, ctx) => base.render(target, `${props}+`, ctx),
+  });
   const e = el();
   mountComponent(/** @type {any} */ (e), { kind: 'wrapped', props: 'p' });
   assert.deepEqual(log, ['base:p+']);
@@ -132,23 +165,23 @@ test('a renderer can wrap the one it replaces, without recursion', () => {
 });
 
 test('a throwing or rejecting renderer shows the failure notice', async () => {
-  registerRenderer('boom', () => {
-    throw new Error('x');
+  registerRenderer('boom', {
+    render() {
+      throw new Error('x');
+    },
   });
-  registerRenderer('reject', async () => {
-    throw new Error('y');
+  registerRenderer('reject', {
+    async render() {
+      throw new Error('y');
+    },
   });
   const a = el();
   const b = el();
-  const quiet = console.error;
-  console.error = () => {};
-  try {
+  await quietly(async () => {
     mountComponent(/** @type {any} */ (a), { kind: 'boom', props: 1 });
     mountComponent(/** @type {any} */ (b), { kind: 'reject', props: 1 });
     await tick();
-  } finally {
-    console.error = quiet;
-  }
+  });
   assert.equal(noticeOf(a), 'failed:boom');
   assert.equal(noticeOf(b), 'failed:reject');
   unmountComponent(/** @type {any} */ (a));
@@ -158,12 +191,12 @@ test('a throwing or rejecting renderer shows the failure notice', async () => {
 test('an async cleanup arriving after unmount runs at once', async () => {
   let release = () => {};
   let cleaned = 0;
-  registerRenderer(
-    'slow',
-    () => new Promise((resolve) => {
-      release = () => resolve(() => cleaned++);
-    }),
-  );
+  registerRenderer('slow', {
+    render: () =>
+      new Promise((resolve) => {
+        release = () => resolve(() => cleaned++);
+      }),
+  });
   const e = el();
   mountComponent(/** @type {any} */ (e), { kind: 'slow', props: 1 });
   unmountComponent(/** @type {any} */ (e));
@@ -175,9 +208,11 @@ test('an async cleanup arriving after unmount runs at once', async () => {
 test('rerender and sweep: cleanup runs once per render; detached mounts go', async () => {
   let renders = 0;
   let cleanups = 0;
-  registerRenderer('count', () => {
-    renders++;
-    return () => cleanups++;
+  registerRenderer('count', {
+    render() {
+      renders++;
+      return () => cleanups++;
+    },
   });
   const e = el();
   mountComponent(/** @type {any} */ (e), { kind: 'count', props: 1 });
@@ -197,8 +232,10 @@ test('ctx.send is refused once the component left the page', () => {
   configureComponents({ send: (text) => (sent.push(text), true) });
   /** @type {any} */
   let ctx;
-  registerRenderer('sender', (_el, _props, c) => {
-    ctx = c;
+  registerRenderer('sender', {
+    render(_el, _props, c) {
+      ctx = c;
+    },
   });
   const e = el();
   mountComponent(/** @type {any} */ (e), { kind: 'sender', props: 1 });
@@ -210,6 +247,46 @@ test('ctx.send is refused once the component left the page', () => {
 });
 
 test('invalid registrations throw', () => {
-  assert.throws(() => registerRenderer('Bad', () => {}), TypeError);
-  assert.throws(() => registerRenderer('ok', /** @type {any} */ (null)), TypeError);
+  const bad = /** @type {any} */ ([null, () => {}, {}, { render: 1 }, { render() {}, snapshot: 'x' }]);
+  assert.throws(() => registerRenderer('Bad', { render() {} }), TypeError);
+  for (const r of bad) assert.throws(() => registerRenderer('ok', r), TypeError);
+});
+
+// ---- snapshots -------------------------------------------------------------
+
+test('snapshotComponent: the HTML, with a context for the exported chat', async () => {
+  /** @type {any} */
+  let seen;
+  registerRenderer('snap', {
+    render() {},
+    async snapshot(props, ctx) {
+      seen = ctx;
+      return `<p>${props}</p>`;
+    },
+  });
+  const html = await snapshotComponent({ kind: 'snap', props: 7 }, { callId: 'c1', sessionId: 's9' });
+  assert.equal(html, '<p>7</p>');
+  assert.equal(seen.kind, 'snap');
+  assert.equal(seen.callId, 'c1');
+  assert.equal(seen.sessionId, 's9');
+  assert.equal('send' in seen, false);
+});
+
+test('snapshotComponent: null without a snapshot, an unknown kind, or on failure', async () => {
+  registerRenderer('nosnap', { render() {} });
+  registerRenderer('badsnap', {
+    render() {},
+    snapshot() {
+      throw new Error('x');
+    },
+  });
+  assert.equal(await snapshotComponent({ kind: 'nosnap', props: 1 }), null);
+  assert.equal(await snapshotComponent({ kind: 'nobody', props: 1 }), null);
+  assert.equal(await quietly(() => snapshotComponent({ kind: 'badsnap', props: 1 })), null);
+});
+
+test('re-registering a kind without a snapshot drops the old one', async () => {
+  registerRenderer('drop', { render() {}, snapshot: () => 'old' });
+  registerRenderer('drop', { render() {} });
+  assert.equal(await snapshotComponent({ kind: 'drop', props: 1 }), null);
 });

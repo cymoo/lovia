@@ -1,5 +1,6 @@
 // The table component's pure helpers (tables.js): squaring up untrusted props,
-// cell display, numeric-column detection, sorting, filtering, and TSV.
+// cell display, numeric-column detection, sorting, filtering, TSV, and the
+// export snapshot.
 //
 //   node --test tests/web/js/
 
@@ -12,6 +13,7 @@ import {
   normalizeTable,
   numericColumns,
   sortRows,
+  tableSnapshot,
   toTsv,
 } from '../../../lovia/web/static/js/tables.js';
 
@@ -79,4 +81,14 @@ test('toTsv: tab-separated; tabs and newlines inside a cell become spaces', () =
 
 test('toTsv defuses strings a spreadsheet would run as formulas', () => {
   assert.equal(toTsv([['=SUM(A1)', '@x', -5, '+1']]), "'=SUM(A1)\t'@x\t-5\t'+1");
+});
+
+test('tableSnapshot: every row, escaped, numbers right-aligned, title as caption', () => {
+  const rows = Array.from({ length: 45 }, (_, i) => [`<b>${i}</b>`, i]);
+  const html = String(tableSnapshot({ title: 'A & B', columns: ['name', 'n'], rows }, /** @type {any} */ ({})));
+  assert.match(html, /^<figure class="table"><figcaption>A &amp; B<\/figcaption><table>/);
+  assert.match(html, /<th>name<\/th><th class="num">n<\/th>/);
+  assert.match(html, /<tr><td>&lt;b&gt;44&lt;\/b&gt;<\/td><td class="num">44<\/td><\/tr>/);
+  assert.equal(html.match(/<tr>/g)?.length, 46); // the heading row + all 45, unpaged
+  assert.doesNotMatch(String(tableSnapshot({ columns: ['a'], rows: [] }, /** @type {any} */ ({}))), /figcaption/);
 });

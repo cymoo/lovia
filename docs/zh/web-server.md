@@ -158,14 +158,16 @@ cookie，接口可以复用你传给 `auth=` 的依赖。信封要控制在 Agen
 
 ```js
 // ext/kpis.js
-window.lovia.registerRenderer('kpis', (el, props, ctx) => {
-  for (const item of props.items) {
-    const card = document.createElement('div');
-    card.className = 'kpi';
-    card.textContent = `${item.label}: ${item.value}`; // 不要用 innerHTML
-    el.append(card);
-  }
-  // 可以返回一个清理函数（释放 observer、定时器、图表实例等）。
+window.lovia.registerRenderer('kpis', {
+  render(el, props, ctx) {
+    for (const item of props.items) {
+      const card = document.createElement('div');
+      card.className = 'kpi';
+      card.textContent = `${item.label}: ${item.value}`; // 不要用 innerHTML
+      el.append(card);
+    }
+    // 可以返回一个清理函数（释放 observer、定时器、图表实例等）。
+  },
 });
 ```
 
@@ -186,9 +188,24 @@ app.mount("/ext", StaticFiles(directory="ext"))
 | `sessionId` / `callId` | 组件所属的会话和工具调用 |
 | `send(text)` | 以用户身份发送一条消息，例如"下钻 3 月"按钮。只在真实的点击或按键中生效，其他情况返回 `false` |
 
-渲染器可以是 async 函数。渲染出错时卡片会提示，原始输出仍可通过卡片上的"查看原始数据"按钮
+`render` 可以是 async 函数。渲染出错时卡片会提示，原始输出仍可通过卡片上的"查看原始数据"按钮
 查看。某个 kind 还没有渲染器时先显示提示，等渲染器注册后自动补上，所以加载顺序无所谓。重复
 注册同一个 kind 会替换原来的渲染器。
+
+导出的 HTML 是不含脚本的独立文件，`render` 在那里用不上。可以再提供一个
+`snapshot(props, ctx)`，把组件返回成静态 HTML（同步或 async 均可；`ctx` 相同，只是没有
+`send`），导出时会对它做净化。没有 snapshot 的组件，导出时显示原始输出。内置表格会导出成
+包含全部行的普通表格，图表导出成 SVG 图片。
+
+```js
+window.lovia.registerRenderer('kpis', {
+  render(el, props, ctx) { /* … */ },
+  snapshot(props) {
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    return props.items.map((i) => `<p><b>${esc(i.label)}</b>: ${esc(i.value)}</p>`).join('');
+  },
+});
+```
 
 !!! warning "props 不可信"
     props 可能来自模型、工具、MCP 服务器或远程内容。请用 `textContent` 输出（或用页面上的
@@ -200,7 +217,8 @@ app.mount("/ext", StaticFiles(directory="ext"))
 
 ### 包装已有的渲染器
 
-`window.lovia.getRenderer(kind)` 返回当前注册给 `kind` 的渲染器（没有则为 `undefined`），
+`window.lovia.getRenderer(kind)` 返回当前注册给 `kind` 的渲染器，即它的
+`{ render, snapshot }`（没有则为 `undefined`），
 于是一个渲染器可以建立在另一个之上。内置渲染器在你的脚本运行之前就已注册。常见用法：工具只
 返回一个很小的信封，指向你自己接口后面的数据，包装渲染器把数据取回来，再交给内置的 chart：
 
@@ -208,19 +226,21 @@ app.mount("/ext", StaticFiles(directory="ext"))
 const chart = window.lovia.getRenderer('chart');
 const cache = new Map(); // 切换主题时组件会重新渲染
 
-window.lovia.registerRenderer('sales.chart', async (el, props, ctx) => {
-  const url = `${ctx.basePath}/${props.data_url}`;
-  if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
-  const source = await cache.get(url);
-  if (!source) {
-    el.textContent = '图表数据已过期。';
-    return;
-  }
-  return chart(el, { ...props.option, dataset: { source } }, ctx);
+window.lovia.registerRenderer('sales.chart', {
+  async render(el, props, ctx) {
+    const url = `${ctx.basePath}/${props.data_url}`;
+    if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
+    const source = await cache.get(url);
+    if (!source) {
+      el.textContent = '图表数据已过期。';
+      return;
+    }
+    return chart.render(el, { ...props.option, dataset: { source } }, ctx);
+  },
 });
 ```
 
-拿到的是调用那一刻注册的函数，所以包装渲染器也可以替换它所包装的 kind（比如围绕内置的
+拿到的是调用那一刻注册的渲染器，所以包装渲染器也可以替换它所包装的 kind（比如围绕内置的
 `chart` 重新注册 `chart`），而不会调用到自己。
 
 ## 追问建议

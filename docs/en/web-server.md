@@ -172,14 +172,16 @@ write a renderer: a JS module loaded with `ChatUI(scripts=[...])`:
 
 ```js
 // ext/kpis.js
-window.lovia.registerRenderer('kpis', (el, props, ctx) => {
-  for (const item of props.items) {
-    const card = document.createElement('div');
-    card.className = 'kpi';
-    card.textContent = `${item.label}: ${item.value}`; // never innerHTML
-    el.append(card);
-  }
-  // Optionally return a cleanup function (observers, timers, chart instances).
+window.lovia.registerRenderer('kpis', {
+  render(el, props, ctx) {
+    for (const item of props.items) {
+      const card = document.createElement('div');
+      card.className = 'kpi';
+      card.textContent = `${item.label}: ${item.value}`; // never innerHTML
+      el.append(card);
+    }
+    // Optionally return a cleanup function (observers, timers, chart instances).
+  },
 });
 ```
 
@@ -201,10 +203,27 @@ props, and a context:
 | `sessionId` / `callId` | The chat and the tool call the component belongs to |
 | `send(text)` | Post a user message, e.g. from a "drill into March" button. It works only inside a real click or keypress, and returns `false` otherwise |
 
-A renderer may be async. If it throws, the card says so, and the raw output
+`render` may be async. If it throws, the card says so, and the raw output
 stays behind the card's Source toggle. A kind with no renderer shows a notice
 until one registers, so load order doesn't matter. Registering a kind again
 replaces its renderer.
+
+The chat's HTML export is a standalone file with no scripts, so `render`
+can't draw there. Add a `snapshot(props, ctx)` that returns the component as
+static HTML (sync or async; the same `ctx`, without `send`). The export
+sanitizes it. Without a snapshot, the export shows the raw output. The
+built-in table exports every row as a plain table, and the chart exports as
+an SVG image.
+
+```js
+window.lovia.registerRenderer('kpis', {
+  render(el, props, ctx) { /* … */ },
+  snapshot(props) {
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+    return props.items.map((i) => `<p><b>${esc(i.label)}</b>: ${esc(i.value)}</p>`).join('');
+  },
+});
+```
 
 !!! warning "Props are untrusted"
     Props come from the model, tools, MCP servers, or remote content. Write
@@ -218,8 +237,8 @@ posts a follow-up through `ctx.send`.
 
 ### Wrapping a renderer
 
-`window.lovia.getRenderer(kind)` returns the renderer registered for `kind`
-(or `undefined`), so one renderer can build on another. The built-in renderers
+`window.lovia.getRenderer(kind)` returns the renderer registered for `kind` —
+its `{ render, snapshot }` — or `undefined`, so one renderer can build on another. The built-in renderers
 are registered before your scripts run. A common use: the tool returns a small
 envelope pointing at data behind your own endpoint, and a wrapper fetches the
 data and hands it to the built-in chart:
@@ -228,19 +247,21 @@ data and hands it to the built-in chart:
 const chart = window.lovia.getRenderer('chart');
 const cache = new Map(); // components re-render on a theme switch
 
-window.lovia.registerRenderer('sales.chart', async (el, props, ctx) => {
-  const url = `${ctx.basePath}/${props.data_url}`;
-  if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
-  const source = await cache.get(url);
-  if (!source) {
-    el.textContent = 'This chart has expired.';
-    return;
-  }
-  return chart(el, { ...props.option, dataset: { source } }, ctx);
+window.lovia.registerRenderer('sales.chart', {
+  async render(el, props, ctx) {
+    const url = `${ctx.basePath}/${props.data_url}`;
+    if (!cache.has(url)) cache.set(url, fetch(url).then((r) => (r.ok ? r.json() : null)));
+    const source = await cache.get(url);
+    if (!source) {
+      el.textContent = 'This chart has expired.';
+      return;
+    }
+    return chart.render(el, { ...props.option, dataset: { source } }, ctx);
+  },
 });
 ```
 
-The function you get is the one registered at the time of the call, so a
+The renderer you get is the one registered at the time of the call, so a
 wrapper may also replace the kind it wraps — re-register `chart` around the
 built-in one, say — without calling itself.
 

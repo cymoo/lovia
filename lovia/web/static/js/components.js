@@ -2,10 +2,11 @@
 //
 // A tool opts in by returning a UI envelope (lovia/web/components.py
 // `ui_result`) — {"lovia_ui": {"kind", "props" | "from_args"}} — and the
-// renderer registered for `kind` draws it into the tool card. Renderers come
-// from the page itself or from `ChatUI(scripts=...)` modules calling
-// `window.lovia.registerRenderer(kind, render)`. Design notes:
-// docs/design/web-ui-components.md.
+// renderer registered for `kind` draws it into the tool card, and optionally
+// as static HTML into the chat's HTML export. Renderers come from the page
+// itself or from `ChatUI(scripts=...)` modules calling
+// `window.lovia.registerRenderer(kind, { render, snapshot })`. Design notes:
+// docs/design/web-ui-components.md, docs/design/web-component-data.md.
 //
 // No DOM or app-module access at import time: the host (chat.js) injects
 // labels and the render context through `configureComponents`, which keeps
@@ -25,7 +26,18 @@
  */
 /**
  * @typedef {(el: HTMLElement, props: unknown, ctx: RenderContext) =>
- *   void | Cleanup | Promise<void | Cleanup>} Renderer
+ *   void | Cleanup | Promise<void | Cleanup>} Render
+ */
+/** @typedef {Omit<RenderContext, 'send'>} SnapshotContext */
+/**
+ * @typedef {(props: unknown, ctx: SnapshotContext) => string | Promise<string>} Snapshot
+ *   Static HTML for the chat's HTML export — a standalone file, so no script;
+ *   the export sanitizes it.
+ */
+/**
+ * @typedef {object} Renderer
+ * @property {Render} render Draw the component into the chat.
+ * @property {Snapshot} [snapshot] Without one, the export keeps the raw output.
  */
 /**
  * @typedef {object} Mount
@@ -106,9 +118,9 @@ export function configureComponents(opts) {
 
 /**
  * The renderer registered for `kind` right now, so another can wrap it — e.g.
- * fetch data, then draw it with the built-in `chart`. Deliberately the current
- * function, not a lookup at call time: a wrapper re-registered under the same
- * kind must call the renderer it replaced, not itself.
+ * transform the props, then draw them with the built-in `chart`. Deliberately
+ * the current object, not a lookup at call time: a wrapper re-registered under
+ * the same kind must call the renderer it replaced, not itself.
  * @param {string} kind
  * @returns {Renderer | undefined}
  */
@@ -121,17 +133,40 @@ export function getRenderer(kind) {
  * already on screen — waiting for it, or drawn by the one it replaces —
  * render again, so script load order never matters.
  * @param {string} kind
- * @param {Renderer} render
+ * @param {Renderer} renderer
  */
-export function registerRenderer(kind, render) {
+export function registerRenderer(kind, renderer) {
   if (typeof kind !== 'string' || !KIND_RE.test(kind)) {
     throw new TypeError(`lovia.registerRenderer: invalid kind ${JSON.stringify(kind)}`);
   }
-  if (typeof render !== 'function') {
-    throw new TypeError('lovia.registerRenderer: render must be a function');
+  if (typeof renderer?.render !== 'function') {
+    throw new TypeError('lovia.registerRenderer: expected { render: function, snapshot?: function }');
   }
-  renderers.set(kind, render);
+  if (renderer.snapshot != null && typeof renderer.snapshot !== 'function') {
+    throw new TypeError('lovia.registerRenderer: snapshot must be a function');
+  }
+  renderers.set(kind, renderer);
   for (const m of mounts) if (m.kind === kind) run(m);
+}
+
+/**
+ * `comp` as static HTML for the HTML export, or null when its kind has no
+ * snapshot or the snapshot fails — the export then keeps the raw output.
+ * @param {UiComponent} comp
+ * @param {{ callId?: string | null, sessionId?: string | null }} [opts]
+ *   `sessionId`: the exported chat, which need not be the one on screen.
+ * @returns {Promise<string | null>}
+ */
+export async function snapshotComponent(comp, { callId = null, sessionId = null } = {}) {
+  const renderer = renderers.get(comp.kind);
+  if (!renderer?.snapshot) return null;
+  try {
+    const ctx = { ...host.context(), kind: comp.kind, callId, sessionId };
+    return String(await renderer.snapshot(comp.props, ctx));
+  } catch (err) {
+    console.error(`lovia component "${comp.kind}" failed to snapshot:`, err);
+    return null;
+  }
 }
 
 /** @param {Cleanup | null} fn */
@@ -166,8 +201,8 @@ function notice(m, text) {
 /** @param {Mount} m */
 function run(m) {
   teardown(m);
-  const render = renderers.get(m.kind);
-  if (!render) {
+  const renderer = renderers.get(m.kind);
+  if (!renderer) {
     notice(m, host.label('missing', m.kind));
     return;
   }
@@ -186,7 +221,7 @@ function run(m) {
   };
   let out;
   try {
-    out = render(el, m.props, ctx);
+    out = renderer.render(el, m.props, ctx);
   } catch (err) {
     fail(err);
     return;

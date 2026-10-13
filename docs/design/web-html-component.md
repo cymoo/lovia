@@ -115,7 +115,7 @@ before any of the page's own code:
 <!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none';
   script-src 'unsafe-inline'; style-src 'unsafe-inline';
-  img-src data: blob:; font-src data:; media-src data: blob:">
+  img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'">
 <style>:root { --bg: …; --surface: …; --ink: …; --accent: …; --chart-1: … }</style>
 <script>/* bootstrap */</script>
 </head><body>
@@ -174,8 +174,12 @@ JSON-RPC 2.0 notifications over `postMessage`.
 ### The card
 
 The page sits in a `figure.js` card like the chart and table: the title as the
-heading, and a toolbar with **Download HTML** (the page as the tool sent it,
-`<title>`.html) and **Full screen**. Full screen lifts the height cap. A theme
+heading, and a toolbar with **Download HTML** and **Full screen**. The
+download is the frame's own document, `<title>`.html, policy included, so
+the page opened from disk still can't fetch or load anything remote.
+`form-action` is in the policy for that copy, because `default-src` doesn't
+cover it. A top-level page can still navigate itself, which no policy
+prevents. Full screen lifts the height cap. A theme
 switch re-renders, which reloads the page with the new tokens (non-goal
 above).
 
@@ -283,8 +287,8 @@ for a user asking for MCP UIs. The shared message names keep it additive.
 
 ## Tests
 
-- Python: `show_html` validation (empty, oversize, title); config off by
-  default; builder wiring (parent only).
+- Python: `show_html` validation (empty, oversize, title); the
+  `frame-src 'none'` header; builder wiring (always on, parent only).
 - Node: the `srcdoc` assembly (CSP first, tokens, bootstrap, the page
   appended verbatim); the message handler (source check, clamps, unknown
   methods, the `send` cap and gate, removal on cleanup); the snapshot

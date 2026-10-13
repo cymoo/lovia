@@ -14,10 +14,12 @@ import { registerRenderer } from './components.js';
 import { figure, save, staticFigure } from './figure.js';
 import { escapeHtml } from './util.js';
 
-// MCP Apps' default policy, less 'self' (an opaque origin has none).
+// MCP Apps' default policy, less 'self' (an opaque origin has none), plus
+// form-action, which default-src doesn't cover — the sandbox stops forms in
+// the frame, the policy in a downloaded copy.
 export const FRAME_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  'img-src data: blob:; font-src data:; media-src data: blob:';
+  "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'";
 // Longest follow-up a page may post; a longer one is dropped, not cut.
 export const MAX_SEND = 4000;
 
@@ -110,6 +112,21 @@ export function handleMessage(data, on) {
   }
 }
 
+/**
+ * Route messages from `frame`, and only from it, to `on`. The origin of an
+ * opaque frame is "null" and proves nothing; its window does.
+ * @param {{ contentWindow: unknown }} frame
+ * @param {Parameters<typeof handleMessage>[1]} on
+ * @returns {() => void} Stop listening.
+ */
+export function listenToFrame(frame, on) {
+  const onMessage = (/** @type {MessageEvent} */ e) => {
+    if (e.source === frame.contentWindow) handleMessage(e.data, on);
+  };
+  window.addEventListener('message', onMessage);
+  return () => window.removeEventListener('message', onMessage);
+}
+
 const LABELS = {
   en: {
     page: 'Page',
@@ -148,7 +165,10 @@ function renderHtml(el, props, ctx) {
     heading: title ? { text: title } : null,
     lang: ctx.lang,
   });
-  tool(L.download, 'HTML', () => save(new Blob([html], { type: 'text/html' }), filename('html')));
+  const doc = () => buildSrcdoc(html, { theme: ctx.theme, tokens: readTokens() });
+  // The document the frame runs, policy included: opened from disk, the
+  // page still can't fetch or load anything remote.
+  tool(L.download, 'HTML', () => save(new Blob([doc()], { type: 'text/html' }), filename('html')));
 
   /** @type {(() => void) | null} */
   let stop = null;
@@ -159,21 +179,15 @@ function renderHtml(el, props, ctx) {
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.setAttribute('referrerpolicy', 'no-referrer');
     frame.title = title || L.page;
-    frame.srcdoc = buildSrcdoc(html, { theme: ctx.theme, tokens: readTokens() });
-    const onMessage = (/** @type {MessageEvent} */ e) => {
-      // The origin of an opaque frame is "null" and proves nothing.
-      if (e.source !== frame.contentWindow) return;
-      handleMessage(e.data, {
-        resize: (h) => frame.style.setProperty('--page-height', `${h}px`),
-        // ctx.send wants a live user activation, but that is page-wide: a
-        // keypress in the composer would let a page's timer post. Focus
-        // inside the frame shows the gesture was the user's, in this page.
-        send: (text) => document.activeElement === frame && ctx.send(text),
-      });
-    };
-    window.addEventListener('message', onMessage);
+    frame.srcdoc = doc();
+    stop = listenToFrame(frame, {
+      resize: (h) => frame.style.setProperty('--page-height', `${h}px`),
+      // ctx.send wants a live user activation, but that is page-wide: a
+      // keypress in the composer would let a page's timer post. Focus
+      // inside the frame shows the gesture was the user's, in this page.
+      send: (text) => document.activeElement === frame && ctx.send(text),
+    });
     body.replaceChildren(frame);
-    stop = () => window.removeEventListener('message', onMessage);
   };
 
   // A replayed page waits for a click: one that loops forever would

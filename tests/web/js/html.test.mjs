@@ -13,6 +13,7 @@ import {
   buildSrcdoc,
   handleMessage,
   htmlSnapshot,
+  listenToFrame,
   normalizePage,
 } from '../../../lovia/web/static/js/html.js';
 
@@ -46,7 +47,26 @@ test('buildSrcdoc: CSP, tokens and bootstrap come before the page', () => {
 test('the frame CSP allows inline code and data images, nothing remote', () => {
   assert.match(FRAME_CSP, /default-src 'none'/);
   assert.match(FRAME_CSP, /script-src 'unsafe-inline'/);
+  assert.match(FRAME_CSP, /form-action 'none'/); // default-src doesn't cover it
   assert.doesNotMatch(FRAME_CSP, /https?:|\*|connect-src/);
+});
+
+test('listenToFrame acts only on messages from its own frame, until stopped', () => {
+  globalThis.window = /** @type {any} */ (new EventTarget());
+  const post = (source, data) => {
+    const e = new Event('message');
+    Object.defineProperties(e, { source: { value: source }, data: { value: data } });
+    window.dispatchEvent(e);
+  };
+  const frame = { contentWindow: {} };
+  const sent = [];
+  const stop = listenToFrame(frame, { resize: () => {}, send: (t) => sent.push(t) });
+  post({}, say('from another window')); // same message, a different source
+  post(null, say('from nowhere'));
+  post(frame.contentWindow, say('from the frame'));
+  stop();
+  post(frame.contentWindow, say('after stop'));
+  assert.deepEqual(sent, ['from the frame']);
 });
 
 /** Collect what handleMessage asks the parent to do. */

@@ -309,6 +309,7 @@ const LABELS = {
     svg: 'Download SVG',
     csv: 'Download data (CSV)',
     json: 'Download data (JSON)',
+    chart: 'Chart',
   },
   zh: {
     failed: '无法绘制该图表',
@@ -316,6 +317,7 @@ const LABELS = {
     svg: '下载 SVG 图片',
     csv: '下载数据（CSV）',
     json: '下载数据（JSON）',
+    chart: '图表',
   },
 };
 
@@ -461,7 +463,7 @@ const SNAPSHOT_SIZE = { width: 720, height: 360 };
  * node, and an <img> runs no script and takes no page CSS.
  * @type {import('./components.js').Snapshot}
  */
-async function chartSnapshot(props, ctx) {
+export async function chartSnapshot(props, ctx) {
   const { heading, option } = liftTitle(sanitizeOption(props));
   const ec = await loadEcharts();
   const chart = ec.init(null, themeFromCss(), {
@@ -479,7 +481,7 @@ async function chartSnapshot(props, ctx) {
   }
   const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   const img =
-    `<img src="${src}" alt="${escapeHtml(heading?.text ?? '')}" ` +
+    `<img src="${src}" alt="${escapeHtml(heading?.text || (LABELS[ctx.lang] || LABELS.en).chart)}" ` +
     `width="${SNAPSHOT_SIZE.width}" height="${SNAPSHOT_SIZE.height}">`;
   return staticFigure('chart', heading, img);
 }

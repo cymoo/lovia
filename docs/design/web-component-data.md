@@ -110,7 +110,7 @@ truncation loses data.
 
   `sanitizeOption` and `liftTitle` run first, exactly as for the live chart.
   The heading becomes a `<figcaption>`, matching the live card.
-- It is embedded as `<img src="data:image/svg+xml;base64,…" alt="<title>">`,
+- It is embedded as `<img src="data:image/svg+xml;charset=utf-8,<percent-encoded SVG>" alt="<title, else 'Chart'>">`,
   not as inline SVG. An image cannot run script or pick up the page's CSS,
   so the snapshot needs no SVG-specific sanitizer tuning, and DOMPurify
   allows `data:` on `<img>` by default.

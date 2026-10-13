@@ -7,8 +7,8 @@ arguments (``static/js/charts.js``, which also sanitizes it). Passing the
 option through — instead of a lovia chart schema — means every ECharts chart
 type works with no code here, in a format models already know.
 
-Off by default in ``lovia web`` (``"charts": true`` in config.json); add it to
-your own agent with ``tools=[show_chart]``. A tool of your own that takes an
+``lovia web``'s default agent has it; add it to your own agent with
+``tools=[show_chart]``. A tool of your own that takes an
 option from the model checks it with :func:`validate_chart_option`.
 """
 

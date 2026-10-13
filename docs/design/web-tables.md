@@ -179,7 +179,8 @@ def show_table(
   one private helper in `components.py`.
 - `lovia web`: `"tables": true` in `config.json` (`WebConfig.tables`, off by
   default like `charts`) adds it to the parent agent only — a background
-  subagent's transcript has no one watching.
+  subagent's transcript has no one watching. (Since v0.9.83 the switch is
+  gone: the default agent always has `show_table`, still parent only.)
 
 ### Renderer: `static/js/tables.js`
 

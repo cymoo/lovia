@@ -315,7 +315,9 @@ Wiring:
 - In `lovia web`, a `config.json` switch `"charts": true` (top-level
   `WebConfig.charts: bool = False`) makes `builder.py` add `show_chart` to the
   **parent** agent's tools only. A background subagent has nobody watching
-  its transcript, the same reasoning as for `ask_human`.
+  its transcript, the same reasoning as for `ask_human`. (Since v0.9.83 the
+  switch is gone: the default agent always has `show_chart`, still parent
+  only.)
 
 ### Client: `static/js/charts.js`
 

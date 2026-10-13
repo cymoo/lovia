@@ -9,8 +9,8 @@ never pass through the model's output. The renderer ignores keys it doesn't
 know, so such a tool may add model-facing extras (a row count, the SQL) to
 the same props.
 
-Off by default in ``lovia web`` (``"tables": true`` in config.json); add it to
-your own agent with ``tools=[show_table]``.
+``lovia web``'s default agent has it; add it to your own agent with
+``tools=[show_table]``.
 """
 
 from __future__ import annotations

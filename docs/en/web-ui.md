@@ -210,13 +210,8 @@ The `show_chart` tool draws interactive charts in the chat — line, bar, pie,
 scatter, heatmap, candlestick, sankey and the other
 [Apache ECharts](https://echarts.apache.org/) series types. The model writes an
 ECharts option as the call's argument, and the card renders it, live and when
-the chat is reopened. It is off by default; turn it on in `config.json`:
-
-```json
-{ "charts": true }
-```
-
-For your own agent, add the tool: `tools=[show_chart]` (from `lovia.web`).
+the chat is reopened. The default agent of `lovia web` has the tool; for your
+own agent, add it: `tools=[show_chart]` (from `lovia.web`).
 Any tool can produce a chart too: `return ui_result("chart", option)`, which
 draws from real data without the model copying numbers (see
 [UI components](web-server.md#ui-components)). A tool that takes the option
@@ -254,13 +249,9 @@ a time. Numbers align right and sort as numbers. A toolbar copies the table
 (tab-separated, ready to paste into a spreadsheet), downloads it as CSV, or
 opens it full screen; both exports take the current view, filtered and sorted.
 The chat's HTML export includes it as a plain table with every row.
-It is off by default; turn it on in `config.json`:
 
-```json
-{ "tables": true }
-```
-
-For your own agent, add the tool: `tools=[show_table]` (from `lovia.web`). The
+The default agent of `lovia web` has the tool; for your own agent, add it:
+`tools=[show_table]` (from `lovia.web`). The
 more useful path is often a tool of your own that returns
 `ui_result("table", {"title": ..., "columns": [...], "rows": [[...], ...]})`:
 the rows come from your data — a query, an API — and the model never writes

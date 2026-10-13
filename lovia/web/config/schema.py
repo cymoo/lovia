@@ -205,10 +205,6 @@ class WebConfig(BaseModel):
     roles: Roles = Field(default_factory=Roles)
     search: SearchConfig = Field(default_factory=SearchConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
-    # Give the default agent `show_chart` (ECharts charts in the chat UI).
-    charts: bool = False
-    # Give the default agent `show_table` (interactive tables in the chat UI).
-    tables: bool = False
 
     @model_validator(mode="after")
     def _check_references(self) -> "WebConfig":

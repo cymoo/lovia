@@ -471,8 +471,8 @@ FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流�
 把结果渲染成 UI，渲染器通过 `ChatUI(scripts=[...])` 加载（`lovia.getRenderer` 可以让一个
 渲染器包装另一个）；`put_ui_data` 可以把大块结果挡在模型上下文之外，模型只看预览，页面照常画出全部数据。内置了两种：表格，支持排序、筛选、翻页、复制和下载 CSV（`show_table`，
 或直接从你的数据返回 `ui_result("table", ...)`）；以及图表（`show_chart`，基于 Apache
-ECharts），支持下载 PNG / SVG / CSV 和全屏查看；两者在导出的 HTML 中也会画出来。`lovia web` 在配置中设置 `"tables": true` /
-`"charts": true` 即可开启对应工具。工具共用的资源（比如数据库连接池）可以通过
+ECharts），支持下载 PNG / SVG / CSV 和全屏查看；两者在导出的 HTML 中也会画出来。`lovia web` 的默认 Agent
+已带有这两个工具。工具共用的资源（比如数据库连接池）可以通过
 `create_app(lifespan=...)` 随应用一起打开和关闭。
 
 → [Web UI](https://cymoo.github.io/lovia/zh/web-ui/) · [Web 服务端](https://cymoo.github.io/lovia/zh/web-server/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)

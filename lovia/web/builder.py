@@ -356,10 +356,7 @@ def build_default_agent(
     if question_channel is not None:
         tools = [*tools, ask_human(question_channel)]
     # Parent-only too: a background child's transcript has no one watching.
-    if config.charts:
-        tools = [*tools, show_chart]
-    if config.tables:
-        tools = [*tools, show_table]
+    tools = [*tools, show_chart, show_table]
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,

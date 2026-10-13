@@ -586,7 +586,8 @@ def test_build_default_agent_subagents_child_composition(
     # ones that must not ride along (Subagents, Scheduling, Memory).
     assert {type(p).__name__ for p in child.plugins} == {"Skills", "Todo"}
     assert child.workspace is agent.workspace
-    assert child.tools == agent.tools
+    parent_only = {"show_chart", "show_table"}  # no one watches a child's transcript
+    assert child.tools == [t for t in agent.tools if t.name not in parent_only]
 
 
 def test_build_default_agent_no_subagents(
@@ -600,28 +601,19 @@ def test_build_default_agent_no_subagents(
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
-@pytest.mark.parametrize(
-    ("switch", "tool_name"), [("charts", "show_chart"), ("tables", "show_table")]
-)
-def test_build_default_agent_ui_tools_are_opt_in_and_parent_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, switch: str, tool_name: str
+def test_build_default_agent_shows_charts_and_tables_parent_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia import Subagents
-    from lovia.web.config import WebConfig
 
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args(["--no-memory"])
-    store = ChatStore.in_memory()
-    off = builder.build_default_agent(args, store, _provider())
-    assert tool_name not in {t.name for t in off.tools}
-
-    on = builder.build_default_agent(
-        args, store, _provider(), config=WebConfig(**{switch: True})
-    )
-    assert tool_name in {t.name for t in on.tools}
-    (plugin,) = [p for p in on.plugins if isinstance(p, Subagents)]
+    agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
+    names = {t.name for t in agent.tools}
+    assert {"show_chart", "show_table"} <= names
+    (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
-    assert tool_name not in {t.name for t in child.tools}
+    assert not {"show_chart", "show_table"} & {t.name for t in child.tools}
 
 
 def test_build_default_agent_wires_the_vision_role(

@@ -164,14 +164,8 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 
 `show_chart` 工具可以在聊天中绘制交互式图表，支持折线、柱状、饼图、散点、热力图、K 线、
 桑基图等 [Apache ECharts](https://echarts.apache.org/) 的系列类型。模型把 ECharts option
-写成调用参数，卡片负责渲染；实时对话和重新打开会话时都会显示。默认关闭，在 `config.json`
-中开启：
-
-```json
-{ "charts": true }
-```
-
-使用自己的 Agent 时，把工具加进去：`tools=[show_chart]`（从 `lovia.web` 导入）。任何工具也都
+写成调用参数，卡片负责渲染；实时对话和重新打开会话时都会显示。`lovia web` 的默认 Agent
+已带有这个工具；使用自己的 Agent 时，把工具加进去：`tools=[show_chart]`（从 `lovia.web` 导入）。任何工具也都
 可以产出图表：`return ui_result("chart", option)`，直接用真实数据作图，不需要模型抄写数字
 （见[UI 组件](web-server.md#ui-组件)）。如果工具的 option 来自模型（比如执行查询后把结果行放进
 option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛出与 `show_chart` 相同的
@@ -199,13 +193,10 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 恢复原顺序），行数较多时可以输入关键字筛选，每页 20 行翻页浏览。数字右对齐并按数值排序。
 工具栏可以复制表格（制表符分隔，可直接粘贴到表格软件）、下载 CSV，或全屏查看；导出的都是当前
 视图，也就是筛选、排序之后的结果。把聊天导出为 HTML 时，表格会以包含全部行的普通表格形式
-包含在内。默认关闭，在 `config.json` 中开启：
+包含在内。
 
-```json
-{ "tables": true }
-```
-
-使用自己的 Agent 时，把工具加进去：`tools=[show_table]`（从 `lovia.web` 导入）。更常用的做法
+`lovia web` 的默认 Agent 已带有这个工具；使用自己的 Agent 时，把工具加进去：`tools=[show_table]`
+（从 `lovia.web` 导入）。更常用的做法
 往往是让自己的工具返回 `ui_result("table", {"title": ..., "columns": [...], "rows": [[...], ...]})`：
 行数据直接来自你的数据源（查询、API），模型不必逐个写出数字，更快、更省，也不会出错。单元格可以是
 字符串、数字、布尔值或 null，按原样显示。表格不认识的键会被忽略，所以同一份 props 里还可以附带

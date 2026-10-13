@@ -264,10 +264,10 @@ function run(m) {
     console.error(`lovia component "${m.kind}" failed to render:`, err);
     if (current()) notice(m, host.label('failed', m.kind));
   };
-  const draw = (/** @type {unknown} */ props) => {
+  const draw = (/** @type {unknown} */ props, target = el) => {
     let out;
     try {
-      out = renderer.render(el, props, ctx);
+      out = renderer.render(target, props, ctx);
     } catch (err) {
       fail(err);
       return;
@@ -292,7 +292,12 @@ function run(m) {
     }
     m.full = null; // a later render (a theme switch) may find it reachable again
     notice(m, host.label('partial', m.kind));
-    if (m.props !== null) draw(m.props);
+    if (m.props === null) return;
+    // A box of its own: a renderer owns its element's children and may
+    // replace them, notice included.
+    const box = document.createElement('div');
+    el.append(box);
+    draw(m.props, box);
   });
 }
 

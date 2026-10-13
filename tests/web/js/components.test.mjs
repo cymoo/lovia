@@ -30,6 +30,9 @@ const el = () => ({
   replaceChildren(...c) {
     this.children = c;
   },
+  append(...c) {
+    this.children.push(...c);
+  },
 });
 const noticeOf = (e) => e.children[0]?.textContent;
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -332,10 +335,14 @@ test('with data, the renderer draws the fetched props, fetched once per mount', 
 
 test('data gone: a notice, then the preview; a null preview shows the notice alone', async () => {
   const urls = serve(undefined);
+  globalThis.document = /** @type {any} */ ({
+    createElement: () => ({ className: '', textContent: '', ...el() }),
+  });
   const seen = [];
   registerRenderer('gone', {
-    render(_el, props) {
+    render(target, props) {
       seen.push(props);
+      target.replaceChildren('drawn'); // a renderer owns its element's children
     },
   });
   const a = el();
@@ -343,8 +350,10 @@ test('data gone: a notice, then the preview; a null preview shows the notice alo
   mountComponent(/** @type {any} */ (a), { kind: 'gone', props: 'preview', data: REF });
   mountComponent(/** @type {any} */ (b), { kind: 'gone', props: null, data: REF });
   await tick();
-  assert.equal(noticeOf(a), 'partial:gone');
+  assert.equal(noticeOf(a), 'partial:gone'); // kept: the preview drew into a box of its own
+  assert.deepEqual(a.children[1].children, ['drawn']);
   assert.equal(noticeOf(b), 'partial:gone');
+  assert.equal(b.children.length, 1);
   assert.deepEqual(seen, ['preview']);
   rerenderComponents(); // a failed fetch is retried on the next render
   await tick();

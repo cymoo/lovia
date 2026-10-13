@@ -73,6 +73,7 @@ def test_ui_result_rejects_a_bad_ref(kwargs, match) -> None:
 
 async def test_put_ui_data_checks_what_the_page_can_parse(monkeypatch) -> None:
     store = ChatStore.in_memory()
+    await store.upsert("s1")
     token = UI_DATA_SINK.set((store, "s1"))
     try:
         with pytest.raises(ToolError, match="NaN"):
@@ -93,9 +94,11 @@ async def test_put_ui_data_checks_what_the_page_can_parse(monkeypatch) -> None:
 
 async def test_store_scopes_refs_to_their_chat_and_deletes_with_it() -> None:
     store = ChatStore.in_memory()
+    await store.upsert("s1")
+    await store.upsert("s2")
     a = await store.put_ui_data("s1", b'{"x": 1}')
     b = await store.put_ui_data("s2", b'{"x": 2}')
-    assert a != b
+    assert a and b and a != b
     assert await store.get_ui_data("s1", a) == b'{"x": 1}'
     assert await store.get_ui_data("s2", a) is None  # another chat's ref
     await store.delete("s1")
@@ -103,6 +106,21 @@ async def test_store_scopes_refs_to_their_chat_and_deletes_with_it() -> None:
     assert await store.get_ui_data("s2", b) == b'{"x": 2}'
     await store.delete_all()
     assert await store.get_ui_data("s2", b) is None
+
+
+async def test_a_deleted_chat_takes_no_more_data() -> None:
+    """A run cancelled by the delete winds down later; its tool must not
+    leave rows behind the delete."""
+    store = ChatStore.in_memory()
+    await store.upsert("s1")
+    await store.delete("s1")
+    assert await store.put_ui_data("s1", b'{"x": 1}') is None
+    assert await store.put_ui_data("never-created", b'{"x": 1}') is None
+    token = UI_DATA_SINK.set((store, "s1"))
+    try:
+        assert await put_ui_data(FULL) is None  # the tool degrades to its preview
+    finally:
+        UI_DATA_SINK.reset(token)
 
 
 # ---- through the app ---------------------------------------------------------

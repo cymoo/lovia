@@ -54,9 +54,9 @@ async def put_ui_data(value: Any) -> str | None:
             preview = {"columns": columns, "rows": rows[:20], "row_count": len(rows)}
             return ui_result("table", preview, data=ref)
 
-    Outside a ``lovia web`` run (a script, an eval) there is no chat to keep
-    it in: returns None, and ``ui_result(..., data=None)`` is a plain
-    envelope — the preview.
+    Outside a ``lovia web`` run (a script, an eval), or once the chat has
+    been deleted, there is no chat to keep it in: returns None, and
+    ``ui_result(..., data=None)`` is a plain envelope — the preview.
     """
     sink = UI_DATA_SINK.get()
     if sink is None:

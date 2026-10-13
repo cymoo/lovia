@@ -256,9 +256,14 @@ CREATE INDEX IF NOT EXISTS idx_chat_ui_data_session ON chat_ui_data (session_id)
   transcript, checkpoint and runs.
 - **Retention is the chat's lifetime. There is no TTL.** Transcripts don't
   expire in core, and a data-only TTL would be the kind of presumptuous
-  serving-layer default lovia avoids. Rows written by a run that was later
-  cancelled stay until the chat is deleted. That is harmless, and it is the
-  same as an interrupted run's other side effects.
+  serving-layer default lovia avoids.
+- The insert is conditional on the chat's row (`INSERT … SELECT … WHERE
+  EXISTS`). Deleting a chat cancels its run, but the run winds down in the
+  background, and a tool still running must not leave data behind the
+  delete. `delete` drops the chat's row before its data, so a late write
+  either fails the check or is swept by the same delete. A refused write
+  makes `put_ui_data` return `None`, which degrades to the preview. Every
+  run path (chat, schedule, subagent) creates the row before the run starts.
 - In-memory stores (`meta_path=":memory:"`) behave the same and are lost on
   restart. The page then falls back to the preview, which is consistent with
   how such a store treats metadata.
@@ -290,8 +295,10 @@ There is no size cap or pruning job for now (see *Deferred*).
   - On success, render with the fetched props.
   - On failure (404, network), show a `.tool-ui-notice` (new label
     `'partial'`: "The full data is no longer available; showing a preview."),
-    then the preview below it (nothing more when the preview is `null`). The
-    failed fetch is dropped, so the next render (a theme switch) retries.
+    then the preview below it in a box of its own, since a renderer owns its
+    element's children and may replace them (nothing more when the preview
+    is `null`). The failed fetch is dropped, so the next render (a theme
+    switch) retries.
 - The existing `gen` counter already discards a fetch that resolves after a
   re-render or an unmount.
 - Renderers are unchanged and never see the ref.

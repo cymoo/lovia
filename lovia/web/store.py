@@ -563,21 +563,27 @@ class ChatStore:
     # Full props kept out of the model's context (lovia.web.put_ui_data);
     # they live as long as their chat.
 
-    async def put_ui_data(self, session_id: str, payload: bytes) -> str:
-        """Store a component's props (JSON bytes) for ``session_id``; return its ref."""
+    async def put_ui_data(self, session_id: str, payload: bytes) -> str | None:
+        """Store a component's props (JSON bytes) for ``session_id``; return its ref.
+
+        None when the chat no longer exists: a run cancelled by deleting its
+        chat winds down in the background, and a tool still running must not
+        leave data behind the delete.
+        """
         ref = secrets.token_urlsafe(16)
 
-        def _impl() -> None:
+        def _impl() -> bool:
             blob = zlib.compress(payload)
             with self._meta._tx() as conn:
-                conn.execute(
+                cur = conn.execute(
                     "INSERT INTO chat_ui_data (id, session_id, created_at, payload) "
-                    "VALUES (?, ?, ?, ?)",
-                    (ref, session_id, time.time(), blob),
+                    "SELECT ?, ?, ?, ? WHERE EXISTS "
+                    "(SELECT 1 FROM chat_sessions WHERE id = ?)",
+                    (ref, session_id, time.time(), blob, session_id),
                 )
+                return cur.rowcount == 1
 
-        await self._meta._run(_impl)
-        return ref
+        return ref if await self._meta._run(_impl) else None
 
     async def get_ui_data(self, session_id: str, ref: str) -> bytes | None:
         """The JSON bytes stored under ``ref`` — None unless it belongs to ``session_id``."""

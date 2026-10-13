@@ -54,6 +54,7 @@ ErrorCode = Literal[
     "file_not_found",
     "turn_not_found",
     "image_not_found",
+    "ui_data_not_found",
     "approval_not_found",
     "question_not_found",
     "process_not_found",

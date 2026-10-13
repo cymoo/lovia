@@ -267,7 +267,10 @@ the rows come from your data — a query, an API — and the model never writes
 the numbers out, which is faster, cheaper, and exact. Cells are strings,
 numbers, booleans, or null, and values are shown as given. Keys the table
 doesn't know are ignored, so the same props can carry extras meant for the
-model, such as a total row count or the SQL that produced them.
+model, such as a total row count or the SQL that produced them. For a large
+result, keep the rows out of the model's context with `put_ui_data`: the
+model reads a preview, and the table shows every row (see
+[Bulk data](web-server.md#bulk-data)).
 
 ## Useful CLI options
 

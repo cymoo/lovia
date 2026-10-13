@@ -126,6 +126,7 @@ normalizes all three.
 | `file_not_found` | 404 | no such workspace file or directory |
 | `turn_not_found` | 404 | rewind named a user turn the chat doesn't have |
 | `image_not_found` | 404 | no servable image at that tool-result index |
+| `ui_data_not_found` | 404 | no component data under that ref in this chat |
 | `approval_not_found` | 404 | no pending approval matches |
 | `question_not_found` | 404 | no pending `ask_human` question matches |
 | `process_not_found` | 404 | no such background process |
@@ -163,6 +164,7 @@ normalizes all three.
 | `POST /api/sessions/{id}/followups` | `{followups: [...]}` — questions the user might ask next; `[]` when the feature is off or nothing fits. POST because it spends model tokens |
 | `POST /api/sessions/{id}/rewind` | drop everything from the user-message index `user_turn` onward (zero-based); 409 while a run is live, 501 if the store lacks `rewind` |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | export a chat |
+| `GET /api/sessions/{id}/ui-data/{ref}` | a UI component's full props, stored by `put_ui_data` during a run of this chat ([details](web-server.md#bulk-data)) |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [scheduled runs](web-server.md#scheduling): list, create, retime/pause, delete, fire now |
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |

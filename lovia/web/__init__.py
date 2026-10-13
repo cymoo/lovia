@@ -33,7 +33,7 @@ try:
     from .app import create_app, serve
     from .auth import generate_token, is_loopback, token_dependency
     from .charts import show_chart, validate_chart_option
-    from .components import ui_result
+    from .components import put_ui_data, ui_result
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .questions import QuestionRegistry
     from .scheduling import Scheduling
@@ -61,6 +61,7 @@ __all__ = [
     "generate_followups",
     "generate_token",
     "is_loopback",
+    "put_ui_data",
     "serve",
     "show_chart",
     "show_table",

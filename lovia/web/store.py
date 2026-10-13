@@ -14,8 +14,10 @@ metadata table is owned by this module.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import time
+import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +102,14 @@ CREATE INDEX IF NOT EXISTS idx_chat_runs_session
     ON chat_runs(session_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_runs_source
     ON chat_runs(source, started_at DESC);
+CREATE TABLE IF NOT EXISTS chat_ui_data (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    payload BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_ui_data_session
+    ON chat_ui_data(session_id);
 """
 
 # Columns added after their table first shipped, as (table, column definition).
@@ -506,6 +516,9 @@ class ChatStore:
         await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
         await self._write("DELETE FROM chat_runs WHERE session_id = ?", (session_id,))
+        await self._write(
+            "DELETE FROM chat_ui_data WHERE session_id = ?", (session_id,)
+        )
 
     async def delete_all(self) -> None:
         """Remove ALL transcripts, checkpoints, and metadata."""
@@ -520,6 +533,7 @@ class ChatStore:
             await self.session.clear(session_id)
         await self._write("DELETE FROM chat_sessions")
         await self._write("DELETE FROM chat_runs")
+        await self._write("DELETE FROM chat_ui_data")
 
     async def _drop_checkpoint(self, session_id: str) -> None:
         """Delete the session's active-run snapshot, if any (best-effort)."""
@@ -543,6 +557,40 @@ class ChatStore:
             "ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?",
             (pattern, pattern, limit, offset),
             ChatMeta.from_row,
+        )
+
+    # ---- UI component data ----------------------------------------------
+    # Full props kept out of the model's context (lovia.web.put_ui_data);
+    # they live as long as their chat.
+
+    async def put_ui_data(self, session_id: str, payload: bytes) -> str | None:
+        """Store a component's props (JSON bytes) for ``session_id``; return its ref.
+
+        None when the chat no longer exists: a run cancelled by deleting its
+        chat winds down in the background, and a tool still running must not
+        leave data behind the delete.
+        """
+        ref = secrets.token_urlsafe(16)
+
+        def _impl() -> bool:
+            blob = zlib.compress(payload)
+            with self._meta._tx() as conn:
+                cur = conn.execute(
+                    "INSERT INTO chat_ui_data (id, session_id, created_at, payload) "
+                    "SELECT ?, ?, ?, ? WHERE EXISTS "
+                    "(SELECT 1 FROM chat_sessions WHERE id = ?)",
+                    (ref, session_id, time.time(), blob, session_id),
+                )
+                return cur.rowcount == 1
+
+        return ref if await self._meta._run(_impl) else None
+
+    async def get_ui_data(self, session_id: str, ref: str) -> bytes | None:
+        """The JSON bytes stored under ``ref`` — None unless it belongs to ``session_id``."""
+        return await self._read_one(
+            "SELECT payload FROM chat_ui_data WHERE id = ? AND session_id = ?",
+            (ref, session_id),
+            lambda row: zlib.decompress(row[0]),
         )
 
     # ---- active run tracking --------------------------------------------

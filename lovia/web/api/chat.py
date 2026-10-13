@@ -21,6 +21,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ...runner import Runner
 from ..attachments import build_user_input
+from ..components import UI_DATA_SINK
 from ..errors import WebError
 from ..schemas import (
     AnswerRequest,
@@ -96,6 +97,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # RunSupervisor.start(): background processes belong to the chat, no
         # matter which endpoint ran the turn.
         agent = await deps.workspaces.bind(sid, agent)
+        UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
         result = await Runner.run(
             agent,
             user_input,

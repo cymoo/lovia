@@ -118,6 +118,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `file_not_found` | 404 | 工作区文件或目录不存在 |
 | `turn_not_found` | 404 | rewind 指定的用户 Turn 不存在 |
 | `image_not_found` | 404 | 该 Tool 结果位置没有可提供的图片 |
+| `ui_data_not_found` | 404 | 本聊天中没有该 ref 对应的组件数据 |
 | `approval_not_found` | 404 | 没有匹配的待审批请求 |
 | `question_not_found` | 404 | 没有匹配的待回答 `ask_human` 问题 |
 | `process_not_found` | 404 | 后台进程不存在 |
@@ -155,6 +156,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从索引为 `user_turn` 的用户消息起删除后续内容，索引从 0 开始；运行中返回 409，不支持 `rewind` 时返回 501 |
 | `GET /api/sessions/{id}/export?format=md\|json\|txt` | 导出聊天 |
+| `GET /api/sessions/{id}/ui-data/{ref}` | UI 组件的完整 props，由本聊天运行中的 `put_ui_data` 保存（[详情](web-server.md#大块数据)） |
 | `GET` / `POST /api/schedules`, `GET` / `PATCH` / `DELETE /api/schedules/{id}`, `POST .../run` | [定时运行](web-server.md#定时任务)：列出、创建、改时间/暂停、删除、立即触发 |
 | `GET /api/schedules/{id}/runs` | 按时间倒序列出定时任务的运行记录 |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | 读取 Agent [工作区](workspace.md)中的文件 |

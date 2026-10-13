@@ -500,7 +500,8 @@ in HTTP responses and stream `error` events alike. Keeping the page?
 works under a path prefix — behind a proxy (`--root-path`) or mounted in your
 own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
 a renderer you load with `ChatUI(scripts=[...])` (`lovia.getRenderer` lets one
-wrap another). Two kinds come built in: tables — sort, filter, pages, copy /
+wrap another); `put_ui_data` keeps a large result out of the model's context,
+which reads a preview while the page draws it all. Two kinds come built in: tables — sort, filter, pages, copy /
 CSV (`show_table`, or `ui_result("table", ...)` straight from your data) — and
 charts (`show_chart`, Apache ECharts), with PNG / SVG / CSV download and full
 screen — and both draw in the chat's HTML export; `"tables": true` / `"charts": true` turn the tools on in

@@ -155,6 +155,10 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
         # upgrade, instead of a heuristically-cached shell pointing at the old,
         # now-404 prefix.
         response.headers["Cache-Control"] = "no-cache"
+        # The page's own frames are all srcdoc, which this allows; what it
+        # stops is a sandboxed page (static/js/html.js, the Files preview)
+        # navigating itself to a URL that carries its data away.
+        response.headers["Content-Security-Policy"] = "frame-src 'none'"
         return response
 
     return router

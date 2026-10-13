@@ -972,7 +972,7 @@ function renderToolImages(node, images) {
 // A result carrying a UI envelope renders as its component, just above the
 // result box (the raw output and params stay one "Source" toggle away). Idempotent
 // across repeated result updates; any other result tears a component down.
-function syncToolComponent(node, result, isError) {
+function syncToolComponent(node, result, isError, live) {
   const box = node.querySelector('.tool-result-box');
   if (!box) return;
   const comp = isError ? null : parseEnvelope(String(result ?? ''), toolArgs.get(node));
@@ -1004,15 +1004,16 @@ function syncToolComponent(node, result, isError) {
     });
     node.querySelector('summary')?.appendChild(src);
   }
-  mountComponent(el, comp, { callId: node.dataset.callId ?? null });
+  mountComponent(el, comp, { callId: node.dataset.callId ?? null, live });
 }
 
 // The one renderer behind both the live tool_result event and history replay:
 // content (highlighted or linkified), error styling, the image strip, UI
-// components, and the hover actions (copy, expand when clipped).
-function setToolResult(node, result, isError, images) {
+// components, and the hover actions (copy, expand when clipped). `live`: the
+// result just arrived on the stream (components see it as ctx.live).
+function setToolResult(node, result, isError, images, live = false) {
   renderToolImages(node, images);
-  syncToolComponent(node, result, isError);
+  syncToolComponent(node, result, isError, live);
   const pre = node.querySelector('.tool-result');
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
@@ -1085,7 +1086,7 @@ function setToolResult(node, result, isError, images) {
 function updateToolResult(id, result, isError, images) {
   const node = store.toolNodes.get(id);
   if (!node) return;
-  setToolResult(node, result, isError, images);
+  setToolResult(node, result, isError, images, true);
   if (node.classList.contains('tool--ui')) scrollDown(); // a component adds height
 }
 

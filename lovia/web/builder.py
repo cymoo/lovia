@@ -34,6 +34,7 @@ from ..tools import (
 from ..workspace import LocalWorkspace, Workspace, WorkspaceMode
 from .charts import show_chart
 from .config import ModelProfile, SearchConfig, WebConfig, resolve_skills_dirs
+from .html import show_html
 from .scheduling import Scheduling
 from .store import ChatStore
 from .tables import show_table
@@ -356,7 +357,7 @@ def build_default_agent(
     if question_channel is not None:
         tools = [*tools, ask_human(question_channel)]
     # Parent-only too: a background child's transcript has no one watching.
-    tools = [*tools, show_chart, show_table]
+    tools = [*tools, show_chart, show_table, show_html]
     agent: Agent[Any] = Agent(
         name=DEFAULT_AGENT_NAME,
         instructions=instructions,

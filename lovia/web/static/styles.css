@@ -4596,6 +4596,32 @@ body.files-splitting {
 .tool .chart:fullscreen .figure-body {
   height: auto;
 }
+/* Pages (html.js): as tall as the page reports, within bounds; taller pages
+   scroll inside the frame. */
+.tool .html-frame {
+  display: block;
+  width: 100%;
+  height: clamp(80px, var(--page-height, 160px), 70vh);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.tool .html:fullscreen .html-frame {
+  height: 100%;
+}
+.tool .html-paused {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 13px;
+}
+.tool .html-paused span {
+  flex: 1;
+}
 /* Tables (tables.js): a filter row, the table (scrolling sideways when wide),
    and a pager. */
 .tool .table .figure-body {

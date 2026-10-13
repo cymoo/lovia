@@ -258,6 +258,18 @@ test('ctx.send is refused once the component left the page', () => {
   unmountComponent(/** @type {any} */ (e));
 });
 
+test('ctx.live: true only for a result that arrived on the live stream', () => {
+  const seen = [];
+  registerRenderer('liveness', { render: (_el, _props, c) => void seen.push(c.live) });
+  const a = el();
+  const b = el();
+  mountComponent(/** @type {any} */ (a), { kind: 'liveness', props: 1 }, { live: true });
+  mountComponent(/** @type {any} */ (b), { kind: 'liveness', props: 1 });
+  assert.deepEqual(seen, [true, false]);
+  unmountComponent(/** @type {any} */ (a));
+  unmountComponent(/** @type {any} */ (b));
+});
+
 test('invalid registrations throw', () => {
   const bad = /** @type {any} */ ([null, () => {}, {}, { render: 1 }, { render() {}, snapshot: 'x' }]);
   assert.throws(() => registerRenderer('Bad', { render() {} }), TypeError);

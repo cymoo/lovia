@@ -586,7 +586,7 @@ def test_build_default_agent_subagents_child_composition(
     # ones that must not ride along (Subagents, Scheduling, Memory).
     assert {type(p).__name__ for p in child.plugins} == {"Skills", "Todo"}
     assert child.workspace is agent.workspace
-    parent_only = {"show_chart", "show_table"}  # no one watches a child's transcript
+    parent_only = {"show_chart", "show_table", "show_html"}  # no one watches a child
     assert child.tools == [t for t in agent.tools if t.name not in parent_only]
 
 
@@ -601,7 +601,7 @@ def test_build_default_agent_no_subagents(
     assert all(not isinstance(p, Subagents) for p in agent.plugins)
 
 
-def test_build_default_agent_shows_charts_and_tables_parent_only(
+def test_build_default_agent_shows_ui_components_parent_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from lovia import Subagents
@@ -609,11 +609,11 @@ def test_build_default_agent_shows_charts_and_tables_parent_only(
     monkeypatch.chdir(tmp_path)
     args = cli.build_parser().parse_args(["--no-memory"])
     agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
-    names = {t.name for t in agent.tools}
-    assert {"show_chart", "show_table"} <= names
+    ui_tools = {"show_chart", "show_table", "show_html"}
+    assert ui_tools <= {t.name for t in agent.tools}
     (plugin,) = [p for p in agent.plugins if isinstance(p, Subagents)]
     (child,) = plugin._catalog.values()
-    assert not {"show_chart", "show_table"} & {t.name for t in child.tools}
+    assert not ui_tools & {t.name for t in child.tools}
 
 
 def test_build_default_agent_wires_the_vision_role(

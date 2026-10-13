@@ -144,7 +144,8 @@ def top_products(n: int = 10) -> str:
     return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
 ```
 
-内置了两种 kind：`table`（上例，见[表格](web-ui.md#表格)）和 `chart`（见[图表](web-ui.md#图表)）。
+内置了三种 kind：`table`（上例，见[表格](web-ui.md#表格)）、`chart`（见[图表](web-ui.md#图表)），
+以及在沙箱中运行的页面 `html`（见[页面](web-ui.md#页面)）。
 上面表格里的数字直接来自查询，模型不需要把它们写出来。
 
 这个信封就是工具的输出，所以模型同样能看到 props。如果调用参数本身就是要展示的数据（纯展示型
@@ -185,6 +186,7 @@ app.mount("/ext", StaticFiles(directory="ext"))
 | `theme` / `lang` | `'light'` 或 `'dark'`；`'en'` 或 `'zh'`。切换主题时，组件会先清理再重新渲染 |
 | `basePath` | 挂载前缀，用于请求你自己的接口 |
 | `sessionId` / `callId` | 组件所属的会话和工具调用 |
+| `live` | 结果刚刚到达时为 `true`，重新打开聊天回放时为 `false`，可用于把开销大的操作推迟到用户点击之后 |
 | `send(text)` | 以用户身份发送一条消息，例如"下钻 3 月"按钮。只在真实的点击或按键中生效，其他情况返回 `false` |
 
 `render` 可以是 async 函数。渲染出错时卡片会提示，原始输出仍可通过卡片上的"查看原始数据"按钮

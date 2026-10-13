@@ -35,6 +35,7 @@ try:
     from .charts import show_chart, validate_chart_option
     from .components import put_ui_data, ui_result
     from .followups import FollowupFn, FollowupRequest, generate_followups
+    from .html import show_html
     from .questions import QuestionRegistry
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
@@ -64,6 +65,7 @@ __all__ = [
     "put_ui_data",
     "serve",
     "show_chart",
+    "show_html",
     "show_table",
     "subagent_deliver",
     "token_dependency",

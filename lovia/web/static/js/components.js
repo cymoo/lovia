@@ -29,13 +29,15 @@
  * @property {string} basePath The mount prefix, for the deployer's own endpoints.
  * @property {string | null} sessionId
  * @property {string | null} callId
+ * @property {boolean} live True when the result just arrived on the live
+ *   stream, false when a reopened chat replays it.
  * @property {(text: string) => boolean} send Post a user message; needs a user gesture.
  */
 /**
  * @typedef {(el: HTMLElement, props: unknown, ctx: RenderContext) =>
  *   void | Cleanup | Promise<void | Cleanup>} Render
  */
-/** @typedef {Omit<RenderContext, 'send'>} SnapshotContext */
+/** @typedef {Omit<RenderContext, 'send' | 'live'>} SnapshotContext */
 /**
  * @typedef {(props: unknown, ctx: SnapshotContext) => string | Promise<string>} Snapshot
  *   Static HTML for the chat's HTML export — a standalone file, so no script;
@@ -52,6 +54,7 @@
  * @property {string} kind
  * @property {unknown} props
  * @property {string | null} callId
+ * @property {boolean} live
  * @property {string | undefined} data
  * @property {Promise<unknown> | null} full The fetch of `data`, kept across re-renders.
  * @property {Cleanup | null} cleanup
@@ -109,7 +112,7 @@ const renderers = new Map();
 const mounts = new Set();
 
 const host = {
-  /** @type {() => Omit<RenderContext, 'kind' | 'callId' | 'send'>} */
+  /** @type {() => Omit<RenderContext, 'kind' | 'callId' | 'live' | 'send'>} */
   context: () => ({ theme: 'light', lang: 'en', basePath: '', sessionId: null }),
   /** @type {(text: string) => boolean} */
   send: () => false,
@@ -256,6 +259,7 @@ function run(m) {
     ...host.context(),
     kind: m.kind,
     callId: m.callId,
+    live: m.live,
     // Only a live, on-screen component may speak for the user.
     send: (/** @type {string} */ text) => el.isConnected && host.send(text),
   };
@@ -305,9 +309,10 @@ function run(m) {
  * Render `comp` into `el` — replacing whatever component `el` held.
  * @param {HTMLElement} el
  * @param {UiComponent} comp
- * @param {{ callId?: string | null }} [opts]
+ * @param {{ callId?: string | null, live?: boolean }} [opts] `live`: the result
+ *   just arrived on the stream, rather than a reopened chat replaying it.
  */
-export function mountComponent(el, comp, { callId = null } = {}) {
+export function mountComponent(el, comp, { callId = null, live = false } = {}) {
   unmountComponent(el);
   /** @type {Mount} */
   const m = {
@@ -315,6 +320,7 @@ export function mountComponent(el, comp, { callId = null } = {}) {
     kind: comp.kind,
     props: comp.props,
     callId,
+    live,
     data: comp.data,
     full: null,
     cleanup: null,

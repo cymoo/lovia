@@ -153,9 +153,10 @@ def top_products(n: int = 10) -> str:
     return ui_result("table", {"columns": ["sku", "units"], "rows": rows})
 ```
 
-Two kinds are built in: `table` (above, see [Tables](web-ui.md#tables)) and
-`chart` (see [Charts](web-ui.md#charts)). The numbers in that table come
-straight from the query; the model never writes them out.
+Three kinds are built in: `table` (above, see [Tables](web-ui.md#tables)),
+`chart` (see [Charts](web-ui.md#charts)), and `html`, a sandboxed page (see
+[Pages](web-ui.md#pages)). The numbers in that table come straight from the
+query; the model never writes them out.
 
 The envelope is the tool's output, so the model sees the props as well. When
 the call's own arguments already are the data (a presentational tool), pass
@@ -199,6 +200,7 @@ props, and a context:
 | `theme` / `lang` | `'light'` or `'dark'`; `'en'` or `'zh'`. On a theme switch the component is cleaned up and rendered again |
 | `basePath` | The mount prefix, for requests to your own endpoints |
 | `sessionId` / `callId` | The chat and the tool call the component belongs to |
+| `live` | `true` when the result just arrived, `false` when a reopened chat replays it, e.g. to hold back something costly until a click |
 | `send(text)` | Post a user message, e.g. from a "drill into March" button. It works only inside a real click or keypress, and returns `false` otherwise |
 
 `render` may be async. If it throws, the card says so, and the raw output

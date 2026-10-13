@@ -263,6 +263,34 @@ result, keep the rows out of the model's context with `put_ui_data`: the
 model reads a preview, and the table shows every row (see
 [Bulk data](web-server.md#bulk-data)).
 
+## Pages
+
+The `show_html` tool shows an interactive page inline: a calculator, a
+simulation, a custom visualisation, anything a chart or table can't do. The
+model writes a self-contained page, with inline CSS and JavaScript, and the
+card runs it in a sandbox. The default agent of `lovia web` has the tool; for
+your own agent, add it: `tools=[show_html]` (from `lovia.web`). A tool of your
+own can return `ui_result("html", {"html": page, "title": ...})`.
+
+What the page can and can't do:
+
+- It can't reach the app or the network. It runs in an opaque origin (no
+  cookies, storage, or access to the chat), and its policy blocks every
+  request: no `fetch`, CDN scripts, web fonts, or remote images. Links don't
+  navigate.
+- It matches the chat's look through CSS variables: `var(--ink)`,
+  `var(--surface)`, `var(--border)`, `var(--accent)`, `var(--chart-1)` …
+  `var(--chart-8)`, in light and dark themes.
+- A button can ask a follow-up as the user: `lovia.send("Break it down by
+  region")`. This works only from a real click inside the page.
+- The card grows with the page, up to most of the screen, and has full screen
+  and an HTML download.
+- When you reopen a chat, its pages wait for a click on **Run**, so a page
+  stuck in a loop can't freeze the chat each time it opens. A theme switch
+  reloads a page.
+- The chat's HTML export has no scripts, so it shows the page's source
+  instead.
+
 ## Useful CLI options
 
 Apart from model, search, and skills configuration, options resolve as CLI

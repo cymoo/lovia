@@ -110,4 +110,9 @@ function renderTable(root, props, ctx) {
   // holds observers, timers, or chart instances returns a cleanup function.
 }
 
-window.lovia.registerRenderer('table', renderTable);
+// Keep the built-in snapshot: the props are the same, so the HTML export
+// still draws the table.
+window.lovia.registerRenderer('table', {
+  render: renderTable,
+  snapshot: window.lovia.getRenderer('table')?.snapshot,
+});

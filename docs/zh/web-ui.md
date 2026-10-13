@@ -184,6 +184,7 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 须知：
 
 - ECharts（约 1 MB，已随包内置）在出现第一张图时才加载，没有图表的会话不会请求它。
+- 把聊天导出为 HTML 时，每张图表以 SVG 图片的形式包含在内。
 - option 在绘制前会经过过滤：图片、链接、`graphic` 和 `toolbox` 组件、HTML 形式的
   tooltip 都会被去掉；需要代码或地图数据的系列类型（`custom`、`map`）也不支持。
 - 团队的作图约定（偏好的图表类型、单位、标题写法等）写进 instructions 或一个 Skill 即可，
@@ -197,7 +198,8 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 `show_table` 工具用交互式表格代替 Markdown 表格展示给用户：点击表头排序（再点一次倒序，第三次
 恢复原顺序），行数较多时可以输入关键字筛选，每页 20 行翻页浏览。数字右对齐并按数值排序。
 工具栏可以复制表格（制表符分隔，可直接粘贴到表格软件）、下载 CSV，或全屏查看；导出的都是当前
-视图，也就是筛选、排序之后的结果。默认关闭，在 `config.json` 中开启：
+视图，也就是筛选、排序之后的结果。把聊天导出为 HTML 时，表格会以包含全部行的普通表格形式
+包含在内。默认关闭，在 `config.json` 中开启：
 
 ```json
 { "tables": true }

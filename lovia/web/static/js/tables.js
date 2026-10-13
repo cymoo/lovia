@@ -11,9 +11,10 @@
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { registerRenderer } from './components.js';
-import { csvBlob, figure, save } from './figure.js';
+import { csvBlob, figure, save, staticFigure } from './figure.js';
 import { icon } from './icons.js';
 import { toast } from './toast.js';
+import { escapeHtml } from './util.js';
 
 // About a screenful inside a chat card; no nested scroll area.
 export const PAGE_SIZE = 20;
@@ -154,7 +155,7 @@ const LABELS = {
   },
 };
 
-/** @type {import('./components.js').Renderer} */
+/** @type {import('./components.js').Render} */
 function renderTable(el, props, ctx) {
   const { title, columns, rows } = normalizeTable(props); // throws → the failure notice
   const L = LABELS[ctx.lang] || LABELS.en;
@@ -310,4 +311,20 @@ function renderTable(el, props, ctx) {
   update();
 }
 
-registerRenderer('table', renderTable);
+/**
+ * Every row, as a plain table: an export is an archive, so nothing is paged
+ * away.
+ * @type {import('./components.js').Snapshot}
+ */
+export function tableSnapshot(props) {
+  const { title, columns, rows } = normalizeTable(props);
+  const numeric = numericColumns(rows, columns.length);
+  const cell = (/** @type {string} */ tag, /** @type {string} */ text, /** @type {number} */ i) =>
+    `<${tag}${numeric[i] ? ' class="num"' : ''}>${escapeHtml(text)}</${tag}>`;
+  const head = columns.map((c, i) => cell('th', c, i)).join('');
+  const body = rows.map((r) => `<tr>${r.map((v, i) => cell('td', cellText(v), i)).join('')}</tr>`);
+  const table = `<table><thead><tr>${head}</tr></thead><tbody>${body.join('')}</tbody></table>`;
+  return staticFigure('table', title ? { text: title } : null, table);
+}
+
+registerRenderer('table', { render: renderTable, snapshot: tableSnapshot });

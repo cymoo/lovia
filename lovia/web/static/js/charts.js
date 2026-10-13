@@ -16,7 +16,8 @@
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { registerRenderer } from './components.js';
-import { csvBlob, figure, save } from './figure.js';
+import { csvBlob, figure, save, staticFigure } from './figure.js';
+import { escapeHtml } from './util.js';
 
 // Same as SERIES_TYPES in lovia/web/charts.py (a test keeps them equal).
 export const SERIES_TYPES = new Set([
@@ -308,6 +309,7 @@ const LABELS = {
     svg: 'Download SVG',
     csv: 'Download data (CSV)',
     json: 'Download data (JSON)',
+    chart: 'Chart',
   },
   zh: {
     failed: '无法绘制该图表',
@@ -315,6 +317,7 @@ const LABELS = {
     svg: '下载 SVG 图片',
     csv: '下载数据（CSV）',
     json: '下载数据（JSON）',
+    chart: '图表',
   },
 };
 
@@ -376,7 +379,7 @@ async function svgToPng({ svg, width, height }) {
   );
 }
 
-/** @type {import('./components.js').Renderer} */
+/** @type {import('./components.js').Render} */
 function renderChart(el, props, ctx) {
   const clean = sanitizeOption(props); // throws → the registry's failure notice
   const { heading, option } = liftTitle(clean);
@@ -452,4 +455,35 @@ function renderChart(el, props, ctx) {
   };
 }
 
-registerRenderer('chart', renderChart);
+// The HTML export's content column (760px less its padding).
+const SNAPSHOT_SIZE = { width: 720, height: 360 };
+
+/**
+ * The chart as an SVG image. ECharts' server-side rendering needs no DOM
+ * node, and an <img> runs no script and takes no page CSS.
+ * @type {import('./components.js').Snapshot}
+ */
+export async function chartSnapshot(props, ctx) {
+  const { heading, option } = liftTitle(sanitizeOption(props));
+  const ec = await loadEcharts();
+  const chart = ec.init(null, themeFromCss(), {
+    renderer: 'svg',
+    ssr: true,
+    locale: ctx.lang === 'zh' ? 'ZH' : 'EN',
+    ...SNAPSHOT_SIZE,
+  });
+  let svg;
+  try {
+    chart.setOption({ ...option, animation: false });
+    svg = chart.renderToSVGString();
+  } finally {
+    chart.dispose();
+  }
+  const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  const img =
+    `<img src="${src}" alt="${escapeHtml(heading?.text || (LABELS[ctx.lang] || LABELS.en).chart)}" ` +
+    `width="${SNAPSHOT_SIZE.width}" height="${SNAPSHOT_SIZE.height}">`;
+  return staticFigure('chart', heading, img);
+}
+
+registerRenderer('chart', { render: renderChart, snapshot: chartSnapshot });

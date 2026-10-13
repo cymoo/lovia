@@ -1,12 +1,14 @@
 // The card the built-in UI components (charts.js, tables.js) draw in: an HTML
 // heading, a toolbar revealed on hover, the component's body, and full screen.
-// Plus the download helpers they share.
+// Plus the download helpers they share, and the static card of their export
+// snapshots.
 //
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { exportFilename } from './export.js';
 import { icon } from './icons.js';
 import { toast } from './toast.js';
+import { escapeHtml } from './util.js';
 
 const LABELS = {
   en: { full: 'Full screen', exitFull: 'Exit full screen', failed: 'That didn’t work' },
@@ -94,6 +96,23 @@ export function figure(el, { kind, heading, lang }) {
   }
   const filename = (/** @type {string} */ ext) => exportFilename(heading?.text || kind, ext);
   return { fig, body, tool, filename };
+}
+
+/**
+ * A snapshot's card for the HTML export: the heading as a caption over `inner`
+ * (already-escaped HTML).
+ * @param {string} kind
+ * @param {{ text: string, subtext?: string } | null} heading
+ * @param {string} inner
+ * @returns {string}
+ */
+export function staticFigure(kind, heading, inner) {
+  const caption = heading
+    ? `<figcaption>${escapeHtml(heading.text)}` +
+      (heading.subtext ? `<span>${escapeHtml(heading.subtext)}</span>` : '') +
+      '</figcaption>'
+    : '';
+  return `<figure class="${kind}">${caption}${inner}</figure>`;
 }
 
 /**

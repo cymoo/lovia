@@ -234,6 +234,7 @@ Good to know:
 
 - ECharts (about 1 MB, bundled) loads with the first chart, so chats without
   charts never fetch it.
+- The chat's HTML export includes each chart as an SVG image.
 - The option is sanitized before it is drawn. Images, links, the `graphic`
   and `toolbox` components, and HTML tooltips are removed, and so are series
   types that need code or map data (`custom`, `map`).
@@ -252,6 +253,7 @@ restore the order), type to filter longer tables, and page through 20 rows at
 a time. Numbers align right and sort as numbers. A toolbar copies the table
 (tab-separated, ready to paste into a spreadsheet), downloads it as CSV, or
 opens it full screen; both exports take the current view, filtered and sorted.
+The chat's HTML export includes it as a plain table with every row.
 It is off by default; turn it on in `config.json`:
 
 ```json

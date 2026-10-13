@@ -1,13 +1,18 @@
 // The chart component's pure helpers (charts.js): the sanitizer — what an
 // untrusted ECharts option may and may not carry into the page — the title
-// lift, and the data export.
+// lift, the data export, and the HTML-export snapshot.
 //
 //   node --test tests/web/js/
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { liftTitle, optionRows, sanitizeOption } from '../../../lovia/web/static/js/charts.js';
+import {
+  chartSnapshot,
+  liftTitle,
+  optionRows,
+  sanitizeOption,
+} from '../../../lovia/web/static/js/charts.js';
 import { toCsv } from '../../../lovia/web/static/js/figure.js';
 
 const bar = { type: 'bar' };
@@ -236,4 +241,59 @@ test('toCsv quotes per RFC 4180 and defuses spreadsheet formulas', () => {
       `"line\nbreak",'+1,"{""k"":1}"`,
     ].join('\r\n'),
   );
+});
+
+// ---- Export snapshot -----------------------------------------------------------
+
+// A stand-in for the ECharts global and the computed styles the theme reads.
+function stubEcharts({ failOn } = {}) {
+  const calls = { init: [], option: null, disposed: 0 };
+  globalThis.echarts = {
+    init(dom, _theme, opts) {
+      calls.init.push([dom, opts]);
+      return {
+        setOption(o) {
+          if (failOn === 'setOption') throw new Error('bad option');
+          calls.option = o;
+        },
+        renderToSVGString: () => '<svg xmlns="http://www.w3.org/2000/svg"><text>Jan & "Feb"</text></svg>',
+        dispose: () => calls.disposed++,
+      };
+    },
+  };
+  globalThis.document = /** @type {any} */ ({ documentElement: {}, body: {} });
+  globalThis.getComputedStyle = /** @type {any} */ (() => ({ getPropertyValue: () => '', fontFamily: 'sans' }));
+  return calls;
+}
+
+test('chartSnapshot: SSR to an SVG data image, heading as caption, disposed', async () => {
+  const calls = stubEcharts();
+  const html = await chartSnapshot(
+    { title: { text: 'Sales <Q1>', subtext: 'EUR' }, series: [bar] },
+    /** @type {any} */ ({ lang: 'zh' }),
+  );
+  const [dom, opts] = calls.init[0];
+  assert.equal(dom, null);
+  assert.deepEqual(opts, { renderer: 'svg', ssr: true, locale: 'ZH', width: 720, height: 360 });
+  assert.equal(calls.option.animation, false);
+  assert.equal(calls.option.title, undefined); // lifted into the caption
+  assert.equal(calls.disposed, 1);
+  assert.match(html, /^<figure class="chart"><figcaption>Sales &lt;Q1&gt;<span>EUR<\/span><\/figcaption><img /);
+  const src = /src="([^"]+)"/.exec(html)?.[1] ?? '';
+  assert.ok(src.startsWith('data:image/svg+xml;charset=utf-8,'));
+  assert.match(decodeURIComponent(src.split(',')[1]), /<text>Jan & "Feb"<\/text>/);
+  assert.match(html, /alt="Sales &lt;Q1&gt;"/);
+});
+
+test('chartSnapshot: an untitled chart still has an accessible name', async () => {
+  stubEcharts();
+  const html = await chartSnapshot({ series: [bar] }, /** @type {any} */ ({ lang: 'en' }));
+  assert.doesNotMatch(html, /figcaption/);
+  assert.match(html, /alt="Chart"/);
+});
+
+test('chartSnapshot: disposes the instance when drawing fails', async () => {
+  const calls = stubEcharts({ failOn: 'setOption' });
+  await assert.rejects(chartSnapshot({ series: [bar] }, /** @type {any} */ ({ lang: 'en' })), /bad option/);
+  assert.equal(calls.disposed, 1);
 });

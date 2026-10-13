@@ -4,8 +4,10 @@
 // is built here because it reuses the browser's already-loaded marked +
 // DOMPurify + highlight.js, so the output matches what the user sees with no new
 // server dependency. Source data is the existing JSON export endpoint, which
-// carries reasoning + tool calls per message.
+// carries reasoning + tool calls per message. A UI component draws as its
+// renderer's static snapshot (components.js), when it has one.
 import { api, apiError } from './api.js';
+import { parseEnvelope, snapshotComponent } from './components.js';
 import { toast } from './toast.js';
 import { escapeHtml } from './util.js';
 
@@ -48,12 +50,39 @@ function contentText(content) {
   return JSON.stringify(content, null, 2);
 }
 
-function renderMessage(m, toolNames = {}) {
+/**
+ * Call id → sanitized snapshot HTML, for each tool result that is a UI
+ * component whose renderer has a snapshot.
+ * @param {any[]} messages
+ * @param {Record<string, string>} toolArgs Call id → raw arguments.
+ * @param {string | null} sessionId
+ * @returns {Promise<Map<string, string>>}
+ */
+async function snapshotComponents(messages, toolArgs, sessionId) {
+  const out = new Map();
+  if (typeof DOMPurify === 'undefined') return out;
+  const purify = DOMPurify;
+  await Promise.all(
+    messages.map(async (m) => {
+      if (m.role !== 'tool' || !m.tool_call_id) return;
+      const comp = parseEnvelope(contentText(m.content), toolArgs[m.tool_call_id]);
+      if (!comp) return;
+      const html = await snapshotComponent(comp, { callId: m.tool_call_id, sessionId });
+      if (html) out.set(m.tool_call_id, purify.sanitize(html));
+    }),
+  );
+  return out;
+}
+
+function renderMessage(m, toolNames = {}, snapshots = new Map()) {
   // A tool *result* message: attribute it to its call's name (results carry no
   // name of their own) and show the raw output in a <pre>, not as markdown.
   // Tool and reasoning blocks render as <details> (collapsed by default) so
   // the exported page reads as the conversation, with the machinery on demand.
+  // A UI component is part of the answer instead: its snapshot, shown.
   if (m.role === 'tool') {
+    const snapshot = m.tool_call_id && snapshots.get(m.tool_call_id);
+    if (snapshot) return `<section class="msg msg-component">${snapshot}</section>`;
     const result = contentText(m.content);
     if (!result.trim()) return '';
     const name = (m.tool_call_id && toolNames[m.tool_call_id]) || m.name || '';
@@ -92,21 +121,28 @@ function renderMessage(m, toolNames = {}) {
 /**
  * Build a complete, self-contained HTML document from an export envelope.
  * `theme` is baked into the root so the file keeps the look it was exported from.
- * @param {{ title?: string, messages?: any[] }} data Export envelope.
+ * @param {{ title?: string, session_id?: string, messages?: any[] }} data Export envelope.
  * @param {'light' | 'dark' | string} [theme]
- * @returns {string} A full HTML document.
+ * @returns {Promise<string>} A full HTML document.
  */
-export function buildExportDoc(data, theme = 'light') {
+export async function buildExportDoc(data, theme = 'light') {
   const heading = data.title || 'Chat';
   const messages = data.messages || [];
-  // call id → tool name, so a tool result message can be labelled with its tool.
+  // call id → tool name, so a tool result message can be labelled with its
+  // tool; → arguments, for components drawn from their call's arguments.
+  /** @type {Record<string, string>} */
   const toolNames = {};
+  /** @type {Record<string, string>} */
+  const toolArgs = {};
   for (const m of messages) {
     for (const tc of m.tool_calls || []) {
-      if (tc.id) toolNames[tc.id] = tc.name;
+      if (!tc.id) continue;
+      toolNames[tc.id] = tc.name;
+      toolArgs[tc.id] = tc.arguments;
     }
   }
-  const body = messages.map((m) => renderMessage(m, toolNames)).join('\n');
+  const snapshots = await snapshotComponents(messages, toolArgs, data.session_id ?? null);
+  const body = messages.map((m) => renderMessage(m, toolNames, snapshots)).join('\n');
 
   // Highlight code in a detached node, exactly like the live view (skip mermaid
   // blocks — the export has no mermaid runtime, so they stay as plain code).
@@ -147,7 +183,7 @@ export async function exportSessionHtml(sessionId, title) {
     });
     const heading = data.title || title || 'Chat';
     const theme = document.documentElement.getAttribute('data-theme') || 'light';
-    const doc = buildExportDoc({ ...data, title: heading }, theme);
+    const doc = await buildExportDoc({ ...data, title: heading }, theme);
 
     const blob = new Blob([doc], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -229,6 +265,12 @@ hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
 table { border-collapse:collapse; margin:0 0 14px; font-size:14px; display:block; overflow-x:auto; }
 th,td { border:1px solid var(--border); padding:6px 11px; text-align:left; }
 th { background:var(--surface-2); font-weight:600; }
+/* UI component snapshots (tables.js / charts.js). */
+figure { margin:0; }
+figcaption { font-weight:600; margin:0 0 8px; }
+figcaption span { display:block; font-size:13px; font-weight:400; color:var(--muted); }
+figure img { display:block; max-width:100%; height:auto; }
+th.num, td.num { text-align:right; font-variant-numeric:tabular-nums; }
 code {
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:0.88em;

@@ -198,8 +198,7 @@ valid props of its kind.
 ### Python API
 
 ```python
-from lovia.web import put_ui_data, ui_result
-
+# put_ui_data and ui_result come from lovia.web.
 @tool
 async def query_table(sql: str) -> str:
     columns, rows = await run_query(sql)

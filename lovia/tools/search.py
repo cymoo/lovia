@@ -31,6 +31,7 @@ import httpx
 from ..exceptions import ToolError, UserError
 from ..http_config import resolve_verify
 from .base import Tool, default_result_renderer, tool
+from .fence import FENCE_NOTE, fence
 
 __all__ = [
     "DuckDuckGoSearch",
@@ -204,7 +205,8 @@ def _render_search_results(result: Any, ctx: Any) -> str:
 
     A readable block per hit (title / url / snippet) instead of raw JSON; the
     bare URL on its own line is what the web UI turns into a clickable link.
-    Only the success shape (a list of hits) is ours to format — the runner
+    Titles and snippets are the open web's words, so the hits come back
+    fenced. Only the success shape (a list of hits) is ours to format — the runner
     never routes error strings through renderers, so anything else can only
     arrive from a direct caller and falls back to the default rendering.
     """
@@ -223,7 +225,7 @@ def _render_search_results(result: Any, ctx: Any) -> str:
         if snippet:
             block += f"\n{snippet}"
         blocks.append(block)
-    return "\n\n".join(blocks)
+    return fence("\n\n".join(blocks))
 
 
 def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
@@ -237,7 +239,15 @@ def web_search(impl: WebSearch, *, name: str = "web_search") -> Tool:
     # Search crosses the open internet: a dropped connection is a normal
     # event, and retrying here costs a moment where letting it through costs
     # the model a whole turn to notice and re-ask.
-    @tool(name=name, result_renderer=_render_search_results, retries=2)
+    @tool(
+        name=name,
+        result_renderer=_render_search_results,
+        retries=2,
+        description=(
+            "Search the web and return a list of ``{title, url, snippet}``.\n"
+            f"{FENCE_NOTE}"
+        ),
+    )
     async def _search(
         query: Annotated[str, "Search query."],
         max_results: Annotated[int, "Max results (1-20)."] = 5,

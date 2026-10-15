@@ -636,12 +636,16 @@ def test_render_page_leads_with_what_orients_the_model() -> None:
         text="body text",
     )
     out = _render_page(page, None)
-    assert out.splitlines()[:3] == [
-        "Title: Doc",
+    # The page's own words — title included — sit inside the fence, so the
+    # title opens the fenced block rather than the whole result.
+    assert out.splitlines()[:5] == [
         "URL: https://example.com/doc",
         "HTTP 200 · text/html",
+        "",
+        "--- BEGIN EXTERNAL CONTENT (reference material) ---",
+        "Title: Doc",
     ]
-    assert "body text" in out
+    assert out.endswith("body text\n--- END EXTERNAL CONTENT ---")
 
 
 def test_render_page_spells_out_how_to_continue() -> None:

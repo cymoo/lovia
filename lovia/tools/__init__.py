@@ -22,6 +22,7 @@ from .base import (
     truncate_tool_output,
     tool,
 )
+from .fence import FENCE_NOTE, fence
 from .http import http_request, writes_need_approval
 from .human import HumanChannel, HumanQuestion, QuestionOption, ask_human
 from .page import (
@@ -48,6 +49,7 @@ from .time import current_date, now, sleep
 __all__ = [
     "ApprovalPredicate",
     "DuckDuckGoSearch",
+    "FENCE_NOTE",
     "HttpReader",
     "HumanChannel",
     "HumanQuestion",
@@ -67,6 +69,7 @@ __all__ = [
     "current_date",
     "default_result_renderer",
     "duckduckgo_search",
+    "fence",
     "html_to_markdown",
     "http_request",
     "make_recall_tool",

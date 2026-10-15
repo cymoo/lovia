@@ -39,12 +39,14 @@ from urllib.parse import urljoin, urlparse
 from pydantic import Field
 
 from .base import Tool, default_result_renderer, tool
+from .fence import FENCE_NOTE, fence
 from .http import (
     MAX_RESPONSE_BYTES,
     RawResponse,
     compact_json,
     decode_body,
     default_user_agent,
+    display_media_type,
     fetch_raw,
     render_payload,
     validate_url,
@@ -664,11 +666,8 @@ def _render_page(result: Any, ctx: Any) -> str:
     if not isinstance(result, Page):
         return result if isinstance(result, str) else default_result_renderer(result)
 
-    lines: list[str] = []
-    if result.title:
-        lines.append(f"Title: {result.title}")
-    lines.append(f"URL: {result.url}")
-    status = f"HTTP {result.status_code} · {result.media_type or 'unknown'}"
+    lines = [f"URL: {result.url}"]
+    status = f"HTTP {result.status_code} · {display_media_type(result.media_type)}"
     if result.size_capped:
         status += (
             f" · download capped at {MAX_RESPONSE_BYTES / 1e6:.1f}MB "
@@ -676,19 +675,28 @@ def _render_page(result: Any, ctx: Any) -> str:
         )
     lines.append(status)
 
+    # Title, text, and image alts are the page's words; URL, status, and the
+    # truncation notice are ours.
+    page: list[str] = []
+    if result.title:
+        page.append(f"Title: {result.title}")
     if result.text:
-        lines += ["", result.text]
-    if result.next_offset is not None:
-        lines += ["", f"[... truncated. Continue with offset={result.next_offset}.]"]
+        page += ["", result.text] if page else [result.text]
     if result.images:
         shown = result.images[:_RENDERED_IMAGES]
         total = len(result.images)
         count = f"{len(shown)} of {total}" if total > len(shown) else str(total)
-        lines += ["", f"Images ({count}):"]
-        lines += [
+        if page:
+            page.append("")
+        page.append(f"Images ({count}):")
+        page += [
             f"{i}. {image.url}" + (f" — {image.alt}" if image.alt else "")
             for i, image in enumerate(shown, 1)
         ]
+    if page:
+        lines += ["", fence("\n".join(page))]
+    if result.next_offset is not None:
+        lines += ["", f"[... truncated. Continue with offset={result.next_offset}.]"]
     return "\n".join(lines)
 
 
@@ -724,7 +732,8 @@ def page_reader(
             "continue from.\n"
             "- No JavaScript is executed, so a page that builds its content "
             "in the browser may come back nearly empty.\n"
-            "- For REST APIs and non-HTML endpoints, use http_request."
+            "- For REST APIs and non-HTML endpoints, use http_request.\n"
+            f"- {FENCE_NOTE}"
         ),
     )
     async def _read(

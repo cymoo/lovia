@@ -172,6 +172,10 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
+The built-in web tools (`read_page`, `http_request`, `web_search`) fence what
+they fetch, so the model reads it as material rather than instructions;
+`fence()` does the same for your own tools.
+
 → [Tools](https://cymoo.github.io/lovia/tools/) · [Built-in tools](https://cymoo.github.io/lovia/built-in-tools/)
 
 ### Structured output

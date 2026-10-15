@@ -46,6 +46,7 @@ from .http import (
     compact_json,
     decode_body,
     default_user_agent,
+    display_media_type,
     fetch_raw,
     render_payload,
     validate_url,
@@ -666,7 +667,7 @@ def _render_page(result: Any, ctx: Any) -> str:
         return result if isinstance(result, str) else default_result_renderer(result)
 
     lines = [f"URL: {result.url}"]
-    status = f"HTTP {result.status_code} · {result.media_type or 'unknown'}"
+    status = f"HTTP {result.status_code} · {display_media_type(result.media_type)}"
     if result.size_capped:
         status += (
             f" · download capped at {MAX_RESPONSE_BYTES / 1e6:.1f}MB "

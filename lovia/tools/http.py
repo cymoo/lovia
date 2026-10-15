@@ -45,6 +45,7 @@ __all__ = [
     "compact_json",
     "decode_body",
     "default_user_agent",
+    "display_media_type",
     "fetch_raw",
     "http_request",
     "looks_textual",
@@ -258,6 +259,20 @@ def _is_binary_type(media_type: str) -> bool:
     )
 
 
+# RFC 6838 type/subtype names. The status line sits outside the fence, yet the
+# media type comes from the server's Content-Type header — so anything that
+# isn't a well-formed type is shown as "unknown" rather than echoed.
+_MEDIA_TYPE = re.compile(
+    r"[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}",
+    re.IGNORECASE,
+)
+
+
+def display_media_type(media_type: str) -> str:
+    """``media_type`` when it is a well-formed MIME type, else ``"unknown"``."""
+    return media_type if _MEDIA_TYPE.fullmatch(media_type) else "unknown"
+
+
 @tool(
     name="http_request",
     description=(
@@ -303,7 +318,8 @@ async def http_request(
     elif char_capped:
         size_note += " (truncated)"
 
-    lines = [f"HTTP {raw.status_code} · {raw.media_type or 'unknown'} · {size_note}"]
+    media_type = display_media_type(raw.media_type)
+    lines = [f"HTTP {raw.status_code} · {media_type} · {size_note}"]
     if raw.url != url:
         lines.append(f"URL: {raw.url}")
     # Headers and body are the server's words; the status line above is ours.

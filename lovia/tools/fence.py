@@ -33,10 +33,16 @@ FENCE_NOTE = (
 # C0/C1 controls (tab, newline and carriage return survive), bidirectional
 # overrides and isolates, and the Unicode tag block — invisible text a page
 # can use to hide instructions or reorder what a reader sees.
-_INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩\U000e0000-\U000e007f]")
+_INVISIBLE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"
+    r"\U0000200e\U0000200f\U0000202a-\U0000202e\U00002066-\U00002069"
+    r"\U000e0000-\U000e007f]"
+)
 # Anything shaped like a marker, whatever its label: bending the dashes keeps
-# it readable while it no longer matches a frame.
-_MARKER = re.compile(r"---(\s*(?:BEGIN|END)\b)", re.IGNORECASE)
+# it readable while it no longer matches a frame. It must start at a line
+# start or after whitespace — a real marker always does, and that spares
+# URLs and paths such as ``/---END/guide``.
+_MARKER = re.compile(r"(?<!\S)---(\s*(?:BEGIN|END)\b)", re.IGNORECASE)
 _REMINDER = re.compile(r"<(/?\s*system-reminder)", re.IGNORECASE)
 _TEMPLATE_TOKEN = re.compile(r"<\|([^|<>\n]{1,40})\|>")
 

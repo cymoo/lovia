@@ -3,7 +3,8 @@
 Prompt changes are empirical: this eval feeds the *live* model synthetic
 conversations that mirror the failure modes observed in real MEMORY.md files
 (install logs promoted to facts, paraphrase duplicates, one-off task detail,
-session-scoped permissions fossilized) and checks what the digest admits,
+session-scoped permissions fossilized, the assistant's own claims promoted to
+facts) and checks what the digest admits,
 retires, and what a dream keeps.
 
 The fixture notes are entirely fictional — they reproduce the pathologies,
@@ -138,6 +139,146 @@ DIGEST_CASES = [
             ),
         ],
         lambda d: _no_facts_matching(d, r"3\.13|requires-python"),
+    ),
+    # -- Only the user is a source -------------------------------------------
+    # Observed on real data: the digest promoted the assistant's own claims —
+    # once a *wrong* conclusion, which then resurfaced in later sessions as a
+    # "fact". The same knowledge is fair game when the user states it.
+    (
+        "assistant-wrong-conclusion",
+        "",
+        [
+            ("user", "你能显示表格吗"),
+            (
+                "assistant",
+                "可以，我有一个 data_grid 工具，能生成可排序、可筛选的表格。",
+            ),
+            ("user", "支持分页吗"),
+            (
+                "assistant",
+                "不支持分页：data_grid 只有 title / columns / rows 三个参数，"
+                "需要一次性传入全部数据。几百行以内没问题，上千行建议先聚合。",
+            ),
+        ],
+        lambda d: _no_facts_matching(d, r"分页|data_grid|columns|rows"),
+    ),
+    (
+        # The messy shape that leaked where the clean one above didn't: a bare
+        # "go on", the assistant experimenting on its own, then a "for your
+        # reference" verdict phrased as a behavior rule.
+        "assistant-self-derived-guideline",
+        "",
+        [
+            ("user", "嗯"),
+            (
+                "assistant",
+                "好，我来实测一下。先生成 200 行模拟数据，再一次性交给 data_grid 渲染。",
+            ),
+            (
+                "assistant",
+                "200 行已经渲染出来了。我这边的观察：200 行完全不卡，排序和筛选"
+                "覆盖全部行，所以分页在这个量级上没有存在意义；真正的瓶颈在数据"
+                "传输——这些行是我一次性写进工具调用的。\n\n"
+                "小结一句给你备查：\n"
+                "| 数据量 | 建议做法 |\n|---|---|\n"
+                "| 几十行 | 直接 data_grid |\n| 一两百行 | 也可以，实测流畅 |\n"
+                "| 上千行 | 先聚合，或导出 CSV/xlsx |\n\n"
+                "结论：不支持分页，也不需要。",
+            ),
+        ],
+        lambda d: _no_facts_matching(d, r"分页|data_grid|行|CSV|聚合"),
+    ),
+    (
+        # The user's correction may land; the assistant's elaboration of it
+        # (paging happens in the UI layer, automatically; no page parameter;
+        # pass everything at once) may not.
+        "user-corrects-tool-claim",
+        "",
+        [
+            ("user", "data_grid 支持分页吗"),
+            ("assistant", "不支持，它只有 title / columns / rows 三个参数。"),
+            ("user", "哇，其实是支持分页的"),
+            (
+                "assistant",
+                "我看错了，抱歉——分页在界面层自动完成，工具参数里没有页码，"
+                "所以仍需一次性交出全部数据。",
+            ),
+        ],
+        lambda d: _no_facts_matching(d, r"页码|参数|一次性|界面|自动"),
+    ),
+    (
+        "assistant-explains-config",
+        "",
+        [
+            ("user", "我在项目目录放了个 config.json，为什么原来的 models 都没了？"),
+            (
+                "assistant",
+                "因为 acme 的配置是整文件择优、不按字段合并：项目级 config.json "
+                "会整体覆盖用户级的，缺失的 models、roles 会被清空。",
+            ),
+        ],
+        lambda d: _no_facts_matching(d, r"整文件|覆盖|合并"),
+    ),
+    (
+        # The same knowledge as above, stated by the user: it lands.
+        "user-states-config",
+        "",
+        [
+            (
+                "user",
+                "提醒一下：acme 的配置是整文件覆盖、不按字段合并的，项目级 "
+                "config.json 会整体顶掉用户级的。这个坑以后注意。",
+            ),
+            ("assistant", "记住了，之后改项目级配置会写完整文档。"),
+        ],
+        lambda d: any(re.search(r"整文件|覆盖|合并", f) for f in d.facts),
+    ),
+    (
+        # The assistant proposes, the user explicitly adopts it: that is the
+        # user's rule now, unlike the bare "嗯" above.
+        "user-confirms-proposal",
+        "",
+        [
+            ("user", "帮我把这份周报润色一下"),
+            (
+                "assistant",
+                "润色好了。另外建议：以后周报都按「进展 / 风险 / 下周计划」三段写，"
+                "读者扫一眼就能抓住重点。要按这个格式来吗？",
+            ),
+            ("user", "对，以后周报都按这个三段格式写"),
+            ("assistant", "好的，之后的周报都用这三段。"),
+        ],
+        lambda d: any(re.search(r"周报", f) for f in d.facts),
+    ),
+    (
+        "tool-format-explained",
+        "",
+        [
+            ("user", "Can you draw charts?"),
+            (
+                "assistant",
+                "Yes — plot_chart takes a standard ECharts option object. The "
+                "option is JSON, so it can't contain functions; use template "
+                "strings for formatters.",
+            ),
+        ],
+        lambda d: _no_facts_matching(d, r"echarts|option|formatter|plot_chart"),
+    ),
+    (
+        "user-intent-amid-tool-talk",
+        "",
+        [
+            ("user", "生成几个图表给我看看"),
+            ("assistant", "已用 plot_chart 生成 4 个图表（ECharts option 格式）。"),
+            ("user", "第 2、3 张标题和图例重叠了，重画一下"),
+            ("assistant", "已重画全部 4 张。"),
+            ("user", "你没理解我的意思，只重画有问题的那两张，别动其他的"),
+            ("assistant", "明白，只重画第 2、3 张，其余保持不变。"),
+        ],
+        lambda d: (
+            any(re.search(r"只|有问题|其余|其他", f) for f in d.facts)
+            and _no_facts_matching(d, r"echarts|option|plot_chart")
+        ),
     ),
 ]
 

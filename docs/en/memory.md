@@ -54,7 +54,10 @@ Three paths, from automatic to manual:
    (`RunCompleted`), one digest call over the complete transcript promotes
    the few durable facts into Notes — date-stamped `[YYYY-MM]`, admission
    is deliberately strict (no re-derivable state, no one-off task details,
-   most runs yield nothing) — retires existing notes the conversation
+   most runs yield nothing) and takes facts only from what the user said or
+   explicitly confirmed — the assistant's own explanations and conclusions,
+   including whatever it drew from tool output, can be wrong and never
+   become notes on their own — retires existing notes the conversation
    disproved, and writes a self-contained episode summary into the archive,
    where it searches far better than raw chat fragments. Raw user/assistant
    messages are indexed too; document ids are deterministic (`run_id:seq`),

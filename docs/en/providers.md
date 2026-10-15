@@ -198,13 +198,19 @@ they stay cached.
 - **OpenAI**: caching is automatic server-side; the adapter surfaces
   `prompt_tokens_details.cached_tokens` as `usage.cache_read_tokens`.
 - **Anthropic**: caching is explicit. Opt in per agent and the adapter
-  places `cache_control: {"type": "ephemeral"}` breakpoints on the **last
-  system block and the last tool definition** (the stable prefix):
+  places `cache_control: {"type": "ephemeral"}` breakpoints at three
+  stability boundaries — the **last tool definition**, the **last system
+  block**, and the **conversation's last stable block**, so each turn reads
+  the whole prior history from cache instead of re-paying it:
 
   ```python
   settings = ModelSettings(provider_options={"anthropic": {"cache_system": True}})
   ```
 
+  The history breakpoint sits on the last tool result or assistant block,
+  never on the trailing user text: a new user message, and the reminders
+  plugins inject for one call only (the todo list, running subagents), sit
+  after it — so the prefix it marks is byte-identical in the next request.
   Cache reads/writes surface as `usage.cache_read_tokens` /
   `usage.cache_write_tokens`.
 
@@ -345,8 +351,9 @@ triggers reactive compaction instead of retries. That error also carries
   so nothing in the resolution chain can reach it, and no error will ever
   tell you. Set `Compaction(context_window=…)` to match your `num_ctx`.
 - **Anthropic prompt caching is opt-in** (`cache_system: True`). Long
-  agent loops on the official API without it re-pay the full prompt every
-  turn.
+  agent loops on the official API without it re-pay the full prompt —
+  history included — every turn. The flag's name predates the history
+  breakpoint; it now covers tools, system, and conversation alike.
 - **`trust_env` defaults to off** — deliberate, so ambient proxy settings
   can't silently reroute provider traffic. In proxied environments set
   `LOVIA_PROVIDER_TRUST_ENV=1` or nothing connects.

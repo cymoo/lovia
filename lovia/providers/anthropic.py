@@ -259,12 +259,16 @@ class AnthropicProvider:
             replay_thinking=replay_thinking,
             include_images=self.supports_vision,
         )
-        if cache_system and system_blocks:
-            # Mark the system prompt as cacheable (ephemeral 5-minute TTL).
-            system_blocks[-1] = {
-                **system_blocks[-1],
-                "cache_control": {"type": "ephemeral"},
-            }
+        if cache_system:
+            # Breakpoints (ephemeral, 5-minute TTL) at each stability boundary:
+            # tools and system below, the conversation's stable prefix here.
+            # Three of the API's four slots.
+            if system_blocks:
+                system_blocks[-1] = {
+                    **system_blocks[-1],
+                    "cache_control": {"type": "ephemeral"},
+                }
+            _mark_history_breakpoint(anthropic_messages)
 
         payload: JsonObject = {
             "model": self.model,
@@ -598,6 +602,40 @@ def _append_user_message(out: list[JsonObject], content: list[JsonObject]) -> No
         out[-1]["content"] = _merge_anthropic_blocks(out[-1].get("content"), content)
         return
     out.append({"role": "user", "content": content})
+
+
+def _mark_history_breakpoint(messages: list[JsonObject]) -> None:
+    """Put a cache breakpoint on the conversation's last *stable* block.
+
+    The tail of a request is volatile: a new user message, or the reminder
+    text a view injector appends for this call only and drops on the next
+    (``RunLoop._augment_view``). A breakpoint on it would key the cache to a
+    prefix the next request no longer has, so every turn would miss. Walking
+    back past the trailing user text/image blocks lands on the last
+    ``tool_result`` or assistant block — bytes every later request repeats
+    verbatim — and the next request's breakpoint finds this entry within the
+    API's 20-position lookback. One marker suffices: requests are one turn
+    apart, and the API counts a run of consecutive ``tool_use`` blocks, and
+    likewise of ``tool_result`` blocks, as a single position, so even a wide
+    parallel turn adds only a handful. Thinking blocks and empty text can't
+    carry a marker, so they're stepped over.
+    """
+    for message in reversed(messages):
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        user = message.get("role") == "user"
+        for i in range(len(content) - 1, -1, -1):
+            block = content[i]
+            kind = block.get("type")
+            if user and kind != "tool_result":
+                continue
+            if kind in ("thinking", "redacted_thinking"):
+                continue
+            if kind == "text" and not block.get("text"):
+                continue
+            content[i] = {**block, "cache_control": {"type": "ephemeral"}}
+            return
 
 
 def _to_anthropic_messages(

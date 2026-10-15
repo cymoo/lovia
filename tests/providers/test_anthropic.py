@@ -469,6 +469,130 @@ def test_rejects_non_pdf_anthropic_file_urls() -> None:
         _to_anthropic_messages(msgs)
 
 
+_CACHE = ModelSettings(provider_options={"anthropic": {"cache_system": True}})
+_REMINDER = "<system-reminder>todo: 1 open</system-reminder>"
+
+
+def _cached_payload(entries: list[Any], settings: ModelSettings = _CACHE) -> Any:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+    return provider._build_payload(
+        entries=entries,
+        tools=None,
+        response_format=None,
+        settings=settings,
+        stream=False,
+    )
+
+
+def _marked(payload: Any) -> list[tuple[int, int, str]]:
+    """(message index, block index, block type) of every message breakpoint."""
+    return [
+        (m, b, block["type"])
+        for m, message in enumerate(payload["messages"])
+        for b, block in enumerate(message["content"])
+        if "cache_control" in block
+    ]
+
+
+def _loop_turn(n: int) -> list[Any]:
+    return [
+        AssistantTextEntry(content=f"step {n}"),
+        ToolCallEntry(call_id=f"c{n}", name="f", arguments="{}"),
+        ToolResultEntry(call_id=f"c{n}", output=f"result {n}"),
+    ]
+
+
+def test_cache_marks_last_tool_result_not_the_injected_reminder() -> None:
+    # The reminder merges into the tool-result user message as a text block;
+    # it vanishes next call, so the breakpoint must sit before it.
+    entries = [
+        InputEntry(role="system", content="sys"),
+        InputEntry(role="user", content="go"),
+        *_loop_turn(1),
+        InputEntry(role="user", content=_REMINDER),
+    ]
+    payload = _cached_payload(entries)
+    last = payload["messages"][-1]["content"]
+    assert [b["type"] for b in last] == ["tool_result", "text"]
+    assert _marked(payload) == [(len(payload["messages"]) - 1, 0, "tool_result")]
+
+
+def test_cache_marks_assistant_tail_before_a_new_user_message() -> None:
+    entries = [
+        InputEntry(role="user", content="hi"),
+        ReasoningEntry(
+            content="hmm", provider="anthropic", metadata={"signature": "s"}
+        ),
+        AssistantTextEntry(content="hello"),
+        InputEntry(role="user", content="and now?"),
+    ]
+    thinking_on = ModelSettings(
+        provider_options={
+            "anthropic": {"cache_system": True, "thinking": {"type": "adaptive"}}
+        }
+    )
+    payload = _cached_payload(entries, thinking_on)
+    # thinking can't carry a marker; the text after it does.
+    assert [b["type"] for b in payload["messages"][1]["content"]] == [
+        "thinking",
+        "text",
+    ]
+    assert _marked(payload) == [(1, 1, "text")]
+
+
+def test_cache_has_no_history_breakpoint_on_the_first_turn() -> None:
+    payload = _cached_payload([InputEntry(role="user", content="hi")])
+    assert _marked(payload) == []
+
+
+def test_cache_off_marks_nothing_in_history() -> None:
+    entries = [InputEntry(role="user", content="go"), *_loop_turn(1)]
+    assert _marked(_cached_payload(entries, ModelSettings())) == []
+
+
+def test_cached_prefix_reappears_verbatim_in_the_next_request() -> None:
+    # The property caching rests on: everything up to request N's breakpoint
+    # is byte-identical at the head of request N+1, even though N's reminder
+    # is gone from N+1.
+    head = [
+        InputEntry(role="system", content="sys"),
+        InputEntry(role="user", content="go"),
+    ]
+    first = _cached_payload(
+        [*head, *_loop_turn(1), InputEntry(role="user", content=_REMINDER)]
+    )
+    second = _cached_payload(
+        [
+            *head,
+            *_loop_turn(1),
+            *_loop_turn(2),
+            InputEntry(role="user", content=_REMINDER),
+        ]
+    )
+    [(m, b, _)] = _marked(first)
+    assert _prefix_through(first, m, b) == _prefix_through(second, m, b)
+    # …and the second request's own breakpoint moved forward to its last result.
+    [(m2, _, kind)] = _marked(second)
+    assert m2 > m and kind == "tool_result"
+
+
+def _prefix_through(payload: Any, m: int, b: int) -> str:
+    """The messages up to block ``b`` of message ``m``, markers stripped."""
+    out = []
+    for i, message in enumerate(payload["messages"][: m + 1]):
+        blocks = message["content"] if i < m else message["content"][: b + 1]
+        out.append(
+            {
+                "role": message["role"],
+                "content": [
+                    {k: v for k, v in block.items() if k != "cache_control"}
+                    for block in blocks
+                ],
+            }
+        )
+    return json.dumps(out)
+
+
 def test_build_payload_maps_settings_cache_and_structured_output() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 

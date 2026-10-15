@@ -166,14 +166,19 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
 
 - **OpenAI**：服务端自动缓存；适配器把 `prompt_tokens_details.cached_tokens` 暴露为
   `usage.cache_read_tokens`。
-- **Anthropic**：需要显式开启。按 agent 手动开启后，适配器会在**最后一个 system block
-  和最后一个工具定义**上放置 `cache_control: {"type": "ephemeral"}`，作为稳定前缀的断点：
+- **Anthropic**：需要显式开启。按 agent 手动开启后，适配器会在三个稳定边界上放置
+  `cache_control: {"type": "ephemeral"}` 断点：**最后一个工具定义**、**最后一个 system
+  block**，以及**对话里最后一个稳定的块**。这样每一轮都能从缓存读取之前的全部历史，
+  而不必重新付费：
 
   ```python
   settings = ModelSettings(provider_options={"anthropic": {"cache_system": True}})
   ```
 
-  缓存读写分别暴露为 `usage.cache_read_tokens` / `usage.cache_write_tokens`。
+  历史断点放在最后一个工具结果或助手块上，不会放在末尾的用户文本上：新的用户消息，以及
+  插件只为本次调用注入的提醒（待办列表、运行中的子 agent）都排在它之后，因此它标记的
+  前缀在下一次请求里逐字节不变。缓存读写分别暴露为 `usage.cache_read_tokens` /
+  `usage.cache_write_tokens`。
 
 无论哪种方式，`usage.input_tokens` 都是**完整** prompt 大小，包含已缓存 token；cache 字段
 只是拆分总量，不额外相加。想受益就要保持前缀稳定：易变的
@@ -293,7 +298,8 @@ entry point 不能覆盖内置的 `openai:` / `anthropic:` 前缀（安装包不
   它的 OpenAI 兼容 `/models` 接口也不公布窗口，因此解析链的每一层都无法探测，且永远
   不会有报错来提醒你。请设置 `Compaction(context_window=…)` 与你的 `num_ctx` 对齐。
 - **Anthropic prompt caching 需要显式开启**（`cache_system: True`）。官方 API 上的长循环
-  如果不开，每轮都会重新支付完整 prompt。
+  如果不开，每轮都会重新支付完整 prompt，包括全部历史。这个开关的名字早于历史断点，
+  现在它同时覆盖工具、system 和对话历史。
 - **`trust_env` 默认关闭**。这是有意为之，避免环境里的代理设置在无提示时改变路由。在需要代理的
   环境里设置 `LOVIA_PROVIDER_TRUST_ENV=1`，否则不会使用代理。
 - **由字符串构造的 provider 归运行管理；你传入的实例归你管理。** 你手动构造并传入的

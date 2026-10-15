@@ -190,7 +190,8 @@ DIGEST_CASES = [
     ),
     (
         # The user's correction may land; the assistant's elaboration of it
-        # (no page parameter, pass everything at once) may not.
+        # (paging happens in the UI layer, automatically; no page parameter;
+        # pass everything at once) may not.
         "user-corrects-tool-claim",
         "",
         [
@@ -203,7 +204,7 @@ DIGEST_CASES = [
                 "所以仍需一次性交出全部数据。",
             ),
         ],
-        lambda d: _no_facts_matching(d, r"页码|参数|一次性"),
+        lambda d: _no_facts_matching(d, r"页码|参数|一次性|界面|自动"),
     ),
     (
         "assistant-explains-config",

@@ -377,7 +377,9 @@ _DIGEST_INSTRUCTIONS = (
     "or explicitly confirmed. The assistant's turns are context for reading "
     "the user's — its explanations, findings, and conclusions (including "
     "whatever it drew from tool output) can be wrong and never become facts "
-    'on their own; a bare "ok" or "go on" confirms nothing. Record the '
+    'on their own; a bare "ok" or "go on" confirms nothing. When the user '
+    "corrects or confirms something, the fact is exactly what they said — "
+    "never fold in the assistant's explanation around it. Record the "
     'lasting takeaway, not the event ("user prefers X", not "user did X '
     "today\"). The test: would this change the agent's behavior "
     "in a fresh session a month from now? Never record: state re-derivable "

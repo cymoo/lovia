@@ -331,7 +331,9 @@ class _RunDigest(BaseModel):
         description=(
             "New durable facts worth keeping long-term: stable preferences, "
             "standing rules, corrections, lasting details about the user or "
-            "their projects. Most runs have none — prefer empty over marginal."
+            "their projects — taken from what the user said or confirmed, "
+            "never from the assistant's own statements. Most runs have none "
+            "— prefer empty over marginal."
         ),
     )
     stale: list[str] = Field(
@@ -371,8 +373,13 @@ _DIGEST_INSTRUCTIONS = (
     "1. facts: new durable facts that will still matter in future, unrelated "
     "sessions — the user's stable preferences and standing rules, corrections "
     "they made, and lasting details about them, their environment, or their "
-    'projects. Record the conclusion, not the event ("user prefers X", not '
-    '"user did X today"). The test: would this change the agent\'s behavior '
+    "projects. Only the user is a source: take facts from what the user said "
+    "or explicitly confirmed. The assistant's turns are context for reading "
+    "the user's — its explanations, findings, and conclusions (including "
+    "whatever it drew from tool output) can be wrong and never become facts "
+    'on their own; a bare "ok" or "go on" confirms nothing. Record the '
+    'lasting takeaway, not the event ("user prefers X", not "user did X '
+    "today\"). The test: would this change the agent's behavior "
     "in a fresh session a month from now? Never record: state re-derivable "
     "from files or a quick command (directory listings, config values, "
     "versions); one-off task outputs and their details (logs, counts, sizes); "
@@ -555,8 +562,9 @@ async def _summarize(
 _REMEMBER_DESCRIPTION = (
     "Save a durable fact to long-term memory so you can recall it in future "
     "sessions. Use it for stable preferences, corrections, or lasting details "
-    "about the user or project — not transient task state. Pass one concise, "
-    "self-contained fact per call."
+    "about the user or project that the user stated or confirmed — not "
+    "transient task state, and not your own explanations or conclusions. "
+    "Pass one concise, self-contained fact per call."
 )
 
 _FORGET_DESCRIPTION = (
@@ -590,7 +598,10 @@ def _build_instructions(has_index: bool) -> str:
     parts.append(
         "When the user asks you to remember something, or corrects a wrong "
         "assumption, call `remember` immediately; everything else is curated "
-        "automatically when the run ends — never record transient task details."
+        "automatically when the run ends — never record transient task details. "
+        "Record only what the user said or confirmed, never your own "
+        "explanations or conclusions; if a note turns out to be wrong, "
+        "`forget` it."
     )
     return "\n".join(parts)
 

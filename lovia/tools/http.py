@@ -7,7 +7,9 @@ page is :mod:`lovia.tools.page`'s job (``read_page``).
 
 The body is streamed with a hard byte cap (huge downloads stop early), decoded
 by declared charset, and clipped to ``max_chars``. JSON is re-serialized
-compactly; binary returns metadata only.
+compactly; binary returns metadata only. Headers and body come back
+fenced (:mod:`lovia.tools.fence`), with injection-shaped text inside
+disarmed — material to read, not bytes to reproduce.
 
 This module also holds the transport helpers ``read_page`` builds on:
 :func:`fetch_raw` performs one capped request, :func:`decode_body` turns bytes
@@ -35,6 +37,7 @@ from ..http_config import resolve_verify
 from ..exceptions import ToolError
 from ..run_context import RunContext
 from .base import clip_text, tool
+from .fence import FENCE_NOTE, fence
 
 __all__ = [
     "MAX_RESPONSE_BYTES",
@@ -265,7 +268,8 @@ def _is_binary_type(media_type: str) -> bool:
         "- JSON responses are compacted; binary responses return metadata "
         "only.\n"
         "- body is sent as a JSON request body for POST/PUT/PATCH.\n"
-        "- One shot per call: no sessions, cookies, or JavaScript rendering."
+        "- One shot per call: no sessions, cookies, or JavaScript rendering.\n"
+        f"- {FENCE_NOTE}"
     ),
 )
 async def http_request(
@@ -302,10 +306,9 @@ async def http_request(
     lines = [f"HTTP {raw.status_code} · {raw.media_type or 'unknown'} · {size_note}"]
     if raw.url != url:
         lines.append(f"URL: {raw.url}")
-    if header_block := _render_headers(raw.headers):
+    # Headers and body are the server's words; the status line above is ours.
+    remote = [part for part in (_render_headers(raw.headers), rendered) if part]
+    if remote:
         lines.append("")
-        lines.append(header_block)
-    if rendered:
-        lines.append("")
-        lines.append(rendered)
+        lines.append(fence("\n\n".join(remote)))
     return "\n".join(lines)

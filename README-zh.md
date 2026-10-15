@@ -153,6 +153,9 @@ async def apply_migration(name: str) -> str:
     return "applied"
 ```
 
+内置的网络工具（`read_page`、`http_request`、`web_search`）会把抓取到的内容放进隔离框，
+让模型把它当作素材而不是指令；自定义工具可以用 `fence()` 做同样的处理。
+
 → [工具](https://cymoo.github.io/lovia/zh/tools/) · [内置工具](https://cymoo.github.io/lovia/zh/built-in-tools/)
 
 ### 结构化输出

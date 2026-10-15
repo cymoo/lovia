@@ -614,8 +614,11 @@ def _mark_history_breakpoint(messages: list[JsonObject]) -> None:
     back past the trailing user text/image blocks lands on the last
     ``tool_result`` or assistant block — bytes every later request repeats
     verbatim — and the next request's breakpoint finds this entry within the
-    API's 20-block lookback. Thinking blocks and empty text can't carry a
-    marker, so they're stepped over.
+    API's 20-position lookback. One marker suffices: requests are one turn
+    apart, and the API counts a run of consecutive ``tool_use`` blocks, and
+    likewise of ``tool_result`` blocks, as a single position, so even a wide
+    parallel turn adds only a handful. Thinking blocks and empty text can't
+    carry a marker, so they're stepped over.
     """
     for message in reversed(messages):
         content = message.get("content")

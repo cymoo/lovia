@@ -108,6 +108,12 @@ class MCPToolResult:
         return render_mcp_content(self.content, is_error=self.is_error)
 
 
+def _field(obj: Any, name: str, legacy: str, default: Any = None) -> Any:
+    """Read an MCP model field: ``name`` on mcp 2.x, camelCase ``legacy`` on 1.x."""
+    value = getattr(obj, name, None)
+    return getattr(obj, legacy, default) if value is None else value
+
+
 def _approx_bytes(b64: str | None) -> int:
     """Approximate decoded byte length of a base64 string without decoding it."""
     if not b64:
@@ -137,7 +143,7 @@ def _render_block(block: Any) -> str:
     if btype == "text":
         return getattr(block, "text", "") or ""
     if btype in ("image", "audio"):
-        mime = getattr(block, "mimeType", None) or "application/octet-stream"
+        mime = _field(block, "mime_type", "mimeType") or "application/octet-stream"
         size = _human_size(_approx_bytes(getattr(block, "data", None)))
         return f"[{btype}: {mime}, {size}]"
     if btype == "resource_link":
@@ -149,7 +155,7 @@ def _render_block(block: Any) -> str:
         if text is not None:
             return str(text)
         uri = getattr(resource, "uri", "") or ""
-        mime = getattr(resource, "mimeType", None) or "application/octet-stream"
+        mime = _field(resource, "mime_type", "mimeType") or "application/octet-stream"
         size = _human_size(_approx_bytes(getattr(resource, "blob", None)))
         return f"[resource: {uri}, {mime}, {size}]"
     # Unknown block type: serialise compactly, dropping bulky binary fields.
@@ -326,15 +332,19 @@ class MCPConnection:
 
     # -- listing ------------------------------------------------------------- #
     async def _list_all_tools(self) -> list[Any]:
+        from mcp.types import PaginatedRequestParams
+
         session = self._require_session()
         out: list[Any] = []
-        cursor: str | None = None
+        # `params=` is the one pagination spelling both SDK majors accept.
+        params: PaginatedRequestParams | None = None
         while True:
-            result = await session.list_tools(cursor=cursor)
+            result = await session.list_tools(params=params)
             out.extend(result.tools)
-            cursor = getattr(result, "nextCursor", None)
+            cursor = _field(result, "next_cursor", "nextCursor")
             if not cursor:
                 break
+            params = PaginatedRequestParams(cursor=cursor)
         return out
 
     def _keep(self, name: str) -> bool:
@@ -358,7 +368,9 @@ class MCPConnection:
                 Tool(
                     name=display,
                     description=getattr(entry, "description", None) or "",
-                    parameters=normalize_schema(getattr(entry, "inputSchema", None)),
+                    parameters=normalize_schema(
+                        _field(entry, "input_schema", "inputSchema")
+                    ),
                     invoke=self._make_invoke(raw_name),
                     needs_approval=self.needs_approval,
                     retries=self.retries,
@@ -383,7 +395,7 @@ class MCPConnection:
         session = self._require_session()
         result = await session.call_tool(tool_name, args)
         content = list(getattr(result, "content", None) or [])
-        is_error = bool(getattr(result, "isError", False))
+        is_error = bool(_field(result, "is_error", "isError", False))
         return MCPToolResult(content=content, is_error=is_error)
 
     async def _call(self, tool_name: str, args: dict[str, Any]) -> MCPToolResult:
@@ -559,23 +571,21 @@ class MCPServerStreamableHTTP(MCPServer):
         url, headers = self.url, self.headers
         modern_client = getattr(module, "streamable_http_client", None)
         if modern_client is not None:
-            # The newer API takes a configured HTTP client, not headers.
-            # Match the SDK's defaults and own the client for this transport.
+            # The newer API takes a configured HTTP client, not headers. Build
+            # it with the SDK's own factory (what the SDK uses when given no
+            # client) so the HTTP library — httpx on 1.x, httpx2 on 2.x — and
+            # its timeout/redirect defaults always match the installed SDK.
+            from mcp.shared._httpx_utils import create_mcp_http_client
+
             @asynccontextmanager
             async def transport() -> AsyncIterator[Any]:
-                import httpx
-
-                async with httpx.AsyncClient(
-                    headers=headers,
-                    timeout=httpx.Timeout(30, read=300),
-                    follow_redirects=True,
-                ) as http_client:
+                async with create_mcp_http_client(headers=headers) as http_client:
                     async with modern_client(url, http_client=http_client) as streams:
                         yield streams
 
             return transport
         client = getattr(module, "streamablehttp_client", None)
-        if client is None:  # pragma: no cover - very old/new mcp
+        if client is None:  # pragma: no cover - very old mcp
             raise UserError(
                 "Installed 'mcp' has no streamable-HTTP client.",
                 hint="Upgrade with: pip install -U mcp",

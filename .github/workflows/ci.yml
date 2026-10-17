@@ -42,6 +42,22 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
+  # The lockfile pins the mcp SDK at 1.x, but the MCP plugin supports 2.x too:
+  # rerun its tests (including a real stdio round trip) on the newest 2.x.
+  test-mcp-2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev --extra mcp
+          uv pip install "mcp>=2,<3"
+      - name: Pytest (MCP plugin)
+        run: uv run --no-sync pytest tests/plugins/test_mcp.py
+
   # Type-check the bundled web UI (lovia/web/static/js) with TypeScript's
   # checkJs. No build step and no npm packages in the repo — a hand-written
   # jsconfig.json + types.d.ts drive it, and tsc is pinned via npx so the check
@@ -157,7 +173,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [lint, test, typecheck-web]
+    needs: [lint, test, test-mcp-2, typecheck-web]
     runs-on: ubuntu-latest
     environment:
       name: pypi

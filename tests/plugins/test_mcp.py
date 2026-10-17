@@ -11,6 +11,10 @@ from typing import Any
 
 import pytest
 
+# The plugin reads the SDK's own types and HTTP client factory, so these tests
+# need the optional extra (`pip install -e '.[mcp]'`); CI always installs it.
+pytest.importorskip("mcp")
+
 from lovia.exceptions import MCPError, ToolError, UserError
 from lovia.plugins.mcp import (
     MCP,
@@ -677,7 +681,6 @@ async def test_defer_flag_flows_from_server_config(
 # Real SDK round trip (CI runs this file on both mcp 1.x and 2.x)
 # --------------------------------------------------------------------------- #
 async def test_stdio_round_trip_through_the_installed_sdk() -> None:
-    pytest.importorskip("mcp")
     script = Path(__file__).with_name("mcp_stub_server.py")
     server = MCPServerStdio(command=sys.executable, args=[str(script)], name="stub")
     async with server.session() as conn:

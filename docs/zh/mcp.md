@@ -8,7 +8,7 @@
 pip install "lovia[mcp]"
 ```
 
-插件目前支持 MCP Python SDK 1.x。
+插件支持 MCP Python SDK 1.18 及以上版本，包括 2.x。
 
 ```python
 from lovia import Agent

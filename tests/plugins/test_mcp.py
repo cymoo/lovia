@@ -3,12 +3,17 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
+
+# The plugin reads the SDK's own types and HTTP client factory, so these tests
+# need the optional extra (`pip install -e '.[mcp]'`); CI always installs it.
+pytest.importorskip("mcp")
 
 from lovia.exceptions import MCPError, ToolError, UserError
 from lovia.plugins.mcp import (
@@ -32,18 +37,18 @@ async def test_streamable_http_modern_client(
     headers: dict[str, str] | None,
     failure: type[BaseException] | None,
 ) -> None:
-    clients: list[httpx.AsyncClient] = []
+    # The client comes from the installed SDK's own factory (httpx on 1.x,
+    # httpx2 on 2.x), so only the API both libraries share is asserted.
+    clients: list[Any] = []
     streams = object()
 
     @asynccontextmanager
-    async def modern(url: str, *, http_client: httpx.AsyncClient):
+    async def modern(url: str, *, http_client: Any):
         clients.append(http_client)
         request = http_client.build_request("POST", url)
         assert str(request.url) == "https://search.parallel.ai/mcp"
         if headers:
             assert request.headers["User-Agent"] == headers["User-Agent"]
-        assert http_client.timeout == httpx.Timeout(30, read=300)
-        assert http_client.follow_redirects is True
         assert not http_client.is_closed
         yield streams
 
@@ -53,8 +58,17 @@ async def test_streamable_http_modern_client(
     module = SimpleNamespace(
         streamable_http_client=modern, streamablehttp_client=legacy
     )
+    real_import = importlib.import_module
     with monkeypatch.context() as patch:
-        patch.setattr(importlib, "import_module", lambda _: module)
+        patch.setattr(
+            importlib,
+            "import_module",
+            lambda name, *a: (
+                module
+                if name == "mcp.client.streamable_http"
+                else real_import(name, *a)
+            ),
+        )
         factory = MCPServerStreamableHTTP(
             url="https://search.parallel.ai/mcp", headers=headers
         )._make_transport()
@@ -99,7 +113,7 @@ async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) ->
 
 
 # --------------------------------------------------------------------------- #
-# Fakes (mcp-package-free: only attribute access is used by the implementation)
+# Fakes (mcp 1.x-shaped, camelCase; the implementation only reads attributes)
 # --------------------------------------------------------------------------- #
 def _tool(
     name: str, *, description: Any = "", input_schema: Any = None
@@ -145,9 +159,9 @@ class FakeSession:
         self.list_calls = 0
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def list_tools(self, cursor: str | None = None) -> SimpleNamespace:
+    async def list_tools(self, *, params: Any = None) -> SimpleNamespace:
         self.list_calls += 1
-        idx = 0 if cursor is None else int(cursor)
+        idx = 0 if params is None else int(params.cursor)
         return self._pages[idx]
 
     async def call_tool(self, name: str, args: dict[str, Any]) -> SimpleNamespace:
@@ -217,6 +231,31 @@ def test_normalize_schema_unit() -> None:
     assert normalize_schema(None) == {"type": "object", "properties": {}}
     assert normalize_schema({}) == {"type": "object", "properties": {}}
     assert normalize_schema({"type": "object"}) == {"type": "object", "properties": {}}
+
+
+async def test_reads_mcp_2_snake_case_fields() -> None:
+    # The fakes above mirror mcp 1.x (camelCase); 2.x renamed the attributes.
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    session = FakeSession(
+        pages=[
+            SimpleNamespace(
+                tools=[SimpleNamespace(name="a", description="", input_schema=schema)],
+                next_cursor="1",
+            ),
+            SimpleNamespace(tools=[SimpleNamespace(name="b")], next_cursor=None),
+        ],
+        results={
+            "a": lambda args: SimpleNamespace(content=[_text("no")], is_error=True)
+        },
+    )
+    conn = await _loaded(session)
+    assert [t.name for t in conn.tools()] == ["a", "b"]
+    tool = conn.tools()[0]
+    assert tool.parameters == schema
+    result = await tool.invoke({}, _ctx())
+    assert result.is_error is True
+    image = SimpleNamespace(type="image", mime_type="image/png", data="AAAA")
+    assert render_mcp_content([image]) == "[image: image/png, 3 B]"
 
 
 # --------------------------------------------------------------------------- #
@@ -636,3 +675,24 @@ async def test_defer_flag_flows_from_server_config(
     monkeypatch.setattr(MCPConnection, "_open_session", fake_open)
     conn = await _FakeServer(defer=True).open()
     assert conn.defer is True
+
+
+# --------------------------------------------------------------------------- #
+# Real SDK round trip (CI runs this file on both mcp 1.x and 2.x)
+# --------------------------------------------------------------------------- #
+async def test_stdio_round_trip_through_the_installed_sdk() -> None:
+    script = Path(__file__).with_name("mcp_stub_server.py")
+    server = MCPServerStdio(command=sys.executable, args=[str(script)], name="stub")
+    async with server.session() as conn:
+        tools = {t.name: t for t in conn.tools()}
+        assert list(tools) == ["stub__add", "stub__fail", "stub__pic"]
+        assert tools["stub__add"].parameters["required"] == ["a", "b"]
+        ctx = _ctx()
+
+        async def call(name: str, args: dict[str, Any]) -> str:
+            tool = tools[name]
+            return await render_tool_result(tool, await run_tool(tool, args, ctx), ctx)
+
+        assert await call("stub__add", {"a": 2, "b": 3}) == "5"
+        assert await call("stub__fail", {}) == "[tool error] boom"
+        assert await call("stub__pic", {}) == "[image: image/png, 3 B]"

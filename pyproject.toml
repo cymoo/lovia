@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lovia"
-version = "0.9.88"
+version = "0.9.89"
 description = "A lightweight and elegant Agent framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0,<2"]
+mcp = ["mcp>=1.18,<3"]
 ddg = ["ddgs>=7.0"]
 web = [
     "croniter>=2.0",

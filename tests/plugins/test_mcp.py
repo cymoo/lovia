@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from lovia.exceptions import MCPError, ToolError, UserError
@@ -19,6 +23,79 @@ from lovia.plugins.mcp import (
 )
 from lovia.run_context import RunContext
 from lovia.tools import Tool, render_tool_result, run_tool
+
+
+@pytest.mark.parametrize("headers", [None, {"User-Agent": "lovia-parallel-mcp"}])
+@pytest.mark.parametrize("failure", [None, RuntimeError, asyncio.CancelledError])
+async def test_streamable_http_modern_client(
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str] | None,
+    failure: type[BaseException] | None,
+) -> None:
+    clients: list[httpx.AsyncClient] = []
+    streams = object()
+
+    @asynccontextmanager
+    async def modern(url: str, *, http_client: httpx.AsyncClient):
+        clients.append(http_client)
+        request = http_client.build_request("POST", url)
+        assert str(request.url) == "https://search.parallel.ai/mcp"
+        if headers:
+            assert request.headers["User-Agent"] == headers["User-Agent"]
+        assert http_client.timeout == httpx.Timeout(30, read=300)
+        assert http_client.follow_redirects is True
+        assert not http_client.is_closed
+        yield streams
+
+    def legacy(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Prefer the modern API when both names exist")
+
+    module = SimpleNamespace(
+        streamable_http_client=modern, streamablehttp_client=legacy
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(importlib, "import_module", lambda _: module)
+        factory = MCPServerStreamableHTTP(
+            url="https://search.parallel.ai/mcp", headers=headers
+        )._make_transport()
+
+    async def use_transport() -> None:
+        async with factory() as result:
+            assert result is streams
+            if failure:
+                raise failure()
+
+    if failure:
+        with pytest.raises(failure):
+            await use_transport()
+    else:
+        await use_transport()
+    assert len(clients) == 1
+    assert clients[0].is_closed
+
+
+async def test_streamable_http_legacy_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, dict[str, str] | None]] = []
+    headers = {"Authorization": "Bearer example", "User-Agent": "lovia-example"}
+    streams = object()
+
+    @asynccontextmanager
+    async def legacy(url: str, headers: dict[str, str] | None = None):
+        calls.append((url, headers))
+        yield streams
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            importlib,
+            "import_module",
+            lambda _: SimpleNamespace(streamablehttp_client=legacy),
+        )
+        factory = MCPServerStreamableHTTP(
+            url="https://mcp.example.com/mcp", headers=headers
+        )._make_transport()
+    async with factory() as result:
+        assert result is streams
+    assert calls == [("https://mcp.example.com/mcp", headers)]
 
 
 # --------------------------------------------------------------------------- #

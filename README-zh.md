@@ -413,7 +413,8 @@ agent = Agent(
 - **`Skills(dir)`**：可复用的指令包（`SKILL.md` + 附属文件）。提示词里常驻
   一行索引，完整内容按需加载。
 - **`MCP(server)`**：接入 Model Context Protocol 服务器提供的工具，支持
-  stdio 或 HTTP，可按服务器加名称前缀和审批门禁。
+  stdio 或 HTTP，可按服务器加名称前缀和审批门禁。网页研究可参考
+  [Parallel Search MCP 配置示例](https://cymoo.github.io/lovia/zh/mcp/#使用-parallel-进行网页研究)。
 
 自己写插件，只需要一个 `name` 和一个返回贡献内容的异步 `setup()`。
 

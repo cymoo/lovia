@@ -47,6 +47,36 @@ MCPServerStreamableHTTP(url="https://mcp.example.com/mcp", headers=None, name="a
 `MCP(a, b, ...)` 接受任意数量的服务器；前缀能避免工具名冲突（冲突会像其他重复工具名一样
 在运行开始时报错）。
 
+## 使用 Parallel 进行网页研究
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+通过 Streamable HTTP 提供网页搜索和页面抓取，免费层无需注册账号或 API key。
+匿名搜索使用 Fast 模式；免费使用有速率限制。按上文安装 `lovia[mcp]`，配置好
+[模型环境变量](providers.md)，再将下面的代码作为 Python 脚本运行：
+
+```python
+from lovia import Agent, model_from_env
+from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
+
+server = MCPServerStreamableHTTP(
+    name="parallel",
+    url="https://search.parallel.ai/mcp",
+    headers={"User-Agent": "lovia-parallel-mcp"},
+)
+agent = Agent(
+    name="researcher",
+    model=model_from_env(),
+    instructions="搜索来源，抓取相关页面，并在回答中引用来源 URL。",
+    plugins=[MCP(server)],
+)
+result = agent.run_sync("查找最新的 Python 稳定版，并总结其官方发布说明。")
+print(result.output)
+```
+
+插件会暴露 `parallel__web_search` 和 `parallel__web_fetch`。先搜索候选来源，
+再抓取选定的 URL。只有配置了此插件的 Agent 才会使用该服务器。在异步代码中，
+用 `await Runner.run(agent, ...)` 代替 `run_sync()`。
+
 ## 连接生命周期
 
 **按运行打开（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在

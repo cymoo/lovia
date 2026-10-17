@@ -50,6 +50,41 @@ Shared options (on either config):
 names from colliding (a clash is reported at run start like any other
 duplicate tool name).
 
+## Web research with Parallel
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)
+provides web search and page fetching over Streamable HTTP, with no account or
+API key required for its free tier. Anonymous search uses Fast mode; free usage
+has rate limits. Install `lovia[mcp]` as above and configure your
+[model environment variables](providers.md), then run this
+as a Python script:
+
+```python
+from lovia import Agent, model_from_env
+from lovia.plugins.mcp import MCP, MCPServerStreamableHTTP
+
+server = MCPServerStreamableHTTP(
+    name="parallel",
+    url="https://search.parallel.ai/mcp",
+    headers={"User-Agent": "lovia-parallel-mcp"},
+)
+agent = Agent(
+    name="researcher",
+    model=model_from_env(),
+    instructions="Search for sources, fetch relevant pages, and cite their URLs.",
+    plugins=[MCP(server)],
+)
+result = agent.run_sync(
+    "Find the latest stable Python release and summarize its official release notes."
+)
+print(result.output)
+```
+
+The plugin exposes `parallel__web_search` and `parallel__web_fetch`. Search finds
+candidate sources; fetch reads selected URLs. Only agents given this plugin use
+the server. From async code, use `await Runner.run(agent, ...)` instead of
+`run_sync()`.
+
 ## Connection lifecycle
 
 **Per-run (default).** Passing a server *config* means each run opens the

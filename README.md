@@ -440,7 +440,8 @@ agent = Agent(
 - **`Skills(dir)`** — reusable instruction bundles (`SKILL.md` + files): a
   one-line index stays in the prompt, full content loads on demand.
 - **`MCP(server)`** — tools from Model Context Protocol servers, stdio or
-  HTTP, with per-server name prefixes and approval gates.
+  HTTP, with per-server name prefixes and approval gates. For web research,
+  try the [Parallel Search MCP recipe](https://cymoo.github.io/lovia/mcp/#web-research-with-parallel).
 
 Writing your own is a `name` plus one async `setup()` returning the
 contributions.

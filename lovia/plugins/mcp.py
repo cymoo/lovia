@@ -556,16 +556,30 @@ class MCPServerStreamableHTTP(MCPServer):
                 "MCP HTTP support requires the optional 'mcp' package.",
                 hint=_MCP_INSTALL_HINT,
             ) from exc
-        # The factory was renamed across mcp releases; accept either spelling.
-        client = getattr(module, "streamable_http_client", None) or getattr(
-            module, "streamablehttp_client", None
-        )
+        url, headers = self.url, self.headers
+        modern_client = getattr(module, "streamable_http_client", None)
+        if modern_client is not None:
+            # The newer API takes a configured HTTP client, not headers.
+            # Match the SDK's defaults and own the client for this transport.
+            @asynccontextmanager
+            async def transport() -> AsyncIterator[Any]:
+                import httpx
+
+                async with httpx.AsyncClient(
+                    headers=headers,
+                    timeout=httpx.Timeout(30, read=300),
+                    follow_redirects=True,
+                ) as http_client:
+                    async with modern_client(url, http_client=http_client) as streams:
+                        yield streams
+
+            return transport
+        client = getattr(module, "streamablehttp_client", None)
         if client is None:  # pragma: no cover - very old/new mcp
             raise UserError(
                 "Installed 'mcp' has no streamable-HTTP client.",
                 hint="Upgrade with: pip install -U mcp",
             )
-        url, headers = self.url, self.headers
         return lambda: client(url, headers=headers)
 
 

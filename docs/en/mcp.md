@@ -9,6 +9,8 @@ ordinary [`Tool`](tools.md)s.
 pip install "lovia[mcp]"
 ```
 
+The plugin currently supports version 1.x of the MCP Python SDK.
+
 ```python
 from lovia import Agent
 from lovia.plugins.mcp import MCP, MCPServerStdio

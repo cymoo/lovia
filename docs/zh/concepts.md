@@ -189,7 +189,7 @@ async def lookup(ctx: RunContext[Deps], user_id: int) -> str:
 
 一项可复用能力往往同时需要工具、提示词、每轮提醒、钩子和清理逻辑。lovia 用一个
 **插件（plugin）**对象统一提供这些内容。
-Runner 会在每次运行中激活一次插件（`await plugin.setup()`），并在运行结束后清理；
+Runner 会在每次运行中激活一次插件（`await plugin.setup(ctx)`），并在运行结束后清理；
 插件提供的各项能力会合并到前述运行流程的固定阶段。Plugin 不拥有控制流；它只能通过
 Tool、Guardrail、Hook 等扩展点影响运行，最终的中止、重试和 Handoff 仍由运行循环执行。
 

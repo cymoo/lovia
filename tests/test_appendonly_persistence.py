@@ -374,7 +374,7 @@ class _CaptureOnCompleted:
         self.result_contents: list[Any] = []
         self.ctx_roles: list[str] = []
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: Any) -> PluginInstance:
         hooks = AgentHooks()
 
         @hooks.on(RunCompleted)

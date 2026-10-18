@@ -1290,11 +1290,11 @@ class TestAgentIntegration:
             root = Path(tmp)
             _add_skill(root, "deploy", description="Deploy the app.")
             # New DX: pass the directory straight to Skills().
-            inst = await Skills(root).setup()
+            inst = await Skills(root).setup(_make_ctx())
             assert "deploy" in (inst.instructions or "")
             assert {t.name for t in inst.tools} == {"load_skill", "read_skill_file"}
             # A SkillSource is wrapped without SkillCatalog(...) boilerplate.
-            inst2 = await Skills(DirectorySkillSource(str(root))).setup()
+            inst2 = await Skills(DirectorySkillSource(str(root))).setup(_make_ctx())
             assert "deploy" in (inst2.instructions or "")
 
     def test_skills_factory_requires_a_source(self) -> None:
@@ -1314,7 +1314,7 @@ class TestAgentIntegration:
 
     async def test_setup_renders_no_instructions_for_empty_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inst = await Skills(tmp).setup()
+            inst = await Skills(tmp).setup(_make_ctx())
             assert inst.instructions is None
             # Tools are still contributed: skills may appear at runtime and
             # remain loadable through the live source.

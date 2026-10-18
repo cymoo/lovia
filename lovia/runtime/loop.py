@@ -587,26 +587,26 @@ class RunLoop:
             agent = self._resume_agent
         else:
             agent = self.initial_agent
-        active = await self._resolve_active(agent, resources)
         extra_instructions = self.extra_instructions
 
-        # Build the context first (with an empty transcript) so the initial
-        # system prompt can be rendered against the live ``run_ctx`` — dynamic
-        # instruction fragments then see the same handle tools/hooks receive.
+        # Build the context first (with an empty transcript) so plugin
+        # ``setup`` and the initial system prompt both see the live ``run_ctx``
+        # — the same handle tools/hooks receive. ``_resolve_active`` fills in
+        # the workspace once it is connected.
         run_ctx: RunContext[Any] = RunContext(
             context=self.context,
             entries=[],
-            agent=active.agent,
+            agent=agent,
             session_id=self.session_id,
             run_id=self.run_id,
             budget=self.budget,
-            workspace=active.workspace,
             cancel_token=self.cancel_token,
             mailbox=self.mailbox,
             # The caller's tracer verbatim (None when untraced), carried as
             # internal plumbing so agent-as-tool sub-runs join this trace.
             _tracer=self.tracer,
         )
+        active = await self._resolve_active(agent, resources, run_ctx)
         # Read prior session history once, as segments: the flattened entries
         # become the prefix, and the latest segment's ``meta`` seeds a fresh
         # run's context-policy state (below).
@@ -676,7 +676,7 @@ class RunLoop:
         )
 
     async def _resolve_active(
-        self, agent: Agent[Any], resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack, run_ctx: RunContext[Any]
     ) -> ActiveAgent:
         """Resolve everything derived from ``agent`` into one swappable bundle.
 
@@ -703,7 +703,12 @@ class RunLoop:
             supports_json_schema(provider),
         )
         workspace, workspace_tools = await self._connect_workspace(agent, resources)
-        plugins = await self._activate_plugins(agent, resources)
+        # Plugin ``setup`` must see the agent being activated, not the one
+        # handing off; ``RunState.activate`` mirrors the same pair once the
+        # bundle is built, and a failed handoff's rollback restores both.
+        run_ctx.agent = agent
+        run_ctx.workspace = workspace
+        plugins = await self._activate_plugins(agent, resources, run_ctx)
         if workspace is not None:
             # The workspace's per-turn reminders (background-process status)
             # ride the plugins' view-injector channel — one transient-view
@@ -727,7 +732,7 @@ class RunLoop:
         return active
 
     async def _activate_plugins(
-        self, agent: Agent[Any], resources: AsyncExitStack
+        self, agent: Agent[Any], resources: AsyncExitStack, run_ctx: RunContext[Any]
     ) -> PluginActivation:
         """Activate ``agent.plugins`` for one run, collecting their contributions.
 
@@ -754,7 +759,7 @@ class RunLoop:
             seen.add(plugin.name)
         act = PluginActivation()
         for plugin in agent.plugins:
-            inst = await plugin.setup()
+            inst = await plugin.setup(run_ctx)
             act.tools.extend(inst.tools)
             act.view_injectors.extend(inst.view_injectors)
             if inst.instructions:
@@ -1174,7 +1179,9 @@ class RunLoop:
         with handoff_span(tracer, from_agent=prev_agent.name, to_agent=target.name):
             prev_active = state.active
             try:
-                state.activate(await self._resolve_active(target, resources))
+                state.activate(
+                    await self._resolve_active(target, resources, state.run_ctx)
+                )
                 await self._reset_transcript_for_handoff(state)
             except BaseException:
                 # Nothing durable changed (the transcript swap follows the

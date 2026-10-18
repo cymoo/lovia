@@ -236,7 +236,7 @@ async def test_empty_instruction_is_refused() -> None:
 
 @pytest.mark.asyncio
 async def test_plugin_contributes_tools_and_instructions() -> None:
-    inst = await Scheduling(ChatStore.in_memory()).setup()
+    inst = await Scheduling(ChatStore.in_memory()).setup(_ctx())
     assert {t.name for t in inst.tools} == {
         "schedule_run",
         "list_schedules",

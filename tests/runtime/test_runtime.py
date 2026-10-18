@@ -656,7 +656,7 @@ async def test_resume_retries_a_handoff_whose_target_failed_to_activate() -> Non
         name = "flaky"
         failures = 1
 
-        async def setup(self) -> PluginInstance:
+        async def setup(self, ctx: Any) -> PluginInstance:
             if self.failures:
                 self.failures -= 1
                 raise ValueError("plugin down")
@@ -914,7 +914,7 @@ async def test_handoff_reuses_activation_for_a_previously_active_agent() -> None
             self.name = f"counter-{tag}"
             self.tag = tag
 
-        async def setup(self) -> PluginInstance:
+        async def setup(self, ctx: Any) -> PluginInstance:
             setups.append(self.tag)
             return PluginInstance()
 
@@ -927,6 +927,65 @@ async def test_handoff_reuses_activation_for_a_previously_active_agent() -> None
     result = await Runner.run(a, "go")
     assert result.output == "done"
     assert sorted(setups) == ["a", "b"]  # one activation per agent, not per hop
+
+
+async def test_plugin_setup_sees_the_agent_being_activated() -> None:
+    """setup(ctx) gets the live run context with the activating agent already
+    mirrored in — on a handoff too, before RunState.activate swaps it in."""
+    from lovia import InMemorySession
+    from lovia.plugins import PluginInstance
+
+    seen: list[tuple[str, str | None]] = []
+
+    class Recorder:
+        def __init__(self, tag: str) -> None:
+            self.name = f"rec-{tag}"
+
+        async def setup(self, ctx: Any) -> PluginInstance:
+            seen.append((ctx.agent.name, ctx.session_id))
+            return PluginInstance()
+
+    b = Agent(name="b", model=ScriptedProvider([text("done")]), plugins=[Recorder("b")])
+    a = Agent(
+        name="a",
+        model=ScriptedProvider([call("transfer_to_b", {})]),
+        plugins=[Recorder("a")],
+        handoffs=[b],
+    )
+    await Runner.run(a, "go", session=InMemorySession(), session_id="s1")
+    assert seen == [("a", "s1"), ("b", "s1")]
+
+
+async def test_failed_handoff_activation_restores_the_context_agent() -> None:
+    # The target's setup saw itself mirrored onto the context; the rollback
+    # must put the handing-off agent back before terminal hooks observe it.
+    from lovia import AgentHooks, events
+    from lovia.plugins import PluginInstance
+
+    observed: list[str] = []
+    hooks = AgentHooks()
+
+    @hooks.on(events.RunFailed)
+    async def _failed(ev: events.RunFailed, ctx: Any) -> None:
+        observed.append(ctx.agent.name)
+
+    class _Broken:
+        name = "broken"
+
+        async def setup(self, ctx: Any) -> PluginInstance:
+            assert ctx.agent.name == "b"
+            raise ValueError("plugin down")
+
+    b = Agent(name="b", model=ScriptedProvider([]), plugins=[_Broken()])
+    a = Agent(
+        name="a",
+        model=ScriptedProvider([call("transfer_to_b", {})]),
+        handoffs=[b],
+        hooks=hooks,
+    )
+    with pytest.raises(ValueError, match="plugin down"):
+        await Runner.run(a, "go")
+    assert observed == ["a"]
 
 
 async def test_failed_subrun_usage_folds_into_parent() -> None:
@@ -1011,7 +1070,7 @@ async def test_bootstrap_failure_ends_the_stream_with_run_failed() -> None:
     class _BrokenPlugin:
         name = "broken"
 
-        async def setup(self) -> PluginInstance:
+        async def setup(self, ctx: Any) -> PluginInstance:
             raise ValueError("setup exploded")
 
     agent = Agent(name="t", model=ScriptedProvider([]), plugins=[_BrokenPlugin()])

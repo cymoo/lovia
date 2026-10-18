@@ -18,16 +18,20 @@ agent = Agent(
 
 ## 契约
 
-任何拥有 `name` 和异步 `setup()` 方法、且能返回 `PluginInstance` 的对象，都可以作为插件：
+任何拥有 `name` 和异步 `setup(ctx)` 方法、且能返回 `PluginInstance` 的对象，都可以作为插件：
 
 ```python
 class Plugin(Protocol):
     name: str
-    async def setup(self) -> PluginInstance: ...
+    async def setup(self, ctx: RunContext) -> PluginInstance: ...
 ```
 
 Runner 会在**每次运行**调用并等待一次 `setup()`；如果 [Handoff](multi-agent.md) 到另一个
-Agent，也会依次执行目标 Agent 插件的 `setup()`。返回内容会合并到运行循环的固定扩展点：
+Agent，也会依次执行目标 Agent 插件的 `setup()`。返回内容会合并到运行循环的固定扩展点。
+
+`ctx` 是本次运行的实时 `RunContext`，与工具、钩子拿到的是同一个句柄，插件可以据此按会话或用户
+定制自己的贡献。`setup` 时 `session_id`、`run_id`、`context` 已经确定，`agent` / `workspace`
+是正在激活的那个 Agent；`entries` 在运行开始时为空，不要从它推导任何东西。
 
 | `PluginInstance` 字段 | 效果 |
 | --- | --- |
@@ -78,7 +82,7 @@ Injector **失败时放行**：异常会被记录并跳过，不会中止运行�
 from dataclasses import dataclass
 from typing import Protocol
 
-from lovia import Agent, PluginInstance, tool
+from lovia import Agent, PluginInstance, RunContext, tool
 
 
 class Glossary(Protocol):
@@ -95,7 +99,7 @@ class GlossaryPlugin:
     store: Glossary          # 长生命周期，所有运行共享
     name: str = "glossary"
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext) -> PluginInstance:
         store = self.store
 
         @tool
@@ -122,7 +126,7 @@ agent = Agent(name="assistant", model="<model>", plugins=[GlossaryPlugin(MyGloss
 如果插件在 `setup()` 中打开资源（MCP 连接、HTTP client），就通过 `aclose` 返回清理动作：
 
 ```python
-async def setup(self) -> PluginInstance:
+async def setup(self, ctx: RunContext) -> PluginInstance:
     conn = await open_connection(self.url)
     return PluginInstance(tools=tools_from(conn), aclose=conn.close)
 ```

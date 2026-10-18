@@ -352,7 +352,7 @@ class Scheduling:
     instructions: str | None = _INSTRUCTIONS
     name: str = "scheduling"
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         return PluginInstance(
             tools=[
                 _make_tool(self.store),

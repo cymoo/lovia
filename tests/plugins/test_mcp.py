@@ -504,7 +504,7 @@ async def test_setup_failure_closes_owned_connections_only(
     plugin = MCP(_FakeServer(name="ok"), persistent, _BoomServer())
 
     with pytest.raises(ConnectionError, match="boom"):
-        await plugin.setup()
+        await plugin.setup(_ctx())
 
     assert len(opened) == 1
     assert opened[0]._session is None  # owned connection closed, no leak
@@ -544,7 +544,7 @@ def _issue_pages() -> list[SimpleNamespace]:
 async def _deferred_plugin(**kwargs: Any) -> tuple[dict[str, Tool], str | None]:
     """One deferred server -> {tool name: tool} of the instance + instructions."""
     conn = await _loaded(FakeSession(pages=_issue_pages()), defer=True, **kwargs)
-    inst = await MCP(conn).setup()
+    inst = await MCP(conn).setup(_ctx())
     return {t.name: t for t in inst.tools}, inst.instructions
 
 
@@ -561,7 +561,7 @@ async def test_defer_swaps_tools_for_search_and_call() -> None:
 async def test_defer_mixes_with_regular_servers() -> None:
     big = await _loaded(FakeSession(pages=_issue_pages()), prefix="big", defer=True)
     small = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
-    inst = await MCP(big, small).setup()
+    inst = await MCP(big, small).setup(_ctx())
     assert sorted(t.name for t in inst.tools) == [
         "call_mcp_tool",
         "echo",
@@ -573,7 +573,7 @@ async def test_defer_mixes_with_regular_servers() -> None:
 
 async def test_regular_only_plugin_contributes_no_search_pair() -> None:
     small = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
-    inst = await MCP(small).setup()
+    inst = await MCP(small).setup(_ctx())
     assert [t.name for t in inst.tools] == ["echo"]
     assert inst.instructions is None
 
@@ -607,7 +607,7 @@ async def test_search_no_match_is_a_helpful_message() -> None:
 async def test_call_dispatches_arguments_and_renders_text() -> None:
     session = FakeSession(pages=_issue_pages())
     conn = await _loaded(session, defer=True)
-    inst = await MCP(conn).setup()
+    inst = await MCP(conn).setup(_ctx())
     call_tool = next(t for t in inst.tools if t.name == "call_mcp_tool")
     out = await run_tool(
         call_tool, {"tool": "create_issue", "arguments": {"title": "x"}}, _ctx()
@@ -654,7 +654,7 @@ async def test_deferred_name_clash_between_servers_raises() -> None:
     a = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
     b = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]), defer=True)
     with pytest.raises(UserError, match="name clash"):
-        await MCP(a, b).setup()
+        await MCP(a, b).setup(_ctx())
 
 
 async def test_deferred_name_clash_with_exposed_raises() -> None:
@@ -663,7 +663,7 @@ async def test_deferred_name_clash_with_exposed_raises() -> None:
     )
     exposed = await _loaded(FakeSession(pages=[_page([_tool("echo")], None)]))
     with pytest.raises(UserError, match="clash with exposed"):
-        await MCP(deferred, exposed).setup()
+        await MCP(deferred, exposed).setup(_ctx())
 
 
 async def test_defer_flag_flows_from_server_config(

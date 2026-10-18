@@ -20,18 +20,24 @@ state, per-turn reminders, or cleanup.
 
 ## The contract
 
-A plugin is any object with a `name` and an async `setup()` returning a
+A plugin is any object with a `name` and an async `setup(ctx)` returning a
 `PluginInstance`:
 
 ```python
 class Plugin(Protocol):
     name: str
-    async def setup(self) -> PluginInstance: ...
+    async def setup(self, ctx: RunContext) -> PluginInstance: ...
 ```
 
 The runner awaits `setup()` **once per run** — and once per agent a
 [handoff](multi-agent.md) reaches — then merges the returned contributions
-into the loop's fixed slots:
+into the loop's fixed slots.
+
+`ctx` is the run's live `RunContext`, the same handle tools and hooks
+receive, so a plugin can shape its contributions per session or user. At
+setup time `session_id`, `run_id`, and `context` are final, and `agent` /
+`workspace` are the agent being activated; `entries` is empty at run start,
+so derive nothing from it here.
 
 | `PluginInstance` field | Effect |
 | --- | --- |
@@ -93,7 +99,7 @@ text — in one screen:
 from dataclasses import dataclass
 from typing import Protocol
 
-from lovia import Agent, PluginInstance, tool
+from lovia import Agent, PluginInstance, RunContext, tool
 
 
 class Glossary(Protocol):
@@ -110,7 +116,7 @@ class GlossaryPlugin:
     store: Glossary          # long-lived, shared by every run
     name: str = "glossary"
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext) -> PluginInstance:
         store = self.store
 
         @tool
@@ -138,7 +144,7 @@ A plugin that opens a resource in `setup()` (an MCP connection, an HTTP
 client) returns it via `aclose`:
 
 ```python
-async def setup(self) -> PluginInstance:
+async def setup(self, ctx: RunContext) -> PluginInstance:
     conn = await open_connection(self.url)
     return PluginInstance(tools=tools_from(conn), aclose=conn.close)
 ```

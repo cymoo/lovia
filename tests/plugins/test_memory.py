@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lovia import Agent, ModelSettings, Runner
+from lovia import Agent, InMemorySession, ModelSettings, Runner, tool
 from lovia.exceptions import UserError
 from lovia.plugins.memory import plugin as plugin_mod
 from lovia.plugins.memory.index import Doc, Hit, HybridIndex, KeywordIndex
@@ -348,7 +348,7 @@ def test_expand_query_forced_on_and_off(tmp_path) -> None:
 async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
     mem = Memory(tmp_path / "mem", index=SpyIndex())
     await mem._add_facts(["user prefers dark mode"])
-    inst = await mem.setup()
+    inst = await mem.setup(_ctx(session_id=None))
     assert {t.name for t in inst.tools} == {"remember", "forget", "recall"}
     assert "NOTES" in inst.instructions
     assert "user prefers dark mode" in inst.instructions
@@ -359,11 +359,109 @@ async def test_setup_instructions_include_notes_and_tools(tmp_path) -> None:
 async def test_setup_without_index(tmp_path) -> None:
     mem = Memory(tmp_path / "mem", index=None)
     await mem._add_facts(["durable note"])
-    inst = await mem.setup()
+    inst = await mem.setup(_ctx(session_id=None))
     assert {t.name for t in inst.tools} == {"remember", "forget"}  # no recall
     assert "durable note" in inst.instructions  # notes are always injected
     assert "remember" in inst.instructions  # usage guidance still present
     assert "recall" not in inst.instructions  # no cold-tier guidance
+
+
+# ---------------------------------------------------------------------------
+# Session-pinned Notes snapshot (keeps the cached prompt prefix byte-stable)
+# ---------------------------------------------------------------------------
+
+
+async def _two_runs(mem: Memory, *, session_id: str | None = "s1") -> list[str]:
+    """Run 1 remembers a fact; return both runs' system prompts."""
+    provider = ScriptedProvider(
+        [
+            call("remember", {"fact": "user likes vim"}, call_id="c1"),
+            text("ok"),
+            text("hi"),
+        ]
+    )
+    agent = Agent(name="a", model=provider, plugins=[mem])
+    session = InMemorySession() if session_id is not None else None
+    await Runner.run(
+        agent, "remember I like vim", session=session, session_id=session_id
+    )
+    await Runner.run(agent, "hello again", session=session, session_id=session_id)
+    return [provider.calls[i][0].content or "" for i in (0, 2)]
+
+
+async def test_notes_pinned_within_a_session(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    first, second = await _two_runs(mem)
+    assert second == first  # the cached prefix survives the write
+    assert "user likes vim" not in second
+    assert "user likes vim" in _bare(await mem._notes_store().load())
+
+
+async def test_notes_refresh_once_the_session_idles(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem._add_facts(["old fact"])
+    first = await mem.setup(_ctx())
+    await mem._add_facts(["new fact"])
+    text_, used = mem._snapshots["s1"]
+    mem._snapshots["s1"] = (text_, used - mem.notes_refresh_after)  # idle past it
+    second = await mem.setup(_ctx())
+    assert "new fact" not in (first.instructions or "")
+    assert "new fact" in (second.instructions or "")
+
+
+async def test_run_end_restarts_the_idle_clock(tmp_path) -> None:
+    # A long run keeps the provider cache warm until its last call, so the
+    # window counts from run end, not run start.
+    mem = Memory(
+        tmp_path / "mem", index=None, auto_curate=False, notes_refresh_after=300
+    )
+
+    @tool
+    def slow_work() -> str:
+        """Stand-in for a run that outlasts most of the window."""
+        text_, used = mem._snapshots["s1"]
+        mem._snapshots["s1"] = (text_, used - 250)
+        return "done"
+
+    provider = ScriptedProvider(
+        [call("slow_work", {}, call_id="c1"), text("ok"), text("hi")]
+    )
+    agent = Agent(name="a", model=provider, tools=[slow_work], plugins=[mem])
+    session = InMemorySession()
+    await Runner.run(agent, "work", session=session, session_id="s1")
+    await mem.remember("written after the run")
+    text_, used = mem._snapshots["s1"]
+    mem._snapshots["s1"] = (text_, used - 100)  # 350s after start, 100s after end
+    await Runner.run(agent, "again", session=session, session_id="s1")
+    assert "written after the run" not in (provider.calls[2][0].content or "")
+
+
+async def test_zero_refresh_window_reads_notes_every_run(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False, notes_refresh_after=0)
+    _, second = await _two_runs(mem)
+    assert "user likes vim" in second
+    assert mem._snapshots == {}
+
+
+async def test_sessionless_runs_read_notes_live(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    _, second = await _two_runs(mem, session_id=None)
+    assert "user likes vim" in second
+
+
+async def test_replace_notes_unpins_every_session(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem.setup(_ctx(session_id="s1"))
+    await mem.setup(_ctx(session_id="s2"))
+    await mem.replace_notes("- edited by hand")
+    assert mem._snapshots == {}
+    inst = await mem.setup(_ctx(session_id="s1"))
+    assert "edited by hand" in (inst.instructions or "")
+
+
+def test_negative_refresh_window_rejected(tmp_path) -> None:
+    with pytest.raises(UserError, match="notes_refresh_after"):
+        Memory(tmp_path / "mem", notes_refresh_after=-1)
 
 
 # ---------------------------------------------------------------------------

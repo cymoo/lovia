@@ -221,7 +221,7 @@ class Todo:
     instructions: str | None = _INSTRUCTIONS
     name: str = "todos"
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         store = TodoList()
         return PluginInstance(
             tools=[_make_tool(store, self.tool_name)],

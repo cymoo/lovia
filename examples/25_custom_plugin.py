@@ -45,7 +45,7 @@ class ProfilePlugin:
     path: Path
     name: str = "profile"
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         # Loaded fresh per run; the tool and injector below close over it.
         profile: dict[str, str] = (
             json.loads(self.path.read_text()) if self.path.exists() else {}

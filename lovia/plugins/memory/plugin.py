@@ -5,7 +5,9 @@ sessions, built from two tiers and three verbs the model already understands:
 
 * **Notes** (the *hot* tier) — a tiny, char-budgeted list of date-stamped
   facts that is **always injected** into the system prompt: the user's stable
-  preferences, durable facts, important context. The model curates it with
+  preferences, durable facts, important context. Each session stays pinned to
+  the Notes it started with (``notes_refresh_after``), so writes never bust
+  the provider's cached prompt prefix mid-conversation. The model curates it with
   ``remember(fact)`` / ``forget(fact)``, and (when ``auto_curate``) the plugin
   promotes durable facts into it — and retires disproved ones — automatically
   at the end of each run. A periodic *dream* pass (:meth:`Memory.dream`)
@@ -91,6 +93,7 @@ _ARCHIVE_FILENAME = "archive.db"
 _VECTORS_FILENAME = "vectors.db"
 _DEFAULT_NOTES_BUDGET = 8000
 _DEFAULT_DREAM_EVERY_DAYS = 3.0
+_DEFAULT_NOTES_REFRESH_AFTER = 300.0
 _DREAMED_FILENAME = ".dreamed"
 _BACKUP_FILENAME = "MEMORY.md.bak"
 
@@ -587,7 +590,9 @@ def _build_instructions(has_index: bool) -> str:
         "You have long-term memory that persists across sessions.",
         "- Your durable NOTES are shown below and are always in context — they "
         "hold the user's stable preferences, facts about them, and context "
-        "worth keeping.",
+        "worth keeping. They are a snapshot from when this conversation began: "
+        "anything remembered or forgotten since shows in the conversation, "
+        "not below.",
         "- Call `remember(fact)` to save a new durable fact (a preference, a "
         "correction, a stable detail). Keep each fact short and self-contained.",
         "- Call `forget(fact)` to remove a note that is wrong or no longer true.",
@@ -683,6 +688,18 @@ class Memory:
     dreams immediately; ``None`` keeps only that overflow trigger. Cadence
     state is the mtime of a ``.dreamed`` marker file under ``root``."""
 
+    notes_refresh_after: float = _DEFAULT_NOTES_REFRESH_AFTER
+    """Seconds a session keeps the Notes it started with.
+
+    Notes ride the system prompt, so changing them mid-session would bust the
+    provider's cached prefix — the whole conversation history. Each session
+    therefore stays pinned to one Notes snapshot (facts saved meanwhile are
+    already in its conversation) until it sits idle this long; the next run
+    then re-reads Notes, by which time the provider cache has expired anyway.
+    Match it to your provider's cache lifetime (Anthropic's default is five
+    minutes); ``0`` re-reads Notes on every run. Snapshots live in process
+    memory, so a restart simply re-reads."""
+
     model: "str | Provider | None" = None
     """Model for the curation side-queries. ``None`` (default) reuses the
     host agent's model."""
@@ -691,6 +708,11 @@ class Memory:
     """Plugin name."""
 
     def __post_init__(self) -> None:
+        if self.notes_refresh_after < 0:
+            raise UserError(
+                f"Memory: notes_refresh_after must be >= 0, got {self.notes_refresh_after}",
+                hint="use 0 to re-read Notes on every run",
+            )
         if self.notes is None:
             self.notes = FileNotesStore(Path(self.root) / _NOTES_FILENAME)
         if isinstance(self.index, EllipsisType):
@@ -720,6 +742,11 @@ class Memory:
         # Strong refs to background curation tasks (curate_in_background):
         # without them the event loop may garbage-collect a task mid-flight.
         self._curation_tasks: set[asyncio.Task[None]] = set()
+        # session_id -> (rendered Notes block, last used, monotonic seconds).
+        self._snapshots: dict[str, tuple[str, float]] = {}
+        # Bumped by replace_notes: a snapshot rendered under an older epoch is
+        # never (re)pinned, so a deliberate edit can't be pinned over.
+        self._notes_epoch = 0
 
     def _resolve_model(self, ctx: RunContext[Any]) -> "str | Provider":
         # ``self.model`` overrides; otherwise reuse the host agent's model. A
@@ -752,6 +779,31 @@ class Memory:
         if not body:
             return f"NOTES {meter}\n(empty — use `remember` to save durable facts)"
         return f"NOTES {meter}\n{body}"
+
+    async def _session_notes(self, session_id: str | None) -> str:
+        """The Notes block for a run: the session's snapshot while it stays
+        warm, else a fresh render (which the caller pins via :meth:`_pin`)."""
+        if session_id is None or self.notes_refresh_after == 0:
+            # No session means no cross-run prefix to keep stable.
+            return await self._render_notes()
+        now = time.monotonic()
+        # A snapshot idle past the window is useless — the provider cache is
+        # cold by now too — so expiry doubles as the eviction rule.
+        self._snapshots = {
+            sid: snap
+            for sid, snap in self._snapshots.items()
+            if now - snap[1] < self.notes_refresh_after
+        }
+        pinned = self._snapshots.get(session_id)
+        return pinned[0] if pinned else await self._render_notes()
+
+    def _pin(self, session_id: str | None, text: str, epoch: int) -> None:
+        """Pin ``text`` as the session's snapshot and restart its idle clock —
+        unless :meth:`replace_notes` superseded it since ``epoch``."""
+        if session_id is None or self.notes_refresh_after == 0:
+            return
+        if epoch == self._notes_epoch:
+            self._snapshots[session_id] = (text, time.monotonic())
 
     async def _add_facts(self, new: list[str]) -> int:
         """Merge normalized facts into Notes (date-stamped, keyed dedup)."""
@@ -834,29 +886,45 @@ class Memory:
         are normalized, deduplicated by key, and date-stamped when undated —
         the same policy every other Notes write applies. Returns the
         canonical body stored.
+
+        Unlike model and curation writes, a wholesale replacement is a
+        deliberate edit, so it also unpins every session's Notes snapshot:
+        each session's next run sees it (at the price of one cache miss).
         """
         facts: list[str] = []
         _merge_new(facts, _parse_facts(body))
         async with self._notes_lock:
             await self._notes_store().save(facts)
+            self._notes_epoch += 1
+            self._snapshots.clear()
         return _format_facts(facts)
 
     # -- setup -----------------------------------------------------------------
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         index = cast("Index | None", self.index)
 
         tools: list[Tool] = [self._make_remember(), self._make_forget()]
         if index is not None:
             tools.append(self._make_recall(index))
 
-        guidance = _build_instructions(index is not None)
-        instructions = f"{guidance}\n\n{await self._render_notes()}"
+        sid, epoch = ctx.session_id, self._notes_epoch
+        notes = await self._session_notes(sid)
+        self._pin(sid, notes, epoch)
 
+        async def repin() -> None:
+            # Teardown runs on every outcome. The provider cache stays warm
+            # from the run's last call, not its start, so restart the idle
+            # clock here — re-pinning the snapshot if another session's sweep
+            # evicted it while this run outlasted the window.
+            self._pin(sid, notes, epoch)
+
+        guidance = _build_instructions(index is not None)
         return PluginInstance(
             tools=tools,
-            instructions=instructions,
+            instructions=f"{guidance}\n\n{notes}",
             hooks=self._make_hooks(index),
+            aclose=repin,
         )
 
     # -- tools -------------------------------------------------------------------

@@ -37,7 +37,7 @@ def _plugin(
     )
 
     class _P:
-        async def setup(self) -> PluginInstance:
+        async def setup(self, ctx: RunContext) -> PluginInstance:
             return inst
 
     p = _P()
@@ -187,7 +187,7 @@ async def test_setup_called_per_run_gives_fresh_state() -> None:
         def __init__(self) -> None:
             self.setups = 0
 
-        async def setup(self) -> PluginInstance:
+        async def setup(self, ctx: RunContext) -> PluginInstance:
             self.setups += 1
             return PluginInstance()
 

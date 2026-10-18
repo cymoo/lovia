@@ -4,8 +4,8 @@ Sessions preserve one conversation. The `Memory` plugin carries selected
 information across conversations in two tiers:
 
 - **Notes** (hot) — a small, char-budgeted block of durable facts,
-  **always injected** into the system prompt. Curated with
-  `remember(fact)` / `forget(fact)`.
+  **always injected** into the system prompt (pinned per session, so the
+  prompt cache survives). Curated with `remember(fact)` / `forget(fact)`.
 - **Archive** (cold) — a full-text-searchable store of past conversations,
   pulled in only on demand with `recall(query)`.
 
@@ -80,6 +80,24 @@ Three paths, from automatic to manual:
 Setting `auto_curate=False` disables the run-end digest and episode summary,
 but it does not stop raw user and assistant messages from entering the Archive.
 Use `index=None` when no searchable conversation record should be stored.
+
+## Notes and the prompt cache
+
+Notes live in the system prompt, and providers cache the prompt prefix —
+system prompt first, then the whole conversation history. Changing Notes
+mid-conversation would make the next run re-pay for all of that history.
+So each session stays **pinned** to the Notes it started with: facts
+remembered (or curated) meanwhile hit `MEMORY.md` at once and are already
+visible in the conversation itself, and the system prompt stays
+byte-identical.
+
+Once a session sits idle for `notes_refresh_after` seconds (default 300 —
+Anthropic's default cache lifetime), its next run re-reads Notes; by then
+the provider cache has expired anyway, so the refresh is free. Raise it to
+match a longer cache lifetime, or set `0` to re-read Notes on every run.
+Runs without a `session_id` always read live Notes, and
+`replace_notes()` — a deliberate edit — unpins every session. Snapshots
+live in process memory: a restart simply re-reads.
 
 ## Dreaming
 
@@ -179,6 +197,7 @@ a Redis- or DB-backed store is a dozen lines (`FileNotesStore` — the
 | `recall_k` | `5` | hits retrieved per recall |
 | `notes_budget` | `8000` | char budget for Notes — the prompt meter and the dream's overflow trigger |
 | `dream_every_days` | `3` | cadence for the periodic dream; `None` keeps only the overflow trigger |
+| `notes_refresh_after` | `300` | seconds a session keeps its Notes snapshot after its last run; `0` re-reads every run |
 | `model` | host agent's model | model for the curation/recall side-queries |
 
 The side-queries (digest, dream, expansion, summarization) dogfood

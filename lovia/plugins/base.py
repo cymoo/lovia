@@ -1,10 +1,11 @@
 """Plugin protocol: declarative, additive capability bundles for an Agent.
 
 A :class:`Plugin` is a **declarative** feature attached to an :class:`Agent`.
-The runner activates it **once per run** (via the async :meth:`Plugin.setup`),
-so a plugin that needs run-scoped state simply builds a fresh store in ``setup``
-and closes its tools/injectors over it — concurrency-safe by construction, the
-same way ``workspace`` produces a fresh session per run. Keep run state inside
+The runner activates it **once per run** (via the async :meth:`Plugin.setup`,
+which receives the run's :class:`~lovia.run_context.RunContext`), so a plugin
+that needs run-scoped state simply builds a fresh store in ``setup`` and closes
+its tools/injectors over it — concurrency-safe by construction, the same way
+``workspace`` produces a fresh session per run. Keep run state inside
 ``setup``, not on the plugin object, or concurrent runs of one agent would
 share it.
 
@@ -112,6 +113,13 @@ class Plugin(Protocol):
     during activation; pair that with :attr:`PluginInstance.aclose` for
     teardown.
 
+    ``ctx`` is the run's live :class:`~lovia.run_context.RunContext` — the
+    same handle tools, hooks, and view injectors receive. At setup time its
+    identity fields (``session_id``, ``run_id``, ``context``) are final and
+    ``agent``/``workspace`` are the agent being activated; ``entries`` is
+    still empty at run start (and mid-conversation on a handoff), so derive
+    nothing from it here.
+
     ``name`` is the plugin's identity: it must be **unique** among an agent's
     plugins (the runner rejects an agent carrying two plugins of the same name)
     and **stable** — treat it as set at construction and never reassign it, the
@@ -121,7 +129,7 @@ class Plugin(Protocol):
 
     name: str
 
-    async def setup(self) -> PluginInstance: ...
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance: ...
 
 
 __all__ = ["Plugin", "PluginInstance", "ViewInjector"]

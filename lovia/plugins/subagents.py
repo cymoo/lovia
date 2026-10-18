@@ -339,7 +339,7 @@ class Subagents:
             catalog[agent.name] = agent
         self._catalog = catalog
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         registry = _Registry()
         bounded = self.deliver is None
         instructions: str | None

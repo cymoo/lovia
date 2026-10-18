@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from ...exceptions import UserError
 from ..base import PluginInstance
 from .catalog import SkillCatalog, SkillFilter
 from .source import SkillSource
+
+if TYPE_CHECKING:
+    from ...run_context import RunContext
 
 
 def _build_catalog(
@@ -77,7 +81,7 @@ class Skills:
         # type name; override to mount two Skills plugins on one agent.
         self.name = name
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         return PluginInstance(
             tools=self.catalog.tools(),
             instructions=await self.catalog.instructions() or None,

@@ -790,7 +790,7 @@ class MCP:
         self.servers = tuple(servers)
         self.name = name
 
-    async def setup(self) -> PluginInstance:
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
         exposed: list[Tool] = []
         deferred: dict[str, Tool] = {}
         deferred_by_server: list[tuple[str | None, list[str]]] = []

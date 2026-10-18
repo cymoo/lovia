@@ -443,7 +443,7 @@ agent = Agent(
   HTTP, with per-server name prefixes and approval gates. For web research,
   try the [Parallel Search MCP recipe](https://cymoo.github.io/lovia/mcp/#web-research-with-parallel).
 
-Writing your own is a `name` plus one async `setup()` returning the
+Writing your own is a `name` plus one async `setup(ctx)` returning the
 contributions.
 
 → [Plugins](https://cymoo.github.io/lovia/plugins/) · [Skills](https://cymoo.github.io/lovia/skills/) · [MCP](https://cymoo.github.io/lovia/mcp/)
@@ -451,10 +451,10 @@ contributions.
 ### Memory
 
 Long-term memory across conversations — always-in-prompt **Notes** (facts
-the user stated or confirmed, never the assistant's own claims) plus a
-searchable **Archive**, zero-config, self-tidying (a periodic **dream**
-pass merges duplicates and prunes stale facts), upgradeable one argument
-at a time:
+the user stated or confirmed, never the assistant's own claims; pinned per
+session so they never bust the prompt cache) plus a searchable **Archive**,
+zero-config, self-tidying (a periodic **dream** pass merges duplicates and
+prunes stale facts), upgradeable one argument at a time:
 
 ```python
 from lovia import Agent, Memory

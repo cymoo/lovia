@@ -416,14 +416,15 @@ agent = Agent(
   stdio 或 HTTP，可按服务器加名称前缀和审批门禁。网页研究可参考
   [Parallel Search MCP 配置示例](https://cymoo.github.io/lovia/zh/mcp/#使用-parallel-进行网页研究)。
 
-自己写插件，只需要一个 `name` 和一个返回贡献内容的异步 `setup()`。
+自己写插件，只需要一个 `name` 和一个返回贡献内容的异步 `setup(ctx)`。
 
 → [插件](https://cymoo.github.io/lovia/zh/plugins/) · [技能](https://cymoo.github.io/lovia/zh/skills/) ·
 [MCP](https://cymoo.github.io/lovia/zh/mcp/)
 
 ### 记忆
 
-跨对话的长期记忆：常驻提示词的 **Notes** 加可检索的 **Archive**。零配置可用，
+跨对话的长期记忆：常驻提示词的 **Notes**（按会话固定，不破坏提示词缓存）加可检索的
+**Archive**。零配置可用，
 默认会在运行结束时筛选真正值得长期保留的事实（只取用户说过或确认过的内容，不取助手自己的
 说法），并定期整理 Notes，合并重复内容、
 清理过期信息。需要更强的检索能力时，可以按需增加参数：

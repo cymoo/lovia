@@ -219,7 +219,7 @@ Turn. The complete field catalog is in the
 A reusable capability often needs Tools, instructions, per-turn reminders,
 hooks, and cleanup together. A lovia **plugin** is one object that contributes any mix of: tools, system
 prompt text, per-turn view injectors, hooks, and guardrails. The runner
-activates it once per run (`await plugin.setup()`), tears it down at run end,
+activates it once per run (`await plugin.setup(ctx)`), tears it down at run end,
 and merges its contributions into the fixed loop slots above. A Plugin does
 not own control flow: it can affect a Run through Tools, Guardrails, and Hooks,
 while the loop still executes aborts, retries, and handoffs.

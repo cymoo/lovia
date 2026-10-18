@@ -19,6 +19,7 @@ import pytest
 
 from lovia import Agent, InMemorySession, ModelSettings, Runner, tool
 from lovia.exceptions import UserError
+from lovia.tools import Tool
 from lovia.plugins.memory import plugin as plugin_mod
 from lovia.plugins.memory.index import Doc, Hit, HybridIndex, KeywordIndex
 from lovia.plugins.memory.plugin import (
@@ -409,31 +410,69 @@ async def test_notes_refresh_once_the_session_idles(tmp_path) -> None:
     assert "new fact" in (second.instructions or "")
 
 
-async def test_run_end_restarts_the_idle_clock(tmp_path) -> None:
-    # A long run keeps the provider cache warm until its last call, so the
-    # window counts from run end, not run start.
-    mem = Memory(
-        tmp_path / "mem", index=None, auto_curate=False, notes_refresh_after=300
-    )
+def _outlast_window(mem: Memory) -> Tool:
+    """A tool standing in for a run that outlasts the refresh window, during
+    which another session's setup sweeps this session's snapshot away."""
 
     @tool
-    def slow_work() -> str:
-        """Stand-in for a run that outlasts most of the window."""
+    async def slow_work() -> str:
+        """Do slow work."""
         text_, used = mem._snapshots["s1"]
-        mem._snapshots["s1"] = (text_, used - 250)
+        mem._snapshots["s1"] = (text_, used - mem.notes_refresh_after - 50)
+        await mem._session_notes("other")  # the sweep
+        assert "s1" not in mem._snapshots
         return "done"
 
+    return slow_work
+
+
+async def test_run_end_repins_and_restarts_the_idle_clock(tmp_path) -> None:
+    # A long run keeps the provider cache warm until its last call, so the
+    # window counts from run end — and survives an eviction mid-run.
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
     provider = ScriptedProvider(
         [call("slow_work", {}, call_id="c1"), text("ok"), text("hi")]
     )
-    agent = Agent(name="a", model=provider, tools=[slow_work], plugins=[mem])
+    agent = Agent(name="a", model=provider, tools=[_outlast_window(mem)], plugins=[mem])
     session = InMemorySession()
     await Runner.run(agent, "work", session=session, session_id="s1")
     await mem.remember("written after the run")
-    text_, used = mem._snapshots["s1"]
-    mem._snapshots["s1"] = (text_, used - 100)  # 350s after start, 100s after end
     await Runner.run(agent, "again", session=session, session_id="s1")
-    assert "written after the run" not in (provider.calls[2][0].content or "")
+    assert provider.calls[2][0].content == provider.calls[0][0].content
+
+
+async def test_failed_run_still_restarts_the_idle_clock(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    session = InMemorySession()
+    # The script runs out after the tool call, so the run fails mid-way.
+    failing = ScriptedProvider([call("slow_work", {}, call_id="c1")])
+    agent = Agent(name="a", model=failing, tools=[_outlast_window(mem)], plugins=[mem])
+    with pytest.raises(AssertionError, match="ran out"):
+        await Runner.run(agent, "work", session=session, session_id="s1")
+    await mem.remember("written after the run")
+    retry = ScriptedProvider([text("hi")])
+    await Runner.run(
+        agent.clone(model=retry), "again", session=session, session_id="s1"
+    )
+    assert retry.calls[0][0].content == failing.calls[0][0].content
+
+
+async def test_edit_during_snapshot_render_is_not_pinned_over(tmp_path) -> None:
+    mem = Memory(tmp_path / "mem", index=None, auto_curate=False)
+    await mem.remember("old fact")
+    render = mem._render_notes
+
+    async def render_then_edit() -> str:
+        stale = await render()
+        await mem.replace_notes("- edited by hand")  # lands mid-setup
+        return stale
+
+    mem._render_notes = render_then_edit  # type: ignore[method-assign]
+    first = await mem.setup(_ctx())
+    mem._render_notes = render  # type: ignore[method-assign]
+    second = await mem.setup(_ctx())
+    assert "old fact" in (first.instructions or "")
+    assert "edited by hand" in (second.instructions or "")
 
 
 async def test_zero_refresh_window_reads_notes_every_run(tmp_path) -> None:

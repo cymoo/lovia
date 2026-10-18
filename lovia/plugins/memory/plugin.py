@@ -744,6 +744,9 @@ class Memory:
         self._curation_tasks: set[asyncio.Task[None]] = set()
         # session_id -> (rendered Notes block, last used, monotonic seconds).
         self._snapshots: dict[str, tuple[str, float]] = {}
+        # Bumped by replace_notes: a snapshot rendered under an older epoch is
+        # never (re)pinned, so a deliberate edit can't be pinned over.
+        self._notes_epoch = 0
 
     def _resolve_model(self, ctx: RunContext[Any]) -> "str | Provider":
         # ``self.model`` overrides; otherwise reuse the host agent's model. A
@@ -778,7 +781,8 @@ class Memory:
         return f"NOTES {meter}\n{body}"
 
     async def _session_notes(self, session_id: str | None) -> str:
-        """The Notes block for a run: pinned per session while it stays warm."""
+        """The Notes block for a run: the session's snapshot while it stays
+        warm, else a fresh render (which the caller pins via :meth:`_pin`)."""
         if session_id is None or self.notes_refresh_after == 0:
             # No session means no cross-run prefix to keep stable.
             return await self._render_notes()
@@ -791,9 +795,15 @@ class Memory:
             if now - snap[1] < self.notes_refresh_after
         }
         pinned = self._snapshots.get(session_id)
-        text = pinned[0] if pinned else await self._render_notes()
-        self._snapshots[session_id] = (text, now)
-        return text
+        return pinned[0] if pinned else await self._render_notes()
+
+    def _pin(self, session_id: str | None, text: str, epoch: int) -> None:
+        """Pin ``text`` as the session's snapshot and restart its idle clock —
+        unless :meth:`replace_notes` superseded it since ``epoch``."""
+        if session_id is None or self.notes_refresh_after == 0:
+            return
+        if epoch == self._notes_epoch:
+            self._snapshots[session_id] = (text, time.monotonic())
 
     async def _add_facts(self, new: list[str]) -> int:
         """Merge normalized facts into Notes (date-stamped, keyed dedup)."""
@@ -885,7 +895,8 @@ class Memory:
         _merge_new(facts, _parse_facts(body))
         async with self._notes_lock:
             await self._notes_store().save(facts)
-        self._snapshots.clear()
+            self._notes_epoch += 1
+            self._snapshots.clear()
         return _format_facts(facts)
 
     # -- setup -----------------------------------------------------------------
@@ -897,13 +908,23 @@ class Memory:
         if index is not None:
             tools.append(self._make_recall(index))
 
-        guidance = _build_instructions(index is not None)
-        instructions = f"{guidance}\n\n{await self._session_notes(ctx.session_id)}"
+        sid, epoch = ctx.session_id, self._notes_epoch
+        notes = await self._session_notes(sid)
+        self._pin(sid, notes, epoch)
 
+        async def repin() -> None:
+            # Teardown runs on every outcome. The provider cache stays warm
+            # from the run's last call, not its start, so restart the idle
+            # clock here — re-pinning the snapshot if another session's sweep
+            # evicted it while this run outlasted the window.
+            self._pin(sid, notes, epoch)
+
+        guidance = _build_instructions(index is not None)
         return PluginInstance(
             tools=tools,
-            instructions=instructions,
+            instructions=f"{guidance}\n\n{notes}",
             hooks=self._make_hooks(index),
+            aclose=repin,
         )
 
     # -- tools -------------------------------------------------------------------
@@ -988,11 +1009,6 @@ class Memory:
             if finalized:
                 return
             finalized = True
-            # The provider cache stays warm from the run's last model call,
-            # not its start: restart the session's idle clock here.
-            sid = ctx.session_id
-            if sid is not None and sid in self._snapshots:
-                self._snapshots[sid] = (self._snapshots[sid][0], time.monotonic())
             if self.curate_in_background:
                 # Off the hot path: the run's final event shouldn't wait for
                 # curation's model calls. _curate never raises (best-effort

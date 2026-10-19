@@ -1819,7 +1819,10 @@ function renderHistoryWindow({ stickBottom }) {
           // (the live path can't — this render replaced the transcript).
           if (call.name === QUESTION_TOOL && !result) {
             const question = buildQuestionCard(call);
-            if (question) appendBubbleContent(currentBubble, question);
+            if (question) {
+              appendBubbleContent(currentBubble, question);
+              setToolStatus(node, 'awaiting'); // as the live path marks it
+            }
           }
         }
       }

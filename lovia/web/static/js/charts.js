@@ -17,6 +17,7 @@
 
 import { registerRenderer } from './components.js';
 import { csvBlob, figure, save, staticFigure } from './figure.js';
+import { pageConfig } from './page-config.js';
 import { escapeHtml } from './util.js';
 
 // Same as SERIES_TYPES in lovia/web/charts.py (a test keeps them equal).
@@ -232,11 +233,8 @@ export function optionRows(option) {
 let _loading = null;
 
 function staticBase() {
-  try {
-    const cfg = JSON.parse(document.getElementById('app-config')?.textContent || '{}');
-    if (typeof cfg.static_base === 'string') return cfg.static_base;
-  } catch { /* fall through */ }
-  return '/static/';
+  const base = pageConfig.static_base;
+  return typeof base === 'string' ? base : '/static/';
 }
 
 /** @returns {Promise<any>} The ECharts global, injected on first use. */

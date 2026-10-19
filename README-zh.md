@@ -471,9 +471,11 @@ lovia web --check                          # 查看已保存的连接
 浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的
 FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流式 `error` 事件中的错误
 都带有稳定的 `code`，客户端可据此判断错误类型。沿用内置页面时，可以用
-`ui=ChatUI(...)` 设置空白页文案、为自定义 `auth=` 指定 `login_url`，还可以用自己的模板
-往页头、侧栏和脚本位置追加内容；页面也支持部署在路径前缀下，无论是在代理后面
-（`--root-path`）还是挂载到你自己的应用中。工具还可以返回 `ui_result(kind, props)`，
+`ui=ChatUI(...)` 设置空白页文案、为自定义 `auth=` 指定 `login_url`、修改文案和语言
+（`messages`、`default_lang`），还可以通过模板 block 放入自己的 logo、链接、输入框控件
+和脚本；样式则通过设计变量和 `data-part` 属性调整，你的 CSS 无需 `!important` 就能
+覆盖内置样式。页面也支持部署在路径前缀下，无论是在代理后面（`--root-path`）还是挂载到
+你自己的应用中。工具还可以返回 `ui_result(kind, props)`，
 把结果渲染成 UI，渲染器通过 `ChatUI(scripts=[...])` 加载（`lovia.getRenderer` 可以让一个
 渲染器包装另一个）；`put_ui_data` 可以把大块结果挡在模型上下文之外，模型只看预览，页面照常画出全部数据。内置了三种：表格，支持排序、筛选、翻页、复制和下载 CSV（`show_table`，
 或直接从你的数据返回 `ui_result("table", ...)`）；图表（`show_chart`，基于 Apache

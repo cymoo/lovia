@@ -25,32 +25,16 @@ import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
+import { pageConfig } from './page-config.js';
 import './charts.js'; // registers the built-in `chart` UI component
 import './tables.js'; // … `table`
 import './html.js'; // … and `html`
 
-// ---- Page config --------------------------------------------------------
-// Server-rendered settings (lovia/web/ui.py): the path prefix the app is
-// served under, and where a signed-out user logs in.
-let basePath = '';
-let loginUrl = null;
-
-function loadPageConfig() {
-  const node = document.getElementById('app-config');
-  if (!node?.textContent) return;
-  try {
-    const cfg = JSON.parse(node.textContent);
-    if (typeof cfg.empty_title === 'string') store.emptyTitle = cfg.empty_title;
-    if (typeof cfg.empty_description === 'string' || Array.isArray(cfg.empty_description)) {
-      store.emptyDescription = cfg.empty_description;
-    }
-    if (Array.isArray(cfg.empty_examples)) store.emptyExamples = cfg.empty_examples;
-    if (typeof cfg.base_path === 'string') basePath = cfg.base_path;
-    if (typeof cfg.login_url === 'string' && cfg.login_url) loginUrl = cfg.login_url;
-  } catch (err) {
-    console.error('app-config:', err);
-  }
-}
+// The path prefix the app is served under, and where a signed-out user logs in.
+const basePath = typeof pageConfig.base_path === 'string' ? pageConfig.base_path : '';
+const loginUrl = typeof pageConfig.login_url === 'string' && pageConfig.login_url
+  ? pageConfig.login_url
+  : null;
 
 // ---- Auth ---------------------------------------------------------------
 // The server may guard /api/* with a token (see lovia/web/auth.py). The UI
@@ -294,7 +278,6 @@ function initKeyboardShortcuts() {
 
 // ---- Bootstrap ----------------------------------------------------------
 (async function () {
-  loadPageConfig();
   configureApi({ base: basePath, onUnauthorized });
   adoptTokenFromURL(); // before the first API call
   applyStaticI18n(); // before init code reads/sets any labels

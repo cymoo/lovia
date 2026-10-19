@@ -4,7 +4,7 @@
 // sound); Models/Search edit the server's config.json through model-config.js
 // and appear only when the server reports features.model_config.
 import { showDialog, setThemePref, themePref } from './ui.js';
-import { t, langPref, setLangPref } from './i18n.js';
+import { t, languages, langPref, setLangPref } from './i18n.js';
 import { toast } from './toast.js';
 import { store } from './store.js';
 import { buildAboutPane, buildModelsPane, buildSearchPane, buildSkillsPane } from './model-config.js';
@@ -133,20 +133,16 @@ function buildGeneralPane() {
   const panel = document.createElement('div');
   panel.className = 'settings-panel';
 
-  // Language — applies on reload.
-  const lang = select(
-    [
-      ['auto', t('settings.langAuto')],
-      ['en', 'English'],
-      ['zh', '中文'],
-    ],
-    langPref(),
-  );
+  // Language — applies on reload. 'auto' is the deployment's default_lang,
+  // else the browser's.
+  const lang = select([['auto', t('settings.langAuto')], ...languages()], langPref());
   lang.addEventListener('change', () => {
     setLangPref(lang.value);
     location.reload();
   });
-  panel.appendChild(field(t('settings.language'), lang));
+  const langRow = field(t('settings.language'), lang);
+  langRow.dataset.part = 'language';
+  panel.appendChild(langRow);
 
   // Theme — applies live.
   const theme = select(

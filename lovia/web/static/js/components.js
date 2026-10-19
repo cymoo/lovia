@@ -25,7 +25,8 @@
  * @typedef {object} RenderContext
  * @property {string} kind
  * @property {'light' | 'dark'} theme
- * @property {'en' | 'zh'} lang
+ * @property {string} lang The page's language code ('en', 'zh', or one a
+ *   deployer added through ChatUI.messages).
  * @property {string} basePath The mount prefix, for the deployer's own endpoints.
  * @property {string | null} sessionId
  * @property {string | null} callId

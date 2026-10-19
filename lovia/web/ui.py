@@ -7,8 +7,9 @@ Serves the single-page app at ``GET /``. Keep this separate from
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,11 @@ Defined next to the UI it describes so the two change together.
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
+# Languages the bundled UI ships strings for; ``ChatUI.messages`` adds more.
+BUILTIN_LANGS = ("en", "zh")
+# A BCP 47-style tag: "ja", "pt-BR", "zh-Hant".
+_LANG_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
+
 
 @dataclass(frozen=True)
 class ChatUI:
@@ -64,13 +70,23 @@ class ChatUI:
     ``templates`` is a directory of your own Jinja templates. An
     ``index.html`` there replaces the page; start it with
     ``{% extends "lovia/index.html" %}`` and fill only the blocks you need —
-    ``head``, ``sidebar_footer``, ``body_end``.
+    ``head``, ``sidebar_header``, ``sidebar_nav``, ``sidebar_footer``,
+    ``topbar_actions``, ``composer_actions``, ``welcome``, ``body_end``.
 
     ``scripts`` are JS modules loaded after the app's own — where custom UI
     component renderers register (``window.lovia.registerRenderer``; see
     :func:`~lovia.web.ui_result`). An absolute URL is used as is; anything
     else is relative to the app, so it follows a mount prefix. Serving the
     files is yours: ``app.mount("/ext", StaticFiles(directory="ext"))``.
+
+    ``messages`` overrides or adds UI strings per language —
+    ``{"zh": {"composer.placeholder": "问点什么…"}, "ja": {...}}``. A
+    language the UI doesn't ship becomes selectable in Settings. Keys under a
+    prefix of your own (``acme.help``) label your template's elements through
+    ``data-i18n``; an unknown key under one of the UI's prefixes (``nav.``,
+    ``composer.``, …) — a typo, or a string a release renamed — is logged as a
+    warning in the browser console. ``default_lang`` is the language for a
+    user who hasn't picked one in Settings; unset, the browser's decides.
     """
 
     empty_title: str = "Where shall we begin?"
@@ -81,6 +97,28 @@ class ChatUI:
     login_url: str | None = None
     templates: str | Path | None = None
     scripts: Sequence[str] = ()
+    default_lang: str | None = None
+    messages: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for lang, strings in self.messages.items():
+            if not isinstance(lang, str) or not _LANG_RE.match(lang):
+                raise UserError(
+                    f"ChatUI messages: invalid language tag {lang!r}",
+                    hint='use a BCP 47 tag such as "ja" or "pt-BR"',
+                )
+            if not isinstance(strings, Mapping) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in strings.items()
+            ):
+                raise UserError(
+                    f"ChatUI messages[{lang!r}] must map message keys to strings",
+                )
+        known = (*BUILTIN_LANGS, *self.messages)
+        if self.default_lang is not None and self.default_lang not in known:
+            raise UserError(
+                f"ChatUI default_lang {self.default_lang!r} has no strings",
+                hint=f"use one of {', '.join(known)}, or add it to messages",
+            )
 
 
 def _templates(directory: str | Path | None) -> Jinja2Templates:
@@ -123,6 +161,10 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
     templates = _templates(ui.templates)
     examples = _as_list(ui.empty_examples)
     scripts = _as_list(ui.scripts)
+    i18n = {
+        "default_lang": ui.default_lang,
+        "messages": {lang: dict(strings) for lang, strings in ui.messages.items()},
+    }
 
     @router.get("/", include_in_schema=False)
     async def index(request: Request) -> Any:
@@ -137,9 +179,7 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
                 "empty_examples": examples,
                 "scripts": [_script_url(s, base_path) for s in scripts],
                 "app_config": {
-                    "empty_title": ui.empty_title,
-                    "empty_description": ui.empty_description,
-                    "empty_examples": examples,
+                    "i18n": i18n,
                     # The mount prefix (a proxy's root_path, or app.mount's):
                     # the client prepends it to every /api call.
                     "base_path": base_path,

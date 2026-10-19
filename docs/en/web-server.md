@@ -69,6 +69,8 @@ app = create_app(agent, lifespan=lifespan)
 | `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
 | `templates` | `None` | A directory of your own templates (see [Customizing the page](#customizing-the-page)) |
 | `scripts` | `()` | JS modules loaded after the app's own, e.g. component renderers (see [UI components](#ui-components)) |
+| `messages` | `{}` | UI strings per language: overrides, extra languages, and keys for your own template (see [Wording and languages](#wording-and-languages)) |
+| `default_lang` | `None` | The language for a user who hasn't picked one in Settings; `None` follows the browser |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -95,6 +97,22 @@ For endpoint contracts and the `ChatStore` interface, see
 
 ## Customizing the page
 
+You build on the bundled page through a few public surfaces, each with its own
+job:
+
+| Surface | What it's for |
+| --- | --- |
+| [Template blocks](#template-blocks) | Your own markup at fixed places: a logo, links, a control by the composer |
+| [Design tokens](#styling) | Colors, fonts, radii, spacing |
+| [`data-part` attributes](#styling) | Targeting a region from your CSS: hiding or restyling it |
+| [`data-i18n` keys](#wording-and-languages) | Wording and languages |
+| `api.js` and `window.lovia.registerRenderer` / `getRenderer` | Talking to the API; [UI components](#ui-components) |
+
+Everything else — class names, element ids, the JavaScript modules — is
+internal and may change between releases.
+
+### Template blocks
+
 `ChatUI(templates="ui")` points at a directory of your own Jinja templates.
 An `index.html` there replaces the page. Extend the bundled one and fill only
 the blocks you need:
@@ -107,6 +125,19 @@ the blocks you need:
 <link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
 {% endblock %}
 
+{% block sidebar_header %}
+<img class="acme-logo" src="{{ url_for('brand', path='logo.svg').path }}" alt="Acme">
+{% endblock %}
+
+{% block sidebar_nav %}
+<a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
+{% endblock %}
+
+{% block welcome %}
+{{ super() }}
+<p class="acme-notice">Scheduled maintenance tonight at 22:00.</p>
+{% endblock %}
+
 {% block sidebar_footer %}
 <a class="signout" href="/logout">Sign out</a>
 {% endblock %}
@@ -115,8 +146,17 @@ the blocks you need:
 | Block | Where it renders |
 | --- | --- |
 | `head` | End of `<head>`: stylesheets, meta tags |
+| `sidebar_header` | Top of the sidebar; wraps the title, so filling it replaces the title (with a logo, say) |
+| `sidebar_nav` | End of the sidebar's navigation, under Settings: links of your own |
 | `sidebar_footer` | Bottom of the sidebar: a user menu, a sign-out link |
+| `topbar_actions` | Start of the top bar's button group |
+| `composer_actions` | In the composer, after the message box: a mode switch, a picker |
+| `welcome` | The blank chat state's content; `{{ super() }}` keeps the default title, description and examples. The page restores it on "New chat" |
 | `body_end` | After the app's script: scripts of your own |
+
+The example's link borrows the bundled `sidebar-nav-item` look. Class names are
+internal, so give it a class of your own instead if you'd rather not track them
+across releases.
 
 Serve your own files from a static mount on the app, and link them with
 `url_for(...).path` so they keep working under a
@@ -129,12 +169,83 @@ app = create_app(agent, ui=ChatUI(templates="ui"))
 app.mount("/brand", StaticFiles(directory="brand"), name="brand")
 ```
 
-To retheme, override the design tokens at the top of the bundled
-`styles.css` (`--bg`, `--surface`, `--ink`, `--accent`, …; the dark theme
-sets its own under `[data-theme="dark"]`). Class names, element ids, and the
-JavaScript modules are internal and may change between releases. The
-documented front-end surfaces are `api.js` (the client) and
-`window.lovia.registerRenderer` / `getRenderer` ([UI components](#ui-components)).
+### Styling
+
+The bundled `styles.css` sits in a cascade layer named `lovia`. Any rule in
+your own stylesheet (outside a layer) beats every bundled rule, whatever the
+selectors' specificity — no `!important` needed.
+
+Retheme by overriding the design tokens at the top of `styles.css`. Each theme
+has its own values, so set yours per theme; a token set on `:root` applies to
+both:
+
+```css
+/* brand/theme.css */
+[data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
+[data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
+:root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
+```
+
+| Tokens | What they set |
+| --- | --- |
+| `--bg`, `--surface`, `--surface-2`, `--surface-3`, `--border`, `--border-strong` | Canvas, panels, cards, hover, and their borders |
+| `--ink`, `--ink-2`, `--muted`, `--muted-2` | Text, from primary to faint |
+| `--accent`, `--accent-hover`, `--accent-soft`, `--accent-text` | The brand color and its tints |
+| `--user-surface`, `--user-border` | The user's message bubble |
+| `--chart-1` … `--chart-8` | Chart series colors |
+| `--warn`, `--danger`, `--ok` | Status colors |
+| `--sans`, `--mono` | Font stacks |
+| `--radius-xs` … `--radius-xl` | Corner radii |
+| `--sidebar-w`, `--content-w` | Sidebar width, the transcript's reading width |
+
+To target a region, select its `data-part`:
+
+```css
+[data-part="export"] { display: none; }                                   /* no Export menu */
+[data-part="tool"][data-tool="read_process_output"] { display: none; }   /* hide one tool's cards */
+[data-part="turn"][data-role="user"] .bubble { border-radius: 4px; }
+```
+
+| Region | `data-part` |
+| --- | --- |
+| Sidebar | `sidebar`, `sidebar-header`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
+| Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `export`, `files-toggle` |
+| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"`) |
+| Composer | `composer`, `attach`, `context-ring` |
+| Elsewhere | `files-panel`; in Settings, `language` (the language row) |
+
+Hiding a tool's cards never hides an approval request: those render apart from
+the card.
+
+### Wording and languages
+
+The UI ships English and Chinese. `ChatUI(messages=...)` changes its wording,
+adds languages, and labels your own template's elements:
+
+```python
+ui = ChatUI(
+    default_lang="zh",
+    messages={
+        "en": {"composer.placeholder": "Ask Acme anything…", "acme.help": "Help center"},
+        "zh": {"composer.placeholder": "问问 Acme…", "acme.help": "帮助中心"},
+        "ja": {"composer.placeholder": "何でも聞いてください…", "nav.newChat": "新しいチャット"},
+    },
+)
+```
+
+- Keys are the ones in `lovia/web/static/js/i18n.js` (`nav.newChat`,
+  `composer.placeholder`, …). A key you set under one of the UI's own prefixes
+  that the UI doesn't have — a typo, or a string a release renamed — is logged
+  as a warning in the browser console.
+- A language the UI doesn't ship (`ja` above) becomes selectable in Settings;
+  a string it lacks falls back to English.
+- Keys under a prefix of your own (`acme.help`) label your template's elements
+  through `data-i18n` (text), `data-i18n-title`, `data-i18n-aria` and
+  `data-i18n-placeholder`. The element's own text stays when the active
+  language has no string for its key.
+- `default_lang` applies until the user picks a language in Settings, where
+  "Automatic" returns to it. To keep users on one language, set it and hide
+  the picker: `[data-part="language"] { display: none; }`.
 
 ## UI components
 

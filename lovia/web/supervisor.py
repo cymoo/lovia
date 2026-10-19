@@ -752,6 +752,21 @@ class RunController:
 # --------------------------------------------------------------------------- #
 
 
+def _stopped() -> WebError:
+    return WebError(409, "run_cancelled", "the run was stopped before it started")
+
+
+class _Hold:
+    """A session held by a run outside the supervisor (``RunSupervisor.reserve``)."""
+
+    def __init__(self) -> None:
+        self.cancelled = False  # voided by a stop or a deletion
+
+    def claim(self) -> None:
+        if self.cancelled:
+            raise _stopped()
+
+
 class _Setup:
     """A run's setup, from registering its controller to handing it over.
 
@@ -775,9 +790,7 @@ class _Setup:
 
     def claim(self) -> None:
         if not self.owns():
-            raise WebError(
-                409, "run_cancelled", "the run was stopped before it started"
-            )
+            raise _stopped()
 
     async def bind(self, agent: Agent[Any]) -> None:
         """Bind the run to the chat's workspace session, opened on first use.
@@ -825,7 +838,7 @@ class RunSupervisor:
         # report runs that deliver their results back into it.
         self.last_client: dict[str, JsonObject] = {}
         # Sessions an unsupervised run holds (see :meth:`reserve`).
-        self._reserved: set[str] = set()
+        self._reserved: dict[str, _Hold] = {}
 
     @property
     def max_background_runs(self) -> int:
@@ -1029,15 +1042,19 @@ class RunSupervisor:
         return ctrl
 
     @contextmanager
-    def reserve(self, session_id: str) -> Iterator[None]:
+    def reserve(self, session_id: str) -> Iterator[_Hold]:
         """Hold ``session_id`` for a run outside the supervisor (the blocking
-        ``/api/chat``) while it lasts: no supervised run starts on it."""
+        ``/api/chat``) while it lasts: no supervised run starts on it. A stop
+        or a deletion (:meth:`cancel`) voids the hold; the run checks it with
+        ``claim()`` before each step that writes."""
         self._check_slot(session_id, cap=False)
-        self._reserved.add(session_id)
+        hold = _Hold()
+        self._reserved[session_id] = hold
         try:
-            yield
+            yield hold
         finally:
-            self._reserved.discard(session_id)
+            if self._reserved.get(session_id) is hold:
+                del self._reserved[session_id]
 
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
         """Refuse a second run for one session, and (``cap``) one over the limit."""
@@ -1051,9 +1068,12 @@ class RunSupervisor:
     def cancel(self, session_id: str, *, discard: bool = False) -> bool:
         """Cancel the live run, if any. ``discard`` additionally drops the
         partial transcript instead of persisting it — for session deletion."""
+        hold = self._reserved.pop(session_id, None)
+        if hold is not None:
+            hold.cancelled = True
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
-            return False
+            return hold is not None
         # Evict synchronously so an immediate follow-up /stream starts fresh;
         # the task winds down + deletes its checkpoint in the background.
         self._controllers.pop(session_id, None)
@@ -1062,6 +1082,11 @@ class RunSupervisor:
         ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
+
+    def cancel_all(self, *, discard: bool = False) -> None:
+        """:meth:`cancel` every session's run — for deleting every chat."""
+        for session_id in [*self._controllers, *self._reserved]:
+            self.cancel(session_id, discard=discard)
 
     async def drain(self, session_id: str, *, timeout: float = 60.0) -> bool:
         """Wait for this session's cancelled runs to wind down. ``False`` on timeout.

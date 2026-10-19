@@ -516,6 +516,60 @@ async def test_a_blocking_turn_holds_its_chat_through_the_hook() -> None:
     assert users == ["a", "b"]
 
 
+@pytest.mark.parametrize("delete", ["one", "all"])
+async def test_deleting_a_chat_during_a_blocking_turns_hook_wins(delete: str) -> None:
+    gate = asyncio.Event()
+    provider = ScriptedProvider([text("late")])
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    store = ChatStore.in_memory()
+    await store.upsert("s", agent="bot")
+    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
+    deps = app.state.deps
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(lambda: "s" in deps.supervisor._reserved)
+        await ac.delete("/api/sessions/s" if delete == "one" else "/api/sessions")
+        gate.set()
+        res = await blocking
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "run_cancelled"
+    assert provider.calls == []
+    assert await store.get("s") is None
+    assert "s" not in deps.supervisor.last_client
+
+
+async def test_a_schedule_waits_out_a_blocking_turn_and_the_next_one_fires() -> None:
+    gate = asyncio.Event()
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    store = ChatStore.in_memory()
+    await store.upsert("busy", agent="bot")
+    app = _app(_agent([text("ok")] * 3), store=store, run_context=hook)
+    deps = app.state.deps
+    now = time.time()
+    for sid, target, due in (("fixed", "busy", now - 2), ("fresh", None, now - 1)):
+        await store.add_schedule(
+            ScheduleRow(
+                id=sid, agent="bot", input="digest", session_id=target,
+                trigger_kind="every", trigger_expr="3600", next_fire=due,
+                active=True, last_session_id=None, created_at=now,
+                updated_at=now,
+            )
+        )  # fmt: skip
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "busy", "context": {"kb": "slow"}}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(lambda: "busy" in deps.supervisor._reserved)
+        await Scheduler(deps).run_due()
+        gate.set()
+        assert (await blocking).status_code == 200
+    await _drain_runs(deps)
+    fixed, fresh = await store.get_schedule("fixed"), await store.get_schedule("fresh")
+    assert fixed.next_fire == now - 2  # still due: the next poll fires it
+    assert await store.list_runs(source="schedule:fixed") == []
+    assert fresh.last_session_id is not None
+
+
 async def _interrupted(store: ChatStore, sid: str = "s1") -> None:
     from lovia.checkpointer import RunHead
     from lovia.messages import Usage

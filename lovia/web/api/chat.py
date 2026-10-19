@@ -101,7 +101,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         client = req.context or {}
         # Hold the chat for the whole turn, as a supervised run does: no
         # stream starts a second run on it meanwhile.
-        with deps.supervisor.reserve(sid):
+        with deps.supervisor.reserve(sid) as hold:
             # Before any state changes, as in RunSupervisor.start(): a refusal
             # leaves nothing behind.
             context = await build_run_context(
@@ -114,6 +114,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     client=client,
                 ),
             )
+            hold.claim()  # a deletion meanwhile wins: write nothing back
             name = deps.name_of(agent)
             await upsert_session(sid, name, req.message, is_new=is_new)
             if is_new:
@@ -122,6 +123,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # RunSupervisor.start(): background processes belong to the chat, no
             # matter which endpoint ran the turn.
             agent = await deps.workspaces.bind(sid, agent)
+            hold.claim()
             # Subagent tasks this turn spawns work in its context.
             deps.supervisor.last_client[sid] = dict(client)
             UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task

@@ -259,16 +259,17 @@ class Scheduler:
                     title=title,
                 ),
             )
-        except WebError as exc:
-            if exc.code == "too_many_runs":
-                # At the concurrency cap: defer (leave next_fire due → retried).
-                log.info("schedule %s: at concurrency cap; deferring", sched.id)
-                return None
-            raise
         except Exception as exc:
-            # The run_context hook refused this fire (or failed). A miss, like
-            # an unserved agent: the schedule moves on, so a refusal that
-            # persists can't hold up the schedules due after it.
+            busy = ("too_many_runs", "run_active")
+            if isinstance(exc, WebError) and exc.code in busy:
+                # At the concurrency cap, or the chat is busy (a run outside
+                # the supervisor holds it): defer, leaving next_fire due — the
+                # next poll retries, and the schedules due after it fire now.
+                log.info("schedule %s: %s; deferring", sched.id, exc)
+                return None
+            # Refused by the run_context hook (or failed, or stopped during
+            # setup). A miss, like an unserved agent: the schedule moves on,
+            # so a refusal that persists can't hold up the schedules after it.
             await self._miss(sched, now, agent_name, f"run refused: {exc}")
             return None
         if is_new:

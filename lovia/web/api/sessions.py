@@ -164,8 +164,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:
         """Delete every session's transcript and metadata (stopping live runs)."""
-        for sid, _ctrl in deps.supervisor:
-            deps.supervisor.cancel(sid, discard=True)
+        deps.supervisor.cancel_all(discard=True)
         deps.supervisor.last_client.clear()
         # Reap every chat's workspace session (and its background processes).
         await deps.workspaces.aclose()

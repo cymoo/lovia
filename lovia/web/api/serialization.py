@@ -98,27 +98,6 @@ def display_text(m: Message) -> str:
     return val if isinstance(val, str) else str(val or "")
 
 
-def _apply_tool_errors(
-    outs: list[MessageOut], entries: list[TranscriptEntry]
-) -> list[MessageOut]:
-    """Stamp ``is_error`` onto tool-result messages.
-
-    ``entries_to_messages`` flattens :class:`ToolResultEntry` down to a plain
-    ``tool`` message and loses the error flag the live SSE stream carries, so
-    replayed sessions rendered without the error styling. Re-derive it here.
-    """
-    errs = {
-        e.call_id
-        for e in entries
-        if isinstance(e, ToolResultEntry) and e.is_error and e.call_id
-    }
-    if errs:
-        for o in outs:
-            if o.role == "tool" and o.tool_call_id in errs:
-                o.is_error = True
-    return outs
-
-
 def tool_image_stubs(parts: list[Any] | None) -> list[ToolImageOut]:
     """Image stubs for one tool result's parts (0-based over its image parts)."""
     if not parts:
@@ -129,27 +108,35 @@ def tool_image_stubs(parts: list[Any] | None) -> list[ToolImageOut]:
     ]
 
 
-def _apply_tool_images(
+def tool_result_flags(
+    entries: list[TranscriptEntry],
+) -> tuple[set[str], dict[str, list[ToolImageOut]]]:
+    """Per call id, what ``entries_to_messages`` drops when it flattens a
+    :class:`ToolResultEntry` to a plain ``tool`` message: the ids whose call
+    failed, and each result's image stubs (no bytes — the client fetches them
+    from the tool-images route). Replays and exports re-derive them here so
+    they match what the live SSE stream carried."""
+    errors: set[str] = set()
+    images: dict[str, list[ToolImageOut]] = {}
+    for e in entries:
+        if isinstance(e, ToolResultEntry) and e.call_id:
+            if e.is_error:
+                errors.add(e.call_id)
+            if stubs := tool_image_stubs(e.parts):
+                images[e.call_id] = stubs
+    return errors, images
+
+
+def _apply_tool_flags(
     outs: list[MessageOut], entries: list[TranscriptEntry]
 ) -> list[MessageOut]:
-    """Stamp image stubs onto tool-result messages.
-
-    Same re-derivation as :func:`_apply_tool_errors`: ``entries_to_messages``
-    flattens a :class:`ToolResultEntry` to its ``output`` string, so replayed
-    sessions would lose the images the live SSE stream advertises. The stubs
-    carry no bytes — the client fetches them from the tool-images route.
-    """
-    stubs = {
-        e.call_id: imgs
-        for e in entries
-        if isinstance(e, ToolResultEntry)
-        and e.call_id
-        and (imgs := tool_image_stubs(e.parts))
-    }
-    if stubs:
-        for o in outs:
-            if o.role == "tool" and o.tool_call_id in stubs:
-                o.images = stubs[o.tool_call_id]
+    """Stamp ``is_error`` and image stubs onto tool-result messages."""
+    errors, images = tool_result_flags(entries)
+    for o in outs:
+        if o.role == "tool" and o.tool_call_id:
+            o.is_error = o.is_error or o.tool_call_id in errors
+            if o.tool_call_id in images:
+                o.images = images[o.tool_call_id]
     return outs
 
 
@@ -200,11 +187,8 @@ def segments_to_out(
         notice = (seg.meta or {}).get(NOTICE_META_KEY)
         if isinstance(notice, dict):
             boundaries.append((len(all_msgs), notice))
-    outs = _apply_tool_images(
-        _apply_tool_errors(
-            messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
-            all_entries,
-        ),
+    outs = _apply_tool_flags(
+        messages_to_out(all_msgs, created_at=created_at, updated_at=updated_at),
         all_entries,
     )
     # Insert from last to first so earlier boundary indices stay valid.
@@ -229,27 +213,28 @@ def view_messages(
     session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
     live re-attach snapshot so both render byte-identically."""
     kept = drop_system_entries(entries)
-    return _apply_tool_images(
-        _apply_tool_errors(
-            messages_to_out(
-                entries_to_messages(kept),
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-            kept,
+    return _apply_tool_flags(
+        messages_to_out(
+            entries_to_messages(kept), created_at=created_at, updated_at=updated_at
         ),
         kept,
     )
 
 
-def message_to_json_dict(m: Message) -> dict[str, Any]:
+def message_to_json_dict(
+    m: Message,
+    *,
+    errors: set[str] | None = None,
+    images: dict[str, list[ToolImageOut]] | None = None,
+) -> dict[str, Any]:
     """One message in the JSON-export envelope.
 
     ``tool_call_id``/``name`` are included so a consumer can attribute a tool
     *result* message back to the call it answers (results don't carry the tool
-    name themselves).
+    name themselves). A result also carries ``is_error`` and its ``images``
+    (from :func:`tool_result_flags`), as the session view does.
     """
-    return {
+    out: dict[str, Any] = {
         "role": m.role,
         "content": _content(m),
         "reasoning": m.reasoning,
@@ -257,6 +242,10 @@ def message_to_json_dict(m: Message) -> dict[str, Any]:
         "tool_call_id": m.tool_call_id,
         "name": m.name,
     }
+    if m.role == "tool" and m.tool_call_id:
+        out["is_error"] = m.tool_call_id in (errors or ())
+        out["images"] = [i.model_dump() for i in (images or {}).get(m.tool_call_id, [])]
+    return out
 
 
 def export_txt(msgs: list[Message]) -> str:

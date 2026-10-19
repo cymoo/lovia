@@ -1999,6 +1999,10 @@ let _lastEventWasError = false;
 // from "cancelled or died", which is what gates the follow-up chips.
 let _sawDone = false;
 
+// This stream's latest event: a run that answered ends on `done`, while an
+// auto-chained one that broke off after a leg's `done` ends on something else.
+let _lastEvent = '';
+
 // This stream's last assistant text, for the follow-up cache signature. It
 // can't be read off store.rawText in the finally: `message_completed` clears
 // that as each model turn lands, long before `done` — so the finally always
@@ -2010,6 +2014,7 @@ let _lastReply = '';
 
 async function handleEvent({ event, data }) {
   _lastEventWasError = event === 'error';
+  _lastEvent = event;
   switch (event) {
     case 'session': {
       const known = store.sessions.some((s) => s.id === data.session_id);
@@ -2495,19 +2500,48 @@ function runEnded(status) {
   if (!_shownRun) return;
   const { sessionId, usage } = _shownRun;
   _shownRun = null;
-  store.emit('run-end', { sessionId, status, usage });
+  // After the ending stream's own cleanup (it runs on synchronously from
+  // here): a listener may start the next run, which that cleanup would
+  // otherwise clobber (its abort controller, for one).
+  queueMicrotask(() => store.emit('run-end', { sessionId, status, usage }));
 }
 
 /**
- * How a stream that stayed on screen to its end went.
- * @param {{ cancelled: boolean, terminal: boolean }} flags
+ * How a stream that stayed on screen to its end went. Order matters: an
+ * auto-chained run says `done` once per leg, so an earlier leg's answer must
+ * not hide a later stop or failure.
+ * @param {{ cancelled: boolean, readFailed: boolean, terminal: boolean }} flags
+ *   `readFailed`: reading the stream itself failed (the connection broke), as
+ *   opposed to the run reporting an error or the page failing on an event.
  * @returns {'done' | 'error' | 'cancelled' | 'detached'}
  */
-function runStatus({ cancelled, terminal }) {
-  if (_sawDone && !_lastEventWasError) return 'done';
+function runStatus({ cancelled, readFailed, terminal }) {
   if (cancelled) return 'cancelled';
+  if (readFailed) return 'detached'; // the run may go on server-side
   if (terminal || _lastEventWasError) return 'error';
-  return 'detached'; // the connection dropped; recovery may reattach
+  if (_lastEvent === 'done') return 'done';
+  return 'detached'; // ended mid-run without a failure: the connection dropped
+}
+
+/**
+ * The stream's events, marking `flags.readFailed` when reading the body
+ * fails — a broken connection — rather than handling an event.
+ * @param {Response} res
+ * @param {{ readFailed: boolean }} flags
+ */
+async function* readStream(res, flags) {
+  const events = readSSE(res);
+  for (;;) {
+    let step;
+    try {
+      step = await events.next();
+    } catch (err) {
+      if (err?.name !== 'AbortError') flags.readFailed = true;
+      throw err;
+    }
+    if (step.done) return;
+    yield step.value;
+  }
 }
 
 // While a run streams, Stop takes the Send circle's place; Send comes back —
@@ -2565,11 +2599,13 @@ export async function runStream(message, attachments = null) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastEvent = '';
   _lastReply = '';
   // Set on every path that already surfaced a failure (or a deliberate abort),
   // so the finally's dropped-connection check doesn't fire on top of it.
   let terminal = false;
   let cancelled = false;
+  const flags = { readFailed: false };
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2604,7 +2640,7 @@ export async function runStream(message, attachments = null) {
     // re-enter the queue now (each as its own turn).
     drainPendingResend();
 
-    for await (const ev of readSSE(res)) {
+    for await (const ev of readStream(res, flags)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
         return;
@@ -2653,7 +2689,7 @@ export async function runStream(message, attachments = null) {
       // Un-mute any queued bubbles the server dropped (an errored/cancelled run
       // doesn't auto-chain) so they read as sent — the user can resend.
       flushQueuedTurns();
-      exitStreamingUI(runStatus({ cancelled, terminal }));
+      exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       // A new chat's title is generated server-side just after the first turn —
@@ -2690,9 +2726,11 @@ export async function runReconnect(sessionId) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastEvent = '';
   _lastReply = '';
   let terminal = false; // see runStream — gates the dropped-connection check
   let cancelled = false;
+  const flags = { readFailed: false };
   let outcome = /** @type {'attached' | 'norun' | 'error'} */ ('attached');
 
   _resumeAutoScroll();
@@ -2717,7 +2755,7 @@ export async function runReconnect(sessionId) {
     runStarted();
     drainPendingResend(); // same re-queue point as runStream
 
-    for await (const ev of readSSE(res)) {
+    for await (const ev of readStream(res, flags)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
         return 'attached';
@@ -2750,7 +2788,7 @@ export async function runReconnect(sessionId) {
       const dropped = !terminal && !_lastEventWasError && !_sawDone;
       finalizeCurrentAssistantTurn();
       flushQueuedTurns();
-      exitStreamingUI(runStatus({ cancelled, terminal }));
+      exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       loadSessions();

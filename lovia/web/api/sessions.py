@@ -39,6 +39,7 @@ from .serialization import (
     export_md,
     export_txt,
     message_to_json_dict,
+    tool_result_flags,
     run_record,
     segments_to_out,
     session_info,
@@ -431,15 +432,20 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     ) -> Any:
         """Export a session as markdown, JSON, or plain text."""
         meta = await store.get(session_id)
-        msgs = entries_to_messages(await session.load(session_id))
+        entries = await session.load(session_id)
+        msgs = entries_to_messages(entries)
 
         if format == "json":
+            errors, images = tool_result_flags(entries)
             return JSONResponse(
                 content={
                     "session_id": session_id,
                     "title": meta.title if meta else None,
                     "agent": meta.agent if meta else None,
-                    "messages": [message_to_json_dict(m) for m in msgs],
+                    "messages": [
+                        message_to_json_dict(m, errors=errors, images=images)
+                        for m in msgs
+                    ],
                 }
             )
 

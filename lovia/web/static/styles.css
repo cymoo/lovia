@@ -314,6 +314,14 @@ body.sidebar-collapsed .sidebar {
   letter-spacing: -0.011em;
   color: var(--ink);
 }
+/* ChatUI(logo=...): sized to the title's line, whatever the file's size. */
+.sidebar-logo {
+  display: block;
+  height: 24px;
+  width: auto;
+  max-width: 180px;
+  object-fit: contain;
+}
 
 /* Top nav — app-level destinations (New chat, Memory, Scheduled runs):
    icon + label rows above the chats section. */

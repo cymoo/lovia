@@ -22,6 +22,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 
     raise_missing_web_extra(exc)
 
+from .. import __version__
 from ..exceptions import UserError
 
 SURFACE_NOTE = (
@@ -46,6 +47,8 @@ Defined next to the UI it describes so the two change together.
 """
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
+# Where create_app serves ``ChatUI.assets``.
+ASSETS_PATH = "/ui"
 
 # Languages the bundled UI ships strings for; ``ChatUI.messages`` adds more.
 BUILTIN_LANGS = ("en", "zh")
@@ -67,17 +70,22 @@ class ChatUI:
     login flow to return to. Unset, the page only says the user is signed
     out. The token check (``token=``) keeps its own prompt either way.
 
-    ``templates`` is a directory of your own Jinja templates. An
+    ``assets`` is your UI directory, served at ``<app>/ui/`` — every file
+    in it except templates (``*.html``) and dotfiles is public. An
     ``index.html`` there replaces the page; start it with
     ``{% extends "lovia/index.html" %}`` and fill only the blocks you need —
     ``head``, ``sidebar_header``, ``sidebar_nav``, ``sidebar_footer``,
     ``topbar_actions``, ``composer_actions``, ``welcome``, ``body_end``.
+    The files are revalidated on every load, so an edit shows on reload.
 
-    ``scripts`` are JS modules loaded after the app's own — where custom UI
-    component renderers register (``window.lovia.registerRenderer``; see
-    :func:`~lovia.web.ui_result`). An absolute URL is used as is; anything
-    else is relative to the app, so it follows a mount prefix. Serving the
-    files is yours: ``app.mount("/ext", StaticFiles(directory="ext"))``.
+    ``scripts`` are JS modules the page imports before it starts — where
+    extensions register (``window.lovia``; see :func:`~lovia.web.ui_result`
+    for component renderers). One that fails to load is reported and
+    skipped; one still loading after 5 seconds stops holding up the start.
+    ``styles`` load after the bundled stylesheet, ``logo`` replaces the
+    sidebar's title, ``favicon`` the tab icon. Each of these is a file in
+    ``assets`` (``"theme.css"``), a path on the app (``"/brand/x.css"``,
+    following a mount prefix), or a URL (``"https://…"``).
 
     ``messages`` overrides or adds UI strings per language —
     ``{"zh": {"composer.placeholder": "问点什么…"}, "ja": {...}}``. A
@@ -95,12 +103,31 @@ class ChatUI:
     )
     empty_examples: Sequence[str] = ()
     login_url: str | None = None
-    templates: str | Path | None = None
+    assets: str | Path | None = None
     scripts: Sequence[str] = ()
+    styles: Sequence[str] = ()
+    logo: str | None = None
+    favicon: str | None = None
     default_lang: str | None = None
     messages: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.assets is not None and not Path(self.assets).expanduser().is_dir():
+            raise UserError(
+                f"ChatUI assets directory not found: {self.assets}",
+                hint="pass an existing directory holding your index.html, "
+                "scripts and styles",
+            )
+        refs = [*_as_list(self.scripts), *_as_list(self.styles)]
+        refs += [ref for ref in (self.logo, self.favicon) if ref]
+        for ref in refs:
+            if self.assets is None and _in_assets(ref):
+                raise UserError(
+                    f"ChatUI: {ref!r} names a file in assets, but no assets "
+                    "directory is set",
+                    hint='set assets=..., or give a path on the app ("/ext/x.js") '
+                    'or a URL ("https://…")',
+                )
         for lang, strings in self.messages.items():
             if not isinstance(lang, str) or not _LANG_RE.match(lang):
                 raise UserError(
@@ -125,11 +152,6 @@ def _templates(directory: str | Path | None) -> Jinja2Templates:
     if directory is None:
         return Jinja2Templates(directory=_TEMPLATE_DIR)
     root = Path(directory).expanduser().resolve()
-    if not root.is_dir():
-        raise UserError(
-            f"ChatUI templates directory not found: {directory}",
-            hint="pass an existing directory holding your index.html",
-        )
     builtin = jinja2.FileSystemLoader(_TEMPLATE_DIR)
     # Yours first; the bundled page stays reachable as "lovia/index.html" so
     # an override can extend it without extending itself.
@@ -149,18 +171,30 @@ def _as_list(value: str | Sequence[str]) -> list[str]:
     return [value] if isinstance(value, str) else list(value)
 
 
-def _script_url(src: str, base_path: str) -> str:
-    if "://" in src or src.startswith("//"):
-        return src
-    return f"{base_path}/{src.lstrip('/')}"
+def _is_url(ref: str) -> bool:
+    return "://" in ref or ref.startswith("//")
+
+
+def _in_assets(ref: str) -> bool:
+    return not _is_url(ref) and not ref.startswith("/")
+
+
+def _ref_url(ref: str, base_path: str) -> str:
+    """Where the page loads a ``ChatUI`` file reference from."""
+    if _is_url(ref):
+        return ref
+    if ref.startswith("/"):
+        return base_path + ref
+    return f"{base_path}{ASSETS_PATH}/{ref}"
 
 
 def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
     """Router that serves the bundled single-page chat UI."""
     router = APIRouter()
-    templates = _templates(ui.templates)
+    templates = _templates(ui.assets)
     examples = _as_list(ui.empty_examples)
     scripts = _as_list(ui.scripts)
+    styles = _as_list(ui.styles)
     i18n = {
         "default_lang": ui.default_lang,
         "messages": {lang: dict(strings) for lang, strings in ui.messages.items()},
@@ -177,8 +211,13 @@ def build_ui_router(ui: ChatUI, *, title: str) -> APIRouter:
                 "empty_title": ui.empty_title,
                 "empty_description": ui.empty_description,
                 "empty_examples": examples,
-                "scripts": [_script_url(s, base_path) for s in scripts],
+                "styles": [_ref_url(s, base_path) for s in styles],
+                "logo": ui.logo and _ref_url(ui.logo, base_path),
+                "favicon": ui.favicon and _ref_url(ui.favicon, base_path),
                 "app_config": {
+                    "version": __version__,
+                    # Imported by main.js before the app starts (extensions).
+                    "scripts": [_ref_url(s, base_path) for s in scripts],
                     "i18n": i18n,
                     # The mount prefix (a proxy's root_path, or app.mount's):
                     # the client prepends it to every /api call.

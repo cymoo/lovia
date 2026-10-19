@@ -25,6 +25,8 @@ import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
+import { loadExtensions } from './extensions.js';
+import { lovia, markReady } from './lovia.js';
 import { pageConfig } from './page-config.js';
 import './charts.js'; // registers the built-in `chart` UI component
 import './tables.js'; // … `table`
@@ -277,10 +279,17 @@ function initKeyboardShortcuts() {
 }
 
 // ---- Bootstrap ----------------------------------------------------------
+window.lovia = lovia;
+
 (async function () {
   configureApi({ base: basePath, onUnauthorized });
   adoptTokenFromURL(); // before the first API call
   applyStaticI18n(); // before init code reads/sets any labels
+  // Extensions register before anything renders, so the first render has them.
+  const failed = await loadExtensions(pageConfig.scripts ?? []);
+  for (const url of failed) {
+    toast(t('toast.extensionFailed', { name: url.split('/').pop() || url }), { type: 'error' });
+  }
   initTheme();
   initSidebarToggle();
   initComposer();
@@ -325,4 +334,5 @@ function initKeyboardShortcuts() {
   if (sid) {
     await switchSession(sid).catch(() => {});
   }
+  markReady();
 })();

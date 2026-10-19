@@ -87,37 +87,46 @@ def test_envelope_reaches_the_client_verbatim() -> None:
     assert next(m for m in entries if m["role"] == "tool")["content"] == expected
 
 
-def _module_scripts(page: str) -> list[str]:
-    tail = page.split("js/main.js", 1)[1]
-    return [
-        line.split('src="', 1)[1].split('"', 1)[0]
-        for line in tail.splitlines()
-        if line.startswith('<script type="module" src="')
-    ]
+def _scripts(page: str) -> list[str]:
+    """The extension modules main.js imports before it starts."""
+    raw = page.split('<script id="app-config" type="application/json">', 1)[1]
+    return json.loads(raw.split("</script>", 1)[0])["scripts"]
 
 
-def test_scripts_load_after_the_app_and_follow_the_prefix() -> None:
+def test_scripts_resolve_into_assets_the_app_or_a_url(tmp_path) -> None:
     ui = ChatUI(
+        assets=tmp_path,
         scripts=[
             "ext/table.js",
             "/ext/kpi.js",
             "https://cdn.example.com/x.js",
             "//cdn.example.com/y.js",
-        ]
+        ],
     )
     agent = Agent(name="bot", model=ScriptedProvider([]))
     page = TestClient(_app(agent, ui=ui), root_path="/lovia").get("/").text
-    assert _module_scripts(page) == [
-        "/lovia/ext/table.js",
+    assert _scripts(page) == [
+        "/lovia/ui/ext/table.js",
         "/lovia/ext/kpi.js",
         "https://cdn.example.com/x.js",
         "//cdn.example.com/y.js",
     ]
+    # Imported by main.js, not by tags of their own after it.
+    assert "ext/table.js" not in page.split("js/main.js", 1)[1]
 
 
-def test_scripts_at_the_root_and_as_a_bare_string() -> None:
+def test_scripts_at_the_root_and_as_a_bare_string(tmp_path) -> None:
     agent = Agent(name="bot", model=ScriptedProvider([]))
-    page = TestClient(_app(agent, ui=ChatUI(scripts="ext/table.js"))).get("/").text
-    assert _module_scripts(page) == ["/ext/table.js"]
-    plain = TestClient(_app(agent)).get("/").text
-    assert _module_scripts(plain) == []
+    ui = ChatUI(assets=tmp_path, scripts="ext/table.js")
+    page = TestClient(_app(agent, ui=ui)).get("/").text
+    assert _scripts(page) == ["/ui/ext/table.js"]
+    assert _scripts(TestClient(_app(agent)).get("/").text) == []
+
+
+def test_a_file_in_assets_needs_an_assets_directory() -> None:
+    with pytest.raises(UserError, match="names a file in assets"):
+        ChatUI(scripts=["ext/table.js"])
+    with pytest.raises(UserError, match="names a file in assets"):
+        ChatUI(logo="logo.svg")
+    # A path on the app, or a URL, needs none.
+    ChatUI(scripts=["/ext/table.js"], styles=["https://cdn.example.com/a.css"])

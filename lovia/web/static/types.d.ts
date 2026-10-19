@@ -74,11 +74,8 @@ declare var echarts: any;
 interface Window {
   /** Safari's prefixed AudioContext — probed as a fallback in settings.js. */
   webkitAudioContext?: typeof AudioContext;
-  /** The page's extension API: UI component renderers register here (components.js). */
-  lovia?: {
-    registerRenderer: typeof import('./js/components.js').registerRenderer;
-    getRenderer: typeof import('./js/components.js').getRenderer;
-  };
+  /** The page's public extension API, assembled in lovia.js. */
+  lovia?: typeof import('./js/lovia.js').lovia;
 }
 
 interface Error {

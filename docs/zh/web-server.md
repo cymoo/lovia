@@ -65,8 +65,10 @@ app = create_app(agent, lifespan=lifespan)
 | `empty_title` / `empty_description` | lovia 默认文案 | 空白聊天页的文案；说明可以是若干短句组成的列表 |
 | `empty_examples` | `()` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
 | `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
-| `templates` | `None` | 自定义模板所在的目录（见[定制页面](#定制页面)） |
-| `scripts` | `()` | 在应用自身脚本之后加载的 JS 模块，例如组件渲染器（见[UI 组件](#ui-组件)） |
+| `assets` | `None` | 你的 UI 目录：`index.html` 覆盖模板、样式表、图片、脚本（见[定制页面](#定制页面)） |
+| `scripts` | `()` | 页面启动前导入的 JS 模块，例如组件渲染器（见[扩展脚本](#扩展脚本)） |
+| `styles` | `()` | 在内置样式表之后加载的样式表 |
+| `logo` / `favicon` | `None` | 替换侧栏标题的图片 / 标签页图标 |
 | `messages` | `{}` | 按语言提供的界面文案：覆盖内置文案、新增语言、给自己模板里的元素用（见[文案与语言](#文案与语言)） |
 | `default_lang` | `None` | 用户还没在设置里选过语言时使用的语言；`None` 表示跟随浏览器 |
 
@@ -92,34 +94,61 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 
 ## 定制页面
 
-在内置页面的基础上扩展，靠的是下面几种公开接口，各管一件事：
+把自己的文件放进一个目录，用 `ChatUI(assets=...)` 指向它：
+
+```text
+ui/
+├── index.html    # 可选：继承内置页面，填写其中的 block
+├── theme.css
+├── logo.svg
+├── favicon.png
+└── acme.js
+```
+
+```python
+from lovia.web import ChatUI, create_app
+
+app = create_app(
+    agent,
+    title="Acme",
+    ui=ChatUI(
+        assets="ui",
+        styles=["theme.css"],
+        logo="logo.svg",
+        favicon="favicon.png",
+        scripts=["acme.js"],
+    ),
+)
+```
+
+lovia 把这个目录挂在 `<app>/ui/` 下。除模板（`*.html`）和以点开头的文件外，目录里的
+文件都是公开的；浏览器每次加载都会重新验证，所以改完文件刷新即可看到，不用重启服务。
+`scripts`、`styles`、`logo` 和 `favicon` 里的每一项可以是：
+
+- `assets` 里的文件：`"theme.css"`；
+- 应用上的路径：`"/brand/theme.css"`，用于你自己提供的文件；部署在
+  [路径前缀下](#部署在路径前缀下)时依然有效；
+- URL：`"https://cdn.example.com/theme.css"`。
+
+除了这些文件，在内置页面的基础上扩展还靠下面几种公开接口，各管一件事：
 
 | 接口 | 用途 |
 | --- | --- |
-| [模板 block](#模板-block) | 在固定位置放入自己的内容：logo、链接、输入框旁的控件 |
+| [模板 block](#模板-block) | 在固定位置放入自己的内容：链接、输入框旁的控件、公告 |
 | [设计变量](#样式) | 颜色、字体、圆角、间距 |
 | [`data-part` 属性](#样式) | 在自己的 CSS 里定位某个区域：隐藏它，或改它的样式 |
 | [`data-i18n` key](#文案与语言) | 文案与语言 |
-| `api.js` 和 `window.lovia.registerRenderer` / `getRenderer` | 调用 API；[UI 组件](#ui-组件) |
+| [`window.lovia`](#扩展脚本) 和 `api.js` | 你的脚本；调用 API |
 
 其余一切——CSS 类名、元素 id、JavaScript 模块——都属于内部实现，可能随版本变化。
 
 ### 模板 block
 
-`ChatUI(templates="ui")` 指向一个存放自定义 Jinja 模板的目录，其中的 `index.html` 会替换
-内置页面。继承内置页面，只填写需要的 block 即可：
+`assets` 里的 `index.html` 会替换内置页面。继承内置页面，只填写需要的 block 即可：
 
 ```html+jinja
 {# ui/index.html #}
 {% extends "lovia/index.html" %}
-
-{% block head %}
-<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
-{% endblock %}
-
-{% block sidebar_header %}
-<img class="acme-logo" src="{{ url_for('brand', path='logo.svg').path }}" alt="Acme">
-{% endblock %}
 
 {% block sidebar_nav %}
 <a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
@@ -137,8 +166,8 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 
 | Block | 渲染位置 |
 | --- | --- |
-| `head` | `<head>` 末尾：样式表、meta 标签 |
-| `sidebar_header` | 侧栏顶部；它包住了标题，填写后会替换标题（例如换成 logo） |
+| `head` | `<head>` 末尾：meta 标签、预加载 |
+| `sidebar_header` | 侧栏顶部；它包住了标题（或 `logo`），填写后两者都会被替换，比如放一个 logo 再配上名字 |
 | `sidebar_nav` | 侧栏导航末尾、"设置"下方：你自己的链接 |
 | `sidebar_footer` | 侧栏底部：用户菜单、退出登录链接 |
 | `topbar_actions` | 顶栏按钮组的最左侧 |
@@ -147,17 +176,8 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 | `body_end` | 应用脚本之后：你自己的脚本 |
 
 示例里的链接借用了内置的 `sidebar-nav-item` 样式。类名属于内部实现，如果不想跟着版本
-调整，就换成自己的类名。
-
-自己的静态文件可以挂载到应用上提供，并用 `url_for(...).path` 引用，这样部署在
-[路径前缀下](#部署在路径前缀下)时链接仍然有效：
-
-```python
-from fastapi.staticfiles import StaticFiles
-
-app = create_app(agent, ui=ChatUI(templates="ui"))
-app.mount("/brand", StaticFiles(directory="brand"), name="brand")
-```
+调整，就换成自己的类名。在模板里引用 `assets` 中的其他文件，用
+`{{ url_for('ui-assets', path='banner.png').path }}`，它会带上路径前缀。
 
 ### 样式
 
@@ -168,7 +188,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 直接写在 `:root` 上的变量对两个主题都生效：
 
 ```css
-/* brand/theme.css */
+/* ui/theme.css */
 [data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
 [data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
 :root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
@@ -229,6 +249,30 @@ ui = ChatUI(
 - `default_lang` 在用户于设置里选择语言之前生效，选"自动"即回到它。想让用户固定使用一种
   语言，就设置它并隐藏语言选项：`[data-part="language"] { display: none; }`。
 
+### 扩展脚本
+
+`ChatUI(scripts=[...])` 列出的 ES 模块会在页面**启动之前**导入，所以它们注册的内容（比如一个
+[组件渲染器](#ui-组件)）在首次渲染时就已就位。脚本通过 `window.lovia` 和页面打交道，这是
+页面唯一公开的脚本接口；其余模块都属于内部实现。
+
+| `window.lovia` | 说明 |
+| --- | --- |
+| `version` | 提供页面的 lovia 版本，用于特性检测 |
+| `ready` | 应用启动完成、对话列表加载后兑现的 promise（用户未登录时一直挂起） |
+| `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
+
+```js
+// ui/acme.js
+window.lovia.ready.then(() => {
+  console.info(`Acme extensions on lovia ${window.lovia.version}`);
+});
+```
+
+不要在脚本顶层 `await window.lovia.ready`：页面要等你的脚本加载完才启动，两边会互相等待，
+直到下面说的 5 秒上限。加载失败的脚本会弹出错误提示，页面不带它照常启动。5 秒后仍在加载的
+脚本不再阻塞启动，它会继续加载，加载完再注册。脚本是你自己的代码，拥有页面的全部权限，所以
+第三方代码请放进 `assets` 自托管，不要直接引用别人的 CDN。
+
 ## UI 组件
 
 工具结果可以渲染成 UI（可排序的表格、指标卡片等），而不只是文本。工具返回
@@ -259,7 +303,7 @@ def top_products(n: int = 10) -> str:
 `ChatUI(scripts=[...])` 加载的 JS 模块：
 
 ```js
-// ext/kpis.js
+// ui/kpis.js
 window.lovia.registerRenderer('kpis', {
   render(el, props, ctx) {
     for (const item of props.items) {
@@ -274,14 +318,10 @@ window.lovia.registerRenderer('kpis', {
 ```
 
 ```python
-from fastapi.staticfiles import StaticFiles
-
-app = create_app(agent, ui=ChatUI(scripts=["ext/kpis.js"]))
-app.mount("/ext", StaticFiles(directory="ext"))
+app = create_app(agent, ui=ChatUI(assets="ui", scripts=["kpis.js"]))
 ```
 
-相对路径的脚本 URL 会跟随[路径前缀](#部署在路径前缀下)，绝对 URL 原样使用。渲染器收到三个
-参数：要绘制的元素、props 和一个上下文：
+渲染器收到三个参数：要绘制的元素、props 和一个上下文：
 
 | `ctx` 字段 | 说明 |
 | --- | --- |

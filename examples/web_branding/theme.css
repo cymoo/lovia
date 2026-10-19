@@ -1,0 +1,84 @@
+/* Acme's look, on top of lovia's design tokens. The bundled stylesheet sits in
+   the `lovia` cascade layer, so every plain rule here wins over it. */
+
+/* Brand color, per theme: a token set on :root would apply to both. */
+[data-theme="light"] {
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-text: #3730a3;
+}
+[data-theme="dark"] {
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-soft: #23214a;
+  --accent-text: #c7d2fe;
+}
+:root {
+  --radius: 10px;
+  --radius-lg: 14px;
+}
+
+/* This deployment has no use for exporting chats. A tool's cards hide the
+   same way: [data-part="tool"][data-tool="order_status"] { display: none; } */
+[data-part="export"] {
+  display: none;
+}
+
+/* The elements index.html adds. */
+.acme-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-2);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.acme-nav-link:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.acme-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+.acme-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+/* The top bar is tight on phones: keep just the dot. */
+@media (max-width: 720px) {
+  .acme-status span:not(.acme-status-dot) {
+    display: none;
+  }
+}
+
+.acme-notice {
+  margin-top: 18px;
+  color: var(--accent-text);
+  font-size: 13px;
+}
+
+.acme-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+}

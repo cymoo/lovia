@@ -80,6 +80,7 @@ const MESSAGES = {
     // ---- toasts / errors
     'toast.exported': '对话已导出',
     'toast.exportFailed': '导出失败',
+    'toast.extensionFailed': '扩展 {name} 加载失败',
     'toast.renameFailed': '重命名失败',
     'toast.pinFailed': '置顶状态更新失败',
     'toast.deleteFailed': '删除失败',
@@ -518,6 +519,7 @@ const EN = {
   'topbar.turn': 'Turn {n}',
   'toast.exported': 'Chat exported',
   'toast.exportFailed': 'Export failed',
+  'toast.extensionFailed': 'Extension {name} failed to load',
   'toast.renameFailed': 'Couldn’t rename chat',
   'toast.pinFailed': 'Couldn’t update pin',
   'toast.deleteFailed': 'Couldn’t delete chat',

@@ -1,0 +1,33 @@
+{% extends "lovia/index.html" %}
+{#
+  Acme's page: the bundled one, with four blocks filled. Rendered as a template
+  by examples/32_web_branding.py (ChatUI(assets=...)), never served as a file.
+  Text marked data-i18n is reworded per language from ChatUI(messages=...);
+  the English here is what shows when a language has no string for the key.
+#}
+
+{% block sidebar_nav %}
+<a class="acme-nav-link" href="https://example.com/help" target="_blank" rel="noopener">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+  <span data-i18n="acme.help">Help center</span>
+</a>
+{% endblock %}
+
+{% block topbar_actions %}
+<a class="acme-status" href="https://status.example.com" target="_blank" rel="noopener">
+  <span class="acme-status-dot" aria-hidden="true"></span>
+  <span data-i18n="acme.status">All systems normal</span>
+</a>
+{% endblock %}
+
+{% block welcome %}
+{{ super() }}
+<p class="acme-notice" data-i18n="acme.notice">Order data in this demo is made up.</p>
+{% endblock %}
+
+{% block sidebar_footer %}
+<div class="acme-user">
+  <img src="{{ url_for('ui-assets', path='favicon.svg').path }}" alt="" width="24" height="24">
+  <span data-i18n="acme.signedIn">Signed in as Demo User</span>
+</div>
+{% endblock %}

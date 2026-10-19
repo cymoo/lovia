@@ -147,14 +147,12 @@ async function loadData(basePath, sessionId, ref) {
 
 /**
  * Wire the registry to the page: render context, message sending, notice
- * labels. Also publishes `window.lovia.registerRenderer` / `getRenderer`.
+ * labels. (`registerRenderer` / `getRenderer` reach extensions through
+ * `window.lovia`, assembled in lovia.js.)
  * @param {Partial<typeof host>} opts
  */
 export function configureComponents(opts) {
   Object.assign(host, opts);
-  if (typeof window !== 'undefined') {
-    window.lovia = Object.assign(window.lovia || {}, { registerRenderer, getRenderer });
-  }
 }
 
 /**

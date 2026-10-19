@@ -8,11 +8,11 @@ import mimetypes
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Mapping
 
 try:
-    from fastapi import Depends, FastAPI
+    from fastapi import Depends, FastAPI, HTTPException
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from ._deps import raise_missing_web_extra
@@ -36,7 +36,7 @@ from .store import ChatStore
 
 if TYPE_CHECKING:
     from .config import ConfigRuntime
-from .ui import ChatUI, build_ui_router
+from .ui import ASSETS_PATH, ChatUI, build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -82,6 +82,25 @@ class _ImmutableStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         if getattr(response, "status_code", None) == 200:
             response.headers["Cache-Control"] = _IMMUTABLE_CACHE
+        return response
+
+
+class _AssetFiles(StaticFiles):
+    """A deployer's ``ChatUI(assets=...)`` directory.
+
+    Revalidated on every load (``no-cache`` plus the ETag ``StaticFiles``
+    sends), so an edited file shows on the next reload without a restart.
+    Templates (``*.html``) are Jinja's to render, and dotfiles are nobody's
+    to download: both 404.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        parts = PurePosixPath(path).parts
+        if path.endswith(".html") or any(p.startswith(".") for p in parts):
+            raise HTTPException(status_code=404)
+        response = await super().get_response(path, scope)
+        if getattr(response, "status_code", None) in (200, 304):
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
 
@@ -363,6 +382,12 @@ def create_app(
             _ImmutableStaticFiles(directory=str(_STATIC), check_dir=False),
             name="static",
         )
+        if chat_ui.assets is not None:
+            app.mount(
+                ASSETS_PATH,
+                _AssetFiles(directory=str(Path(chat_ui.assets).expanduser())),
+                name="ui-assets",
+            )
 
     # The app's served agents, store, and live runs, for introspection.
     app.state.deps = deps

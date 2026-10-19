@@ -85,6 +85,7 @@ OpenAI-compatible 服务
 | `29_data_analysis.py` | 基于 SQLite 的数据分析 agent + 图表报告 |
 | `30_support_bot.py` | 综合练习：交互式终端客服 bot |
 | `31_web_components.py` | 在聊天 UI 中把工具结果渲染成表格，并用自定义渲染器替换内置的表格渲染器（`ui_result` + `ChatUI(scripts=...)`） |
+| `32_web_branding.py` | 给聊天 UI 换上自己的品牌：logo、主题变量、模板 block、隐藏区域、改写文案并新增一门语言（`ChatUI(assets=...)`；文件在 `web_branding/`） |
 
 ## 子目录
 

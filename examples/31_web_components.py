@@ -8,10 +8,11 @@ Run::
 
 The ``top_products`` tool returns ``ui_result("table", ...)`` — a UI envelope
 — instead of text. ``table`` is a built-in kind, so that alone draws a
-sortable table; ``examples/web_components/table.js``, loaded through
-``ChatUI(scripts=[...])``, *replaces* the built-in renderer with one that adds
-an "Ask" button to each row (it posts a follow-up message via ``ctx.send``).
-The model still sees the rows as the tool output, so it can talk about them.
+sortable table; ``examples/web_components/table.js``, served from
+``ChatUI(assets=...)`` and loaded through ``ChatUI(scripts=[...])``,
+*replaces* the built-in renderer with one that adds an "Ask" button to each
+row (it posts a follow-up message via ``ctx.send``). The model still sees the
+rows as the tool output, so it can talk about them.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ import random
 from pathlib import Path
 
 from dotenv import load_dotenv
-from starlette.staticfiles import StaticFiles
 
 from lovia import Agent, enable_logging, model_from_env, tool
 from lovia.web import ChatUI, create_app, serve, ui_result
@@ -72,9 +72,8 @@ def main() -> None:
         model=MODEL,
         tools=[top_products],
     )
-    app = create_app(agent, ui=ChatUI(scripts=["ext/table.js"]))
-    app.mount("/ext", StaticFiles(directory=Path(__file__).parent / "web_components"))
-    serve(app, host="127.0.0.1", port=8000)
+    ui = ChatUI(assets=Path(__file__).parent / "web_components", scripts=["table.js"])
+    serve(create_app(agent, ui=ui), host="127.0.0.1", port=8000)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@
 
 /**
  * @typedef {object} PageConfig
+ * @property {string} [version] The lovia package version.
+ * @property {string[]} [scripts] Extension modules to import before starting.
  * @property {string} [base_path] The mount prefix every API call carries.
  * @property {string} [static_base] The versioned prefix of the bundled assets.
  * @property {string | null} [login_url] Where a signed-out user logs in.

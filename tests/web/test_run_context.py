@@ -3,6 +3,7 @@ identity reach a run's tools as RunContext.deps — on every way a run starts.""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -345,3 +346,85 @@ async def test_a_refused_subagent_task_leaves_no_task_chat() -> None:
     with pytest.raises(HTTPException):
         await subagent_runner(deps)(spec)
     assert await deps.store.list_children("parent") == []
+
+
+async def _until(cond, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "condition not met"
+        await asyncio.sleep(0.01)
+
+
+async def test_a_start_holds_its_place_while_the_hook_decides(tmp_path) -> None:
+    """From the first check on, a starting run holds its chat and a place under
+    the run cap, through the hook: a second request for that chat attaches to
+    it rather than racing it, one for another chat is turned away before it
+    opens a workspace, and the refusal leaves no chat behind."""
+    from lovia.workspace import Workspace
+
+    gate = asyncio.Event()
+
+    async def slow_refusal(trigger: RunTrigger) -> None:
+        if trigger.client.get("kb") == "secret":
+            await gate.wait()
+            raise HTTPException(403, "not your knowledge base")
+
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.local(str(tmp_path)),
+    )
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store, run_context=slow_refusal, max_background_runs=1)
+    deps = app.state.deps
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "new", "context": {"kb": "secret"}}
+        refused = asyncio.create_task(ac.post("/api/chat/stream", json=body))
+        await _until(lambda: deps.supervisor.get("new") is not None)
+        pending = deps.supervisor.get("new")
+        same = asyncio.create_task(
+            ac.post("/api/chat/stream", json={"message": "b", "session_id": "new"})
+        )
+        await _until(lambda: bool(pending.hub._subs))  # attached, not started
+        other = await ac.post(
+            "/api/chat/stream", json={"message": "c", "session_id": "other"}
+        )
+        assert other.status_code == 429
+        assert deps.workspaces.get("other") is None
+        gate.set()
+        assert (await refused).status_code == 403
+        await asyncio.wait_for(same, 5)  # its stream ends with the refused start
+        assert await store.get("new") is None
+        assert deps.workspaces.get("new") is None
+        # The chat is free again, and an accepted turn makes it for good.
+        await ac.post("/api/chat/stream", json={"message": "d", "session_id": "new"})
+    assert (await store.get("new")).title == "d"
+
+
+async def test_a_failed_setup_closes_only_the_workspace_it_opened(
+    tmp_path, monkeypatch
+) -> None:
+    from lovia.workspace import Workspace
+
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([text("ok")]),
+        workspace=Workspace.local(str(tmp_path)),
+    )
+    app = _app(agent)
+    deps = app.state.deps
+
+    async def broken(*_a, **_k) -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(deps.store, "set_active_run_id", broken)
+    start = {"agent": agent, "input": "hi", "is_new": False, "title_message": None}
+    with pytest.raises(RuntimeError):
+        await deps.supervisor.start(session_id="fresh", **start)
+    assert deps.workspaces.get("fresh") is None
+    # A chat whose workspace an earlier run opened keeps it (and its processes).
+    await deps.workspaces.bind("used", agent)
+    with pytest.raises(RuntimeError):
+        await deps.supervisor.start(session_id="used", **start)
+    assert deps.workspaces.get("used") is not None
+    await deps.workspaces.aclose()

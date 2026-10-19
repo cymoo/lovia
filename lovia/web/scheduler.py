@@ -238,13 +238,8 @@ class Scheduler:
             target = uuid.uuid4().hex
             is_new = True
 
+        title = provisional_title(sched.input) if is_new else None
         try:
-            title = provisional_title(sched.input) if is_new else None
-            await self.store.upsert(
-                target,
-                agent=agent_name,  # registry key — the identity pick() speaks
-                title=title,
-            )
             await self.deps.supervisor.start(
                 session_id=target,
                 agent=agent,
@@ -256,30 +251,27 @@ class Scheduler:
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
                 client=sched.context,
+                # The chat row, written only once the run is admitted: a
+                # deferred or refused fire leaves no empty chat behind.
+                on_admit=lambda: self.store.upsert(
+                    target,
+                    agent=agent_name,  # registry key — the identity pick() speaks
+                    title=title,
+                ),
             )
         except WebError as exc:
             if exc.code == "too_many_runs":
                 # At the concurrency cap: defer (leave next_fire due → retried).
-                # Drop the freshly-created session row so repeated 429s on a
-                # fresh-session schedule don't leak empty chats (each retry mints
-                # a new UUID). start() raises 429 before any state change, so the
-                # only side effect to undo is our own upsert above.
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
-                if is_new:
-                    await self.store.delete(target)
                 return None
             raise
         except Exception as exc:
             # The run_context hook refused this fire (or failed). A miss, like
             # an unserved agent: the schedule moves on, so a refusal that
             # persists can't hold up the schedules due after it.
-            if is_new:
-                await self.store.delete(target)
             await self._miss(sched, now, agent_name, f"run refused: {exc}")
             return None
         if is_new:
-            # After start() succeeded — a 429-deferred fire deletes its fresh
-            # session above, which must not have been announced.
             self.deps.emit(
                 "session_created",
                 SessionCreatedData(session_id=target, agent=agent_name, title=title),

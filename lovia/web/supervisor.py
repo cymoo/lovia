@@ -19,7 +19,7 @@ import contextvars
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -809,27 +809,17 @@ class RunSupervisor:
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
         request: Request | None = None,
+        on_admit: Callable[[], Awaitable[object]] | None = None,
     ) -> RunController:
+        """Register and set up a run for ``session_id``; the caller begins it
+        (``subscribe_live``), or ``autostart`` does.
+
+        ``on_admit`` runs once the ``run_context`` hook has accepted the run:
+        where a caller creates the chat the run goes into, so a refused run
+        never leaves one behind.
+        """
         self._check_slot(session_id)
         client = dict(client or {})
-        # The run_context hook first: its refusal must leave nothing behind.
-        context = await build_run_context(
-            self.deps.run_context,
-            RunTrigger(
-                session_id=session_id,
-                agent=agent,
-                source=source,
-                request=request,
-                client=client,
-            ),
-        )
-        # Every run of one web session shares that session's workspace session
-        # (lazily opened here), so background processes survive across runs —
-        # they die with the *chat* (deletion/shutdown), not with the turn.
-        agent = await self.deps.workspaces.bind(session_id, agent)
-        # Those awaits may have let a concurrent start for this session in.
-        self._check_slot(session_id)
-        self.last_client[session_id] = client
         # ``input`` seeds the transcript for immediate display and is what the
         # runner consumes. A plain string is the text-only path; a list[Message]
         # (one ``user([...parts])``) carries composer attachments as content
@@ -853,28 +843,56 @@ class RunSupervisor:
             source=source,
             mailbox=mailbox,
             client=client,
-            context=context,
         )
-        # Reserve the session slot BEFORE the checkpoint await: two concurrent
-        # starts (e.g. two tabs submitting at once) would otherwise both pass the
-        # caller's live-check and the second would silently orphan the first's
-        # running task. The loser now gets the 409 above and attaches instead.
+        # Reserve the session's slot, and its place under the run cap, BEFORE
+        # the first await: two concurrent starts (e.g. two tabs submitting at
+        # once) would otherwise both pass the checks above, and the second
+        # would silently orphan the first's running task — the loser gets the
+        # 409 and attaches instead. Nor can a check fail late, after the setup
+        # below opened something.
         self._controllers[session_id] = ctrl
+        workspaces = self.deps.workspaces
+        opened = False  # a workspace session this attempt opened
         try:
+            # The run_context hook first: a refusal leaves nothing behind.
+            ctrl.context = await build_run_context(
+                self.deps.run_context,
+                RunTrigger(
+                    session_id=session_id,
+                    agent=agent,
+                    source=source,
+                    request=request,
+                    client=client,
+                ),
+            )
+            if on_admit is not None:
+                await on_admit()
+            # Every run of one web session shares that session's workspace
+            # session (lazily opened here), so background processes survive
+            # across runs — they die with the *chat* (deletion/shutdown), not
+            # with the turn.
+            opened = workspaces.get(session_id) is None
+            ctrl.agent = await workspaces.bind(session_id, agent)
+            opened = opened and workspaces.get(session_id) is not None
             # The new run supersedes an interrupted one the chat still points
-            # at. Dropped only now, with the slot held: a refused start above
-            # leaves that run resumable.
+            # at. Dropped only now, after the hook: a refused start leaves
+            # that run resumable.
             await self._drop_interrupted(session_id)
             ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
         except BaseException:
             self._controllers.pop(session_id, None)
-            # A concurrent request may have attached during that await; close
+            # A concurrent request may have attached during those awaits; close
             # the hub so its SSE ends instead of waiting on a task that will
             # never start. (After a *successful* start there is no such hang:
             # the caller reaches subscribe_live with no awaits in between, and
             # autostart begins the task right below.)
             ctrl.hub.close()
+            if opened:
+                # Nothing else runs in it yet; one that was open already
+                # keeps its background processes.
+                await workspaces.close(session_id)
             raise
+        self.last_client[session_id] = client
         ctrl._first_ckpt = ckpt
         ctrl.run_id = ckpt.resolved_run_id if ckpt is not None else None
         if autostart:

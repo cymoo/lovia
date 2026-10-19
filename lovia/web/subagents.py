@@ -162,12 +162,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
-        await deps.store.upsert(
-            child_sid,
-            agent=agent_key,
-            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
-            parent_id=spec.parent_session_id,
-        )
+        title = f"[{spec.id}] {provisional_title(spec.prompt)}"
         try:
             ctrl = await deps.supervisor.start(
                 session_id=child_sid,
@@ -186,13 +181,19 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                     if spec.parent_session_id
                     else None
                 ),
+                # The task chat, written only once the run is admitted.
+                on_admit=lambda: deps.store.upsert(
+                    child_sid,
+                    agent=agent_key,
+                    title=title,
+                    parent_id=spec.parent_session_id,
+                ),
             )
         except Exception as exc:
-            # Refused (409/429, or by the run_context hook): no task runs, so
-            # the task chat goes. Closing its workspace is a no-op today (all
-            # three refuse before the binding) but keeps "delete session ⇒
-            # close its workspace" airtight if start()'s failure points move.
-            await deps.workspaces.close(child_sid)
+            # No task runs. A refusal (409/429, or the run_context hook's)
+            # wrote no task chat; a later setup failure may have — it is this
+            # attempt's own (a fresh id), so it goes. start() closed any
+            # workspace it opened.
             await deps.store.delete(child_sid)
             if isinstance(exc, WebError) and exc.code == "too_many_runs":
                 raise RuntimeError(

@@ -157,7 +157,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # rejecting it otherwise before the upsert avoids littering empty rows.
         if empty and deps.supervisor.get(sid) is None:
             raise WebError(422, "invalid_request", "empty message")
-        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
+        name = deps.name_of(agent)
+        if not is_new:
+            await upsert_session(sid, name, req.message, is_new=False)
 
         def attach(live: RunController) -> EventSourceResponse:
             # A run is already live for this session: a new message injects
@@ -176,7 +178,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             raise WebError(422, "invalid_request", "empty message")
 
         # No live run → start a fresh supervised run (which supersedes any
-        # interrupted one the chat still points at).
+        # interrupted one the chat still points at). A new chat is created
+        # only once the run is admitted: a refused one leaves nothing behind.
         try:
             ctrl = await deps.supervisor.start(
                 session_id=sid,
@@ -186,20 +189,21 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 title_message=req.message,
                 client=req.context,
                 request=request,
+                on_admit=(
+                    (lambda: upsert_session(sid, name, req.message, is_new=True))
+                    if is_new
+                    else None
+                ),
             )
-        except Exception as exc:
+        except WebError as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
             # winner owns the run, so deliver this message by injecting into it.
             live = deps.supervisor.get(sid)
-            if isinstance(exc, WebError) and exc.code == "run_active" and live:
+            if exc.code == "run_active" and live is not None:
                 return attach(live)
-            # Refused (at the run cap, or by the run_context hook): a new chat
-            # was never announced, so it goes without a trace.
-            if is_new and live is None:
-                await store.delete(sid)
             raise
         if is_new:
-            announce_session(sid, deps.name_of(agent), req.message)
+            announce_session(sid, name, req.message)
         return EventSourceResponse(
             forward(ctrl.subscribe_live(), sid=sid, emit_session=True)
         )

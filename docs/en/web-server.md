@@ -725,8 +725,10 @@ window.lovia.provideContext('kb', () => kb.value);
 
 `run_context` is called once per run — sync or async — and what it returns is
 the run's `ctx.deps`, shared by every leg of an auto-continued run. Raising an
-`HTTPException` refuses the run (for a chat message, the client gets the
-error). `trigger` carries:
+`HTTPException` refuses the run, and a refused run leaves nothing behind: a
+chat message gets the error, with no new chat created and an interrupted run
+still resumable; a schedule's fire is recorded as a failed run, and the
+schedule moves on to its next time. `trigger` carries:
 
 | Field | Description |
 | --- | --- |

@@ -47,14 +47,19 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     async def upsert_session(
         sid: str, agent_name: str, message: str, *, is_new: bool
     ) -> None:
-        """Insert/touch the session's metadata row (announcing a new chat)."""
+        """Insert/touch the session's metadata row."""
         title = provisional_title(message) if is_new else None
         await store.upsert(sid, agent=agent_name, title=title)
-        if is_new:
-            deps.emit(
-                "session_created",
-                SessionCreatedData(session_id=sid, agent=agent_name, title=title),
-            )
+
+    def announce_session(sid: str, agent_name: str, message: str) -> None:
+        """Tell the page a new chat exists — once its run has started, so a
+        refused one never shows up."""
+        deps.emit(
+            "session_created",
+            SessionCreatedData(
+                session_id=sid, agent=agent_name, title=provisional_title(message)
+            ),
+        )
 
     def resolve_agent(meta: ChatMeta | None, requested: str | None) -> Agent[Any]:
         """The agent that runs this turn, given the session's metadata (if any).
@@ -93,11 +98,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
             raise WebError(422, "invalid_request", "empty message")
-        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
-        # Same chat-scoped workspace binding the supervised path applies in
-        # RunSupervisor.start(): background processes belong to the chat, no
-        # matter which endpoint ran the turn.
-        agent = await deps.workspaces.bind(sid, agent)
+        client = req.context or {}
+        # Before any state changes, as in RunSupervisor.start(): a refusal
+        # leaves nothing behind.
         context = await build_run_context(
             deps.run_context,
             RunTrigger(
@@ -105,9 +108,18 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 agent=agent,
                 source="user",
                 request=request,
-                client=req.context or {},
+                client=client,
             ),
         )
+        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
+        if is_new:
+            announce_session(sid, deps.name_of(agent), req.message)
+        # Same chat-scoped workspace binding the supervised path applies in
+        # RunSupervisor.start(): background processes belong to the chat, no
+        # matter which endpoint ran the turn.
+        agent = await deps.workspaces.bind(sid, agent)
+        # Subagent tasks this turn spawns work in its context.
+        deps.supervisor.last_client[sid] = dict(client)
         UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
         RUN_CLIENT.set(req.context or None)
         result = await Runner.run(
@@ -163,13 +175,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # The live run we would have attached to ended mid-request.
             raise WebError(422, "invalid_request", "empty message")
 
-        # No live run → start a fresh supervised run. Delete any stranded
-        # checkpoint first so a later reconnect won't pick up a stale snapshot.
-        if store.checkpointer is not None:
-            old_run_id = await store.get_active_run_id(sid)
-            if old_run_id:
-                await store.checkpointer.delete(old_run_id)
-
+        # No live run → start a fresh supervised run (which supersedes any
+        # interrupted one the chat still points at).
         try:
             ctrl = await deps.supervisor.start(
                 session_id=sid,
@@ -180,13 +187,19 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 client=req.context,
                 request=request,
             )
-        except WebError as exc:
+        except Exception as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
             # winner owns the run, so deliver this message by injecting into it.
             live = deps.supervisor.get(sid)
-            if exc.code == "run_active" and live is not None:
+            if isinstance(exc, WebError) and exc.code == "run_active" and live:
                 return attach(live)
+            # Refused (at the run cap, or by the run_context hook): a new chat
+            # was never announced, so it goes without a trace.
+            if is_new and live is None:
+                await store.delete(sid)
             raise
+        if is_new:
+            announce_session(sid, deps.name_of(agent), req.message)
         return EventSourceResponse(
             forward(ctrl.subscribe_live(), sid=sid, emit_session=True)
         )

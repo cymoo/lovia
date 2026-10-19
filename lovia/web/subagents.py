@@ -187,13 +187,14 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                     else None
                 ),
             )
-        except WebError as exc:
-            # No-op for today's 409/429 (both raise before the workspace
-            # binding), but keeps "delete session ⇒ close its workspace"
-            # airtight if start()'s failure points ever move.
+        except Exception as exc:
+            # Refused (409/429, or by the run_context hook): no task runs, so
+            # the task chat goes. Closing its workspace is a no-op today (all
+            # three refuse before the binding) but keeps "delete session ⇒
+            # close its workspace" airtight if start()'s failure points move.
             await deps.workspaces.close(child_sid)
             await deps.store.delete(child_sid)
-            if exc.code == "too_many_runs":
+            if isinstance(exc, WebError) and exc.code == "too_many_runs":
                 raise RuntimeError(
                     "the server is at its concurrent-run limit; "
                     "wait for other work to finish and spawn again"

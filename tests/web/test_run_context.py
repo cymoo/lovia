@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import Request  # noqa: E402
+from fastapi import HTTPException, Request  # noqa: E402
 
 from lovia import Agent, RunContext, tool  # noqa: E402
 from lovia.web import RunTrigger, create_app, subagent_deliver  # noqa: E402
@@ -246,3 +246,102 @@ async def test_a_report_run_continues_in_its_chats_context() -> None:
     assert seen[-1].source == "subagent-report:t1"
     assert seen[-1].client == {"kb": "docs"}
     assert seen[-1].request is None
+
+
+def _refusing(trigger: RunTrigger) -> dict:
+    """Refuse any run whose page picked the "secret" knowledge base."""
+    if trigger.client.get("kb") == "secret":
+        raise HTTPException(403, "not your knowledge base")
+    return _build(trigger)
+
+
+async def test_a_refused_turn_leaves_the_interrupted_run_resumable() -> None:
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+    from lovia.transcript import InputEntry
+
+    store = ChatStore.in_memory()
+    sid = "s1"
+    await store.upsert(sid, agent="bot")
+    await store.checkpointer.append(
+        "run-1",
+        [InputEntry(role="user", content="q")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id(sid, "run-1", context={"kb": "docs"})
+    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    async with _client(app) as ac:
+        body = {"message": "hi", "session_id": sid, "context": {"kb": "secret"}}
+        res = await ac.post("/api/chat/stream", json=body)
+        assert res.status_code == 403
+        assert await store.get_active_run_id(sid) == "run-1"
+        assert await store.checkpointer.load("run-1") is not None
+        # A turn that does start supersedes it.
+        body["context"] = {"kb": "docs"}
+        await ac.post("/api/chat/stream", json=body)
+    assert await store.checkpointer.load("run-1") is None
+
+
+async def test_a_refused_new_chat_leaves_no_trace(monkeypatch) -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    created: list[str] = []
+    monkeypatch.setattr(app.state.deps, "emit", lambda event, _: created.append(event))
+    async with _client(app) as ac:
+        for path in ("/api/chat/stream", "/api/chat"):
+            body = {"message": "hi", "session_id": "new", "context": {"kb": "secret"}}
+            assert (await ac.post(path, json=body)).status_code == 403
+    assert await store.get("new") is None
+    assert "session_created" not in created
+
+
+async def test_a_blocking_turn_hands_its_context_to_the_tasks_it_spawns() -> None:
+    app = _app(_agent([text("ok")]))
+    async with _client(app) as ac:
+        res = await ac.post("/api/chat", json={"message": "hi", "context": {"kb": "b"}})
+    sid = res.json()["session_id"]
+    assert app.state.deps.supervisor.last_client[sid] == {"kb": "b"}
+
+
+async def test_a_refused_schedule_is_a_miss_and_the_next_one_still_fires() -> None:
+    store = ChatStore.in_memory()
+    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    deps = app.state.deps
+    now = time.time()
+    for sid, kb, due in (("bad", "secret", now - 2), ("good", "docs", now - 1)):
+        await store.add_schedule(
+            ScheduleRow(
+                id=sid, agent="bot", input="digest", session_id=None,
+                trigger_kind="every", trigger_expr="3600", next_fire=due,
+                active=True, last_session_id=None, created_at=now,
+                updated_at=now, context={"kb": kb},
+            )
+        )  # fmt: skip
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    bad, good = await store.get_schedule("bad"), await store.get_schedule("good")
+    assert bad.next_fire > now and bad.last_session_id is None
+    assert good.last_session_id is not None
+    [miss] = await store.list_runs(source="schedule:bad")
+    assert miss.status == "failed" and "not your knowledge base" in miss.error
+    # No empty chat left behind by the refused fire.
+    assert [s.id for s in await store.list(limit=10)] == [good.last_session_id]
+
+
+async def test_a_refused_subagent_task_leaves_no_task_chat() -> None:
+    from lovia.plugins.subagents import ChildSpec
+    from lovia.reliability import CancelToken
+    from lovia.steering import Mailbox
+    from lovia.web.subagents import subagent_runner
+
+    app = _app(_agent([text("ok")]), run_context=_refusing)
+    deps = app.state.deps
+    await deps.store.upsert("parent", agent="bot")
+    deps.supervisor.last_client["parent"] = {"kb": "secret"}
+    spec = ChildSpec(
+        id="t1", agent=_agent([text("ok")]), prompt="dig", token=CancelToken(),
+        parent_session_id="parent", max_turns=5, budget=None, mailbox=Mailbox(),
+    )  # fmt: skip
+    with pytest.raises(HTTPException):
+        await subagent_runner(deps)(spec)
+    assert await deps.store.list_children("parent") == []

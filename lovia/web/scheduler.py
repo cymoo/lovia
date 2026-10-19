@@ -212,27 +212,7 @@ class Scheduler:
                 if sched.agent
                 else "no agent specified and no default is available"
             )
-            log.warning("schedule %s: %s; advancing", sched.id, detail)
-            await self._advance(sched, now, last_session_id=sched.last_session_id)
-            # No run ever started, so the supervisor writes no record — file a
-            # zero-length failed one so the schedule's history shows the miss.
-            # Best-effort bookkeeping: never let it break the fire loop.
-            try:
-                await self.store.start_run(
-                    RunRow(
-                        id=uuid.uuid4().hex,
-                        session_id=None,
-                        agent=agent_name,
-                        source=f"schedule:{sched.id}",
-                        status="failed",
-                        error=detail,
-                        started_at=now,
-                        finished_at=now,
-                        usage=None,
-                    )
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                log.warning("schedule %s: run record write failed: %s", sched.id, exc)
+            await self._miss(sched, now, agent_name, detail)
             return None
         agent = self.deps.agents[agent_name]
 
@@ -289,6 +269,14 @@ class Scheduler:
                     await self.store.delete(target)
                 return None
             raise
+        except Exception as exc:
+            # The run_context hook refused this fire (or failed). A miss, like
+            # an unserved agent: the schedule moves on, so a refusal that
+            # persists can't hold up the schedules due after it.
+            if is_new:
+                await self.store.delete(target)
+            await self._miss(sched, now, agent_name, f"run refused: {exc}")
+            return None
         if is_new:
             # After start() succeeded — a 429-deferred fire deletes its fresh
             # session above, which must not have been announced.
@@ -298,6 +286,32 @@ class Scheduler:
             )
         await self._advance(sched, now, last_session_id=target)
         return target
+
+    async def _miss(
+        self, sched: ScheduleRow, now: float, agent_name: str | None, detail: str
+    ) -> None:
+        """A fire that started no run: advance past it and record why."""
+        log.warning("schedule %s: %s; advancing", sched.id, detail)
+        await self._advance(sched, now, last_session_id=sched.last_session_id)
+        # No run ever started, so the supervisor writes no record — file a
+        # zero-length failed one so the schedule's history shows the miss.
+        # Best-effort bookkeeping: never let it break the fire loop.
+        try:
+            await self.store.start_run(
+                RunRow(
+                    id=uuid.uuid4().hex,
+                    session_id=None,
+                    agent=agent_name,
+                    source=f"schedule:{sched.id}",
+                    status="failed",
+                    error=detail,
+                    started_at=now,
+                    finished_at=now,
+                    usage=None,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("schedule %s: run record write failed: %s", sched.id, exc)
 
     async def _advance(
         self, sched: ScheduleRow, now: float, *, last_session_id: str | None

@@ -788,6 +788,14 @@ class RunSupervisor:
             delete_on_success=True,
         )
 
+    async def _drop_interrupted(self, sid: str) -> None:
+        """Delete the checkpoint of an interrupted run ``sid`` still points at,
+        so a later reconnect can't resume it."""
+        store = self.deps.store
+        if store.checkpointer is not None:
+            if old := await store.get_active_run_id(sid):
+                await store.checkpointer.delete(old)
+
     async def start(
         self,
         *,
@@ -803,11 +811,8 @@ class RunSupervisor:
         request: Request | None = None,
     ) -> RunController:
         self._check_slot(session_id)
-        # Every run of one web session shares that session's workspace session
-        # (lazily opened here), so background processes survive across runs —
-        # they die with the *chat* (deletion/shutdown), not with the turn.
-        agent = await self.deps.workspaces.bind(session_id, agent)
         client = dict(client or {})
+        # The run_context hook first: its refusal must leave nothing behind.
         context = await build_run_context(
             self.deps.run_context,
             RunTrigger(
@@ -818,6 +823,10 @@ class RunSupervisor:
                 client=client,
             ),
         )
+        # Every run of one web session shares that session's workspace session
+        # (lazily opened here), so background processes survive across runs —
+        # they die with the *chat* (deletion/shutdown), not with the turn.
+        agent = await self.deps.workspaces.bind(session_id, agent)
         # Those awaits may have let a concurrent start for this session in.
         self._check_slot(session_id)
         self.last_client[session_id] = client
@@ -852,6 +861,10 @@ class RunSupervisor:
         # running task. The loser now gets the 409 above and attaches instead.
         self._controllers[session_id] = ctrl
         try:
+            # The new run supersedes an interrupted one the chat still points
+            # at. Dropped only now, with the slot held: a refused start above
+            # leaves that run resumable.
+            await self._drop_interrupted(session_id)
             ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
         except BaseException:
             self._controllers.pop(session_id, None)
@@ -878,10 +891,6 @@ class RunSupervisor:
         request: Request | None = None,
     ) -> RunController:
         self._check_slot(session_id, cap=False)
-        # Same chat-scoped workspace binding as start(): the resumed leg's
-        # background processes are gone (they never survive a restart), but
-        # its shell/file tools must land on the chat's one live session.
-        agent = await self.deps.workspaces.bind(session_id, agent)
         # The run's own client context (a checkpoint keeps none), with the
         # reconnecting request for identity.
         client = await self.deps.store.get_active_context(session_id) or {}
@@ -896,6 +905,10 @@ class RunSupervisor:
                 resumed=True,
             ),
         )
+        # Same chat-scoped workspace binding as start(): the resumed leg's
+        # background processes are gone (they never survive a restart), but
+        # its shell/file tools must land on the chat's one live session.
+        agent = await self.deps.workspaces.bind(session_id, agent)
         self._check_slot(session_id, cap=False)
         self.last_client[session_id] = client
         ckpt = CheckpointOptions(

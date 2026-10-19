@@ -31,6 +31,7 @@ import {
   toolPath,
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
+import { collectContext } from './lovia.js';
 import {
   configureComponents,
   rerenderComponents,
@@ -2617,6 +2618,7 @@ export async function runStream(message, attachments = null) {
         agent: store.agent,
         session_id: store.sessionId,
         attachments: attachments?.length ? attachments : undefined,
+        context: collectContext(),
       },
       { signal: _streamAbortController.signal }
     );

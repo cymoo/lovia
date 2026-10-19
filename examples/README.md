@@ -88,6 +88,7 @@ Two examples run fully offline, no key needed: `10_custom_provider.py` and
 | `31_web_components.py` | a tool result rendered as a table in the chat UI, with a custom renderer replacing the built-in one (`ui_result` + `ChatUI(scripts=...)`) |
 | `32_web_branding.py` | brand the chat UI: logo, theme tokens, template blocks, hidden parts, reworded strings and an added language (`ChatUI(assets=...)`; files in `web_branding/`) |
 | `33_web_extensions.py` | extend the chat UI's behavior with `window.lovia`: friendly tool summaries, a custom search-results view, run events driving a status pill and token counter, buttons that send or draft messages (files in `web_extensions/`) |
+| `34_web_run_context.py` | give a served agent's tools the user's identity (`auth=`) and what they picked on the page (`provideContext`) through `create_app(run_context=...)` (files in `web_run_context/`) |
 
 ## Subdirectories
 

@@ -39,6 +39,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 | `cors_origins` | `None` | 允许跨域访问的浏览器 Origin；不设置时不发送 CORS 响应头 |
 | `token` / `auth` | `None` | 使用 Bearer token 保护业务 API，或传入自定义 FastAPI 依赖（见下文） |
 | `lifespan` | `None` | 你自己资源的生命周期，写法同 `FastAPI(lifespan=...)`（见下文） |
+| `run_context` | `None` | 用页面上下文和请求中的身份，为每次运行构造 `RunContext.deps`（见[运行上下文](#运行上下文)） |
 | `title` | `"lovia"` | 页面标题，也是 API 报告的标题 |
 
 `create_app` 自己占用了应用的 FastAPI `lifespan`，用来启停调度器、收尾仍在运行的 Run。
@@ -273,6 +274,7 @@ ui = ChatUI(
 | `t(key, params)` | 当前语言下的界面文案，包括你[自己的 key](#文案与语言) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 | `registerToolView(name, view)` | [工具视图](#工具视图) |
+| `provideContext(key, fn)` | 把 `key` 加进运行开始时的上下文，发送时读取 `fn()` 的值，见[运行上下文](#运行上下文) |
 
 ```js
 // ui/acme.js
@@ -610,6 +612,79 @@ app.add_middleware(
 `create_app()` 本身默认不启用认证；交给其他 ASGI 服务器运行时，请自行传入 `token` 或
 `auth`。`serve()` 只检查由 `create_app()` 构建的应用；自行挂载 `build_api_router` 的应用
 沿用自身的中间件，按原样运行。
+
+## 运行上下文
+
+工具常常需要知道是谁在提问，以及用户在页面上选了什么——比如输入框旁下拉框里选的知识库。
+`create_app(run_context=fn)` 用这两样东西为每次运行构造
+[`RunContext.deps`](agents.md#注入应用依赖)：
+
+```python
+from dataclasses import dataclass
+
+from fastapi import HTTPException, Request
+from lovia import RunContext, tool
+from lovia.web import RunTrigger, create_app
+
+
+async def auth(request: Request) -> None:
+    request.state.user = await users.from_session_cookie(request)  # 你的身份体系
+
+
+@dataclass
+class Deps:
+    user: str
+    kb: str
+
+
+def run_context(trigger: RunTrigger) -> Deps:
+    user = trigger.request.state.user if trigger.request else "scheduler"
+    kb = trigger.client.get("kb", "docs")
+    if kb not in KNOWLEDGE_BASES:
+        raise HTTPException(400, f"unknown knowledge base {kb!r}")
+    return Deps(user=user, kb=kb)
+
+
+@tool
+async def search(ctx: RunContext[Deps], query: str) -> str:
+    """在用户的知识库里搜索。"""
+    return await KNOWLEDGE_BASES[ctx.deps.kb].search(query, user=ctx.deps.user)
+
+
+app = create_app(agent, auth=auth, run_context=run_context)
+```
+
+页面这一侧由扩展脚本通过 `lovia.provideContext(key, fn)` 提供；每次发送消息（或新建定时任务）
+时都会读取一次 `fn()`：
+
+```js
+const kb = document.getElementById('acme-kb'); // composer_actions block 里的 <select>
+window.lovia.provideContext('kb', () => kb.value);
+```
+
+`run_context` 每次运行调用一次，可以是同步或异步函数，返回值就是这次运行的 `ctx.deps`，自动
+续跑的每一段共用它。抛出 `HTTPException` 会拒绝这次运行（对聊天消息来说，客户端会收到这个
+错误）。`trigger` 包含：
+
+| 字段 | 说明 |
+| --- | --- |
+| `client` | 页面提供的上下文（`provideContext` 的各个 key）：UI 状态。**它由浏览器控制，绝不要据此判断身份或权限** |
+| `request` | 发起这次运行的请求，`auth=` 已经执行过：身份在这里（`request.state`）。没有人发起的运行为 `None` |
+| `source` | 运行的来源：`user`（一条消息，或重连时恢复的运行）、`schedule:<id>`、`subagent:<session>`、`subagent-report:<task>` |
+| `resumed` | 是否是重连时从 checkpoint 恢复的运行 |
+| `session_id`、`agent` | 所属对话，以及即将运行的 agent |
+
+每次运行都有上下文，包括没有人发起的那些：
+
+- **重启后恢复。** checkpoint 不保存上下文，所以服务端把这次运行的 `client` 存在它的
+  checkpoint 指针旁边，运行结束时清掉；恢复时取回它，`request` 是重连的那个请求。
+- **定时任务。** 定时任务相当于一条延后发送的消息：在定时任务对话框里创建的，保存创建那一刻
+  页面的上下文；agent 用 `schedule_run` 创建的，保存它所在运行的上下文。每次触发都用它，
+  `request=None`。
+- **子 agent 任务及其汇报**使用所属对话最近一次的上下文，`request=None`。
+
+`client` 编码成 JSON 后上限 64 KB。不设置 `run_context` 时，运行没有上下文（和 core 的
+`Runner` 一样）；如果请求带了上下文，服务端会记一条警告日志。
 
 ## 部署在路径前缀下
 

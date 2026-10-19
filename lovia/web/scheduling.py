@@ -38,6 +38,7 @@ from typing import Annotated, Any, Literal
 from ..plugins.base import PluginInstance
 from ..run_context import RunContext
 from ..tools import Tool, tool
+from .run_context import RUN_CLIENT
 from .scheduler import initial_next_fire, validate_trigger
 from .store import ChatStore, ScheduleRow
 
@@ -233,6 +234,9 @@ def _make_tool(store: ChatStore) -> Tool:
             until=until_text,
             max_fires=max_fires,
             expires_at=expires_epoch,
+            # The fires run in this run's context (the page's, when a user
+            # message started it), as if the user had sent them from here.
+            context=RUN_CLIENT.get(),
         )
         await store.add_schedule(row)
 

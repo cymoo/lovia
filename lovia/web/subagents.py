@@ -105,6 +105,8 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     title_message=None,
                     autostart=True,  # clientless: consume the report unattended
                     source=f"subagent-report:{report.id}",
+                    # The chat's own context: this run continues it.
+                    client=deps.supervisor.last_client.get(sid),
                 )
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
@@ -178,6 +180,12 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # The parent's send_to_subagent pushes into this same channel,
                 # joining whatever the task chat's own /inject sends.
                 mailbox=spec.mailbox,
+                # A task works for the chat that spawned it, so in its context.
+                client=(
+                    deps.supervisor.last_client.get(spec.parent_session_id)
+                    if spec.parent_session_id
+                    else None
+                ),
             )
         except WebError as exc:
             # No-op for today's 409/429 (both raise before the workspace

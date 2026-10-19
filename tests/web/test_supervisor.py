@@ -450,9 +450,9 @@ async def test_cancel_during_auto_chain_hop_does_not_revive(monkeypatch) -> None
     orig_set = store.set_active_run_id
     sets = 0
 
-    async def gated_set(sid, run_id):
+    async def gated_set(sid, run_id, *, context=None):
         nonlocal sets
-        await orig_set(sid, run_id)  # advance the DB pointer first (DB = leg 2)
+        await orig_set(sid, run_id, context=context)  # advance the DB pointer first
         sets += 1
         if sets == 2:
             parked.set()
@@ -945,7 +945,7 @@ async def test_failed_start_releases_window_attachers(monkeypatch) -> None:
     entered = asyncio.Event()
     proceed = asyncio.Event()
 
-    async def failing_set_active(self, session_id, run_id):
+    async def failing_set_active(self, session_id, run_id, *, context=None):
         entered.set()
         await proceed.wait()
         raise RuntimeError("db down")

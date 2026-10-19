@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 try:
-    from fastapi import APIRouter, Query
+    from fastapi import APIRouter, Query, Request
     from sse_starlette.sse import EventSourceResponse
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -23,6 +23,7 @@ from ...runner import Runner
 from ..attachments import build_user_input
 from ..components import UI_DATA_SINK
 from ..errors import WebError
+from ..run_context import RUN_CLIENT, RunTrigger, build_run_context
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
@@ -69,7 +70,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return deps.pick(requested)
 
     @router.post("/api/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest) -> ChatResponse:
+    async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         # Blocking, non-streaming turn — runs to completion inside the request
         # and is NOT supervised (not detachable).
         if not req.message.strip() and not req.attachments:
@@ -97,10 +98,22 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # RunSupervisor.start(): background processes belong to the chat, no
         # matter which endpoint ran the turn.
         agent = await deps.workspaces.bind(sid, agent)
+        context = await build_run_context(
+            deps.run_context,
+            RunTrigger(
+                session_id=sid,
+                agent=agent,
+                source="user",
+                request=request,
+                client=req.context or {},
+            ),
+        )
         UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
+        RUN_CLIENT.set(req.context or None)
         result = await Runner.run(
             agent,
             user_input,
+            context=context,
             session=session,
             session_id=sid,
             context_policy=deps.context_policy,
@@ -118,7 +131,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
 
     @router.post("/api/chat/stream")
-    async def chat_stream(req: ChatRequest) -> EventSourceResponse:
+    async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
         sid = req.session_id or uuid.uuid4().hex
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
@@ -164,6 +177,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 input=user_input,
                 is_new=is_new,
                 title_message=req.message,
+                client=req.context,
+                request=request,
             )
         except WebError as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
@@ -250,7 +265,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         raise WebError(404, "run_not_found", "no active stream")
 
     @router.post("/api/chat/reconnect")
-    async def chat_reconnect(session_id: str = Query(...)) -> EventSourceResponse:
+    async def chat_reconnect(
+        request: Request, session_id: str = Query(...)
+    ) -> EventSourceResponse:
         """Re-attach to a live run, or resume an interrupted one from checkpoint.
 
         Called by the frontend after a page refresh when the session endpoint
@@ -300,6 +317,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 session_id=session_id,
                 agent=deps.agents[snapshot.agent_name],
                 snapshot=snapshot,
+                request=request,
             )
         except WebError as exc:
             # Lost a concurrent-reconnect race: attach to the winner's run.

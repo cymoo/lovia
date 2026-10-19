@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .run_context import MAX_CLIENT_CONTEXT_BYTES, client_context_size
+
+
+def _bounded_context(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is not None and client_context_size(value) > MAX_CLIENT_CONTEXT_BYTES:
+        raise ValueError(f"context is over {MAX_CLIENT_CONTEXT_BYTES // 1024} KB")
+    return value
 
 
 class AgentInfo(BaseModel):
@@ -163,6 +171,12 @@ class ChatRequest(BaseModel):
     # workspace). Empty/None is the plain text-only path. Capped to keep one
     # turn's payload bounded.
     attachments: list[Attachment] | None = Field(default=None, max_length=20)
+    # The page's context for a run this message starts (window.lovia's
+    # provideContext): handed to create_app(run_context=...) as trigger.client.
+    # Ignored when the message joins a live run, which keeps its own.
+    context: dict[str, Any] | None = None
+
+    _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
 
 class InjectRequest(BaseModel):
@@ -312,6 +326,10 @@ class ScheduleSpec(BaseModel):
     # Safety nets, enforced deterministically by the scheduler loop.
     max_fires: int | None = Field(default=None, ge=1)
     expires_at: float | None = None  # epoch seconds
+    # The client context its fires run with — the page's, as for a message.
+    context: dict[str, Any] | None = None
+
+    _bounded = field_validator("context")(lambda value: _bounded_context(value))
 
 
 class SchedulePatch(BaseModel):

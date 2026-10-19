@@ -1,0 +1,27 @@
+/* The pickers index.html adds, on lovia's design tokens. */
+
+.acme-kb {
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 4px;
+}
+.acme-kb select,
+.acme-user select {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.acme-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+}

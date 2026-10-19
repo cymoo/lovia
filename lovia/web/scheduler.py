@@ -275,6 +275,7 @@ class Scheduler:
                 # The supervisor records the run under this source, which is
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
+                client=sched.context,
             )
         except WebError as exc:
             if exc.code == "too_many_runs":

@@ -36,6 +36,7 @@ from .store import ChatStore
 
 if TYPE_CHECKING:
     from .config import ConfigRuntime
+from .run_context import RunContextFn
 from .ui import ASSETS_PATH, ChatUI, build_ui_router
 
 _STATIC = Path(__file__).parent / "static"
@@ -205,6 +206,7 @@ def create_app(
     auth: Callable[..., Any] | None = None,
     lifespan: Lifespan | None = None,
     config_runtime: ConfigRuntime | None = None,
+    run_context: RunContextFn | None = None,
 ) -> FastAPI:
     """Build a FastAPI app that exposes the given agent(s).
 
@@ -273,6 +275,15 @@ def create_app(
     are up before the first run and close only after live runs wound down; a
     state mapping it yields reaches ``request.state`` as usual.
 
+    ``run_context`` builds each run's ``RunContext.deps`` — what tools,
+    instructions and hooks see as ``ctx.deps`` — from a
+    :class:`~lovia.web.RunTrigger`: the page's ``client`` context (UI state,
+    via ``window.lovia.provideContext``) and the ``request`` that started the
+    run, where your ``auth=`` dependency left the user's identity. Sync or
+    async; called once per run, chat turns, resumes, schedules and subagent
+    tasks alike. ``None`` (default) runs without a context, like the core
+    ``Runner``.
+
     ``config_runtime`` is the CLI's runtime-reconfiguration surface (a
     :class:`lovia.web.config.ConfigRuntime`); passing one mounts the
     ``/api/config`` routes and allows an *empty* agents mapping — the
@@ -311,6 +322,7 @@ def create_app(
         agents=agents,
         store=chat_store,
         config_runtime=config_runtime,
+        run_context=run_context,
         title=title,
         # ``None`` = no server-level override: each agent's own context_policy
         # (or the loop's default Compaction) applies per run.

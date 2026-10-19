@@ -6,7 +6,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { EVENTS, configureLovia, emitLovia, lovia } from '../../../lovia/web/static/js/lovia.js';
+import {
+  EVENTS,
+  collectContext,
+  configureLovia,
+  emitLovia,
+  lovia,
+} from '../../../lovia/web/static/js/lovia.js';
 
 test('the API surface is exactly the documented one', () => {
   assert.deepEqual(Object.keys(lovia).sort(), [
@@ -15,6 +21,7 @@ test('the API surface is exactly the documented one', () => {
     'newChat',
     'on',
     'openSession',
+    'provideContext',
     'ready',
     'registerRenderer',
     'registerToolView',
@@ -57,6 +64,27 @@ test('a throwing listener is contained; the others still run', () => {
   } finally {
     console.error = quiet;
   }
+});
+
+test('provideContext: values read at send time; a failing or empty one is left out', () => {
+  assert.equal(collectContext(), undefined); // nothing provided: no context
+  let kb = 'docs';
+  lovia.provideContext('kb', () => kb);
+  lovia.provideContext('none', () => undefined);
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    lovia.provideContext('broken', () => {
+      throw new Error('boom');
+    });
+    assert.deepEqual(collectContext(), { kb: 'docs' });
+    kb = 'tickets';
+    assert.deepEqual(collectContext(), { kb: 'tickets' });
+  } finally {
+    console.error = quiet;
+  }
+  assert.throws(() => lovia.provideContext('', () => 1), /expected a key/);
+  assert.throws(() => lovia.provideContext('x', 1), /expected a function/);
 });
 
 test('actions reach the page, normalized', async () => {

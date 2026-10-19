@@ -142,6 +142,7 @@ def build_schedules_router(deps: RouterDeps) -> APIRouter:
             until=(spec.until.strip() or None) if spec.until else None,
             max_fires=spec.max_fires,
             expires_at=spec.expires_at,
+            context=spec.context,
         )
         await store.add_schedule(row)
         return _info(row)

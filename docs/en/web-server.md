@@ -40,6 +40,7 @@ run the app under another ASGI server, skip `serve()`.
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
 | `lifespan` | `None` | Your own resources' lifespan, as for `FastAPI(lifespan=...)` (see below) |
+| `run_context` | `None` | Builds each run's `RunContext.deps` from the page's context and the request's identity (see [Run context](#run-context)) |
 | `title` | `"lovia"` | Page title and the API's reported title |
 
 `create_app` sets the app's FastAPI `lifespan` itself, to start and stop its
@@ -295,6 +296,7 @@ internal.
 | `t(key, params)` | A UI string in the page's language, including your [own keys](#wording-and-languages) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
+| `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run context](#run-context) |
 
 ```js
 // ui/acme.js
@@ -669,6 +671,86 @@ token check's own 401 (code `server_token`) keeps its token prompt.
 pass `token` or `auth` yourself. `serve()` only judges apps built by
 `create_app()` — an app of your own that mounts `build_api_router` keeps its
 own middleware and is run as is.
+
+## Run context
+
+Tools often need to know who is asking, and what the user picked on the page —
+the knowledge base in a dropdown by the composer, say. `create_app(run_context=fn)`
+builds each run's [`RunContext.deps`](agents.md#inject-application-dependencies)
+from both:
+
+```python
+from dataclasses import dataclass
+
+from fastapi import HTTPException, Request
+from lovia import RunContext, tool
+from lovia.web import RunTrigger, create_app
+
+
+async def auth(request: Request) -> None:
+    request.state.user = await users.from_session_cookie(request)  # your identity
+
+
+@dataclass
+class Deps:
+    user: str
+    kb: str
+
+
+def run_context(trigger: RunTrigger) -> Deps:
+    user = trigger.request.state.user if trigger.request else "scheduler"
+    kb = trigger.client.get("kb", "docs")
+    if kb not in KNOWLEDGE_BASES:
+        raise HTTPException(400, f"unknown knowledge base {kb!r}")
+    return Deps(user=user, kb=kb)
+
+
+@tool
+async def search(ctx: RunContext[Deps], query: str) -> str:
+    """Search the user's knowledge base."""
+    return await KNOWLEDGE_BASES[ctx.deps.kb].search(query, user=ctx.deps.user)
+
+
+app = create_app(agent, auth=auth, run_context=run_context)
+```
+
+On the page, an extension script supplies the client side with
+`lovia.provideContext(key, fn)`; `fn()` is read each time a message (or a new
+schedule) is sent:
+
+```js
+const kb = document.getElementById('acme-kb'); // a <select> in the composer_actions block
+window.lovia.provideContext('kb', () => kb.value);
+```
+
+`run_context` is called once per run — sync or async — and what it returns is
+the run's `ctx.deps`, shared by every leg of an auto-continued run. Raising an
+`HTTPException` refuses the run (for a chat message, the client gets the
+error). `trigger` carries:
+
+| Field | Description |
+| --- | --- |
+| `client` | The page's context (`provideContext`'s keys): UI state. **The browser controls it — never derive identity or permissions from it** |
+| `request` | The request that started the run, after `auth=` ran: identity lives here (`request.state`). `None` when nobody requested the run |
+| `source` | Why the run started: `user` (a message, or a reconnect resuming a run), `schedule:<id>`, `subagent:<session>`, `subagent-report:<task>` |
+| `resumed` | A reconnect is resuming the run from its checkpoint |
+| `session_id`, `agent` | The chat, and the agent about to run |
+
+Every run gets a context, including the ones nobody sent:
+
+- **Resume after a restart.** A checkpoint keeps no context, so the server
+  stores the run's `client` beside its checkpoint pointer and clears it when
+  the run ends; the resume gets it back, with the reconnecting `request`.
+- **Schedules.** A schedule is a deferred message: one made from the
+  Schedules dialog stores the page's context at that moment, one the agent
+  makes with `schedule_run` stores its own run's. Each fire gets it, with
+  `request=None`.
+- **Subagent tasks and their reports** get the latest context of the chat
+  they work for, with `request=None`.
+
+A `client` is capped at 64 KB of JSON. Without `run_context`, runs have no
+context (as with the core `Runner`), and a request that carries one logs a
+warning.
 
 ## Serving under a path prefix
 

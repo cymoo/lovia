@@ -329,16 +329,10 @@ interface ToolState { id: string; name: string;
 1. **工具状态模型。** 为每个 call id 维护一个 `ToolState`。实时事件（`tool_call` / `approval_required` / `tool_result`）和历史回放都只负责更新它，再统一交给 `renderTool(state)` 渲染，P-4 里的两条路径在工具这一层合为一条。
    - 只为工具建模，不为整条消息建完整的 parts 模型：扩展的需求集中在工具上，而文本流式渲染依赖 `stream-blocks.js` 的增量 DOM，强行纳入统一模型代价大、收益小。
    - 以后真有消息级的扩展需求，再把模型扩展到其它 part。
-2. **拆分模块。** 按即将暴露的接口拆：
-
-   | 模块 | 职责 |
-   | --- | --- |
-   | `stream.js` | 消费 SSE，产出 `run-start` / `run-end` |
-   | `tools.js` | ToolState、工具视图注册表、工具卡片 |
-   | `history.js` | 历史回放 |
-   | `composer.js` | 发送、草稿、附件、`provideContext` |
-   | `turns.js` | 气泡、复制、（后续的）消息操作 |
-   | `chat.js` | 只负责组装以上模块 |
+2. **拆分模块（实施时收窄）。** 只拆出 `tools.js`：工具卡片的构建与结果渲染、参数格式化、`ToolState`，以及 PR 4 要加的工具视图注册表。原计划还要拆 `stream.js`、`history.js`、`composer.js`、`turns.js`，实施时没有拆，原因如下：
+   - PR 4 需要的另外两个接缝——运行开始/结束事件、页面动作——都只是 chat.js 里现有函数上的几行改动，不需要先拆模块。
+   - 这几块共享大量模块级状态（滚动、排队消息、流式缓冲），硬拆风险大、收益小。
+   - 仍按"有具体改动需要时再拆"处理。
 
 **验证：**
 - 现有的 pytest 和 node 测试全部通过；
@@ -481,7 +475,7 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 | --- | --- | --- | --- |
 | 1 主题与骨架约定 | `@layer lovia`；`data-part`；新增 5 个 block；欢迎页只保留模板一份实现；改用 `data-i18n` 属性；`ChatUI(default_lang, messages)`；约定测试 | `app_config` 删掉 `empty_*`（内部字段） | 中 |
 | 2 扩展加载 | `ChatUI(assets=)` 替代 `templates=`；`styles=`、`logo`、`favicon`（相对路径都在 `assets` 里解析，所以和它一起做）；扩展先于启动加载，最多等 5 秒，失败不影响页面；`lovia.version` / `ready` | `templates=` → `assets=` | 小到中 |
-| 3 重构 | 拆分 chat.js；建立工具状态模型；两条渲染路径在工具层合一 | 无（纯重构） | 大 |
+| 3 重构 | 工具卡片拆到 `tools.js`；建立工具状态模型（`data-status`）；两条渲染路径在工具层合一 | 无（纯重构） | 中 |
 | 4 `window.lovia` v1 | `on` / `state` / 页面动作 / `api` / `t`；`registerToolView`（内置的 shell、read_file 先用）；`lovia.d.ts`；`examples/31_web_custom_ui` | 只新增 JS 接口 | 中 |
 | 5 数据通路 | 先写设计文档并讨论透 §5.7，再实现 `context` / `provideContext` / `run_context` | 新增 | 中 |
 | 6 消息标识与消息操作 | 服务端生成的 `ref`；`registerMessageAction`（内置复制先用）；rewind 改用 `ref` | `RewindRequest` 字段变化 | 中 |

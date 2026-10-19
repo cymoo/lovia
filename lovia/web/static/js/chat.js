@@ -10,6 +10,7 @@ import { icon } from './icons.js';
 import { enterToSend, followupsEnabled } from './settings.js';
 import { readFollowups, writeFollowups, dropFollowups } from './followup-cache.js';
 import {
+  cloneTemplate,
   escapeHtml,
   formatDateTime,
   formatTimeSmart,
@@ -19,13 +20,19 @@ import {
   sanitizedFragment,
   toDate,
 } from './util.js';
+import {
+  STALE_TOOLS,
+  buildToolNode,
+  fillParams,
+  findToolNode,
+  setToolResult,
+  setToolStatus,
+  toolPath,
+} from './tools.js';
 import { BlockStream } from './stream-blocks.js';
 import {
   configureComponents,
-  mountComponent,
-  parseEnvelope,
   rerenderComponents,
-  unmountComponent,
   watchComponents,
 } from './components.js';
 
@@ -34,24 +41,6 @@ import {
 // be absent (offline, blocked CDN, SRI failure). Rendering helpers live in
 // util.js (shared with the Files panel) and degrade to escaped text.
 if (typeof marked !== 'undefined') marked.setOptions({ gfm: true, breaks: false });
-
-// Escape arbitrary text and turn bare http(s) URLs into clickable links. Used
-// for tool-result <pre> blocks so links work without markdown-rendering (which
-// would mangle code / shell output); every non-URL character is escaped.
-function linkifyText(text) {
-  const urlRe = /https?:\/\/[^\s<>"')\]]+/g;
-  let out = '';
-  let last = 0;
-  let m;
-  while ((m = urlRe.exec(text)) !== null) {
-    out += escapeHtml(text.slice(last, m.index));
-    const url = m[0];
-    out += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
-    last = m.index + url.length;
-  }
-  out += escapeHtml(text.slice(last));
-  return out;
-}
 
 // Exported for scripts/bench_stream_render.py, which times the real flush.
 export function highlightCode(container, opts = {}) {
@@ -265,16 +254,6 @@ function flushRender(force = false) {
 }
 
 // ---- Templates ---------------------------------------------------------
-/**
- * Deep-clone a `<template>`'s first element child.
- * @param {string} id Template element id.
- * @returns {HTMLElement}
- */
-function cloneTemplate(id) {
-  const tmpl = /** @type {HTMLTemplateElement} */ (document.getElementById(id));
-  return /** @type {HTMLElement} */ (tmpl.content.firstElementChild.cloneNode(true));
-}
-
 function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
   node.classList.add(role);
@@ -292,120 +271,6 @@ function setTurnTimestamp(turn, ts = Date.now()) {
   if (timestamp) {
     timestamp.textContent = turn.dataset.timestamp;
     timestamp.title = turn.dataset.timestampFull;
-  }
-}
-
-function argValue(v) {
-  if (typeof v === 'string') {
-    const oneLine = v.replace(/\s+/g, ' ').trim();
-    return oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine;
-  }
-  return JSON.stringify(v);
-}
-
-// old/new pairs (edit_file) ARE a diff: the arguments are already the two
-// sides of the change, so no diff algorithm is needed to present them as one.
-function isDiffArgs(obj) {
-  return typeof obj.old === 'string' && typeof obj.new === 'string';
-}
-
-// Arguments in render order. `arguments` is the raw JSON the model emitted and
-// its key order is not stable — the same call can come back path-first once and
-// new-before-old the next time. Two keys are pinned so a card always reads the
-// same way: `path` leads (it is the subject of the call, and the first declared
-// parameter of every workspace tool that takes one; `command` plays that role
-// for shell-style tools), and a diff pair renders old-then-new at whichever
-// side the model mentioned first. Every other key keeps the order it came in.
-function argEntries(obj) {
-  const entries = Object.entries(obj);
-  const diff = isDiffArgs(obj);
-  const lead =
-    typeof obj.path === 'string' ? 'path'
-      : typeof obj.command === 'string' ? 'command'
-        : null;
-  if (!diff && !lead) return entries;
-  const ordered = [];
-  let placed = false;
-  for (const [k, v] of entries) {
-    if (k === lead) continue; // hoisted to the front below
-    if (diff && (k === 'old' || k === 'new')) {
-      if (placed) continue;
-      placed = true;
-      ordered.push(['old', obj.old], ['new', obj.new]);
-      continue;
-    }
-    ordered.push([k, v]);
-  }
-  if (lead) ordered.unshift([lead, obj[lead]]);
-  return ordered;
-}
-
-// A one-line `(k: v, …)` preview for the tool bubble's summary. The full
-// values live in the expanded card's params rows (fillParams). `omit` drops
-// keys the card already surfaces elsewhere (e.g. shell's description).
-function formatArgs(args, omit) {
-  if (!args) return '()';
-  let obj;
-  try {
-    obj = JSON.parse(args);
-  } catch {
-    return `(${args})`;
-  }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return `(${args})`;
-  const entries = argEntries(obj).filter(([k]) => !omit?.includes(k));
-  if (entries.length === 0) return '()';
-  return `(${entries.map(([k, v]) => `${k}: ${argValue(v)}`).join(', ')})`;
-}
-
-// Full arguments as key/value rows — the one renderer behind both the
-// expanded tool card and the approval card. Values stay plain text: args are
-// model *inputs*, so no linkification. Short values sit inline next to their
-// key; multi-line or long ones become full-width scrollable blocks. Empty
-// args append nothing, leaving the container :empty so CSS hides it.
-function fillParams(container, args) {
-  if (!container || !args) return;
-  const addBlock = (text) => {
-    const div = document.createElement('div');
-    div.className = 'param-val block';
-    div.textContent = text;
-    container.appendChild(div);
-  };
-  let obj;
-  try {
-    obj = JSON.parse(args);
-  } catch {
-    addBlock(String(args)); // unparsable — show the raw payload
-    return;
-  }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
-    addBlock(String(args));
-    return;
-  }
-  // Color the two sides of a diff so an approval is reviewed as a change,
-  // not as two look-alike walls of text.
-  const isDiff = isDiffArgs(obj);
-  for (const [k, v] of argEntries(obj)) {
-    if (isDiff && (k === 'old' || k === 'new')) {
-      const old = k === 'old';
-      const key = document.createElement('div');
-      key.className = 'param-key';
-      key.textContent = old ? t('tool.old') : t('tool.new');
-      const value = document.createElement('div');
-      value.className = `param-val block ${old ? 'diff-old' : 'diff-new'}`;
-      value.textContent = v;
-      container.append(key, value);
-      continue;
-    }
-    let val = typeof v === 'string' ? v : JSON.stringify(v);
-    const block = val.includes('\n') || val.length > 80;
-    if (block && typeof v !== 'string') val = JSON.stringify(v, null, 2);
-    const key = document.createElement('div');
-    key.className = 'param-key';
-    key.textContent = k;
-    const value = document.createElement('div');
-    value.className = block ? 'param-val block' : 'param-val';
-    value.textContent = val;
-    container.append(key, value);
   }
 }
 
@@ -771,101 +636,7 @@ function finalizeReasoning() {
 }
 
 // ---- Tool cards ----------------------------------------------------------
-// Tools whose `path` argument points into the agent's workspace — their cards
-// offer "open in the Files panel", and read_file results highlight by
-// extension.
-const PATH_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
-// Tools whose completion means workspace files may have changed since the
-// Files panel last looked. shell covers its own (foreground) run; the
-// background tools are the observation points of a process that keeps
-// writing while nobody watches — its start ('shell' again), each output
-// poll, and the kill.
-const STALE_TOOLS = new Set(['shell', 'read_process_output', 'kill_process']);
-const RESULT_HL_MAX = 200_000; // chars — hljs over megabyte dumps janks the tab
-const RESULT_EXPANDABLE_LINES = 12; // roughly what the capped height shows
-
-function toolPath(args) {
-  try {
-    const p = JSON.parse(args || '{}').path;
-    return typeof p === 'string' && p ? p : null;
-  } catch {
-    return null;
-  }
-}
-
-function toolActionBtn(iconName, title) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'tool-action';
-  b.title = title;
-  b.setAttribute('aria-label', title);
-  b.innerHTML = icon(iconName, { size: 12 });
-  return b;
-}
-
-// The shell tool's optional `description` argument — a model-written one-liner
-// for the user. Shown as a muted subtitle under the summary; the command stays
-// the summary's primary text (the description is the model's claim about the
-// command, not ground truth).
-function toolDescription(call) {
-  if (call.name !== 'shell') return null;
-  try {
-    const d = JSON.parse(call.arguments || '{}').description;
-    return typeof d === 'string' && d.trim() ? d.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-// Raw call arguments per tool card, for `from_args` UI components.
-/** @type {WeakMap<HTMLElement, string>} */
-const toolArgs = new WeakMap();
-const ARGS_KEEP_MAX = 256 * 1024;
-
-function buildToolNode(call) {
-  const node = cloneTemplate('tmpl-tool');
-  node.querySelector('.tool-name').textContent = call.name;
-  const desc = toolDescription(call);
-  node.querySelector('.tool-args').textContent = formatArgs(
-    call.arguments,
-    desc ? ['description'] : undefined,
-  );
-  if (desc) {
-    const sub = document.createElement('span');
-    sub.className = 'tool-desc';
-    sub.textContent = desc;
-    sub.title = desc; // ellipsized subtitle stays readable on hover
-    node.querySelector('summary')?.appendChild(sub);
-  }
-  fillParams(node.querySelector('.tool-params'), call.arguments);
-  // The result renderer only needs the name and the path — stash those
-  // instead of the full arguments (write_file args can be megabytes).
-  // `data-tool` is also public: deployer CSS targets a tool's cards by it.
-  node.dataset.tool = call.name;
-  // ...except a UI component may render from its call's arguments
-  // (`from_args`): keep them off the DOM, and only when modest in size.
-  if (call.arguments && call.arguments.length <= ARGS_KEEP_MAX) {
-    toolArgs.set(node, call.arguments);
-  }
-  // Identity, so a card already on screen can be recognised rather than drawn
-  // twice — see appendTool.
-  if (call.id) node.dataset.callId = call.id;
-  const path = toolPath(call.arguments);
-  if (path && PATH_TOOLS.has(call.name)) {
-    node.dataset.toolPath = path;
-    const open = toolActionBtn('folder', t('tool.openInFiles'));
-    open.classList.add('tool-open-file');
-    open.addEventListener('click', (e) => {
-      // Inside <summary>: don't let the click also toggle the card.
-      e.preventDefault();
-      e.stopPropagation();
-      store.emit('open-workspace-file', { path });
-    });
-    node.querySelector('summary')?.appendChild(open);
-  }
-  return node;
-}
-
+// Drawn and settled by tools.js; placing them in the live bubble is ours.
 function appendTool(call) {
   if (!store.bubble) return;
   // A resumed run re-announces the calls it is about to drain (loop.py
@@ -881,208 +652,6 @@ function appendTool(call) {
   store.body = null;
   store.rawText = '';
   scrollDown();
-}
-
-/**
- * The tool card for `id` anywhere in the transcript — the live registry first,
- * then the DOM, which is where a card replayed by the history render lives.
- * @param {string} id Tool call id.
- * @returns {HTMLElement | null}
- */
-function findToolNode(id) {
-  const known = store.toolNodes.get(id);
-  if (known?.isConnected) return known;
-  const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&');
-  return /** @type {HTMLElement | null} */ (
-    document.querySelector(`#transcript .tool[data-call-id="${escaped}"]`)
-  );
-}
-
-// Language for a highlighted result: read_file content only — shell output is
-// mixed text where wrong highlighting is worse than none.
-function resultLang(node) {
-  if (node.dataset.tool !== 'read_file') return null;
-  const ext = (node.dataset.toolPath?.split('.').pop() || '').toLowerCase();
-  return /^[a-z0-9]{1,8}$/.test(ext) ? ext : null;
-}
-
-// A successful read_file result opens with the renderer's pagination header,
-// "path (lines X-Y of Z)". The model needs it to page through big files; the
-// card doesn't — the path is already in the summary. Split it off so copy and
-// highlighting see pure file content, and render the range as a meta chip.
-// The empty-file / past-eof variants (and any custom result_renderer format)
-// simply never match and pass through whole.
-const READ_FILE_HEADER = /^.+ \(lines (\d+)-(\d+) of (\d+)\)(?:\n|$)/;
-
-function splitReadFileHeader(node, text, isError) {
-  if (isError || node.dataset.tool !== 'read_file') return { text, meta: null };
-  const m = READ_FILE_HEADER.exec(text);
-  if (!m) return { text, meta: null };
-  return {
-    text: text.slice(m[0].length),
-    meta: { start: +m[1], end: +m[2], total: +m[3] },
-  };
-}
-
-// Images a tool result carried (view_image & friends): rendered from the
-// transcript-serving route, so the strip shows exactly the pixels the model
-// saw — even for files since changed, deleted, or outside the workspace.
-// Idempotent across repeated result updates; a fetch failure degrades each
-// image to a small chip instead of a broken-image glyph.
-function renderToolImages(node, images) {
-  const box = node.querySelector('.tool-result-box');
-  if (!box) return;
-  let strip = box.querySelector('.tool-result-images');
-  if (!images?.length) {
-    strip?.remove();
-    return;
-  }
-  const callId = node.dataset.callId;
-  if (!callId || !store.sessionId) return;
-  if (!strip) {
-    strip = document.createElement('div');
-    strip.className = 'tool-result-images';
-    box.append(strip);
-  }
-  // The image IS the payload — surface it instead of hiding it behind the
-  // collapsed card (matching how attachments render without a click).
-  node.open = true;
-  strip.replaceChildren();
-  for (const im of images) {
-    const img = document.createElement('img');
-    img.className = 'tool-result-image';
-    img.loading = 'lazy';
-    img.alt = t('tool.image');
-    img.src = api.toolImageUrl(store.sessionId, callId, im.index ?? 0);
-    img.addEventListener('error', () => {
-      const chip = document.createElement('span');
-      chip.className = 'tool-image-chip';
-      chip.innerHTML = icon('image', { size: 13 }); // our own SVG, trusted
-      const label = document.createElement('span');
-      // textContent, not markup: mime_type is tool-supplied text.
-      label.textContent = im.mime_type || 'image';
-      chip.append(label);
-      img.replaceWith(chip);
-    });
-    img.addEventListener('click', () =>
-      openImageLightbox(img.src, { alt: img.alt }),
-    );
-    strip.append(img);
-  }
-}
-
-// A result carrying a UI envelope renders as its component, just above the
-// result box (the raw output and params stay one "Source" toggle away). Idempotent
-// across repeated result updates; any other result tears a component down.
-function syncToolComponent(node, result, isError, live) {
-  const box = node.querySelector('.tool-result-box');
-  if (!box) return;
-  const comp = isError ? null : parseEnvelope(String(result ?? ''), toolArgs.get(node));
-  let el = /** @type {HTMLElement | null} */ (node.querySelector(':scope > .tool-ui'));
-  if (!comp) {
-    if (el) {
-      unmountComponent(el);
-      el.remove();
-    }
-    node.classList.remove('tool--ui', 'show-source');
-    node.querySelector('.tool-source')?.remove();
-    return;
-  }
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'tool-ui';
-    box.before(el); // outside the box, clear of its hover actions
-  }
-  node.classList.add('tool--ui');
-  node.open = true; // the component IS the payload, like the image strip
-  if (!node.querySelector('.tool-source')) {
-    const src = toolActionBtn('code', t('tool.source'));
-    src.classList.add('tool-source');
-    src.addEventListener('click', (e) => {
-      e.preventDefault(); // inside <summary>: don't toggle the card
-      e.stopPropagation();
-      node.open = true;
-      node.classList.toggle('show-source');
-    });
-    node.querySelector('summary')?.appendChild(src);
-  }
-  mountComponent(el, comp, { callId: node.dataset.callId ?? null, live });
-}
-
-// The one renderer behind both the live tool_result event and history replay:
-// content (highlighted or linkified), error styling, the image strip, UI
-// components, and the hover actions (copy, expand when clipped). `live`: the
-// result just arrived on the stream (components see it as ctx.live).
-function setToolResult(node, result, isError, images, live = false) {
-  renderToolImages(node, images);
-  syncToolComponent(node, result, isError, live);
-  const pre = node.querySelector('.tool-result');
-  if (!pre) return;
-  const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);
-  if (!text.trim()) {
-    pre.style.display = 'none';
-    node.querySelector('.tool-result-meta')?.remove();
-    return;
-  }
-  // Undo the hide above: a card replayed while its call was still pending got
-  // an empty result first and the real one only after the run resumed.
-  pre.style.display = '';
-  // Highlight only content the header vouches for: a headerless read_file
-  // result is a notice (empty file, custom renderer), not code.
-  const lang = meta && text.length <= RESULT_HL_MAX ? resultLang(node) : null;
-  if (lang) {
-    const code = document.createElement('code');
-    code.className = `language-${lang}`;
-    code.textContent = text;
-    pre.replaceChildren(code);
-    highlightIn(node);
-  } else {
-    pre.innerHTML = linkifyText(text);
-  }
-  if (isError) node.classList.add('error');
-
-  const box = node.querySelector('.tool-result-box');
-  if (!box) return;
-  let metaEl = box.querySelector('.tool-result-meta');
-  if (meta) {
-    if (!metaEl) {
-      metaEl = document.createElement('div');
-      metaEl.className = 'tool-result-meta';
-      pre.before(metaEl);
-    }
-    metaEl.textContent =
-      meta.start === 1 && meta.end >= meta.total
-        ? t('tool.linesAll', { total: meta.total })
-        : t('tool.lines', meta);
-  } else {
-    metaEl?.remove(); // idempotent across repeated result updates
-  }
-  let actions = box.querySelector('.tool-result-actions');
-  if (!actions) {
-    actions = document.createElement('div');
-    actions.className = 'tool-result-actions';
-    box.prepend(actions);
-  }
-  actions.replaceChildren(); // idempotent across repeated result updates
-
-  if (text.length > 1500 || text.split('\n').length > RESULT_EXPANDABLE_LINES) {
-    const expand = toolActionBtn('maximize-2', t('tool.expand'));
-    expand.addEventListener('click', () => {
-      const on = pre.classList.toggle('expanded');
-      expand.title = on ? t('tool.collapse') : t('tool.expand');
-    });
-    actions.append(expand);
-  }
-  const copy = toolActionBtn('copy', t('tool.copyResult'));
-  copy.addEventListener('click', async () => {
-    if (await copyToClipboard(text)) {
-      copy.innerHTML = icon('check', { size: 12 });
-      setTimeout(() => {
-        copy.innerHTML = icon('copy', { size: 12 });
-      }, 1500);
-    }
-  });
-  actions.append(copy);
 }
 
 function updateToolResult(id, result, isError, images) {
@@ -1271,6 +840,7 @@ function appendApproval(call) {
     scrollDown();
     return;
   }
+  setToolStatus(findToolNode(call.id), 'awaiting');
   const node = cloneTemplate('tmpl-approval');
   const head = node.querySelector('.approval-head');
   if (head) head.textContent = t('approval.waiting');
@@ -1288,6 +858,8 @@ function appendApproval(call) {
 
   const resolve = async (decision) => {
     node.classList.add('resolved');
+    // A denial settles as an error result; an approval runs the call.
+    if (decision === 'approve') setToolStatus(findToolNode(call.id), 'running');
     if (decision === 'approve' && box.checked) rememberApproval(call.name);
     always.remove();
     // Leave a record of which way it went instead of just dimming the card.
@@ -1515,6 +1087,7 @@ function appendQuestion(call) {
   if (call.id && findQuestionNode(call.id)) return;
   const node = buildQuestionCard(call);
   if (!node) return;
+  setToolStatus(findToolNode(call.id), 'awaiting');
   appendBubbleContent(store.bubble, node);
   store.body = null;
   store.rawText = '';
@@ -2238,13 +1811,9 @@ function renderHistoryWindow({ stickBottom }) {
           // Attached first, so a UI component renders into a laid-out card.
           appendBubbleContent(currentBubble, node);
           // Same renderer as the live path: highlighting, error styling, and
-          // the copy/expand actions all match; absent results hide the <pre>.
-          setToolResult(
-            node,
-            result?.text ?? '',
-            result?.isError ?? false,
-            result?.images,
-          );
+          // the copy/expand actions all match. A call with no result yet stays
+          // running (its empty <pre> is hidden by CSS).
+          if (result) setToolResult(node, result.text, result.isError, result.images);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).

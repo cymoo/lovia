@@ -14,6 +14,16 @@ export function escapeHtml(s) {
   );
 }
 
+/**
+ * Deep-clone a `<template>`'s first element child.
+ * @param {string} id Template element id.
+ * @returns {HTMLElement}
+ */
+export function cloneTemplate(id) {
+  const tmpl = /** @type {HTMLTemplateElement} */ (document.getElementById(id));
+  return /** @type {HTMLElement} */ (tmpl.content.firstElementChild.cloneNode(true));
+}
+
 // ---- Markdown ------------------------------------------------------------
 /**
  * Render markdown to sanitized HTML. Degrades to escaped plain text when

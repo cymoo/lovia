@@ -62,6 +62,7 @@ ErrorCode = Literal[
     "feature_unavailable",
     "run_active",
     "run_stopping",
+    "run_cancelled",
     "agent_unregistered",
     "schedule_not_fired",
     "model_exists",

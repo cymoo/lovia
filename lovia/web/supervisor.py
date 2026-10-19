@@ -747,6 +747,61 @@ class RunController:
 # --------------------------------------------------------------------------- #
 
 
+class _Setup:
+    """A run's setup, from registering its controller to handing it over.
+
+    A stop or a deletion (``RunSupervisor.cancel`` evicts synchronously), and
+    then a replacement turn, can take the chat over during any of the setup's
+    awaits. ``claim()`` after each one stops a stale setup before it touches
+    what they own now; ``abandon()`` undoes only what this setup did.
+    """
+
+    def __init__(
+        self, supervisor: RunSupervisor, session_id: str, ctrl: RunController
+    ) -> None:
+        self.supervisor = supervisor
+        self.session_id = session_id
+        self.ctrl = ctrl
+        self.opened = False  # opened the chat's workspace session
+        self.pointer: str | None = None  # set the chat's checkpoint pointer
+
+    def owns(self) -> bool:
+        return self.supervisor._controllers.get(self.session_id) is self.ctrl
+
+    def claim(self) -> None:
+        if not self.owns():
+            raise WebError(
+                409, "run_cancelled", "the run was stopped before it started"
+            )
+
+    async def bind(self, agent: Agent[Any]) -> None:
+        """Bind the run to the chat's workspace session, opened on first use.
+        Every run of one chat shares it, so background processes survive
+        across runs — they die with the *chat* (deletion/shutdown)."""
+        workspaces = self.supervisor.deps.workspaces
+        fresh = workspaces.get(self.session_id) is None
+        self.ctrl.agent = await workspaces.bind(self.session_id, agent)
+        self.opened = fresh and workspaces.get(self.session_id) is not None
+        self.claim()
+
+    async def abandon(self) -> None:
+        owned = self.owns()
+        if owned:
+            self.supervisor._controllers.pop(self.session_id, None)
+        # A request may have attached during setup; close the hub so its SSE
+        # ends instead of waiting on a task that will never start. (After a
+        # *successful* setup there is no such hang: the caller reaches
+        # subscribe_live with no awaits in between, or autostart begins it.)
+        self.ctrl.hub.close()
+        deps = self.supervisor.deps
+        if self.pointer is not None:  # guarded: never a replacement's pointer
+            await deps.store.clear_active_run_id(self.session_id, expected=self.pointer)
+        if self.opened and owned:
+            # Nothing else ran in it. Not owned, the chat is another's now: a
+            # deletion closes the workspace itself, a replacement turn uses it.
+            await deps.workspaces.close(self.session_id)
+
+
 class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
@@ -787,14 +842,6 @@ class RunSupervisor:
             run_id=run_id,
             delete_on_success=True,
         )
-
-    async def _drop_interrupted(self, sid: str) -> None:
-        """Delete the checkpoint of an interrupted run ``sid`` still points at,
-        so a later reconnect can't resume it."""
-        store = self.deps.store
-        if store.checkpointer is not None:
-            if old := await store.get_active_run_id(sid):
-                await store.checkpointer.delete(old)
 
     async def start(
         self,
@@ -851,8 +898,7 @@ class RunSupervisor:
         # 409 and attaches instead. Nor can a check fail late, after the setup
         # below opened something.
         self._controllers[session_id] = ctrl
-        workspaces = self.deps.workspaces
-        opened = False  # a workspace session this attempt opened
+        setup = _Setup(self, session_id, ctrl)
         try:
             # The run_context hook first: a refusal leaves nothing behind.
             ctrl.context = await build_run_context(
@@ -865,32 +911,27 @@ class RunSupervisor:
                     client=client,
                 ),
             )
+            setup.claim()
             if on_admit is not None:
                 await on_admit()
-            # Every run of one web session shares that session's workspace
-            # session (lazily opened here), so background processes survive
-            # across runs — they die with the *chat* (deletion/shutdown), not
-            # with the turn.
-            opened = workspaces.get(session_id) is None
-            ctrl.agent = await workspaces.bind(session_id, agent)
-            opened = opened and workspaces.get(session_id) is not None
+                setup.claim()
+            await setup.bind(agent)
             # The new run supersedes an interrupted one the chat still points
             # at. Dropped only now, after the hook: a refused start leaves
             # that run resumable.
-            await self._drop_interrupted(session_id)
+            store = self.deps.store
+            if store.checkpointer is not None:
+                old = await store.get_active_run_id(session_id)
+                setup.claim()
+                if old:
+                    await store.checkpointer.delete(old)
+                    setup.claim()
             ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
+            if ckpt is not None:
+                setup.pointer = ckpt.resolved_run_id
+            setup.claim()
         except BaseException:
-            self._controllers.pop(session_id, None)
-            # A concurrent request may have attached during those awaits; close
-            # the hub so its SSE ends instead of waiting on a task that will
-            # never start. (After a *successful* start there is no such hang:
-            # the caller reaches subscribe_live with no awaits in between, and
-            # autostart begins the task right below.)
-            ctrl.hub.close()
-            if opened:
-                # Nothing else runs in it yet; one that was open already
-                # keeps its background processes.
-                await workspaces.close(session_id)
+            await setup.abandon()
             raise
         self.last_client[session_id] = client
         ctrl._first_ckpt = ckpt
@@ -909,32 +950,12 @@ class RunSupervisor:
         request: Request | None = None,
     ) -> RunController:
         self._check_slot(session_id, cap=False)
-        # The run's own client context (a checkpoint keeps none), with the
-        # reconnecting request for identity.
-        client = await self.deps.store.get_active_context(session_id) or {}
-        context = await build_run_context(
-            self.deps.run_context,
-            RunTrigger(
-                session_id=session_id,
-                agent=agent,
-                source="user",
-                request=request,
-                client=client,
-                resumed=True,
-            ),
-        )
-        # Same chat-scoped workspace binding as start(): the resumed leg's
-        # background processes are gone (they never survive a restart), but
-        # its shell/file tools must land on the chat's one live session.
-        agent = await self.deps.workspaces.bind(session_id, agent)
-        self._check_slot(session_id, cap=False)
-        self.last_client[session_id] = client
+        store = self.deps.store
         ckpt = CheckpointOptions(
-            checkpointer=self.deps.store.checkpointer,
+            checkpointer=store.checkpointer,
             resume_from=snapshot,
             delete_on_success=True,
         )
-        seed = drop_system_entries(list(snapshot.entries))
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,
@@ -942,16 +963,53 @@ class RunSupervisor:
             agent=agent,
             first_input=[],
             first_checkpoint=ckpt,
-            seed_entries=seed,
+            seed_entries=drop_system_entries(list(snapshot.entries)),
             is_new=False,
             title_message=None,
             # The resumer's identity; if the run already has a record (it
             # normally does — same run_id), start_run keeps the original source.
             source="user",
-            client=client,
-            context=context,
         )
+        # Reserved before the first await, as in start(): a second reconnect
+        # attaches to this resume instead of resuming the snapshot again.
         self._controllers[session_id] = ctrl
+        setup = _Setup(self, session_id, ctrl)
+        try:
+            # The caller read ``snapshot`` before this reservation: make sure it
+            # is still the chat's interrupted run, as it was — not one another
+            # resume has moved on (or finished) since, or a stop dropped.
+            assert store.checkpointer is not None  # nothing to resume without
+            current = await store.checkpointer.load(snapshot.run_id)
+            if (
+                current is None
+                or current.updated_at != snapshot.updated_at
+                or await store.get_active_run_id(session_id) != snapshot.run_id
+            ):
+                raise WebError(404, "run_not_found", "no resumable run")
+            setup.claim()
+            # The run's own client context (a checkpoint keeps none), with the
+            # reconnecting request for identity.
+            ctrl.client = await store.get_active_context(session_id) or {}
+            ctrl.context = await build_run_context(
+                self.deps.run_context,
+                RunTrigger(
+                    session_id=session_id,
+                    agent=agent,
+                    source="user",
+                    request=request,
+                    client=ctrl.client,
+                    resumed=True,
+                ),
+            )
+            setup.claim()
+            # Same chat-scoped workspace binding as start(): the resumed leg's
+            # background processes are gone (they never survive a restart), but
+            # its shell/file tools must land on the chat's one live session.
+            await setup.bind(agent)
+        except BaseException:
+            await setup.abandon()
+            raise
+        self.last_client[session_id] = ctrl.client
         return ctrl
 
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:

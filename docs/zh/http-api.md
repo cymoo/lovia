@@ -126,6 +126,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `feature_unavailable` | 404 / 501 | 服务端或 Agent 不具备该功能（工作区、Memory、checkpointer、提问通道或 `rewind`） |
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
+| `run_cancelled` | 409 | Run 在开始之前被停止，或者它所在的聊天已被删除 |
 | `agent_unregistered` | 409 | 中断的 Run 所属 Agent 已不再提供服务 |
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
 | `model_exists` | 409 | 该 id 的模型配置已存在 |

@@ -263,6 +263,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         ctrl = deps.supervisor.get(session_id)
         if ctrl is not None:
             run_id = ctrl.run_id
+            begun = ctrl.task is not None
             deps.supervisor.cancel(session_id)
             # cancel() evicts the controller synchronously, so until its task's
             # finally runs the active_run_id pointer still names this run. Clear
@@ -270,6 +271,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # refresh in that window would reconnect and revive the stopped run.
             if store.checkpointer is not None and run_id:
                 await store.clear_active_run_id(session_id, expected=run_id)
+                if not begun:
+                    # A resume stopped during its setup: no task will wind its
+                    # checkpoint down, so drop it as a stranded one is below.
+                    await store.checkpointer.delete(run_id)
             return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.

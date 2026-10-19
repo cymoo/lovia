@@ -20,7 +20,12 @@ from lovia.web.store import ChatStore, ScheduleRow  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 from .test_scheduler import _drain_runs  # noqa: E402
-from .test_supervisor import _client, _wait_record  # noqa: E402
+from .test_supervisor import (  # noqa: E402
+    _blocking_tool,
+    _client,
+    _spawn,
+    _wait_record,
+)
 from .test_web import _parse_sse  # noqa: E402
 
 seen: list[RunTrigger] = []
@@ -428,3 +433,132 @@ async def test_a_failed_setup_closes_only_the_workspace_it_opened(
         await deps.supervisor.start(session_id="used", **start)
     assert deps.workspaces.get("used") is not None
     await deps.workspaces.aclose()
+
+
+def _gated(gate: asyncio.Event, *, when):
+    """A run_context hook that holds the runs ``when(trigger)`` picks at
+    ``gate`` — a setup kept waiting while the test acts around it."""
+
+    async def hook(trigger: RunTrigger) -> None:
+        if when(trigger):
+            await gate.wait()
+
+    return hook
+
+
+@pytest.mark.parametrize("stop", ["cancel", "delete"])
+async def test_a_stop_during_setup_beats_the_stale_start(stop: str) -> None:
+    """A chat stopped (or deleted) while a start's hook still waits, then taken
+    by a replacement turn: the stale start gives up and touches nothing of
+    the replacement's — not its controller, not its checkpoint pointer."""
+    gate, release = asyncio.Event(), asyncio.Event()
+    agent = _agent([call("block", {}), text("done")])
+    agent = agent.clone(tools=[_blocking_tool(release)])
+    store = ChatStore.in_memory()
+    await store.upsert("s", agent="bot")
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    app = _app(agent, store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
+        stale = asyncio.create_task(ac.post("/api/chat/stream", json=body))
+        await _until(lambda: sup.get("s") is not None)
+        stale_ctrl = sup.get("s")
+        if stop == "cancel":
+            await ac.post("/api/chat/cancel", params={"session_id": "s"})
+        else:
+            await ac.delete("/api/sessions/s")
+        replacement, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "b", "session_id": "s"}
+        )
+        await _until(
+            lambda: (
+                (c := sup.get("s")) is not None
+                and c is not stale_ctrl
+                and c.task is not None
+            )
+        )
+        live = sup.get("s")
+        gate.set()
+        res = await stale
+        assert res.status_code == 409
+        assert res.json()["detail"]["code"] == "run_cancelled"
+        assert sup.get("s") is live
+        assert await store.get_active_run_id("s") == live.run_id
+        release.set()
+        await asyncio.wait_for(replacement, 5)
+    entries = await store.session.load("s")
+    assert [e.content for e in entries if getattr(e, "role", None) == "user"] == ["b"]
+
+
+async def _interrupted(store: ChatStore, sid: str = "s1") -> None:
+    from lovia.checkpointer import RunHead
+    from lovia.messages import Usage
+    from lovia.transcript import InputEntry
+
+    await store.upsert(sid, agent="bot")
+    await store.checkpointer.append(
+        "run-1",
+        [InputEntry(role="user", content="q")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id(sid, "run-1", context={"kb": "docs"})
+
+
+async def test_concurrent_reconnects_resume_the_run_once() -> None:
+    gate = asyncio.Event()
+    provider = ScriptedProvider([text("resumed"), text("again")])
+    store = ChatStore.in_memory()
+    await _interrupted(store)
+    hook = _gated(gate, when=lambda t: t.resumed)
+    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        params = {"session_id": "s1"}
+        first, _ = _spawn(ac, "/api/chat/reconnect", params=params)
+        await _until(lambda: sup.get("s1") is not None)
+        pending = sup.get("s1")
+        second, _ = _spawn(ac, "/api/chat/reconnect", params=params)
+        await _until(lambda: bool(pending.hub._subs))  # attached to the first
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 5)
+    assert len(provider.calls) == 1
+
+
+async def test_a_snapshot_another_resume_moved_on_from_is_not_resumed() -> None:
+    from lovia.web.errors import WebError
+
+    store = ChatStore.in_memory()
+    await _interrupted(store)
+    agent = _agent([text("resumed")])
+    app = _app(agent, store=store)
+    sup = app.state.deps.supervisor
+    snapshot = await store.checkpointer.load("run-1")
+    ctrl = await sup.start_resume(session_id="s1", agent=agent, snapshot=snapshot)
+    ctrl._ensure_begun()
+    await ctrl.task  # resumed and finished: checkpoint and pointer are gone
+    with pytest.raises(WebError) as exc:
+        await sup.start_resume(session_id="s1", agent=agent, snapshot=snapshot)
+    assert exc.value.code == "run_not_found"
+
+
+async def test_a_stop_during_resume_setup_drops_the_run() -> None:
+    gate = asyncio.Event()
+    provider = ScriptedProvider([text("resumed")])
+    store = ChatStore.in_memory()
+    await _interrupted(store)
+    hook = _gated(gate, when=lambda t: t.resumed)
+    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        params = {"session_id": "s1"}
+        resume = asyncio.create_task(ac.post("/api/chat/reconnect", params=params))
+        await _until(lambda: sup.get("s1") is not None)
+        await ac.post("/api/chat/cancel", params=params)
+        gate.set()
+        res = await resume
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "run_cancelled"
+    assert provider.calls == []
+    assert await store.get_active_run_id("s1") is None
+    assert await store.checkpointer.load("run-1") is None

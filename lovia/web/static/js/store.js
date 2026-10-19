@@ -8,11 +8,6 @@ export const store = {
   sessions: [],
   activeRuns: new Set(), // session ids with a live background run (sidebar dot)
   chatEpoch: 0,
-  // Mirrors the server defaults in web/ui.py — used only if app-config is
-  // missing or unparsable.
-  emptyTitle: "Where shall we begin?",
-  emptyDescription: "A good question is already half the answer.",
-  emptyExamples: [],
   // Both bundled stores support rewind — assume yes until /api/info says no
   // (custom Session backends may lack it).
   canRewind: true,

@@ -13,7 +13,14 @@
 
    Contracts: every class name here is load-bearing for static/js/* — rename
    nothing without updating the JS. Tokens first; components in DOM order.
+
+   Everything sits in the `lovia` cascade layer, so a deployer's unlayered
+   stylesheet wins over it whatever its selectors' specificity. The public
+   styling surface is the tokens below and the `data-part` attributes;
+   class names stay internal.
    ========================================================================== */
+
+@layer lovia {
 
 /* ---- Design tokens ---------------------------------------------------- */
 :root,
@@ -5615,3 +5622,5 @@ body.files-splitting {
   color: var(--muted-2);
   font-family: var(--mono);
 }
+
+} /* @layer lovia */

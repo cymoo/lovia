@@ -103,14 +103,13 @@ def test_index_renders_example_prompts() -> None:
     )
     res = TestClient(app).get("/")
     assert res.status_code == 200
-    # Rendered as clickable chips AND carried in the app-config blob so the
-    # client-side empty-state re-render shows them too.
+    # Rendered as clickable chips AND into the welcome template the client
+    # restores on "New chat", so they show there too.
     assert res.text.count("Summarize my inbox") == 2
     # `chip` is the shared pill look; `empty-example` is the behaviour the
     # delegated click handler keys off (fill the composer, don't send). Both
     # matter — a follow-up chip wears `chip` but must NOT wear `empty-example`.
     assert 'class="chip empty-example"' in res.text
-    assert "empty_examples" in res.text
 
 
 def _app_config(page: str) -> dict:
@@ -134,9 +133,20 @@ def test_index_under_a_root_path() -> None:
 
 _OVERRIDE = """{% extends "lovia/index.html" %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">{% endblock %}
+{% block sidebar_header %}<img id="logo" src="/logo.svg" alt="Acme">{% endblock %}
+{% block sidebar_nav %}<a id="help" href="/help">Help</a>{% endblock %}
 {% block sidebar_footer %}<a id="signout" href="/logout">Sign out</a>{% endblock %}
+{% block topbar_actions %}<button id="share">Share</button>{% endblock %}
+{% block composer_actions %}<select id="kb"></select>{% endblock %}
+{% block welcome %}{{ super() }}<p class="notice">Maintenance at 6pm</p>{% endblock %}
 {% block body_end %}<script src="/extra.js"></script>{% endblock %}
 """
+
+
+def _inside(page: str, part: str, needle: str) -> bool:
+    """Whether ``needle`` follows the opening tag of ``data-part=part``."""
+    start = page.index(f'data-part="{part}"')
+    return needle in page[start : start + 4000]
 
 
 def test_templates_override_fills_the_blocks(tmp_path) -> None:
@@ -153,6 +163,17 @@ def test_templates_override_fills_the_blocks(tmp_path) -> None:
     sidebar = body.split("</aside>", 1)[0]
     assert sidebar.index('id="sessions-list"') < sidebar.index('id="signout"')
     assert page.index("js/main.js") < page.index('src="/extra.js"')
+    # Each block lands in its region; sidebar_header replaces the title.
+    assert _inside(page, "sidebar-header", 'id="logo"')
+    assert 'class="sidebar-title"' not in sidebar
+    assert _inside(page, "sidebar-nav", 'id="help"')
+    assert _inside(page, "topbar-actions", 'id="share"')
+    assert _inside(page, "composer", 'id="kb"')
+    # The welcome extends the default (super) and reaches the template the
+    # client restores on "New chat" too.
+    assert page.count('class="notice"') == 2
+    welcome = page.split('id="tmpl-welcome">', 1)[1].split("</template>", 1)[0]
+    assert "&lt;b&gt;Acme&lt;/b&gt;" in welcome and 'class="notice"' in welcome
     # The bundled page is intact around the blocks, and still autoescaped.
     for anchor in ('id="composer"', 'id="app-config"', 'id="files-panel"'):
         assert anchor in page
@@ -170,6 +191,108 @@ def test_index_at_the_root_has_no_base_path() -> None:
     cfg = _app_config(TestClient(_app(_make_agent([text("hi")]))).get("/").text)
     assert cfg["base_path"] == ""
     assert cfg["login_url"] is None
+    assert cfg["i18n"] == {"default_lang": None, "messages": {}}
+
+
+# The public styling contract: deployer CSS may target these (docs list them
+# in web-server.md); renaming one is a breaking change.
+_PUBLIC_PARTS = (
+    "sidebar", "sidebar-header", "agent-switcher", "sidebar-nav", "new-chat",
+    "memory", "schedules", "settings", "sessions-label", "sessions-search",
+    "sessions", "topbar", "chat-title", "topbar-actions", "tasks", "export",
+    "files-toggle", "transcript", "welcome", "todo-panel", "composer",
+    "attach", "context-ring", "files-panel", "turn", "tool",
+)  # fmt: skip
+
+
+def test_index_carries_the_public_parts() -> None:
+    page = TestClient(_app(_make_agent([text("hi")]))).get("/").text
+    for part in _PUBLIC_PARTS:
+        assert f'data-part="{part}"' in page, part
+
+
+def test_template_i18n_keys_exist_in_the_bundled_strings() -> None:
+    """A data-i18n key the dictionary lacks would silently stay English."""
+    from pathlib import Path
+
+    import lovia.web
+
+    root = Path(lovia.web.__file__).parent
+    html = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    js = (root / "static" / "js" / "i18n.js").read_text(encoding="utf-8")
+    en = js[js.index("const EN = {") :]
+    keys = set(re.findall(r'data-i18n(?:-\w+)?="([^"]+)"', html))
+    assert keys
+    for key in keys:
+        assert f"'{key}':" in en, key
+
+
+def test_chat_ui_messages_reach_the_page() -> None:
+    ui = ChatUI(
+        default_lang="ja",
+        messages={
+            "ja": {"composer.placeholder": "メッセージ"},
+            "zh": {"nav.chats": "会话"},
+        },
+    )
+    cfg = _app_config(TestClient(_app(_make_agent([text("hi")]), ui=ui)).get("/").text)
+    assert cfg["i18n"]["default_lang"] == "ja"
+    assert cfg["i18n"]["messages"]["ja"] == {"composer.placeholder": "メッセージ"}
+    # The welcome copy is rendered into the page, not shipped as config.
+    assert "empty_title" not in cfg
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"messages": {"Japanese": {}}}, "invalid language tag"),
+        ({"messages": {"ja": {"nav.chats": 1}}}, "must map message keys to strings"),
+        ({"default_lang": "fr"}, "default_lang 'fr' has no strings"),
+    ],
+)
+def test_chat_ui_rejects_bad_i18n(kwargs, match) -> None:
+    from lovia.exceptions import UserError
+
+    with pytest.raises(UserError, match=match):
+        ChatUI(**kwargs)
+
+
+def test_chat_ui_default_lang_may_be_a_bundled_or_added_language() -> None:
+    assert ChatUI(default_lang="zh").default_lang == "zh"
+    assert ChatUI(default_lang="pt-BR", messages={"pt-BR": {}}).default_lang == "pt-BR"
+
+
+def test_documented_design_tokens_exist() -> None:
+    """The token table in web-server.md is a contract; keep it honest."""
+    from pathlib import Path
+
+    import lovia.web
+
+    css = (Path(lovia.web.__file__).parent / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    docs = Path(__file__).parents[2] / "docs"
+    for lang in ("en", "zh"):
+        page = (docs / lang / "web-server.md").read_text(encoding="utf-8")
+        table = page.split("| `--bg`", 1)[1].split("\n\n", 1)[0]
+        tokens = set(re.findall(r"`(--[a-z0-9-]+)`", "| `--bg`" + table))
+        assert len(tokens) > 20, lang
+        for token in tokens:
+            assert f"{token}:" in css, (lang, token)
+
+
+def test_bundled_styles_sit_in_the_lovia_layer() -> None:
+    """Unlayered deployer CSS must beat every bundled rule (styles.css header)."""
+    from pathlib import Path
+
+    import lovia.web
+
+    css = (Path(lovia.web.__file__).parent / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    body = css.split("@layer lovia {", 1)
+    assert len(body) == 2 and "{" not in re.sub(r"/\*.*?\*/", "", body[0], flags=re.S)
+    assert body[1].rstrip().endswith("} /* @layer lovia */")
 
 
 def test_shell_assets_get_executable_content_types(monkeypatch) -> None:

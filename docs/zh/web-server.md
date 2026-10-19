@@ -67,6 +67,8 @@ app = create_app(agent, lifespan=lifespan)
 | `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
 | `templates` | `None` | 自定义模板所在的目录（见[定制页面](#定制页面)） |
 | `scripts` | `()` | 在应用自身脚本之后加载的 JS 模块，例如组件渲染器（见[UI 组件](#ui-组件)） |
+| `messages` | `{}` | 按语言提供的界面文案：覆盖内置文案、新增语言、给自己模板里的元素用（见[文案与语言](#文案与语言)） |
+| `default_lang` | `None` | 用户还没在设置里选过语言时使用的语言；`None` 表示跟随浏览器 |
 
 ```python
 from lovia.web import ChatUI, create_app
@@ -90,6 +92,20 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 
 ## 定制页面
 
+在内置页面的基础上扩展，靠的是下面几种公开接口，各管一件事：
+
+| 接口 | 用途 |
+| --- | --- |
+| [模板 block](#模板-block) | 在固定位置放入自己的内容：logo、链接、输入框旁的控件 |
+| [设计变量](#样式) | 颜色、字体、圆角、间距 |
+| [`data-part` 属性](#样式) | 在自己的 CSS 里定位某个区域：隐藏它，或改它的样式 |
+| [`data-i18n` key](#文案与语言) | 文案与语言 |
+| `api.js` 和 `window.lovia.registerRenderer` / `getRenderer` | 调用 API；[UI 组件](#ui-组件) |
+
+其余一切——CSS 类名、元素 id、JavaScript 模块——都属于内部实现，可能随版本变化。
+
+### 模板 block
+
 `ChatUI(templates="ui")` 指向一个存放自定义 Jinja 模板的目录，其中的 `index.html` 会替换
 内置页面。继承内置页面，只填写需要的 block 即可：
 
@@ -101,6 +117,19 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 <link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
 {% endblock %}
 
+{% block sidebar_header %}
+<img class="acme-logo" src="{{ url_for('brand', path='logo.svg').path }}" alt="Acme">
+{% endblock %}
+
+{% block sidebar_nav %}
+<a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
+{% endblock %}
+
+{% block welcome %}
+{{ super() }}
+<p class="acme-notice">今晚 22:00 例行维护。</p>
+{% endblock %}
+
 {% block sidebar_footer %}
 <a class="signout" href="/logout">退出登录</a>
 {% endblock %}
@@ -109,8 +138,16 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 | Block | 渲染位置 |
 | --- | --- |
 | `head` | `<head>` 末尾：样式表、meta 标签 |
+| `sidebar_header` | 侧栏顶部；它包住了标题，填写后会替换标题（例如换成 logo） |
+| `sidebar_nav` | 侧栏导航末尾、"设置"下方：你自己的链接 |
 | `sidebar_footer` | 侧栏底部：用户菜单、退出登录链接 |
+| `topbar_actions` | 顶栏按钮组的最左侧 |
+| `composer_actions` | 输入框内、文本框之后：模式切换、选择器 |
+| `welcome` | 空白聊天页的内容；`{{ super() }}` 保留默认的标题、说明和示例问题。点"新对话"时页面会恢复它 |
 | `body_end` | 应用脚本之后：你自己的脚本 |
+
+示例里的链接借用了内置的 `sidebar-nav-item` 样式。类名属于内部实现，如果不想跟着版本
+调整，就换成自己的类名。
 
 自己的静态文件可以挂载到应用上提供，并用 `url_for(...).path` 引用，这样部署在
 [路径前缀下](#部署在路径前缀下)时链接仍然有效：
@@ -122,10 +159,75 @@ app = create_app(agent, ui=ChatUI(templates="ui"))
 app.mount("/brand", StaticFiles(directory="brand"), name="brand")
 ```
 
-更换主题时，覆盖内置 `styles.css` 开头的设计变量即可（`--bg`、`--surface`、`--ink`、
-`--accent` 等；深色主题在 `[data-theme="dark"]` 下另有一套）。CSS 类名、元素 id 和
-JavaScript 模块都属于内部实现，可能随版本变化。有文档的前端接口只有两个：客户端 `api.js`，
-以及 `window.lovia.registerRenderer` / `getRenderer`（见[UI 组件](#ui-组件)）。
+### 样式
+
+内置的 `styles.css` 放在名为 `lovia` 的 cascade layer 里。你自己的样式表（不放进任何
+layer）中的规则总会压过内置规则，不管选择器的优先级如何，不需要 `!important`。
+
+更换主题时，覆盖 `styles.css` 开头的设计变量。两个主题各有一套取值，所以要分别设置；
+直接写在 `:root` 上的变量对两个主题都生效：
+
+```css
+/* brand/theme.css */
+[data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
+[data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
+:root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
+```
+
+| 变量 | 作用 |
+| --- | --- |
+| `--bg`、`--surface`、`--surface-2`、`--surface-3`、`--border`、`--border-strong` | 画布、面板、卡片、悬停态及其边框 |
+| `--ink`、`--ink-2`、`--muted`、`--muted-2` | 文字，由深到浅 |
+| `--accent`、`--accent-hover`、`--accent-soft`、`--accent-text` | 品牌色及其衍生色 |
+| `--user-surface`、`--user-border` | 用户消息气泡 |
+| `--chart-1` … `--chart-8` | 图表系列颜色 |
+| `--warn`、`--danger`、`--ok` | 状态色 |
+| `--sans`、`--mono` | 字体 |
+| `--radius-xs` … `--radius-xl` | 圆角 |
+| `--sidebar-w`、`--content-w` | 侧栏宽度、对话区的阅读宽度 |
+
+要定位某个区域，就选它的 `data-part`：
+
+```css
+[data-part="export"] { display: none; }                                   /* 去掉导出菜单 */
+[data-part="tool"][data-tool="read_process_output"] { display: none; }   /* 隐藏某个工具的卡片 */
+[data-part="turn"][data-role="user"] .bubble { border-radius: 4px; }
+```
+
+| 区域 | `data-part` |
+| --- | --- |
+| 侧栏 | `sidebar`、`sidebar-header`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
+| 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`export`、`files-toggle` |
+| 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"`） |
+| 输入框 | `composer`、`attach`、`context-ring` |
+| 其他 | `files-panel`；设置面板里的 `language`（语言那一行） |
+
+隐藏某个工具的卡片不会连带隐藏它的审批请求：审批卡片是单独渲染的。
+
+### 文案与语言
+
+界面自带英文和中文。`ChatUI(messages=...)` 可以修改文案、新增语言，也可以给自己模板里的
+元素提供文案：
+
+```python
+ui = ChatUI(
+    default_lang="zh",
+    messages={
+        "en": {"composer.placeholder": "Ask Acme anything…", "acme.help": "Help center"},
+        "zh": {"composer.placeholder": "问问 Acme…", "acme.help": "帮助中心"},
+        "ja": {"composer.placeholder": "何でも聞いてください…", "nav.newChat": "新しいチャット"},
+    },
+)
+```
+
+- key 见 `lovia/web/static/js/i18n.js`（`nav.newChat`、`composer.placeholder` 等）。如果在界面
+  自带的前缀下写了一个界面没有的 key（拼错了，或者新版本改了名），浏览器 console 里会有警告。
+- 界面没带的语言（上例的 `ja`）会出现在设置的语言列表里；缺少的文案回退到英文。
+- 自己前缀下的 key（`acme.help`）通过 `data-i18n`（文本）、`data-i18n-title`、
+  `data-i18n-aria` 和 `data-i18n-placeholder` 给模板里的元素提供文案。当前语言没有对应
+  文案时，元素保留自己原本的文字。
+- `default_lang` 在用户于设置里选择语言之前生效，选"自动"即回到它。想让用户固定使用一种
+  语言，就设置它并隐藏语言选项：`[data-part="language"] { display: none; }`。
 
 ## UI 组件
 

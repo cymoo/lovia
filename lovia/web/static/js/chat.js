@@ -1,5 +1,5 @@
 // Chat streaming, SSE handling, message rendering.
-import { currentLang, t } from './i18n.js';
+import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { toast } from './toast.js';
 import { api, apiError, basePath, readSSE } from './api.js';
@@ -278,6 +278,7 @@ function cloneTemplate(id) {
 function makeTurn(role, ts) {
   const node = cloneTemplate('tmpl-turn');
   node.classList.add(role);
+  node.dataset.role = role;
   setTurnTimestamp(node, ts);
   return node;
 }
@@ -839,7 +840,8 @@ function buildToolNode(call) {
   fillParams(node.querySelector('.tool-params'), call.arguments);
   // The result renderer only needs the name and the path — stash those
   // instead of the full arguments (write_file args can be megabytes).
-  node.dataset.toolName = call.name;
+  // `data-tool` is also public: deployer CSS targets a tool's cards by it.
+  node.dataset.tool = call.name;
   // ...except a UI component may render from its call's arguments
   // (`from_args`): keep them off the DOM, and only when modest in size.
   if (call.arguments && call.arguments.length <= ARGS_KEEP_MAX) {
@@ -899,7 +901,7 @@ function findToolNode(id) {
 // Language for a highlighted result: read_file content only — shell output is
 // mixed text where wrong highlighting is worse than none.
 function resultLang(node) {
-  if (node.dataset.toolName !== 'read_file') return null;
+  if (node.dataset.tool !== 'read_file') return null;
   const ext = (node.dataset.toolPath?.split('.').pop() || '').toLowerCase();
   return /^[a-z0-9]{1,8}$/.test(ext) ? ext : null;
 }
@@ -913,7 +915,7 @@ function resultLang(node) {
 const READ_FILE_HEADER = /^.+ \(lines (\d+)-(\d+) of (\d+)\)(?:\n|$)/;
 
 function splitReadFileHeader(node, text, isError) {
-  if (isError || node.dataset.toolName !== 'read_file') return { text, meta: null };
+  if (isError || node.dataset.tool !== 'read_file') return { text, meta: null };
   const m = READ_FILE_HEADER.exec(text);
   if (!m) return { text, meta: null };
   return {
@@ -2391,38 +2393,17 @@ export function renderEmptyState() {
     renderSetupHero(transcript);
     return;
   }
-  const title = store.emptyTitle || 'Where shall we begin?';
-  const desc = store.emptyDescription;
+  // The server renders the welcome (its `welcome` block, overrides included)
+  // into the page once and into this template; restore it from there.
   const empty = document.createElement('div');
   empty.className = 'empty-state';
   empty.id = 'empty-state';
-  const h2 = document.createElement('h2');
-  h2.textContent = title;
-  empty.appendChild(h2);
-  if (Array.isArray(desc)) {
-    const ul = document.createElement('ul');
-    for (const item of desc) {
-      const li = document.createElement('li');
-      li.textContent = item;
-      ul.appendChild(li);
-    }
-    empty.appendChild(ul);
-  } else if (desc) {
-    const p = document.createElement('p');
-    p.textContent = desc;
-    empty.appendChild(p);
-  }
-  if (store.emptyExamples?.length) {
-    const wrap = document.createElement('div');
-    wrap.className = 'empty-examples';
-    for (const example of store.emptyExamples) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip empty-example';
-      btn.textContent = example;
-      wrap.appendChild(btn);
-    }
-    empty.appendChild(wrap);
+  empty.dataset.part = 'welcome';
+  const tmpl = /** @type {HTMLTemplateElement | null} */ (document.getElementById('tmpl-welcome'));
+  if (tmpl) {
+    const content = /** @type {DocumentFragment} */ (tmpl.content.cloneNode(true));
+    applyStaticI18n(content);
+    empty.appendChild(content);
   }
   transcript.replaceChildren(empty);
 }

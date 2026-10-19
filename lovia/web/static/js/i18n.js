@@ -3,16 +3,19 @@
 // `t('key')` looks up the active language, falling back to English, then to
 // the key itself (a missing translation shows readable English, never a blank).
 // `{name}` placeholders interpolate via the params object. The language
-// preference lives in localStorage ('auto' follows the browser); changing it
-// takes effect on reload — the app re-reads every string at boot, which keeps
-// this module free of re-render machinery.
+// preference lives in localStorage ('auto': the deployment's default_lang,
+// else the browser's); changing it takes effect on reload — the app re-reads
+// every string at boot, which keeps this module free of re-render machinery.
 //
-// Static HTML (buttons, placeholders, tooltips in index.html) is translated
-// once at boot by applyStaticI18n(); strings built in JS call t() directly.
-// Server-provided copy (empty-state config, agent instructions) is shown
-// verbatim — the server owner localizes those.
+// Static HTML is labelled through data-i18n / data-i18n-title / -aria /
+// -placeholder attributes, applied by applyStaticI18n(); strings built in JS
+// call t() directly. ChatUI(messages=...) overrides and extends the
+// dictionaries below. Server-provided copy (empty-state config, agent
+// instructions) is shown verbatim — the server owner localizes those.
 
-const LANG_KEY = 'lovia-lang'; // 'auto' | 'en' | 'zh'
+import { pageConfig } from './page-config.js';
+
+const LANG_KEY = 'lovia-lang'; // 'auto' or a language code
 
 const MESSAGES = {
   zh: {
@@ -336,7 +339,7 @@ const MESSAGES = {
     // ---- settings
     'settings.title': '设置',
     'settings.language': '语言',
-    'settings.langAuto': '跟随浏览器',
+    'settings.langAuto': '自动',
     'settings.theme': '主题',
     'settings.themeSystem': '跟随系统',
     'settings.themeLight': '浅色',
@@ -766,7 +769,7 @@ const EN = {
   'a11y.runFailed': 'The run failed',
   'settings.title': 'Settings',
   'settings.language': 'Language',
-  'settings.langAuto': 'Match browser',
+  'settings.langAuto': 'Automatic',
   'settings.theme': 'Theme',
   'settings.themeSystem': 'System',
   'settings.themeLight': 'Light',
@@ -897,26 +900,116 @@ const EN = {
   'cfg.heroAlt': 'Or hand-edit ~/.lovia/config.json',
 };
 
-function browserLang() {
-  return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+/** @typedef {Record<string, Record<string, string>>} Dictionaries */
+
+/**
+ * The bundled dictionaries with a deployer's `ChatUI.messages` merged over
+ * them, plus the keys it set under one of the UI's own prefixes (`nav.`,
+ * `composer.`, …) that the UI doesn't have — a typo, or a renamed string.
+ * Keys under any other prefix are the deployer's own.
+ * @param {Dictionaries} builtin Keyed by language; must include `en`.
+ * @param {Dictionaries | undefined} extra
+ * @returns {{ dicts: Dictionaries, unknown: string[] }}
+ */
+export function mergeMessages(builtin, extra) {
+  /** @type {Dictionaries} */
+  const dicts = {};
+  for (const [lang, strings] of Object.entries(builtin)) dicts[lang] = { ...strings };
+  const prefixes = new Set(Object.keys(builtin.en).map((k) => k.split('.')[0]));
+  const unknown = new Set();
+  for (const [lang, strings] of Object.entries(extra || {})) {
+    if (!strings || typeof strings !== 'object') continue;
+    dicts[lang] = { ...dicts[lang], ...strings };
+    for (const key of Object.keys(strings)) {
+      if (!(key in builtin.en) && prefixes.has(key.split('.')[0])) unknown.add(key);
+    }
+  }
+  return { dicts, unknown: [...unknown] };
 }
 
-/** @returns {'auto' | 'en' | 'zh'} The stored language preference. */
+/**
+ * The language to show: the user's pick, else the deployment's default, else
+ * the first browser language that has strings (exact tag, then its primary
+ * subtag — `zh-TW` finds `zh`), else English.
+ * @param {{ pref: string, defaultLang: string | null | undefined,
+ *   browser: readonly string[], available: readonly string[] }} opts
+ * @returns {string}
+ */
+export function resolveLang({ pref, defaultLang, browser, available }) {
+  if (pref !== 'auto' && available.includes(pref)) return pref;
+  if (defaultLang && available.includes(defaultLang)) return defaultLang;
+  const lower = available.map((l) => l.toLowerCase());
+  for (const tag of browser) {
+    const want = tag.toLowerCase();
+    for (const candidate of [want, want.split('-')[0]]) {
+      const i = lower.indexOf(candidate);
+      if (i >= 0) return available[i];
+    }
+  }
+  return 'en';
+}
+
+const { dicts: DICTS, unknown } = mergeMessages(
+  { en: EN, ...MESSAGES },
+  pageConfig.i18n?.messages,
+);
+if (unknown.length) {
+  console.warn(`lovia: ChatUI.messages has keys the UI doesn't use: ${unknown.join(', ')}`);
+}
+
+/** @returns {string} The stored preference: 'auto' or a language with strings. */
 export function langPref() {
-  const saved = localStorage.getItem(LANG_KEY);
-  return saved === 'en' || saved === 'zh' || saved === 'auto' ? saved : 'auto';
+  let saved = null;
+  try {
+    saved = localStorage.getItem(LANG_KEY);
+  } catch { /* no storage access: follow the defaults */ }
+  return saved && (saved === 'auto' || saved in DICTS) ? saved : 'auto';
 }
 
-/** @param {'auto' | 'en' | 'zh' | string} pref Persisted; applies on next reload. */
+/** @param {string} pref 'auto' or a language code. Applies on next reload. */
 export function setLangPref(pref) {
-  localStorage.setItem(LANG_KEY, pref);
+  try {
+    localStorage.setItem(LANG_KEY, pref);
+  } catch { /* no storage access: the pick lasts this page only */ }
 }
 
-const _lang = /** @type {'en' | 'zh'} */ (langPref() === 'auto' ? browserLang() : langPref());
+const _lang = resolveLang({
+  pref: langPref(),
+  defaultLang: pageConfig.i18n?.default_lang,
+  browser: typeof navigator === 'undefined'
+    ? []
+    : navigator.languages?.length ? navigator.languages : [navigator.language || ''],
+  available: Object.keys(DICTS),
+});
 
-/** @returns {'en' | 'zh'} The active language (preference resolved vs. the browser). */
+/** @returns {string} The active language code. */
 export function currentLang() {
   return _lang;
+}
+
+/**
+ * The languages that have strings, with their names in their own language —
+ * the Settings picker's options.
+ * @returns {Array<[string, string]>}
+ */
+export function languages() {
+  return Object.keys(DICTS).map((code) => {
+    let name = code;
+    try {
+      name = new Intl.DisplayNames([code], { type: 'language' }).of(code) || code;
+    } catch { /* an engine without the locale: show the code */ }
+    return [code, name];
+  });
+}
+
+/**
+ * A translation for `key` in the active language, falling back to English;
+ * undefined when neither has one.
+ * @param {string} key
+ * @returns {string | undefined}
+ */
+function lookup(key) {
+  return DICTS[_lang]?.[key] ?? DICTS.en[key];
 }
 
 /**
@@ -927,7 +1020,7 @@ export function currentLang() {
  * @returns {string}
  */
 export function t(key, params) {
-  let s = (_lang !== 'en' && MESSAGES[_lang]?.[key]) || EN[key] || key;
+  let s = lookup(key) ?? key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       s = s.replaceAll(`{${k}}`, String(v));
@@ -936,61 +1029,40 @@ export function t(key, params) {
   return s;
 }
 
-// ---- Static chrome -------------------------------------------------------
-// index.html ships English; this pass re-labels it at boot. Selector →
-// [textKey, titleKey?, placeholderKey?, ariaKey?] — null skips a slot.
-const STATIC = [
-  ['#new-chat span', 'nav.newChat', null, null],
-  ['#new-chat', null, 'nav.newChat', 'nav.newChat'],
-  ['#memory-btn span', 'nav.memory', null, null],
-  ['#memory-btn', null, 'nav.memoryTitle', null],
-  ['#schedules-btn span', 'nav.schedules', null, null],
-  ['#settings-btn span', 'nav.settings', null, null],
-  ['#settings-btn', null, 'nav.settings', null],
-  ['#sidebar-collapse', null, 'nav.collapse', 'nav.collapse'],
-  ['#sidebar-expand', null, 'nav.expand', 'nav.expand'],
-  ['.sidebar-section-label', 'nav.chats', null, null],
-  ['#export-btn', null, 'topbar.export', null],
-  ['#files-btn', null, 'topbar.files', 'topbar.files'],
-  ['label[for="prompt"]', 'composer.message', null, null],
-  ['#stop', 'composer.stop', null, 'composer.stop'],
-  ['#send', null, null, 'composer.send'],
-  ['#attach', null, 'composer.attach', 'composer.attach'],
-  ['#files-tab-recent', 'files.recent', null, null],
-  ['#files-tab-browse', 'files.browse', null, null],
-  ['#files-refresh', null, 'files.refresh', 'files.refresh'],
-  ['#files-close', null, 'files.close', 'files.close'],
-  ['#files-upload', null, 'files.upload', 'files.upload'],
-  ['#files-attach', null, 'files.attach', 'files.attach'],
-  ['#files-copy', null, 'files.copyContent', 'files.copyContent'],
-  ['#files-fullscreen', null, 'files.fullscreen', 'files.fullscreen'],
-  ['#files-download', null, 'files.download', 'files.download'],
-  ['.export-menu-item[data-format="txt"]', 'topbar.exportText', null, null],
-];
+// ---- Static markup -------------------------------------------------------
+// index.html (and a deployer's template) ships English text and marks what
+// to translate with data-i18n (text), data-i18n-title, data-i18n-aria and
+// data-i18n-placeholder. A key with no translation keeps the markup's text.
+// The markup's English is the source text — often more descriptive than the
+// shared dictionary entry (an aria-label next to a terse title) — so in
+// English only a deployer's own `en` strings replace it.
 
-const PLACEHOLDERS = [
-  ['#session-search', 'nav.filterChats', 'nav.filterChats'],
-  ['#files-filter', 'files.filter', 'files.filter'],
-  ['#prompt', 'composer.placeholder', null],
-];
+const I18N_SELECTOR = '[data-i18n], [data-i18n-title], [data-i18n-aria], [data-i18n-placeholder]';
+const DEPLOYER_EN = pageConfig.i18n?.messages?.en ?? {};
 
-/** Re-label the server-rendered (English) chrome for the active language. Runs once at boot. */
-export function applyStaticI18n() {
-  if (_lang === 'en') return; // the HTML already is English
-  for (const [sel, textKey, titleKey, ariaKey] of STATIC) {
-    for (const el of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll(sel))) {
-      if (textKey) el.textContent = t(textKey);
-      if (titleKey) el.title = t(titleKey);
-      if (ariaKey) el.setAttribute('aria-label', t(ariaKey));
+/**
+ * @param {string} key
+ * @returns {string | undefined}
+ */
+function markupText(key) {
+  return (_lang === 'en' ? undefined : DICTS[_lang]?.[key]) ?? DEPLOYER_EN[key];
+}
+
+/**
+ * Label the marked elements under `root` for the active language — the page
+ * once at boot, and markup cloned from a <template> later.
+ * @param {ParentNode} [root]
+ */
+export function applyStaticI18n(root = document) {
+  for (const el of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll(I18N_SELECTOR))) {
+    const { i18n, i18nTitle, i18nAria, i18nPlaceholder } = el.dataset;
+    let s;
+    if (i18n && (s = markupText(i18n)) !== undefined) el.textContent = s;
+    if (i18nTitle && (s = markupText(i18nTitle)) !== undefined) el.title = s;
+    if (i18nAria && (s = markupText(i18nAria)) !== undefined) el.setAttribute('aria-label', s);
+    if (i18nPlaceholder && (s = markupText(i18nPlaceholder)) !== undefined) {
+      /** @type {HTMLInputElement} */ (el).placeholder = s;
     }
   }
-  for (const [sel, phKey, ariaKey] of PLACEHOLDERS) {
-    const el = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (
-      document.querySelector(sel)
-    );
-    if (!el) continue;
-    el.placeholder = t(phKey);
-    if (ariaKey) el.setAttribute('aria-label', t(ariaKey));
-  }
-  document.documentElement.lang = _lang;
+  if (root === document) document.documentElement.lang = _lang;
 }

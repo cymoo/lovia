@@ -36,17 +36,28 @@ from ..schemas import (
 )
 from .deps import RouterDeps
 from .serialization import (
+    Runs,
     export_md,
     export_txt,
     message_to_json_dict,
     tool_result_flags,
     run_record,
+    segments_runs,
     segments_to_out,
     session_info,
+    user_turn_refs,
     view_messages,
 )
 
 _RESUMABLE = ("interrupted", "running")
+
+
+def _runs_view(runs: Runs, *, created_at: float, updated_at: float) -> list[MessageOut]:
+    """The session view over finished runs plus one in flight, refs stamped."""
+    entries = [e for _, run in runs for e in run]
+    return view_messages(
+        entries, created_at=created_at, updated_at=updated_at, runs=runs
+    )
 
 
 async def _session_view(
@@ -66,12 +77,12 @@ async def _session_view(
 
     live = deps.supervisor.get(session_id)
     if live is not None:
-        entries = await session.load(session_id)
+        runs = segments_runs(await session.segments(session_id))
         if store.checkpointer is not None and live.run_id is not None:
             snapshot = await store.checkpointer.load(live.run_id)
             if snapshot is not None and snapshot.status in _RESUMABLE:
-                entries = entries + list(snapshot.entries)
-        view = view_messages(entries, created_at=created_at, updated_at=updated_at)
+                runs.append((live.run_id, list(snapshot.entries)))
+        view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
         return view, live.run_id
 
     candidate = (
@@ -82,8 +93,9 @@ async def _session_view(
     if candidate and store.checkpointer is not None:
         snapshot = await store.checkpointer.load(candidate)
         if snapshot is not None and snapshot.status in _RESUMABLE:
-            entries = await session.load(session_id) + list(snapshot.entries)
-            view = view_messages(entries, created_at=created_at, updated_at=updated_at)
+            runs = segments_runs(await session.segments(session_id))
+            runs.append((candidate, list(snapshot.entries)))
+            view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
             return view, candidate
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
         await store.clear_active_run_id(session_id)
@@ -308,7 +320,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.post("/api/sessions/{session_id}/rewind", response_model=RewindResponse)
     async def rewind_session(session_id: str, req: RewindRequest) -> RewindResponse:
-        """Rewind to just before the ``user_turn``-th user message.
+        """Rewind to just before the user message ``ref`` (or ``user_turn``) names.
 
         The destructive-undo behind edit-and-resend / regenerate: the target
         user message and everything after it are dropped; the caller then
@@ -349,6 +361,8 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # ordinal mapping agrees with what the client saw. Read-only for now:
         # nothing is destroyed until the ordinal validates.
         ckpt_user_turns = 0
+        runs = segments_runs(await session.segments(session_id))
+        entries = [e for _, run in runs for e in run]
         stale = await store.get_active_run_id(session_id)
         if stale and store.checkpointer is not None:
             snapshot = await store.checkpointer.load(stale)
@@ -358,22 +372,27 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     for e in snapshot.entries
                     if isinstance(e, InputEntry) and e.role == "user"
                 )
+                runs.append((stale, list(snapshot.entries)))
+        user_turn = req.user_turn
+        if req.ref is not None:
+            refs = user_turn_refs(runs)
+            if req.ref not in refs:
+                raise WebError(404, "turn_not_found", f"message {req.ref!r} not found")
+            user_turn = refs.index(req.ref)
+        assert user_turn is not None  # RewindRequest takes exactly one
         # Map the user-turn ordinal onto the flat entry index that starts it.
-        entries = await session.load(session_id)
         cut = None
         seen = -1
         for i, entry in enumerate(entries):
             if isinstance(entry, InputEntry) and entry.role == "user":
                 seen += 1
-                if seen == req.user_turn:
+                if seen == user_turn:
                     cut = i
                     break
-        if cut is None and req.user_turn > seen + ckpt_user_turns:
+        if cut is None and user_turn > seen + ckpt_user_turns:
             # Out of range (e.g. a stale client): refuse BEFORE touching the
             # checkpoint — a bad ordinal must not cost a resumable run.
-            raise WebError(
-                404, "turn_not_found", f"user turn {req.user_turn} not found"
-            )
+            raise WebError(404, "turn_not_found", f"user turn {user_turn} not found")
         # Validated — now the destructive part. The resume pointer dies with
         # every rewind (its snapshot replays a tail that no longer exists);
         # a cut inside the checkpoint's own turns means "drop the checkpoint,

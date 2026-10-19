@@ -32,6 +32,7 @@ import {
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
 import { collectContext } from './lovia.js';
+import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
   configureComponents,
   rerenderComponents,
@@ -345,15 +346,22 @@ function maybeDateSeparator(transcriptEl, ts, { anchorFirst = false } = {}) {
 }
 
 // ---- Edit & regenerate ---------------------------------------------------
-// User turns carry their 0-based ordinal (dataset.userTurn) — the currency of
-// POST /sessions/{id}/rewind. History renders assign it from the full entry
-// list; live sends take the next number chronologically (queued bubbles get
-// theirs only once the run confirms them, matching server transcript order).
+// POST /sessions/{id}/rewind names a user turn by its server ref
+// (dataset.ref) when the turn has one: it can't land on another message if
+// the chat changed in another tab. A turn the server hasn't named yet (its
+// run ended without one) falls back to its 0-based ordinal (dataset.userTurn).
+// History renders assign that from the full entry list; live sends take the
+// next number chronologically (queued bubbles get theirs only once the run
+// confirms them, matching server transcript order).
 let _userTurnCount = 0;
 
-async function rewindTo(userTurn, message) {
+async function rewindTo(node, message) {
+  const { ref, userTurn } = node.dataset;
   try {
-    const res = await api.rewindSession(store.sessionId, userTurn);
+    const res = await api.rewindSession(
+      store.sessionId,
+      ref ? { ref } : { user_turn: Number(userTurn) },
+    );
     renderHistory(res.entries || []);
     hideContextMeter(); // the old fill describes a transcript that's gone
     _staleMeterSessions.add(store.sessionId); // …and so does its run record
@@ -448,7 +456,7 @@ function startEditUserTurn(node) {
     sendBtn.textContent = t('chat.stopping');
     // On success the whole transcript re-renders (editor included); only a
     // failure leaves this editor alive — re-enable it for another try.
-    if (!(await rewindTo(Number(node.dataset.userTurn), text))) {
+    if (!(await rewindTo(node, text))) {
       sendBtn.disabled = false;
       sendBtn.textContent = t('chat.send');
     }
@@ -491,7 +499,7 @@ function updateRegenButton() {
   btn.addEventListener('click', () => {
     if (store.streaming) return;
     const text = lastUser.querySelector('.body')?.textContent?.trim();
-    if (text) rewindTo(Number(lastUser.dataset.userTurn), text);
+    if (text) rewindTo(lastUser, text);
   });
   ensureFooter(last.querySelector('.bubble'))?.appendChild(btn);
 }
@@ -522,7 +530,7 @@ export function appendUserTurn(text, { queued = false, before = null, attachment
   ensureFooter(bubble);
   if (!queued) {
     node.dataset.userTurn = String(_userTurnCount++);
-    addCopyButton(bubble); // queued bubbles get their copy button on confirm
+    addMessageActions(bubble); // queued bubbles get their actions on confirm
     // No edit button here: it belongs to whichever turn ends up last, which
     // updateEditButton decides once the run settles.
   }
@@ -580,6 +588,7 @@ function resumeTailAssistantTurn() {
   node.classList.add('streaming');
   store.turnNode = node;
   store.bubble = node.querySelector('.bubble');
+  renderMessageActions(store.bubble); // none while it streams; settling redraws them
   // The rest starts clean: what's in the bubble is finished history, and the
   // continuation is a fresh model turn — its first delta opens a new body, its
   // thinking a new <details>, exactly as they render when nobody reconnected.
@@ -1486,22 +1495,31 @@ function cleanMarkdownForCopy(markdown) {
   return cleaned.join('\n').trim();
 }
 
-function addCopyButton(bubble) {
-  if (!bubble) return;
-  for (const node of bubble.querySelectorAll(':scope > .btn-copy, :scope > .turn-footer > .btn-copy')) {
-    node.remove();
-  }
+// A bubble's text as Markdown: what copy puts on the clipboard.
+function bubbleMarkdown(bubble) {
   const bodies = Array.from(bubble.children).filter((node) =>
     node.classList?.contains('body')
   );
-  const footer = ensureFooter(bubble);
-  const markdown = cleanMarkdownForCopy(bodies
+  return cleanMarkdownForCopy(bodies
     .map((body) => body.dataset.raw || body.textContent || '')
     .map((text) => text.trim())
     .filter(Boolean)
     .join('\n\n'));
-  if (!markdown) return;
+}
 
+// The footer's copy button, then the deployer's message actions.
+function addMessageActions(bubble) {
+  if (!bubble) return;
+  for (const node of bubble.querySelectorAll(':scope > .btn-copy, :scope > .turn-footer > .btn-copy')) {
+    node.remove();
+  }
+  const footer = ensureFooter(bubble);
+  addCopyButton(footer, bubbleMarkdown(bubble));
+  renderMessageActions(bubble);
+}
+
+function addCopyButton(footer, markdown) {
+  if (!markdown) return;
   const btn = cloneTemplate('tmpl-copy-btn');
   btn.addEventListener('click', async () => {
     const ok = await copyToClipboard(markdown);
@@ -1515,6 +1533,77 @@ function addCopyButton(bubble) {
     }
   });
   footer?.appendChild(btn);
+}
+
+/**
+ * A turn as message actions see it. A reply carries the ref of the user
+ * message it answers: the nearest confirmed user turn above it.
+ * @param {HTMLElement} turn
+ * @returns {MessageRef}
+ */
+function describeMessage(turn) {
+  const role = turn.classList.contains('user') ? 'user' : 'assistant';
+  let user = /** @type {Element | null} */ (turn);
+  while (user && !user.matches('.turn.user:not(.queued)')) user = user.previousElementSibling;
+  const bubble = turn.querySelector('.bubble');
+  return Object.freeze({
+    sessionId: store.sessionId,
+    ref: /** @type {HTMLElement | null} */ (user)?.dataset.ref ?? null,
+    role,
+    text: bubble ? bubbleMarkdown(bubble) : '',
+  });
+}
+
+// (Re)draw a settled turn's message actions, right after its copy button. A
+// queued or still-streaming turn gets none yet; its settling draws them.
+function renderMessageActions(bubble) {
+  const turn = /** @type {HTMLElement | null} */ (bubble?.closest('.turn'));
+  const footer = bubble?.querySelector(':scope > .turn-footer');
+  if (!turn || !footer) return;
+  let box = footer.querySelector(':scope > .msg-actions');
+  const settled = !turn.matches('.queued, .streaming');
+  const buttons = settled ? messageActionButtons(() => describeMessage(turn)) : [];
+  if (!buttons.length) {
+    box?.remove();
+    return;
+  }
+  if (!box) {
+    box = document.createElement('span');
+    box.className = 'msg-actions';
+    box.setAttribute('data-part', 'message-actions');
+  }
+  box.replaceChildren(...buttons);
+  const anchor =
+    footer.querySelector(':scope > .btn-copy') ?? footer.querySelector(':scope > .timestamp');
+  if (anchor) anchor.after(box);
+  else footer.prepend(box);
+}
+
+function renderAllMessageActions(from = null) {
+  const transcriptEl = document.getElementById('transcript');
+  const turns = transcriptEl?.querySelectorAll(':scope > .turn') ?? [];
+  let on = !from;
+  for (const turn of turns) {
+    on ||= turn === from;
+    if (on) renderMessageActions(turn.querySelector('.bubble'));
+  }
+}
+
+watchMessageActions(() => renderAllMessageActions());
+
+// A run named its user turns (the `refs` frame, just before `done`): they are
+// the last confirmed ones on screen. Stamp them, then redraw the actions of
+// every message from the first — a reply's ref is its user turn's.
+function stampRefs(refs) {
+  const transcriptEl = document.getElementById('transcript');
+  if (!transcriptEl || !refs?.length) return;
+  const users = [...transcriptEl.querySelectorAll(':scope > .turn.user:not(.queued)')]
+    .slice(-refs.length);
+  const skip = refs.length - users.length;
+  users.forEach((node, i) => {
+    /** @type {HTMLElement} */ (node).dataset.ref = refs[skip + i];
+  });
+  if (users.length) renderAllMessageActions(users[0]);
 }
 
 // ---- Mid-run injection: queued user turns awaiting confirmation ----------
@@ -1547,7 +1636,7 @@ function finalizeCurrentAssistantTurn() {
     } else {
       node.classList.remove('streaming');
       setTurnTimestamp(node);
-      addCopyButton(store.bubble);
+      addMessageActions(store.bubble);
     }
   }
   store.turnNode = null;
@@ -1569,7 +1658,7 @@ function confirmQueuedTurn(node) {
   delete node.dataset.injectId;
   // Confirmation order matches the server's drain order — number it now.
   node.dataset.userTurn = String(_userTurnCount++);
-  addCopyButton(node.querySelector('.bubble'));
+  addMessageActions(node.querySelector('.bubble'));
   // No edit button: this runs mid-run, and the pencil belongs to the tail turn
   // once the run settles (updateEditButton, called from exitStreamingUI).
 }
@@ -1755,6 +1844,7 @@ function renderHistoryWindow({ stickBottom }) {
       }
       const turn = makeTurn('user', it.timestamp);
       turn.dataset.userTurn = String(userIdx++);
+      if (it.ref) turn.dataset.ref = it.ref;
       const bubble = turn.querySelector('.bubble');
       // A turn's attachments survive in stored history only as the note the
       // server appends to the text (attachments.py `_attachment_note`); recover
@@ -1768,8 +1858,8 @@ function renderHistoryWindow({ stickBottom }) {
       }
       if (attachments.length) appendBubbleContent(bubble, makeAttachmentsBlock(attachments));
       ensureFooter(bubble);
-      addCopyButton(bubble);
-      transcriptEl.appendChild(turn);
+      transcriptEl.appendChild(turn); // first: its actions look for the user turn above
+      addMessageActions(bubble);
     } else if (it.role === 'assistant') {
       if (!currentBubble) {
         if (it.timestamp) {
@@ -1832,7 +1922,7 @@ function renderHistoryWindow({ stickBottom }) {
           }
         }
       }
-      addCopyButton(currentBubble);
+      addMessageActions(currentBubble);
     } else if (it.role === 'context_compacted') {
       // Persisted run-boundary notice — render into the run's bubble (matching
       // the live placement), or the transcript if the run had no assistant turn.
@@ -1842,6 +1932,7 @@ function renderHistoryWindow({ stickBottom }) {
 
   // Remove streaming markers
   transcriptEl.querySelectorAll('.turn.streaming').forEach(n => n.classList.remove('streaming'));
+  renderAllMessageActions(); // the replies were still marked streaming above
   store.bubble = null;
   store.body = null;
   store.rawText = '';
@@ -2203,6 +2294,10 @@ async function handleEvent({ event, data }) {
       appendErrorNotice(data.hint ? `${message} — ${data.hint}` : message, data.code);
       break;
     }
+
+    case 'refs':
+      stampRefs(data?.refs);
+      break;
 
     case 'done': {
       _sawDone = true;

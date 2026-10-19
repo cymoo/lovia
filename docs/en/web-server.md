@@ -237,7 +237,7 @@ To target a region, select its `data-part`:
 | --- | --- |
 | Sidebar | `sidebar`, `sidebar-header`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `export`, `files-toggle` |
-| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`) |
+| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
 | Composer | `composer`, `attach`, `context-ring` |
 | Elsewhere | `files-panel`; in Settings, `language` (the language row) |
 
@@ -293,9 +293,11 @@ internal.
 | `newChat()` / `openSession(id)` | Show a new chat / chat `id` |
 | `toast(text, { type })` | A transient notice; `type` is `"info"` (default) or `"error"` |
 | `api` | The page's API client — the [path prefix](#serving-under-a-path-prefix) and sign-in handling built in |
+| `fetch(path, init)` | `fetch` for your own routes: `path` starts with `/` and gets the path prefix; a 401 gets the page's sign-in handling |
 | `t(key, params)` | A UI string in the page's language, including your [own keys](#wording-and-languages) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
+| `registerMessageAction(id, action)` / `refreshMessageActions()` | [Message actions](#message-actions) |
 | `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run context](#run-context) |
 
 ```js
@@ -399,6 +401,64 @@ lovia.registerToolView('web_search', {
   [Styling](#styling)), not a view's.
 - Kinds starting with `lovia.` are lovia's own: don't register renderers under
   them.
+
+### Message actions
+
+`registerMessageAction(id, action)` adds a button to the messages' footers,
+beside copy: rate an answer, report it, save it to notes. lovia keeps none of
+that data — the action calls a route of your own:
+
+```js
+const ratings = new Map(); // ref → 'up' | 'down', for the chat on screen
+
+lovia.registerMessageAction('rate-up', {
+  label: 'Good answer',
+  icon: '👍',
+  when: (msg) => msg.role === 'assistant' && msg.ref !== null,
+  pressed: (msg) => ratings.get(msg.ref) === 'up',
+  async run(msg) {
+    const res = await lovia.fetch('/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: msg.sessionId, ref: msg.ref, rating: 'up' }),
+    });
+    if (!res.ok) throw new Error('Could not save the rating'); // shown as a toast
+    ratings.set(msg.ref, 'up');
+    lovia.refreshMessageActions(); // draw it pressed
+  },
+});
+```
+
+| `action` field | Description |
+| --- | --- |
+| `label` | The tooltip and accessible name |
+| `icon` | A built-in icon name, SVG markup, or text such as an emoji; the label when absent |
+| `when(msg)` | Whether `msg` shows the action; every message when absent |
+| `pressed(msg)` | Draw the button pressed (`aria-pressed`), e.g. a rating already given |
+| `run(msg)` | Called on a click; may be async, and the button is disabled until it settles. An error it throws shows as a toast |
+
+- `msg` is a frozen snapshot: `sessionId`, `role` (`user` or `assistant`),
+  `text` (Markdown, what copy takes), and `ref`.
+- `ref` names a user message — `"<run_id>:<n>"` — and a reply carries the
+  `ref` of the message it answers, so `(sessionId, ref)` is the key for data
+  you keep about a message. It survives reloads, and it never names another
+  message: rewinding cuts a message's ref out for good, so an edited question
+  or a regenerated answer gets a new one, and an old rating never lands on new
+  text.
+- `ref` is `null` until the server names the message: when its run finishes,
+  or on the next load of the chat for a run that failed or was stopped (and
+  for every run when the chat store keeps no checkpoints).
+  `when: (msg) => msg.ref !== null` holds an action back until then; one that
+  needs no ref (quote, translate) shows at once.
+- Actions show on settled messages: none on a reply still streaming in or a
+  message still queued.
+- `when` and `pressed` are asked when a footer is drawn. After the state they
+  read changes (a rating saved, ratings fetched for the chat that came on
+  screen), call `lovia.refreshMessageActions()`. Registering under an `id`
+  again replaces the action; `null` removes it.
+
+`examples/35_web_feedback.py` is a complete version: 👍 / 👎 on answers kept
+in SQLite by its own routes, a report page, and a Quote action.
 
 ## UI components
 

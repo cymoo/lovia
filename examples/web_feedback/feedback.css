@@ -1,0 +1,6 @@
+/* Message actions carry data-action="<id>"; a given rating is aria-pressed.
+   lovia already keeps a pressed action visible in the accent colour — a 👎
+   reads better in the danger one. */
+[data-part="message-actions"] [data-action="acme-down"][aria-pressed="true"] {
+  color: var(--danger);
+}

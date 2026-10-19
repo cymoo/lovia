@@ -39,7 +39,13 @@ from ..transcript import (
     drop_dangling_tool_calls,
     input_to_entries,
 )
-from .api.serialization import drop_system_entries, view_messages
+from .api.serialization import (
+    Runs,
+    drop_system_entries,
+    segments_runs,
+    user_turn_refs,
+    view_messages,
+)
 from .components import UI_DATA_SINK
 from .errors import WebError
 from .schemas import MessageOut
@@ -48,6 +54,7 @@ from .sse import (
     RunStartedData,
     SessionData,
     SnapshotData,
+    UserTurnRefs,
     event_to_sse,
     frame,
     usage_dict,
@@ -283,6 +290,8 @@ class RunController:
         self.last_input_tokens: int | None = None
         # snapshot mirror (task-private until read synchronously by attach)
         self.history_baseline: list[TranscriptEntry] = []
+        # The same history grouped by run, so a snapshot can name user turns.
+        self.history_runs: Runs = []
         self.completed_mirror: list[TranscriptEntry] = []
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event] = []
@@ -317,8 +326,8 @@ class RunController:
         self._ensure_begun()
         return sub
 
-    def subscribe_resume(self, entries: list[TranscriptEntry]) -> _Attachment:
-        """Subscribe to a resumed run, opening with ``entries`` as its snapshot.
+    def subscribe_resume(self, runs: Runs) -> _Attachment:
+        """Subscribe to a resumed run, opening with ``runs`` as its snapshot.
 
         A resume differs from a START in having a past: the interrupted turn is
         already on screen, and the run is about to re-announce the tool calls it
@@ -326,15 +335,16 @@ class RunController:
         treat this exactly like a re-attach — continue the run's own bubble, and
         recognise the replayed calls instead of drawing them twice.
 
-        ``entries`` comes from the caller (session history + the checkpoint's
-        own), NOT from ``history_baseline``/``completed_mirror``: those are
+        ``runs`` comes from the caller (session history + the checkpoint's
+        own), NOT from ``history_runs``/``completed_mirror``: those are
         task-private by design and still empty here, since the task has not
         begun. Subscribe first, then begin, so no early event is missed.
         """
         sub = self.hub.subscribe()
         now = time.time()
+        entries = [e for _, run in runs for e in run]
         attachment = _Attachment(
-            snapshot=view_messages(entries, created_at=now, updated_at=now),
+            snapshot=view_messages(entries, created_at=now, updated_at=now, runs=runs),
             buffered=[],  # nothing has been published yet — the tail IS the run
             subscription=sub,
             status=self.status,
@@ -349,8 +359,9 @@ class RunController:
         buffered = list(self.in_flight_buffer)
         if with_snapshot:
             entries = [*self.history_baseline, *self.completed_mirror]
+            runs = [*self.history_runs, (self.run_id, self.completed_mirror)]
             now = time.time()
-            snapshot = view_messages(entries, created_at=now, updated_at=now)
+            snapshot = view_messages(entries, created_at=now, updated_at=now, runs=runs)
         else:
             snapshot = []
         # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
@@ -553,9 +564,9 @@ class RunController:
                 # this leg.
                 if self.cancel.is_cancelled:
                     break
-                self.history_baseline = (
-                    await session.load(sid) if session is not None else []
-                )
+                segments = await session.segments(sid) if session is not None else []
+                self.history_runs = segments_runs(segments)
+                self.history_baseline = [e for seg in segments for e in seg.entries]
                 self.completed_mirror = list(seed)
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
@@ -580,6 +591,11 @@ class RunController:
                 async for ev in handle:
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
+                    if isinstance(ev, events.RunCompleted) and self.run_id:
+                        # The leg's turns are all in the mirror by now (TurnEnded
+                        # precedes RunCompleted) and its segment is keyed by run_id.
+                        refs = user_turn_refs([(self.run_id, self.completed_mirror)])
+                        self.hub.publish(UserTurnRefs([r for r in refs if r]))
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
                         succeeded = True

@@ -13,16 +13,20 @@ import {
   emitLovia,
   lovia,
 } from '../../../lovia/web/static/js/lovia.js';
+import { configureApi } from '../../../lovia/web/static/js/api.js';
 
 test('the API surface is exactly the documented one', () => {
   assert.deepEqual(Object.keys(lovia).sort(), [
     'api',
+    'fetch',
     'getRenderer',
     'newChat',
     'on',
     'openSession',
     'provideContext',
     'ready',
+    'refreshMessageActions',
+    'registerMessageAction',
     'registerRenderer',
     'registerToolView',
     'send',
@@ -129,4 +133,22 @@ test('actions reach the page, normalized', async () => {
   assert.equal(state.sessionId, 's1');
   assert.equal(state.busy, true);
   assert.ok(Object.isFrozen(state));
+});
+
+test('fetch() takes an app path and adds the mount prefix', async () => {
+  const requested = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requested.push([url, init?.method]);
+    return new Response('{}');
+  };
+  try {
+    configureApi({ base: '/lovia' });
+    await lovia.fetch('/feedback', { method: 'POST' });
+    assert.deepEqual(requested, [['/lovia/feedback', 'POST']]);
+    assert.throws(() => lovia.fetch('feedback'), /starting with '\/'/);
+  } finally {
+    configureApi({ base: '' });
+    globalThis.fetch = realFetch;
+  }
 });

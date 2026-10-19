@@ -165,6 +165,45 @@ def messages_to_out(
     ]
 
 
+#: The runs a view covers, in transcript order: (run_id, that run's entries).
+#: A run in flight without a checkpoint has no id yet: its turns get no ref.
+Runs = list[tuple[str | None, list[TranscriptEntry]]]
+
+
+def user_turn_refs(runs: Runs) -> list[str | None]:
+    """Each user turn's ref, in transcript order: ``"<run_id>:<n>"`` — its
+    run's segment id and its place among that run's user turns.
+
+    A run's segment is never appended to again (a rewind only cuts a run's
+    tail; new turns always start a new run), so a ref once cut never comes
+    back naming another turn — unlike a turn's position, which a rewind and a
+    retry reuse.
+    """
+    refs: list[str | None] = []
+    for run_id, entries in runs:
+        n = 0
+        for e in entries:
+            if isinstance(e, InputEntry) and e.role == "user":
+                refs.append(f"{run_id}:{n}" if run_id else None)
+                n += 1
+    return refs
+
+
+def stamp_refs(outs: list[MessageOut], runs: Runs) -> list[MessageOut]:
+    """Give each user message its ref (see :func:`user_turn_refs`). When the
+    counts disagree nothing is stamped: no ref beats a wrong one."""
+    users = [o for o in outs if o.role == "user"]
+    refs = user_turn_refs(runs)
+    if len(users) == len(refs):
+        for out, ref in zip(users, refs):
+            out.ref = ref
+    return outs
+
+
+def segments_runs(segments: list[Segment]) -> Runs:
+    return [(seg.run_id, seg.entries) for seg in segments]
+
+
 def segments_to_out(
     segments: list[Segment], *, created_at: float, updated_at: float
 ) -> list[MessageOut]:
@@ -203,22 +242,28 @@ def segments_to_out(
                 timestamp=ts,
             ),
         )
-    return outs
+    return stamp_refs(outs, segments_runs(segments))
 
 
 def view_messages(
-    entries: list[TranscriptEntry], *, created_at: float, updated_at: float
+    entries: list[TranscriptEntry],
+    *,
+    created_at: float,
+    updated_at: float,
+    runs: Runs | None = None,
 ) -> list[MessageOut]:
     """Project a transcript (session history + a run's own entries) to the
     session-detail message shape. Shared by ``GET /api/sessions/{id}`` and the
-    live re-attach snapshot so both render byte-identically."""
+    live re-attach snapshot so both render byte-identically. ``runs`` — the
+    same entries grouped by run — stamps the user turns' refs."""
     kept = drop_system_entries(entries)
-    return _apply_tool_flags(
+    outs = _apply_tool_flags(
         messages_to_out(
             entries_to_messages(kept), created_at=created_at, updated_at=updated_at
         ),
         kept,
     )
+    return stamp_refs(outs, runs) if runs is not None else outs
 
 
 def message_to_json_dict(

@@ -37,6 +37,7 @@ from ..store import ChatMeta
 from ..supervisor import RunController, forward
 from ..titles import provisional_title
 from .deps import RouterDeps
+from .serialization import segments_runs
 
 
 def build_chat_router(deps: RouterDeps) -> APIRouter:
@@ -348,7 +349,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # Same splice `_session_view` used to build the view the client is
         # looking at right now (session history + the checkpoint's entries), so
         # the snapshot it re-renders matches rather than fights it.
-        entries = await session.load(session_id) + list(snapshot.entries)
+        runs = [
+            *segments_runs(await session.segments(session_id)),
+            (run_id, list(snapshot.entries)),
+        ]
 
         try:
             ctrl = await deps.supervisor.start_resume(
@@ -371,7 +375,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 )
             raise
         return EventSourceResponse(
-            forward(ctrl.subscribe_resume(entries), sid=session_id, emit_session=True)
+            forward(ctrl.subscribe_resume(runs), sid=session_id, emit_session=True)
         )
 
     return router

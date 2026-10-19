@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import AsyncIterator, Callable, TypedDict, cast
 
 from ..types import JsonObject, JsonValue
@@ -123,6 +123,20 @@ class DoneData(TypedDict):
     usage: dict[str, int]
 
 
+class RefsData(TypedDict):
+    refs: list[str]
+
+
+@dataclass(frozen=True)
+class UserTurnRefs:
+    """The refs of the user turns a just-finished leg of a run holds, in order
+    (api/serialization.py ``user_turn_refs``): published by the supervisor
+    just before the leg's ``RunCompleted`` so a live view can name those turns
+    while ``done`` stays the stream's last frame."""
+
+    refs: list[str]
+
+
 CHAT_EVENTS: dict[str, type] = {
     "session": SessionData,
     "snapshot": SnapshotData,
@@ -139,6 +153,7 @@ CHAT_EVENTS: dict[str, type] = {
     "turn_started": TurnStartedData,
     "context_compacted": ContextCompactedData,
     "error": ErrorData,
+    "refs": RefsData,
     "done": DoneData,
 }
 
@@ -278,8 +293,10 @@ def _coerce(value: object) -> JsonValue:
     return str(value)
 
 
-def event_to_sse(ev: events.Event) -> dict[str, str] | None:
+def event_to_sse(ev: events.Event | UserTurnRefs) -> dict[str, str] | None:
     """Return a ``{"event": ..., "data": json}`` dict, or ``None`` to skip."""
+    if isinstance(ev, UserTurnRefs):
+        return frame("refs", RefsData(refs=ev.refs))
     if isinstance(ev, events.TextDelta):
         return frame("text_delta", DeltaData(delta=ev.delta))
     if isinstance(ev, events.ReasoningDelta):

@@ -33,7 +33,13 @@ const url = (path) => _base + path;
 /** @returns {string} The mount prefix set by `configureApi` ('' at the root). */
 export const basePath = () => _base;
 
-async function request(path, init) {
+/**
+ * `fetch` for an app-relative path: the mount prefix added, a 401 routed.
+ * @param {string} path
+ * @param {RequestInit} [init]
+ * @returns {Promise<Response>}
+ */
+export async function request(path, init) {
   const res = await fetch(url(path), init);
   if (res.status === 401 && _onUnauthorized && !_unauthorized) {
     _unauthorized = true;
@@ -200,11 +206,13 @@ export const api = {
     }).then(_json),
   // Rewind to just before the userTurn-th user message (edit / regenerate);
   // resolves to { removed, entries } — the authoritative post-rewind view.
-  rewindSession: (id, userTurn) =>
+  // `target` names the user message: `{ ref }`, or `{ user_turn }` for one
+  // without a ref yet.
+  rewindSession: (id, target) =>
     request(`/api/sessions/${encodeURIComponent(id)}/rewind`, {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({ user_turn: userTurn }),
+      body: JSON.stringify(target),
     }).then(_json),
   // The chat as a file → Response (`json` feeds the client-side HTML export).
   exportChat: (id, format = 'md') =>

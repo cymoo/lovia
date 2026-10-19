@@ -5,9 +5,10 @@
 // supplies what the page implements through configureLovia and relays the
 // page's events through emitLovia.
 
-import { api } from './api.js';
+import { api, request } from './api.js';
 import { getRenderer, registerRenderer } from './components.js';
 import { t } from './i18n.js';
+import { refreshMessageActions, registerMessageAction } from './message-actions.js';
 import { pageConfig } from './page-config.js';
 import { registerToolView } from './tool-views.js';
 
@@ -110,6 +111,8 @@ export const lovia = Object.freeze({
   registerRenderer,
   getRenderer,
   registerToolView,
+  registerMessageAction,
+  refreshMessageActions,
   provideContext(key, fn) {
     if (typeof key !== 'string' || !key) {
       throw new TypeError('lovia.provideContext: expected a key');
@@ -136,6 +139,12 @@ export const lovia = Object.freeze({
     host.toast(String(text), { type: opts?.type === 'error' ? 'error' : 'info' });
   },
   api,
+  fetch(path, init) {
+    if (typeof path !== 'string' || !path.startsWith('/')) {
+      throw new TypeError("lovia.fetch: expected an app path starting with '/'");
+    }
+    return request(path, init);
+  },
   t,
 });
 

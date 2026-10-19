@@ -19,24 +19,28 @@ function restore() {
 
 test('every module is imported, and none failed', async () => {
   const seen = [];
-  const failed = await loadExtensions(['a.js', 'b.js'], {
+  const failed = [];
+  await loadExtensions(['a.js', 'b.js'], {
     importer: async (url) => seen.push(url),
+    onFailure: (url) => failed.push(url),
   });
   assert.deepEqual(seen.sort(), ['a.js', 'b.js']);
   assert.deepEqual(failed, []);
 });
 
-test('a module that throws (or rejects) is reported, the rest still load', async () => {
+test('a module that throws (or rejects) is reported once, the rest still load', async () => {
   silence();
   try {
     const loaded = [];
-    const failed = await loadExtensions(['bad.js', 'sync.js', 'good.js'], {
+    const failed = [];
+    await loadExtensions(['bad.js', 'sync.js', 'good.js'], {
       importer: (url) => {
         if (url === 'sync.js') throw new Error('boom');
         if (url === 'bad.js') return Promise.reject(new Error('404'));
         loaded.push(url);
         return Promise.resolve();
       },
+      onFailure: (url) => failed.push(url),
     });
     assert.deepEqual(failed.sort(), ['bad.js', 'sync.js']);
     assert.deepEqual(loaded, ['good.js']);
@@ -51,8 +55,9 @@ test('a slow module stops holding up the start, and still lands later', async ()
     let landed = false;
     /** @type {() => void} */
     let finish = () => {};
+    const failed = [];
     const started = Date.now();
-    const failed = await loadExtensions(['slow.js'], {
+    await loadExtensions(['slow.js'], {
       timeoutMs: 30,
       importer: () =>
         new Promise((resolve) => {
@@ -61,18 +66,42 @@ test('a slow module stops holding up the start, and still lands later', async ()
             resolve(undefined);
           };
         }),
+      onFailure: (url) => failed.push(url),
     });
-    assert.deepEqual(failed, []);
     assert.ok(Date.now() - started < 1000);
     assert.equal(landed, false);
     finish();
     await new Promise((r) => setTimeout(r, 0));
     assert.equal(landed, true);
+    assert.deepEqual(failed, []);
+  } finally {
+    restore();
+  }
+});
+
+test('a slow module that then fails is still reported, after the start', async () => {
+  silence();
+  try {
+    /** @type {(err: Error) => void} */
+    let fail = () => {};
+    const failed = [];
+    await loadExtensions(['late.js'], {
+      timeoutMs: 30,
+      importer: () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+      onFailure: (url) => failed.push(url),
+    });
+    assert.deepEqual(failed, []); // started without it
+    fail(new Error('404'));
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(failed, ['late.js']);
   } finally {
     restore();
   }
 });
 
 test('no modules resolves at once', async () => {
-  assert.deepEqual(await loadExtensions([]), []);
+  await loadExtensions([]);
 });

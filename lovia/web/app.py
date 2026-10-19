@@ -8,7 +8,7 @@ import mimetypes
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 try:
@@ -95,7 +95,8 @@ class _AssetFiles(StaticFiles):
     """
 
     async def get_response(self, path: str, scope: Any) -> Any:
-        parts = PurePosixPath(path).parts
+        # StaticFiles hands over an OS path: backslash-separated on Windows.
+        parts = path.replace("\\", "/").split("/")
         if path.endswith(".html") or any(p.startswith(".") for p in parts):
             raise HTTPException(status_code=404)
         response = await super().get_response(path, scope)

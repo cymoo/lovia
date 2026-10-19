@@ -206,6 +206,23 @@ def test_assets_are_served_revalidated_but_not_templates_or_dotfiles(
         assert c.get(hidden).status_code == 404, hidden
 
 
+@pytest.mark.parametrize("path", ["nested\\.env", ".git\\config", "a\\b\\.secret"])
+async def test_asset_filter_reads_windows_paths(tmp_path, path) -> None:
+    """StaticFiles passes an OS path, so on Windows the separator is '\\'."""
+    from fastapi import HTTPException
+
+    from lovia.web.app import _AssetFiles
+
+    # Present at that path (on POSIX, a backslash is just a filename
+    # character), so only the filter stands between it and a download.
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("SECRET=1", encoding="utf-8")
+    files = _AssetFiles(directory=str(tmp_path))
+    with pytest.raises(HTTPException) as err:
+        await files.get_response(path, {"type": "http", "method": "GET"})
+    assert err.value.status_code == 404
+
+
 def test_styles_logo_and_favicon_resolve_like_scripts(tmp_path) -> None:
     ui = ChatUI(
         assets=tmp_path,

@@ -258,7 +258,7 @@ ui = ChatUI(
 | `window.lovia` | 说明 |
 | --- | --- |
 | `version` | 提供页面的 lovia 版本，用于特性检测 |
-| `ready` | 应用启动完成、对话列表加载后兑现的 promise（用户未登录时一直挂起） |
+| `ready` | 应用启动结束时兑现的 promise：页面已就绪，首次的对话列表请求和 URL 指定的对话都已加载完（或失败）。页面发现用户未登录时一直挂起 |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 
 ```js

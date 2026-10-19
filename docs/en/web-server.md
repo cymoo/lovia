@@ -278,7 +278,7 @@ its one public script API; the other modules are internal.
 | `window.lovia` | Description |
 | --- | --- |
 | `version` | The lovia version serving the page, for feature checks |
-| `ready` | A promise that settles once the app has started and the chat list is in (it stays pending while the user is signed out) |
+| `ready` | A promise that settles once the app's start is over: the page is wired up, and the first chat-list request and the chat in the URL have loaded or failed. It stays pending if the page finds the user signed out |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 
 ```js

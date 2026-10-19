@@ -286,10 +286,12 @@ window.lovia = lovia;
   adoptTokenFromURL(); // before the first API call
   applyStaticI18n(); // before init code reads/sets any labels
   // Extensions register before anything renders, so the first render has them.
-  const failed = await loadExtensions(pageConfig.scripts ?? []);
-  for (const url of failed) {
-    toast(t('toast.extensionFailed', { name: url.split('/').pop() || url }), { type: 'error' });
-  }
+  await loadExtensions(pageConfig.scripts ?? [], {
+    onFailure: (url) => {
+      const name = url.split('/').pop() || url;
+      toast(t('toast.extensionFailed', { name }), { type: 'error' });
+    },
+  });
   initTheme();
   initSidebarToggle();
   initComposer();
@@ -334,5 +336,7 @@ window.lovia = lovia;
   if (sid) {
     await switchSession(sid).catch(() => {});
   }
+  // The start is over — the list and the URL's chat loaded or failed (each
+  // failure surfaces on its own, and the sidebar retries).
   markReady();
 })();

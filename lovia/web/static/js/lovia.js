@@ -15,9 +15,11 @@ const ready = new Promise((resolve) => {
 export const lovia = Object.freeze({
   /** The lovia package version serving this page. */
   version: typeof pageConfig.version === 'string' ? pageConfig.version : '',
-  /** Settles once the app has started and the chat list is in — never while
-   * the user is signed out. The start waits for extension modules, so one
-   * that awaits this at its top level stalls until the load timeout. */
+  /** Settles once the app's start is over: the page is wired, and the first
+   * chat-list request and the URL's chat have loaded or failed. Not when the
+   * agent list is refused (signed out). The start waits for extension
+   * modules, so one that awaits this at its top level stalls until the load
+   * timeout. */
   ready,
   registerRenderer,
   getRenderer,

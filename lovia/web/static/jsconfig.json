@@ -25,5 +25,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["js/**/*.js", "types.d.ts"]
+  "include": ["js/**/*.js", "types.d.ts", "lovia.d.ts"]
 }

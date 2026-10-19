@@ -1721,6 +1721,20 @@ body.sidebar-collapsed .sidebar-expand-btn {
   text-overflow: ellipsis;
   flex: 1;
 }
+/* A tool view's summary line (lovia.registerToolView) stands in for name(args). */
+.tool.tool--summary .tool-name,
+.tool.tool--summary .tool-args {
+  display: none;
+}
+.tool .tool-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 13px;
+}
 /* The shell card's model-written one-liner: a muted prose subtitle on its own
    row (order pushes it past the summary's hover actions). */
 .tool summary .tool-desc {

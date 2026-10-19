@@ -150,6 +150,11 @@ with its own job:
 Everything else — class names, element ids, the JavaScript modules — is
 internal and may change between releases.
 
+Two runnable examples put these together: `examples/32_web_branding.py` brands
+the page (logo, tokens, blocks, wording, an added language), and
+`examples/33_web_extensions.py` extends its behavior through `window.lovia`
+(tool views, events, actions).
+
 ### Template blocks
 
 An `index.html` in `assets` replaces the page. Extend the bundled one and fill
@@ -271,30 +276,127 @@ ui = ChatUI(
 ### Extension scripts
 
 `ChatUI(scripts=[...])` lists ES modules the page imports **before it starts**,
-so whatever they register — a [component renderer](#ui-components), say — is
-in place for the first render. They reach the page through `window.lovia`,
-its one public script API; the other modules are internal.
+so whatever they register — a [component renderer](#ui-components), a
+[tool view](#tool-views) — is in place for the first render. They reach the
+page through `window.lovia`, its one public script API; the other modules are
+internal.
 
 | `window.lovia` | Description |
 | --- | --- |
 | `version` | The lovia version serving the page, for feature checks |
 | `ready` | A promise that settles once the app's start is over: the page is wired up, and the first chat-list request and the chat in the URL have loaded or failed. It stays pending if the page finds the user signed out |
+| `state` | A frozen snapshot: `sessionId` (null for a new chat), `agent`, `theme`, `lang`, `busy` (a run is streaming in). Read it again for the current one |
+| `on(event, fn)` | Listen for an [event](#events); returns a function that stops listening |
+| `send(text)` | Send `text` as the user; while a run streams it is queued for the next turn |
+| `setDraft(text)` | Put `text` in the composer for the user to edit and send |
+| `newChat()` / `openSession(id)` | Show a new chat / chat `id` |
+| `toast(text, { type })` | A transient notice; `type` is `"info"` (default) or `"error"` |
+| `api` | The page's API client — the [path prefix](#serving-under-a-path-prefix) and sign-in handling built in |
+| `t(key, params)` | A UI string in the page's language, including your [own keys](#wording-and-languages) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
+| `registerToolView(name, view)` | [Tool views](#tool-views) |
 
 ```js
 // ui/acme.js
-window.lovia.ready.then(() => {
-  console.info(`Acme extensions on lovia ${window.lovia.version}`);
+const { lovia } = window;
+
+lovia.ready.then(() => {
+  console.info(`Acme extensions on lovia ${lovia.version}`);
+});
+
+// A button the template put in the composer_actions block.
+document.getElementById('acme-summarize')?.addEventListener('click', () => {
+  lovia.send(lovia.t('acme.summarizePrompt'));
 });
 ```
 
-Don't `await window.lovia.ready` at the top level of a script: the page waits
-for your script before it starts, so the two would wait on each other until the
+Don't `await lovia.ready` at the top level of a script: the page waits for your
+script before it starts, so the two would wait on each other until the
 5-second limit below. A script that fails to load shows an error toast, and the
-page starts without it. One still loading after 5 seconds stops holding up the start; it keeps
-loading and registers when it lands. Scripts are your own code, with the
-page's full privileges, so self-host third-party code in `assets` rather than
-loading it from someone else's CDN.
+page starts without it. One still loading after 5 seconds stops holding up the
+start; it keeps loading and registers when it lands. Scripts are your own code,
+with the page's full privileges, so self-host third-party code in `assets`
+rather than loading it from someone else's CDN.
+
+For editor completion and type checks, reference the declarations shipped with
+lovia (the path is under your environment's `site-packages`):
+
+```js
+// @ts-check
+/// <reference path="…/site-packages/lovia/web/static/lovia.d.ts" />
+```
+
+### Events
+
+Events describe what the page on screen does. A listener that throws is logged
+and doesn't stop the others.
+
+| Event | Payload | When |
+| --- | --- | --- |
+| `session` | `{ sessionId }` | Another chat is on screen (`null`: a new one); also when a new chat gets saved |
+| `agent` | `{ agent }` | The user picked another agent |
+| `run-start` | `{ sessionId }` | A run began streaming into the view: sent, or reattached after a reload |
+| `run-end` | `{ sessionId, status, usage }` | The view stopped streaming it. `status`: `done` (answered), `error`, `cancelled` (stopped by the user), or `detached` (the user switched chats or the connection dropped; the run may go on server-side). `usage` is the answered run's token usage, else `null` |
+| `theme` | `{ theme }` | Light or dark took effect |
+
+```js
+lovia.on('run-end', ({ status, usage }) => {
+  if (status === 'done') analytics.track('reply', { tokens: usage?.total_tokens });
+});
+```
+
+### Tool views
+
+Every tool call shows as a card: its name and arguments on one line, the
+parameters and result inside. `registerToolView` changes how a tool's cards
+read — useful for the tools you don't control (MCP servers, say), and for
+end-user deployments where `read_file(path: …)` means nothing to the reader:
+
+```js
+// One line in place of name(args), for every tool without a view of its own;
+// null keeps the default line.
+const labels = { order_status: 'Looking up an order', read_file: 'Reading a file' };
+lovia.registerToolView('*', { summary: (tool) => labels[tool.name] ?? null });
+
+lovia.registerToolView('web_search', {
+  summary: (tool) =>
+    tool.status === 'done' ? `Searched “${tool.args?.query}”` : `Searching “${tool.args?.query}”…`,
+  // Draw the card's body; called again on every change of `tool`.
+  render(el, tool) {
+    if (tool.status !== 'done') return;
+    const list = document.createElement('ol');
+    for (const hit of JSON.parse(tool.result).results ?? []) {
+      const link = document.createElement('a');
+      link.href = hit.url;
+      link.target = '_blank';
+      link.textContent = hit.title; // never innerHTML: tool output is untrusted
+      const item = document.createElement('li');
+      item.append(link);
+      list.append(item);
+    }
+    el.replaceChildren(list);
+  },
+});
+```
+
+| `view` field | Description |
+| --- | --- |
+| `summary(tool)` | The card's one-line summary instead of `name(args)`; `null` or `undefined` keeps the default. Hovering shows the call it stands for |
+| `render(el, tool, ctx)` | Draw the card's body into `el`. Same contract as a [component renderer](#ui-components) (`ctx`, an optional cleanup function), and the raw result stays one "Source" toggle away |
+| `snapshot(tool, ctx)` | Static HTML for the chat's HTML export |
+
+- `tool` is a frozen snapshot of the call: `id`, `name`, `args` (parsed; absent
+  when over 256 KB or unparsable), `status` (`running`, `awaiting` the user,
+  `done`, `error`), `result` (the output text, once settled), `isError`,
+  `images`. A view's functions run again whenever it changes.
+- The view for a tool's name wins over the `'*'` view, field by field: a view
+  with only `summary` still gets the `'*'` view's `render`.
+- A result that is itself a [UI component](#ui-components) keeps drawing as
+  that component; the view's `summary` still applies.
+- Hiding a tool's cards is CSS's job (`[data-part="tool"][data-tool="…"]`, see
+  [Styling](#styling)), not a view's.
+- Kinds starting with `lovia.` are lovia's own: don't register renderers under
+  them.
 
 ## UI components
 

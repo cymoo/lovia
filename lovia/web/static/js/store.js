@@ -1,8 +1,20 @@
 // Shared reactive store for the lovia chat UI.
 const _listeners = new Map();
+/** @type {string | null} */
+let _sessionId = null;
 
 export const store = {
-  sessionId: null,
+  // The chat on screen (null: a new, unsaved one). Set from several places
+  // (switching, a new chat, a run's `session` event); every change emits
+  // 'session-id' so listeners don't have to track them all.
+  get sessionId() {
+    return _sessionId;
+  },
+  set sessionId(id) {
+    if (id === _sessionId) return;
+    _sessionId = id;
+    this.emit('session-id', id);
+  },
   agent: null,
   agents: [],
   sessions: [],

@@ -1,5 +1,5 @@
 // Entry point — wires together all modules.
-import { applyStaticI18n, t } from './i18n.js';
+import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { api, configureApi } from './api.js';
 import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
@@ -11,6 +11,8 @@ import {
   renderHistory,
   resetChatForNewSession,
   runReconnect,
+  sendText,
+  setDraft,
 } from './chat.js';
 import {
   initSessions,
@@ -26,7 +28,7 @@ import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { loadExtensions } from './extensions.js';
-import { lovia, markReady } from './lovia.js';
+import { configureLovia, emitLovia, lovia, markReady } from './lovia.js';
 import { pageConfig } from './page-config.js';
 import './charts.js'; // registers the built-in `chart` UI component
 import './tables.js'; // … `table`
@@ -277,6 +279,32 @@ function initKeyboardShortcuts() {
     }
   });
 }
+
+// ---- window.lovia -------------------------------------------------------
+// The public API's page-side half: its state, actions, and events, relayed
+// from the internal store (whose event names stay free to change).
+configureLovia({
+  state: () => ({
+    sessionId: store.sessionId,
+    agent: store.agent,
+    theme: store.theme === 'dark' ? 'dark' : 'light',
+    lang: currentLang(),
+    busy: !!store.streaming,
+  }),
+  send: (text) => void sendText(text),
+  setDraft,
+  newChat: () => {
+    clearChat();
+    document.getElementById('prompt')?.focus();
+  },
+  openSession: (id) => switchSession(id),
+  toast: (text, opts) => toast(text, opts),
+});
+store.on('session-id', (sessionId) => emitLovia('session', { sessionId }));
+store.on('agent-changed', (agent) => emitLovia('agent', { agent }));
+store.on('theme-changed', (theme) => emitLovia('theme', { theme }));
+store.on('run-start', (payload) => emitLovia('run-start', payload));
+store.on('run-end', (payload) => emitLovia('run-end', payload));
 
 // ---- Bootstrap ----------------------------------------------------------
 window.lovia = lovia;

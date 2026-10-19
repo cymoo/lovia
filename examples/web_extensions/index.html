@@ -1,0 +1,24 @@
+{% extends "lovia/index.html" %}
+{#
+  The elements extension.js drives, placed through template blocks. Rendered as
+  a template by examples/33_web_extensions.py, never served as a file.
+#}
+
+{% block sidebar_nav %}
+<button type="button" class="acme-nav" id="acme-new-ticket">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2M13 17v2M13 11v2"/></svg>
+  <span data-i18n="acme.newTicket">New ticket</span>
+</button>
+{% endblock %}
+
+{% block topbar_actions %}
+<span class="acme-tokens" id="acme-tokens" hidden></span>
+<span class="acme-working" id="acme-working" role="status" hidden>
+  <span class="acme-spinner" aria-hidden="true"></span>
+  <span data-i18n="acme.working">Working…</span>
+</span>
+{% endblock %}
+
+{% block composer_actions %}
+<button type="button" class="acme-chip" id="acme-summarize" data-i18n="acme.summarize">Summarize</button>
+{% endblock %}

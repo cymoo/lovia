@@ -10,11 +10,13 @@ import { api } from './api.js';
 import {
   mountComponent,
   parseEnvelope,
+  registerRenderer,
   unmountComponent,
 } from './components.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { store } from './store.js';
+import { TOOL_VIEW_KIND, toolInfo, toolViewField, watchToolViews } from './tool-views.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
 import { cloneTemplate, escapeHtml, highlightIn } from './util.js';
 
@@ -47,6 +49,19 @@ const ARGS_KEEP_MAX = 256 * 1024;
 
 /** @type {WeakMap<HTMLElement, ToolState>} */
 const states = new WeakMap();
+
+// A tool view's `render` draws through the component machinery (errors
+// contained, async cleanup, theme re-renders), under a kind of lovia's own.
+registerRenderer(TOOL_VIEW_KIND, {
+  render: (el, props, ctx) => {
+    const tool = /** @type {import('./tool-views.js').ToolInfo} */ (props);
+    return toolViewField(tool.name, 'render')?.(el, tool, ctx);
+  },
+  snapshot: (props, ctx) => {
+    const tool = /** @type {import('./tool-views.js').ToolInfo} */ (props);
+    return toolViewField(tool.name, 'snapshot')?.(tool, ctx) ?? '';
+  },
+});
 
 // ---- Arguments -------------------------------------------------------------
 
@@ -244,6 +259,7 @@ export function buildToolNode(call) {
     images: undefined,
   });
   node.dataset.status = 'running';
+  applySummary(node);
   const path = toolPath(call.arguments);
   if (path && PATH_TOOLS.has(call.name)) {
     node.dataset.toolPath = path;
@@ -268,10 +284,69 @@ export function buildToolNode(call) {
  */
 export function setToolStatus(node, status) {
   const state = node && states.get(node);
-  if (!state || state.result !== undefined) return;
+  if (!state || state.result !== undefined || state.status === status) return;
   state.status = status;
   node.dataset.status = status;
+  refreshTool(node, true);
 }
+
+/**
+ * Bring a card's view-driven parts up to date: its summary line and, until
+ * its result is a UI envelope, the body a tool view draws. Call once a fresh
+ * card is in the document; setToolResult and setToolStatus call it too.
+ * @param {HTMLElement} node
+ * @param {boolean} [live]
+ */
+export function refreshTool(node, live = false) {
+  applySummary(node);
+  syncToolUi(node, live);
+}
+
+// The one-line summary a tool view gives in place of `name(args)`; the
+// default comes back when it gives none (or throws).
+function applySummary(node) {
+  const state = states.get(node);
+  const summary = node.querySelector('summary');
+  if (!state || !summary) return;
+  let text = null;
+  const fn = toolViewField(state.name, 'summary');
+  if (fn) {
+    try {
+      const out = fn(toolInfo(state));
+      if (typeof out === 'string' && out.trim()) text = out.trim();
+    } catch (err) {
+      console.error(`lovia tool view "${state.name}" summary failed:`, err);
+    }
+  }
+  let el = summary.querySelector(':scope > .tool-summary');
+  if (text === null) {
+    el?.remove();
+    node.classList.remove('tool--summary');
+    return;
+  }
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'tool-summary';
+    summary.querySelector('.tool-args')?.after(el);
+  }
+  el.textContent = text;
+  // The call it stands for, on hover.
+  /** @type {HTMLElement} */ (el).title =
+    `${state.name} ${node.querySelector('.tool-args')?.textContent ?? ''}`.trim();
+  node.classList.add('tool--summary');
+}
+
+// Re-apply a view registered late (a slow extension) to the cards on screen
+// it covers. A card showing a result's own UI envelope keeps it as is:
+// redrawing would replay it (an html page would come back paused).
+watchToolViews((name) => {
+  for (const node of document.querySelectorAll('#transcript [data-part="tool"]')) {
+    const card = /** @type {HTMLElement} */ (node);
+    if (name !== '*' && card.dataset.tool !== name) continue;
+    applySummary(card);
+    if (card.dataset.ui !== 'envelope') syncToolUi(card, false);
+  }
+});
 
 /**
  * The tool card for `id` anywhere in the transcript — the live registry first,
@@ -381,15 +456,20 @@ function renderToolImages(node, images) {
   }
 }
 
-// A result carrying a UI envelope renders as its component, just above the
-// result box (the raw output and params stay one "Source" toggle away). Idempotent
-// across repeated result updates; any other result tears a component down.
-function syncToolComponent(node, result, isError, live) {
+// The card's UI, drawn just above the result box (the raw output and params
+// stay one "Source" toggle away): a result's UI envelope first, else a tool
+// view's `render`. Idempotent across repeated updates; with neither, any UI
+// is torn down.
+function syncToolUi(node, live) {
   const box = node.querySelector('.tool-result-box');
-  if (!box) return;
-  const comp = isError
+  const state = states.get(node);
+  if (!box || !state) return;
+  let comp = state.isError || state.result === undefined
     ? null
-    : parseEnvelope(String(result ?? ''), states.get(node)?.arguments);
+    : parseEnvelope(state.result, state.arguments);
+  if (!comp && toolViewField(state.name, 'render')) {
+    comp = { kind: TOOL_VIEW_KIND, props: toolInfo(state) };
+  }
   let el = /** @type {HTMLElement | null} */ (node.querySelector(':scope > .tool-ui'));
   if (!comp) {
     if (el) {
@@ -398,8 +478,10 @@ function syncToolComponent(node, result, isError, live) {
     }
     node.classList.remove('tool--ui', 'show-source');
     node.querySelector('.tool-source')?.remove();
+    delete node.dataset.ui;
     return;
   }
+  node.dataset.ui = comp.kind === TOOL_VIEW_KIND ? 'view' : 'envelope';
   if (!el) {
     el = document.createElement('div');
     el.className = 'tool-ui';
@@ -443,7 +525,7 @@ export function setToolResult(node, result, isError, images, live = false) {
   }
   node.dataset.status = isError ? 'error' : 'done';
   renderToolImages(node, images);
-  syncToolComponent(node, result, isError, live);
+  refreshTool(node, live);
   const pre = /** @type {HTMLElement | null} */ (node.querySelector('.tool-result'));
   if (!pre) return;
   const { text, meta } = splitReadFileHeader(node, String(result ?? ''), isError);

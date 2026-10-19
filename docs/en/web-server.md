@@ -67,8 +67,10 @@ app = create_app(agent, lifespan=lifespan)
 | `empty_title` / `empty_description` | lovia defaults | Blank chat state copy; the description may be a list of short lines |
 | `empty_examples` | `()` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
 | `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
-| `templates` | `None` | A directory of your own templates (see [Customizing the page](#customizing-the-page)) |
-| `scripts` | `()` | JS modules loaded after the app's own, e.g. component renderers (see [UI components](#ui-components)) |
+| `assets` | `None` | Your UI directory: an `index.html` override, stylesheets, images, scripts (see [Customizing the page](#customizing-the-page)) |
+| `scripts` | `()` | JS modules the page imports before it starts, e.g. component renderers (see [Extension scripts](#extension-scripts)) |
+| `styles` | `()` | Stylesheets loaded after the bundled one |
+| `logo` / `favicon` | `None` | An image replacing the sidebar's title / the tab icon |
 | `messages` | `{}` | UI strings per language: overrides, extra languages, and keys for your own template (see [Wording and languages](#wording-and-languages)) |
 | `default_lang` | `None` | The language for a user who hasn't picked one in Settings; `None` follows the browser |
 
@@ -97,37 +99,65 @@ For endpoint contracts and the `ChatStore` interface, see
 
 ## Customizing the page
 
-You build on the bundled page through a few public surfaces, each with its own
-job:
+Keep your files in one directory and point `ChatUI(assets=...)` at it:
+
+```text
+ui/
+├── index.html    # optional: extends the bundled page, fills its blocks
+├── theme.css
+├── logo.svg
+├── favicon.png
+└── acme.js
+```
+
+```python
+from lovia.web import ChatUI, create_app
+
+app = create_app(
+    agent,
+    title="Acme",
+    ui=ChatUI(
+        assets="ui",
+        styles=["theme.css"],
+        logo="logo.svg",
+        favicon="favicon.png",
+        scripts=["acme.js"],
+    ),
+)
+```
+
+lovia serves the directory at `<app>/ui/`. Every file in it is public except
+templates (`*.html`) and dotfiles, and each load revalidates it, so an edit
+shows on the next reload without a restart. Each name in `scripts`, `styles`,
+`logo` and `favicon` is one of:
+
+- a file in `assets` — `"theme.css"`;
+- a path on the app — `"/brand/theme.css"`, for files you serve yourself; it
+  keeps working under a [path prefix](#serving-under-a-path-prefix);
+- a URL — `"https://cdn.example.com/theme.css"`.
+
+Beyond those files, you build on the page through a few public surfaces, each
+with its own job:
 
 | Surface | What it's for |
 | --- | --- |
-| [Template blocks](#template-blocks) | Your own markup at fixed places: a logo, links, a control by the composer |
+| [Template blocks](#template-blocks) | Your own markup at fixed places: links, a control by the composer, a notice |
 | [Design tokens](#styling) | Colors, fonts, radii, spacing |
 | [`data-part` attributes](#styling) | Targeting a region from your CSS: hiding or restyling it |
 | [`data-i18n` keys](#wording-and-languages) | Wording and languages |
-| `api.js` and `window.lovia.registerRenderer` / `getRenderer` | Talking to the API; [UI components](#ui-components) |
+| [`window.lovia`](#extension-scripts) and `api.js` | Your scripts; talking to the API |
 
 Everything else — class names, element ids, the JavaScript modules — is
 internal and may change between releases.
 
 ### Template blocks
 
-`ChatUI(templates="ui")` points at a directory of your own Jinja templates.
-An `index.html` there replaces the page. Extend the bundled one and fill only
-the blocks you need:
+An `index.html` in `assets` replaces the page. Extend the bundled one and fill
+only the blocks you need:
 
 ```html+jinja
 {# ui/index.html #}
 {% extends "lovia/index.html" %}
-
-{% block head %}
-<link rel="stylesheet" href="{{ url_for('brand', path='theme.css').path }}">
-{% endblock %}
-
-{% block sidebar_header %}
-<img class="acme-logo" src="{{ url_for('brand', path='logo.svg').path }}" alt="Acme">
-{% endblock %}
 
 {% block sidebar_nav %}
 <a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
@@ -145,8 +175,8 @@ the blocks you need:
 
 | Block | Where it renders |
 | --- | --- |
-| `head` | End of `<head>`: stylesheets, meta tags |
-| `sidebar_header` | Top of the sidebar; wraps the title, so filling it replaces the title (with a logo, say) |
+| `head` | End of `<head>`: meta tags, preloads |
+| `sidebar_header` | Top of the sidebar; wraps the title (or `logo`), so filling it replaces both — a logo with a name beside it, say |
 | `sidebar_nav` | End of the sidebar's navigation, under Settings: links of your own |
 | `sidebar_footer` | Bottom of the sidebar: a user menu, a sign-out link |
 | `topbar_actions` | Start of the top bar's button group |
@@ -156,18 +186,9 @@ the blocks you need:
 
 The example's link borrows the bundled `sidebar-nav-item` look. Class names are
 internal, so give it a class of your own instead if you'd rather not track them
-across releases.
-
-Serve your own files from a static mount on the app, and link them with
-`url_for(...).path` so they keep working under a
-[path prefix](#serving-under-a-path-prefix):
-
-```python
-from fastapi.staticfiles import StaticFiles
-
-app = create_app(agent, ui=ChatUI(templates="ui"))
-app.mount("/brand", StaticFiles(directory="brand"), name="brand")
-```
+across releases. To reference another file from `assets` in a template, use
+`{{ url_for('ui-assets', path='banner.png').path }}` — it carries the path
+prefix.
 
 ### Styling
 
@@ -180,7 +201,7 @@ has its own values, so set yours per theme; a token set on `:root` applies to
 both:
 
 ```css
-/* brand/theme.css */
+/* ui/theme.css */
 [data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
 [data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
 :root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
@@ -247,6 +268,34 @@ ui = ChatUI(
   "Automatic" returns to it. To keep users on one language, set it and hide
   the picker: `[data-part="language"] { display: none; }`.
 
+### Extension scripts
+
+`ChatUI(scripts=[...])` lists ES modules the page imports **before it starts**,
+so whatever they register — a [component renderer](#ui-components), say — is
+in place for the first render. They reach the page through `window.lovia`,
+its one public script API; the other modules are internal.
+
+| `window.lovia` | Description |
+| --- | --- |
+| `version` | The lovia version serving the page, for feature checks |
+| `ready` | A promise that settles once the app's start is over: the page is wired up, and the first chat-list request and the chat in the URL have loaded or failed. It stays pending if the page finds the user signed out |
+| `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
+
+```js
+// ui/acme.js
+window.lovia.ready.then(() => {
+  console.info(`Acme extensions on lovia ${window.lovia.version}`);
+});
+```
+
+Don't `await window.lovia.ready` at the top level of a script: the page waits
+for your script before it starts, so the two would wait on each other until the
+5-second limit below. A script that fails to load shows an error toast, and the
+page starts without it. One still loading after 5 seconds stops holding up the start; it keeps
+loading and registers when it lands. Scripts are your own code, with the
+page's full privileges, so self-host third-party code in `assets` rather than
+loading it from someone else's CDN.
+
 ## UI components
 
 A tool result can render as UI — a sortable table, a KPI strip — instead of
@@ -281,7 +330,7 @@ For a kind of your own — say `return ui_result("kpis", {"items": [...]})` —
 write a renderer: a JS module loaded with `ChatUI(scripts=[...])`:
 
 ```js
-// ext/kpis.js
+// ui/kpis.js
 window.lovia.registerRenderer('kpis', {
   render(el, props, ctx) {
     for (const item of props.items) {
@@ -296,15 +345,10 @@ window.lovia.registerRenderer('kpis', {
 ```
 
 ```python
-from fastapi.staticfiles import StaticFiles
-
-app = create_app(agent, ui=ChatUI(scripts=["ext/kpis.js"]))
-app.mount("/ext", StaticFiles(directory="ext"))
+app = create_app(agent, ui=ChatUI(assets="ui", scripts=["kpis.js"]))
 ```
 
-A relative script URL follows a [path prefix](#serving-under-a-path-prefix);
-an absolute one is used as is. The renderer gets the element to draw into, the
-props, and a context:
+The renderer gets the element to draw into, the props, and a context:
 
 | `ctx` field | Description |
 | --- | --- |

@@ -149,11 +149,11 @@ def _inside(page: str, part: str, needle: str) -> bool:
     return needle in page[start : start + 4000]
 
 
-def test_templates_override_fills_the_blocks(tmp_path) -> None:
+def test_assets_index_overrides_the_page_and_fills_the_blocks(tmp_path) -> None:
     from starlette.staticfiles import StaticFiles
 
     (tmp_path / "index.html").write_text(_OVERRIDE, encoding="utf-8")
-    ui = ChatUI(empty_title="<b>Acme</b>", templates=tmp_path)
+    ui = ChatUI(empty_title="<b>Acme</b>", assets=tmp_path)
     app = _app(_make_agent([text("hi")]), ui=ui)
     app.mount("/brand", StaticFiles(directory=tmp_path), name="brand")
     page = TestClient(app, root_path="/lovia").get("/").text
@@ -180,11 +180,74 @@ def test_templates_override_fills_the_blocks(tmp_path) -> None:
     assert "&lt;b&gt;Acme&lt;/b&gt;" in page
 
 
-def test_templates_directory_must_exist(tmp_path) -> None:
+def test_assets_directory_must_exist(tmp_path) -> None:
     from lovia.exceptions import UserError
 
-    with pytest.raises(UserError, match="templates directory not found"):
-        _app(_make_agent([text("hi")]), ui=ChatUI(templates=tmp_path / "nope"))
+    with pytest.raises(UserError, match="assets directory not found"):
+        ChatUI(assets=tmp_path / "nope")
+
+
+def test_assets_are_served_revalidated_but_not_templates_or_dotfiles(
+    tmp_path,
+) -> None:
+    (tmp_path / "theme.css").write_text("body{}", encoding="utf-8")
+    (tmp_path / "index.html").write_text(_OVERRIDE, encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("x", encoding="utf-8")
+    c = TestClient(_app(_make_agent([text("hi")]), ui=ChatUI(assets=tmp_path)))
+
+    res = c.get("/ui/theme.css")
+    assert res.status_code == 200 and res.text == "body{}"
+    assert res.headers["cache-control"] == "no-cache"
+    again = c.get("/ui/theme.css", headers={"if-none-match": res.headers["etag"]})
+    assert again.status_code == 304
+    for hidden in ("/ui/index.html", "/ui/.env", "/ui/.git/config"):
+        assert c.get(hidden).status_code == 404, hidden
+
+
+@pytest.mark.parametrize("path", ["nested\\.env", ".git\\config", "a\\b\\.secret"])
+async def test_asset_filter_reads_windows_paths(tmp_path, path) -> None:
+    """StaticFiles passes an OS path, so on Windows the separator is '\\'."""
+    from fastapi import HTTPException
+
+    from lovia.web.app import _AssetFiles
+
+    # Present at that path (on POSIX, a backslash is just a filename
+    # character), so only the filter stands between it and a download.
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("SECRET=1", encoding="utf-8")
+    files = _AssetFiles(directory=str(tmp_path))
+    with pytest.raises(HTTPException) as err:
+        await files.get_response(path, {"type": "http", "method": "GET"})
+    assert err.value.status_code == 404
+
+
+def test_styles_logo_and_favicon_resolve_like_scripts(tmp_path) -> None:
+    ui = ChatUI(
+        assets=tmp_path,
+        styles=["theme.css", "https://cdn.example.com/f.css"],
+        logo="logo.svg",
+        favicon="/brand/icon.png",
+    )
+    page = TestClient(_app(_make_agent([text("hi")]), ui=ui), root_path="/lovia")
+    html = page.get("/").text
+    head = html.split("</head>", 1)[0]
+    bundled = head.index("styles.css")
+    assert bundled < head.index('href="/lovia/ui/theme.css"')
+    assert bundled < head.index('href="https://cdn.example.com/f.css"')
+    assert '<link rel="icon" href="/lovia/brand/icon.png" />' in head
+    assert "favicon.svg" not in head
+    assert '<img class="sidebar-logo" src="/lovia/ui/logo.svg" alt="lovia" />' in html
+    assert 'class="sidebar-title"' not in html
+
+
+def test_app_config_carries_the_version() -> None:
+    from lovia import __version__
+
+    cfg = _app_config(TestClient(_app(_make_agent([text("hi")]))).get("/").text)
+    assert cfg["version"] == __version__
+    assert cfg["scripts"] == []
 
 
 def test_index_at_the_root_has_no_base_path() -> None:

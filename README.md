@@ -502,10 +502,11 @@ mounting the router into your own FastAPI app — lets you build a custom
 front-end on the same endpoints. Errors carry a stable `code` to branch on,
 in HTTP responses and stream `error` events alike. Keeping the page?
 `ui=ChatUI(...)` sets its blank-state copy, a `login_url` for your own
-`auth=`, its wording and languages (`messages`, `default_lang`), and template
-blocks for your own logo, links, composer controls, and scripts; restyle it
-through design tokens and `data-part` attributes, which your CSS wins over
-without `!important`. It works under a path prefix — behind a proxy
+`auth=`, and its wording and languages (`messages`, `default_lang`). Point
+`assets=` at a directory of your own logo, favicon, stylesheets and scripts,
+plus an `index.html` that fills template blocks — links, composer controls, a
+notice; restyle through design tokens and `data-part` attributes, which your
+CSS wins over without `!important`. It works under a path prefix — behind a proxy
 (`--root-path`) or mounted in your own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
 a renderer you load with `ChatUI(scripts=[...])` (`lovia.getRenderer` lets one
 wrap another); `put_ui_data` keeps a large result out of the model's context,

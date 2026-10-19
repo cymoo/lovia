@@ -25,6 +25,8 @@ import { initMemory } from './memory.js';
 import { initModelConfig } from './model-config.js';
 import { initSettings } from './settings.js';
 import { toast } from './toast.js';
+import { loadExtensions } from './extensions.js';
+import { lovia, markReady } from './lovia.js';
 import { pageConfig } from './page-config.js';
 import './charts.js'; // registers the built-in `chart` UI component
 import './tables.js'; // … `table`
@@ -277,10 +279,19 @@ function initKeyboardShortcuts() {
 }
 
 // ---- Bootstrap ----------------------------------------------------------
+window.lovia = lovia;
+
 (async function () {
   configureApi({ base: basePath, onUnauthorized });
   adoptTokenFromURL(); // before the first API call
   applyStaticI18n(); // before init code reads/sets any labels
+  // Extensions register before anything renders, so the first render has them.
+  await loadExtensions(pageConfig.scripts ?? [], {
+    onFailure: (url) => {
+      const name = url.split('/').pop() || url;
+      toast(t('toast.extensionFailed', { name }), { type: 'error' });
+    },
+  });
   initTheme();
   initSidebarToggle();
   initComposer();
@@ -325,4 +336,7 @@ function initKeyboardShortcuts() {
   if (sid) {
     await switchSession(sid).catch(() => {});
   }
+  // The start is over — the list and the URL's chat loaded or failed (each
+  // failure surfaces on its own, and the sidebar retries).
+  markReady();
 })();

@@ -9,7 +9,11 @@
   <!-- Asset URLs are root-relative (`.path`): they carry the mount prefix but
        no scheme or host, so a TLS-terminating proxy the server doesn't trust
        for X-Forwarded-Proto can't turn them into blocked http:// loads. -->
+  {% if favicon %}
+  <link rel="icon" href="{{ favicon }}" />
+  {% else %}
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='favicon.svg').path }}" />
+  {% endif %}
   <script>
     // Apply the saved (or OS) theme before first paint — without this, dark-
     // mode users get a white flash on every load. Key mirrors js/store.js.
@@ -22,6 +26,9 @@
     } catch (e) { /* no storage access: keep the light default */ }
   </script>
   <link rel="stylesheet" href="{{ url_for('static', path='styles.css').path }}" />
+  {%- for href in styles | default([]) %}
+  <link rel="stylesheet" href="{{ href }}" />
+  {%- endfor %}
   <!-- Renderers (markdown / sanitizer / syntax highlight / diagrams),
        vendored under static/vendor (exact versions + licenses in its
        README). Self-hosted so the UI needs no CDN or font origin — it works
@@ -52,7 +59,7 @@
 <!-- Sidebar -->
 <aside class="sidebar" id="sidebar" data-part="sidebar">
   <div class="sidebar-head" data-part="sidebar-header">
-    {% block sidebar_header %}<span class="sidebar-title">{{ title }}</span>{% endblock %}
+    {% block sidebar_header %}{% if logo %}<img class="sidebar-logo" src="{{ logo }}" alt="{{ title }}" />{% else %}<span class="sidebar-title">{{ title }}</span>{% endif %}{% endblock %}
     <div class="sidebar-head-actions">
       <button id="sidebar-collapse" class="btn-icon sidebar-collapse-btn" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" data-i18n-title="nav.collapse" data-i18n-aria="nav.collapse"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
     </div>
@@ -349,10 +356,8 @@
   </div>
 </template>
 
+<!-- main.js imports ChatUI.scripts (app_config.scripts) before it starts. -->
 <script type="module" src="{{ url_for('static', path='js/main.js').path }}"></script>
-{%- for src in scripts | default([]) %}
-<script type="module" src="{{ src }}"></script>
-{%- endfor %}
 {% block body_end %}{% endblock %}
 </body>
 </html>

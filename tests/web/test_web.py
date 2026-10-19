@@ -1052,6 +1052,41 @@ def test_export_attributes_tool_result_to_its_tool() -> None:
     # consumer (export.js) can label it.
     result_msg = next(m for m in data["messages"] if m["role"] == "tool")
     assert result_msg["tool_call_id"] == "c1"
+    assert result_msg["is_error"] is False
+    assert result_msg["images"] == []
+
+
+async def test_export_json_keeps_tool_errors_and_image_stubs() -> None:
+    """The flags entries_to_messages drops: a tool view's export snapshot needs
+    them as much as the replayed card does."""
+    from lovia.parts import ImagePart, TextPart
+    from lovia.transcript import AssistantTextEntry, ToolCallEntry, ToolResultEntry
+
+    store = ChatStore.in_memory()
+    await store.session.append(
+        "s1",
+        [
+            ToolCallEntry(call_id="bad", name="fetch", arguments="{}"),
+            ToolResultEntry(call_id="bad", output="boom", is_error=True),
+            ToolCallEntry(call_id="pic", name="view_image", arguments="{}"),
+            ToolResultEntry(
+                call_id="pic",
+                output="an image",
+                parts=[
+                    TextPart("an image"),
+                    ImagePart(data="iVBORw0KGgo=", mime_type="image/png"),
+                ],
+            ),
+            AssistantTextEntry(content="done"),
+        ],
+    )
+    await store.upsert("s1", agent="bot")
+    c = TestClient(_app(_make_agent([text("hi")]), store=store))
+    data = c.get("/api/sessions/s1/export?format=json").json()
+    results = {m["tool_call_id"]: m for m in data["messages"] if m["role"] == "tool"}
+    assert results["bad"]["is_error"] is True
+    assert results["pic"]["is_error"] is False
+    assert results["pic"]["images"] == [{"index": 0, "mime_type": "image/png"}]
 
 
 def test_export_md_does_not_misattribute_tool_result_with_empty_id() -> None:

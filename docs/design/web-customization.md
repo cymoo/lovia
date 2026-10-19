@@ -314,7 +314,7 @@ interface ToolState { id: string; name: string;
 - **优先级**：`ui_result` 信封 > 按名字注册的视图 > `'*'` 兜底视图 > 内置默认卡片。每个字段单独回退，例如只提供了 `summary`，卡片主体仍用默认渲染。
 - **典型用法**：面向终端用户的产品写 `registerToolView('*', { summary: t => friendly(t) })`，就能把所有工具卡片换成友好的一句话。
 - **render 的调用时机**：每次 `ToolState` 变化（例如从 running 变为 done）都会重新调用，复用组件注册表的代数计数和清理机制。
-- **内置工具先用**：shell（用 `summary` 显示描述）、read_file（用 `render` 拆分页头并高亮）都改成通过 `registerToolView` 注册。
+- **内置工具不改用视图（实施时调整）**：shell 的描述副标题、read_file 的分页头和高亮、路径工具的"在文件面板打开"，都是在默认卡片上做装饰，而不是替换摘要或主体。硬要用 `summary` / `render` 表达，会改变内置卡片现在的样子。所以它们仍是默认卡片的功能。视图机制由 `examples/33_web_extensions.py` 和单元测试覆盖；视图的 `render` 走组件的挂载引擎（内部 kind `lovia.tool-view`），因此和 charts / tables / html 共用一套经过验证的机制。
 - **todo 和 ask_human 在 v1 保持特殊处理**：它们画在工具卡片之外（计划面板、交互卡片），硬塞进 ToolView 反而会让接口变复杂。
 
 **稳定性保障：**
@@ -476,7 +476,7 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 | 1 主题与骨架约定 | `@layer lovia`；`data-part`；新增 5 个 block；欢迎页只保留模板一份实现；改用 `data-i18n` 属性；`ChatUI(default_lang, messages)`；约定测试 | `app_config` 删掉 `empty_*`（内部字段） | 中 |
 | 2 扩展加载 | `ChatUI(assets=)` 替代 `templates=`；`styles=`、`logo`、`favicon`（相对路径都在 `assets` 里解析，所以和它一起做）；扩展先于启动加载，最多等 5 秒，失败不影响页面；`lovia.version` / `ready` | `templates=` → `assets=` | 小到中 |
 | 3 重构 | 工具卡片拆到 `tools.js`；建立工具状态模型（`data-status`）；两条渲染路径在工具层合一 | 无（纯重构） | 中 |
-| 4 `window.lovia` v1 | `on` / `state` / 页面动作 / `api` / `t`；`registerToolView`（内置的 shell、read_file 先用）；`lovia.d.ts`；`examples/31_web_custom_ui` | 只新增 JS 接口 | 中 |
+| 4 `window.lovia` v1 | `on` / `state` / 页面动作 / `api` / `t`；`registerToolView`（`summary` / `render` / `snapshot`，`'*'` 兜底）；`lovia.d.ts`（由 tsc 对照实现检查）；`examples/33_web_extensions.py`（品牌示例已在 PR 2 的 `32_web_branding.py`） | 只新增 JS 接口 | 中 |
 | 5 数据通路 | 先写设计文档并讨论透 §5.7，再实现 `context` / `provideContext` / `run_context` | 新增 | 中 |
 | 6 消息标识与消息操作 | 服务端生成的 `ref`；`registerMessageAction`（内置复制先用）；rewind 改用 `ref` | `RewindRequest` 字段变化 | 中 |
 | 7 可选 | 工具进度事件（core）；定时任务开关（§5.9）；把 `lovia web init-ui` 做成脚手架。在 [#244](https://github.com/cymoo/lovia/issues/244) 跟踪 | 视方案 | — |

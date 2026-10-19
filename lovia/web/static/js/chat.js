@@ -25,6 +25,7 @@ import {
   buildToolNode,
   fillParams,
   findToolNode,
+  refreshTool,
   setToolResult,
   setToolStatus,
   toolPath,
@@ -647,7 +648,10 @@ function appendTool(call) {
   // attaching fresh has no prior state, so reconciling is this client's job.
   const existing = call.id ? findToolNode(call.id) : null;
   const node = existing || buildToolNode(call);
-  if (!existing) appendBubbleContent(store.bubble, node);
+  if (!existing) {
+    appendBubbleContent(store.bubble, node);
+    refreshTool(node, true); // a tool view draws into the laid-out card
+  }
   store.toolNodes.set(call.id, node);
   store.body = null;
   store.rawText = '';
@@ -1814,6 +1818,7 @@ function renderHistoryWindow({ stickBottom }) {
           // the copy/expand actions all match. A call with no result yet stays
           // running (its empty <pre> is hidden by CSS).
           if (result) setToolResult(node, result.text, result.isError, result.images);
+          else refreshTool(node);
           // A result-less ask_human call is still parked server-side: rebuild
           // its interactive card so a reloaded or re-attached tab can answer
           // (the live path can't — this render replaced the transcript).
@@ -1994,6 +1999,10 @@ let _lastEventWasError = false;
 // from "cancelled or died", which is what gates the follow-up chips.
 let _sawDone = false;
 
+// This stream's latest event: a run that answered ends on `done`, while an
+// auto-chained one that broke off after a leg's `done` ends on something else.
+let _lastEvent = '';
+
 // This stream's last assistant text, for the follow-up cache signature. It
 // can't be read off store.rawText in the finally: `message_completed` clears
 // that as each model turn lands, long before `done` — so the finally always
@@ -2005,10 +2014,12 @@ let _lastReply = '';
 
 async function handleEvent({ event, data }) {
   _lastEventWasError = event === 'error';
+  _lastEvent = event;
   switch (event) {
     case 'session': {
       const known = store.sessions.some((s) => s.id === data.session_id);
       store.sessionId = data.session_id;
+      if (_shownRun) _shownRun.sessionId = data.session_id;
       store.syncURL(data.session_id);
       // A brand-new session gets a server-generated title shortly after the
       // first turn; flag it so the stream's end polls for it (see pollForTitle).
@@ -2187,6 +2198,7 @@ async function handleEvent({ event, data }) {
 
     case 'done': {
       _sawDone = true;
+      if (_shownRun) _shownRun.usage = data?.usage ?? null;
       _dropRecoveries = 0; // the connection proved healthy — re-arm recovery
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       updateContextMeter(data?.usage);
@@ -2471,6 +2483,67 @@ function appendReconnectRow(sessionId) {
   scrollDown();
 }
 
+// ---- Run lifecycle (window.lovia's run-start / run-end) -----------------
+// A run starts in this view once its stream is open, and ends when the view
+// stops streaming it: answered, failed, stopped by the user, or left — a
+// switch or a dropped connection, while the run may go on server-side.
+/** @type {{ sessionId: string | null, usage: object | null } | null} */
+let _shownRun = null;
+
+function runStarted() {
+  _shownRun = { sessionId: store.sessionId, usage: null };
+  store.emit('run-start', { sessionId: store.sessionId });
+}
+
+/** @param {'done' | 'error' | 'cancelled' | 'detached'} status */
+function runEnded(status) {
+  if (!_shownRun) return;
+  const { sessionId, usage } = _shownRun;
+  _shownRun = null;
+  // After the ending stream's own cleanup (it runs on synchronously from
+  // here): a listener may start the next run, which that cleanup would
+  // otherwise clobber (its abort controller, for one).
+  queueMicrotask(() => store.emit('run-end', { sessionId, status, usage }));
+}
+
+/**
+ * How a stream that stayed on screen to its end went. Order matters: an
+ * auto-chained run says `done` once per leg, so an earlier leg's answer must
+ * not hide a later stop or failure.
+ * @param {{ cancelled: boolean, readFailed: boolean, terminal: boolean }} flags
+ *   `readFailed`: reading the stream itself failed (the connection broke), as
+ *   opposed to the run reporting an error or the page failing on an event.
+ * @returns {'done' | 'error' | 'cancelled' | 'detached'}
+ */
+function runStatus({ cancelled, readFailed, terminal }) {
+  if (cancelled) return 'cancelled';
+  if (readFailed) return 'detached'; // the run may go on server-side
+  if (terminal || _lastEventWasError) return 'error';
+  if (_lastEvent === 'done') return 'done';
+  return 'detached'; // ended mid-run without a failure: the connection dropped
+}
+
+/**
+ * The stream's events, marking `flags.readFailed` when reading the body
+ * fails — a broken connection — rather than handling an event.
+ * @param {Response} res
+ * @param {{ readFailed: boolean }} flags
+ */
+async function* readStream(res, flags) {
+  const events = readSSE(res);
+  for (;;) {
+    let step;
+    try {
+      step = await events.next();
+    } catch (err) {
+      if (err?.name !== 'AbortError') flags.readFailed = true;
+      throw err;
+    }
+    if (step.done) return;
+    yield step.value;
+  }
+}
+
 // While a run streams, Stop takes the Send circle's place; Send comes back —
 // as a queue control — the moment there's text to queue (updateSendEnabled),
 // and pressing Enter queues it for the next turn/run. The placeholder is what
@@ -2492,7 +2565,8 @@ function enterStreamingUI() {
   updateEditButton(); // …and no edit either: rewind is refused during a live run
 }
 
-function exitStreamingUI() {
+/** @param {'done' | 'error' | 'cancelled' | 'detached'} [status] How the run shown went. */
+function exitStreamingUI(status = 'detached') {
   store.streaming = false;
   syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
@@ -2504,6 +2578,7 @@ function exitStreamingUI() {
   document.getElementById('transcript')?.setAttribute('aria-busy', 'false');
   updateRegenButton();
   updateEditButton();
+  runEnded(status); // last: listeners see the composer idle again
 }
 
 /**
@@ -2524,10 +2599,13 @@ export async function runStream(message, attachments = null) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastEvent = '';
   _lastReply = '';
   // Set on every path that already surfaced a failure (or a deliberate abort),
   // so the finally's dropped-connection check doesn't fire on top of it.
   let terminal = false;
+  let cancelled = false;
+  const flags = { readFailed: false };
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
@@ -2557,11 +2635,12 @@ export async function runStream(message, attachments = null) {
       return;
     }
 
+    runStarted();
     // The run is registered — messages that raced the previous run's end can
     // re-enter the queue now (each as its own turn).
     drainPendingResend();
 
-    for await (const ev of readSSE(res)) {
+    for await (const ev of readStream(res, flags)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
         return;
@@ -2574,6 +2653,7 @@ export async function runStream(message, attachments = null) {
     if (store.chatEpoch !== streamEpoch) return;
     terminal = true;
     if (err.name === 'AbortError') {
+      cancelled = true;
       ensureBody();
       if (!store.rawText) store.rawText = t('chat.cancelled');
       flushRender(true);
@@ -2609,7 +2689,7 @@ export async function runStream(message, attachments = null) {
       // Un-mute any queued bubbles the server dropped (an errored/cancelled run
       // doesn't auto-chain) so they read as sent — the user can resend.
       flushQueuedTurns();
-      exitStreamingUI();
+      exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       // A new chat's title is generated server-side just after the first turn —
@@ -2646,8 +2726,11 @@ export async function runReconnect(sessionId) {
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
+  _lastEvent = '';
   _lastReply = '';
   let terminal = false; // see runStream — gates the dropped-connection check
+  let cancelled = false;
+  const flags = { readFailed: false };
   let outcome = /** @type {'attached' | 'norun' | 'error'} */ ('attached');
 
   _resumeAutoScroll();
@@ -2669,9 +2752,10 @@ export async function runReconnect(sessionId) {
       return 'norun';
     }
 
+    runStarted();
     drainPendingResend(); // same re-queue point as runStream
 
-    for await (const ev of readSSE(res)) {
+    for await (const ev of readStream(res, flags)) {
       if (store.chatEpoch !== streamEpoch) {
         _streamAbortController?.abort();
         return 'attached';
@@ -2682,6 +2766,7 @@ export async function runReconnect(sessionId) {
     if (store.chatEpoch !== streamEpoch) return 'attached'; // detached by a switch — not an error
     terminal = true;
     outcome = 'error';
+    cancelled = err.name === 'AbortError';
     if (err.name !== 'AbortError') {
       ensureBody();
       const raw = err.message ?? String(err);
@@ -2703,7 +2788,7 @@ export async function runReconnect(sessionId) {
       const dropped = !terminal && !_lastEventWasError && !_sawDone;
       finalizeCurrentAssistantTurn();
       flushQueuedTurns();
-      exitStreamingUI();
+      exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       loadSessions();
@@ -2780,6 +2865,20 @@ const autoresize = () => {
   promptEl.style.height = 'auto';
   promptEl.style.height = Math.min(promptEl.scrollHeight, window.innerHeight * 0.3) + 'px';
 };
+
+/**
+ * Put `text` in the composer for the user to edit and send — what a starter
+ * prompt does, and window.lovia.setDraft.
+ * @param {string} text
+ */
+export function setDraft(text) {
+  if (!promptEl) return;
+  promptEl.value = String(text ?? '');
+  autoresize();
+  updateSendEnabled();
+  saveDraftSoon();
+  promptEl.focus();
+}
 
 // ---- Drafts --------------------------------------------------------------
 // The composer's unsent text survives reloads and follows its chat: one
@@ -3100,7 +3199,12 @@ function splitAttachmentNote(text) {
  * attachments. The composer and UI components (`ctx.send`) share it.
  * @param {string} message Trimmed, non-empty.
  */
-async function sendText(message) {
+/**
+ * Send `message` as the user — or, mid-run, queue it for the run's next turn.
+ * Shared by UI components' ctx.send and window.lovia.send.
+ * @param {string} message
+ */
+export async function sendText(message) {
   _resumeAutoScroll();
   if (!store.streaming) {
     document.getElementById('empty-state')?.remove();
@@ -3255,12 +3359,7 @@ export function initComposer() {
   // composer for editing — clicking must not fire a send behind your back.
   document.getElementById('transcript')?.addEventListener('click', (e) => {
     const btn = e.target instanceof Element ? e.target.closest('.empty-example') : null;
-    if (!btn || !promptEl) return;
-    promptEl.value = btn.textContent;
-    autoresize();
-    updateSendEnabled();
-    saveDraftSoon();
-    promptEl.focus();
+    if (btn) setDraft(btn.textContent);
   });
 
   composer?.addEventListener('submit', async (e) => {

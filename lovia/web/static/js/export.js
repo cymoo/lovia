@@ -8,6 +8,7 @@
 // renderer's static snapshot (components.js), when it has one.
 import { api, apiError } from './api.js';
 import { parseEnvelope, snapshotComponent } from './components.js';
+import { TOOL_VIEW_KIND, toolInfo, toolViewField } from './tool-views.js';
 import { toast } from './toast.js';
 import { escapeHtml } from './util.js';
 
@@ -52,20 +53,38 @@ function contentText(content) {
 
 /**
  * Call id → sanitized snapshot HTML, for each tool result that is a UI
- * component whose renderer has a snapshot.
+ * component whose renderer has a snapshot — or whose tool has a view with one.
  * @param {any[]} messages
  * @param {Record<string, string>} toolArgs Call id → raw arguments.
+ * @param {Record<string, string>} toolNames Call id → tool name.
  * @param {string | null} sessionId
  * @returns {Promise<Map<string, string>>}
  */
-async function snapshotComponents(messages, toolArgs, sessionId) {
+async function snapshotComponents(messages, toolArgs, toolNames, sessionId) {
   const out = new Map();
   if (typeof DOMPurify === 'undefined') return out;
   const purify = DOMPurify;
   await Promise.all(
     messages.map(async (m) => {
       if (m.role !== 'tool' || !m.tool_call_id) return;
-      const comp = parseEnvelope(contentText(m.content), toolArgs[m.tool_call_id]);
+      const id = m.tool_call_id;
+      const text = contentText(m.content);
+      let comp = m.is_error ? null : parseEnvelope(text, toolArgs[id]);
+      const name = toolNames[id];
+      if (!comp && name && toolViewField(name, 'snapshot')) {
+        comp = {
+          kind: TOOL_VIEW_KIND,
+          props: toolInfo({
+            id,
+            name,
+            arguments: toolArgs[id],
+            status: m.is_error ? 'error' : 'done',
+            result: text,
+            isError: !!m.is_error,
+            images: m.images,
+          }),
+        };
+      }
       if (!comp) return;
       const html = await snapshotComponent(comp, { callId: m.tool_call_id, sessionId });
       if (html) out.set(m.tool_call_id, purify.sanitize(html));
@@ -141,7 +160,12 @@ export async function buildExportDoc(data, theme = 'light') {
       toolArgs[tc.id] = tc.arguments;
     }
   }
-  const snapshots = await snapshotComponents(messages, toolArgs, data.session_id ?? null);
+  const snapshots = await snapshotComponents(
+    messages,
+    toolArgs,
+    toolNames,
+    data.session_id ?? null,
+  );
   const body = messages.map((m) => renderMessage(m, toolNames, snapshots)).join('\n');
 
   // Highlight code in a detached node, exactly like the live view (skip mermaid

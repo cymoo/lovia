@@ -142,6 +142,10 @@ lovia 把这个目录挂在 `<app>/ui/` 下。除模板（`*.html`）和以点�
 
 其余一切——CSS 类名、元素 id、JavaScript 模块——都属于内部实现，可能随版本变化。
 
+两个可运行的示例把这些串了起来：`examples/32_web_branding.py` 给页面换上品牌（logo、设计变量、
+block、文案、新增语言），`examples/33_web_extensions.py` 通过 `window.lovia` 扩展页面行为
+（工具视图、事件、页面动作）。
+
 ### 模板 block
 
 `assets` 里的 `index.html` 会替换内置页面。继承内置页面，只填写需要的 block 即可：
@@ -251,27 +255,116 @@ ui = ChatUI(
 
 ### 扩展脚本
 
-`ChatUI(scripts=[...])` 列出的 ES 模块会在页面**启动之前**导入，所以它们注册的内容（比如一个
-[组件渲染器](#ui-组件)）在首次渲染时就已就位。脚本通过 `window.lovia` 和页面打交道，这是
-页面唯一公开的脚本接口；其余模块都属于内部实现。
+`ChatUI(scripts=[...])` 列出的 ES 模块会在页面**启动之前**导入，所以它们注册的内容（比如
+[组件渲染器](#ui-组件)、[工具视图](#工具视图)）在首次渲染时就已就位。脚本通过 `window.lovia`
+和页面打交道，这是页面唯一公开的脚本接口；其余模块都属于内部实现。
 
 | `window.lovia` | 说明 |
 | --- | --- |
 | `version` | 提供页面的 lovia 版本，用于特性检测 |
 | `ready` | 应用启动结束时兑现的 promise：页面已就绪，首次的对话列表请求和 URL 指定的对话都已加载完（或失败）。页面发现用户未登录时一直挂起 |
+| `state` | 冻结的快照：`sessionId`（新对话为 null）、`agent`、`theme`、`lang`、`busy`（是否有运行正在流式输出）。需要最新值时重新读取 |
+| `on(event, fn)` | 监听[事件](#事件)；返回一个取消监听的函数 |
+| `send(text)` | 以用户身份发送 `text`；有运行在进行时，会排队到下一轮 |
+| `setDraft(text)` | 把 `text` 放进输入框，由用户修改后发送 |
+| `newChat()` / `openSession(id)` | 打开一个新对话 / 打开对话 `id` |
+| `toast(text, { type })` | 短暂提示；`type` 为 `"info"`（默认）或 `"error"` |
+| `api` | 页面的 API 客户端，已处理[路径前缀](#部署在路径前缀下)和登录 |
+| `t(key, params)` | 当前语言下的界面文案，包括你[自己的 key](#文案与语言) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
+| `registerToolView(name, view)` | [工具视图](#工具视图) |
 
 ```js
 // ui/acme.js
-window.lovia.ready.then(() => {
-  console.info(`Acme extensions on lovia ${window.lovia.version}`);
+const { lovia } = window;
+
+lovia.ready.then(() => {
+  console.info(`Acme extensions on lovia ${lovia.version}`);
+});
+
+// 模板在 composer_actions block 里放的按钮。
+document.getElementById('acme-summarize')?.addEventListener('click', () => {
+  lovia.send(lovia.t('acme.summarizePrompt'));
 });
 ```
 
-不要在脚本顶层 `await window.lovia.ready`：页面要等你的脚本加载完才启动，两边会互相等待，
-直到下面说的 5 秒上限。加载失败的脚本会弹出错误提示，页面不带它照常启动。5 秒后仍在加载的
-脚本不再阻塞启动，它会继续加载，加载完再注册。脚本是你自己的代码，拥有页面的全部权限，所以
-第三方代码请放进 `assets` 自托管，不要直接引用别人的 CDN。
+不要在脚本顶层 `await lovia.ready`：页面要等你的脚本加载完才启动，两边会互相等待，直到下面说的
+5 秒上限。加载失败的脚本会弹出错误提示，页面不带它照常启动。5 秒后仍在加载的脚本不再阻塞启动，
+它会继续加载，加载完再注册。脚本是你自己的代码，拥有页面的全部权限，所以第三方代码请放进
+`assets` 自托管，不要直接引用别人的 CDN。
+
+想要编辑器补全和类型检查，可以引用 lovia 自带的类型声明（路径在你的环境的 `site-packages` 下）：
+
+```js
+// @ts-check
+/// <reference path="…/site-packages/lovia/web/static/lovia.d.ts" />
+```
+
+### 事件
+
+事件描述的是屏幕上这个页面的动静。抛出异常的监听器会被记录下来，不影响其他监听器。
+
+| 事件 | payload | 触发时机 |
+| --- | --- | --- |
+| `session` | `{ sessionId }` | 屏幕上换了一个对话（`null` 表示新对话）；新对话首次保存时也会触发 |
+| `agent` | `{ agent }` | 用户切换了 agent |
+| `run-start` | `{ sessionId }` | 一次运行开始在页面上流式输出：用户发送，或刷新后重新接上 |
+| `run-end` | `{ sessionId, status, usage }` | 页面不再流式输出这次运行。`status`：`done`（已回答）、`error`、`cancelled`（用户停止）或 `detached`（用户切换了对话或连接断开，服务端可能还在运行）。`usage` 是已回答运行的 token 用量，否则为 `null` |
+| `theme` | `{ theme }` | 浅色或深色主题生效 |
+
+```js
+lovia.on('run-end', ({ status, usage }) => {
+  if (status === 'done') analytics.track('reply', { tokens: usage?.total_tokens });
+});
+```
+
+### 工具视图
+
+每次工具调用都显示为一张卡片：一行写着名字和参数，展开后是参数和结果。`registerToolView`
+可以改变某个工具卡片的呈现方式——适合你无法控制的工具（比如 MCP 服务器），也适合面向终端用户的
+部署：`read_file(path: …)` 对他们没有意义。
+
+```js
+// 代替 name(args) 的一行摘要，作用于所有没有专属视图的工具；返回 null 保留默认。
+const labels = { order_status: '正在查询订单', read_file: '正在读取文件' };
+lovia.registerToolView('*', { summary: (tool) => labels[tool.name] ?? null });
+
+lovia.registerToolView('web_search', {
+  summary: (tool) =>
+    tool.status === 'done' ? `已搜索「${tool.args?.query}」` : `正在搜索「${tool.args?.query}」…`,
+  // 绘制卡片主体；`tool` 每次变化都会重新调用。
+  render(el, tool) {
+    if (tool.status !== 'done') return;
+    const list = document.createElement('ol');
+    for (const hit of JSON.parse(tool.result).results ?? []) {
+      const link = document.createElement('a');
+      link.href = hit.url;
+      link.target = '_blank';
+      link.textContent = hit.title; // 不要用 innerHTML：工具输出不可信
+      const item = document.createElement('li');
+      item.append(link);
+      list.append(item);
+    }
+    el.replaceChildren(list);
+  },
+});
+```
+
+| `view` 字段 | 说明 |
+| --- | --- |
+| `summary(tool)` | 代替 `name(args)` 的一行摘要；返回 `null` 或 `undefined` 保留默认。鼠标悬停时显示它代表的调用 |
+| `render(el, tool, ctx)` | 把卡片主体画进 `el`。约定和[组件渲染器](#ui-组件)相同（`ctx`、可选的清理函数），原始结果仍可通过 "Source" 开关查看 |
+| `snapshot(tool, ctx)` | 用于对话 HTML 导出的静态 HTML |
+
+- `tool` 是这次调用的冻结快照：`id`、`name`、`args`（已解析；超过 256 KB 或无法解析时没有）、
+  `status`（`running`、`awaiting` 等待用户、`done`、`error`）、`result`（结束后的输出文本）、
+  `isError`、`images`。它每次变化，视图的函数都会重新调用。
+- 工具名的专属视图优先于 `'*'` 视图，而且逐个字段回退：只有 `summary` 的视图仍会用 `'*'` 视图的
+  `render`。
+- 结果本身是 [UI 组件](#ui-组件)的，仍按那个组件绘制；视图的 `summary` 照样生效。
+- 隐藏某个工具的卡片是 CSS 的事（`[data-part="tool"][data-tool="…"]`，见[样式](#样式)），
+  不归视图管。
+- 以 `lovia.` 开头的 kind 归 lovia 自己使用，不要在这些名字下注册渲染器。
 
 ## UI 组件
 

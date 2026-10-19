@@ -506,8 +506,12 @@ in HTTP responses and stream `error` events alike. Keeping the page?
 `assets=` at a directory of your own logo, favicon, stylesheets and scripts,
 plus an `index.html` that fills template blocks — links, composer controls, a
 notice; restyle through design tokens and `data-part` attributes, which your
-CSS wins over without `!important`. It works under a path prefix — behind a proxy
-(`--root-path`) or mounted in your own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
+CSS wins over without `!important`. Your scripts load before the page starts
+and drive it through `window.lovia` (typed in `lovia.d.ts`): run and session
+events, actions such as `send` and `setDraft`, and tool views that turn a
+tool's `name(args)` card into a plain-language line or a body of your own. It
+works under a path prefix — behind a proxy (`--root-path`) or mounted in your
+own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
 a renderer you load with `ChatUI(scripts=[...])` (`lovia.getRenderer` lets one
 wrap another); `put_ui_data` keeps a large result out of the model's context,
 which reads a preview while the page draws it all. Three kinds come built in:

@@ -99,41 +99,45 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # workspace) and there's no text — nothing to run.
             raise WebError(422, "invalid_request", "empty message")
         client = req.context or {}
-        # Before any state changes, as in RunSupervisor.start(): a refusal
-        # leaves nothing behind.
-        context = await build_run_context(
-            deps.run_context,
-            RunTrigger(
+        # Hold the chat for the whole turn, as a supervised run does: no
+        # stream starts a second run on it meanwhile.
+        with deps.supervisor.reserve(sid):
+            # Before any state changes, as in RunSupervisor.start(): a refusal
+            # leaves nothing behind.
+            context = await build_run_context(
+                deps.run_context,
+                RunTrigger(
+                    session_id=sid,
+                    agent=agent,
+                    source="user",
+                    request=request,
+                    client=client,
+                ),
+            )
+            name = deps.name_of(agent)
+            await upsert_session(sid, name, req.message, is_new=is_new)
+            if is_new:
+                announce_session(sid, name, req.message)
+            # Same chat-scoped workspace binding the supervised path applies in
+            # RunSupervisor.start(): background processes belong to the chat, no
+            # matter which endpoint ran the turn.
+            agent = await deps.workspaces.bind(sid, agent)
+            # Subagent tasks this turn spawns work in its context.
+            deps.supervisor.last_client[sid] = dict(client)
+            UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
+            RUN_CLIENT.set(req.context or None)
+            result = await Runner.run(
+                agent,
+                user_input,
+                context=context,
+                session=session,
                 session_id=sid,
-                agent=agent,
-                source="user",
-                request=request,
-                client=client,
-            ),
-        )
-        await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
-        if is_new:
-            announce_session(sid, deps.name_of(agent), req.message)
-        # Same chat-scoped workspace binding the supervised path applies in
-        # RunSupervisor.start(): background processes belong to the chat, no
-        # matter which endpoint ran the turn.
-        agent = await deps.workspaces.bind(sid, agent)
-        # Subagent tasks this turn spawns work in its context.
-        deps.supervisor.last_client[sid] = dict(client)
-        UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
-        RUN_CLIENT.set(req.context or None)
-        result = await Runner.run(
-            agent,
-            user_input,
-            context=context,
-            session=session,
-            session_id=sid,
-            context_policy=deps.context_policy,
-            max_turns=deps.max_turns,
-            budget=deps.fresh_budget(),
-            retry=deps.retry,
-            tracer=deps.tracer,
-        )
+                context_policy=deps.context_policy,
+                max_turns=deps.max_turns,
+                budget=deps.fresh_budget(),
+                retry=deps.retry,
+                tracer=deps.tracer,
+            )
         if is_new:
             deps.schedule_title(sid, req.message, result.output, deps.name_of(agent))
         return ChatResponse(
@@ -323,21 +327,23 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 f"agent {snapshot.agent_name!r} is no longer registered",
             )
 
-        # Built BEFORE start_resume: that call registers the controller, and
-        # nothing may await between registration and the subscribe that begins
-        # its task. An await there could be cancelled (client disconnect) or
-        # raise, stranding a registered controller that never starts — later
-        # reconnects would attach to a hub that publishes nothing and hang.
+        # Built BEFORE start_resume: once it has returned, nothing may await
+        # before the subscribe that begins its task. An await there could be
+        # cancelled (client disconnect) or raise, stranding a registered
+        # controller that never starts — later reconnects would attach to a
+        # hub that publishes nothing and hang.
         #
         # Same splice `_session_view` used to build the view the client is
         # looking at right now (session history + the checkpoint's entries), so
         # the snapshot it re-renders matches rather than fights it.
-        entries = await session.load(session_id) + list(snapshot.entries)
+        history = await session.load(session_id)
+        entries = history + list(snapshot.entries)
 
         try:
             ctrl = await deps.supervisor.start_resume(
                 session_id=session_id,
                 agent=deps.agents[snapshot.agent_name],
+                history=history,
                 snapshot=snapshot,
                 request=request,
             )

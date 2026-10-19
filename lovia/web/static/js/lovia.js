@@ -64,17 +64,19 @@ const providers = new Map();
  * @returns {Record<string, unknown> | undefined} undefined when there is none.
  */
 export function collectContext() {
-  /** @type {Record<string, unknown>} */
-  const out = {};
+  /** @type {[string, unknown][]} */
+  const entries = [];
   for (const [key, fn] of providers) {
     try {
       const value = fn();
-      if (value !== undefined) out[key] = value;
+      if (value !== undefined) entries.push([key, value]);
     } catch (err) {
       console.error(`lovia: context provider "${key}" failed:`, err);
     }
   }
-  return Object.keys(out).length ? out : undefined;
+  // fromEntries defines own properties: a "__proto__" key stays a key,
+  // where assigning it would set the object's prototype instead.
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 /** @type {() => void} */

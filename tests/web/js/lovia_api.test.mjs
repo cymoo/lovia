@@ -87,6 +87,19 @@ test('provideContext: values read at send time; a failing or empty one is left o
   assert.throws(() => lovia.provideContext('x', 1), /expected a function/);
 });
 
+test('provideContext: a "__proto__" key is a key like any other', () => {
+  lovia.provideContext('__proto__', () => ({ x: 1 }));
+  const quiet = console.error;
+  console.error = () => {}; // the earlier test's broken provider
+  try {
+    const ctx = collectContext();
+    assert.ok(Object.hasOwn(ctx, '__proto__'));
+    assert.match(JSON.stringify(ctx), /"__proto__":\{"x":1\}/);
+  } finally {
+    console.error = quiet;
+  }
+});
+
 test('actions reach the page, normalized', async () => {
   const calls = [];
   configureLovia({

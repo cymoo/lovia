@@ -19,7 +19,8 @@ import contextvars
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -214,9 +215,11 @@ class EventHub:
 @dataclass
 class _Attachment:
     """What a re-attaching subscriber receives: an authoritative snapshot of the
-    completed turns, the current turn's events to replay, and the live tail."""
+    completed turns, the current turn's events to replay, and the live tail.
+    No snapshot (``None``) while the run's view isn't loaded yet: an empty one
+    would wipe the history the client shows."""
 
-    snapshot: list[MessageOut]
+    snapshot: list[MessageOut] | None
     buffered: list[events.Event]
     subscription: _Subscription
     status: str
@@ -283,9 +286,11 @@ class RunController:
         # Final model call's prompt size (context fill), from the last leg that
         # reported one — rides in the run record next to the cumulative usage.
         self.last_input_tokens: int | None = None
-        # snapshot mirror (task-private until read synchronously by attach)
+        # snapshot mirror (task-private until read synchronously by attach);
+        # ``has_view`` once it holds the chat's history, not just defaults
         self.history_baseline: list[TranscriptEntry] = []
         self.completed_mirror: list[TranscriptEntry] = []
+        self.has_view = False
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event] = []
         self.pending_approval: events.ApprovalRequired | None = None
@@ -349,12 +354,11 @@ class RunController:
         + live tail, captured atomically against the hub seq."""
         sub = self.hub.subscribe()
         buffered = list(self.in_flight_buffer)
-        if with_snapshot:
+        snapshot = None
+        if with_snapshot and self.has_view:
             entries = [*self.history_baseline, *self.completed_mirror]
             now = time.time()
             snapshot = view_messages(entries, created_at=now, updated_at=now)
-        else:
-            snapshot = []
         # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
         # if it somehow isn't, so a late client can always decide.
         if self.pending_approval is not None and self.pending_approval not in buffered:
@@ -559,6 +563,7 @@ class RunController:
                     await session.load(sid) if session is not None else []
                 )
                 self.completed_mirror = list(seed)
+                self.has_view = True
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
                 budget = deps.fresh_budget()
@@ -819,6 +824,8 @@ class RunSupervisor:
         # session starts on nobody's request: its subagent tasks, and the
         # report runs that deliver their results back into it.
         self.last_client: dict[str, JsonObject] = {}
+        # Sessions an unsupervised run holds (see :meth:`reserve`).
+        self._reserved: set[str] = set()
 
     @property
     def max_background_runs(self) -> int:
@@ -947,8 +954,11 @@ class RunSupervisor:
         session_id: str,
         agent: Agent[Any],
         snapshot: RunSnapshot,
+        history: list[TranscriptEntry],
         request: Request | None = None,
     ) -> RunController:
+        """Register a resume of ``snapshot``, the run the chat's ``history``
+        (the session's, read with it) was interrupted after."""
         self._check_slot(session_id, cap=False)
         store = self.deps.store
         ckpt = CheckpointOptions(
@@ -956,6 +966,7 @@ class RunSupervisor:
             resume_from=snapshot,
             delete_on_success=True,
         )
+        seed = drop_system_entries(list(snapshot.entries))
         ctrl = RunController(
             deps=self.deps,
             supervisor=self,
@@ -963,13 +974,18 @@ class RunSupervisor:
             agent=agent,
             first_input=[],
             first_checkpoint=ckpt,
-            seed_entries=drop_system_entries(list(snapshot.entries)),
+            seed_entries=seed,
             is_new=False,
             title_message=None,
             # The resumer's identity; if the run already has a record (it
             # normally does — same run_id), start_run keeps the original source.
             source="user",
         )
+        # The view is known already, so a reconnect attaching during the setup
+        # below gets the same snapshot as this one.
+        ctrl.history_baseline = list(history)
+        ctrl.completed_mirror = list(seed)
+        ctrl.has_view = True
         # Reserved before the first await, as in start(): a second reconnect
         # attaches to this resume instead of resuming the snapshot again.
         self._controllers[session_id] = ctrl
@@ -1012,9 +1028,20 @@ class RunSupervisor:
         self.last_client[session_id] = ctrl.client
         return ctrl
 
+    @contextmanager
+    def reserve(self, session_id: str) -> Iterator[None]:
+        """Hold ``session_id`` for a run outside the supervisor (the blocking
+        ``/api/chat``) while it lasts: no supervised run starts on it."""
+        self._check_slot(session_id, cap=False)
+        self._reserved.add(session_id)
+        try:
+            yield
+        finally:
+            self._reserved.discard(session_id)
+
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
         """Refuse a second run for one session, and (``cap``) one over the limit."""
-        if session_id in self._controllers:
+        if session_id in self._controllers or session_id in self._reserved:
             raise WebError(
                 409, "run_active", "a run is already active for this session"
             )
@@ -1114,14 +1141,15 @@ async def forward(
         yield frame("session", SessionData(session_id=sid))
     if isinstance(source, _Attachment):
         sub = source.subscription
-        yield frame(
-            "snapshot",
-            SnapshotData(
-                session_id=sid,
-                status=source.status,
-                entries=[m.model_dump() for m in source.snapshot],
-            ),
-        )
+        if source.snapshot is not None:
+            yield frame(
+                "snapshot",
+                SnapshotData(
+                    session_id=sid,
+                    status=source.status,
+                    entries=[m.model_dump() for m in source.snapshot],
+                ),
+            )
         for ev in source.buffered:
             payload = event_to_sse(ev)
             if payload is not None:

@@ -398,7 +398,10 @@ async def test_a_start_holds_its_place_while_the_hook_decides(tmp_path) -> None:
         assert deps.workspaces.get("other") is None
         gate.set()
         assert (await refused).status_code == 403
-        await asyncio.wait_for(same, 5)  # its stream ends with the refused start
+        # Its stream ends with the refused start, having sent no snapshot:
+        # the run's view wasn't loaded, and an empty one would wipe the page.
+        attached = _parse_sse((await asyncio.wait_for(same, 5)).text)
+        assert "snapshot" not in [e for e, _ in attached]
         assert await store.get("new") is None
         assert deps.workspaces.get("new") is None
         # The chat is free again, and an accepted turn makes it for good.
@@ -491,6 +494,28 @@ async def test_a_stop_during_setup_beats_the_stale_start(stop: str) -> None:
     assert [e.content for e in entries if getattr(e, "role", None) == "user"] == ["b"]
 
 
+async def test_a_blocking_turn_holds_its_chat_through_the_hook() -> None:
+    gate = asyncio.Event()
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    store = ChatStore.in_memory()
+    agent = _agent([text("blocking"), text("stream")])
+    app = _app(agent, store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(lambda: "s" in sup._reserved)
+        then = {"message": "b", "session_id": "s"}
+        assert (await ac.post("/api/chat/stream", json=then)).status_code == 409
+        gate.set()
+        assert (await blocking).status_code == 200
+        assert "s" not in sup._reserved  # released with the turn
+        assert (await ac.post("/api/chat/stream", json=then)).status_code == 200
+    entries = await store.session.load("s")
+    users = [e.content for e in entries if getattr(e, "role", None) == "user"]
+    assert users == ["a", "b"]
+
+
 async def _interrupted(store: ChatStore, sid: str = "s1") -> None:
     from lovia.checkpointer import RunHead
     from lovia.messages import Usage
@@ -515,14 +540,19 @@ async def test_concurrent_reconnects_resume_the_run_once() -> None:
     sup = app.state.deps.supervisor
     async with _client(app) as ac:
         params = {"session_id": "s1"}
-        first, _ = _spawn(ac, "/api/chat/reconnect", params=params)
+        first, first_lines = _spawn(ac, "/api/chat/reconnect", params=params)
         await _until(lambda: sup.get("s1") is not None)
         pending = sup.get("s1")
-        second, _ = _spawn(ac, "/api/chat/reconnect", params=params)
+        second, second_lines = _spawn(ac, "/api/chat/reconnect", params=params)
         await _until(lambda: bool(pending.hub._subs))  # attached to the first
         gate.set()
         await asyncio.wait_for(asyncio.gather(first, second), 5)
     assert len(provider.calls) == 1
+    # Both see the history the run was interrupted in — the second, attached
+    # mid-setup, too: an empty snapshot would wipe the page.
+    for lines in (first_lines, second_lines):
+        snapshot = next(d for e, d in _parse_sse("\n".join(lines)) if e == "snapshot")
+        assert [m["content"] for m in snapshot["entries"]] == ["q"]
 
 
 async def test_a_snapshot_another_resume_moved_on_from_is_not_resumed() -> None:
@@ -534,11 +564,12 @@ async def test_a_snapshot_another_resume_moved_on_from_is_not_resumed() -> None:
     app = _app(agent, store=store)
     sup = app.state.deps.supervisor
     snapshot = await store.checkpointer.load("run-1")
-    ctrl = await sup.start_resume(session_id="s1", agent=agent, snapshot=snapshot)
+    resume = {"session_id": "s1", "agent": agent, "snapshot": snapshot, "history": []}
+    ctrl = await sup.start_resume(**resume)
     ctrl._ensure_begun()
     await ctrl.task  # resumed and finished: checkpoint and pointer are gone
     with pytest.raises(WebError) as exc:
-        await sup.start_resume(session_id="s1", agent=agent, snapshot=snapshot)
+        await sup.start_resume(**resume)
     assert exc.value.code == "run_not_found"
 
 

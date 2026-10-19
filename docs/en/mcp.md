@@ -87,6 +87,36 @@ candidate sources; fetch reads selected URLs. Only agents given this plugin use
 the server. From async code, use `await Runner.run(agent, ...)` instead of
 `run_sync()`.
 
+## Local code navigation with Sem
+
+[Sem](https://github.com/Ataraxy-Labs/sem) exposes symbol lookup and source
+search over stdio. Install Sem using its upstream instructions and confirm
+`sem --version` works. With `lovia[mcp]` installed, configure a navigation-only
+tool projection:
+
+```python
+from lovia.plugins.mcp import MCP, MCPServerStdio
+
+server = MCPServerStdio(
+    name="sem",
+    command="sem",
+    args=["mcp"],
+    env={"SEM_REPO": "/absolute/path/to/checkout"},
+    include_tools=["sem_find", "sem_grep"],
+)
+# Pass plugins=[MCP(server)] to your Agent.
+```
+
+Use an existing Git checkout visible to the server process. The tools are
+named `sem__sem_find` and `sem__sem_grep`; ask the agent to find an existing
+function and inspect its callers. The first lookup may write a local index.
+Tool filtering does not sandbox the process, and `SEM_REPO` is not an
+access-control boundary. The full Sem server also includes command-running
+validation tools. Use trusted checkouts; returned source is sent to the
+configured model. For repeated sequential runs, use the persistent connection
+pattern below. No model credentials are needed just to open a session and
+discover tools.
+
 ## Connection lifecycle
 
 **Per-run (default).** Passing a server *config* means each run opens the

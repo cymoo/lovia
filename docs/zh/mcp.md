@@ -79,6 +79,31 @@ print(result.output)
 再抓取选定的 URL。只有配置了此插件的 Agent 才会使用该服务器。在异步代码中，
 用 `await Runner.run(agent, ...)` 代替 `run_sync()`。
 
+## 使用 Sem 导航本地代码
+
+[Sem](https://github.com/Ataraxy-Labs/sem) 通过 stdio 提供符号查找和源码搜索。
+按上游说明安装 Sem，并确认 `sem --version` 可用。安装 `lovia[mcp]` 后，
+可以只向 Agent 暴露导航工具：
+
+```python
+from lovia.plugins.mcp import MCP, MCPServerStdio
+
+server = MCPServerStdio(
+    name="sem",
+    command="sem",
+    args=["mcp"],
+    env={"SEM_REPO": "/absolute/path/to/checkout"},
+    include_tools=["sem_find", "sem_grep"],
+)
+# 将 plugins=[MCP(server)] 传给 Agent。
+```
+
+路径必须指向服务器进程可访问的现有 Git 仓库。工具名为 `sem__sem_find` 和
+`sem__sem_grep`；可以让 Agent 查找某个现有函数及其调用方。首次查询可能写入
+本地索引。工具过滤不是进程沙箱，`SEM_REPO` 也不是访问控制边界；完整的 Sem
+服务器还包含可执行命令的验证工具。请使用可信仓库；返回的源码会发送给所配置的
+模型。重复的顺序运行可以使用下面的持久连接模式。仅建立连接和发现工具无需模型凭据。
+
 ## 连接生命周期
 
 **按运行打开（默认）。** 传入服务器**配置**时，每次运行都会在插件 `setup()` 中打开连接，并在

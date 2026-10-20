@@ -2681,12 +2681,12 @@ export async function runStream(message, attachments = null) {
       appendRetry();
     }
   } finally {
-    _admitting = false; // e.g. refused: no session frame came
-    _stopOnceAdmitted = false;
     cancelRender();
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
+      _admitting = false; // e.g. refused: no session frame came
+      _stopOnceAdmitted = false;
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText; // store raw markdown for copy
         flushRender(true);
@@ -2852,9 +2852,12 @@ export function detachStream() {
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
   //  - the turn-progress pill (un-hidden by turn_started);
   //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
-  //  - any in-flight follow-up request, whose chips would land in the new view.
+  //  - any in-flight follow-up request, whose chips would land in the new view;
+  //  - a stop waiting for the run's admission: leaving isn't stopping.
   _queuedTurns = [];
   _pendingResend = [];
+  _admitting = false;
+  _stopOnceAdmitted = false;
   if (turnProgressEl) turnProgressEl.classList.add('hidden');
   clearTodoPanel();
   clearFollowups();

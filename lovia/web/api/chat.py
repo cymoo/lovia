@@ -174,6 +174,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             raise WebError(422, "invalid_request", "empty message")
         if not decided:  # ... and so did the one this message was to join
             context = await build_run_context(deps.run_context, trigger)
+            # Another may have started while the hook ran: join that one,
+            # before the cleanup below could take its checkpoint for stale.
+            if (live := deps.supervisor.get(sid)) is not None:
+                return attach(live)
 
         # No live run → start a fresh supervised run. Delete any stranded
         # checkpoint first so a later reconnect won't pick up a stale snapshot.

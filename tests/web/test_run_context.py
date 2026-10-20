@@ -390,6 +390,76 @@ async def test_turns_whose_hooks_return_together_make_one_run() -> None:
     assert sorted(users) == ["a", "b"]
 
 
+async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
+    monkeypatch,
+) -> None:
+    """A message for a live run sees that run end while its chat row is
+    written, so it calls the hook after all — and while the hook runs another
+    turn starts a run. The message joins that run; it must not take the new
+    run's checkpoint for a stale one and delete it."""
+    releases = [asyncio.Event(), asyncio.Event()]
+    in_tool: list[int] = []
+
+    @tool
+    async def block() -> str:
+        """Block until the test releases this call."""
+        i = len(in_tool)
+        in_tool.append(i)
+        await releases[i].wait()
+        return "unblocked"
+
+    script = [call("block", {}), text("a"), call("block", {}), text("c"), text("b")]
+    agent = Agent(name="bot", model=ScriptedProvider(script), tools=[block])
+    gate, entered = asyncio.Event(), []
+    hook = _gated(gate, entered, when=lambda t: t.client.get("kb") == "late")
+    store = ChatStore.in_memory()
+    app = _app(agent, store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+
+    upsert, hold_upsert, upsert_held = store.upsert, asyncio.Event(), []
+
+    async def held_upsert(*args, **kwargs):
+        if kwargs.get("title") is None and not upsert_held:  # the late message's
+            upsert_held.append(True)
+            await hold_upsert.wait()
+        return await upsert(*args, **kwargs)
+
+    deleted: list[str] = []
+    delete = store.checkpointer.delete
+
+    async def recorded_delete(run_id: str) -> None:
+        deleted.append(run_id)
+        await delete(run_id)
+
+    monkeypatch.setattr(store.checkpointer, "delete", recorded_delete)
+    async with _client(app) as ac:
+        first = asyncio.create_task(
+            ac.post("/api/chat/stream", json={"message": "a", "session_id": "s"})
+        )
+        await _until(lambda: in_tool == [0])  # run A, inside its tool
+        monkeypatch.setattr(store, "upsert", held_upsert)
+        late = {"message": "b", "session_id": "s", "context": {"kb": "late"}}
+        joining = asyncio.create_task(ac.post("/api/chat/stream", json=late))
+        await _until(lambda: bool(upsert_held))  # A is live: no hook yet
+        releases[0].set()
+        await _until(lambda: sup.get("s") is None)  # A ended meanwhile
+        hold_upsert.set()
+        await _until(lambda: bool(entered))  # so the message calls the hook
+        nxt = asyncio.create_task(
+            ac.post("/api/chat/stream", json={"message": "c", "session_id": "s"})
+        )
+        await _until(lambda: in_tool == [0, 1])  # run C is live, in its tool
+        replacement = sup.get("s").run_id
+        gate.set()
+        await _until(lambda: bool(sup.get("s").mailbox))  # b joined C
+        assert replacement not in deleted
+        releases[1].set()
+        await asyncio.wait_for(asyncio.gather(first, joining, nxt), 5)
+    entries = await store.session.load("s")
+    users = [e.content for e in entries if getattr(e, "role", None) == "user"]
+    assert users == ["a", "c", "b"]
+
+
 async def test_a_reconnect_does_not_resume_a_run_finished_while_its_hook_ran() -> None:
     gate, entered = asyncio.Event(), []
     provider = ScriptedProvider([text("resumed"), text("again")])

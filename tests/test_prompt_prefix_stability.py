@@ -36,7 +36,13 @@ from lovia.providers.base import ModelSettings
 from lovia.providers.openai_chat import OpenAIChatProvider
 from lovia.stores import SQLiteSession
 from lovia.testing import ScriptedProvider, batch, call, text
-from lovia.transcript import InputEntry, ModelDelta, TranscriptEntry, entry_to_dict
+from lovia.transcript import (
+    InputEntry,
+    ModelDelta,
+    ToolResultEntry,
+    TranscriptEntry,
+    entry_to_dict,
+)
 from lovia.workspace import CommandRule, Workspace
 
 _STUB = Path(__file__).parent / "plugins" / "mcp_stub_server.py"
@@ -70,7 +76,9 @@ class _RecordingProvider(ScriptedProvider):
         settings: ModelSettings | None = None,
     ) -> AsyncIterator[ModelDelta]:
         self.requests.append(
-            _Request(copy.deepcopy(entries), copy.deepcopy(tools), settings)
+            _Request(
+                copy.deepcopy(entries), copy.deepcopy(tools), copy.deepcopy(settings)
+            )
         )
         async for delta in super().stream(
             entries, tools=tools, response_format=response_format, settings=settings
@@ -156,6 +164,14 @@ async def _drive(root: Path) -> _Recording:
     assert not provider._script, "every scripted turn was consumed"
     system = provider.requests[0].entries[0]
     history = await session.load(_SESSION)
+    # A failed tool still lands as a result and the script plays on, so check
+    # the calls really did what the scenario relies on.
+    results = {e.call_id: e for e in history if isinstance(e, ToolResultEntry)}
+    assert len(results) == 11 and not [e for e in results.values() if e.is_error]
+    assert results["sh1"].output.startswith("started background process")
+    assert "Say hi." in results["sk1"].output
+    assert (results["mcp1"].output, results["mcp2"].output) == ("5", "9")
+    assert "stub__add" in results["mcp3"].output
     notes = (root / "memory" / "MEMORY.md").read_text()
     return _Recording(provider.requests, [system, *history], notes)
 

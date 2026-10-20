@@ -100,7 +100,10 @@ For endpoint contracts and the `ChatStore` interface, see
 
 ## Customizing the page
 
-Keep your files in one directory and point `ChatUI(assets=...)` at it:
+Keep your files in one directory and point `ChatUI(assets=...)` at it.
+`lovia web init-ui ui` starts one: an `index.html` listing every block, a
+`theme.css` listing every token with its default, and a type-checked
+`extension.js` — all commented out, so the scaffold alone changes nothing.
 
 ```text
 ui/

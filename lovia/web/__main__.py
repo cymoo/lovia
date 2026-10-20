@@ -82,6 +82,7 @@ examples:
   lovia web --workspace ~/notes --readonly # let it read, not write
   lovia web --app myagents:assistant       # serve your own agent
   lovia web --app myserver:app             # ... or your own create_app() app
+  lovia web init-ui ui                     # scaffold a UI directory for ChatUI(assets=)
 
 configuration:
   The model connection (model, base URL, API key, context window), extra
@@ -389,6 +390,11 @@ def _workspace_desc(args: argparse.Namespace, workspace: object) -> str:
 
 
 def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["init-ui"]:
+        from .scaffold import main as init_ui
+
+        return init_ui(argv[1:], prog=f"{prog or 'python -m lovia.web'} init-ui")
     args = build_parser(prog).parse_args(argv)
     try:
         level = (_first(args.log_level, os.getenv("LOVIA_LOG_LEVEL")) or "info").upper()

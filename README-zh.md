@@ -445,9 +445,11 @@ Memory("./memory", index=None)                 # 只有 Notes，不建 Archive
 
 ### Web UI
 
-一个轻量的 FastAPI 应用，提供 SSE 流式输出、会话管理、追问建议、审批、定时任务、
-记忆编辑、图片与文件上传、工作区文件预览等功能。
-浏览器断开后，未完成的对话仍会在服务端继续：
+一个可接入任意 Agent 的轻量 FastAPI 聊天应用（`pip install "lovia[web]"`）：
+
+```bash
+lovia web --port 9000                      # python -m lovia.web 亦可
+```
 
 ```python
 from lovia.web import create_app, serve
@@ -455,40 +457,16 @@ from lovia.web import create_app, serve
 serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
-```bash
-lovia web --port 9000                      # python -m lovia.web 亦可
-lovia web --check                          # 查看已保存的连接
-```
-
-模型连接（模型名、Base URL、API 密钥）只需在浏览器里配置一次
-（设置 → 模型：多模型档案、视觉/辅助角色指派、按端点的额外请求参数——推理强度、思考开关，
-按端点自己的写法——连接测试、输入框旁即时切换），
-保存到 `~/.lovia/config.json`（仅当前用户可读写、自动 git-ignore）。
-项目级 `./.lovia/config.json` 存在时整体优先；所有修改即时生效，无需重启。用
-`lovia web --check` 检查配置与端点；服务器与 Agent 选项仍走参数/环境变量。
-
-所有能力都以 JSON + SSE REST API 暴露（可在 `/api/docs`
-浏览），因此你可以用 `create_app(agent, ui=False)`，或者把 router 挂到自己的
-FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流式 `error` 事件中的错误
-都带有稳定的 `code`，客户端可据此判断错误类型。沿用内置页面时，可以用
-`ui=ChatUI(...)` 设置空白页文案、为自定义 `auth=` 指定 `login_url`、修改文案和语言
-（`messages`、`default_lang`）。`assets=` 指向一个目录，放你自己的 logo、favicon、样式表
-和脚本，以及填写模板 block 的 `index.html`（链接、输入框控件、公告等）；样式则通过设计
-变量和 `data-part` 属性调整，你的 CSS 无需 `!important` 就能覆盖内置样式。你的脚本在页面
-启动前加载，通过 `window.lovia`（类型见 `lovia.d.ts`）驱动页面：运行和会话事件、`send`、
-`setDraft` 等页面动作，工具视图——把工具卡片的 `name(args)` 换成一句人话，或画上你自己的
-主体，以及消息操作——复制按钮旁的自定义按钮，比如由你自己的路由按每条消息稳定的 `ref` 保存的
-👍 / 👎。`create_app(run_context=...)` 把请求相关的信息交给工具：来自 `auth=` 的用户身份，以及用户
-在页面上的选择（`lovia.provideContext`）——聊天、恢复的运行、定时任务、子 agent 任务都适用。
-页面也支持部署在路径前缀下，无论是在代理后面（`--root-path`）还是挂载到
-你自己的应用中。工具还可以返回 `ui_result(kind, props)`，
-把结果渲染成 UI，渲染器通过 `ChatUI(scripts=[...])` 加载（`lovia.getRenderer` 可以让一个
-渲染器包装另一个）；`put_ui_data` 可以把大块结果挡在模型上下文之外，模型只看预览，页面照常画出全部数据。内置了三种：表格，支持排序、筛选、翻页、复制和下载 CSV（`show_table`，
-或直接从你的数据返回 `ui_result("table", ...)`）；图表（`show_chart`，基于 Apache
-ECharts），支持下载 PNG / SVG / CSV 和全屏查看；以及页面（`show_html`），在无网络访问的沙箱中
-运行一个自包含的交互式页面。表格和图表在导出的 HTML 中也会画出来；`lovia web` 的默认 Agent
-已带有这三个工具。工具共用的资源（比如数据库连接池）可以通过
-`create_app(lifespan=...)` 随应用一起打开和关闭。
+- **开箱即用的完整聊天** —— SSE 流式输出、会话、审批、定时任务、记忆编辑与文件上传；
+  浏览器断开后运行仍在服务端继续。
+- **在浏览器里配置模型** —— 设置 → 模型，档案保存到 `~/.lovia/config.json`，修改即时生效；
+  `lovia web --check` 用于诊断连接。
+- **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
+  和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
+- **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过
+  `window.lovia` 驱动页面，`run_context=` 把用户身份和页面上下文交给工具。
+- **也可以不用内置页面** —— 所有能力都是 JSON + SSE REST API（`/api/docs`）；
+  `create_app(agent, ui=False)` 为你自己的前端提供服务。
 
 → [Web UI](https://cymoo.github.io/lovia/zh/web-ui/) · [Web 服务端](https://cymoo.github.io/lovia/zh/web-server/) · [HTTP API](https://cymoo.github.io/lovia/zh/http-api/)
 

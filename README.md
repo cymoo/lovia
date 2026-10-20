@@ -472,9 +472,11 @@ Memory("./memory", index=None)                 # notes only, no archive
 
 ### Web UI
 
-A lightweight FastAPI app — SSE streaming, sessions with titles, follow-up
-suggestions, approvals, schedules, a memory editor, image & file attachments —
-whose runs survive browser disconnects:
+A lightweight FastAPI chat app for any agent (`pip install "lovia[web]"`):
+
+```bash
+lovia web --port 9000                      # python -m lovia.web works too
+```
 
 ```python
 from lovia.web import create_app, serve
@@ -482,53 +484,20 @@ from lovia.web import create_app, serve
 serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 ```
 
-```bash
-lovia web --port 9000                      # python -m lovia.web works too
-lovia web --check                          # inspect the saved connection
-```
-
-The model connection (model name, Base URL, API key) is configured once,
-in the browser — Settings → Models: multiple profiles, a vision/aux role per
-task, extra request fields per endpoint (reasoning effort, thinking on/off,
-in the endpoint's own dialect), connection testing, live switching from the
-composer — and saved to
-`~/.lovia/config.json` (owner-only, git-ignored). A project-local `./.lovia/config.json` overrides it wholesale;
-changes apply live, no restart. Diagnose with `lovia web --check`; server
-and agent options stay flags/env vars.
-
-The bundled page is optional: everything is exposed as a JSON + SSE REST
-API (browse it at `/api/docs`), so `create_app(agent, ui=False)` — or
-mounting the router into your own FastAPI app — lets you build a custom
-front-end on the same endpoints. Errors carry a stable `code` to branch on,
-in HTTP responses and stream `error` events alike. Keeping the page?
-`ui=ChatUI(...)` sets its blank-state copy, a `login_url` for your own
-`auth=`, and its wording and languages (`messages`, `default_lang`). Point
-`assets=` at a directory of your own logo, favicon, stylesheets and scripts,
-plus an `index.html` that fills template blocks — links, composer controls, a
-notice; restyle through design tokens and `data-part` attributes, which your
-CSS wins over without `!important`. Your scripts load before the page starts
-and drive it through `window.lovia` (typed in `lovia.d.ts`): run and session
-events, actions such as `send` and `setDraft`, tool views that turn a
-tool's `name(args)` card into a plain-language line or a body of your own,
-and message actions — buttons beside copy, such as 👍 / 👎 stored by your own
-route under each message's stable `ref`.
-`create_app(run_context=...)` hands tools what they need about the request:
-the user's identity from your `auth=`, and what they picked on the page
-(`lovia.provideContext`) — for chat turns, resumed runs, schedules and
-subagent tasks alike. It
-works under a path prefix — behind a proxy (`--root-path`) or mounted in your
-own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
-a renderer you load with `ChatUI(scripts=[...])` (`lovia.getRenderer` lets one
-wrap another); `put_ui_data` keeps a large result out of the model's context,
-which reads a preview while the page draws it all. Three kinds come built in:
-tables — sort, filter, pages, copy / CSV (`show_table`, or
-`ui_result("table", ...)` straight from your data); charts (`show_chart`,
-Apache ECharts), with PNG / SVG / CSV download and full screen; and pages
-(`show_html`), a self-contained interactive page run in a sandbox with no
-network access. Tables and charts also draw in the chat's HTML export, and
-`lovia web`'s default agent has all three tools. Your own resources —
-a DB pool your tools share — open and close with the app via
-`create_app(lifespan=...)`.
+- **Full chat out of the box** — SSE streaming, sessions, approvals,
+  schedules, a memory editor and file attachments; runs survive browser
+  disconnects.
+- **Models set up in the browser** — Settings → Models saves profiles to
+  `~/.lovia/config.json` and applies changes live; `lovia web --check`
+  diagnoses the connection.
+- **Rich tool results** — a tool returns `ui_result(kind, props)` to draw UI;
+  tables, ECharts charts and sandboxed HTML pages come built in
+  (`show_table`, `show_chart`, `show_html`).
+- **Customizable page** — `ChatUI(...)` and `assets=` change wording, logo,
+  styles and scripts; scripts drive the page through `window.lovia`, and
+  `run_context=` hands tools the user's identity and page context.
+- **Headless if you prefer** — everything is a JSON + SSE REST API
+  (`/api/docs`); `create_app(agent, ui=False)` serves your own front-end.
 
 → [Web UI](https://cymoo.github.io/lovia/web-ui/) · [Web server](https://cymoo.github.io/lovia/web-server/) · [HTTP API](https://cymoo.github.io/lovia/http-api/)
 

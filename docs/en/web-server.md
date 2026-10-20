@@ -356,12 +356,16 @@ lovia.on('run-end', ({ status, usage }) => {
 Every tool call shows as a card: its name and arguments on one line, the
 parameters and result inside. `registerToolView` changes how a tool's cards
 read — useful for the tools you don't control (MCP servers, say), and for
-end-user deployments where `read_file(path: …)` means nothing to the reader:
+end-user deployments where `order_status(id: …)` means nothing to the reader.
+lovia's own tools already read this way — "Read file a.md", "$ ls -la",
+"Web search “…”" — and a view you register, the `'*'` fallback included, takes
+precedence over theirs:
 
 ```js
 // One line in place of name(args), for every tool without a view of its own;
-// null keeps the default line.
-const labels = { order_status: 'Looking up an order', read_file: 'Reading a file' };
+// null hands over to the next view (lovia's line for its own tools), and in
+// the end keeps name(args).
+const labels = { order_status: 'Looking up an order' };
 lovia.registerToolView('*', { summary: (tool) => labels[tool.name] ?? null });
 
 lovia.registerToolView('web_search', {
@@ -387,7 +391,7 @@ lovia.registerToolView('web_search', {
 
 | `view` field | Description |
 | --- | --- |
-| `summary(tool)` | The card's one-line summary instead of `name(args)`; `null` or `undefined` keeps the default. Hovering shows the call it stands for |
+| `summary(tool)` | The card's one-line summary instead of `name(args)`; `null` or `undefined` falls through to the `'*'` view, then lovia's own line, then `name(args)`. Hovering shows the call it stands for |
 | `render(el, tool, ctx)` | Draw the card's body into `el`. Same contract as a [component renderer](#ui-components) (`ctx`, an optional cleanup function), and the raw result stays one "Source" toggle away |
 | `snapshot(tool, ctx)` | Static HTML for the chat's HTML export |
 

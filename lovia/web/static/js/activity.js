@@ -12,6 +12,7 @@
 
 import { t } from './i18n.js';
 import { icon } from './icons.js';
+import { toolLabel } from './tool-views.js';
 
 /**
  * Whether `node` is a working step that may fold into a group. A tool card
@@ -78,10 +79,10 @@ function makeGroup(open) {
 
 /** @param {HTMLElement} group */
 function relabel(group) {
-  const steps = [...stepsOf(group).children].map((n) => ({
-    reasoning: n.classList.contains('reasoning'),
-    tool: /** @type {HTMLElement} */ (n).dataset.tool,
-  }));
+  const steps = [...stepsOf(group).children].map((n) => {
+    const tool = /** @type {HTMLElement} */ (n).dataset.tool;
+    return { reasoning: n.classList.contains('reasoning'), tool: tool && toolLabel(tool) };
+  });
   const label = group.querySelector('.activity-label');
   if (label) label.textContent = summarize(steps).join(' · ');
 }

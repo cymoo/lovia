@@ -36,6 +36,13 @@ const FIELDS = ['summary', 'render', 'snapshot'];
 
 /** @type {Map<string, ToolView>} */
 const views = new Map();
+/**
+ * lovia's own views of its built-in tools (builtin-views.js), below every
+ * registered one — the '*' fallback included — plus the short label an
+ * activity group's digest uses.
+ * @type {Map<string, ToolView & { label?: () => string }>}
+ */
+const defaults = new Map();
 /** @type {Set<(name: string) => void>} */
 const watchers = new Set();
 
@@ -68,7 +75,39 @@ export function registerToolView(name, view) {
  * @returns {ToolView[F] | undefined}
  */
 export function toolViewField(name, field) {
-  return views.get(name)?.[field] ?? views.get(ANY_TOOL)?.[field];
+  return toolViewChain(name, field)[0];
+}
+
+/**
+ * Every view function `field` for tool `name`, most specific first: its own
+ * view's, the fallback's, lovia's default. A summary that returns nothing
+ * hands over to the next.
+ * @template {'summary' | 'render' | 'snapshot'} F
+ * @param {string} name
+ * @param {F} field
+ * @returns {NonNullable<ToolView[F]>[]}
+ */
+export function toolViewChain(name, field) {
+  return [views.get(name), views.get(ANY_TOOL), defaults.get(name)]
+    .map((view) => view?.[field])
+    .filter((fn) => fn != null);
+}
+
+/**
+ * Set lovia's default view of a built-in tool (not part of window.lovia).
+ * @param {string} name
+ * @param {ToolView & { label?: () => string }} view
+ */
+export function setDefaultView(name, view) {
+  defaults.set(name, view);
+}
+
+/**
+ * A tool's short display name: its default label, else the name itself.
+ * @param {string} name
+ */
+export function toolLabel(name) {
+  return defaults.get(name)?.label?.() ?? name;
 }
 
 /**

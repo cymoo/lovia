@@ -7,6 +7,7 @@
 // it as `data-status` — public, like `data-tool`, for deployer CSS.
 
 import { liftStep } from './activity.js';
+import './builtin-views.js';
 import { api } from './api.js';
 import {
   mountComponent,
@@ -17,7 +18,13 @@ import {
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { store } from './store.js';
-import { TOOL_VIEW_KIND, toolInfo, toolViewField, watchToolViews } from './tool-views.js';
+import {
+  TOOL_VIEW_KIND,
+  toolInfo,
+  toolViewChain,
+  toolViewField,
+  watchToolViews,
+} from './tool-views.js';
 import { copyToClipboard, openImageLightbox } from './ui.js';
 import { cloneTemplate, escapeHtml, highlightIn } from './util.js';
 
@@ -310,14 +317,14 @@ function applySummary(node) {
   const summary = node.querySelector('summary');
   if (!state || !summary) return;
   let text = null;
-  const fn = toolViewField(state.name, 'summary');
-  if (fn) {
+  for (const fn of toolViewChain(state.name, 'summary')) {
     try {
       const out = fn(toolInfo(state));
       if (typeof out === 'string' && out.trim()) text = out.trim();
     } catch (err) {
       console.error(`lovia tool view "${state.name}" summary failed:`, err);
     }
+    if (text !== null) break;
   }
   let el = summary.querySelector(':scope > .tool-summary');
   if (text === null) {

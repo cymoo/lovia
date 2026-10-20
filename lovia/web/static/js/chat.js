@@ -1545,10 +1545,16 @@ function describeMessage(turn) {
   const role = turn.classList.contains('user') ? 'user' : 'assistant';
   let user = /** @type {Element | null} */ (turn);
   while (user && !user.matches('.turn.user:not(.queued)')) user = user.previousElementSibling;
+  let ref = /** @type {HTMLElement | null} */ (user)?.dataset.ref ?? null;
+  if (!user && turn.dataset.question) {
+    // Its question is above the rendered window: the history still has it.
+    const cached = _historyEntries.filter((e) => e.role === 'user');
+    ref = cached[Number(turn.dataset.question)]?.ref ?? null;
+  }
   const bubble = turn.querySelector('.bubble');
   return Object.freeze({
     sessionId: store.sessionId,
-    ref: /** @type {HTMLElement | null} */ (user)?.dataset.ref ?? null,
+    ref,
     role,
     text: bubble ? bubbleMarkdown(bubble) : '',
   });
@@ -1873,6 +1879,8 @@ function renderHistoryWindow({ stickBottom }) {
         }
         const result = startAssistantTurn(it.timestamp);
         currentBubble = result.bubble;
+        // Its question, by absolute ordinal: the window may start below it.
+        if (userIdx > 0) result.node.dataset.question = String(userIdx - 1);
       }
       const text = contentText(it.content);
       if (it.reasoning) {

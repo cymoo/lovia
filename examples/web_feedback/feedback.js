@@ -20,10 +20,13 @@ const ICONS = {
 
 /** The chat on screen's ratings: ref → 'up' | 'down'. */
 let ratings = new Map();
+/** Ratings saved while a load was out: ref → rating, null for taken back. */
+let saved = new Map();
 
 // Fetch a chat's ratings when it comes on screen, then redraw the buttons so
 // the ratings already given show pressed.
 async function load(sessionId) {
+  saved = new Map();
   /** @type {Map<string, string>} */
   let next = new Map();
   if (sessionId) {
@@ -31,6 +34,11 @@ async function load(sessionId) {
     if (res.ok) next = new Map(Object.entries(await res.json()));
   }
   if (lovia.state.sessionId !== sessionId) return; // the user moved on meanwhile
+  // A rating saved since this load began is newer than its answer.
+  for (const [ref, rating] of saved) {
+    if (rating) next.set(ref, rating);
+    else next.delete(ref);
+  }
   ratings = next;
   lovia.refreshMessageActions();
 }
@@ -52,6 +60,7 @@ async function rate(msg, rating) {
   if (!res.ok) throw new Error(lovia.t('acme.failed')); // shown as an error toast
   if (next) ratings.set(ref, next);
   else ratings.delete(ref);
+  saved.set(ref, next);
   lovia.refreshMessageActions();
   if (next === 'down') lovia.toast(lovia.t('acme.thanks'));
 }

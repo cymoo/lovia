@@ -11,8 +11,6 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
 * the session has a live supervised run → inject into its mailbox (the next
   turn sees it; the supervisor's auto-chain covers a run that is just
   finishing);
-* a blocking ``/api/chat`` turn holds the session → its mailbox likewise; a
-  report the turn ended without reading is delivered again once it is over;
 * no live run → start a clientless supervised run with the report as its
   input (recorded under source ``subagent-report:<task id>``, distinct from
   the child task run's ``subagent:<session>``), so the model reacts to the
@@ -46,12 +44,12 @@ from ..plugins.subagents import (
     Subagents,
 )
 from .errors import WebError
+from .run_context import RunTrigger, build_run_context
 from .sse import SessionCreatedData
 
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
     from .api.deps import RouterDeps
-    from .supervisor import _Hold
 
 log = logging.getLogger(__name__)
 
@@ -63,14 +61,6 @@ _RETRY_DELAYS = (0.0, 2.0, 5.0, 15.0, 30.0)
 
 def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
     """Build the inject-or-start :data:`~lovia.plugins.DeliverFn` for ``deps``."""
-
-    # Re-deliveries waiting for a blocking turn to end (referenced until done).
-    waiting: set[asyncio.Task[None]] = set()
-
-    async def redeliver_unread(hold: _Hold, token: int, report: SubagentReport) -> None:
-        await hold.released.wait()
-        if hold.mailbox.remove(token):  # the turn ended before reading it
-            await deliver(report)
 
     async def deliver(report: SubagentReport) -> None:
         sid = report.session_id
@@ -86,21 +76,6 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 log.info(
                     "subagent %s: report injected into session %s's live run "
                     "(visible at its next turn)",
-                    report.id,
-                    sid,
-                )
-                return
-            hold = deps.supervisor.held(sid)
-            if hold is not None:
-                # A blocking /api/chat turn: its mailbox, as a live run's. Not
-                # waited for here — the child, and a parent in wait_subagents
-                # on it, would wait on each other.
-                token = hold.mailbox.push(report.text)
-                task = asyncio.create_task(redeliver_unread(hold, token, report))
-                waiting.add(task)
-                task.add_done_callback(waiting.discard)
-                log.info(
-                    "subagent %s: report queued for session %s's blocking turn",
                     report.id,
                     sid,
                 )
@@ -122,6 +97,24 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     row.agent,
                 )
                 return
+            # The chat's own context: this run continues it.
+            client = deps.supervisor.last_client.get(sid)
+            source = f"subagent-report:{report.id}"
+            try:
+                context = await build_run_context(
+                    deps.run_context,
+                    RunTrigger(
+                        session_id=sid, agent=agent, source=source, client=client or {}
+                    ),
+                )
+            except Exception as exc:
+                log.warning(
+                    "subagent %s: run_context refused the report run (%s); "
+                    "report dropped",
+                    report.id,
+                    exc,
+                )
+                return
             try:
                 await deps.supervisor.start(
                     session_id=sid,
@@ -130,9 +123,9 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     is_new=False,
                     title_message=None,
                     autostart=True,  # clientless: consume the report unattended
-                    source=f"subagent-report:{report.id}",
-                    # The chat's own context: this run continues it.
-                    client=deps.supervisor.last_client.get(sid),
+                    source=source,
+                    client=client,
+                    context=context,
                 )
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
@@ -188,7 +181,29 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
-        title = f"[{spec.id}] {provisional_title(spec.prompt)}"
+        # A task works for the chat that spawned it, so in its context. The
+        # run_context hook decides before the task chat exists: a refusal
+        # fails the spawn and leaves nothing behind.
+        client = (
+            deps.supervisor.last_client.get(spec.parent_session_id)
+            if spec.parent_session_id
+            else None
+        )
+        context = await build_run_context(
+            deps.run_context,
+            RunTrigger(
+                session_id=child_sid,
+                agent=spec.agent,
+                source=f"subagent:{child_sid}",
+                client=client or {},
+            ),
+        )
+        await deps.store.upsert(
+            child_sid,
+            agent=agent_key,
+            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+            parent_id=spec.parent_session_id,
+        )
         try:
             ctrl = await deps.supervisor.start(
                 session_id=child_sid,
@@ -201,27 +216,16 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # The parent's send_to_subagent pushes into this same channel,
                 # joining whatever the task chat's own /inject sends.
                 mailbox=spec.mailbox,
-                # A task works for the chat that spawned it, so in its context.
-                client=(
-                    deps.supervisor.last_client.get(spec.parent_session_id)
-                    if spec.parent_session_id
-                    else None
-                ),
-                # The task chat, written only once the run is admitted.
-                on_admit=lambda: deps.store.upsert(
-                    child_sid,
-                    agent=agent_key,
-                    title=title,
-                    parent_id=spec.parent_session_id,
-                ),
+                client=client,
+                context=context,
             )
-        except Exception as exc:
-            # No task runs. A refusal (409/429, or the run_context hook's)
-            # wrote no task chat; a later setup failure may have — it is this
-            # attempt's own (a fresh id), so it goes. start() closed any
-            # workspace it opened.
+        except WebError as exc:
+            # No-op for today's 409/429 (both raise before the workspace
+            # binding), but keeps "delete session ⇒ close its workspace"
+            # airtight if start()'s failure points ever move.
+            await deps.workspaces.close(child_sid)
             await deps.store.delete(child_sid)
-            if isinstance(exc, WebError) and exc.code == "too_many_runs":
+            if exc.code == "too_many_runs":
                 raise RuntimeError(
                     "the server is at its concurrent-run limit; "
                     "wait for other work to finish and spawn again"

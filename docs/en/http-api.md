@@ -134,7 +134,6 @@ normalizes all three.
 | `feature_unavailable` | 404 / 501 | the server or agent lacks it (no workspace, memory, checkpointer, question channel, or `rewind`) |
 | `run_active` | 409 | a run owns this chat |
 | `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
-| `run_cancelled` | 409 | the run was stopped, or its chat deleted, before it started — or, for a blocking `/api/chat` turn, before it finished |
 | `agent_unregistered` | 409 | the interrupted run's agent is no longer served |
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
 | `model_exists` | 409 | a model profile with that id exists |

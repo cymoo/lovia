@@ -19,8 +19,7 @@ import contextvars
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -54,12 +53,10 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
-from .run_context import RUN_CLIENT, RunTrigger, build_run_context
+from .run_context import RUN_CLIENT
 from .store import RunRow
 
 if TYPE_CHECKING:
-    from fastapi import Request
-
     from ..agent import Agent
     from ..checkpointer import RunSnapshot
     from .api.deps import RouterDeps
@@ -215,11 +212,9 @@ class EventHub:
 @dataclass
 class _Attachment:
     """What a re-attaching subscriber receives: an authoritative snapshot of the
-    completed turns, the current turn's events to replay, and the live tail.
-    No snapshot (``None``) while the run's view isn't loaded yet: an empty one
-    would wipe the history the client shows."""
+    completed turns, the current turn's events to replay, and the live tail."""
 
-    snapshot: list[MessageOut] | None
+    snapshot: list[MessageOut]
     buffered: list[events.Event]
     subscription: _Subscription
     status: str
@@ -286,11 +281,9 @@ class RunController:
         # Final model call's prompt size (context fill), from the last leg that
         # reported one — rides in the run record next to the cumulative usage.
         self.last_input_tokens: int | None = None
-        # snapshot mirror (task-private until read synchronously by attach);
-        # ``has_view`` once it holds the chat's history, not just defaults
+        # snapshot mirror (task-private until read synchronously by attach)
         self.history_baseline: list[TranscriptEntry] = []
         self.completed_mirror: list[TranscriptEntry] = []
-        self.has_view = False
         self.current_turn_entries: list[TranscriptEntry] = []
         self.in_flight_buffer: list[events.Event] = []
         self.pending_approval: events.ApprovalRequired | None = None
@@ -354,11 +347,12 @@ class RunController:
         + live tail, captured atomically against the hub seq."""
         sub = self.hub.subscribe()
         buffered = list(self.in_flight_buffer)
-        snapshot = None
-        if with_snapshot and self.has_view:
+        if with_snapshot:
             entries = [*self.history_baseline, *self.completed_mirror]
             now = time.time()
             snapshot = view_messages(entries, created_at=now, updated_at=now)
+        else:
+            snapshot = []
         # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
         # if it somehow isn't, so a late client can always decide.
         if self.pending_approval is not None and self.pending_approval not in buffered:
@@ -563,7 +557,6 @@ class RunController:
                     await session.load(sid) if session is not None else []
                 )
                 self.completed_mirror = list(seed)
-                self.has_view = True
                 self.current_turn_entries = []
                 self.in_flight_buffer = []
                 budget = deps.fresh_budget()
@@ -752,81 +745,6 @@ class RunController:
 # --------------------------------------------------------------------------- #
 
 
-def _stopped() -> WebError:
-    return WebError(409, "run_cancelled", "the run was stopped before it started")
-
-
-class _Hold:
-    """A session held by a run outside the supervisor (``RunSupervisor.reserve``),
-    with what a controller gives a supervised run: a mailbox (subagent reports
-    reach the turn through it) and a cancel signal (a stop, a deletion,
-    shutdown)."""
-
-    def __init__(self) -> None:
-        self.mailbox = Mailbox()
-        self.cancel = CancelToken()
-        self.deleted = False  # cancelled by the chat's deletion
-        self.released = asyncio.Event()  # the turn is over; the chat is free
-
-    def claim(self) -> None:
-        if self.cancel.is_cancelled:
-            raise _stopped()
-
-
-class _Setup:
-    """A run's setup, from registering its controller to handing it over.
-
-    A stop or a deletion (``RunSupervisor.cancel`` evicts synchronously), and
-    then a replacement turn, can take the chat over during any of the setup's
-    awaits. ``claim()`` after each one stops a stale setup before it touches
-    what they own now; ``abandon()`` undoes only what this setup did.
-    """
-
-    def __init__(
-        self, supervisor: RunSupervisor, session_id: str, ctrl: RunController
-    ) -> None:
-        self.supervisor = supervisor
-        self.session_id = session_id
-        self.ctrl = ctrl
-        self.opened = False  # opened the chat's workspace session
-        self.pointer: str | None = None  # set the chat's checkpoint pointer
-
-    def owns(self) -> bool:
-        return self.supervisor._controllers.get(self.session_id) is self.ctrl
-
-    def claim(self) -> None:
-        # Shutdown cancels without evicting, so check both.
-        if not self.owns() or self.ctrl.cancel.is_cancelled:
-            raise _stopped()
-
-    async def bind(self, agent: Agent[Any]) -> None:
-        """Bind the run to the chat's workspace session, opened on first use.
-        Every run of one chat shares it, so background processes survive
-        across runs — they die with the *chat* (deletion/shutdown)."""
-        workspaces = self.supervisor.deps.workspaces
-        fresh = workspaces.get(self.session_id) is None
-        self.ctrl.agent = await workspaces.bind(self.session_id, agent)
-        self.opened = fresh and workspaces.get(self.session_id) is not None
-        self.claim()
-
-    async def abandon(self) -> None:
-        owned = self.owns()
-        if owned:
-            self.supervisor._controllers.pop(self.session_id, None)
-        # A request may have attached during setup; close the hub so its SSE
-        # ends instead of waiting on a task that will never start. (After a
-        # *successful* setup there is no such hang: the caller reaches
-        # subscribe_live with no awaits in between, or autostart begins it.)
-        self.ctrl.hub.close()
-        deps = self.supervisor.deps
-        if self.pointer is not None:  # guarded: never a replacement's pointer
-            await deps.store.clear_active_run_id(self.session_id, expected=self.pointer)
-        if self.opened and owned:
-            # Nothing else ran in it. Not owned, the chat is another's now: a
-            # deletion closes the workspace itself, a replacement turn uses it.
-            await deps.workspaces.close(self.session_id)
-
-
 class RunSupervisor:
     def __init__(self, deps: RouterDeps) -> None:
         self.deps = deps
@@ -844,8 +762,6 @@ class RunSupervisor:
         # session starts on nobody's request: its subagent tasks, and the
         # report runs that deliver their results back into it.
         self.last_client: dict[str, JsonObject] = {}
-        # Sessions an unsupervised run holds (see :meth:`reserve`).
-        self._reserved: dict[str, _Hold] = {}
 
     @property
     def max_background_runs(self) -> int:
@@ -882,17 +798,24 @@ class RunSupervisor:
         source: str = "user",
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
-        request: Request | None = None,
-        on_admit: Callable[[], Awaitable[object]] | None = None,
+        context: Any = None,
     ) -> RunController:
-        """Register and set up a run for ``session_id``; the caller begins it
+        """Register a run for ``session_id``; the caller begins it
         (``subscribe_live``), or ``autostart`` does.
 
-        ``on_admit`` runs once the ``run_context`` hook has accepted the run:
-        where a caller creates the chat the run goes into, so a refused run
-        never leaves one behind.
+        ``context`` is the run's ``RunContext.deps``, built by the caller from
+        ``client`` (the page's context) with :func:`build_run_context` before
+        it writes anything — so a refusal leaves no trace, and no deployer
+        code runs between the checks here and the registration.
         """
         self._check_slot(session_id)
+        # Every run of one web session shares that session's workspace session
+        # (lazily opened here), so background processes survive across runs —
+        # they die with the *chat* (deletion/shutdown), not with the turn.
+        agent = await self.deps.workspaces.bind(session_id, agent)
+        # That await may have let a concurrent start for this chat in. (Its
+        # workspace is this chat's too: nothing to undo.)
+        self._check_slot(session_id, cap=False)
         client = dict(client or {})
         # ``input`` seeds the transcript for immediate display and is what the
         # runner consumes. A plain string is the text-only path; a list[Message]
@@ -917,50 +840,25 @@ class RunSupervisor:
             source=source,
             mailbox=mailbox,
             client=client,
+            context=context,
         )
-        # Reserve the session's slot, and its place under the run cap, BEFORE
-        # the first await: two concurrent starts (e.g. two tabs submitting at
-        # once) would otherwise both pass the checks above, and the second
-        # would silently orphan the first's running task — the loser gets the
-        # 409 and attaches instead. Nor can a check fail late, after the setup
-        # below opened something.
+        # Reserve the session slot BEFORE the checkpoint await: two concurrent
+        # starts (e.g. two tabs submitting at once) would otherwise both pass the
+        # caller's live-check and the second would silently orphan the first's
+        # running task. The loser now gets the 409 above and attaches instead.
         self._controllers[session_id] = ctrl
-        setup = _Setup(self, session_id, ctrl)
-        try:
-            # The run_context hook first: a refusal leaves nothing behind.
-            ctrl.context = await build_run_context(
-                self.deps.run_context,
-                RunTrigger(
-                    session_id=session_id,
-                    agent=agent,
-                    source=source,
-                    request=request,
-                    client=client,
-                ),
-            )
-            setup.claim()
-            if on_admit is not None:
-                await on_admit()
-                setup.claim()
-            await setup.bind(agent)
-            # The new run supersedes an interrupted one the chat still points
-            # at. Dropped only now, after the hook: a refused start leaves
-            # that run resumable.
-            store = self.deps.store
-            if store.checkpointer is not None:
-                old = await store.get_active_run_id(session_id)
-                setup.claim()
-                if old:
-                    await store.checkpointer.delete(old)
-                    setup.claim()
-            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
-            if ckpt is not None:
-                setup.pointer = ckpt.resolved_run_id
-            setup.claim()
-        except BaseException:
-            await setup.abandon()
-            raise
         self.last_client[session_id] = client
+        try:
+            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
+        except BaseException:
+            self._controllers.pop(session_id, None)
+            # A concurrent request may have attached during that await; close
+            # the hub so its SSE ends instead of waiting on a task that will
+            # never start. (After a *successful* start there is no such hang:
+            # the caller reaches subscribe_live with no awaits in between, and
+            # autostart begins the task right below.)
+            ctrl.hub.close()
+            raise
         ctrl._first_ckpt = ckpt
         ctrl.run_id = ckpt.resolved_run_id if ckpt is not None else None
         if autostart:
@@ -974,15 +872,19 @@ class RunSupervisor:
         session_id: str,
         agent: Agent[Any],
         snapshot: RunSnapshot,
-        history: list[TranscriptEntry],
-        request: Request | None = None,
+        client: JsonObject | None = None,
+        context: Any = None,
     ) -> RunController:
-        """Register a resume of ``snapshot``, the run the chat's ``history``
-        (the session's, read with it) was interrupted after."""
+        """Register a resume of ``snapshot``; ``context`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
-        store = self.deps.store
+        # Same chat-scoped workspace binding as start(): the resumed leg's
+        # background processes are gone (they never survive a restart), but
+        # its shell/file tools must land on the chat's one live session.
+        agent = await self.deps.workspaces.bind(session_id, agent)
+        self._check_slot(session_id, cap=False)  # as in start()
+        client = dict(client or {})
         ckpt = CheckpointOptions(
-            checkpointer=store.checkpointer,
+            checkpointer=self.deps.store.checkpointer,
             resume_from=snapshot,
             delete_on_success=True,
         )
@@ -1000,77 +902,16 @@ class RunSupervisor:
             # The resumer's identity; if the run already has a record (it
             # normally does — same run_id), start_run keeps the original source.
             source="user",
+            client=client,
+            context=context,
         )
-        # The view is known already, so a reconnect attaching during the setup
-        # below gets the same snapshot as this one.
-        ctrl.history_baseline = list(history)
-        ctrl.completed_mirror = list(seed)
-        ctrl.has_view = True
-        # Reserved before the first await, as in start(): a second reconnect
-        # attaches to this resume instead of resuming the snapshot again.
         self._controllers[session_id] = ctrl
-        setup = _Setup(self, session_id, ctrl)
-        try:
-            # The caller read ``snapshot`` before this reservation: make sure it
-            # is still the chat's interrupted run, as it was — not one another
-            # resume has moved on (or finished) since, or a stop dropped.
-            assert store.checkpointer is not None  # nothing to resume without
-            current = await store.checkpointer.load(snapshot.run_id)
-            if (
-                current is None
-                or current.updated_at != snapshot.updated_at
-                or await store.get_active_run_id(session_id) != snapshot.run_id
-            ):
-                raise WebError(404, "run_not_found", "no resumable run")
-            setup.claim()
-            # The run's own client context (a checkpoint keeps none), with the
-            # reconnecting request for identity.
-            ctrl.client = await store.get_active_context(session_id) or {}
-            ctrl.context = await build_run_context(
-                self.deps.run_context,
-                RunTrigger(
-                    session_id=session_id,
-                    agent=agent,
-                    source="user",
-                    request=request,
-                    client=ctrl.client,
-                    resumed=True,
-                ),
-            )
-            setup.claim()
-            # Same chat-scoped workspace binding as start(): the resumed leg's
-            # background processes are gone (they never survive a restart), but
-            # its shell/file tools must land on the chat's one live session.
-            await setup.bind(agent)
-        except BaseException:
-            await setup.abandon()
-            raise
-        self.last_client[session_id] = ctrl.client
+        self.last_client[session_id] = client
         return ctrl
-
-    @contextmanager
-    def reserve(self, session_id: str) -> Iterator[_Hold]:
-        """Hold ``session_id`` for a run outside the supervisor (the blocking
-        ``/api/chat``) while it lasts: no supervised run starts on it. A stop
-        or a deletion (:meth:`cancel`) cancels the hold — the run checks it
-        with ``claim()`` before each step that writes, and its runner stops on
-        ``hold.cancel`` — but the chat stays held until the run is over."""
-        self._check_slot(session_id, cap=False)
-        hold = _Hold()
-        self._reserved[session_id] = hold
-        try:
-            yield hold
-        finally:
-            del self._reserved[session_id]
-            hold.released.set()
-
-    def held(self, session_id: str) -> _Hold | None:
-        """The hold a run outside the supervisor has on ``session_id``."""
-        return self._reserved.get(session_id)
 
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
         """Refuse a second run for one session, and (``cap``) one over the limit."""
-        if session_id in self._controllers or session_id in self._reserved:
+        if session_id in self._controllers:
             raise WebError(
                 409, "run_active", "a run is already active for this session"
             )
@@ -1080,14 +921,9 @@ class RunSupervisor:
     def cancel(self, session_id: str, *, discard: bool = False) -> bool:
         """Cancel the live run, if any. ``discard`` additionally drops the
         partial transcript instead of persisting it — for session deletion."""
-        hold = self._reserved.get(session_id)
-        if hold is not None:
-            # Still held until its runner has stopped: reserve() lets go then.
-            hold.deleted = hold.deleted or discard
-            self._stop_hold(session_id, hold, "user requested stop")
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
-            return hold is not None
+            return False
         # Evict synchronously so an immediate follow-up /stream starts fresh;
         # the task winds down + deletes its checkpoint in the background.
         self._controllers.pop(session_id, None)
@@ -1096,19 +932,6 @@ class RunSupervisor:
         ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
-
-    def _stop_hold(self, session_id: str, hold: _Hold, reason: str) -> None:
-        hold.cancel.cancel(reason)
-        # A runner parked on an approval or an ask_human question never polls
-        # the token: unblock it, as RunController.cancel_run does.
-        self.deps.approvals.deny_pending(session_id)
-        if self.deps.questions is not None:
-            self.deps.questions.cancel_session(session_id)
-
-    def cancel_all(self, *, discard: bool = False) -> None:
-        """:meth:`cancel` every session's run — for deleting every chat."""
-        for session_id in [*self._controllers, *self._reserved]:
-            self.cancel(session_id, discard=discard)
 
     async def drain(self, session_id: str, *, timeout: float = 60.0) -> bool:
         """Wait for this session's cancelled runs to wind down. ``False`` on timeout.
@@ -1156,8 +979,6 @@ class RunSupervisor:
                 self._draining.pop(session_id, None)
 
     async def shutdown(self, *, grace: float = 10.0) -> None:
-        for session_id, hold in list(self._reserved.items()):
-            self._stop_hold(session_id, hold, "server shutdown")
         ctrls = list(self._controllers.values())
         for c in ctrls:
             c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint
@@ -1190,15 +1011,14 @@ async def forward(
         yield frame("session", SessionData(session_id=sid))
     if isinstance(source, _Attachment):
         sub = source.subscription
-        if source.snapshot is not None:
-            yield frame(
-                "snapshot",
-                SnapshotData(
-                    session_id=sid,
-                    status=source.status,
-                    entries=[m.model_dump() for m in source.snapshot],
-                ),
-            )
+        yield frame(
+            "snapshot",
+            SnapshotData(
+                session_id=sid,
+                status=source.status,
+                entries=[m.model_dump() for m in source.snapshot],
+            ),
+        )
         for ev in source.buffered:
             payload = event_to_sse(ev)
             if payload is not None:

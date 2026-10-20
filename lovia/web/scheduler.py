@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .errors import WebError
+from .run_context import RunTrigger, build_run_context
 from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
@@ -238,8 +239,30 @@ class Scheduler:
             target = uuid.uuid4().hex
             is_new = True
 
-        title = provisional_title(sched.input) if is_new else None
+        # The run_context hook decides first, before anything is written. A
+        # refusal is a miss, like an unserved agent: recorded, and the schedule
+        # moves on — so one that persists can't hold up the schedules after it.
         try:
+            context = await build_run_context(
+                self.deps.run_context,
+                RunTrigger(
+                    session_id=target,
+                    agent=agent,
+                    source=f"schedule:{sched.id}",
+                    client=sched.context or {},
+                ),
+            )
+        except Exception as exc:
+            await self._miss(sched, now, agent_name, f"run refused: {exc}")
+            return None
+
+        try:
+            title = provisional_title(sched.input) if is_new else None
+            await self.store.upsert(
+                target,
+                agent=agent_name,  # registry key — the identity pick() speaks
+                title=title,
+            )
             await self.deps.supervisor.start(
                 session_id=target,
                 agent=agent,
@@ -251,28 +274,23 @@ class Scheduler:
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
                 client=sched.context,
-                # The chat row, written only once the run is admitted: a
-                # deferred or refused fire leaves no empty chat behind.
-                on_admit=lambda: self.store.upsert(
-                    target,
-                    agent=agent_name,  # registry key — the identity pick() speaks
-                    title=title,
-                ),
+                context=context,
             )
-        except Exception as exc:
-            busy = ("too_many_runs", "run_active")
-            if isinstance(exc, WebError) and exc.code in busy:
-                # At the concurrency cap, or the chat is busy (a run outside
-                # the supervisor holds it): defer, leaving next_fire due — the
-                # next poll retries, and the schedules due after it fire now.
-                log.info("schedule %s: %s; deferring", sched.id, exc)
+        except WebError as exc:
+            if exc.code == "too_many_runs":
+                # At the concurrency cap: defer (leave next_fire due → retried).
+                # Drop the freshly-created session row so repeated 429s on a
+                # fresh-session schedule don't leak empty chats (each retry mints
+                # a new UUID). start() raises 429 before any state change, so the
+                # only side effect to undo is our own upsert above.
+                log.info("schedule %s: at concurrency cap; deferring", sched.id)
+                if is_new:
+                    await self.store.delete(target)
                 return None
-            # Refused by the run_context hook (or failed, or stopped during
-            # setup). A miss, like an unserved agent: the schedule moves on,
-            # so a refusal that persists can't hold up the schedules after it.
-            await self._miss(sched, now, agent_name, f"run refused: {exc}")
-            return None
+            raise
         if is_new:
+            # After start() succeeded — a 429-deferred fire deletes its fresh
+            # session above, which must not have been announced.
             self.deps.emit(
                 "session_created",
                 SessionCreatedData(session_id=target, agent=agent_name, title=title),

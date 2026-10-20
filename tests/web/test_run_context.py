@@ -20,12 +20,7 @@ from lovia.web.store import ChatStore, ScheduleRow  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 from .test_scheduler import _drain_runs  # noqa: E402
-from .test_supervisor import (  # noqa: E402
-    _blocking_tool,
-    _client,
-    _spawn,
-    _wait_record,
-)
+from .test_supervisor import _client, _wait_record  # noqa: E402
 from .test_web import _parse_sse  # noqa: E402
 
 seen: list[RunTrigger] = []
@@ -155,26 +150,28 @@ async def test_the_live_run_keeps_its_client_beside_the_pointer() -> None:
     assert app.state.deps.supervisor.last_client[sid] == {"kb": "docs"}
 
 
-async def test_a_resume_gets_the_runs_client_and_the_reconnecting_request() -> None:
+async def _interrupted(store: ChatStore, sid: str = "s1") -> None:
+    """``sid`` as a restart leaves it: an interrupted run, with its client."""
     from lovia.checkpointer import RunHead
     from lovia.messages import Usage
     from lovia.transcript import InputEntry
 
-    store = ChatStore.in_memory()
-    sid = "s1"
     await store.upsert(sid, agent="bot")
     await store.checkpointer.append(
         "run-1",
         [InputEntry(role="user", content="q")],
         RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
     )
-    # As the run left it before the restart.
     await store.set_active_run_id(sid, "run-1", context={"kb": "docs"})
 
+
+async def test_a_resume_gets_the_runs_client_and_the_reconnecting_request() -> None:
+    store = ChatStore.in_memory()
+    await _interrupted(store)
     app = _app(_agent([call("whoami", {}), text("ok")]), store=store)
     async with _client(app) as ac:
         res = await ac.post(
-            "/api/chat/reconnect", params={"session_id": sid}, headers={"x-user": "cy"}
+            "/api/chat/reconnect", params={"session_id": "s1"}, headers={"x-user": "cy"}
         )
     events = _parse_sse(res.text)
     assert _tool_result(events) == repr({"user": "cy", "kb": "docs", "source": "user"})
@@ -254,6 +251,17 @@ async def test_a_report_run_continues_in_its_chats_context() -> None:
     assert seen[-1].request is None
 
 
+async def test_a_blocking_turn_hands_its_context_to_the_tasks_it_spawns() -> None:
+    app = _app(_agent([text("ok")]))
+    async with _client(app) as ac:
+        res = await ac.post("/api/chat", json={"message": "hi", "context": {"kb": "b"}})
+    sid = res.json()["session_id"]
+    assert app.state.deps.supervisor.last_client[sid] == {"kb": "b"}
+
+
+# --------------------------------------------- refusals: the hook goes first -
+
+
 def _refusing(trigger: RunTrigger) -> dict:
     """Refuse any run whose page picked the "secret" knowledge base."""
     if trigger.client.get("kb") == "secret":
@@ -262,25 +270,14 @@ def _refusing(trigger: RunTrigger) -> dict:
 
 
 async def test_a_refused_turn_leaves_the_interrupted_run_resumable() -> None:
-    from lovia.checkpointer import RunHead
-    from lovia.messages import Usage
-    from lovia.transcript import InputEntry
-
     store = ChatStore.in_memory()
-    sid = "s1"
-    await store.upsert(sid, agent="bot")
-    await store.checkpointer.append(
-        "run-1",
-        [InputEntry(role="user", content="q")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
-    )
-    await store.set_active_run_id(sid, "run-1", context={"kb": "docs"})
+    await _interrupted(store)
     app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
     async with _client(app) as ac:
-        body = {"message": "hi", "session_id": sid, "context": {"kb": "secret"}}
+        body = {"message": "hi", "session_id": "s1", "context": {"kb": "secret"}}
         res = await ac.post("/api/chat/stream", json=body)
         assert res.status_code == 403
-        assert await store.get_active_run_id(sid) == "run-1"
+        assert await store.get_active_run_id("s1") == "run-1"
         assert await store.checkpointer.load("run-1") is not None
         # A turn that does start supersedes it.
         body["context"] = {"kb": "docs"}
@@ -299,14 +296,6 @@ async def test_a_refused_new_chat_leaves_no_trace(monkeypatch) -> None:
             assert (await ac.post(path, json=body)).status_code == 403
     assert await store.get("new") is None
     assert "session_created" not in created
-
-
-async def test_a_blocking_turn_hands_its_context_to_the_tasks_it_spawns() -> None:
-    app = _app(_agent([text("ok")]))
-    async with _client(app) as ac:
-        res = await ac.post("/api/chat", json={"message": "hi", "context": {"kb": "b"}})
-    sid = res.json()["session_id"]
-    assert app.state.deps.supervisor.last_client[sid] == {"kb": "b"}
 
 
 async def test_a_refused_schedule_is_a_miss_and_the_next_one_still_fires() -> None:
@@ -353,6 +342,9 @@ async def test_a_refused_subagent_task_leaves_no_task_chat() -> None:
     assert await deps.store.list_children("parent") == []
 
 
+# ------------------------------------- what may happen while the hook runs -
+
+
 async def _until(cond, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while not cond():
@@ -360,424 +352,78 @@ async def _until(cond, timeout: float = 5.0) -> None:
         await asyncio.sleep(0.01)
 
 
-async def test_a_start_holds_its_place_while_the_hook_decides(tmp_path) -> None:
-    """From the first check on, a starting run holds its chat and a place under
-    the run cap, through the hook: a second request for that chat attaches to
-    it rather than racing it, one for another chat is turned away before it
-    opens a workspace, and the refusal leaves no chat behind."""
-    from lovia.workspace import Workspace
-
-    gate = asyncio.Event()
-
-    async def slow_refusal(trigger: RunTrigger) -> None:
-        if trigger.client.get("kb") == "secret":
-            await gate.wait()
-            raise HTTPException(403, "not your knowledge base")
-
-    agent = Agent(
-        name="bot",
-        model=ScriptedProvider([text("ok")]),
-        workspace=Workspace.local(str(tmp_path)),
-    )
-    store = ChatStore.in_memory()
-    app = _app(agent, store=store, run_context=slow_refusal, max_background_runs=1)
-    deps = app.state.deps
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "new", "context": {"kb": "secret"}}
-        refused = asyncio.create_task(ac.post("/api/chat/stream", json=body))
-        await _until(lambda: deps.supervisor.get("new") is not None)
-        pending = deps.supervisor.get("new")
-        same = asyncio.create_task(
-            ac.post("/api/chat/stream", json={"message": "b", "session_id": "new"})
-        )
-        await _until(lambda: bool(pending.hub._subs))  # attached, not started
-        other = await ac.post(
-            "/api/chat/stream", json={"message": "c", "session_id": "other"}
-        )
-        assert other.status_code == 429
-        assert deps.workspaces.get("other") is None
-        gate.set()
-        assert (await refused).status_code == 403
-        # Its stream ends with the refused start, having sent no snapshot:
-        # the run's view wasn't loaded, and an empty one would wipe the page.
-        attached = _parse_sse((await asyncio.wait_for(same, 5)).text)
-        assert "snapshot" not in [e for e, _ in attached]
-        assert await store.get("new") is None
-        assert deps.workspaces.get("new") is None
-        # The chat is free again, and an accepted turn makes it for good.
-        await ac.post("/api/chat/stream", json={"message": "d", "session_id": "new"})
-    assert (await store.get("new")).title == "d"
-
-
-async def test_a_failed_setup_closes_only_the_workspace_it_opened(
-    tmp_path, monkeypatch
-) -> None:
-    from lovia.workspace import Workspace
-
-    agent = Agent(
-        name="bot",
-        model=ScriptedProvider([text("ok")]),
-        workspace=Workspace.local(str(tmp_path)),
-    )
-    app = _app(agent)
-    deps = app.state.deps
-
-    async def broken(*_a, **_k) -> None:
-        raise RuntimeError("store down")
-
-    monkeypatch.setattr(deps.store, "set_active_run_id", broken)
-    start = {"agent": agent, "input": "hi", "is_new": False, "title_message": None}
-    with pytest.raises(RuntimeError):
-        await deps.supervisor.start(session_id="fresh", **start)
-    assert deps.workspaces.get("fresh") is None
-    # A chat whose workspace an earlier run opened keeps it (and its processes).
-    await deps.workspaces.bind("used", agent)
-    with pytest.raises(RuntimeError):
-        await deps.supervisor.start(session_id="used", **start)
-    assert deps.workspaces.get("used") is not None
-    await deps.workspaces.aclose()
-
-
-def _gated(gate: asyncio.Event, *, when):
-    """A run_context hook that holds the runs ``when(trigger)`` picks at
-    ``gate`` — a setup kept waiting while the test acts around it."""
+def _gated(gate: asyncio.Event, entered: list[RunTrigger], *, when):
+    """A run_context hook that notes each call, and holds those ``when`` picks
+    at ``gate`` — the test acts while their hook still runs."""
 
     async def hook(trigger: RunTrigger) -> None:
+        entered.append(trigger)
         if when(trigger):
             await gate.wait()
 
     return hook
 
 
-@pytest.mark.parametrize("stop", ["cancel", "delete"])
-async def test_a_stop_during_setup_beats_the_stale_start(stop: str) -> None:
-    """A chat stopped (or deleted) while a start's hook still waits, then taken
-    by a replacement turn: the stale start gives up and touches nothing of
-    the replacement's — not its controller, not its checkpoint pointer."""
-    gate, release = asyncio.Event(), asyncio.Event()
-    agent = _agent([call("block", {}), text("done")])
-    agent = agent.clone(tools=[_blocking_tool(release)])
+async def test_turns_whose_hooks_return_together_make_one_run() -> None:
+    """Both found the chat idle and ran their hook: they still make one run,
+    the second message joining the first's rather than a second run over the
+    same transcript."""
+    gate, entered = asyncio.Event(), []
     store = ChatStore.in_memory()
     await store.upsert("s", agent="bot")
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    app = _app(agent, store=store, run_context=hook)
-    sup = app.state.deps.supervisor
+    hook = _gated(gate, entered, when=lambda t: True)
+    app = _app(_agent([text("one"), text("two")]), store=store, run_context=hook)
     async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
-        stale = asyncio.create_task(ac.post("/api/chat/stream", json=body))
-        await _until(lambda: sup.get("s") is not None)
-        stale_ctrl = sup.get("s")
-        if stop == "cancel":
-            await ac.post("/api/chat/cancel", params={"session_id": "s"})
-        else:
-            await ac.delete("/api/sessions/s")
-        replacement, _ = _spawn(
-            ac, "/api/chat/stream", json={"message": "b", "session_id": "s"}
-        )
-        await _until(
-            lambda: (
-                (c := sup.get("s")) is not None
-                and c is not stale_ctrl
-                and c.task is not None
+        turns = [
+            asyncio.create_task(
+                ac.post("/api/chat/stream", json={"message": m, "session_id": "s"})
             )
-        )
-        live = sup.get("s")
+            for m in ("a", "b")
+        ]
+        await _until(lambda: len(entered) == 2)
         gate.set()
-        res = await stale
-        assert res.status_code == 409
-        assert res.json()["detail"]["code"] == "run_cancelled"
-        assert sup.get("s") is live
-        assert await store.get_active_run_id("s") == live.run_id
-        release.set()
-        await asyncio.wait_for(replacement, 5)
-    entries = await store.session.load("s")
-    assert [e.content for e in entries if getattr(e, "role", None) == "user"] == ["b"]
-
-
-async def test_a_blocking_turn_holds_its_chat_through_the_hook() -> None:
-    gate = asyncio.Event()
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    store = ChatStore.in_memory()
-    agent = _agent([text("blocking"), text("stream")])
-    app = _app(agent, store=store, run_context=hook)
-    sup = app.state.deps.supervisor
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(lambda: "s" in sup._reserved)
-        then = {"message": "b", "session_id": "s"}
-        assert (await ac.post("/api/chat/stream", json=then)).status_code == 409
-        gate.set()
-        assert (await blocking).status_code == 200
-        assert "s" not in sup._reserved  # released with the turn
-        assert (await ac.post("/api/chat/stream", json=then)).status_code == 200
+        await asyncio.wait_for(asyncio.gather(*turns), 5)
+    await _drain_runs(app.state.deps)
+    assert len(await store.list_runs(session_id="s")) == 1
     entries = await store.session.load("s")
     users = [e.content for e in entries if getattr(e, "role", None) == "user"]
-    assert users == ["a", "b"]
+    assert sorted(users) == ["a", "b"]
 
 
-@pytest.mark.parametrize("delete", ["one", "all"])
-async def test_deleting_a_chat_during_a_blocking_turns_hook_wins(delete: str) -> None:
-    gate = asyncio.Event()
-    provider = ScriptedProvider([text("late")])
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    store = ChatStore.in_memory()
-    await store.upsert("s", agent="bot")
-    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
-    deps = app.state.deps
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(lambda: "s" in deps.supervisor._reserved)
-        await ac.delete("/api/sessions/s" if delete == "one" else "/api/sessions")
-        gate.set()
-        res = await blocking
-    assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "run_cancelled"
-    assert provider.calls == []
-    assert await store.get("s") is None
-    assert "s" not in deps.supervisor.last_client
-
-
-async def test_stopping_a_blocking_turn_in_its_hook_stops_it() -> None:
-    gate = asyncio.Event()
-    provider = ScriptedProvider([text("late")])
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    app = _app(Agent(name="bot", model=provider), run_context=hook)
-    sup = app.state.deps.supervisor
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(lambda: "s" in sup._reserved)
-        await ac.post("/api/chat/cancel", params={"session_id": "s"})
-        assert "s" in sup._reserved  # still held: the turn isn't over yet
-        gate.set()
-        res = await blocking
-    assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "run_cancelled"
-    assert provider.calls == []
-    assert "s" not in sup._reserved
-
-
-async def test_stopping_a_running_blocking_turn_stops_its_runner() -> None:
-    release = asyncio.Event()
-    provider = ScriptedProvider([call("block", {}), text("never")])
-    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
-    app = _app(agent)
-    sup = app.state.deps.supervisor
-    async with _client(app) as ac:
-        blocking = asyncio.create_task(
-            ac.post("/api/chat", json={"message": "a", "session_id": "s"})
-        )
-        await _until(lambda: len(provider.calls) == 1)  # inside the tool
-        await ac.post("/api/chat/cancel", params={"session_id": "s"})
-        release.set()
-        res = await asyncio.wait_for(blocking, 5)
-    assert res.status_code == 409
-    assert len(provider.calls) == 1  # stopped before its next model call
-    assert "s" not in sup._reserved
-
-
-async def test_deleting_a_chat_while_a_blocking_turn_writes_its_row_wins(
-    tmp_path, monkeypatch
-) -> None:
-    from lovia.workspace import Workspace
-
-    store = ChatStore.in_memory()
-    await store.upsert("s", agent="bot")
-    writing, gate = asyncio.Event(), asyncio.Event()
-    upsert = store.upsert
-
-    async def held_upsert(*args, **kwargs):
-        writing.set()
-        await gate.wait()
-        return await upsert(*args, **kwargs)
-
-    monkeypatch.setattr(store, "upsert", held_upsert)
-    provider = ScriptedProvider([text("late")])
-    agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(tmp_path)))
-    app = _app(agent, store=store)
-    deps = app.state.deps
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s"}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(writing.is_set)
-        await ac.delete("/api/sessions/s")
-        gate.set()  # the turn's write lands after the deletion's
-        res = await blocking
-    assert res.status_code == 409
-    assert await store.get("s") is None
-    assert deps.workspaces.get("s") is None
-    assert provider.calls == []
-
-
-async def test_stopping_a_start_in_setup_drops_the_older_interrupted_run() -> None:
-    gate = asyncio.Event()
-    store = ChatStore.in_memory()
-    await _interrupted(store)
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    app = _app(_agent([text("ok")]), store=store, run_context=hook)
-    sup = app.state.deps.supervisor
-    async with _client(app) as ac:
-        body = {"message": "b", "session_id": "s1", "context": {"kb": "slow"}}
-        stream = asyncio.create_task(ac.post("/api/chat/stream", json=body))
-        await _until(lambda: sup.get("s1") is not None)
-        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
-        gate.set()
-        assert (await stream).status_code == 409
-    # A reload must not reconnect to the run the stop meant to end.
-    assert await store.get_active_run_id("s1") is None
-    assert await store.checkpointer.load("run-1") is None
-
-
-async def test_stopping_a_blocking_turn_parked_on_a_question_frees_it() -> None:
-    from lovia.tools.human import HumanChannel, ask_human
-
-    channel = HumanChannel()
-    provider = ScriptedProvider([call("ask_human", {"question": "pick"}), text("x")])
-    agent = Agent(name="bot", model=provider, tools=[ask_human(channel)])
-    app = _app(agent, question_channel=channel)
-    sup = app.state.deps.supervisor
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "s"}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(lambda: bool(channel.pending))
-        await ac.post("/api/chat/cancel", params={"session_id": "s"})
-        res = await asyncio.wait_for(blocking, 5)
-    assert res.status_code == 409
-    assert "s" not in sup._reserved
-
-
-async def test_a_setup_pending_at_shutdown_gives_up() -> None:
-    from lovia.web.errors import WebError
-
-    gate = asyncio.Event()
-    store = ChatStore.in_memory()
-    agent = _agent([text("ok")])
-    app = _app(agent, store=store, run_context=_gated(gate, when=lambda t: True))
-    sup = app.state.deps.supervisor
-    start = asyncio.create_task(
-        sup.start(
-            session_id="s", agent=agent, input="hi", is_new=True,
-            title_message=None,
-            on_admit=lambda: store.upsert("s", agent="bot", title="hi"),
-        )
-    )  # fmt: skip
-    await _until(lambda: sup.get("s") is not None)
-    await sup.shutdown(grace=0.1)
-    gate.set()
-    with pytest.raises(WebError) as exc:
-        await start
-    assert exc.value.code == "run_cancelled"
-    assert sup.get("s") is None
-    assert await store.get("s") is None
-
-
-async def test_a_schedule_waits_out_a_blocking_turn_and_the_next_one_fires() -> None:
-    gate = asyncio.Event()
-    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
-    store = ChatStore.in_memory()
-    await store.upsert("busy", agent="bot")
-    app = _app(_agent([text("ok")] * 3), store=store, run_context=hook)
-    deps = app.state.deps
-    now = time.time()
-    for sid, target, due in (("fixed", "busy", now - 2), ("fresh", None, now - 1)):
-        await store.add_schedule(
-            ScheduleRow(
-                id=sid, agent="bot", input="digest", session_id=target,
-                trigger_kind="every", trigger_expr="3600", next_fire=due,
-                active=True, last_session_id=None, created_at=now,
-                updated_at=now,
-            )
-        )  # fmt: skip
-    async with _client(app) as ac:
-        body = {"message": "a", "session_id": "busy", "context": {"kb": "slow"}}
-        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
-        await _until(lambda: "busy" in deps.supervisor._reserved)
-        await Scheduler(deps).run_due()
-        gate.set()
-        assert (await blocking).status_code == 200
-    await _drain_runs(deps)
-    fixed, fresh = await store.get_schedule("fixed"), await store.get_schedule("fresh")
-    assert fixed.next_fire == now - 2  # still due: the next poll fires it
-    assert await store.list_runs(source="schedule:fixed") == []
-    assert fresh.last_session_id is not None
-
-
-async def _interrupted(store: ChatStore, sid: str = "s1") -> None:
-    from lovia.checkpointer import RunHead
-    from lovia.messages import Usage
-    from lovia.transcript import InputEntry
-
-    await store.upsert(sid, agent="bot")
-    await store.checkpointer.append(
-        "run-1",
-        [InputEntry(role="user", content="q")],
-        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
-    )
-    await store.set_active_run_id(sid, "run-1", context={"kb": "docs"})
-
-
-async def test_concurrent_reconnects_resume_the_run_once() -> None:
-    gate = asyncio.Event()
+async def test_a_reconnect_does_not_resume_a_run_finished_while_its_hook_ran() -> None:
+    gate, entered = asyncio.Event(), []
     provider = ScriptedProvider([text("resumed"), text("again")])
     store = ChatStore.in_memory()
     await _interrupted(store)
-    hook = _gated(gate, when=lambda t: t.resumed)
+    hook = _gated(gate, entered, when=lambda t: len(entered) == 1)  # the first
     app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
-    sup = app.state.deps.supervisor
     async with _client(app) as ac:
         params = {"session_id": "s1"}
-        first, first_lines = _spawn(ac, "/api/chat/reconnect", params=params)
-        await _until(lambda: sup.get("s1") is not None)
-        pending = sup.get("s1")
-        second, second_lines = _spawn(ac, "/api/chat/reconnect", params=params)
-        await _until(lambda: bool(pending.hub._subs))  # attached to the first
+        stale = asyncio.create_task(ac.post("/api/chat/reconnect", params=params))
+        await _until(lambda: len(entered) == 1)  # read the snapshot; in its hook
+        await ac.post("/api/chat/reconnect", params=params)  # resumes it to the end
+        await _wait_record(store, "run-1")
         gate.set()
-        await asyncio.wait_for(asyncio.gather(first, second), 5)
+        res = await stale
+    assert res.status_code == 404
     assert len(provider.calls) == 1
-    # Both see the history the run was interrupted in — the second, attached
-    # mid-setup, too: an empty snapshot would wipe the page.
-    for lines in (first_lines, second_lines):
-        snapshot = next(d for e, d in _parse_sse("\n".join(lines)) if e == "snapshot")
-        assert [m["content"] for m in snapshot["entries"]] == ["q"]
 
 
-async def test_a_snapshot_another_resume_moved_on_from_is_not_resumed() -> None:
-    from lovia.web.errors import WebError
-
-    store = ChatStore.in_memory()
-    await _interrupted(store)
-    agent = _agent([text("resumed")])
-    app = _app(agent, store=store)
-    sup = app.state.deps.supervisor
-    snapshot = await store.checkpointer.load("run-1")
-    resume = {"session_id": "s1", "agent": agent, "snapshot": snapshot, "history": []}
-    ctrl = await sup.start_resume(**resume)
-    ctrl._ensure_begun()
-    await ctrl.task  # resumed and finished: checkpoint and pointer are gone
-    with pytest.raises(WebError) as exc:
-        await sup.start_resume(**resume)
-    assert exc.value.code == "run_not_found"
-
-
-async def test_a_stop_during_resume_setup_drops_the_run() -> None:
-    gate = asyncio.Event()
+async def test_a_stop_while_a_reconnects_hook_runs_drops_the_run() -> None:
+    gate, entered = asyncio.Event(), []
     provider = ScriptedProvider([text("resumed")])
     store = ChatStore.in_memory()
     await _interrupted(store)
-    hook = _gated(gate, when=lambda t: t.resumed)
+    hook = _gated(gate, entered, when=lambda t: t.resumed)
     app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
-    sup = app.state.deps.supervisor
     async with _client(app) as ac:
         params = {"session_id": "s1"}
         resume = asyncio.create_task(ac.post("/api/chat/reconnect", params=params))
-        await _until(lambda: sup.get("s1") is not None)
-        await ac.post("/api/chat/cancel", params=params)
+        await _until(lambda: bool(entered))
+        await ac.post("/api/chat/cancel", params=params)  # drops the stranded run
         gate.set()
         res = await resume
-    assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "run_cancelled"
+    assert res.status_code == 404
     assert provider.calls == []
     assert await store.get_active_run_id("s1") is None
     assert await store.checkpointer.load("run-1") is None

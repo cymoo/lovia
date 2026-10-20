@@ -131,6 +131,83 @@ async def setup(self, ctx: RunContext) -> PluginInstance:
     return PluginInstance(tools=tools_from(conn), aclose=conn.close)
 ```
 
+## 完整示例：循环守卫
+
+插件不一定要提供工具。这个示例把 hook（观察）和 view injector（提醒）组合起来：当模型反复重试
+一个以同样方式失败的工具调用时，提醒它一次。
+
+```python
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from lovia import Agent, AgentHooks, PluginInstance, RunContext, events
+from lovia.transcript import InputEntry, TranscriptEntry
+
+
+@dataclass
+class LoopGuard:
+    """Nudge the model when it keeps retrying the same failing tool call."""
+
+    threshold: int = 3
+    name: str = "loop_guard"
+
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
+        # Per-run state, closed over by the hook and the injector below.
+        last: str | None = None  # signature of the latest failed call
+        streak = 0
+        pending: str | None = None  # a reminder owed to the next turn
+
+        hooks = AgentHooks()
+
+        @hooks.on(events.ToolCallCompleted)
+        def track(ev: events.ToolCallCompleted, ctx: RunContext[Any]) -> None:
+            nonlocal last, streak, pending
+            if not ev.is_error:  # any success ends the streak
+                last, streak, pending = None, 0, None
+                return
+            try:
+                args = json.dumps(json.loads(ev.call.arguments), sort_keys=True)
+            except json.JSONDecodeError:
+                args = ev.call.arguments
+            sig = f"{ev.call.name}:{args}"
+            streak = streak + 1 if sig == last else 1
+            last = sig
+            if streak == self.threshold:  # == not >=: once per streak
+                pending = (
+                    f"You called `{ev.call.name}` with identical arguments "
+                    f"{streak} times and it failed each time. Change approach "
+                    "instead of retrying the same call."
+                )
+
+        @hooks.on(events.MessageCompleted)
+        def delivered(ev: events.MessageCompleted, ctx: RunContext[Any]) -> None:
+            nonlocal pending
+            pending = None  # the model has answered a view that carried it
+
+        def remind(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+            # Not cleared here: an overflow retry rebuilds the view and calls
+            # the injector again, and must still see the reminder.
+            if pending is None:
+                return None
+            content = f"<system-reminder>\n{pending}\n</system-reminder>"
+            return [InputEntry(role="user", content=content)]
+
+        return PluginInstance(hooks=hooks, view_injectors=[remind])
+
+
+agent = Agent(name="builder", model="<model>", plugins=[LoopGuard()])
+```
+
+- **只统计工具错误**（`ToolCallCompleted.is_error`）。在 lovia 中，shell 命令以非零码退出不算错误
+  ——退出码只是输出的一部分——所以轮询、改完代码后重跑测试都不会触发它。
+- **签名是工具名加参数的规范化 JSON**，键的顺序和空白不影响比较；任何一次成功的工具调用都会
+  重置计数。
+- **每段连续失败只提醒一次**：在第 `threshold` 次相同失败之后的下一轮注入。它是 view entry，
+  从不写入 transcript 或 session，所以缓存的 prompt 前缀保持稳定。
+- **不强行中止。** 模型如果无视提醒，仍会撞上 `max_turns` / [`RunBudget`](budgets.md)，
+  它们才是最后的兜底。
+
 ## 内置插件
 
 | 插件 | 一句话 | 指南 |

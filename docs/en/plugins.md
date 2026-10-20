@@ -149,6 +149,86 @@ async def setup(self, ctx: RunContext) -> PluginInstance:
     return PluginInstance(tools=tools_from(conn), aclose=conn.close)
 ```
 
+## Worked example: a loop guard
+
+A plugin needn't add tools at all. This one pairs a hook (observe) with a view
+injector (nudge): when the model keeps retrying a tool call that fails the same
+way, it says so — once.
+
+```python
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from lovia import Agent, AgentHooks, PluginInstance, RunContext, events
+from lovia.transcript import InputEntry, TranscriptEntry
+
+
+@dataclass
+class LoopGuard:
+    """Nudge the model when it keeps retrying the same failing tool call."""
+
+    threshold: int = 3
+    name: str = "loop_guard"
+
+    async def setup(self, ctx: RunContext[Any]) -> PluginInstance:
+        # Per-run state, closed over by the hook and the injector below.
+        last: str | None = None  # signature of the latest failed call
+        streak = 0
+        pending: str | None = None  # a reminder owed to the next turn
+
+        hooks = AgentHooks()
+
+        @hooks.on(events.ToolCallCompleted)
+        def track(ev: events.ToolCallCompleted, ctx: RunContext[Any]) -> None:
+            nonlocal last, streak, pending
+            if not ev.is_error:  # any success ends the streak
+                last, streak, pending = None, 0, None
+                return
+            try:
+                args = json.dumps(json.loads(ev.call.arguments), sort_keys=True)
+            except json.JSONDecodeError:
+                args = ev.call.arguments
+            sig = f"{ev.call.name}:{args}"
+            streak = streak + 1 if sig == last else 1
+            last = sig
+            if streak == self.threshold:  # == not >=: once per streak
+                pending = (
+                    f"You called `{ev.call.name}` with identical arguments "
+                    f"{streak} times and it failed each time. Change approach "
+                    "instead of retrying the same call."
+                )
+
+        @hooks.on(events.MessageCompleted)
+        def delivered(ev: events.MessageCompleted, ctx: RunContext[Any]) -> None:
+            nonlocal pending
+            pending = None  # the model has answered a view that carried it
+
+        def remind(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+            # Not cleared here: an overflow retry rebuilds the view and calls
+            # the injector again, and must still see the reminder.
+            if pending is None:
+                return None
+            content = f"<system-reminder>\n{pending}\n</system-reminder>"
+            return [InputEntry(role="user", content=content)]
+
+        return PluginInstance(hooks=hooks, view_injectors=[remind])
+
+
+agent = Agent(name="builder", model="<model>", plugins=[LoopGuard()])
+```
+
+- **Only tool errors count** (`ToolCallCompleted.is_error`). A shell command
+  that exits non-zero is not an error in lovia — the exit code is just part of
+  the output — so polling, or rerunning tests after an edit, never trips it.
+- **The signature is the tool name plus canonical JSON** of the arguments, so
+  key order and whitespace don't matter; any successful call resets the streak.
+- **One reminder per streak**, on the turn after the `threshold`-th identical
+  failure. It is a view entry, never written to the transcript or session, so
+  the cached prompt prefix stays stable.
+- **No hard stop.** A model that ignores the nudge still runs into
+  `max_turns` / [`RunBudget`](budgets.md) — those remain the backstop.
+
 ## The built-in plugins
 
 | Plugin | One line | Guide |

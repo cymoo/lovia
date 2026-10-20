@@ -61,8 +61,9 @@ class ChatUI:
     """Options for the bundled chat UI: ``create_app(agent, ui=ChatUI(...))``.
 
     ``empty_title`` and ``empty_description`` (a string or a list of short
-    lines) fill the blank chat state; ``empty_examples`` are clickable starter
-    prompts on it — clicking one fills the composer, it doesn't send.
+    lines) fill the blank chat state — unset, lovia's own copy shows in the
+    user's language; ``empty_examples`` are clickable starter prompts on it —
+    clicking one fills the composer, it doesn't send.
 
     ``login_url`` is where the page sends a signed-out user: an API call that
     a custom ``auth=`` dependency answers with 401 navigates there. A
@@ -97,10 +98,8 @@ class ChatUI:
     user who hasn't picked one in Settings; unset, the browser's decides.
     """
 
-    empty_title: str = "Where shall we begin?"
-    empty_description: str | Sequence[str] = (
-        "A good question is already half the answer."
-    )
+    empty_title: str | None = None
+    empty_description: str | Sequence[str] | None = None
     empty_examples: Sequence[str] = ()
     login_url: str | None = None
     assets: str | Path | None = None

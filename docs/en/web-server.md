@@ -65,7 +65,7 @@ app = create_app(agent, lifespan=lifespan)
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `empty_title` / `empty_description` | lovia defaults | Blank chat state copy; the description may be a list of short lines |
+| `empty_title` / `empty_description` | lovia's copy, in the user's language | Blank chat state copy; the description may be a list of short lines |
 | `empty_examples` | `()` | Clickable starter prompts on the blank chat state (clicking fills the composer) |
 | `login_url` | `None` | Where a signed-out user goes under `auth=` (see [Authentication](#authentication)) |
 | `assets` | `None` | Your UI directory: an `index.html` override, stylesheets, images, scripts (see [Customizing the page](#customizing-the-page)) |

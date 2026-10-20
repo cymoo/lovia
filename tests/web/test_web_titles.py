@@ -29,6 +29,17 @@ from ..scripted_provider import ScriptedProvider, text  # noqa: E402
         ('title: "hello world"', "hello world"),
         ('"Title: Foo Bar"', "Foo Bar"),
         ("Title: Title: Doubled", "Doubled"),
+        # Markdown a model wraps its answer in.
+        ("## Summary of Files", "Summary of Files"),
+        ("**Bold Title**", "Bold Title"),
+        ("# **Title: Nested**", "Nested"),
+        ("- Listed Title", "Listed Title"),
+        ("*Emphasised*", "Emphasised"),
+        # ...but markup inside the title is the title's own.
+        ("__init__ Explained", "__init__ Explained"),
+        ("C# Basics", "C# Basics"),
+        ("#hashtag", "#hashtag"),
+        ("*a* and *b*", "*a* and *b*"),
     ],
 )
 def test_clean(raw: str, expected: str) -> None:

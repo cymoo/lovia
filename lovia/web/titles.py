@@ -12,6 +12,7 @@ UI falls back to "Untitled chat".
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..agent import Agent
@@ -78,15 +79,23 @@ async def generate_title(
     return _clean(raw) or _fallback_title(user_message)
 
 
+_MD_MARKER = re.compile(r"^(?:#{1,6}|[-*+])\s+")
+_MD_EMPHASIS = re.compile(r"(\*\*|\*|__|_)((?:(?!\1).)+)\1")
+
+
 def _clean(s: str) -> str:
     s = " ".join(s.strip().splitlines()[0:1]).strip()  # first line only
-    # Strip wrapping quotes and a leading "Title:" prefix, repeating until
-    # stable. Doing it once misses the common ``Title: "Foo"`` shape, where
-    # the quotes only become outermost after the prefix is removed.
+    # Strip wrapping quotes, Markdown (a heading or list marker, emphasis) and
+    # a leading "Title:" prefix, repeating until stable. Doing it once misses
+    # the common ``Title: "Foo"`` shape, where the quotes only become
+    # outermost after the prefix is removed.
     prev = None
     while s != prev:
         prev = s
         s = s.strip("\"'`").strip()
+        s = _MD_MARKER.sub("", s)
+        if m := _MD_EMPHASIS.fullmatch(s):
+            s = m.group(2).strip()
         if s[:6].lower() == "title:":
             s = s[6:].strip()
     s = s.rstrip(".!?,;:")

@@ -63,7 +63,7 @@ app = create_app(agent, lifespan=lifespan)
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `empty_title` / `empty_description` | lovia 默认文案 | 空白聊天页的文案；说明可以是若干短句组成的列表 |
+| `empty_title` / `empty_description` | lovia 默认文案（随用户语言） | 空白聊天页的文案；说明可以是若干短句组成的列表 |
 | `empty_examples` | `()` | 空白聊天页上的示例问题；点击后填入输入框，但不会自动发送 |
 | `login_url` | `None` | 使用 `auth=` 时未登录用户的跳转地址（见[认证](#认证)） |
 | `assets` | `None` | 你的 UI 目录：`index.html` 覆盖模板、样式表、图片、脚本（见[定制页面](#定制页面)） |

@@ -641,9 +641,12 @@ function finalizeReasoning() {
   store.reasoningNode.classList.add('done');
   const end = store.reasoningEnd || Date.now();
   const start = store.reasoningStart || end;
-  const elapsed = ((end - start) / 1000).toFixed(1);
+  const elapsed = (end - start) / 1000;
   const label = store.reasoningNode.querySelector('.reasoning-label');
-  if (label) label.textContent = t('chat.thought', { s: elapsed });
+  // Reasoning that arrived in one burst has no meaningful duration.
+  if (label) {
+    label.textContent = elapsed < 1 ? t('chat.thoughtDone') : t('chat.thought', { s: elapsed.toFixed(1) });
+  }
 }
 
 // ---- Tool cards ----------------------------------------------------------

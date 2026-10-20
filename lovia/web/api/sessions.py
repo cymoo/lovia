@@ -182,11 +182,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:
         """Delete every session's transcript and metadata (stopping live runs)."""
-        sids = [sid for sid, _ctrl in deps.supervisor]
-        for sid in sids:
+        for sid, _ctrl in deps.supervisor:
             deps.supervisor.cancel(sid, discard=True)
-        # As in delete_session: let the stopped runs wind down first.
-        await asyncio.gather(*(deps.supervisor.drain(sid) for sid in sids))
+        # As in delete_session: let every stopped run wind down first — those
+        # stopped just now and those stopped earlier but still winding down.
+        await deps.supervisor.drain()
         deps.supervisor.last_client.clear()
         # Reap every chat's workspace session (and its background processes).
         await deps.workspaces.aclose()

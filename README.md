@@ -508,8 +508,10 @@ plus an `index.html` that fills template blocks — links, composer controls, a
 notice; restyle through design tokens and `data-part` attributes, which your
 CSS wins over without `!important`. Your scripts load before the page starts
 and drive it through `window.lovia` (typed in `lovia.d.ts`): run and session
-events, actions such as `send` and `setDraft`, and tool views that turn a
-tool's `name(args)` card into a plain-language line or a body of your own.
+events, actions such as `send` and `setDraft`, tool views that turn a
+tool's `name(args)` card into a plain-language line or a body of your own,
+and message actions — buttons beside copy, such as 👍 / 👎 stored by your own
+route under each message's stable `ref`.
 `create_app(run_context=...)` hands tools what they need about the request:
 the user's identity from your `auth=`, and what they picked on the page
 (`lovia.provideContext`) — for chat turns, resumed runs, schedules and

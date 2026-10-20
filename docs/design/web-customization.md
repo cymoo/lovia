@@ -384,6 +384,16 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 - 需要长期引用的操作（比如反馈）写 `when: m => m.ref !== null`，在 `ref` 确定之前不显示。
 - 反馈数据存在哪由用户决定：在 action 里调用自己的路由，以 `(sessionId, ref)` 为键保存即可；lovia 不负责保存反馈（这是十行以内就能写完的用户侧代码）。
 
+**实施时的调整：**
+- **`ref` 走单独的 `refs` 帧，不放进 `done`**：`done` 由 `event_to_sse` 从 core 的 `RunCompleted` 直接转换，拿不到 `run_id`。supervisor 在每段运行的 `RunCompleted` 之前发一个 `refs` 帧，`done` 仍是最后一帧（客户端据此判断运行状态）。
+- **在途运行不带 `ref`（与上文一致）**：曾尝试让已知 checkpoint `run_id` 的在途运行提前带上 `ref`，评审发现两处会给错：自动续跑两段之间重连时，上一段的问题会被标成下一段的 `ref`；结构化输出的修复提示是一条没有事件通知的用户条目，会让在途编号整体错位。所以回到原设计：快照和会话视图里，在途运行的用户回合 `ref` 为 `null`，等运行结束由 `refs` 帧补上。
+- **`refs` 帧按运行的规范条目（`RunResult.entries`）编号**，并且只在其中的用户条目数与流里显示过的一致时才发送；不一致（出现了修复提示）就不发送，下次加载对话时补上。前端按位置把这一帧盖到气泡上，宁缺毋错。
+- **rewind 按对话串行**：每次 rewind 都按自己读到的 transcript 定位目标，两个重叠的 rewind 中，后一个可能按过期的读数去截断。加了一把按对话的锁（`WeakValueDictionary`），后一个会读到前一个的结果。
+- **`RewindRequest` 接受 `ref` 或 `user_turn` 二选一**，不是只收 `ref`：运行失败或被停止时没有 `refs` 帧，这时屏幕上的回合还没有 `ref`，编辑和重新生成要退回到 `user_turn`。有 `ref` 时优先用它，过期的 `ref` 返回 404，多标签页错位的问题就消除了。
+- **内置的复制按钮没有改成 action**：它有"已复制"的反馈动画，改写只为证明接口够用，收益不大。复制和 action 由同一个函数画进消息底部，action 紧跟在复制之后。
+- **接口比设想多了两样**：`pressed(msg)`（画成按下状态，比如已经给过的评分）和 `lovia.refreshMessageActions()`（`when`/`pressed` 依赖的状态变化后重画，比如切换对话后异步取回了评分）。另加 `lovia.fetch(path, init)`：扩展调用自己的路由时，自动加路径前缀、走登录处理。
+- 示例是 `examples/35_web_feedback.py`：👍 / 👎 存在示例自己的 SQLite 路由里，另有报表页和不需要 `ref` 的"引用"操作。
+
 ### 5.7 数据通路：UI 状态 → RunContext（需先单独设计）
 
 **这里的"状态"指什么：** 前端扩展在发送时提供的一个 JSON 对象，比如输入框旁"知识库"下拉框的当前选择 `{"kb": "product-docs"}`。下面称它为 client context。它：
@@ -487,7 +497,7 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 | 3 重构 | 工具卡片拆到 `tools.js`；建立工具状态模型（`data-status`）；两条渲染路径在工具层合一 | 无（纯重构） | 中 |
 | 4 `window.lovia` v1 | `on` / `state` / 页面动作 / `api` / `t`；`registerToolView`（`summary` / `render` / `snapshot`，`'*'` 兜底）；`lovia.d.ts`（由 tsc 对照实现检查）；`examples/33_web_extensions.py`（品牌示例已在 PR 2 的 `32_web_branding.py`） | 只新增 JS 接口 | 中 |
 | 5 数据通路 | 按 §5.7 实现 `ChatRequest.context` / `lovia.provideContext` / `create_app(run_context=)`；`RunTrigger`；在途运行与定时任务的上下文持久化；子 agent 继承；`examples/34_web_run_context.py` | 新增 | 中 |
-| 6 消息标识与消息操作 | 服务端生成的 `ref`；`registerMessageAction`（内置复制先用）；rewind 改用 `ref` | `RewindRequest` 字段变化 | 中 |
+| 6 消息标识与消息操作 | 服务端生成的 `ref`（`refs` 帧）；`registerMessageAction` / `refreshMessageActions` / `lovia.fetch`；rewind 优先用 `ref`；`examples/35_web_feedback.py`（实施时的调整见 §5.6） | `api.rewindSession` 改收 `{ref}` 或 `{user_turn}` | 中 |
 | 7 可选 | 工具进度事件（core）；定时任务开关（§5.9）；把 `lovia web init-ui` 做成脚手架。在 [#244](https://github.com/cymoo/lovia/issues/244) 跟踪 | 视方案 | — |
 
 - **顺序**：PR 5 和 PR 6 互不依赖，可以按需求先后调换。定时任务开关很小，可以随时单独做。

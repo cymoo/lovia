@@ -88,6 +88,7 @@ OpenAI-compatible 服务
 | `32_web_branding.py` | 给聊天 UI 换上自己的品牌：logo、主题变量、模板 block、隐藏区域、改写文案并新增一门语言（`ChatUI(assets=...)`；文件在 `web_branding/`） |
 | `33_web_extensions.py` | 用 `window.lovia` 扩展聊天 UI 的行为：友好的工具摘要、自定义的搜索结果视图、由运行事件驱动的状态提示和 token 计数、发送或预填消息的按钮（文件在 `web_extensions/`） |
 | `34_web_run_context.py` | 通过 `create_app(run_context=...)` 把用户身份（`auth=`）和用户在页面上的选择（`provideContext`）交给工具（文件在 `web_run_context/`） |
+| `35_web_feedback.py` | 回答上的 👍 / 👎，由你自己的路由按每条消息稳定的 `ref` 保存，外加一个"引用"操作（`registerMessageAction`；文件在 `web_feedback/`） |
 
 ## 子目录
 

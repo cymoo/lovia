@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .run_context import MAX_CLIENT_CONTEXT_BYTES, client_context_size
 
@@ -229,6 +229,9 @@ class ToolImageOut(BaseModel):
 class MessageOut(BaseModel):
     role: str
     content: Any
+    # A user message's stable id (see api/serialization.py user_turn_refs);
+    # None until its run has finished.
+    ref: str | None = None
     reasoning: str | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -383,11 +386,20 @@ class ScheduleInfo(BaseModel):
 
 
 class RewindRequest(BaseModel):
-    # 0-based index of the user turn to rewind to: everything from that user
-    # message onward is dropped (edit-and-resend / regenerate then send a
-    # fresh message). Counted over the transcript's user messages in order —
-    # the same order a UI renders its user bubbles.
-    user_turn: int = Field(ge=0)
+    # The user message to rewind to: everything from it onward is dropped
+    # (edit-and-resend / regenerate then send a fresh message). Give one of:
+    # `ref` (MessageOut.ref) — preferred, since it can't land on another
+    # message when the chat changed elsewhere since the client rendered it —
+    # or `user_turn`, its 0-based place among the transcript's user messages
+    # (the order a UI renders its user bubbles), for a turn with no ref yet.
+    ref: str | None = None
+    user_turn: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_target(self) -> RewindRequest:
+        if (self.ref is None) == (self.user_turn is None):
+            raise ValueError("give exactly one of ref, user_turn")
+        return self
 
 
 class RewindResponse(BaseModel):

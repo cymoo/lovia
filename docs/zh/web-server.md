@@ -223,7 +223,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | --- | --- |
 | 侧栏 | `sidebar`、`sidebar-header`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
 | 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`export`、`files-toggle` |
-| 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`） |
+| 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
 | 输入框 | `composer`、`attach`、`context-ring` |
 | 其他 | `files-panel`；设置面板里的 `language`（语言那一行） |
 
@@ -271,9 +271,11 @@ ui = ChatUI(
 | `newChat()` / `openSession(id)` | 打开一个新对话 / 打开对话 `id` |
 | `toast(text, { type })` | 短暂提示；`type` 为 `"info"`（默认）或 `"error"` |
 | `api` | 页面的 API 客户端，已处理[路径前缀](#部署在路径前缀下)和登录 |
+| `fetch(path, init)` | 用来请求你自己的路由的 `fetch`：`path` 以 `/` 开头，会加上路径前缀；遇到 401 时走页面的登录处理 |
 | `t(key, params)` | 当前语言下的界面文案，包括你[自己的 key](#文案与语言) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 | `registerToolView(name, view)` | [工具视图](#工具视图) |
+| `registerMessageAction(id, action)` / `refreshMessageActions()` | [消息操作](#消息操作) |
 | `provideContext(key, fn)` | 把 `key` 加进运行开始时的上下文，发送时读取 `fn()` 的值，见[运行上下文](#运行上下文) |
 
 ```js
@@ -367,6 +369,56 @@ lovia.registerToolView('web_search', {
 - 隐藏某个工具的卡片是 CSS 的事（`[data-part="tool"][data-tool="…"]`，见[样式](#样式)），
   不归视图管。
 - 以 `lovia.` 开头的 kind 归 lovia 自己使用，不要在这些名字下注册渲染器。
+
+### 消息操作
+
+`registerMessageAction(id, action)` 在消息底部的复制按钮旁加一个按钮：给回答评分、举报、存到笔记……
+lovia 不保存这些数据，由操作去调用你自己的路由：
+
+```js
+const ratings = new Map(); // ref → 'up' | 'down'，屏幕上这个对话的评分
+
+lovia.registerMessageAction('rate-up', {
+  label: '回答得好',
+  icon: '👍',
+  when: (msg) => msg.role === 'assistant' && msg.ref !== null,
+  pressed: (msg) => ratings.get(msg.ref) === 'up',
+  async run(msg) {
+    const res = await lovia.fetch('/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: msg.sessionId, ref: msg.ref, rating: 'up' }),
+    });
+    if (!res.ok) throw new Error('评分保存失败'); // 以提示框显示
+    ratings.set(msg.ref, 'up');
+    lovia.refreshMessageActions(); // 画成按下状态
+  },
+});
+```
+
+| `action` 字段 | 说明 |
+| --- | --- |
+| `label` | 悬停提示和无障碍名称 |
+| `icon` | 内置图标名、SVG 标记，或 emoji 之类的文字；不提供时显示 `label` |
+| `when(msg)` | 这条消息是否显示该操作；不提供时所有消息都显示 |
+| `pressed(msg)` | 按钮是否画成按下状态（`aria-pressed`），比如已经给过的评分 |
+| `run(msg)` | 点击时调用；可以是 async，结束前按钮处于禁用状态。抛出的错误以提示框显示 |
+
+- `msg` 是冻结的快照：`sessionId`、`role`（`user` 或 `assistant`）、`text`（Markdown，即复制得到的
+  内容）和 `ref`。
+- `ref` 标识一条用户消息，形如 `"<run_id>:<n>"`；回复沿用它所回答的那条消息的 `ref`，所以
+  `(sessionId, ref)` 就是你为某条消息保存数据时的键。它在刷新后不变，也绝不会指向别的消息：回退会
+  让一条消息的 `ref` 永久作废，修改后的问题、重新生成的回答都会拿到新的 `ref`，旧评分不会落到新内容上。
+- 服务端给消息命名之前，`ref` 为 `null`：运行结束时命名；运行失败或被停止的，在下次加载这个对话时
+  命名（对话存储不保存 checkpoint 时，所有运行都是如此）。用 `when: (msg) => msg.ref !== null`
+  可以让操作等到那时再出现；不需要 `ref` 的操作（引用、翻译）立即显示。
+- 操作只显示在已经定稿的消息上：还在流式输出的回复、还在排队的消息都没有。
+- `when` 和 `pressed` 在绘制消息底部时调用。它们依赖的状态变化后（保存了评分、为刚打开的对话取回了
+  评分），调用 `lovia.refreshMessageActions()`。用同一个 `id` 再次注册会替换原来的操作，传 `null`
+  则移除。
+
+完整示例见 `examples/35_web_feedback.py`：回答上的 👍 / 👎 由示例自己的路由存进 SQLite，另有报表
+页面和一个"引用"操作。
 
 ## UI 组件
 

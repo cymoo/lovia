@@ -4360,9 +4360,7 @@ body.files-splitting {
     display: none; /* the menu's pin button (always visible here) takes over */
   }
   .btn-copy,
-  .btn-copy-code,
-  .btn-edit,
-  .btn-regen {
+  .btn-copy-code {
     opacity: 1;
     transform: none;
     pointer-events: auto;
@@ -5012,6 +5010,72 @@ body.files-splitting {
 .btn-regen:hover {
   color: var(--ink);
   background: var(--surface-2);
+}
+/* After the rules above, or they would win: no hover on touch. */
+@media (hover: none) {
+  .btn-edit,
+  .btn-regen {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ---- Message actions (lovia.registerMessageAction) -------------------------- */
+/* Copy's look and whisper-visibility; a pressed one (a rating given) stays. */
+.msg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.msg-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 2px;
+  min-width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition:
+    opacity var(--t-med) var(--ease),
+    color var(--t-fast),
+    background var(--t-fast);
+  opacity: 0;
+  pointer-events: none;
+}
+.msg-action--text {
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+.turn .bubble:hover .msg-action,
+.turn .bubble:focus-within .msg-action,
+.turn.user:hover .msg-action,
+.turn.user:focus-within .msg-action,
+.msg-action[aria-pressed="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msg-action:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.msg-action[aria-pressed="true"] {
+  color: var(--accent);
+}
+.msg-action:disabled {
+  cursor: progress;
+}
+/* Where copy is always shown (no hover, or a phone-width layout), so are these. */
+@media (hover: none), (max-width: 720px) {
+  .msg-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 /* Inline editor swapped in for the bubble text. */
 .turn.user .bubble:has(.edit-area) {

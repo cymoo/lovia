@@ -38,6 +38,7 @@ from lovia.web.sse import (  # noqa: E402
     CHAT_EVENTS,
     LIFECYCLE_EVENTS,
     ContextCompactedData,
+    UserTurnRefs,
     event_to_sse,
 )
 from lovia.web.store import ChatStore  # noqa: E402
@@ -133,7 +134,7 @@ def test_context_compacted_payload_tracks_the_notice() -> None:
     assert set(ContextCompactedData.__required_keys__) == {"session_id"} | notice_fields
 
 
-def _every_chat_event() -> list[events.Event]:
+def _every_chat_event() -> list[events.Event | UserTurnRefs]:
     agent = Agent(name="a", model=ScriptedProvider([]))
     call = ToolCall(id="c1", name="t", arguments="{}")
     return [
@@ -165,6 +166,7 @@ def _every_chat_event() -> list[events.Event]:
         events.RunFailed(
             error=ProviderError("x", status_code=429, retryable=True, hint="wait")
         ),
+        UserTurnRefs(refs=["r:0"]),
         events.RunCompleted(
             result=RunResult(
                 output="x", entries=[], final_agent=agent, usage=Usage(), turns=1

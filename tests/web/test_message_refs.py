@@ -57,7 +57,7 @@ async def test_a_run_names_its_turn_just_before_done() -> None:
     assert refs[0].split(":")[0] != refs[1].split(":")[0]
 
 
-async def test_a_reattach_snapshot_carries_the_refs() -> None:
+async def test_a_reattach_names_finished_turns_and_the_live_one_when_done() -> None:
     release = asyncio.Event()
     agent = _bot(
         [text("a1"), call("block", {}), text("a2")], tools=[_blocking_tool(release)]
@@ -74,9 +74,11 @@ async def test_a_reattach_snapshot_carries_the_refs() -> None:
         release.set()
         await asyncio.wait_for(asyncio.gather(task, t2), timeout=5)
         final = await _detail_refs(ac, "s1")
-    snapshot = _frame(_parse_sse("\n".join(lines)), "snapshot")
-    # The live run's own turn is named too — it has a checkpoint id.
-    assert _user_refs(snapshot["entries"]) == final
+    evs = _parse_sse("\n".join(lines))
+    # The live run's turn isn't named until the run has written it: its ref
+    # comes with the refs frame, as for the tab that sent it.
+    assert _user_refs(_frame(evs, "snapshot")["entries"]) == [final[0], None]
+    assert _frame(evs, "refs") == {"refs": [final[1]]}
     assert None not in final
 
 
@@ -97,12 +99,12 @@ async def test_a_resume_snapshot_and_frame_name_the_checkpointed_turn() -> None:
     await store.set_active_run_id(sid, "run-1")
     app = _app(_bot([text("resumed")]), store=store)
     async with _client(app) as ac:
-        # The view a reload shows before reconnecting already names both turns.
-        assert await _detail_refs(ac, sid) == ["run-0:0", "run-1:0"]
+        # Before the reconnect, the interrupted run's turn has no name yet.
+        assert await _detail_refs(ac, sid) == ["run-0:0", None]
         res = await ac.post("/api/chat/reconnect", params={"session_id": sid})
         evs = _parse_sse(res.text)
         assert await _detail_refs(ac, sid) == ["run-0:0", "run-1:0"]
-    assert _user_refs(_frame(evs, "snapshot")["entries"]) == ["run-0:0", "run-1:0"]
+    assert _user_refs(_frame(evs, "snapshot")["entries"]) == ["run-0:0", None]
     assert _frame(evs, "refs") == {"refs": ["run-1:0"]}
 
 
@@ -150,6 +152,91 @@ async def test_rewind_by_ref_and_a_stale_ref_is_refused() -> None:
         assert stale.status_code == 404
         assert stale.json()["detail"]["code"] == "turn_not_found"
         assert (await _detail_refs(ac, sid))[0] == first
+
+
+async def _until(cond, timeout: float = 5.0) -> None:
+    async def wait() -> None:
+        while not cond():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait(), timeout)
+
+
+async def test_overlapping_rewinds_of_a_chat_take_turns(monkeypatch) -> None:
+    """Each rewind maps its target over the transcript as it read it: one
+    that overlaps another must read after it, or it cuts by a stale reading."""
+    app = _app(_bot([text("a1"), text("a2")]))
+    store = app.state.deps.store
+    async with _client(app) as ac:
+        sid = _frame(await _stream(ac, {"message": "one"}), "session")["session_id"]
+        await _stream(ac, {"message": "two", "session_id": sid})
+        _, second = await _detail_refs(ac, sid)
+        gate, held = asyncio.Event(), []
+        get = store.get_active_run_id
+
+        async def held_get(session_id: str):  # the first rewind, past its read
+            if not held:
+                held.append(True)
+                await gate.wait()
+            return await get(session_id)
+
+        monkeypatch.setattr(store, "get_active_run_id", held_get)
+        url, body = f"/api/sessions/{sid}/rewind", {"ref": second}
+        first = asyncio.create_task(ac.post(url, json=body))
+        await _until(lambda: bool(held))
+        later = asyncio.create_task(ac.post(url, json=body))
+        await asyncio.sleep(0.05)
+        gate.set()
+        statuses = sorted([(await first).status_code, (await later).status_code])
+    assert statuses == [200, 404]  # the later one finds `second` already cut
+
+
+class _Held:
+    """A provider whose calls wait for ``gate``: the test queues a message
+    while the first one is in flight."""
+
+    name = "held"
+    model = None
+    supports_json_schema = False
+
+    def __init__(self, inner: ScriptedProvider) -> None:
+        self.inner = inner
+        self.gate = asyncio.Event()
+        self.entered = 0
+
+    async def stream(self, entries, **kwargs):
+        self.entered += 1
+        await self.gate.wait()
+        async for delta in self.inner.stream(entries, **kwargs):
+            yield delta
+
+
+async def test_no_refs_frame_when_the_run_holds_turns_the_stream_never_showed() -> None:
+    """An output-repair prompt is a user entry no event announces: the turns
+    on screen (the sent message, then a queued one) aren't the run's, so the
+    frame — stamped onto them by position — is held back."""
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        n: int
+
+    provider = _Held(ScriptedProvider([text("not json"), text('{"n": 7}')]))
+    app = _app(Agent(name="bot", model=provider, output_type=Out))
+    async with _client(app) as ac:
+        task, lines = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s"}
+        )
+        await _until(lambda: provider.entered == 1)  # first model call
+        res = await ac.post(
+            "/api/chat/inject", json={"session_id": "s", "message": "queued"}
+        )
+        assert res.json()["accepted"]
+        provider.gate.set()  # bad output → repair prompt → "queued" drained
+        await asyncio.wait_for(task, 5)
+        refs = await _detail_refs(ac, "s")
+    kinds = [e for e, _ in _parse_sse("\n".join(lines))]
+    assert "done" in kinds and "refs" not in kinds
+    assert len(refs) == 3 and None not in refs  # go, the repair, queued: on load
 
 
 def test_turns_are_numbered_within_their_run() -> None:

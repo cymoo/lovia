@@ -351,7 +351,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # the snapshot it re-renders matches rather than fights it.
         runs = [
             *segments_runs(await session.segments(session_id)),
-            (run_id, list(snapshot.entries)),
+            (None, list(snapshot.entries)),  # named by its refs frame once done
         ]
 
         try:

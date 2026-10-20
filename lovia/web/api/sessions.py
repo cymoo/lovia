@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import time
 from typing import Any
+from weakref import WeakValueDictionary
 
 try:
     from fastapi import APIRouter, Query
@@ -53,7 +55,10 @@ _RESUMABLE = ("interrupted", "running")
 
 
 def _runs_view(runs: Runs, *, created_at: float, updated_at: float) -> list[MessageOut]:
-    """The session view over finished runs plus one in flight, refs stamped."""
+    """The session view over finished runs plus one in flight, refs stamped —
+    none on the in-flight run's turns, whose run_id the caller passes as None:
+    they are named when it finishes (the stream's refs frame), so a ref never
+    names a turn its run has not written yet."""
     entries = [e for _, run in runs for e in run]
     return view_messages(
         entries, created_at=created_at, updated_at=updated_at, runs=runs
@@ -81,7 +86,8 @@ async def _session_view(
         if store.checkpointer is not None and live.run_id is not None:
             snapshot = await store.checkpointer.load(live.run_id)
             if snapshot is not None and snapshot.status in _RESUMABLE:
-                runs.append((live.run_id, list(snapshot.entries)))
+                # Not named before it finishes (see _runs_view).
+                runs.append((None, list(snapshot.entries)))
         view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
         return view, live.run_id
 
@@ -94,7 +100,7 @@ async def _session_view(
         snapshot = await store.checkpointer.load(candidate)
         if snapshot is not None and snapshot.status in _RESUMABLE:
             runs = segments_runs(await session.segments(session_id))
-            runs.append((candidate, list(snapshot.entries)))
+            runs.append((None, list(snapshot.entries)))
             view = _runs_view(runs, created_at=created_at, updated_at=updated_at)
             return view, candidate
         # Stale pointer — clean it up so a reload doesn't offer a dead reconnect.
@@ -318,6 +324,10 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         await store.delete(session_id)
         return {"ok": True}
 
+    # One rewind of a chat at a time: each maps its target onto the transcript
+    # as it read it, so an overlapping one would cut by a stale reading.
+    rewinding: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+
     @router.post("/api/sessions/{session_id}/rewind", response_model=RewindResponse)
     async def rewind_session(session_id: str, req: RewindRequest) -> RewindResponse:
         """Rewind to just before the user message ``ref`` (or ``user_turn``) names.
@@ -327,6 +337,10 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         sends the (edited or original) text as a fresh turn. Refused while a
         run is live — its in-flight state would resurrect the tail.
         """
+        async with rewinding.setdefault(session_id, asyncio.Lock()):
+            return await rewind_locked(session_id, req)
+
+    async def rewind_locked(session_id: str, req: RewindRequest) -> RewindResponse:
         if deps.supervisor.get(session_id) is not None:
             raise WebError(
                 409,
@@ -372,7 +386,7 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                     for e in snapshot.entries
                     if isinstance(e, InputEntry) and e.role == "user"
                 )
-                runs.append((stale, list(snapshot.entries)))
+                runs.append((None, list(snapshot.entries)))  # unnamed till done
         user_turn = req.user_turn
         if req.ref is not None:
             refs = user_turn_refs(runs)

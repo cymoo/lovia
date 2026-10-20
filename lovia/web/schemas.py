@@ -230,7 +230,7 @@ class MessageOut(BaseModel):
     role: str
     content: Any
     # A user message's stable id (see api/serialization.py user_turn_refs);
-    # None while its run is in flight without a checkpoint.
+    # None until its run has finished.
     ref: str | None = None
     reasoning: str | None = None
     tool_call_id: str | None = None

@@ -95,12 +95,21 @@ function setGlyph(el, action) {
 }
 
 /**
+ * The actions still running, per message: a redraw (a ref arriving, a
+ * refresh) replaces the buttons, and must not hand back an enabled one.
+ * @type {WeakMap<object, Set<string>>}
+ */
+const running = new WeakMap();
+
+/**
  * The buttons for one message, in registration order.
  * @param {() => MessageRef} describe The message as it is now — asked again on
  *   a click, so `run` sees a ref that arrived after the buttons were drawn.
+ * @param {object} [message] What identifies the message across redraws (its
+ *   element): an action running on it keeps its button disabled.
  * @returns {HTMLButtonElement[]}
  */
-export function messageActionButtons(describe) {
+export function messageActionButtons(describe, message = describe) {
   if (!actions.size) return [];
   const msg = describe();
   /** @type {HTMLButtonElement[]} */
@@ -117,7 +126,11 @@ export function messageActionButtons(describe) {
       btn.setAttribute('aria-pressed', String(ask(id, action.pressed, msg, false)));
     }
     setGlyph(btn, action);
+    btn.disabled = running.get(message)?.has(id) ?? false;
     btn.addEventListener('click', async () => {
+      const busy = running.get(message) ?? new Set();
+      if (busy.has(id)) return;
+      running.set(message, busy.add(id));
       btn.disabled = true;
       try {
         await action.run(describe());
@@ -125,7 +138,9 @@ export function messageActionButtons(describe) {
         console.error(`lovia: message action "${id}" failed:`, err);
         toast(err instanceof Error ? err.message : String(err), { type: 'error' });
       } finally {
-        btn.disabled = false;
+        busy.delete(id);
+        // This button may have been redrawn meanwhile: redraw again, enabled.
+        refreshMessageActions();
       }
     });
     out.push(btn);

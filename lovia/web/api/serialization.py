@@ -166,7 +166,7 @@ def messages_to_out(
 
 
 #: The runs a view covers, in transcript order: (run_id, that run's entries).
-#: A run in flight without a checkpoint has no id yet: its turns get no ref.
+#: A run still in flight goes in as None: its turns get no ref yet.
 Runs = list[tuple[str | None, list[TranscriptEntry]]]
 
 

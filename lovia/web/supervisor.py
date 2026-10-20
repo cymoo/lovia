@@ -359,7 +359,9 @@ class RunController:
         buffered = list(self.in_flight_buffer)
         if with_snapshot:
             entries = [*self.history_baseline, *self.completed_mirror]
-            runs = [*self.history_runs, (self.run_id, self.completed_mirror)]
+            # This run's turns get their refs when it finishes (the refs
+            # frame), not before.
+            runs = [*self.history_runs, (None, self.completed_mirror)]
             now = time.time()
             snapshot = view_messages(entries, created_at=now, updated_at=now, runs=runs)
         else:
@@ -504,6 +506,23 @@ class RunController:
         self._ingest(ev)
         self.hub.publish(ev)
 
+    def _publish_refs(self, entries: list[TranscriptEntry]) -> None:
+        """Name the finished leg's user turns (its segment is keyed by run_id).
+
+        Numbered from the run's own canonical ``entries``: the mirror misses
+        user entries no event announces, like an output-repair prompt. The
+        client stamps the frame onto its bubbles by position, so it is sent
+        only when those are the turns the mirror — what streamed — shows.
+        """
+        refs = user_turn_refs([(self.run_id, entries)])
+        shown = sum(
+            1
+            for e in self.completed_mirror
+            if isinstance(e, InputEntry) and e.role == "user"
+        )
+        if len(refs) == shown:
+            self.hub.publish(UserTurnRefs([r for r in refs if r]))
+
     # -- the supervised task --------------------------------------------- #
 
     async def _run(self) -> None:
@@ -592,10 +611,7 @@ class RunController:
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
-                        # The leg's turns are all in the mirror by now (TurnEnded
-                        # precedes RunCompleted) and its segment is keyed by run_id.
-                        refs = user_turn_refs([(self.run_id, self.completed_mirror)])
-                        self.hub.publish(UserTurnRefs([r for r in refs if r]))
+                        self._publish_refs(ev.result.entries)
                     self._publish(ev)
                     if isinstance(ev, events.RunCompleted):
                         succeeded = True

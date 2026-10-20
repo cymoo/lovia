@@ -1562,7 +1562,7 @@ function renderMessageActions(bubble) {
   if (!turn || !footer) return;
   let box = footer.querySelector(':scope > .msg-actions');
   const settled = !turn.matches('.queued, .streaming');
-  const buttons = settled ? messageActionButtons(() => describeMessage(turn)) : [];
+  const buttons = settled ? messageActionButtons(() => describeMessage(turn), turn) : [];
   if (!buttons.length) {
     box?.remove();
     return;

@@ -386,7 +386,9 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 
 **实施时的调整：**
 - **`ref` 走单独的 `refs` 帧，不放进 `done`**：`done` 由 `event_to_sse` 从 core 的 `RunCompleted` 直接转换，拿不到 `run_id`。supervisor 在每段运行的 `RunCompleted` 之前发一个 `refs` 帧，`done` 仍是最后一帧（客户端据此判断运行状态）。
-- **已知 `run_id` 的在途运行也带 `ref`**：有 checkpoint 时，在途运行最终写进 Session 的分段就以 checkpoint 的 `run_id` 为键（中断时补写的部分内容也是），所以重连快照、会话视图里在途运行的用户回合直接带上 `ref`，不必等到结束。正在生成的回复仍然不显示操作按钮——这由前端"只给已定稿的消息画操作"保证，和 `ref` 无关。
+- **在途运行不带 `ref`（与上文一致）**：曾尝试让已知 checkpoint `run_id` 的在途运行提前带上 `ref`，评审发现两处会给错：自动续跑两段之间重连时，上一段的问题会被标成下一段的 `ref`；结构化输出的修复提示是一条没有事件通知的用户条目，会让在途编号整体错位。所以回到原设计：快照和会话视图里，在途运行的用户回合 `ref` 为 `null`，等运行结束由 `refs` 帧补上。
+- **`refs` 帧按运行的规范条目（`RunResult.entries`）编号**，并且只在其中的用户条目数与流里显示过的一致时才发送；不一致（出现了修复提示）就不发送，下次加载对话时补上。前端按位置把这一帧盖到气泡上，宁缺毋错。
+- **rewind 按对话串行**：每次 rewind 都按自己读到的 transcript 定位目标，两个重叠的 rewind 中，后一个可能按过期的读数去截断。加了一把按对话的锁（`WeakValueDictionary`），后一个会读到前一个的结果。
 - **`RewindRequest` 接受 `ref` 或 `user_turn` 二选一**，不是只收 `ref`：运行失败或被停止时没有 `refs` 帧，这时屏幕上的回合还没有 `ref`，编辑和重新生成要退回到 `user_turn`。有 `ref` 时优先用它，过期的 `ref` 返回 404，多标签页错位的问题就消除了。
 - **内置的复制按钮没有改成 action**：它有"已复制"的反馈动画，改写只为证明接口够用，收益不大。复制和 action 由同一个函数画进消息底部，action 紧跟在复制之后。
 - **接口比设想多了两样**：`pressed(msg)`（画成按下状态，比如已经给过的评分）和 `lovia.refreshMessageActions()`（`when`/`pressed` 依赖的状态变化后重画，比如切换对话后异步取回了评分）。另加 `lovia.fetch(path, init)`：扩展调用自己的路由时，自动加路径前缀、走登录处理。

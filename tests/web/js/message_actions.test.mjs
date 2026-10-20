@@ -83,7 +83,7 @@ test('the glyph: a built-in icon, SVG markup, or text (the label by default)', (
   for (const id of 'abcd') registerMessageAction(id, null);
 });
 
-test('a click runs with the message as it is then, disabled until it settles', async () => {
+test('a click runs with the message as it is then, once until it settles', async () => {
   const seen = [];
   let release = () => {};
   registerMessageAction('go', {
@@ -93,15 +93,26 @@ test('a click runs with the message as it is then, disabled until it settles', a
       return new Promise((r) => { release = r; });
     },
   });
+  let redraws = 0;
+  watchMessageActions(() => redraws++);
+  const turn = {};
   let ref = null;
-  const [btn] = messageActionButtons(() => msg({ ref }));
+  const [btn] = messageActionButtons(() => msg({ ref }), turn);
   ref = 'r9:0'; // the run named the turn after the button was drawn
   const done = btn.click();
   assert.equal(btn.disabled, true);
+  // Redrawn while it runs (a refs frame, a refresh): still running, once.
+  const [again] = messageActionButtons(() => msg({ ref }), turn);
+  assert.equal(again.disabled, true);
+  await again.click();
+  assert.deepEqual(seen, ['r9:0']);
+  // Another message's button isn't held up.
+  assert.equal(messageActionButtons(() => msg(), {})[0].disabled, false);
+  const before = redraws;
   release();
   await done;
-  assert.equal(btn.disabled, false);
-  assert.deepEqual(seen, ['r9:0']);
+  assert.equal(redraws, before + 1); // settled: drawn again, enabled
+  assert.equal(messageActionButtons(() => msg({ ref }), turn)[0].disabled, false);
   registerMessageAction('go', null);
 });
 

@@ -190,12 +190,13 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 layer）中的规则总会压过内置规则，不管选择器的优先级如何，不需要 `!important`。
 
 更换主题时，覆盖 `styles.css` 开头的设计变量。两个主题各有一套取值，所以要分别设置；
-直接写在 `:root` 上的变量对两个主题都生效：
+直接写在 `:root` 上的变量对两个主题都生效。`--accent-hover`、`--accent-soft`、
+`--accent-text` 由 `--accent` 推导，换品牌色通常只需设 `--accent`，需要时再单独覆盖：
 
 ```css
 /* ui/theme.css */
-[data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
-[data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
+[data-theme="light"] { --accent: #6d28d9; }
+[data-theme="dark"]  { --accent: #a78bfa; }
 :root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
 ```
 
@@ -203,7 +204,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | --- | --- |
 | `--bg`、`--surface`、`--surface-2`、`--surface-3`、`--border`、`--border-strong` | 画布、面板、卡片、悬停态及其边框 |
 | `--ink`、`--ink-2`、`--muted`、`--muted-2` | 文字，由深到浅 |
-| `--accent`、`--accent-hover`、`--accent-soft`、`--accent-text` | 品牌色及其衍生色 |
+| `--accent`、`--accent-hover`、`--accent-soft`、`--accent-text` | 品牌色及其衍生色（后三个默认由 `--accent` 推导） |
 | `--user-surface`、`--user-border` | 用户消息气泡 |
 | `--chart-1` … `--chart-8` | 图表系列颜色 |
 | `--warn`、`--danger`、`--ok` | 状态色 |

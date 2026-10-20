@@ -46,11 +46,12 @@
   --muted: #6b7280;
   --muted-2: #9aa1ad;
 
-  /* brand accent — restrained green, used for meaning, not decoration */
+  /* brand accent — restrained green, used for meaning, not decoration. Its
+     tints derive from it, so a rebrand only has to set --accent per theme. */
   --accent: #2d8a6e;
-  --accent-hover: #246f59;
-  --accent-soft: #e7f3ee;
-  --accent-text: #1c6b54;
+  --accent-hover: color-mix(in srgb, var(--accent) 80%, black);
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  --accent-text: color-mix(in srgb, var(--accent) 77%, black);
 
   /* the user's voice — the slate surface carrying a trace of the accent, so
      the bubble belongs to the brand's hue family instead of introducing a
@@ -139,9 +140,9 @@
 
   /* brand accent — restrained emerald, legible on slate */
   --accent: #3ecb8f;
-  --accent-hover: #54d9a0;
-  --accent-soft: #13271e;
-  --accent-text: #53d19c;
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, white);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  --accent-text: color-mix(in srgb, var(--accent) 92%, white);
 
   /* the user's voice — same recipe as light, a touch stronger: the accent
      needs more presence to separate from the dark slate card surface */

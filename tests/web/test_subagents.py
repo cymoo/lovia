@@ -336,6 +336,56 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
     assert await deps.store.latest_run_for("subagent-report:t1") is None
 
 
+async def test_a_blocking_turn_spawns_and_waits_for_its_subagent() -> None:
+    """A blocking /api/chat parent holds its chat for the whole turn, so the
+    report can't start a run there: it goes to the turn's mailbox, the child
+    finishes at once, and wait_subagents returns instead of the two waiting
+    on each other."""
+    import httpx
+
+    child = Agent(name="researcher", model=ScriptedProvider([text("findings")]))
+    provider = ScriptedProvider(
+        [
+            call("spawn_subagent", {"prompt": "dig"}),
+            call("wait_subagents", {"timeout_seconds": 30}),
+            text("got the findings"),
+        ]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    app = _app(agent)
+    deps = app.state.deps
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        res = await asyncio.wait_for(
+            ac.post("/api/chat", json={"message": "go", "session_id": "s"}), 10
+        )
+    assert res.status_code == 200
+    assert res.json()["output"] == "got the findings"
+    texts = [
+        e.content
+        for e in await deps.session.load("s")
+        if isinstance(e, InputEntry) and isinstance(e.content, str)
+    ]
+    assert any("findings" in t and "[subagent t1" in t for t in texts)
+    assert await deps.store.latest_run_for("subagent-report:t1") is None
+
+
+async def test_a_report_a_blocking_turn_left_unread_is_delivered_after_it() -> None:
+    provider = ScriptedProvider([text("reacted to the report")])
+    app = _app(Agent(name="bot", model=provider))
+    deps = app.state.deps
+    await deps.store.upsert("s", agent="bot", title="chat")
+    with deps.supervisor.reserve("s") as hold:
+        await asyncio.wait_for(subagent_deliver(deps)(_report("s")), 1)
+        assert bool(hold.mailbox)  # queued for the turn, which never reads it
+
+    async def _delivered() -> bool:
+        run = await deps.store.latest_run_for("subagent-report:t1")
+        return run is not None and run.status == "completed"
+
+    await _poll(_delivered)
+
+
 async def test_failed_child_delivers_failure_report() -> None:
     child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
     provider = ScriptedProvider(

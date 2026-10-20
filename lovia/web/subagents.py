@@ -11,6 +11,8 @@ the same way the scheduler routes a fire (see ``Scheduler._fire``):
 * the session has a live supervised run → inject into its mailbox (the next
   turn sees it; the supervisor's auto-chain covers a run that is just
   finishing);
+* a blocking ``/api/chat`` turn holds the session → its mailbox likewise; a
+  report the turn ended without reading is delivered again once it is over;
 * no live run → start a clientless supervised run with the report as its
   input (recorded under source ``subagent-report:<task id>``, distinct from
   the child task run's ``subagent:<session>``), so the model reacts to the
@@ -49,6 +51,7 @@ from .sse import SessionCreatedData
 if TYPE_CHECKING:
     from ..runtime.result import RunResult
     from .api.deps import RouterDeps
+    from .supervisor import _Hold
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +63,14 @@ _RETRY_DELAYS = (0.0, 2.0, 5.0, 15.0, 30.0)
 
 def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
     """Build the inject-or-start :data:`~lovia.plugins.DeliverFn` for ``deps``."""
+
+    # Re-deliveries waiting for a blocking turn to end (referenced until done).
+    waiting: set[asyncio.Task[None]] = set()
+
+    async def redeliver_unread(hold: _Hold, token: int, report: SubagentReport) -> None:
+        await hold.released.wait()
+        if hold.mailbox.remove(token):  # the turn ended before reading it
+            await deliver(report)
 
     async def deliver(report: SubagentReport) -> None:
         sid = report.session_id
@@ -75,6 +86,21 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 log.info(
                     "subagent %s: report injected into session %s's live run "
                     "(visible at its next turn)",
+                    report.id,
+                    sid,
+                )
+                return
+            hold = deps.supervisor.held(sid)
+            if hold is not None:
+                # A blocking /api/chat turn: its mailbox, as a live run's. Not
+                # waited for here — the child, and a parent in wait_subagents
+                # on it, would wait on each other.
+                token = hold.mailbox.push(report.text)
+                task = asyncio.create_task(redeliver_unread(hold, token, report))
+                waiting.add(task)
+                task.add_done_callback(waiting.discard)
+                log.info(
+                    "subagent %s: report queued for session %s's blocking turn",
                     report.id,
                     sid,
                 )

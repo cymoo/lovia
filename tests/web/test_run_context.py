@@ -539,6 +539,70 @@ async def test_deleting_a_chat_during_a_blocking_turns_hook_wins(delete: str) ->
     assert "s" not in deps.supervisor.last_client
 
 
+async def test_stopping_a_blocking_turn_in_its_hook_stops_it() -> None:
+    gate = asyncio.Event()
+    provider = ScriptedProvider([text("late")])
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    app = _app(Agent(name="bot", model=provider), run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s", "context": {"kb": "slow"}}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(lambda: "s" in sup._reserved)
+        await ac.post("/api/chat/cancel", params={"session_id": "s"})
+        assert "s" in sup._reserved  # still held: the turn isn't over yet
+        gate.set()
+        res = await blocking
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "run_cancelled"
+    assert provider.calls == []
+    assert "s" not in sup._reserved
+
+
+async def test_stopping_a_running_blocking_turn_stops_its_runner() -> None:
+    release = asyncio.Event()
+    provider = ScriptedProvider([call("block", {}), text("never")])
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        blocking = asyncio.create_task(
+            ac.post("/api/chat", json={"message": "a", "session_id": "s"})
+        )
+        await _until(lambda: len(provider.calls) == 1)  # inside the tool
+        await ac.post("/api/chat/cancel", params={"session_id": "s"})
+        release.set()
+        res = await asyncio.wait_for(blocking, 5)
+    assert res.status_code == 409
+    assert len(provider.calls) == 1  # stopped before its next model call
+    assert "s" not in sup._reserved
+
+
+async def test_a_setup_pending_at_shutdown_gives_up() -> None:
+    from lovia.web.errors import WebError
+
+    gate = asyncio.Event()
+    store = ChatStore.in_memory()
+    agent = _agent([text("ok")])
+    app = _app(agent, store=store, run_context=_gated(gate, when=lambda t: True))
+    sup = app.state.deps.supervisor
+    start = asyncio.create_task(
+        sup.start(
+            session_id="s", agent=agent, input="hi", is_new=True,
+            title_message=None,
+            on_admit=lambda: store.upsert("s", agent="bot", title="hi"),
+        )
+    )  # fmt: skip
+    await _until(lambda: sup.get("s") is not None)
+    await sup.shutdown(grace=0.1)
+    gate.set()
+    with pytest.raises(WebError) as exc:
+        await start
+    assert exc.value.code == "run_cancelled"
+    assert sup.get("s") is None
+    assert await store.get("s") is None
+
+
 async def test_a_schedule_waits_out_a_blocking_turn_and_the_next_one_fires() -> None:
     gate = asyncio.Event()
     hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")

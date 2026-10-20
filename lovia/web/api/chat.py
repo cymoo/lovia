@@ -19,6 +19,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
+from ...exceptions import RunCancelled
 from ...runner import Runner
 from ..attachments import build_user_input
 from ..components import UI_DATA_SINK
@@ -128,18 +129,25 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             deps.supervisor.last_client[sid] = dict(client)
             UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
             RUN_CLIENT.set(req.context or None)
-            result = await Runner.run(
-                agent,
-                user_input,
-                context=context,
-                session=session,
-                session_id=sid,
-                context_policy=deps.context_policy,
-                max_turns=deps.max_turns,
-                budget=deps.fresh_budget(),
-                retry=deps.retry,
-                tracer=deps.tracer,
-            )
+            try:
+                result = await Runner.run(
+                    agent,
+                    user_input,
+                    context=context,
+                    session=session,
+                    session_id=sid,
+                    context_policy=deps.context_policy,
+                    max_turns=deps.max_turns,
+                    budget=deps.fresh_budget(),
+                    retry=deps.retry,
+                    tracer=deps.tracer,
+                    # What a supervised run's controller provides: a stop
+                    # stops it, and subagent reports reach it (subagents.py).
+                    cancel_token=hold.cancel,
+                    mailbox=hold.mailbox,
+                )
+            except RunCancelled as exc:
+                raise WebError(409, "run_cancelled", "the run was stopped") from exc
         if is_new:
             deps.schedule_title(sid, req.message, result.output, deps.name_of(agent))
         return ChatResponse(
@@ -281,6 +289,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     # A resume stopped during its setup: no task will wind its
                     # checkpoint down, so drop it as a stranded one is below.
                     await store.checkpointer.delete(run_id)
+            return {"ok": True}
+        if deps.supervisor.cancel(session_id):
+            # A blocking /api/chat turn holds the chat: stopped, it lets go
+            # once its runner has.
             return {"ok": True}
         # No live run: still let the user clear a stranded interrupted run so a
         # page reload doesn't trigger an unwanted reconnect.

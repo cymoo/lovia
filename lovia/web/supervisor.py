@@ -757,13 +757,18 @@ def _stopped() -> WebError:
 
 
 class _Hold:
-    """A session held by a run outside the supervisor (``RunSupervisor.reserve``)."""
+    """A session held by a run outside the supervisor (``RunSupervisor.reserve``),
+    with what a controller gives a supervised run: a mailbox (subagent reports
+    reach the turn through it) and a cancel signal (a stop, a deletion,
+    shutdown)."""
 
     def __init__(self) -> None:
-        self.cancelled = False  # voided by a stop or a deletion
+        self.mailbox = Mailbox()
+        self.cancel = CancelToken()
+        self.released = asyncio.Event()  # the turn is over; the chat is free
 
     def claim(self) -> None:
-        if self.cancelled:
+        if self.cancel.is_cancelled:
             raise _stopped()
 
 
@@ -789,7 +794,8 @@ class _Setup:
         return self.supervisor._controllers.get(self.session_id) is self.ctrl
 
     def claim(self) -> None:
-        if not self.owns():
+        # Shutdown cancels without evicting, so check both.
+        if not self.owns() or self.ctrl.cancel.is_cancelled:
             raise _stopped()
 
     async def bind(self, agent: Agent[Any]) -> None:
@@ -1045,16 +1051,21 @@ class RunSupervisor:
     def reserve(self, session_id: str) -> Iterator[_Hold]:
         """Hold ``session_id`` for a run outside the supervisor (the blocking
         ``/api/chat``) while it lasts: no supervised run starts on it. A stop
-        or a deletion (:meth:`cancel`) voids the hold; the run checks it with
-        ``claim()`` before each step that writes."""
+        or a deletion (:meth:`cancel`) cancels the hold — the run checks it
+        with ``claim()`` before each step that writes, and its runner stops on
+        ``hold.cancel`` — but the chat stays held until the run is over."""
         self._check_slot(session_id, cap=False)
         hold = _Hold()
         self._reserved[session_id] = hold
         try:
             yield hold
         finally:
-            if self._reserved.get(session_id) is hold:
-                del self._reserved[session_id]
+            del self._reserved[session_id]
+            hold.released.set()
+
+    def held(self, session_id: str) -> _Hold | None:
+        """The hold a run outside the supervisor has on ``session_id``."""
+        return self._reserved.get(session_id)
 
     def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
         """Refuse a second run for one session, and (``cap``) one over the limit."""
@@ -1068,9 +1079,10 @@ class RunSupervisor:
     def cancel(self, session_id: str, *, discard: bool = False) -> bool:
         """Cancel the live run, if any. ``discard`` additionally drops the
         partial transcript instead of persisting it — for session deletion."""
-        hold = self._reserved.pop(session_id, None)
+        hold = self._reserved.get(session_id)
         if hold is not None:
-            hold.cancelled = True
+            # Still held until its runner has stopped: reserve() lets go then.
+            hold.cancel.cancel("user requested stop")
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
             return hold is not None
@@ -1134,6 +1146,8 @@ class RunSupervisor:
                 self._draining.pop(session_id, None)
 
     async def shutdown(self, *, grace: float = 10.0) -> None:
+        for hold in self._reserved.values():
+            hold.cancel.cancel("server shutdown")
         ctrls = list(self._controllers.values())
         for c in ctrls:
             c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint

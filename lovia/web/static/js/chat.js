@@ -31,6 +31,7 @@ import {
   toolPath,
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
+import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -308,11 +309,13 @@ function ensureFooter(bubble) {
 function appendBubbleContent(bubble, node) {
   if (!bubble || !node) return;
   const footer = bubble.querySelector(':scope > .turn-footer');
-  if (footer) {
-    bubble.insertBefore(node, footer);
-  } else {
-    bubble.appendChild(node);
+  if (isStep(node)) {
+    placeStep(bubble, node, footer);
+    return;
   }
+  // The reply's text has started: the steps before it fold away.
+  if (node.classList.contains('body')) sealActivity(bubble);
+  bubble.insertBefore(node, footer);
 }
 
 // ---- Date separators -----------------------------------------------------
@@ -680,7 +683,7 @@ function updateToolResult(id, result, isError, images) {
 
 function removeToolNode(id) {
   const node = store.toolNodes.get(id);
-  if (node) { node.remove(); store.toolNodes.delete(id); }
+  if (node) { removeStep(node); store.toolNodes.delete(id); }
 }
 
 // ---- Todo plugin: a live checklist card --------------------------------
@@ -1651,6 +1654,7 @@ function finalizeCurrentAssistantTurn() {
     } else {
       node.classList.remove('streaming');
       setTurnTimestamp(node);
+      sealActivity(store.bubble);
       addMessageActions(store.bubble);
     }
   }
@@ -2187,7 +2191,7 @@ async function handleEvent({ event, data }) {
       cancelRender();
       if (store.body) { store.body.remove(); store.body = null; }
       store.rawText = '';
-      if (store.reasoningNode) { store.reasoningNode.remove(); store.reasoningNode = null; }
+      if (store.reasoningNode) { removeStep(store.reasoningNode); store.reasoningNode = null; }
       store.reasoningText = '';
       store.reasoningStart = 0;
       store.reasoningEnd = 0;

@@ -224,7 +224,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | --- | --- |
 | 侧栏 | `sidebar`、`sidebar-header`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
 | 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`export`、`files-toggle` |
-| 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
+| 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`activity`（连续两个及以上的思考 / 工具步骤折叠成的一行摘要；回复正文开始后自动收起）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
 | 输入框 | `composer`、`attach`、`context-ring` |
 | 其他 | `files-panel`；设置面板里的 `language`（语言那一行） |
 

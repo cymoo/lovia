@@ -6,6 +6,7 @@
 // exactly what the live run did. Each card carries a ToolState, mirrored onto
 // it as `data-status` — public, like `data-tool`, for deployer CSS.
 
+import { liftStep } from './activity.js';
 import { api } from './api.js';
 import {
   mountComponent,
@@ -430,8 +431,10 @@ function renderToolImages(node, images) {
     box.append(strip);
   }
   // The image IS the payload — surface it instead of hiding it behind the
-  // collapsed card (matching how attachments render without a click).
+  // collapsed card or a folded group (matching how attachments render
+  // without a click).
   node.open = true;
+  liftStep(node);
   strip.replaceChildren();
   for (const im of images) {
     const img = document.createElement('img');
@@ -482,6 +485,7 @@ function syncToolUi(node, live) {
     return;
   }
   node.dataset.ui = comp.kind === TOOL_VIEW_KIND ? 'view' : 'envelope';
+  liftStep(node); // the component is the payload: out of a folded group, before it mounts
   if (!el) {
     el = document.createElement('div');
     el.className = 'tool-ui';

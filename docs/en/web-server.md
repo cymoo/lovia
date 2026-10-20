@@ -239,7 +239,7 @@ To target a region, select its `data-part`:
 | --- | --- |
 | Sidebar | `sidebar`, `sidebar-header`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `export`, `files-toggle` |
-| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
+| Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
 | Composer | `composer`, `attach`, `context-ring` |
 | Elsewhere | `files-panel`; in Settings, `language` (the language row) |
 

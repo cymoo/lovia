@@ -449,7 +449,8 @@ async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
         releases[0].set()
         await _until(lambda: sup.get("s") is None)  # A ended meanwhile
         hold_upsert.set()
-        await _until(lambda: bool(entered))  # so the message calls the hook
+        # So the message calls the hook after all (A's call is in `entered` too).
+        await _until(lambda: any(t.client.get("kb") == "late" for t in entered))
         nxt = asyncio.create_task(
             ac.post("/api/chat/stream", json={"message": "c", "session_id": "s"})
         )

@@ -154,6 +154,38 @@ async def test_rewind_by_ref_and_a_stale_ref_is_refused() -> None:
         assert (await _detail_refs(ac, sid))[0] == first
 
 
+async def test_a_reconnect_as_the_run_winds_down_still_gets_its_refs(
+    monkeypatch,
+) -> None:
+    """The run has answered but is still clearing up when a tab reconnects:
+    its snapshot leaves the run's turn unnamed, so the replay carries the
+    refs frame along with `done`."""
+    app = _app(_bot([text("a1")]))
+    store = app.state.deps.store
+    gate, held = asyncio.Event(), []
+    clear = store.clear_active_run_id
+
+    async def held_clear(*args, **kwargs):  # the run's cleanup, after `done`
+        held.append(True)
+        await gate.wait()
+        return await clear(*args, **kwargs)
+
+    monkeypatch.setattr(store, "clear_active_run_id", held_clear)
+    async with _client(app) as ac:
+        task, sent = _spawn(
+            ac, "/api/chat/stream", json={"message": "one", "session_id": "s1"}
+        )
+        await _until(lambda: bool(held))
+        late, lines = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.05)
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(task, late), 5)
+    evs = _parse_sse("\n".join(lines))
+    kinds = [e for e, _ in evs]
+    assert kinds.index("refs") < kinds.index("done")
+    assert _frame(evs, "refs") == _frame(_parse_sse("\n".join(sent)), "refs")
+
+
 async def _until(cond, timeout: float = 5.0) -> None:
     async def wait() -> None:
         while not cond():

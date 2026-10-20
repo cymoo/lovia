@@ -1600,8 +1600,14 @@ function stampRefs(refs) {
   const users = [...transcriptEl.querySelectorAll(':scope > .turn.user:not(.queued)')]
     .slice(-refs.length);
   const skip = refs.length - users.length;
+  // A turn the snapshot rendered is in the history "Load earlier" redraws
+  // from too, at its absolute ordinal (live ones aren't): name it there.
+  const cached = _historyEntries.filter((e) => e.role === 'user');
   users.forEach((node, i) => {
-    /** @type {HTMLElement} */ (node).dataset.ref = refs[skip + i];
+    const turn = /** @type {HTMLElement} */ (node);
+    turn.dataset.ref = refs[skip + i];
+    const entry = cached[Number(turn.dataset.userTurn)];
+    if (entry) entry.ref = refs[skip + i];
   });
   if (users.length) renderAllMessageActions(users[0]);
 }

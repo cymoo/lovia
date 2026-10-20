@@ -222,7 +222,7 @@ class _Attachment:
     completed turns, the current turn's events to replay, and the live tail."""
 
     snapshot: list[MessageOut]
-    buffered: list[events.Event]
+    buffered: list[events.Event | UserTurnRefs]
     subscription: _Subscription
     status: str
 
@@ -294,7 +294,7 @@ class RunController:
         self.history_runs: Runs = []
         self.completed_mirror: list[TranscriptEntry] = []
         self.current_turn_entries: list[TranscriptEntry] = []
-        self.in_flight_buffer: list[events.Event] = []
+        self.in_flight_buffer: list[events.Event | UserTurnRefs] = []
         self.pending_approval: events.ApprovalRequired | None = None
         # first-run spec
         self._first_input = first_input
@@ -521,7 +521,11 @@ class RunController:
             if isinstance(e, InputEntry) and e.role == "user"
         )
         if len(refs) == shown:
-            self.hub.publish(UserTurnRefs([r for r in refs if r]))
+            frame = UserTurnRefs([r for r in refs if r])
+            # Replayed with the leg's RunCompleted to a reconnect before this
+            # leg is cleared away: its snapshot leaves these turns unnamed.
+            self.in_flight_buffer.append(frame)
+            self.hub.publish(frame)
 
     # -- the supervised task --------------------------------------------- #
 

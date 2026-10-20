@@ -108,8 +108,11 @@ async def test_deleting_the_chat_stops_a_blocking_turn() -> None:
     async with _client(_app(agent, store=store)) as ac:
         turn = _post(ac, "go")
         await _wait_run(ac, "s1")
-        assert (await ac.delete("/api/sessions/s1")).status_code == 200
+        # The delete waits out the parked tool's wind-down.
+        delete = asyncio.create_task(ac.delete("/api/sessions/s1"))
+        await _wait_run(ac, "s1", gone=True)
         release.set()
+        assert (await asyncio.wait_for(delete, timeout=5)).status_code == 200
         res = await asyncio.wait_for(turn, timeout=5)
 
     assert res.json()["detail"]["code"] == "run_cancelled"

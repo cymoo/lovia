@@ -17,12 +17,15 @@ pytest.importorskip("fastapi")
 import httpx  # noqa: E402
 
 from lovia import Agent, Mailbox, Runner, tool  # noqa: E402
+from lovia.checkpointer import RunHead  # noqa: E402
 from lovia.exceptions import ProviderError  # noqa: E402
+from lovia.messages import Usage  # noqa: E402
 from lovia.reliability import RetryPolicy, RunBudget  # noqa: E402
 from lovia.transcript import InputEntry, ToolResultEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
+from .test_subagents import GatedProvider  # noqa: E402
 from .test_web import _app, _parse_sse  # noqa: E402
 
 
@@ -232,6 +235,45 @@ async def test_concurrency_cap_rejects_new_runs() -> None:
         assert r.status_code == 429
         release.set()
         await _kill(task)
+
+
+@pytest.mark.asyncio
+async def test_refused_stream_keeps_the_interrupted_run() -> None:
+    """The chat's interrupted run is deleted only once a new run has taken the
+    chat: a stream refused at the run cap leaves it resumable (#254)."""
+    store = ChatStore.in_memory()
+    await store.upsert("s1", agent="bot")
+    await store.checkpointer.append(
+        "run-1",
+        [InputEntry(role="user", content="q")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id("s1", "run-1")
+    release = asyncio.Event()
+    provider = ScriptedProvider(
+        [call("block", {}, call_id="c1"), text("other done"), text("s1 done")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    app = _app(agent, store=store, max_background_runs=1)
+    async with _client(app) as ac:
+        other, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s2"}
+        )
+        await _wait_run(ac, "s2")  # the one slot is taken
+        r = await ac.post(
+            "/api/chat/stream", json={"message": "hi", "session_id": "s1"}
+        )
+        assert r.status_code == 429
+        assert await store.checkpointer.load("run-1") is not None
+        assert await store.get_active_run_id("s1") == "run-1"
+
+        release.set()
+        await asyncio.wait_for(other, timeout=5)
+        r = await ac.post(
+            "/api/chat/stream", json={"message": "hi", "session_id": "s1"}
+        )
+    assert r.status_code == 200, r.text
+    assert await store.checkpointer.load("run-1") is None  # superseded: dropped
 
 
 @pytest.mark.asyncio
@@ -854,10 +896,11 @@ async def test_delete_session_stops_live_run_without_orphan_transcript() -> None
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
         await _wait_run(ac, "s1")
-        res = await ac.delete("/api/sessions/s1")
-        assert res.status_code == 200
+        # The delete waits out the parked tool's wind-down.
+        delete = asyncio.create_task(ac.delete("/api/sessions/s1"))
         await _wait_run(ac, "s1", gone=True)
         release.set()
+        assert (await asyncio.wait_for(delete, timeout=5)).status_code == 200
         # The SSE closes only after the run task's finally (persist decision
         # included) has executed — safe to assert "nothing re-appeared" after.
         with contextlib.suppress(asyncio.CancelledError):
@@ -879,13 +922,42 @@ async def test_delete_all_sessions_stops_live_runs() -> None:
             ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
         )
         await _wait_run(ac, "s1")
-        assert (await ac.delete("/api/sessions")).status_code == 200
+        delete = asyncio.create_task(ac.delete("/api/sessions"))
         await _wait_run(ac, "s1", gone=True)
         release.set()
+        assert (await asyncio.wait_for(delete, timeout=5)).status_code == 200
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=5)
         assert (await ac.get("/api/sessions")).json() == []
     assert await app.state.deps.store.session.load("s1") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/sessions/s1", "/api/sessions"])
+async def test_delete_outlasts_a_final_model_call_in_flight(path) -> None:
+    """A stop lands only at the run's next safe point: a final text-only model
+    call already in flight completes, and the run appends itself to the
+    Session. Deleting the chat must wait that out, or the transcript comes
+    back under a chat that no longer exists (#255)."""
+    gate = asyncio.Event()
+    agent = Agent(
+        name="bot", model=GatedProvider(ScriptedProvider([text("done")]), gate)
+    )
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")  # parked in the model call
+        delete = asyncio.create_task(ac.delete(path))
+        await asyncio.sleep(0.1)
+        gate.set()
+        assert (await asyncio.wait_for(delete, timeout=5)).status_code == 200
+        # The SSE closes only after the run task's finally has run.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+    assert await store.get("s1") is None
+    assert await store.session.load("s1") == []
 
 
 @pytest.mark.asyncio

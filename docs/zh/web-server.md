@@ -95,7 +95,9 @@ WAL 并记录一条警告，同时保留原有的 journal 模式；也可以直�
 
 ## 定制页面
 
-把自己的文件放进一个目录，用 `ChatUI(assets=...)` 指向它：
+把自己的文件放进一个目录，用 `ChatUI(assets=...)` 指向它。`lovia web init-ui ui` 可以生成一个起步
+目录：列出全部 block 的 `index.html`、列出全部设计变量及默认值的 `theme.css`，以及带类型检查的
+`extension.js`——内容都是注释掉的，生成后页面不会有任何变化。
 
 ```text
 ui/

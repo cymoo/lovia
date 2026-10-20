@@ -39,8 +39,8 @@ log = logging.getLogger(__name__)
 #: Ceiling on the client context a request may carry, JSON-encoded.
 MAX_CLIENT_CONTEXT_BYTES = 64 * 1024
 
-#: The client context of the run on this task — set where runs start
-#: (supervisor.py, api/chat.py) and read by the schedule_run tool
+#: The client context of the run on this task — set where runs run
+#: (RunSupervisor._run) and read by the schedule_run tool
 #: (scheduling.py), so a schedule the agent makes fires in the same context.
 RUN_CLIENT: ContextVar[JsonObject | None] = ContextVar("lovia_run_client", default=None)
 

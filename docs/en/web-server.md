@@ -843,8 +843,9 @@ way.
 
 ## Supervised Run lifecycle
 
-Streaming Runs are server-owned tasks. An SSE subscriber may disconnect and
-reattach without cancelling work.
+Chat Runs — streamed or blocking — are server-owned tasks. An SSE subscriber
+may disconnect and reattach without cancelling work, and a blocking
+`/api/chat` client that disconnects leaves its Run to finish into the chat.
 
 - **User cancellation** finalizes completed turns into the Session, removes
   dangling Tool calls, and clears the checkpoint.
@@ -852,8 +853,9 @@ reattach without cancelling work.
   client can reconnect and resume after deployment.
 - **Capacity** is bounded by `max_background_runs`; new starts receive HTTP 429
   while full.
-- **Blocking `/api/chat`** is not supervised. Front ends should use
-  `/api/chat/stream`.
+- **Blocking `/api/chat`** waits for its Run and answers with the outcome
+  ([details](http-api.md#blocking-turns)). With no client to ask, its gated
+  Tool calls go to the Agent's `approval_handler`, else are denied.
 
 Live Runs, approvals, and SSE hubs are process-local. Run one worker. SQLite
 data uses WAL and survives restarts, but it does not make in-memory supervision

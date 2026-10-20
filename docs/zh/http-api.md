@@ -126,6 +126,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `feature_unavailable` | 404 / 501 | 服务端或 Agent 不具备该功能（工作区、Memory、checkpointer、提问通道或 `rewind`） |
 | `run_active` | 409 | 该聊天已有 Run 在执行 |
 | `run_stopping` | 409 | 已停止的 Run 仍在收尾，请稍后重试 |
+| `run_cancelled` | 409 | 阻塞式 Turn 的 Run 被停止（取消、删除聊天或服务端关闭） |
 | `agent_unregistered` | 409 | 中断的 Run 所属 Agent 已不再提供服务 |
 | `schedule_not_fired` | 409 | 定时任务暂时无法触发 |
 | `model_exists` | 409 | 该 id 的模型配置已存在 |
@@ -133,6 +134,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `file_too_large` | 413 | 超过工作区读取或上传上限 |
 | `unsupported_file_type` | 415 | 不支持内联预览，或扩展名不允许上传 |
 | `too_many_runs` | 429 | 已达到并发 Run 上限 |
+| `run_failed` | 500 | 阻塞式 Turn 的 Run 失败，`message` 为其错误 |
 
 ## 端点
 
@@ -141,7 +143,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /healthz` | 存活检查（由 `create_app` 提供，不属于 `build_api_router`） |
 | `GET /api/info` | 标题、Agent 列表、默认 Agent、版本和功能开关 |
 | `GET /api/agents` · `GET /api/agents/{name}` | 查看 Agent 的 instructions、工具和能力 |
-| `POST /api/chat` | 执行一次**阻塞式** Run → `{output, session_id, usage}` |
+| `POST /api/chat` | 执行一次**阻塞式** Turn → `{output, session_id, usage}`：托管 Run，请求等待其结束（[详见](#阻塞式-turn)） |
 | `POST /api/chat/stream` | **SSE**：启动 Run，或连接到 Session 中正在执行的 Run（新消息会作为追加指令注入） |
 | `POST /api/chat/reconnect?session_id=` | **SSE**：重新连接，或从 Checkpoint 恢复中断的 Run |
 | `POST /api/chat/approve` | 处理未决审批：`{session_id, call_id, decision}` |
@@ -189,13 +191,24 @@ API 路由抛出的错误都使用同一种响应体：
 
 ### 其他行为
 
-- 某个聊天流正在占用 Session 时，`/api/chat` 返回 409。
 - 同一 Session 中已有 Run 正在执行时，再次发起聊天流会连接到现有 Run，而不是另起 Run
   或报错。
 - Workspace 的浏览和读取路由始终以只读方式访问工作区，不受 Agent 自身模式影响，并沿用
   Agent 的 `denied_paths`。`POST /api/workspace/upload` 是唯一的写入例外，只能在
   `uploads/` 目录中新建文件，并会检查扩展名和大小。文件列表会过滤 `__pycache__`、
   `*.pyc`、`venv`、`node_modules` 等可重新生成的内容，也不会显示隐藏文件。
+
+### 阻塞式 Turn
+
+`POST /api/chat` 与聊天流启动同样的托管 Run，并在 Run 结束后返回结果。因此在整个 Turn
+期间 Run 都占用该聊天：同一聊天的另一个 `/api/chat` 返回 409 `run_active`；聊天流的消息、
+子 Agent 的报告或定时任务的触发都会作为追加指令注入这个 Run，此时 `output` 是 Run 最后的
+回答。`/api/chat/cancel`、删除聊天或服务端关闭都会停止它（409 `run_cancelled`）；失败返回
+500 `run_failed`；它也计入并发 Run 上限（429）。客户端中途断开不会停止它：Run 会像断开的
+聊天流一样执行完毕并写入聊天。
+
+阻塞式 Turn 的审批请求没有客户端能看到，因此需要审批的 Tool 调用不会等待决定：由 Agent 的
+`approval_handler` 决定，否则拒绝——与 [`Runner.run`](tools.md#工具审批) 相同。
 
 ## 聊天 SSE 流
 

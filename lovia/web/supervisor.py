@@ -1,8 +1,9 @@
 """Server-owned run supervision: runs that outlive the HTTP connection.
 
-A streaming agent run becomes a long-lived ``asyncio.Task`` owned by the
-process, not the request. SSE endpoints subscribe to the run's :class:`EventHub`
-and may **detach** (disconnect) and **re-attach** without affecting the run.
+A chat run — streamed or blocking — becomes a long-lived ``asyncio.Task``
+owned by the process, not the request. SSE endpoints subscribe to the run's
+:class:`EventHub` and may **detach** (disconnect) and **re-attach** without
+affecting the run.
 There is at most one run per session; the supervisor consolidates the
 per-session cancel token + mailbox that the request handler used to own.
 
@@ -253,12 +254,16 @@ class RunController:
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
         context: Any = None,
+        await_approvals: bool = True,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
         self.source = source
+        # False for a turn whose caller can't answer an approval (a blocking
+        # /api/chat): the run doesn't park, Runner.run's order decides.
+        self.await_approvals = await_approvals
         # The page's client context and what run_context= built from it: the
         # run's RunContext.deps, shared by every auto-chained leg. The client
         # is persisted beside each leg's checkpoint pointer for a resume.
@@ -282,6 +287,8 @@ class RunController:
         # read what happened without re-querying the run-record store.
         self.final_status: str | None = None
         self.final_error: str | None = None
+        # The exception behind ``final_error``, when one ended the run.
+        self.final_exception: Exception | None = None
         self.started_at = time.time()
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
@@ -612,6 +619,13 @@ class RunController:
                 succeeded = False
                 error_seen = False
                 async for ev in handle:
+                    if (
+                        isinstance(ev, events.ApprovalRequired)
+                        and not self.await_approvals
+                    ):
+                        # Left undecided, the call goes to the agent's
+                        # approval_handler, else is denied.
+                        continue
                     if isinstance(ev, events.RunFailed):
                         error_seen = True
                     if isinstance(ev, events.RunCompleted) and self.run_id:
@@ -675,6 +689,7 @@ class RunController:
             # subscribers see a clear notice, mirroring the old drive_stream.
             log.warning("supervised run %s ended: %s", sid, exc)
             final_error = str(exc) or exc.__class__.__name__
+            self.final_exception = exc
             if not error_seen:
                 # Publish via _publish so the synthesized error also lands in the
                 # snapshot mirror / in-flight buffer — a dropped client that
@@ -835,6 +850,7 @@ class RunSupervisor:
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
         context: Any = None,
+        await_approvals: bool = True,
     ) -> RunController:
         """Register a run for ``session_id``; the caller begins it
         (``subscribe_live``), or ``autostart`` does.
@@ -843,6 +859,9 @@ class RunSupervisor:
         ``client`` (the page's context) with :func:`build_run_context` before
         it writes anything — so a refusal leaves no trace, and no deployer
         code runs between the checks here and the registration.
+
+        ``await_approvals=False`` doesn't park the run on an approval: the
+        agent's ``approval_handler`` decides, else the call is denied.
         """
         self._check_slot(session_id)
         # Every run of one web session shares that session's workspace session
@@ -877,6 +896,7 @@ class RunSupervisor:
             mailbox=mailbox,
             client=client,
             context=context,
+            await_approvals=await_approvals,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the

@@ -763,12 +763,14 @@ serve(app, root_path="/lovia")           # 或：lovia web --root-path /lovia
 
 ## 托管 Run 生命周期
 
-流式 Run 由服务端后台任务托管。SSE 连接断开后，Run 仍会继续执行，客户端可以稍后重连。
+聊天 Run（流式或阻塞式）都由服务端后台任务托管。SSE 连接断开后，Run 仍会继续执行，客户端
+可以稍后重连；阻塞式 `/api/chat` 的客户端断开后，Run 同样会执行完毕并写入聊天。
 
 - **用户取消**：把已完成 Turn 写入 Session，移除悬空 Tool 调用并清理 Checkpoint。
 - **服务端关闭**：协作式取消 Run，但保留 Checkpoint，以便部署后重新连接并恢复。
 - **容量**：由 `max_background_runs` 限制；满载时新请求返回 HTTP 429。
-- **阻塞式 `/api/chat`**：不受托管。前端应使用 `/api/chat/stream`。
+- **阻塞式 `/api/chat`**：等待 Run 结束并返回结果（[详见](http-api.md#阻塞式-turn)）。
+  由于没有客户端可询问，需要审批的 Tool 调用交给 Agent 的 `approval_handler`，否则拒绝。
 
 正在运行的 Run、审批状态和 SSE 订阅都保存在进程内，因此只能使用一个 Worker。SQLite 数据
 可以跨重启保留，但持久化存储无法让这些进程内状态支持多 Worker。

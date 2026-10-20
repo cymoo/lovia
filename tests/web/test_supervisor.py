@@ -961,6 +961,30 @@ async def test_delete_outlasts_a_final_model_call_in_flight(path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_all_outlasts_a_run_stopped_before_it() -> None:
+    """A run stopped earlier is no longer live, but its wind-down can still
+    write: deleting every chat waits it out too (#257)."""
+    gate = asyncio.Event()
+    agent = Agent(
+        name="bot", model=GatedProvider(ScriptedProvider([text("done")]), gate)
+    )
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        task, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await _wait_run(ac, "s1")  # parked in the model call
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        delete = asyncio.create_task(ac.delete("/api/sessions"))
+        await asyncio.sleep(0.1)
+        gate.set()
+        assert (await asyncio.wait_for(delete, timeout=5)).status_code == 200
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+    assert await store.session.load("s1") == []
+
+
+@pytest.mark.asyncio
 async def test_approval_timeout_denies_and_completes_run() -> None:
     @tool(needs_approval=True)
     async def sensitive() -> str:

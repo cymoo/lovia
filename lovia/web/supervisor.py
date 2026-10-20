@@ -989,8 +989,11 @@ class RunSupervisor:
         ctrl.cancel_run(user=True)
         return True
 
-    async def drain(self, session_id: str, *, timeout: float = 60.0) -> bool:
-        """Wait for this session's cancelled runs to wind down. ``False`` on timeout.
+    async def drain(
+        self, session_id: str | None = None, *, timeout: float = 60.0
+    ) -> bool:
+        """Wait for this session's cancelled runs (every session's, given
+        ``None``) to wind down. ``False`` on timeout.
 
         Returns once each stopped task's ``finally`` has folded its interrupted
         turn into the Session (and dropped its checkpoint) — the point after
@@ -1008,9 +1011,15 @@ class RunSupervisor:
         # arrivals rather than spinning on settled ones.
         awaited: set[asyncio.Task[None]] = set()
         while True:
+            groups = (
+                self._draining.values()
+                if session_id is None
+                else [self._draining.get(session_id, set())]
+            )
             tasks = [
                 c.task
-                for c in self._draining.get(session_id, ())
+                for ctrls in groups
+                for c in ctrls
                 if c.task is not None and c.task not in awaited
             ]
             if not tasks:

@@ -31,9 +31,9 @@ _UNSET: Any = object()
 
 MAX_UI_DATA_BYTES = 8 * 1024 * 1024
 
-# The store and session a tool's put_ui_data writes to. Set by the web app
-# wherever it starts a run (RunSupervisor._run, POST /api/chat); tool tasks
-# inherit it, since create_task copies the context.
+# The store and session a tool's put_ui_data writes to. Set where the web app
+# runs every run (RunSupervisor._run); tool tasks inherit it, since
+# create_task copies the context.
 UI_DATA_SINK: contextvars.ContextVar[tuple[ChatStore, str] | None] = (
     contextvars.ContextVar("lovia_web_ui_data_sink", default=None)
 )

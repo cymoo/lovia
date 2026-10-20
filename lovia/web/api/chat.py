@@ -1,12 +1,15 @@
 """Chat routes: blocking turn, SSE stream/attach, approval, cancel, reconnect.
 
-Streaming runs are owned by the :class:`~lovia.web.supervisor.RunSupervisor`,
-not the request: ``/chat/stream`` starts (or attaches to) a supervised run and
-forwards its event hub to SSE. A disconnect detaches; the run keeps going.
+Every chat turn is a run owned by the
+:class:`~lovia.web.supervisor.RunSupervisor`, not the request:
+``/chat/stream`` starts (or attaches to) one and forwards its event hub to
+SSE, ``/chat`` starts one and answers with its outcome. A disconnect
+detaches; the run keeps going.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -19,11 +22,9 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
     raise_missing_web_extra(exc)
 
 from ...agent import Agent
-from ...runner import Runner
 from ..attachments import build_user_input
-from ..components import UI_DATA_SINK
 from ..errors import WebError
-from ..run_context import RUN_CLIENT, RunTrigger, build_run_context
+from ..run_context import RunTrigger, build_run_context
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
@@ -72,8 +73,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
 
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, request: Request) -> ChatResponse:
-        # Blocking, non-streaming turn — runs to completion inside the request
-        # and is NOT supervised (not detachable).
+        # Blocking turn: a supervised run, as for a stream, that this request
+        # waits out. The run holds the chat and answers to a stop, a deletion
+        # and shutdown; a disconnect only detaches.
         if not req.message.strip() and not req.attachments:
             raise WebError(422, "invalid_request", "empty message")
         sid = req.session_id or uuid.uuid4().hex
@@ -81,12 +83,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         agent = resolve_agent(meta, req.agent)
         is_new = meta is None
         if deps.supervisor.get(sid) is not None:
-            # A supervised run owns this session; a second concurrent run would
-            # interleave two transcripts. Stream endpoints attach/inject instead.
+            # Unlike a stream, this turn can't join the live run: it would
+            # have no answer of its own to return.
             raise WebError(
                 409,
                 "run_active",
-                "a streaming run is active for this session",
+                "a run is active for this session",
                 hint="use /api/chat/stream to attach or inject",
             )
         user_input = build_user_input(req, agent)
@@ -102,33 +104,43 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
         context = await build_run_context(deps.run_context, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
-        # Same chat-scoped workspace binding the supervised path applies in
-        # RunSupervisor.start(): background processes belong to the chat, no
-        # matter which endpoint ran the turn.
-        agent = await deps.workspaces.bind(sid, agent)
-        # Subagent tasks this turn spawns work in its context, as for a stream.
-        deps.supervisor.last_client[sid] = dict(client)
-        UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
-        RUN_CLIENT.set(req.context or None)
-        result = await Runner.run(
-            agent,
-            user_input,
+        # The chat's interrupted run, superseded by this one: read before the
+        # start, deleted only after it, so a refused start (409/429) leaves it
+        # resumable.
+        checkpointer = store.checkpointer
+        stranded = (
+            await store.get_active_run_id(sid) if checkpointer is not None else None
+        )
+        ctrl = await deps.supervisor.start(
+            session_id=sid,
+            agent=agent,
+            input=user_input,
+            is_new=is_new,
+            title_message=req.message,
+            autostart=True,
+            client=client,
             context=context,
-            session=session,
-            session_id=sid,
-            context_policy=deps.context_policy,
-            max_turns=deps.max_turns,
-            budget=deps.fresh_budget(),
-            retry=deps.retry,
-            tracer=deps.tracer,
+            # No client to ask: Runner.run's approval behaviour.
+            await_approvals=False,
         )
-        if is_new:
-            deps.schedule_title(sid, req.message, result.output, deps.name_of(agent))
-        return ChatResponse(
-            output=_coerce(result.output),
-            session_id=sid,
-            usage=usage_dict(result.usage, last_input_tokens=result.last_input_tokens),
-        )
+        assert ctrl.task is not None  # autostart began it
+        if checkpointer is not None and stranded:
+            await checkpointer.delete(stranded)
+        # asyncio.wait never cancels what it waits on: a request cancelled
+        # by its client going away leaves the run to finish into the chat.
+        await asyncio.wait([ctrl.task])
+        # An exception after a completed leg (an auto-chain hop that failed)
+        # is a failure — the stream's error event says so too.
+        if ctrl.final_status == "completed" and ctrl.final_exception is None:
+            return ChatResponse(
+                output=_coerce(ctrl.final_output),
+                session_id=sid,
+                usage=usage_dict(ctrl.usage, last_input_tokens=ctrl.last_input_tokens),
+            )
+        if ctrl.cancel.is_cancelled or ctrl.final_exception is None:
+            # A stop: /api/chat/cancel, the chat's deletion, or shutdown.
+            raise WebError(409, "run_cancelled", "the run was stopped")
+        raise WebError.from_exc(500, "run_failed", ctrl.final_exception)
 
     @router.post("/api/chat/stream")
     async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:

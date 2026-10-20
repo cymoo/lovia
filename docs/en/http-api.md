@@ -134,6 +134,7 @@ normalizes all three.
 | `feature_unavailable` | 404 / 501 | the server or agent lacks it (no workspace, memory, checkpointer, question channel, or `rewind`) |
 | `run_active` | 409 | a run owns this chat |
 | `run_stopping` | 409 | a stopped run is still winding down; retry shortly |
+| `run_cancelled` | 409 | a blocking turn's run was stopped (cancel, chat deletion, or shutdown) |
 | `agent_unregistered` | 409 | the interrupted run's agent is no longer served |
 | `schedule_not_fired` | 409 | the schedule couldn't fire right now |
 | `model_exists` | 409 | a model profile with that id exists |
@@ -141,6 +142,7 @@ normalizes all three.
 | `file_too_large` | 413 | over the workspace read or upload limit |
 | `unsupported_file_type` | 415 | not previewable inline, or an extension uploads don't allow |
 | `too_many_runs` | 429 | at the concurrent-run cap |
+| `run_failed` | 500 | a blocking turn's run failed; `message` is its error |
 
 ## Endpoints
 
@@ -149,7 +151,7 @@ normalizes all three.
 | `GET /healthz` | liveness (served by `create_app`, not `build_api_router`) |
 | `GET /api/info` | title, agents, default agent, version, feature flags |
 | `GET /api/agents` · `GET /api/agents/{name}` | agent introspection (instructions, tools, capabilities) |
-| `POST /api/chat` | one **blocking** Run → `{output, session_id, usage}` |
+| `POST /api/chat` | one **blocking** turn → `{output, session_id, usage}`: a supervised Run, waited for ([details](#blocking-turns)) |
 | `POST /api/chat/stream` | **SSE**: start a run, or attach to the session's live run (injecting the new message) |
 | `POST /api/chat/reconnect?session_id=` | **SSE**: re-attach after refresh, or resume an interrupted checkpoint |
 | `POST /api/chat/approve` | resolve a pending approval: `{session_id, call_id, decision}` |
@@ -198,13 +200,28 @@ To find Runs that finished while disconnected, query `/api/runs/history` with
 
 ### Other behavior
 
-- `/api/chat` returns 409 while a chat stream owns the Session.
-- Starting another chat stream while that Session has a live Run attaches to
-  the existing Run instead of starting a second one or failing.
+- Starting a chat stream for a Session with a live Run attaches to that Run
+  instead of starting a second one or failing.
 - Workspace routes always access the workspace in read-only mode, regardless
   of the Agent's mode, and preserve its `denied_paths`. They hide regenerable
   files such as `__pycache__`, `*.pyc`, `venv`, and `node_modules`; dotfiles
   stay hidden too.
+
+### Blocking turns
+
+`POST /api/chat` runs its turn as the same supervised Run a stream starts,
+and answers once that Run ends. So the Run holds the chat for the whole
+turn: another `/api/chat` for it gets 409 `run_active`, while a stream's
+message, a subagent's report, or a scheduled fire for the chat is injected
+into it — `output` is then the Run's last answer.
+`/api/chat/cancel`, deleting the chat, or shutdown stops it (409
+`run_cancelled`); a failure answers 500 `run_failed`; it counts toward the
+concurrent-run cap (429). A client that disconnects mid-turn doesn't stop
+it: the Run finishes into the chat, as a detached stream's does.
+
+No client sees a blocking turn's approval requests, so its gated Tool calls
+don't wait for one: the Agent's `approval_handler` decides, else the call is
+denied — as for [`Runner.run`](tools.md#tool-approval).
 
 ## Chat SSE streams
 

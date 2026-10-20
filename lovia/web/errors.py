@@ -14,7 +14,8 @@ validation answers 422 with ``detail`` as a list, and a custom ``auth=``
 dependency answers however it chooses.
 
 A failure *inside* a run arrives instead as the chat stream's ``error``
-event, classified by :func:`run_error_code` into a :data:`RunErrorCode`.
+event, classified by :func:`run_error_code` into a :data:`RunErrorCode` (a
+blocking ``/api/chat`` turn answers it as ``run_failed``).
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ ErrorCode = Literal[
     "feature_unavailable",
     "run_active",
     "run_stopping",
+    "run_cancelled",
     "agent_unregistered",
     "schedule_not_fired",
     "model_exists",
@@ -69,6 +71,7 @@ ErrorCode = Literal[
     "file_too_large",
     "unsupported_file_type",
     "too_many_runs",
+    "run_failed",
 ]
 
 
@@ -103,8 +106,11 @@ class WebError(HTTPException):
         """Wrap ``exc``, lifting a :class:`~lovia.exceptions.LoviaError` hint
         into its own field instead of leaving it folded into the message."""
         if isinstance(exc, LoviaError):
-            return cls(status_code, code, Exception.__str__(exc), hint=exc.hint)
-        return cls(status_code, code, str(exc))
+            message, hint = Exception.__str__(exc), exc.hint
+        else:
+            message, hint = str(exc), None
+        # A message-less exception (a bare ConnectError) names its class.
+        return cls(status_code, code, message or type(exc).__name__, hint=hint)
 
 
 RunErrorCode = Literal[

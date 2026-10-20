@@ -204,12 +204,14 @@ selectors' specificity — no `!important` needed.
 
 Retheme by overriding the design tokens at the top of `styles.css`. Each theme
 has its own values, so set yours per theme; a token set on `:root` applies to
-both:
+both. `--accent-hover`, `--accent-soft` and `--accent-text` derive from
+`--accent`, so a new brand color is usually just `--accent` — override a tint
+only when it needs to differ:
 
 ```css
 /* ui/theme.css */
-[data-theme="light"] { --accent: #6d28d9; --accent-hover: #5b21b6; --accent-soft: #f1ebfe; }
-[data-theme="dark"]  { --accent: #a78bfa; --accent-hover: #c4b5fd; --accent-soft: #2a2240; }
+[data-theme="light"] { --accent: #6d28d9; }
+[data-theme="dark"]  { --accent: #a78bfa; }
 :root { --sans: "Inter", system-ui, sans-serif; --radius: 8px; }
 ```
 
@@ -217,7 +219,7 @@ both:
 | --- | --- |
 | `--bg`, `--surface`, `--surface-2`, `--surface-3`, `--border`, `--border-strong` | Canvas, panels, cards, hover, and their borders |
 | `--ink`, `--ink-2`, `--muted`, `--muted-2` | Text, from primary to faint |
-| `--accent`, `--accent-hover`, `--accent-soft`, `--accent-text` | The brand color and its tints |
+| `--accent`, `--accent-hover`, `--accent-soft`, `--accent-text` | The brand color and its tints (the last three derive from `--accent`) |
 | `--user-surface`, `--user-border` | The user's message bubble |
 | `--chart-1` … `--chart-8` | Chart series colors |
 | `--warn`, `--danger`, `--ok` | Status colors |

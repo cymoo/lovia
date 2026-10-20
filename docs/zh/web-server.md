@@ -327,11 +327,13 @@ lovia.on('run-end', ({ status, usage }) => {
 
 每次工具调用都显示为一张卡片：一行写着名字和参数，展开后是参数和结果。`registerToolView`
 可以改变某个工具卡片的呈现方式——适合你无法控制的工具（比如 MCP 服务器），也适合面向终端用户的
-部署：`read_file(path: …)` 对他们没有意义。
+部署：`order_status(id: …)` 对他们没有意义。lovia 自带的工具已经这样显示——「读取文件 a.md」
+「$ ls -la」「网页搜索 “…”」——你注册的视图（包括 `'*'` 兜底）优先于它们：
 
 ```js
-// 代替 name(args) 的一行摘要，作用于所有没有专属视图的工具；返回 null 保留默认。
-const labels = { order_status: '正在查询订单', read_file: '正在读取文件' };
+// 代替 name(args) 的一行摘要，作用于所有没有专属视图的工具；返回 null 交给下一层
+// （lovia 自带工具有自己的一行），最后才是 name(args)。
+const labels = { order_status: '正在查询订单' };
 lovia.registerToolView('*', { summary: (tool) => labels[tool.name] ?? null });
 
 lovia.registerToolView('web_search', {
@@ -357,7 +359,7 @@ lovia.registerToolView('web_search', {
 
 | `view` 字段 | 说明 |
 | --- | --- |
-| `summary(tool)` | 代替 `name(args)` 的一行摘要；返回 `null` 或 `undefined` 保留默认。鼠标悬停时显示它代表的调用 |
+| `summary(tool)` | 代替 `name(args)` 的一行摘要；返回 `null` 或 `undefined` 时依次交给 `'*'` 视图、lovia 自带的一行、`name(args)`。鼠标悬停时显示它代表的调用 |
 | `render(el, tool, ctx)` | 把卡片主体画进 `el`。约定和[组件渲染器](#ui-组件)相同（`ctx`、可选的清理函数），原始结果仍可通过 "Source" 开关查看 |
 | `snapshot(tool, ctx)` | 用于对话 HTML 导出的静态 HTML |
 

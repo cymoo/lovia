@@ -32,6 +32,7 @@ import {
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
+import { toolLabel } from './tool-views.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -2256,7 +2257,7 @@ async function handleEvent({ event, data }) {
       if (data.name === QUESTION_TOOL) appendQuestion(data);
       // The pill says what the run is doing, not just how far it is.
       if (turnProgressEl && _currentTurn) {
-        turnProgressEl.textContent = `${t('topbar.turn', { n: _currentTurn })} · ${data.name}…`;
+        turnProgressEl.textContent = `${t('topbar.turn', { n: _currentTurn })} · ${toolLabel(data.name)}…`;
       }
       break;
 

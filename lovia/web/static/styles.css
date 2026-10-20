@@ -1659,6 +1659,15 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .activity > .activity-steps > .approval-auto {
   padding: 6px 14px;
 }
+/* A thinking row reads like the tool rows beside it, not as a section label. */
+.activity > .activity-steps > .reasoning > summary {
+  min-height: 36px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--ink-2);
+}
 
 /* ---- Reasoning -------------------------------------------------------------- */
 .reasoning {

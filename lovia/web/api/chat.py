@@ -118,6 +118,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             hold.claim()  # a deletion meanwhile wins: write nothing back
             name = deps.name_of(agent)
             await upsert_session(sid, name, req.message, is_new=is_new)
+            if hold.deleted:
+                # Deleted while the row was written, which may have landed
+                # after the deletion's. The chat is still held, so the row is
+                # this turn's alone: deletion wins.
+                await store.delete(sid)
+            hold.claim()
             if is_new:
                 announce_session(sid, name, req.message)
             # Same chat-scoped workspace binding the supervised path applies in
@@ -275,6 +281,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
     async def cancel_stream(session_id: str = Query(...)) -> dict[str, bool]:
         """Cancel the live run for ``session_id`` (or clear a stranded checkpoint)."""
         ctrl = deps.supervisor.get(session_id)
+        if ctrl is None and deps.supervisor.cancel(session_id):
+            # A blocking /api/chat turn holds the chat: stopped, it lets go
+            # once its runner has.
+            return {"ok": True}
         if ctrl is not None:
             run_id = ctrl.run_id
             begun = ctrl.task is not None
@@ -289,18 +299,20 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                     # A resume stopped during its setup: no task will wind its
                     # checkpoint down, so drop it as a stranded one is below.
                     await store.checkpointer.delete(run_id)
-            return {"ok": True}
-        if deps.supervisor.cancel(session_id):
-            # A blocking /api/chat turn holds the chat: stopped, it lets go
-            # once its runner has.
-            return {"ok": True}
+            if begun or run_id:
+                return {"ok": True}
+            # A start stopped during its setup, before it superseded the chat's
+            # interrupted run: the stop drops that one too, below.
         # No live run: still let the user clear a stranded interrupted run so a
-        # page reload doesn't trigger an unwanted reconnect.
+        # page reload doesn't trigger an unwanted reconnect — unless a run took
+        # the chat meanwhile: then the pointer is that run's.
         if store.checkpointer is not None:
-            run_id = await store.get_active_run_id(session_id)
-            if run_id:
-                await store.checkpointer.delete(run_id)
-            await store.clear_active_run_id(session_id)
+            if deps.supervisor.get(session_id) is None:
+                if run_id := await store.get_active_run_id(session_id):
+                    await store.checkpointer.delete(run_id)
+                    await store.clear_active_run_id(session_id, expected=run_id)
+            return {"ok": True}
+        if ctrl is not None:
             return {"ok": True}
         raise WebError(404, "run_not_found", "no active stream")
 

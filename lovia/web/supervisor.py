@@ -765,6 +765,7 @@ class _Hold:
     def __init__(self) -> None:
         self.mailbox = Mailbox()
         self.cancel = CancelToken()
+        self.deleted = False  # cancelled by the chat's deletion
         self.released = asyncio.Event()  # the turn is over; the chat is free
 
     def claim(self) -> None:
@@ -1082,7 +1083,8 @@ class RunSupervisor:
         hold = self._reserved.get(session_id)
         if hold is not None:
             # Still held until its runner has stopped: reserve() lets go then.
-            hold.cancel.cancel("user requested stop")
+            hold.deleted = hold.deleted or discard
+            self._stop_hold(session_id, hold, "user requested stop")
         ctrl = self._controllers.get(session_id)
         if ctrl is None:
             return hold is not None
@@ -1094,6 +1096,14 @@ class RunSupervisor:
         ctrl._discard_partial = discard
         ctrl.cancel_run(user=True)
         return True
+
+    def _stop_hold(self, session_id: str, hold: _Hold, reason: str) -> None:
+        hold.cancel.cancel(reason)
+        # A runner parked on an approval or an ask_human question never polls
+        # the token: unblock it, as RunController.cancel_run does.
+        self.deps.approvals.deny_pending(session_id)
+        if self.deps.questions is not None:
+            self.deps.questions.cancel_session(session_id)
 
     def cancel_all(self, *, discard: bool = False) -> None:
         """:meth:`cancel` every session's run — for deleting every chat."""
@@ -1146,8 +1156,8 @@ class RunSupervisor:
                 self._draining.pop(session_id, None)
 
     async def shutdown(self, *, grace: float = 10.0) -> None:
-        for hold in self._reserved.values():
-            hold.cancel.cancel("server shutdown")
+        for session_id, hold in list(self._reserved.items()):
+            self._stop_hold(session_id, hold, "server shutdown")
         ctrls = list(self._controllers.values())
         for c in ctrls:
             c.cancel_run(user=False)  # cooperative stop; KEEP the checkpoint

@@ -578,6 +578,76 @@ async def test_stopping_a_running_blocking_turn_stops_its_runner() -> None:
     assert "s" not in sup._reserved
 
 
+async def test_deleting_a_chat_while_a_blocking_turn_writes_its_row_wins(
+    tmp_path, monkeypatch
+) -> None:
+    from lovia.workspace import Workspace
+
+    store = ChatStore.in_memory()
+    await store.upsert("s", agent="bot")
+    writing, gate = asyncio.Event(), asyncio.Event()
+    upsert = store.upsert
+
+    async def held_upsert(*args, **kwargs):
+        writing.set()
+        await gate.wait()
+        return await upsert(*args, **kwargs)
+
+    monkeypatch.setattr(store, "upsert", held_upsert)
+    provider = ScriptedProvider([text("late")])
+    agent = Agent(name="bot", model=provider, workspace=Workspace.local(str(tmp_path)))
+    app = _app(agent, store=store)
+    deps = app.state.deps
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s"}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(writing.is_set)
+        await ac.delete("/api/sessions/s")
+        gate.set()  # the turn's write lands after the deletion's
+        res = await blocking
+    assert res.status_code == 409
+    assert await store.get("s") is None
+    assert deps.workspaces.get("s") is None
+    assert provider.calls == []
+
+
+async def test_stopping_a_start_in_setup_drops_the_older_interrupted_run() -> None:
+    gate = asyncio.Event()
+    store = ChatStore.in_memory()
+    await _interrupted(store)
+    hook = _gated(gate, when=lambda t: t.client.get("kb") == "slow")
+    app = _app(_agent([text("ok")]), store=store, run_context=hook)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        body = {"message": "b", "session_id": "s1", "context": {"kb": "slow"}}
+        stream = asyncio.create_task(ac.post("/api/chat/stream", json=body))
+        await _until(lambda: sup.get("s1") is not None)
+        await ac.post("/api/chat/cancel", params={"session_id": "s1"})
+        gate.set()
+        assert (await stream).status_code == 409
+    # A reload must not reconnect to the run the stop meant to end.
+    assert await store.get_active_run_id("s1") is None
+    assert await store.checkpointer.load("run-1") is None
+
+
+async def test_stopping_a_blocking_turn_parked_on_a_question_frees_it() -> None:
+    from lovia.tools.human import HumanChannel, ask_human
+
+    channel = HumanChannel()
+    provider = ScriptedProvider([call("ask_human", {"question": "pick"}), text("x")])
+    agent = Agent(name="bot", model=provider, tools=[ask_human(channel)])
+    app = _app(agent, question_channel=channel)
+    sup = app.state.deps.supervisor
+    async with _client(app) as ac:
+        body = {"message": "a", "session_id": "s"}
+        blocking = asyncio.create_task(ac.post("/api/chat", json=body))
+        await _until(lambda: bool(channel.pending))
+        await ac.post("/api/chat/cancel", params={"session_id": "s"})
+        res = await asyncio.wait_for(blocking, 5)
+    assert res.status_code == 409
+    assert "s" not in sup._reserved
+
+
 async def test_a_setup_pending_at_shutdown_gives_up() -> None:
     from lovia.web.errors import WebError
 

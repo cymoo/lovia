@@ -50,6 +50,9 @@ const MESSAGES = {
     'session.delete': '删除',
     'session.stop': '停止运行',
     'session.newChat': '新对话',
+    // ---- welcome (ChatUI's empty_* override these)
+    'welcome.title': '从哪里开始？',
+    'welcome.description': '问对了问题，答案就有了一半。',
     // ---- dialogs
     'dialog.cancel': '取消',
     'dialog.ok': '确定',
@@ -492,6 +495,8 @@ const EN = {
   'session.delete': 'Delete',
   'session.stop': 'Stop run',
   'session.newChat': 'New chat',
+  'welcome.title': 'Where shall we begin?',
+  'welcome.description': 'A good question is already half the answer.',
   'dialog.cancel': 'Cancel',
   'dialog.ok': 'OK',
   'dialog.save': 'Save',

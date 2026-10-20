@@ -106,7 +106,7 @@
     <button id="sidebar-toggle" class="btn-icon hamburger-btn" type="button" aria-label="Toggle sidebar">
       <span class="hamburger"></span>
     </button>
-    <h1 id="chat-title" class="chat-title" data-part="chat-title">New chat</h1>
+    <h1 id="chat-title" class="chat-title" data-part="chat-title" data-i18n="session.newChat">New chat</h1>
     <div class="topbar-actions" data-part="topbar-actions">
       {% block topbar_actions %}{% endblock %}
       <span id="turn-progress" class="turn-progress hidden"></span>
@@ -137,8 +137,14 @@
     <section id="transcript" class="transcript" aria-live="polite" data-part="transcript">
       <div class="empty-state" id="empty-state" data-part="welcome">
         {% block welcome %}
+        {% if empty_title is none %}
+        <h2 data-i18n="welcome.title">Where shall we begin?</h2>
+        {% else %}
         <h2>{{ empty_title }}</h2>
-        {% if empty_description is string %}
+        {% endif %}
+        {% if empty_description is none %}
+        <p data-i18n="welcome.description">A good question is already half the answer.</p>
+        {% elif empty_description is string %}
         <p>{{ empty_description }}</p>
         {% else %}
         <ul>

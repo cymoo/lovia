@@ -77,8 +77,9 @@ def test_healthz_and_index() -> None:
     res = c.get("/")
     assert res.status_code == 200
     assert "<html" in res.text.lower()
-    assert "Where shall we begin?" in res.text
-    assert "A good question is already half the answer." in res.text
+    # lovia's own welcome copy is translatable; a deployer's is shown verbatim.
+    assert 'data-i18n="welcome.title">Where shall we begin?' in res.text
+    assert 'data-i18n="welcome.description">A good question' in res.text
 
 
 def test_index_accepts_custom_empty_state() -> None:
@@ -94,6 +95,8 @@ def test_index_accepts_custom_empty_state() -> None:
     assert "Mission control" in res.text
     assert "Tune the array" in res.text
     assert "Listen for the reply" in res.text
+    assert "welcome.title" not in res.text
+    assert "welcome.description" not in res.text
 
 
 def test_index_renders_example_prompts() -> None:

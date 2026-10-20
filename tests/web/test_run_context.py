@@ -20,7 +20,12 @@ from lovia.web.store import ChatStore, ScheduleRow  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
 from .test_scheduler import _drain_runs  # noqa: E402
-from .test_supervisor import _client, _wait_record  # noqa: E402
+from .test_supervisor import (  # noqa: E402
+    _blocking_tool,
+    _client,
+    _spawn,
+    _wait_record,
+)
 from .test_web import _parse_sse  # noqa: E402
 
 seen: list[RunTrigger] = []
@@ -458,6 +463,55 @@ async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
     entries = await store.session.load("s")
     users = [e.content for e in entries if getattr(e, "role", None) == "user"]
     assert users == ["a", "c", "b"]
+
+
+async def test_a_schedule_whose_chat_got_busy_during_its_hook_joins_that_run() -> None:
+    """A fixed-chat schedule found its chat idle, but a stream started a run
+    there while the fire's hook ran: the fire goes into that run, and the
+    schedules due after it still fire."""
+    gate, entered = asyncio.Event(), []
+    release = asyncio.Event()
+    hook = _gated(gate, entered, when=lambda t: t.source == "schedule:fixed")
+    agent = Agent(
+        name="bot",
+        model=ScriptedProvider([call("block", {}), *[text("ok")] * 4]),
+        tools=[_blocking_tool(release)],
+    )
+    store = ChatStore.in_memory()
+    await store.upsert("busy", agent="bot")
+    app = _app(agent, store=store, run_context=hook)
+    deps = app.state.deps
+    now = time.time()
+    for sid, target, due in (("fixed", "busy", now - 2), ("fresh", None, now - 1)):
+        await store.add_schedule(
+            ScheduleRow(
+                id=sid, agent="bot", input="digest", session_id=target,
+                trigger_kind="every", trigger_expr="3600", next_fire=due,
+                active=True, last_session_id=None, created_at=now,
+                updated_at=now,
+            )
+        )  # fmt: skip
+    async with _client(app) as ac:
+        due = asyncio.create_task(Scheduler(deps).run_due())
+        await _until(lambda: bool(entered))  # the fixed fire, in its hook
+        stream, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "hi", "session_id": "busy"}
+        )
+        await _until(
+            lambda: (
+                (c := deps.supervisor.get("busy")) is not None and c.task is not None
+            )
+        )
+        live = deps.supervisor.get("busy")
+        gate.set()
+        await asyncio.wait_for(due, 5)  # not aborted by the busy chat
+        assert bool(live.mailbox)  # the fire joined the stream's run
+        release.set()
+        await asyncio.wait_for(stream, 5)
+    await _drain_runs(deps)
+    fixed, fresh = await store.get_schedule("fixed"), await store.get_schedule("fresh")
+    assert fixed.next_fire > now and fixed.last_session_id == "busy"
+    assert fresh.last_session_id is not None
 
 
 async def test_a_reconnect_does_not_resume_a_run_finished_while_its_hook_ran() -> None:

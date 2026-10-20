@@ -277,6 +277,13 @@ class Scheduler:
                 context=context,
             )
         except WebError as exc:
+            live = self.deps.supervisor.get(target)
+            if exc.code == "run_active" and live is not None:
+                # A run took the chat while the hook ran: deliver into it, as
+                # for a chat already busy above.
+                live.inject(fire_input(sched))
+                await self._advance(sched, now, last_session_id=target)
+                return target
             if exc.code == "too_many_runs":
                 # At the concurrency cap: defer (leave next_fire due → retried).
                 # Drop the freshly-created session row so repeated 429s on a

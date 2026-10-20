@@ -182,8 +182,11 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
     @router.delete("/api/sessions")
     async def delete_all_sessions() -> dict[str, bool]:
         """Delete every session's transcript and metadata (stopping live runs)."""
-        for sid, _ctrl in deps.supervisor:
+        sids = [sid for sid, _ctrl in deps.supervisor]
+        for sid in sids:
             deps.supervisor.cancel(sid, discard=True)
+        # As in delete_session: let the stopped runs wind down first.
+        await asyncio.gather(*(deps.supervisor.drain(sid) for sid in sids))
         deps.supervisor.last_client.clear()
         # Reap every chat's workspace session (and its background processes).
         await deps.workspaces.aclose()
@@ -317,6 +320,10 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
         # it keeps burning tokens and re-persists entries for the deleted chat
         # when it winds down.
         deps.supervisor.cancel(session_id, discard=True)
+        # Stopping is cooperative: a final model call already in flight still
+        # completes, and the run then appends itself to the Session. Wait out
+        # the wind-down before deleting the rows (on a timeout, delete anyway).
+        await deps.supervisor.drain(session_id)
         deps.supervisor.last_client.pop(session_id, None)
         # Deleting the chat is what ends its workspace session — background
         # processes deliberately survive run ends, so this is where they die.

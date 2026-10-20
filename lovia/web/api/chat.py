@@ -192,13 +192,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             if (live := deps.supervisor.get(sid)) is not None:
                 return attach(live)
 
-        # No live run → start a fresh supervised run. Delete any stranded
-        # checkpoint first so a later reconnect won't pick up a stale snapshot.
-        if store.checkpointer is not None:
-            old_run_id = await store.get_active_run_id(sid)
-            if old_run_id:
-                await store.checkpointer.delete(old_run_id)
-
+        # No live run → start a fresh supervised run. The chat's interrupted
+        # run, superseded by it, is read before the start and deleted only
+        # after it (as in /chat), so a refused start (409/429) leaves it
+        # resumable.
+        checkpointer = store.checkpointer
+        stranded = (
+            await store.get_active_run_id(sid) if checkpointer is not None else None
+        )
         try:
             ctrl = await deps.supervisor.start(
                 session_id=sid,
@@ -216,9 +217,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             if exc.code == "run_active" and live is not None:
                 return attach(live)
             raise
-        return EventSourceResponse(
-            forward(ctrl.subscribe_live(), sid=sid, emit_session=True)
-        )
+        # Nothing may await between the start and the subscribe that begins
+        # the run; past it, a failed delete only orphans a checkpoint.
+        sub = ctrl.subscribe_live()
+        if checkpointer is not None and stranded:
+            await checkpointer.delete(stranded)
+        return EventSourceResponse(forward(sub, sid=sid, emit_session=True))
 
     @router.post("/api/chat/inject")
     async def chat_inject(req: InjectRequest) -> dict[str, Any]:

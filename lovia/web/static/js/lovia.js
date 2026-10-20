@@ -55,6 +55,30 @@ export function emitLovia(name, payload) {
   }
 }
 
+/** @type {Map<string, () => unknown>} */
+const providers = new Map();
+
+/**
+ * The client context a run starts with: each `provideContext` key's current
+ * value. A provider that throws (or returns undefined) is left out.
+ * @returns {Record<string, unknown> | undefined} undefined when there is none.
+ */
+export function collectContext() {
+  /** @type {[string, unknown][]} */
+  const entries = [];
+  for (const [key, fn] of providers) {
+    try {
+      const value = fn();
+      if (value !== undefined) entries.push([key, value]);
+    } catch (err) {
+      console.error(`lovia: context provider "${key}" failed:`, err);
+    }
+  }
+  // fromEntries defines own properties: a "__proto__" key stays a key,
+  // where assigning it would set the object's prototype instead.
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 /** @type {() => void} */
 let markReady = () => {};
 const ready = new Promise((resolve) => {
@@ -86,6 +110,15 @@ export const lovia = Object.freeze({
   registerRenderer,
   getRenderer,
   registerToolView,
+  provideContext(key, fn) {
+    if (typeof key !== 'string' || !key) {
+      throw new TypeError('lovia.provideContext: expected a key');
+    }
+    if (typeof fn !== 'function') {
+      throw new TypeError('lovia.provideContext: expected a function returning the value');
+    }
+    providers.set(key, fn);
+  },
   send(text) {
     const message = typeof text === 'string' ? text.trim() : '';
     if (message) host.send(message);

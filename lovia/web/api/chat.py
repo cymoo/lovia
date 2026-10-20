@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 try:
-    from fastapi import APIRouter, Query
+    from fastapi import APIRouter, Query, Request
     from sse_starlette.sse import EventSourceResponse
 except ImportError as exc:  # pragma: no cover - depends on optional env
     from .._deps import raise_missing_web_extra
@@ -23,6 +23,7 @@ from ...runner import Runner
 from ..attachments import build_user_input
 from ..components import UI_DATA_SINK
 from ..errors import WebError
+from ..run_context import RUN_CLIENT, RunTrigger, build_run_context
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
@@ -69,7 +70,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         return deps.pick(requested)
 
     @router.post("/api/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest) -> ChatResponse:
+    async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         # Blocking, non-streaming turn — runs to completion inside the request
         # and is NOT supervised (not detachable).
         if not req.message.strip() and not req.attachments:
@@ -92,15 +93,26 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # Attachments were given but all invalid (missing / outside the
             # workspace) and there's no text — nothing to run.
             raise WebError(422, "invalid_request", "empty message")
+        client = req.context or {}
+        # The run_context hook decides first, before anything is written: a
+        # refused message leaves no trace.
+        trigger = RunTrigger(
+            session_id=sid, agent=agent, source="user", request=request, client=client
+        )
+        context = await build_run_context(deps.run_context, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
         # Same chat-scoped workspace binding the supervised path applies in
         # RunSupervisor.start(): background processes belong to the chat, no
         # matter which endpoint ran the turn.
         agent = await deps.workspaces.bind(sid, agent)
+        # Subagent tasks this turn spawns work in its context, as for a stream.
+        deps.supervisor.last_client[sid] = dict(client)
         UI_DATA_SINK.set((deps.store, sid))  # scoped to this request's task
+        RUN_CLIENT.set(req.context or None)
         result = await Runner.run(
             agent,
             user_input,
+            context=context,
             session=session,
             session_id=sid,
             context_policy=deps.context_policy,
@@ -118,7 +130,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
 
     @router.post("/api/chat/stream")
-    async def chat_stream(req: ChatRequest) -> EventSourceResponse:
+    async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
         sid = req.session_id or uuid.uuid4().hex
         meta = await store.get(sid)  # one read feeds agent choice AND is_new
         agent = resolve_agent(meta, req.agent)
@@ -132,6 +144,17 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # rejecting it otherwise before the upsert avoids littering empty rows.
         if empty and deps.supervisor.get(sid) is None:
             raise WebError(422, "invalid_request", "empty message")
+        client = req.context or {}
+        trigger = RunTrigger(
+            session_id=sid, agent=agent, source="user", request=request, client=client
+        )
+        # A message for a live run joins it, in that run's context. Any other
+        # starts one: the run_context hook decides first, before anything is
+        # written, so a refused message leaves no trace.
+        decided = deps.supervisor.get(sid) is None
+        context = None
+        if decided:
+            context = await build_run_context(deps.run_context, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
 
         def attach(live: RunController) -> EventSourceResponse:
@@ -149,6 +172,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if empty:
             # The live run we would have attached to ended mid-request.
             raise WebError(422, "invalid_request", "empty message")
+        if not decided:  # ... and so did the one this message was to join
+            context = await build_run_context(deps.run_context, trigger)
+            # Another may have started while the hook ran: join that one,
+            # before the cleanup below could take its checkpoint for stale.
+            if (live := deps.supervisor.get(sid)) is not None:
+                return attach(live)
 
         # No live run → start a fresh supervised run. Delete any stranded
         # checkpoint first so a later reconnect won't pick up a stale snapshot.
@@ -164,6 +193,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 input=user_input,
                 is_new=is_new,
                 title_message=req.message,
+                client=client,
+                context=context,
             )
         except WebError as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
@@ -250,7 +281,9 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         raise WebError(404, "run_not_found", "no active stream")
 
     @router.post("/api/chat/reconnect")
-    async def chat_reconnect(session_id: str = Query(...)) -> EventSourceResponse:
+    async def chat_reconnect(
+        request: Request, session_id: str = Query(...)
+    ) -> EventSourceResponse:
         """Re-attach to a live run, or resume an interrupted one from checkpoint.
 
         Called by the frontend after a page refresh when the session endpoint
@@ -283,6 +316,28 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 "agent_unregistered",
                 f"agent {snapshot.agent_name!r} is no longer registered",
             )
+        agent = deps.agents[snapshot.agent_name]
+        # The run's own client context (a checkpoint keeps none), with the
+        # reconnecting request for identity.
+        client = await store.get_active_context(session_id) or {}
+        context = await build_run_context(
+            deps.run_context,
+            RunTrigger(
+                session_id=session_id,
+                agent=agent,
+                source="user",
+                request=request,
+                client=client,
+                resumed=True,
+            ),
+        )
+        # Another reconnect may have resumed the run while the hook ran, even
+        # to its end: resume only what the chat still points at, read afresh.
+        if await store.get_active_run_id(session_id) != run_id:
+            raise WebError(404, "run_not_found", "no resumable run")
+        snapshot = await store.checkpointer.load(run_id)
+        if snapshot is None or snapshot.status not in ("interrupted", "running"):
+            raise WebError(404, "run_not_found", "no resumable run")
 
         # Built BEFORE start_resume: that call registers the controller, and
         # nothing may await between registration and the subscribe that begins
@@ -298,8 +353,10 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         try:
             ctrl = await deps.supervisor.start_resume(
                 session_id=session_id,
-                agent=deps.agents[snapshot.agent_name],
+                agent=agent,
                 snapshot=snapshot,
+                client=client,
+                context=context,
             )
         except WebError as exc:
             # Lost a concurrent-reconnect race: attach to the winner's run.

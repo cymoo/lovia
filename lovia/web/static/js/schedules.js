@@ -18,6 +18,7 @@ import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { formatDateTime } from './util.js';
 import { switchSession } from './sessions.js';
+import { collectContext } from './lovia.js';
 
 function humanizeEvery(expr) {
   const secs = Number(expr);
@@ -649,7 +650,9 @@ export async function openSchedulesDialog() {
           await api.updateSchedule(editing.id, body);
           view = { name: 'detail', id: editing.id };
         } else {
-          await api.createSchedule(body);
+          // A schedule is a deferred message: its fires get the page's
+          // context, as a message sent now would.
+          await api.createSchedule({ ...body, context: collectContext() });
           view = { name: 'list' };
         }
         refresh();

@@ -509,7 +509,11 @@ notice; restyle through design tokens and `data-part` attributes, which your
 CSS wins over without `!important`. Your scripts load before the page starts
 and drive it through `window.lovia` (typed in `lovia.d.ts`): run and session
 events, actions such as `send` and `setDraft`, and tool views that turn a
-tool's `name(args)` card into a plain-language line or a body of your own. It
+tool's `name(args)` card into a plain-language line or a body of your own.
+`create_app(run_context=...)` hands tools what they need about the request:
+the user's identity from your `auth=`, and what they picked on the page
+(`lovia.provideContext`) — for chat turns, resumed runs, schedules and
+subagent tasks alike. It
 works under a path prefix — behind a proxy (`--root-path`) or mounted in your
 own app. A tool can return `ui_result(kind, props)` to render as UI, drawn by
 a renderer you load with `ChatUI(scripts=[...])` (`lovia.getRenderer` lets one

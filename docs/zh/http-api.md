@@ -165,6 +165,11 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
+`POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
+`POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
+`create_app(run_context=...)` 以 `trigger.client` 收到的客户端上下文（见[运行上下文](web-server.md#运行上下文)）。
+加入一个进行中运行的消息不会改变那次运行的上下文。
+
 ### 生命周期事件
 
 `GET /api/events` 使用 GET + `EventSource`，推送以下事件：

@@ -1,0 +1,27 @@
+{% extends "lovia/index.html" %}
+{#
+  The controls extension.js reads: a knowledge-base picker by the message box
+  (UI state, sent as client context) and a demo user picker in the sidebar
+  (identity, carried by a cookie that the auth= dependency reads). Rendered as
+  a template by examples/34_web_run_context.py, never served as a file.
+#}
+
+{% block composer_actions %}
+<span class="acme-kb">
+  <select id="acme-kb" aria-label="Knowledge base" data-i18n-aria="acme.kb">
+    <option value="docs">Docs</option>
+    <option value="billing">Billing</option>
+  </select>
+</span>
+{% endblock %}
+
+{% block sidebar_footer %}
+<label class="acme-user">
+  <span data-i18n="acme.user">Signed in as</span>
+  <select id="acme-user">
+    <option value="guest">guest</option>
+    <option value="ada">ada</option>
+    <option value="bo">bo</option>
+  </select>
+</label>
+{% endblock %}

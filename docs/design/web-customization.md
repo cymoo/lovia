@@ -405,7 +405,7 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
   | `session_id` | 会话 id |
   | `agent` | 本次运行的 agent |
   | `client` | client context |
-  | `source` | 运行来源，直接沿用 supervisor 已有的取值：`chat` / `schedule:<id>` / `subagent:<sid>` / `subagent-report:<id>` |
+  | `source` | 运行来源，直接沿用 supervisor 已有的取值：`user`（一条消息，或重连时恢复的运行）/ `schedule:<id>` / `subagent:<sid>` / `subagent-report:<id>` |
   | `resumed` | 是否是从 checkpoint 恢复 |
 
 - 不传 `run_context` 时，行为和现在一样（没有 context），不擅自加默认值。
@@ -422,11 +422,20 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 - **不放进 `chat_runs`**（上一版的推荐，已撤回）：一条 `chat_runs` 记录可以跨多段自动续跑，它的 id 取自第一段的 run id（[supervisor.py:502](../../lovia/web/supervisor.py#L502)），而恢复的可能是后面某一段，还得另做映射。另外它会被长期保存，没有这个必要。
 - **不放进 checkpoint**：checkpoint 属于 core，放进去会把 web 的概念泄漏到 core。
 
-**定时任务：** `chat_schedules` 已经保存了 `input`，再并列存一列 `context_json`。"定时任务就是一个延后执行的聊天请求"这个模型依然成立。
+**定时任务：** `chat_schedules` 已经保存了 `input`，再并列存一列 `context_json`。"定时任务就是一个延后执行的聊天请求"这个模型依然成立。定时任务对话框创建时带上页面当下的上下文；agent 用 `schedule_run` 创建时，带上它所在运行的上下文——由 supervisor 在运行开始时设置的 ContextVar `RUN_CLIENT` 传给工具，和 `UI_DATA_SINK` 是同一种做法。
 
-**后台子 agent（待设计）：** web 模式下，子 agent 任务和"把结果汇报回父对话"这两种运行，都是独立的受管运行（[web/subagents.py:100](../../lovia/web/subagents.py#L100)、[:170](../../lovia/web/subagents.py#L170)），也需要 client context。
-- 推荐：继承发起它的那次运行的 client context，与子任务一起保存。
-- 不能临时去父对话里取：汇报送达时父运行可能早已结束，`active_context_json` 已被清除。
+**后台子 agent（实施时的做法）：** web 模式下，子 agent 任务和"把结果汇报回父对话"这两种运行，都是独立的受管运行（[web/subagents.py:100](../../lovia/web/subagents.py#L100)、[:170](../../lovia/web/subagents.py#L170)），也需要 client context。
+- supervisor 在内存里记下每个对话最近一次运行的 client context（`last_client`，删除对话时清掉）。
+- 子任务取发起它的对话的那一份；汇报运行取它所在的父对话的那一份。汇报送达时父运行可能早已结束、`active_context_json` 已被清除，但内存里这一份还在。
+- 进程重启后内存里的值会丢，但那时子任务本身也已中断；重启后被恢复的运行，走上面 `active_context_json` 的路径。
+- 原先"与子任务一起保存"的设想没有采用：内存里这一份已经覆盖实际场景，不需要新增一张表。
+
+**钩子在哪里调用（实施时的教训）：** `run_context` 在每个入口最开头调用，早于读写任何运行状态；之后照常走原有的准入流程（`RunSupervisor.start()` / `start_resume()` 接收已构建好的 context）。
+- 最初把钩子放在 supervisor 的准入流程里（检查对话是否空闲、登记运行之间）。原先这段只有两个很短的内部 `await`，插入一个可能很慢、还可能拒绝的部署者钩子后，停止、删除、重连、另一个标签页、定时任务、子 agent 都可能在这段时间里插进来。
+- Copilot 评审了 8 轮，22 个问题里有 13 个是前几轮修复自己引入的：补丁越加越多（占位、认领、回滚、晚到快照……），并发代码比功能本身还多。
+- 改为先调用钩子后：被拒绝时什么都还没写，不需要回滚；准入流程与原来一致，不新增竞态窗口。代价是钩子运行期间的停止还够不到运行（运行尚未登记），所以前端在收到 `session` 帧后补发一次停止；钩子运行期间删除对话，对话会随这条消息重建（与原有的窗口同类）。
+- 重连需要先读快照才知道是哪个 agent，所以钩子返回后要再读一次指针和 checkpoint 做校验。
+- 阻塞式 `/api/chat` 本就不独占对话（不可停止、收不到汇报），这是原有问题，不在本 PR 处理，另开 issue 跟踪。
 
 **信任边界：** client context 可以被客户端伪造。文档要写明：身份只能取自 `request.state`（由 `auth` 依赖写入），绝不能取自 client context。
 
@@ -477,7 +486,7 @@ interface MessageRef { sessionId: string; ref: string | null; role: 'user' | 'as
 | 2 扩展加载 | `ChatUI(assets=)` 替代 `templates=`；`styles=`、`logo`、`favicon`（相对路径都在 `assets` 里解析，所以和它一起做）；扩展先于启动加载，最多等 5 秒，失败不影响页面；`lovia.version` / `ready` | `templates=` → `assets=` | 小到中 |
 | 3 重构 | 工具卡片拆到 `tools.js`；建立工具状态模型（`data-status`）；两条渲染路径在工具层合一 | 无（纯重构） | 中 |
 | 4 `window.lovia` v1 | `on` / `state` / 页面动作 / `api` / `t`；`registerToolView`（`summary` / `render` / `snapshot`，`'*'` 兜底）；`lovia.d.ts`（由 tsc 对照实现检查）；`examples/33_web_extensions.py`（品牌示例已在 PR 2 的 `32_web_branding.py`） | 只新增 JS 接口 | 中 |
-| 5 数据通路 | 先写设计文档并讨论透 §5.7，再实现 `context` / `provideContext` / `run_context` | 新增 | 中 |
+| 5 数据通路 | 按 §5.7 实现 `ChatRequest.context` / `lovia.provideContext` / `create_app(run_context=)`；`RunTrigger`；在途运行与定时任务的上下文持久化；子 agent 继承；`examples/34_web_run_context.py` | 新增 | 中 |
 | 6 消息标识与消息操作 | 服务端生成的 `ref`；`registerMessageAction`（内置复制先用）；rewind 改用 `ref` | `RewindRequest` 字段变化 | 中 |
 | 7 可选 | 工具进度事件（core）；定时任务开关（§5.9）；把 `lovia web init-ui` 做成脚手架。在 [#244](https://github.com/cymoo/lovia/issues/244) 跟踪 | 视方案 | — |
 

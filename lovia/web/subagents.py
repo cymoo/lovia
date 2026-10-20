@@ -44,6 +44,7 @@ from ..plugins.subagents import (
     Subagents,
 )
 from .errors import WebError
+from .run_context import RunTrigger, build_run_context
 from .sse import SessionCreatedData
 
 if TYPE_CHECKING:
@@ -96,6 +97,24 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     row.agent,
                 )
                 return
+            # The chat's own context: this run continues it.
+            client = deps.supervisor.last_client.get(sid)
+            source = f"subagent-report:{report.id}"
+            try:
+                context = await build_run_context(
+                    deps.run_context,
+                    RunTrigger(
+                        session_id=sid, agent=agent, source=source, client=client or {}
+                    ),
+                )
+            except Exception as exc:
+                log.warning(
+                    "subagent %s: run_context refused the report run (%s); "
+                    "report dropped",
+                    report.id,
+                    exc,
+                )
+                return
             try:
                 await deps.supervisor.start(
                     session_id=sid,
@@ -104,7 +123,9 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                     is_new=False,
                     title_message=None,
                     autostart=True,  # clientless: consume the report unattended
-                    source=f"subagent-report:{report.id}",
+                    source=source,
+                    client=client,
+                    context=context,
                 )
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
@@ -160,6 +181,23 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
             row = await deps.store.get(spec.parent_session_id)
             if row is not None:
                 agent_key = row.agent
+        # A task works for the chat that spawned it, so in its context. The
+        # run_context hook decides before the task chat exists: a refusal
+        # fails the spawn and leaves nothing behind.
+        client = (
+            deps.supervisor.last_client.get(spec.parent_session_id)
+            if spec.parent_session_id
+            else None
+        )
+        context = await build_run_context(
+            deps.run_context,
+            RunTrigger(
+                session_id=child_sid,
+                agent=spec.agent,
+                source=f"subagent:{child_sid}",
+                client=client or {},
+            ),
+        )
         await deps.store.upsert(
             child_sid,
             agent=agent_key,
@@ -178,6 +216,8 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 # The parent's send_to_subagent pushes into this same channel,
                 # joining whatever the task chat's own /inject sends.
                 mailbox=spec.mailbox,
+                client=client,
+                context=context,
             )
         except WebError as exc:
             # No-op for today's 409/429 (both raise before the workspace

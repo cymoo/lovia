@@ -52,6 +52,8 @@ from .sse import (
     frame,
     usage_dict,
 )
+from ..types import JsonObject
+from .run_context import RUN_CLIENT
 from .store import RunRow
 
 if TYPE_CHECKING:
@@ -242,12 +244,19 @@ class RunController:
         title_message: str | None,
         source: str,
         mailbox: Mailbox | None = None,
+        client: JsonObject | None = None,
+        context: Any = None,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
         self.session_id = session_id
         self.agent = agent
         self.source = source
+        # The page's client context and what run_context= built from it: the
+        # run's RunContext.deps, shared by every auto-chained leg. The client
+        # is persisted beside each leg's checkpoint pointer for a resume.
+        self.client = client
+        self.context = context
         self.cancel = CancelToken()
         # Caller-supplied for runs steered from outside the HTTP surface
         # (a parent's send_to_subagent pushes into the same channel the
@@ -491,6 +500,7 @@ class RunController:
         deps, sid = self.deps, self.session_id
         session, store = deps.session, deps.store
         UI_DATA_SINK.set((store, sid))
+        RUN_CLIENT.set(self.client or None)
         next_input: str | list[Message] = self._first_input
         ckpt = self._first_ckpt
         seed = self._seed_entries
@@ -553,6 +563,7 @@ class RunController:
                 handle = Runner.stream(
                     self.agent,
                     next_input,
+                    context=self.context,
                     session=session,
                     session_id=sid,
                     context_policy=deps.context_policy,
@@ -617,7 +628,9 @@ class RunController:
                     self.mailbox.push(content)
                 next_input = []
                 seed = []
-                ckpt = await self.supervisor._checkpoint_for(sid, uuid.uuid4().hex)
+                ckpt = await self.supervisor._checkpoint_for(
+                    sid, uuid.uuid4().hex, self.client
+                )
             if succeeded and store.checkpointer is not None:
                 await store.clear_active_run_id(sid, expected=self.run_id)
         except Exception as exc:
@@ -745,6 +758,10 @@ class RunSupervisor:
         # session whose replacement run is stopped just as fast has two runs
         # winding down at once, and both can still write.
         self._draining: dict[str, set[RunController]] = {}
+        # The client context of each session's latest run, for the runs that
+        # session starts on nobody's request: its subagent tasks, and the
+        # report runs that deliver their results back into it.
+        self.last_client: dict[str, JsonObject] = {}
 
     @property
     def max_background_runs(self) -> int:
@@ -756,11 +773,13 @@ class RunSupervisor:
     def __iter__(self) -> Any:
         return iter(list(self._controllers.items()))
 
-    async def _checkpoint_for(self, sid: str, run_id: str) -> CheckpointOptions | None:
+    async def _checkpoint_for(
+        self, sid: str, run_id: str, client: JsonObject | None
+    ) -> CheckpointOptions | None:
         store = self.deps.store
         if store.checkpointer is None:
             return None
-        await store.set_active_run_id(sid, run_id)
+        await store.set_active_run_id(sid, run_id, context=client)
         return CheckpointOptions(
             checkpointer=store.checkpointer,
             run_id=run_id,
@@ -778,17 +797,26 @@ class RunSupervisor:
         autostart: bool = False,
         source: str = "user",
         mailbox: Mailbox | None = None,
+        client: JsonObject | None = None,
+        context: Any = None,
     ) -> RunController:
-        if session_id in self._controllers:
-            raise WebError(
-                409, "run_active", "a run is already active for this session"
-            )
-        if len(self._controllers) >= self.max_background_runs:
-            raise WebError(429, "too_many_runs", "too many concurrent runs")
+        """Register a run for ``session_id``; the caller begins it
+        (``subscribe_live``), or ``autostart`` does.
+
+        ``context`` is the run's ``RunContext.deps``, built by the caller from
+        ``client`` (the page's context) with :func:`build_run_context` before
+        it writes anything — so a refusal leaves no trace, and no deployer
+        code runs between the checks here and the registration.
+        """
+        self._check_slot(session_id)
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
         agent = await self.deps.workspaces.bind(session_id, agent)
+        # That await may have let a concurrent start for this chat in. (Its
+        # workspace is this chat's too: nothing to undo.)
+        self._check_slot(session_id, cap=False)
+        client = dict(client or {})
         # ``input`` seeds the transcript for immediate display and is what the
         # runner consumes. A plain string is the text-only path; a list[Message]
         # (one ``user([...parts])``) carries composer attachments as content
@@ -811,14 +839,17 @@ class RunSupervisor:
             title_message=title_message,
             source=source,
             mailbox=mailbox,
+            client=client,
+            context=context,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the
         # caller's live-check and the second would silently orphan the first's
         # running task. The loser now gets the 409 above and attaches instead.
         self._controllers[session_id] = ctrl
+        self.last_client[session_id] = client
         try:
-            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex)
+            ckpt = await self._checkpoint_for(session_id, uuid.uuid4().hex, client)
         except BaseException:
             self._controllers.pop(session_id, None)
             # A concurrent request may have attached during that await; close
@@ -836,16 +867,22 @@ class RunSupervisor:
         return ctrl
 
     async def start_resume(
-        self, *, session_id: str, agent: Agent[Any], snapshot: RunSnapshot
+        self,
+        *,
+        session_id: str,
+        agent: Agent[Any],
+        snapshot: RunSnapshot,
+        client: JsonObject | None = None,
+        context: Any = None,
     ) -> RunController:
-        if session_id in self._controllers:
-            raise WebError(
-                409, "run_active", "a run is already active for this session"
-            )
+        """Register a resume of ``snapshot``; ``context`` as for :meth:`start`."""
+        self._check_slot(session_id, cap=False)
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
         # its shell/file tools must land on the chat's one live session.
         agent = await self.deps.workspaces.bind(session_id, agent)
+        self._check_slot(session_id, cap=False)  # as in start()
+        client = dict(client or {})
         ckpt = CheckpointOptions(
             checkpointer=self.deps.store.checkpointer,
             resume_from=snapshot,
@@ -865,9 +902,21 @@ class RunSupervisor:
             # The resumer's identity; if the run already has a record (it
             # normally does — same run_id), start_run keeps the original source.
             source="user",
+            client=client,
+            context=context,
         )
         self._controllers[session_id] = ctrl
+        self.last_client[session_id] = client
         return ctrl
+
+    def _check_slot(self, session_id: str, *, cap: bool = True) -> None:
+        """Refuse a second run for one session, and (``cap``) one over the limit."""
+        if session_id in self._controllers:
+            raise WebError(
+                409, "run_active", "a run is already active for this session"
+            )
+        if cap and len(self._controllers) >= self.max_background_runs:
+            raise WebError(429, "too_many_runs", "too many concurrent runs")
 
     def cancel(self, session_id: str, *, discard: bool = False) -> bool:
         """Cancel the live run, if any. ``discard`` additionally drops the

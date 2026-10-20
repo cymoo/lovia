@@ -45,8 +45,14 @@ _META_COLS = "id, title, agent, created_at, updated_at, pinned, parent_id"
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
     "next_fire, active, last_session_id, created_at, updated_at, "
-    "until, max_fires, expires_at, fire_count, finished_reason"
+    "until, max_fires, expires_at, fire_count, finished_reason, context_json"
 )
+
+
+def _dumps_context(context: JsonObject | None) -> str | None:
+    """A client context as stored; an empty one stores as NULL."""
+    return json.dumps(context, ensure_ascii=False) if context else None
+
 
 # Column order shared by every ``RunRow`` SELECT (and ``from_row``).
 _RUN_COLS = (
@@ -63,7 +69,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     updated_at REAL NOT NULL,
     active_run_id TEXT,
     pinned INTEGER NOT NULL DEFAULT 0,
-    parent_id TEXT
+    parent_id TEXT,
+    active_context_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
     ON chat_sessions(updated_at DESC);
@@ -83,7 +90,8 @@ CREATE TABLE IF NOT EXISTS chat_schedules (
     max_fires INTEGER,
     expires_at REAL,
     fire_count INTEGER NOT NULL DEFAULT 0,
-    finished_reason TEXT
+    finished_reason TEXT,
+    context_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_chat_schedules_due
     ON chat_schedules(active, next_fire);
@@ -127,6 +135,10 @@ _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("chat_schedules", "expires_at REAL"),
     ("chat_schedules", "fire_count INTEGER NOT NULL DEFAULT 0"),
     ("chat_schedules", "finished_reason TEXT"),
+    # The page's client context for run_context= (0.9.95): the in-flight run's
+    # (beside its pointer, cleared with it) and a schedule's (for its fires).
+    ("chat_sessions", "active_context_json TEXT"),
+    ("chat_schedules", "context_json TEXT"),
 )
 
 # Indexes over an added column. They can't live in ``_META_SCHEMA``: that
@@ -194,6 +206,9 @@ class ScheduleRow:
     # Why the scheduler/agent deactivated it; NULL on a plain user pause, so
     # ``active=0 AND finished_reason IS NOT NULL`` reads as "done".
     finished_reason: str | None = None
+    # The client context its fires run with (create_app(run_context=...)): the
+    # page's, when the schedule was made — a schedule is a deferred message.
+    context: JsonObject | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> "ScheduleRow":
@@ -214,6 +229,7 @@ class ScheduleRow:
             expires_at=row[13],
             fire_count=row[14],
             finished_reason=row[15],
+            context=json.loads(row[16]) if row[16] else None,
         )
 
     def to_dict(self) -> JsonObject:
@@ -234,6 +250,7 @@ class ScheduleRow:
             "expires_at": self.expires_at,
             "fire_count": self.fire_count,
             "finished_reason": self.finished_reason,
+            "context": self.context,
         }
 
 
@@ -603,12 +620,28 @@ class ChatStore:
             lambda row: row[0],
         )
 
-    async def set_active_run_id(self, session_id: str, run_id: str) -> None:
-        """Record that ``run_id`` is the active (potentially interrupted) run."""
+    async def set_active_run_id(
+        self, session_id: str, run_id: str, *, context: JsonObject | None = None
+    ) -> None:
+        """Record that ``run_id`` is the active (potentially interrupted) run.
+
+        ``context`` is the run's client context: a resume after a restart
+        hands it to ``run_context=`` again, since a checkpoint keeps none.
+        """
         await self._write(
-            "UPDATE chat_sessions SET active_run_id = ? WHERE id = ?",
-            (run_id, session_id),
+            "UPDATE chat_sessions SET active_run_id = ?, active_context_json = ? "
+            "WHERE id = ?",
+            (run_id, _dumps_context(context), session_id),
         )
+
+    async def get_active_context(self, session_id: str) -> JsonObject | None:
+        """The client context recorded with the active run, if any."""
+        raw = await self._read_one(
+            "SELECT active_context_json FROM chat_sessions WHERE id = ?",
+            (session_id,),
+            lambda row: row[0],
+        )
+        return json.loads(raw) if raw else None
 
     async def clear_active_run_id(
         self, session_id: str, *, expected: str | None = None
@@ -617,16 +650,18 @@ class ChatStore:
 
         With ``expected`` set, only clears when the stored pointer still names
         that run — so a finished run doesn't wipe a pointer a newer run claimed.
+        The run's client context goes with it.
         """
         if expected is None:
             await self._write(
-                "UPDATE chat_sessions SET active_run_id = NULL WHERE id = ?",
+                "UPDATE chat_sessions SET active_run_id = NULL, "
+                "active_context_json = NULL WHERE id = ?",
                 (session_id,),
             )
         else:
             await self._write(
-                "UPDATE chat_sessions SET active_run_id = NULL "
-                "WHERE id = ? AND active_run_id = ?",
+                "UPDATE chat_sessions SET active_run_id = NULL, "
+                "active_context_json = NULL WHERE id = ? AND active_run_id = ?",
                 (session_id, expected),
             )
 
@@ -635,7 +670,7 @@ class ChatStore:
     async def add_schedule(self, row: ScheduleRow) -> None:
         await self._write(
             f"INSERT INTO chat_schedules ({_SCHED_COLS}) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row.id,
                 row.agent,
@@ -653,6 +688,7 @@ class ChatStore:
                 row.expires_at,
                 row.fire_count,
                 row.finished_reason,
+                _dumps_context(row.context),
             ),
         )
 

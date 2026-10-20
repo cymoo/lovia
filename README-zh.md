@@ -477,7 +477,9 @@ FastAPI 应用中，在同一套端点上做自定义前端。HTTP 响应和流�
 变量和 `data-part` 属性调整，你的 CSS 无需 `!important` 就能覆盖内置样式。你的脚本在页面
 启动前加载，通过 `window.lovia`（类型见 `lovia.d.ts`）驱动页面：运行和会话事件、`send`、
 `setDraft` 等页面动作，以及工具视图——把工具卡片的 `name(args)` 换成一句人话，或画上你自己的
-主体。页面也支持部署在路径前缀下，无论是在代理后面（`--root-path`）还是挂载到
+主体。`create_app(run_context=...)` 把请求相关的信息交给工具：来自 `auth=` 的用户身份，以及用户
+在页面上的选择（`lovia.provideContext`）——聊天、恢复的运行、定时任务、子 agent 任务都适用。
+页面也支持部署在路径前缀下，无论是在代理后面（`--root-path`）还是挂载到
 你自己的应用中。工具还可以返回 `ui_result(kind, props)`，
 把结果渲染成 UI，渲染器通过 `ChatUI(scripts=[...])` 加载（`lovia.getRenderer` 可以让一个
 渲染器包装另一个）；`put_ui_data` 可以把大块结果挡在模型上下文之外，模型只看预览，页面照常画出全部数据。内置了三种：表格，支持排序、筛选、翻页、复制和下载 CSV（`show_table`，

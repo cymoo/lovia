@@ -37,6 +37,7 @@ try:
     from .followups import FollowupFn, FollowupRequest, generate_followups
     from .html import show_html
     from .questions import QuestionRegistry
+    from .run_context import RunContextFn, RunTrigger
     from .scheduling import Scheduling
     from .store import ChatMeta, ChatStore
     from .subagents import subagent_deliver, wire_subagents
@@ -55,6 +56,8 @@ __all__ = [
     "FollowupRequest",
     "QuestionRegistry",
     "RouterDeps",
+    "RunContextFn",
+    "RunTrigger",
     "SURFACE_NOTE",
     "Scheduling",
     "build_api_router",

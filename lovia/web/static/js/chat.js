@@ -31,6 +31,7 @@ import {
   toolPath,
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
+import { collectContext } from './lovia.js';
 import {
   configureComponents,
   rerenderComponents,
@@ -2027,6 +2028,13 @@ async function handleEvent({ event, data }) {
       // Surface it in the sidebar right away — with its provisional title —
       // instead of waiting for the run to finish.
       if (!known) loadSessions();
+      // The run is registered now: a stop clicked while it was being admitted
+      // can reach it.
+      _admitting = false;
+      if (_stopOnceAdmitted) {
+        _stopOnceAdmitted = false;
+        cancelStream();
+      }
       break;
     }
 
@@ -2422,6 +2430,10 @@ const stopBtn = document.getElementById('stop');
 const composer = /** @type {HTMLFormElement | null} */ (document.getElementById('composer'));
 const promptEl = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('prompt'));
 let _streamAbortController = null;
+// From a send until its stream's `session` frame, the server is admitting the
+// run, and a stop waits for it (see cancelStream).
+let _admitting = false;
+let _stopOnceAdmitted = false;
 
 // ---- Dropped-stream recovery ---------------------------------------------
 // A clean SSE EOF without a `done` (and no error event) means the connection
@@ -2609,6 +2621,8 @@ export async function runStream(message, attachments = null) {
 
   _resumeAutoScroll();
   _streamAbortController = new AbortController();
+  _admitting = true; // until the stream's `session` frame
+  _stopOnceAdmitted = false;
 
   try {
     const res = await api.streamChat(
@@ -2617,6 +2631,7 @@ export async function runStream(message, attachments = null) {
         agent: store.agent,
         session_id: store.sessionId,
         attachments: attachments?.length ? attachments : undefined,
+        context: collectContext(),
       },
       { signal: _streamAbortController.signal }
     );
@@ -2670,6 +2685,8 @@ export async function runStream(message, attachments = null) {
     // If a switch superseded this stream, its DOM/UI now belong to another view;
     // do only the connection-local cleanup above and skip the rest.
     if (store.chatEpoch === streamEpoch) {
+      _admitting = false; // e.g. refused: no session frame came
+      _stopOnceAdmitted = false;
       if (store.body && store.rawText) {
         store.body.dataset.raw = store.rawText; // store raw markdown for copy
         flushRender(true);
@@ -2835,9 +2852,12 @@ export function detachStream() {
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
   //  - the turn-progress pill (un-hidden by turn_started);
   //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
-  //  - any in-flight follow-up request, whose chips would land in the new view.
+  //  - any in-flight follow-up request, whose chips would land in the new view;
+  //  - a stop waiting for the run's admission: leaving isn't stopping.
   _queuedTurns = [];
   _pendingResend = [];
+  _admitting = false;
+  _stopOnceAdmitted = false;
   if (turnProgressEl) turnProgressEl.classList.add('hidden');
   clearTodoPanel();
   clearFollowups();
@@ -2850,6 +2870,13 @@ export function detachStream() {
  * @returns {Promise<void>}
  */
 export async function cancelStream() {
+  if (_admitting) {
+    // The server is still admitting the run (its run_context hook may take a
+    // moment): there's nothing to stop yet. Stop it once the stream names its
+    // session — aborting now would only detach from the run about to start.
+    _stopOnceAdmitted = true;
+    return;
+  }
   if (_streamAbortController) _streamAbortController.abort();
   if (store.sessionId) {
     try {

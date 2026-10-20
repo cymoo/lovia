@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .errors import WebError
+from .run_context import RunTrigger, build_run_context
 from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
@@ -212,27 +213,7 @@ class Scheduler:
                 if sched.agent
                 else "no agent specified and no default is available"
             )
-            log.warning("schedule %s: %s; advancing", sched.id, detail)
-            await self._advance(sched, now, last_session_id=sched.last_session_id)
-            # No run ever started, so the supervisor writes no record — file a
-            # zero-length failed one so the schedule's history shows the miss.
-            # Best-effort bookkeeping: never let it break the fire loop.
-            try:
-                await self.store.start_run(
-                    RunRow(
-                        id=uuid.uuid4().hex,
-                        session_id=None,
-                        agent=agent_name,
-                        source=f"schedule:{sched.id}",
-                        status="failed",
-                        error=detail,
-                        started_at=now,
-                        finished_at=now,
-                        usage=None,
-                    )
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                log.warning("schedule %s: run record write failed: %s", sched.id, exc)
+            await self._miss(sched, now, agent_name, detail)
             return None
         agent = self.deps.agents[agent_name]
 
@@ -258,6 +239,23 @@ class Scheduler:
             target = uuid.uuid4().hex
             is_new = True
 
+        # The run_context hook decides first, before anything is written. A
+        # refusal is a miss, like an unserved agent: recorded, and the schedule
+        # moves on — so one that persists can't hold up the schedules after it.
+        try:
+            context = await build_run_context(
+                self.deps.run_context,
+                RunTrigger(
+                    session_id=target,
+                    agent=agent,
+                    source=f"schedule:{sched.id}",
+                    client=sched.context or {},
+                ),
+            )
+        except Exception as exc:
+            await self._miss(sched, now, agent_name, f"run refused: {exc}")
+            return None
+
         try:
             title = provisional_title(sched.input) if is_new else None
             await self.store.upsert(
@@ -275,8 +273,17 @@ class Scheduler:
                 # The supervisor records the run under this source, which is
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
+                client=sched.context,
+                context=context,
             )
         except WebError as exc:
+            live = self.deps.supervisor.get(target)
+            if exc.code == "run_active" and live is not None:
+                # A run took the chat while the hook ran: deliver into it, as
+                # for a chat already busy above.
+                live.inject(fire_input(sched))
+                await self._advance(sched, now, last_session_id=target)
+                return target
             if exc.code == "too_many_runs":
                 # At the concurrency cap: defer (leave next_fire due → retried).
                 # Drop the freshly-created session row so repeated 429s on a
@@ -297,6 +304,32 @@ class Scheduler:
             )
         await self._advance(sched, now, last_session_id=target)
         return target
+
+    async def _miss(
+        self, sched: ScheduleRow, now: float, agent_name: str | None, detail: str
+    ) -> None:
+        """A fire that started no run: advance past it and record why."""
+        log.warning("schedule %s: %s; advancing", sched.id, detail)
+        await self._advance(sched, now, last_session_id=sched.last_session_id)
+        # No run ever started, so the supervisor writes no record — file a
+        # zero-length failed one so the schedule's history shows the miss.
+        # Best-effort bookkeeping: never let it break the fire loop.
+        try:
+            await self.store.start_run(
+                RunRow(
+                    id=uuid.uuid4().hex,
+                    session_id=None,
+                    agent=agent_name,
+                    source=f"schedule:{sched.id}",
+                    status="failed",
+                    error=detail,
+                    started_at=now,
+                    finished_at=now,
+                    usage=None,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("schedule %s: run record write failed: %s", sched.id, exc)
 
     async def _advance(
         self, sched: ScheduleRow, now: float, *, last_session_id: str | None

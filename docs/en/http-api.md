@@ -171,6 +171,13 @@ normalizes all three.
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
 | `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
 
+`POST /api/chat` and `/api/chat/stream` take
+`{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`
+takes a `context` too. `context` is a JSON object of at most 64 KB — the client
+context `create_app(run_context=...)` receives as `trigger.client` (see
+[Run context](web-server.md#run-context)). A message that joins a live run
+doesn't change that run's context.
+
 ### Lifecycle events
 
 `GET /api/events` uses GET + `EventSource` to publish:

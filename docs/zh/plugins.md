@@ -180,12 +180,17 @@ class LoopGuard:
                     "instead of retrying the same call."
                 )
 
-        def remind(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+        @hooks.on(events.MessageCompleted)
+        def delivered(ev: events.MessageCompleted, ctx: RunContext[Any]) -> None:
             nonlocal pending
+            pending = None  # the model has answered a view that carried it
+
+        def remind(ctx: RunContext[Any]) -> list[TranscriptEntry] | None:
+            # Not cleared here: an overflow retry rebuilds the view and calls
+            # the injector again, and must still see the reminder.
             if pending is None:
                 return None
-            text, pending = pending, None
-            content = f"<system-reminder>\n{text}\n</system-reminder>"
+            content = f"<system-reminder>\n{pending}\n</system-reminder>"
             return [InputEntry(role="user", content=content)]
 
         return PluginInstance(hooks=hooks, view_injectors=[remind])

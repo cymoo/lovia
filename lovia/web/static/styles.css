@@ -1554,6 +1554,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
    of the prose: one surface, one hairline, one radius, one summary rhythm. */
 
 /* chevron shared by <details> summaries */
+.activity > summary::after,
 .reasoning summary::after,
 .tool summary::after {
   content: "";
@@ -1567,9 +1568,96 @@ body.sidebar-collapsed .sidebar-expand-btn {
   opacity: 0.55;
   margin-left: 4px;
 }
+.activity[open] > summary::after,
 .reasoning[open] > summary::after,
 .tool[open] > summary::after {
   transform: rotate(45deg) translate(-2px, -2px);
+}
+
+/* ---- Activity group (activity.js) ---------------------------------------------
+   A run of steps folded under one summary: the same card, with the steps as
+   hairline-separated rows inside it instead of cards of their own. */
+.activity {
+  margin: 8px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  overflow: hidden;
+  transition: border-color var(--t-fast);
+}
+[data-theme="dark"] .activity {
+  background: var(--surface-2);
+}
+.activity:hover {
+  border-color: var(--border-strong);
+}
+.activity > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+  min-height: 36px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--muted);
+  transition: background var(--t-fast);
+}
+.activity > summary::-webkit-details-marker {
+  display: none;
+}
+.activity > summary:hover {
+  background: var(--surface-2);
+}
+[data-theme="dark"] .activity > summary:hover {
+  background: var(--surface-3);
+}
+.activity-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted-2);
+}
+.activity:has(.tool.error) .activity-icon {
+  color: var(--danger);
+}
+.activity-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+/* Still working: the reply is streaming and a step hasn't settled. */
+.turn.streaming .activity:has([data-status="running"], [data-status="awaiting"], .reasoning:not(.done)) .activity-label::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+.activity-steps {
+  border-top: 1px solid var(--border);
+}
+/* Specific enough to beat the card rules below, the themed ones included. */
+.activity > .activity-steps > :is(.reasoning, .tool, .approval-auto) {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.activity > .activity-steps > :is(.reasoning, .tool, .approval-auto) + * {
+  border-top: 1px solid var(--border);
+}
+.activity > .activity-steps > .approval-auto {
+  padding: 6px 14px;
 }
 
 /* ---- Reasoning -------------------------------------------------------------- */

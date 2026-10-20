@@ -71,22 +71,6 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             return deps.agents[meta.agent]
         return deps.pick(requested)
 
-    async def drop_stranded_checkpoint(sid: str) -> None:
-        """Delete the chat's interrupted run before a fresh one takes the chat,
-        so a later reconnect won't pick up a stale snapshot."""
-        if store.checkpointer is not None:
-            old_run_id = await store.get_active_run_id(sid)
-            if old_run_id:
-                await store.checkpointer.delete(old_run_id)
-
-    def run_active() -> WebError:
-        return WebError(
-            409,
-            "run_active",
-            "a run is active for this session",
-            hint="use /api/chat/stream to attach or inject",
-        )
-
     @router.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         # Blocking turn: a supervised run, as for a stream, that this request
@@ -101,7 +85,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         if deps.supervisor.get(sid) is not None:
             # Unlike a stream, this turn can't join the live run: it would
             # have no answer of its own to return.
-            raise run_active()
+            raise WebError(
+                409,
+                "run_active",
+                "a run is active for this session",
+                hint="use /api/chat/stream to attach or inject",
+            )
         user_input = build_user_input(req, agent)
         if isinstance(user_input, str) and not user_input.strip():
             # Attachments were given but all invalid (missing / outside the
@@ -115,10 +104,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         )
         context = await build_run_context(deps.run_context, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
-        # A run that started meanwhile owns the pointer the cleanup reads.
-        if deps.supervisor.get(sid) is not None:
-            raise run_active()
-        await drop_stranded_checkpoint(sid)
+        # The chat's interrupted run, superseded by this one: read before the
+        # start, deleted only after it, so a refused start (409/429) leaves it
+        # resumable.
+        checkpointer = store.checkpointer
+        stranded = (
+            await store.get_active_run_id(sid) if checkpointer is not None else None
+        )
         ctrl = await deps.supervisor.start(
             session_id=sid,
             agent=agent,
@@ -132,10 +124,14 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             await_approvals=False,
         )
         assert ctrl.task is not None  # autostart began it
+        if checkpointer is not None and stranded:
+            await checkpointer.delete(stranded)
         # asyncio.wait never cancels what it waits on: a request cancelled
         # by its client going away leaves the run to finish into the chat.
         await asyncio.wait([ctrl.task])
-        if ctrl.final_status == "completed":
+        # An exception after a completed leg (an auto-chain hop that failed)
+        # is a failure — the stream's error event says so too.
+        if ctrl.final_status == "completed" and ctrl.final_exception is None:
             return ChatResponse(
                 output=_coerce(ctrl.final_output),
                 session_id=sid,
@@ -196,8 +192,13 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             if (live := deps.supervisor.get(sid)) is not None:
                 return attach(live)
 
-        # No live run → start a fresh supervised run.
-        await drop_stranded_checkpoint(sid)
+        # No live run → start a fresh supervised run. Delete any stranded
+        # checkpoint first so a later reconnect won't pick up a stale snapshot.
+        if store.checkpointer is not None:
+            old_run_id = await store.get_active_run_id(sid)
+            if old_run_id:
+                await store.checkpointer.delete(old_run_id)
+
         try:
             ctrl = await deps.supervisor.start(
                 session_id=sid,

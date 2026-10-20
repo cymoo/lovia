@@ -15,11 +15,14 @@ import pytest
 pytest.importorskip("fastapi")
 
 from lovia import Agent, Subagents, tool  # noqa: E402
+from lovia.checkpointer import RunHead  # noqa: E402
+from lovia.messages import Usage  # noqa: E402
 from lovia.tools.human import HumanChannel, ask_human  # noqa: E402
 from lovia.transcript import InputEntry  # noqa: E402
 from lovia.web.store import ChatStore  # noqa: E402
 
 from ..scripted_provider import ScriptedProvider, call, text  # noqa: E402
+from .test_subagents import GatedProvider  # noqa: E402
 from .test_supervisor import (  # noqa: E402
     _blocking_tool,
     _client,
@@ -213,6 +216,62 @@ async def test_blocking_turn_failure_answers_run_failed() -> None:
     detail = res.json()["detail"]
     assert detail["code"] == "run_failed"
     assert "scripted non-retryable failure" in detail["message"]
+
+
+async def test_refused_blocking_turn_keeps_the_interrupted_run() -> None:
+    """The chat's interrupted run is deleted only once a new run has taken the
+    chat: a turn refused at the run cap leaves it resumable."""
+    store = ChatStore.in_memory()
+    await store.upsert("s1", agent="bot")
+    await store.checkpointer.append(
+        "run-1",
+        [InputEntry(role="user", content="q")],
+        RunHead(agent_name="bot", usage=Usage(), turns=1, status="interrupted"),
+    )
+    await store.set_active_run_id("s1", "run-1")
+    release = asyncio.Event()
+    provider = ScriptedProvider(
+        [call("block", {}, call_id="c1"), text("other done"), text("s1 done")]
+    )
+    agent = Agent(name="bot", model=provider, tools=[_blocking_tool(release)])
+    async with _client(_app(agent, store=store, max_background_runs=1)) as ac:
+        other = _post(ac, "go", sid="s2")
+        await _wait_run(ac, "s2")  # the one slot is taken
+        refused = await ac.post("/api/chat", json={"message": "hi", "session_id": "s1"})
+        assert refused.status_code == 429
+        assert await store.checkpointer.load("run-1") is not None
+        assert await store.get_active_run_id("s1") == "run-1"
+
+        release.set()
+        await asyncio.wait_for(other, timeout=5)
+        res = await ac.post("/api/chat", json={"message": "hi", "session_id": "s1"})
+    assert res.status_code == 200, res.text
+    assert await store.checkpointer.load("run-1") is None  # superseded: dropped
+
+
+async def test_failed_auto_chain_hop_is_not_a_success(monkeypatch) -> None:
+    """A leg that completed doesn't make the turn a success when the run then
+    fails to chain the next one (the stream gets an error event for it)."""
+    gate = asyncio.Event()
+    provider = ScriptedProvider([text("first"), text("second")])
+    agent = Agent(name="bot", model=GatedProvider(provider, gate))
+    store = ChatStore.in_memory()
+    async with _client(_app(agent, store=store)) as ac:
+        turn = _post(ac, "go")
+        await _wait_run(ac, "s1")  # parked in the first leg's model call
+        queued = await ac.post(
+            "/api/chat/inject", json={"session_id": "s1", "message": "more"}
+        )
+        assert queued.json()["accepted"]  # left over: the run chains a leg
+
+        async def db_down(*args, **kwargs):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(store, "set_active_run_id", db_down)
+        gate.set()
+        res = await asyncio.wait_for(turn, timeout=5)
+    assert res.status_code == 500
+    assert res.json()["detail"] == {"code": "run_failed", "message": "db down"}
 
 
 async def test_blocking_parent_receives_its_subagent_report() -> None:

@@ -474,6 +474,53 @@ lovia.registerView('dashboard', {
 - `openView(target)` 遇到没有注册的 id 会抛错；链接指向这样的 id、或启动时 URL 里是这样的 id，
   则只显示一条提示。id 只能用 `a-z`、`0-9` 和 `-`，以 `lovia` 开头的留给 lovia 自己。
 
+#### 用组件框架绘制
+
+`render(el, ctx)` 交给你一个元素、收回一个清理函数，所以任何能挂载到元素上的库都可以用来画视图，
+而且依然不需要构建。把库的 ES module 文件放进 `assets` 目录，在 `head` block 里用 import map
+映射它们的模块名，然后在脚本里 import。以 Preact 和 [htm](https://github.com/developit/htm)
+（在普通 JS 里写类似 JSX 的模板）为例：
+
+```html+jinja
+{% block head %}
+<script type="importmap">
+{ "imports": {
+  "preact": "{{ url_for('ui-assets', path='vendor/preact.js').path }}",
+  "preact/hooks": "{{ url_for('ui-assets', path='vendor/preact-hooks.js').path }}",
+  "htm": "{{ url_for('ui-assets', path='vendor/htm.js').path }}",
+  "htm/preact": "{{ url_for('ui-assets', path='vendor/htm-preact.js').path }}"
+} }
+</script>
+{% endblock %}
+```
+
+```js
+import { html, render as mount } from 'htm/preact';
+import { useState } from 'preact/hooks';
+
+function Stats({ stats }) {
+  const [tab, setTab] = useState('day');
+  return html`…`;
+}
+
+lovia.registerView('dashboard', {
+  title: '仪表盘',
+  async render(el) {
+    const res = await lovia.fetch('/acme/stats');
+    mount(html`<${Stats} stats=${await res.json()} />`, el);
+    return () => mount(null, el); // 卸载：组件里的 effect 随之清理
+  },
+});
+```
+
+- `url_for('ui-assets', …)` 让这些 URL 在[路径前缀下](#部署在路径前缀下)也正确。
+- 在 `render` 里加载数据再传下去：加载失败时视图照常显示提示，和不用框架时一样。
+- 框架只管 `el`：页面其他部分通过 `window.lovia` 操作，不要渲染进 lovia 的元素里。
+- Lit、Vue 的 `vue.esm-browser.prod.js` 用法相同。需要编译器的框架（Svelte、JSX）也可以用，
+  只要你自己构建，再把产物列进 `scripts`。
+
+[`examples/33_web_extensions.py`](../../examples/33_web_extensions.py) 的文档视图就是这样画的。
+
 ## UI 组件
 
 工具结果可以渲染成 UI（可排序的表格、指标卡片等），而不只是文本。工具返回

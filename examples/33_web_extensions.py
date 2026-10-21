@@ -22,6 +22,9 @@ script API:
 - **A view.** The sidebar's "Docs index" link (``?view=docs``) opens a page
   in place of the chat (``registerView``), listing the docs from this
   script's own ``/acme/docs`` route; each entry links to ``?view=docs/<slug>``.
+  It is drawn with Preact + htm, still with no build step: the copies in
+  ``web_extensions/vendor/`` are mapped to their bare names by an import map
+  in ``index.html``'s ``head`` block.
 
 ``index.html`` adds the button, the entries and the pill through template
 blocks; ``messages`` supplies their wording (``lovia.t`` reads it too).
@@ -99,6 +102,7 @@ UI = ChatUI(
             "acme.docs": "Docs index",
             "acme.allDocs": "← All pages",
             "acme.askAbout": "Ask about this",
+            "acme.filter": "Filter pages",
         },
         "zh": {
             "acme.newTicket": "新建工单",
@@ -115,6 +119,7 @@ UI = ChatUI(
             "acme.docs": "文档目录",
             "acme.allDocs": "← 全部页面",
             "acme.askAbout": "问问这一页",
+            "acme.filter": "筛选页面",
         },
     },
 )

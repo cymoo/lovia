@@ -528,6 +528,59 @@ lovia.registerView('dashboard', {
   the URL at start, shows a notice instead. Ids use `a-z`, `0-9` and `-`;
   ids starting `lovia` are reserved.
 
+#### With a component framework
+
+`render(el, ctx)` hands you an element and takes back a cleanup, so any
+library that mounts into an element can draw the view — still with no build
+step. Put the library's ES module files in your `assets` directory, map their
+bare names in the `head` block, and import them in your script. With Preact
+and [htm](https://github.com/developit/htm) (JSX-like templates in plain JS):
+
+```html+jinja
+{% block head %}
+<script type="importmap">
+{ "imports": {
+  "preact": "{{ url_for('ui-assets', path='vendor/preact.js').path }}",
+  "preact/hooks": "{{ url_for('ui-assets', path='vendor/preact-hooks.js').path }}",
+  "htm": "{{ url_for('ui-assets', path='vendor/htm.js').path }}",
+  "htm/preact": "{{ url_for('ui-assets', path='vendor/htm-preact.js').path }}"
+} }
+</script>
+{% endblock %}
+```
+
+```js
+import { html, render as mount } from 'htm/preact';
+import { useState } from 'preact/hooks';
+
+function Stats({ stats }) {
+  const [tab, setTab] = useState('day');
+  return html`…`;
+}
+
+lovia.registerView('dashboard', {
+  title: 'Dashboard',
+  async render(el) {
+    const res = await lovia.fetch('/acme/stats');
+    mount(html`<${Stats} stats=${await res.json()} />`, el);
+    return () => mount(null, el); // unmount: the components' effects clean up
+  },
+});
+```
+
+- `url_for('ui-assets', …)` keeps the URLs right under a
+  [path prefix](#serving-under-a-path-prefix).
+- Load the data in `render` and pass it down: a failed load then shows the
+  view's notice, as it would without a framework.
+- The library owns `el` and nothing else: draw the rest of the page through
+  `window.lovia`, not into its elements.
+- Lit and Vue's `vue.esm-browser.prod.js` work the same way. A framework that
+  needs a compiler (Svelte, JSX) works too, if you build it yourself and list
+  the output in `scripts`.
+
+[`examples/33_web_extensions.py`](../../examples/33_web_extensions.py) draws
+its docs view this way.
+
 ## UI components
 
 A tool result can render as UI — a sortable table, a KPI strip — instead of

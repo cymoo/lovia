@@ -266,7 +266,7 @@ _PUBLIC_PARTS = (
     "sidebar", "sidebar-header", "agent-switcher", "sidebar-nav", "new-chat",
     "memory", "schedules", "settings", "sessions-label", "sessions-search",
     "sessions", "topbar", "chat-title", "topbar-actions", "tasks", "export",
-    "files-toggle", "transcript", "welcome", "todo-panel", "composer",
+    "files-toggle", "view", "transcript", "welcome", "todo-panel", "composer",
     "attach", "context-ring", "files-panel", "turn", "tool",
 )  # fmt: skip
 

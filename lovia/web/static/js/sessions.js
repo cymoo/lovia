@@ -2,12 +2,13 @@
 import { t } from './i18n.js';
 import { store } from './store.js';
 import { api, apiError } from './api.js';
-import { promptDialog, confirmDialog, showDialog } from './ui.js';
+import { closeSidebar, promptDialog, confirmDialog, showDialog } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
 import { formatDateTime, formatTimeSmart } from './util.js';
+import { closeView } from './views.js';
 
 const sessionsList = document.getElementById('sessions-list');
 const tasksWrap = document.getElementById('tasks-wrap');
@@ -730,6 +731,9 @@ export async function deleteSession(
 
 /** @param {string} id */
 export async function switchSession(id) {
+  // The user asked for a chat — the current one too: show it.
+  closeView();
+  closeSidebar();
   if (store.sessionId === id) return;
   // Detach from any in-flight stream first — WITHOUT cancelling it. The run
   // keeps going server-side; if the session we're entering has its own live run
@@ -797,6 +801,18 @@ export function clearChat() {
   if (exportWrap) exportWrap.style.display = 'none';
   store.emit('reset-chat-view');
   renderSessions();
+}
+
+/**
+ * The user starts a new chat (button, shortcut, `lovia.newChat`). Unlike
+ * clearChat — also run on an agent switch or deleting the current chat —
+ * this shows the chat, closing any view.
+ */
+export function startNewChat() {
+  closeView();
+  closeSidebar();
+  clearChat();
+  document.getElementById('prompt')?.focus();
 }
 
 // ---- All chats dialog ------------------------------------------------------
@@ -976,10 +992,7 @@ export function initSessions() {
   loadSessions().then(checkMissedRuns);
   initSearch();
 
-  document.getElementById('new-chat')?.addEventListener('click', () => {
-    clearChat();
-    document.getElementById('prompt')?.focus();
-  });
+  document.getElementById('new-chat')?.addEventListener('click', startNewChat);
 
   initExportMenu();
   store.on('clear-chat', clearChat);

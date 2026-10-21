@@ -19,8 +19,11 @@ script API:
 - **Actions.** A "Summarize" button in the composer sends a message
   (``lovia.send``), and a "New ticket" entry in the sidebar fills the composer
   with a template to edit (``lovia.setDraft``).
+- **A view.** The sidebar's "Docs index" link (``?view=docs``) opens a page
+  in place of the chat (``registerView``), listing the docs from this
+  script's own ``/acme/docs`` route; each entry links to ``?view=docs/<slug>``.
 
-``index.html`` adds the button, the entry and the pill through template
+``index.html`` adds the button, the entries and the pill through template
 blocks; ``messages`` supplies their wording (``lovia.t`` reads it too).
 """
 
@@ -93,6 +96,9 @@ UI = ChatUI(
             "acme.tool.open_ticket": "Opening a ticket",
             "acme.tool.open_ticket.done": "Opened a ticket",
             "acme.noHits": "No matching pages.",
+            "acme.docs": "Docs index",
+            "acme.allDocs": "← All pages",
+            "acme.askAbout": "Ask about this",
         },
         "zh": {
             "acme.newTicket": "新建工单",
@@ -106,6 +112,9 @@ UI = ChatUI(
             "acme.tool.open_ticket": "正在提交工单",
             "acme.tool.open_ticket.done": "已提交工单",
             "acme.noHits": "没有找到相关页面。",
+            "acme.docs": "文档目录",
+            "acme.allDocs": "← 全部页面",
+            "acme.askAbout": "问问这一页",
         },
     },
 )
@@ -123,7 +132,17 @@ def main() -> None:
         model=MODEL,
         tools=[search_docs, open_ticket],
     )
-    serve(create_app(agent, title="Acme Docs", ui=UI), host="127.0.0.1", port=8000)
+    app = create_app(agent, title="Acme Docs", ui=UI)
+
+    @app.get("/acme/docs")
+    def docs() -> list[dict[str, str]]:
+        """The docs index the view lists (no auth here: the demo binds to loopback)."""
+        return [
+            {"slug": path.replace("#", "-"), "title": title, "snippet": snippet}
+            for title, path, snippet in _DOCS
+        ]
+
+    serve(app, host="127.0.0.1", port=8000)
 
 
 if __name__ == "__main__":

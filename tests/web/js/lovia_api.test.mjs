@@ -18,17 +18,20 @@ import { configureApi } from '../../../lovia/web/static/js/api.js';
 test('the API surface is exactly the documented one', () => {
   assert.deepEqual(Object.keys(lovia).sort(), [
     'api',
+    'closeView',
     'fetch',
     'getRenderer',
     'newChat',
     'on',
     'openSession',
+    'openView',
     'provideContext',
     'ready',
     'refreshMessageActions',
     'registerMessageAction',
     'registerRenderer',
     'registerToolView',
+    'registerView',
     'send',
     'setDraft',
     'state',
@@ -36,7 +39,7 @@ test('the API surface is exactly the documented one', () => {
     'toast',
     'version',
   ]);
-  assert.deepEqual([...EVENTS], ['session', 'agent', 'run-start', 'run-end', 'theme']);
+  assert.deepEqual([...EVENTS], ['session', 'agent', 'run-start', 'run-end', 'theme', 'view']);
   assert.ok(Object.isFrozen(lovia));
 });
 

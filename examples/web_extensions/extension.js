@@ -122,3 +122,49 @@ document.getElementById('acme-new-ticket')?.addEventListener('click', () => {
   lovia.newChat();
   lovia.setDraft(lovia.t('acme.ticketTemplate'));
 });
+
+// ---- A view --------------------------------------------------------------
+
+// The sidebar's "Docs index" link (`?view=docs`) opens this in place of the
+// chat. Each page links to `?view=docs/<slug>`, which arrives as ctx.path.
+lovia.registerView('docs', {
+  title: lovia.t('acme.docs'),
+  async render(el, ctx) {
+    const res = await lovia.fetch('/acme/docs');
+    /** @type {{ slug: string, title: string, snippet: string }[]} */
+    const docs = await res.json();
+    const page = docs.find((d) => d.slug === ctx.path);
+    const box = document.createElement('div');
+    box.className = 'acme-docs';
+    if (page) {
+      const h = document.createElement('h2');
+      h.textContent = page.title;
+      const p = document.createElement('p');
+      p.textContent = page.snippet;
+      const ask = document.createElement('button');
+      ask.type = 'button';
+      ask.className = 'acme-chip';
+      ask.textContent = lovia.t('acme.askAbout');
+      ask.addEventListener('click', () => {
+        lovia.newChat(); // shows the chat, closing the view
+        lovia.send(`${page.title}: ${page.snippet} Tell me more.`);
+      });
+      const back = document.createElement('a');
+      back.href = '?view=docs';
+      back.textContent = lovia.t('acme.allDocs');
+      box.append(back, h, p, ask);
+    } else {
+      const list = document.createElement('ul');
+      for (const d of docs) {
+        const a = document.createElement('a');
+        a.href = `?view=docs/${encodeURIComponent(d.slug)}`;
+        a.textContent = d.title;
+        const li = document.createElement('li');
+        li.append(a);
+        list.append(li);
+      }
+      box.append(list);
+    }
+    el.replaceChildren(box);
+  },
+});

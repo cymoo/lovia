@@ -82,3 +82,14 @@
   margin: 2px 0 0;
   color: var(--muted);
 }
+
+/* The docs view (registerView('docs', …)). */
+.acme-docs {
+  max-width: var(--content-w);
+  margin: 0 auto;
+  padding: 24px 20px;
+  line-height: 1.6;
+}
+.acme-docs a {
+  color: var(--accent-text);
+}

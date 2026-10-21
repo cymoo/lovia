@@ -11,16 +11,17 @@ import { t } from './i18n.js';
 import { refreshMessageActions, registerMessageAction } from './message-actions.js';
 import { pageConfig } from './page-config.js';
 import { registerToolView } from './tool-views.js';
+import { closeView, openView, registerView } from './views.js';
 
 /** The events `lovia.on` accepts. */
-export const EVENTS = Object.freeze(['session', 'agent', 'run-start', 'run-end', 'theme']);
+export const EVENTS = Object.freeze(['session', 'agent', 'run-start', 'run-end', 'theme', 'view']);
 
 /** @type {Map<string, Set<(payload: any) => void>>} */
 const listeners = new Map(EVENTS.map((name) => [name, new Set()]));
 
 const host = {
   /** @returns {LoviaState} */
-  state: () => ({ sessionId: null, agent: null, theme: 'light', lang: 'en', busy: false }),
+  state: () => ({ sessionId: null, agent: null, theme: 'light', lang: 'en', busy: false, view: null }),
   /** @param {string} _text */
   send: (_text) => {},
   /** @param {string} _text */
@@ -113,6 +114,9 @@ export const lovia = Object.freeze({
   registerToolView,
   registerMessageAction,
   refreshMessageActions,
+  registerView,
+  openView,
+  closeView,
   provideContext(key, fn) {
     if (typeof key !== 'string' || !key) {
       throw new TypeError('lovia.provideContext: expected a key');

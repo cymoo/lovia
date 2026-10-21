@@ -17,8 +17,10 @@ interface LoviaState {
   readonly theme: 'light' | 'dark';
   /** The UI's language code: 'en', 'zh', or one added via ChatUI.messages. */
   readonly lang: string;
-  /** A run is streaming into the view. */
+  /** A run is streaming into the chat. */
   readonly busy: boolean;
+  /** The view on screen, as in the URL (`'exec'`, `'exec/perf'`); null on the chat. */
+  readonly view: string | null;
 }
 
 /** `lovia.on` event names and what each listener receives. */
@@ -26,10 +28,10 @@ interface LoviaEvents {
   /** Another chat is on screen (null: a new one); also when a new chat gets saved. */
   session: { sessionId: string | null };
   agent: { agent: string | null };
-  /** A run began streaming into the view: sent, or reattached after a reload. */
+  /** A run began streaming into the chat: sent, or reattached after a reload. */
   'run-start': { sessionId: string | null };
   /**
-   * The view stopped streaming it: `done` (answered), `error`, `cancelled`
+   * The chat stopped streaming it: `done` (answered), `error`, `cancelled`
    * (stopped by the user), or `detached` (the user switched chats, or the
    * connection dropped — the run may go on server-side).
    */
@@ -40,6 +42,26 @@ interface LoviaEvents {
     usage: Record<string, number> | null;
   };
   theme: { theme: 'light' | 'dark' };
+  /** A view opened (`'exec/perf'`), or the chat came back (null). */
+  view: { view: string | null };
+}
+
+/** A page shown in the main area in place of the chat (`lovia.registerView`). */
+interface View {
+  /** The title in the top bar while the view is open. */
+  title?: string;
+  /**
+   * Draw the view into `el`, on each opening and each change of its path.
+   * May be async. A returned function is called before the view closes,
+   * is replaced, or draws again. The view isn't redrawn on a theme switch:
+   * listen for `theme` if it needs to follow.
+   */
+  render(el: HTMLElement, ctx: ViewContext): void | (() => void) | Promise<void | (() => void)>;
+}
+
+interface ViewContext {
+  /** What follows the id in `?view=<id>/<path>`; '' when nothing does. */
+  readonly path: string;
 }
 
 /** A message in the chat on screen, as a message action sees it. */
@@ -75,8 +97,9 @@ interface LoviaApi {
   /** The lovia version serving the page, for feature checks. */
   readonly version: string;
   /**
-   * Settles once the app's start is over: the page is wired up, and the first
-   * chat-list request and the chat in the URL have loaded or failed. Pending
+   * Settles once the app's start is over: the page is wired up, the first
+   * chat-list request and the chat in the URL have loaded or failed, and the
+   * view in the URL is open. Pending
    * if the page finds the user signed out. Don't await it at a script's top
    * level: the page waits for your script before it starts.
    */
@@ -97,6 +120,15 @@ interface LoviaApi {
   /** Draw every message's actions again, after the state their `when` or `pressed` read changed. */
   refreshMessageActions(): void;
   /**
+   * Add view `id` (a-z, 0-9 and '-'), or replace the one under it; null
+   * removes it. Plain links open it: `<a href="?view=id">`.
+   */
+  registerView(id: string, view: View | null): void;
+  /** Show view `'id'`, or `'id/path'` (its `ctx.path`). The chat stays current underneath. */
+  openView(target: string): void;
+  /** Back to the chat, as it was. */
+  closeView(): void;
+  /**
    * Add `key` to the client context each run starts with: `fn()` is read when
    * a message (or a new schedule) is sent, and reaches the server's
    * `create_app(run_context=...)` as `trigger.client[key]`. Return
@@ -109,9 +141,9 @@ interface LoviaApi {
   send(text: string): void;
   /** Put `text` in the composer for the user to edit and send. */
   setDraft(text: string): void;
-  /** Show a new, empty chat. */
+  /** Show a new, empty chat (closing any view). */
   newChat(): void;
-  /** Show chat `id`. */
+  /** Show chat `id` (closing any view). */
   openSession(id: string): Promise<void>;
   /** A transient notification. */
   toast(text: string, opts?: { type?: 'info' | 'error' }): void;

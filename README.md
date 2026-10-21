@@ -494,8 +494,9 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
   tables, ECharts charts and sandboxed HTML pages come built in
   (`show_table`, `show_chart`, `show_html`).
 - **Customizable page** — `ChatUI(...)` and `assets=` change wording, logo,
-  styles and scripts; scripts drive the page through `window.lovia`, and
-  `run_context=` hands tools the user's identity and page context.
+  styles and scripts; scripts drive the page through `window.lovia` and add
+  views of their own beside the chat, and `run_context=` hands tools the
+  user's identity and page context.
 - **Headless if you prefer** — everything is a JSON + SSE REST API
   (`/api/docs`); `create_app(agent, ui=False)` serves your own front-end.
 

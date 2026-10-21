@@ -158,7 +158,7 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 {% extends "lovia/index.html" %}
 
 {% block sidebar_nav %}
-<a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
+<a href="/help" data-i18n="acme.help">Help center</a>
 {% endblock %}
 
 {% block welcome %}
@@ -182,8 +182,8 @@ block、文案、新增语言），`examples/33_web_extensions.py` 通过 `windo
 | `welcome` | 空白聊天页的内容；`{{ super() }}` 保留默认的标题、说明和示例问题。点"新对话"时页面会恢复它 |
 | `body_end` | 应用脚本之后：你自己的脚本 |
 
-示例里的链接借用了内置的 `sidebar-nav-item` 样式。类名属于内部实现，如果不想跟着版本
-调整，就换成自己的类名。在模板里引用 `assets` 中的其他文件，用
+`sidebar_nav` 里的链接按内置导航项的样式绘制，指向当前[视图](#视图)的那一个显示为选中。
+在模板里引用 `assets` 中的其他文件，用
 `{{ url_for('ui-assets', path='banner.png').path }}`，它会带上路径前缀。
 
 ### 样式
@@ -226,6 +226,7 @@ layer）中的规则总会压过内置规则，不管选择器的优先级如何
 | --- | --- |
 | 侧栏 | `sidebar`、`sidebar-header`、`agent-switcher`、`sidebar-nav`、`new-chat`、`memory`、`schedules`、`settings`、`sessions-label`、`sessions-search`、`sessions` |
 | 顶栏 | `topbar`、`chat-title`、`topbar-actions`、`tasks`、`export`、`files-toggle` |
+| 视图 | `view`（打开的[视图](#视图)画在这个容器里） |
 | 对话区 | `transcript`、`welcome`、`todo-panel`、`turn`（带 `data-role="user"` 或 `"assistant"`）、`tool`（带 `data-tool="<工具名>"` 和 `data-status`：`running`、`awaiting`（等待用户，比如在提问），之后是 `done` 或 `error`）、`activity`（连续两个及以上的思考 / 工具步骤折叠成的一行摘要；回复正文开始后自动收起）、`message-actions`（一条消息的[操作](#消息操作)；每个按钮带 `data-action="<id>"`） |
 | 输入框 | `composer`、`attach`、`context-ring` |
 | 其他 | `files-panel`；设置面板里的 `language`（语言那一行） |
@@ -266,12 +267,12 @@ ui = ChatUI(
 | `window.lovia` | 说明 |
 | --- | --- |
 | `version` | 提供页面的 lovia 版本，用于特性检测 |
-| `ready` | 应用启动结束时兑现的 promise：页面已就绪，首次的对话列表请求和 URL 指定的对话都已加载完（或失败）。页面发现用户未登录时一直挂起 |
-| `state` | 冻结的快照：`sessionId`（新对话为 null）、`agent`、`theme`、`lang`、`busy`（是否有运行正在流式输出）。需要最新值时重新读取 |
+| `ready` | 应用启动结束时兑现的 promise：页面已就绪，首次的对话列表请求和 URL 指定的对话都已加载完（或失败），URL 指定的[视图](#视图)已打开。页面发现用户未登录时一直挂起 |
+| `state` | 冻结的快照：`sessionId`（新对话为 null）、`agent`、`theme`、`lang`、`busy`（是否有运行正在流式输出）、`view`（打开的[视图](#视图)，没有时为 null）。需要最新值时重新读取 |
 | `on(event, fn)` | 监听[事件](#事件)；返回一个取消监听的函数 |
 | `send(text)` | 以用户身份发送 `text`；有运行在进行时，会排队到下一轮 |
 | `setDraft(text)` | 把 `text` 放进输入框，由用户修改后发送 |
-| `newChat()` / `openSession(id)` | 打开一个新对话 / 打开对话 `id` |
+| `newChat()` / `openSession(id)` | 打开一个新对话 / 打开对话 `id`，并关闭视图 |
 | `toast(text, { type })` | 短暂提示；`type` 为 `"info"`（默认）或 `"error"` |
 | `api` | 页面的 API 客户端，已处理[路径前缀](#部署在路径前缀下)和登录 |
 | `fetch(path, init)` | 用来请求你自己的路由的 `fetch`：`path` 以 `/` 开头，会加上路径前缀；遇到 401 时走页面的登录处理 |
@@ -279,6 +280,7 @@ ui = ChatUI(
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 | `registerToolView(name, view)` | [工具视图](#工具视图) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [消息操作](#消息操作) |
+| `registerView(id, view)` / `openView(target)` / `closeView()` | [视图](#视图) |
 | `provideContext(key, fn)` | 把 `key` 加进运行开始时的上下文，发送时读取 `fn()` 的值，见[运行上下文](#运行上下文) |
 
 ```js
@@ -315,9 +317,10 @@ document.getElementById('acme-summarize')?.addEventListener('click', () => {
 | --- | --- | --- |
 | `session` | `{ sessionId }` | 屏幕上换了一个对话（`null` 表示新对话）；新对话首次保存时也会触发 |
 | `agent` | `{ agent }` | 用户切换了 agent |
-| `run-start` | `{ sessionId }` | 一次运行开始在页面上流式输出：用户发送，或刷新后重新接上 |
-| `run-end` | `{ sessionId, status, usage }` | 页面不再流式输出这次运行。`status`：`done`（已回答）、`error`、`cancelled`（用户停止）或 `detached`（用户切换了对话或连接断开，服务端可能还在运行）。`usage` 是已回答运行的 token 用量，否则为 `null` |
+| `run-start` | `{ sessionId }` | 一次运行开始在对话里流式输出：用户发送，或刷新后重新接上 |
+| `run-end` | `{ sessionId, status, usage }` | 对话不再流式输出这次运行。`status`：`done`（已回答）、`error`、`cancelled`（用户停止）或 `detached`（用户切换了对话或连接断开，服务端可能还在运行）。`usage` 是已回答运行的 token 用量，否则为 `null` |
 | `theme` | `{ theme }` | 浅色或深色主题生效 |
+| `view` | `{ view }` | 打开了一个[视图](#视图)（如 `'exec/perf'`），或回到了对话（`null`） |
 
 ```js
 lovia.on('run-end', ({ status, usage }) => {
@@ -424,6 +427,52 @@ lovia.registerMessageAction('rate-up', {
 
 完整示例见 `examples/35_web_feedback.py`：回答上的 👍 / 👎 由示例自己的路由存进 SQLite，另有报表
 页面和一个"引用"操作。
+
+### 视图
+
+视图是你自己的页面，显示在主区域、替代聊天：仪表盘、配置表单、记录列表……注册之后放一个链接，
+普通链接就能打开它：
+
+```html+jinja
+{% block sidebar_nav %}
+<a href="?view=dashboard">仪表盘</a>
+{% endblock %}
+```
+
+```js
+lovia.registerView('dashboard', {
+  title: '仪表盘',
+  async render(el, ctx) {
+    const res = await lovia.fetch('/acme/stats');
+    el.replaceChildren(drawStats(await res.json(), { tab: ctx.path }));
+    const off = lovia.on('theme', redrawCharts);
+    return off; // 视图关闭或重新绘制前调用
+  },
+});
+```
+
+| `view` 字段 | 说明 |
+| --- | --- |
+| `title` | 视图打开时顶栏显示的标题 |
+| `render(el, ctx)` | 把视图画进 `el`，每次打开、子路径每次变化时调用。可以是 async，可以返回清理函数。`ctx.path` 是 `?view=<id>/<path>` 里 id 之后的部分（没有时为 `''`） |
+
+- **视图盖在对话上面，而不是离开对话。** 对话仍是当前对话（`state.sessionId`），运行照常流式
+  输出；视图的状态和对话一起放在 URL 里：`?session=…&view=dashboard`。
+- **链接。** 普通点击指向 `?view=<id>[/<path>]` 的链接，就在原地打开视图；中键或 ⌘/Ctrl 点击
+  会在新标签页打开，新页面启动后直接显示该视图。`?view=`（空值）回到对话。请写成上面的相对形式，
+  这样部署在[路径前缀下](#部署在路径前缀下)也成立。消息里的链接不会被拦截：模型输出不能驱动导航。
+- **回到对话。** 点击任意对话（包括当前对话）、开始新对话、`lovia.openSession`、`lovia.newChat`
+  和 `lovia.closeView()` 都会关闭视图。`lovia.send` 不会：消息照常发到下面的对话。视图打开期间
+  如果对话开始等用户（审批、提问），页面会提示。在手机上，打开视图或对话都会收起侧栏抽屉。
+- **显示什么。** 顶栏保留，显示视图的标题和你在 `topbar_actions` 里放的内容；属于对话的部分会隐藏。
+  视图画在 `[data-part="view"]` 里，可以给它加样式。`sidebar_nav` 里指向当前视图的链接带有
+  `aria-current="page"`（按 id 比较，所以打开 `exec/perf` 时 `?view=exec` 仍显示选中）。
+- **生命周期。** 每次绘制前先执行上一次的清理函数。`render` 抛错时视图里显示一条提示；异步
+  `render` 完成时视图已被切走，就立即调用它返回的清理函数。用同一个 `id` 再次注册，正打开的视图
+  会重新绘制；传 `null` 则移除。切换主题不会重新绘制视图（会丢掉表单输入和滚动位置），需要跟随
+  主题时监听 `theme` 事件。
+- `openView(target)` 遇到没有注册的 id 会抛错；链接指向这样的 id、或启动时 URL 里是这样的 id，
+  则只显示一条提示。id 只能用 `a-z`、`0-9` 和 `-`，以 `lovia` 开头的留给 lovia 自己。
 
 ## UI 组件
 

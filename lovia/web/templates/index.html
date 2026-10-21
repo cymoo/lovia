@@ -107,6 +107,8 @@
       <span class="hamburger"></span>
     </button>
     <h1 id="chat-title" class="chat-title" data-part="chat-title" data-i18n="session.newChat">New chat</h1>
+    <!-- The open view's title (views.js); the chat's title keeps updating underneath. -->
+    <h1 id="view-title" class="chat-title" hidden></h1>
     <div class="topbar-actions" data-part="topbar-actions">
       {% block topbar_actions %}{% endblock %}
       <span id="turn-progress" class="turn-progress hidden"></span>
@@ -132,6 +134,9 @@
       </button>
     </div>
   </header>
+
+  <!-- A deployer's view (lovia.registerView), covering the chat below. -->
+  <section id="view" class="view" aria-labelledby="view-title" data-part="view" hidden></section>
 
   <div id="chat-region" class="chat-region">
     <section id="transcript" class="transcript" aria-live="polite" data-part="transcript">

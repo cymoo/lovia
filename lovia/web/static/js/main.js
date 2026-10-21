@@ -2,7 +2,7 @@
 import { applyStaticI18n, currentLang, t } from './i18n.js';
 import { store } from './store.js';
 import { api, configureApi } from './api.js';
-import { initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
+import { closeSidebar, initTheme, initSidebarToggle, promptDialog, showDialog } from './ui.js';
 import {
   cancelStream,
   detachStream,
@@ -19,6 +19,7 @@ import {
   initEventStream,
   loadSessions,
   clearChat,
+  startNewChat,
   switchSession,
 } from './sessions.js';
 import { initSchedules } from './schedules.js';
@@ -29,6 +30,13 @@ import { initSettings } from './settings.js';
 import { toast } from './toast.js';
 import { loadExtensions } from './extensions.js';
 import { configureLovia, emitLovia, lovia, markReady } from './lovia.js';
+import {
+  configureViews,
+  currentView,
+  initViews,
+  noteAwaiting,
+  openViewFromURL,
+} from './views.js';
 import { pageConfig } from './page-config.js';
 import './charts.js'; // registers the built-in `chart` UI component
 import './tables.js'; // … `table`
@@ -236,6 +244,7 @@ function initKeyboardShortcuts() {
     'keydown',
     (e) => {
       if (e.key !== 'Escape' || e.isComposing || !store.streaming) return;
+      if (currentView()) return; // the run isn't on screen; Esc belongs to the view
       if (document.querySelector('dialog[open]')) return;
       if (document.getElementById('context-popover')?.hidden === false) return;
       if (document.getElementById('export-menu')?.hidden === false) return;
@@ -273,9 +282,8 @@ function initKeyboardShortcuts() {
       search?.focus();
       search?.select();
     } else if (key === 'o' && e.shiftKey) {
-      e.preventDefault(); // start a new chat
-      clearChat();
-      document.getElementById('prompt')?.focus();
+      e.preventDefault();
+      startNewChat();
     }
   });
 }
@@ -290,16 +298,20 @@ configureLovia({
     theme: store.theme === 'dark' ? 'dark' : 'light',
     lang: currentLang(),
     busy: !!store.streaming,
+    view: currentView(),
   }),
   send: (text) => void sendText(text),
   setDraft,
-  newChat: () => {
-    clearChat();
-    document.getElementById('prompt')?.focus();
-  },
+  newChat: startNewChat,
   openSession: (id) => switchSession(id),
   toast: (text, opts) => toast(text, opts),
 });
+configureViews({
+  changed: (view) => emitLovia('view', { view }),
+  notify: (text) => toast(text),
+  shown: closeSidebar, // on a phone, the drawer would cover it
+});
+store.on('tool-awaiting', noteAwaiting);
 store.on('session-id', (sessionId) => emitLovia('session', { sessionId }));
 store.on('agent-changed', (agent) => emitLovia('agent', { agent }));
 store.on('theme-changed', (theme) => emitLovia('theme', { theme }));
@@ -329,6 +341,7 @@ window.lovia = lovia;
   initMemory();
   initSettings();
   initKeyboardShortcuts();
+  initViews();
   // Fetch capabilities in parallel with the agent list, but resolve them
   // BEFORE any chat history renders — edit/regenerate affordances must not
   // flash in on servers whose store can't rewind.
@@ -364,6 +377,7 @@ window.lovia = lovia;
   if (sid) {
     await switchSession(sid).catch(() => {});
   }
+  openViewFromURL(); // after the chat: switching to one closes any view
   // The start is over — the list and the URL's chat loaded or failed (each
   // failure surfaces on its own, and the sidebar retries).
   markReady();

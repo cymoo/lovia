@@ -4,6 +4,9 @@
 // the page starts; it touches the page only through window.lovia. The strings
 // come from ChatUI(messages=...) via lovia.t.
 
+import { html, render as mount } from 'htm/preact';
+import { useState } from 'preact/hooks';
+
 const { lovia } = window;
 
 // ---- Tool views ----------------------------------------------------------
@@ -127,44 +130,59 @@ document.getElementById('acme-new-ticket')?.addEventListener('click', () => {
 
 // The sidebar's "Docs index" link (`?view=docs`) opens this in place of the
 // chat. Each page links to `?view=docs/<slug>`, which arrives as ctx.path.
+// Drawn with Preact + htm, no build step: index.html's import map resolves
+// the bare imports above to the copies in vendor/.
+
+/** @typedef {{ slug: string, title: string, snippet: string }} Doc */
+
+/** @param {{ docs: Doc[], path: string }} props */
+function Docs({ docs, path }) {
+  const [query, setQuery] = useState('');
+  const page = docs.find((d) => d.slug === path);
+  if (page) {
+    const ask = () => {
+      lovia.newChat(); // shows the chat, closing the view
+      lovia.send(`${page.title}: ${page.snippet} Tell me more.`);
+    };
+    return html`
+      <div class="acme-docs">
+        <a href="?view=docs">${lovia.t('acme.allDocs')}</a>
+        <h2>${page.title}</h2>
+        <p>${page.snippet}</p>
+        <button type="button" class="acme-chip" onClick=${ask}>${lovia.t('acme.askAbout')}</button>
+      </div>
+    `;
+  }
+  const q = query.trim().toLowerCase();
+  const shown = docs.filter((d) => `${d.title} ${d.snippet}`.toLowerCase().includes(q));
+  return html`
+    <div class="acme-docs">
+      <input
+        type="search"
+        class="acme-filter"
+        placeholder=${lovia.t('acme.filter')}
+        value=${query}
+        onInput=${(e) => setQuery(e.currentTarget.value)}
+      />
+      <ul>
+        ${shown.map(
+          (d) => html`<li key=${d.slug}><a href=${`?view=docs/${encodeURIComponent(d.slug)}`}>${d.title}</a></li>`,
+        )}
+      </ul>
+      ${shown.length === 0 && html`<p>${lovia.t('acme.noHits')}</p>`}
+    </div>
+  `;
+}
+
 lovia.registerView('docs', {
   title: lovia.t('acme.docs'),
+  // Fetching here, not in the component, keeps lovia's handling of a render
+  // that fails: the view shows a notice.
   async render(el, ctx) {
     const res = await lovia.fetch('/acme/docs');
-    /** @type {{ slug: string, title: string, snippet: string }[]} */
+    /** @type {Doc[]} */
     const docs = await res.json();
-    const page = docs.find((d) => d.slug === ctx.path);
-    const box = document.createElement('div');
-    box.className = 'acme-docs';
-    if (page) {
-      const h = document.createElement('h2');
-      h.textContent = page.title;
-      const p = document.createElement('p');
-      p.textContent = page.snippet;
-      const ask = document.createElement('button');
-      ask.type = 'button';
-      ask.className = 'acme-chip';
-      ask.textContent = lovia.t('acme.askAbout');
-      ask.addEventListener('click', () => {
-        lovia.newChat(); // shows the chat, closing the view
-        lovia.send(`${page.title}: ${page.snippet} Tell me more.`);
-      });
-      const back = document.createElement('a');
-      back.href = '?view=docs';
-      back.textContent = lovia.t('acme.allDocs');
-      box.append(back, h, p, ask);
-    } else {
-      const list = document.createElement('ul');
-      for (const d of docs) {
-        const a = document.createElement('a');
-        a.href = `?view=docs/${encodeURIComponent(d.slug)}`;
-        a.textContent = d.title;
-        const li = document.createElement('li');
-        li.append(a);
-        list.append(li);
-      }
-      box.append(list);
-    }
-    el.replaceChildren(box);
+    mount(html`<${Docs} docs=${docs} path=${ctx.path} />`, el);
+    return () => mount(null, el);
   },
 });

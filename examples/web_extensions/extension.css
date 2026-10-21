@@ -93,3 +93,12 @@
 .acme-docs a {
   color: var(--accent-text);
 }
+.acme-filter {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}

@@ -4,6 +4,12 @@
 >
 > Line numbers refer to v0.9.82 (`b97c79d`). Browser behaviour was checked
 > with Chromium 145 (Playwright); see [Browser facts](#browser-facts).
+>
+> **Revised (v0.9.105):** the chat page's `frame-src 'none'` is gone. Each
+> untrusted frame now sits inside a proxy frame carrying that policy itself
+> (`static/js/sandbox.js`), which frees the page for deployers' iframes. See
+> [web-sandbox-frames.md](web-sandbox-frames.md); the sections below that
+> mention the page header describe the original design.
 
 ## Summary
 
@@ -56,7 +62,7 @@ it.
 | Guarantee | How | Strength |
 | --- | --- | --- |
 | **Isolation**: no access to the app | `sandbox="allow-scripts"` without `allow-same-origin`: an opaque origin. No cookies, no `localStorage`, no parent DOM, no same-origin API calls. Already relied on by the Files panel ([files.js:952](../../lovia/web/static/js/files.js#L952)). | Hard (the browser's origin model) |
-| **No exfiltration** of the page's own data | A CSP in the frame blocks subresources and `fetch`. The chat page's `frame-src 'none'` blocks the frame from navigating itself away. The sandbox blocks popups, forms and top navigation. | Best effort: WebRTC remains ([Residual risks](#residual-risks)) |
+| **No exfiltration** of the page's own data | A CSP in the frame blocks subresources and `fetch`. The `frame-src 'none'` of the document embedding the frame (originally the chat page, now a proxy frame, see the note above) blocks the frame from navigating itself away. The sandbox blocks popups, forms and top navigation. | Best effort: WebRTC remains ([Residual risks](#residual-risks)) |
 | **No acting as the user** | A page's "send" needs both focus inside the frame (`document.activeElement === frame` on the chat page) and the existing `ctx.send` gate (`navigator.userActivation.isActive`). A click in the frame satisfies both; a script alone, or a keypress elsewhere on the chat page, does not. | Hard in Chromium (verified end to end); fails closed where the API is missing |
 
 ## Browser facts
@@ -69,6 +75,7 @@ local server that logs every request reaching it.
 | Frame with no CSP: what leaves? | `fetch`, `<img>`, and `location.href = …` all reach the logger. `window.open` is blocked by the sandbox. |
 | Frame CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:` | `fetch` and `<img>` are blocked. **Self-navigation still leaks**: CSP has no navigation directive. |
 | Plus `frame-src 'self'` or `'none'` on the parent | Navigation is blocked, nothing reaches the logger, and the `srcdoc` frame still loads and runs under both. |
+| The same policy on a proxy `srcdoc` between them, none on the page (v0.9.105; Chromium 145/156, WebKit 26/27.2, Firefox 157; `scripts/verify_sandbox_frames.py`) | Navigation is blocked the same way; messages relayed by the proxy, and the focus and activation checks on the proxy frame, behave as before. Details: [web-sandbox-frames.md §3](web-sandbox-frames.md#3-实测chromium-145webkit-26). |
 | Click inside the frame, then the frame posts a message | The parent's `navigator.userActivation.isActive` is **true** in the message handler. A message posted from a timer with no click: **false**. Activation propagates to ancestors across the opaque origin. |
 | …but the user just pressed Enter in the composer (end to end) | A page's timer that posts within ~5 s **passes** the activation check: activation is page-wide. Requiring `document.activeElement === frame` as well rejects it, while a click in the frame still passes. |
 | A navigation blocked by `frame-src` | The frame's document is **replaced by an error page**, so an ordinary link click would destroy the page. The bootstrap cancels clicks on non-fragment links. |
@@ -256,7 +263,9 @@ for a user asking for MCP UIs. The shared message names keep it additive.
 
 ## Decisions
 
-1. **The chat page sends `frame-src 'none'`, always.** It closes the leak by
+1. *(Superseded in v0.9.105 by a proxy frame per untrusted frame; see
+   [web-sandbox-frames.md](web-sandbox-frames.md).)*
+   **The chat page sends `frame-src 'none'`, always.** It closes the leak by
    navigation for the `html` kind and the Files panel, and breaks nothing of
    lovia's. A deployer template's own iframes are blocked; a
    `ChatUI(frame_src=…)` knob waits for someone who asks. Sending it only

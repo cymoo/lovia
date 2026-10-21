@@ -16,6 +16,7 @@ import { copyToClipboard, setSidebarAutoCollapsed } from './ui.js';
 import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { renderMermaid } from './diagrams.js';
+import { sandboxFrame } from './sandbox.js';
 import {
   formatBytes,
   formatTimeSmart,
@@ -949,15 +950,11 @@ function renderViewerContent() {
     return;
   }
   if (v.kind === 'html' && !v.raw) {
-    const frame = document.createElement('iframe');
-    frame.className = 'files-frame files-frame--html';
-    // allow-scripts WITHOUT allow-same-origin: the document runs in an opaque
-    // origin — its scripts can't touch the parent DOM, the token cookie, or
-    // localStorage. That's what makes rendering agent-authored HTML safe here.
-    frame.setAttribute('sandbox', 'allow-scripts');
-    frame.setAttribute('title', v.name);
-    frame.srcdoc = v.content;
-    els.viewerBody.appendChild(frame);
+    // Agent-authored HTML: an opaque origin that can't touch the parent DOM,
+    // the token cookie or storage, and can't navigate itself away.
+    els.viewerBody.appendChild(
+      sandboxFrame(v.content, { title: v.name, className: 'files-frame files-frame--html' }),
+    );
     return;
   }
   if (v.kind === 'csv' && !v.truncated) {

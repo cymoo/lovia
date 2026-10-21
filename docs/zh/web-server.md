@@ -817,6 +817,10 @@ Web 包会持久化定时任务，支持三种触发方式：
 - 设置 `approval_timeout`，避免无人处理的弹窗长期占用容量。
 - 只使用一个 Worker，并备份 SQLite 数据库。
 - 多用户部署还需要 TLS、按用户认证（`auth=`）和限流。共享 token 只适合单用户场景。
+- 聊天页不设置 Content-Security-Policy，所以模板 block 和扩展脚本可以嵌入其他站点的 iframe。
+  lovia 渲染的不可信内容（`html` 页面、文件面板的 HTML 预览）运行在自带防护的框架里：不透明源，
+  也不能把自己导航到别处。你自己设置的页面策略（在反向代理或中间件里）会被这些 `srcdoc` 框架
+  继承；页面依赖内联脚本，所以 `script-src` 必须允许内联；`frame-src` 不影响 `srcdoc` 框架。
 
 生产使用前请阅读完整的[生产部署](deployment.md)指南。
 

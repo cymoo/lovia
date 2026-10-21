@@ -908,6 +908,13 @@ approval request would be auto-denied.
 - Use one worker and back up the SQLite database.
 - For real multi-user exposure add TLS, per-user auth (`auth=`), and rate
   limiting — a shared token is single-user security.
+- The chat page sets no Content-Security-Policy, so your blocks and extension
+  scripts may embed iframes from other sites. Untrusted content lovia renders
+  (`html` pages, the Files panel's HTML preview) runs in frames that carry
+  their own guard: an opaque origin that can't navigate itself away. A policy
+  of your own (set at your proxy or in middleware) is inherited by those
+  `srcdoc` frames, and the page relies on inline scripts, so its `script-src`
+  must allow them; `frame-src` doesn't affect `srcdoc` frames.
 
 See the complete [Deployment](deployment.md) guide before production use.
 

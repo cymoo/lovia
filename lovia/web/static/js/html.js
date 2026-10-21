@@ -3,15 +3,15 @@
 // any tool may, via `ui_result("html", props)`. Design and the browser facts
 // it rests on: docs/design/web-html-component.md.
 //
-// The page is untrusted. `sandbox="allow-scripts"` without allow-same-origin
-// gives it an opaque origin (no cookies, storage, or parent DOM); the CSP
-// that heads its srcdoc blocks subresources and fetch; the chat page's own
-// `frame-src 'none'` (lovia/web/ui.py) stops it navigating itself away.
+// The page is untrusted. It runs in sandbox.js's frame: an opaque origin (no
+// cookies, storage, or parent DOM) inside a proxy that stops it navigating
+// itself away; the CSP that heads its srcdoc blocks subresources and fetch.
 //
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { registerRenderer } from './components.js';
 import { figure, save, staticFigure } from './figure.js';
+import { sandboxFrame } from './sandbox.js';
 import { escapeHtml } from './util.js';
 
 // MCP Apps' default policy, less 'self' (an opaque origin has none), plus
@@ -43,8 +43,8 @@ const BOOTSTRAP = `(() => {
   };
   new ResizeObserver(report).observe(document.documentElement);
   addEventListener('load', report);
-  // The chat page forbids frame navigation, so following a link would only
-  // swap the page for an error page.
+  // The proxy around the frame forbids navigation, so following a link would
+  // only swap the page for an error page.
   addEventListener('click', (e) => {
     const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
     if (a && !a.getAttribute('href').startsWith('#')) e.preventDefault();
@@ -174,12 +174,11 @@ function renderHtml(el, props, ctx) {
   let stop = null;
   const run = () => {
     started.add(el);
-    const frame = document.createElement('iframe');
-    frame.className = 'html-frame';
-    frame.setAttribute('sandbox', 'allow-scripts');
-    frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.title = title || L.page;
-    frame.srcdoc = doc();
+    const frame = sandboxFrame(doc(), {
+      title: title || L.page,
+      className: 'html-frame',
+      colorScheme: ctx.theme === 'dark' ? 'dark' : 'light',
+    });
     stop = listenToFrame(frame, {
       resize: (h) => frame.style.setProperty('--page-height', `${h}px`),
       // ctx.send wants a live user activation, but that is page-wide: a

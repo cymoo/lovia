@@ -1,5 +1,5 @@
-"""``show_html``: the server-side checks, its envelope, and the chat page's
-``frame-src`` policy that keeps a sandboxed page from navigating its data away."""
+"""``show_html``: the server-side checks, its envelope, and the chat page
+leaving the frame policy to the sandbox (static/js/sandbox.js)."""
 
 from __future__ import annotations
 
@@ -50,8 +50,10 @@ def test_bad_pages_come_back_as_tool_errors(args: dict, match: str) -> None:
     assert result["is_error"] and match in result["result"]
 
 
-def test_the_chat_page_forbids_frame_navigation() -> None:
+def test_the_chat_page_sets_no_csp() -> None:
+    """Untrusted frames carry their own navigation guard (sandbox.js); a page
+    policy would only block the deployer's iframes, so the page has none."""
     agent = Agent(name="bot", model=ScriptedProvider([]))
     app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
     res = TestClient(app).get("/")
-    assert res.headers["content-security-policy"] == "frame-src 'none'"
+    assert "content-security-policy" not in res.headers

@@ -862,6 +862,7 @@ function appendApproval(call) {
     return;
   }
   setToolStatus(findToolNode(call.id), 'awaiting');
+  store.emit('tool-awaiting');
   const node = cloneTemplate('tmpl-approval');
   const head = node.querySelector('.approval-head');
   if (head) head.textContent = t('approval.waiting');
@@ -1109,6 +1110,7 @@ function appendQuestion(call) {
   const node = buildQuestionCard(call);
   if (!node) return;
   setToolStatus(findToolNode(call.id), 'awaiting');
+  store.emit('tool-awaiting');
   appendBubbleContent(store.bubble, node);
   store.body = null;
   store.rawText = '';

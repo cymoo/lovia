@@ -333,7 +333,9 @@ body.sidebar-collapsed .sidebar {
   gap: 2px;
   padding: 0 10px 8px;
 }
-.sidebar-nav-item {
+/* A deployer's links in the sidebar_nav block draw as items too (documented). */
+.sidebar-nav-item,
+.sidebar-nav a[href] {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -343,21 +345,32 @@ body.sidebar-collapsed .sidebar {
   font-weight: 500;
   color: var(--ink-2);
   text-align: left;
+  text-decoration: none;
   transition:
     background var(--t-fast),
     color var(--t-fast);
 }
-.sidebar-nav-item:hover {
+.sidebar-nav-item:hover,
+.sidebar-nav a[href]:hover {
   background: var(--surface-3);
   color: var(--ink);
 }
-.sidebar-nav-item svg {
+.sidebar-nav a[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.sidebar-nav-item svg,
+.sidebar-nav a[href] svg {
   flex-shrink: 0;
   color: var(--muted);
   transition: color var(--t-fast);
 }
-.sidebar-nav-item:hover svg {
+.sidebar-nav-item:hover svg,
+.sidebar-nav a[href]:hover svg {
   color: var(--ink-2);
+}
+.sidebar-nav a[aria-current='page'] svg {
+  color: currentColor;
 }
 
 .sidebar-section-label {
@@ -728,6 +741,39 @@ body.sidebar-collapsed .sidebar {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* Views (views.js): a deployer's page laid over the chat, under the top bar.
+   The chat is only made invisible (and inert), never display:none: it keeps
+   its layout, so a run streaming underneath still follows to the bottom.
+   The top bar stays — its sidebar buttons are the way back on phones and
+   with the sidebar collapsed — minus what belongs to the chat (hidden with
+   !important: several of those toggle inline display). */
+.view {
+  position: absolute;
+  inset: 0;
+  z-index: 29; /* under the top bar's glass */
+  overflow: auto;
+  padding-top: var(--topbar-h);
+  background: var(--bg);
+}
+body.view-open #chat-region,
+body.view-open #composer {
+  visibility: hidden;
+}
+body.view-open #files-panel,
+body.view-open #chat-title,
+body.view-open #tasks-wrap,
+body.view-open #export-wrap,
+body.view-open #files-btn,
+body.view-open #turn-progress {
+  display: none !important;
+}
+.view-failed {
+  margin: 32px auto;
+  max-width: var(--content-w);
+  padding: 0 20px;
+  color: var(--muted);
 }
 
 /* ---- Topbar — glass over the scrolling transcript ----------------------- */

@@ -110,6 +110,15 @@ const {{ lovia }} = window;
 // lovia.on('run-end', ({{ status }}) => {{
 //   if (status === 'error') lovia.toast('Something went wrong', {{ type: 'error' }});
 // }});
+
+// A page of your own beside the chat, opened by a link such as
+// <a href="?view=dashboard">Dashboard</a> in the sidebar_nav block:
+// lovia.registerView('dashboard', {{
+//   title: 'Dashboard',
+//   render(el, ctx) {{
+//     el.textContent = `Dashboard ${{ctx.path}}`; // ctx.path: ?view=dashboard/<path>
+//   }},
+// }});
 """
 
 

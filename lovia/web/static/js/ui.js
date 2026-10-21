@@ -89,7 +89,8 @@ function openSidebar() {
   overlay?.classList.add('open');
 }
 
-function closeSidebar() {
+/** Close the phone drawer (a no-op on desktop, where it never opens). */
+export function closeSidebar() {
   sidebarOpen = false;
   document.getElementById('sidebar')?.classList.remove('open');
   overlay?.classList.remove('open');

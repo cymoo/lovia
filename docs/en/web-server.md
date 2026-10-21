@@ -169,7 +169,7 @@ only the blocks you need:
 {% extends "lovia/index.html" %}
 
 {% block sidebar_nav %}
-<a class="sidebar-nav-item" href="/help" data-i18n="acme.help">Help center</a>
+<a href="/help" data-i18n="acme.help">Help center</a>
 {% endblock %}
 
 {% block welcome %}
@@ -193,9 +193,8 @@ only the blocks you need:
 | `welcome` | The blank chat state's content; `{{ super() }}` keeps the default title, description and examples. The page restores it on "New chat" |
 | `body_end` | After the app's script: scripts of your own |
 
-The example's link borrows the bundled `sidebar-nav-item` look. Class names are
-internal, so give it a class of your own instead if you'd rather not track them
-across releases. To reference another file from `assets` in a template, use
+Links in `sidebar_nav` draw like the bundled items, and the one to the open
+[view](#views) shows as current. To reference another file from `assets` in a template, use
 `{{ url_for('ui-assets', path='banner.png').path }}` — it carries the path
 prefix.
 
@@ -242,6 +241,7 @@ To target a region, select its `data-part`:
 | --- | --- |
 | Sidebar | `sidebar`, `sidebar-header`, `agent-switcher`, `sidebar-nav`, `new-chat`, `memory`, `schedules`, `settings`, `sessions-label`, `sessions-search`, `sessions` |
 | Top bar | `topbar`, `chat-title`, `topbar-actions`, `tasks`, `export`, `files-toggle` |
+| Views | `view` (the container an open [view](#views) draws in) |
 | Conversation | `transcript`, `welcome`, `todo-panel`, `turn` (with `data-role="user"` or `"assistant"`), `tool` (with `data-tool="<tool name>"` and `data-status`: `running`, `awaiting` the user — a question — then `done` or `error`), `activity` (two or more consecutive reasoning / tool steps folded under one summary line; it closes once the reply's text starts), `message-actions` (a message's [actions](#message-actions); each button has `data-action="<id>"`) |
 | Composer | `composer`, `attach`, `context-ring` |
 | Elsewhere | `files-panel`; in Settings, `language` (the language row) |
@@ -290,12 +290,12 @@ internal.
 | `window.lovia` | Description |
 | --- | --- |
 | `version` | The lovia version serving the page, for feature checks |
-| `ready` | A promise that settles once the app's start is over: the page is wired up, and the first chat-list request and the chat in the URL have loaded or failed. It stays pending if the page finds the user signed out |
-| `state` | A frozen snapshot: `sessionId` (null for a new chat), `agent`, `theme`, `lang`, `busy` (a run is streaming in). Read it again for the current one |
+| `ready` | A promise that settles once the app's start is over: the page is wired up, the first chat-list request and the chat in the URL have loaded or failed, and the [view](#views) in the URL is open. It stays pending if the page finds the user signed out |
+| `state` | A frozen snapshot: `sessionId` (null for a new chat), `agent`, `theme`, `lang`, `busy` (a run is streaming in), `view` (the open [view](#views), or null). Read it again for the current one |
 | `on(event, fn)` | Listen for an [event](#events); returns a function that stops listening |
 | `send(text)` | Send `text` as the user; while a run streams it is queued for the next turn |
 | `setDraft(text)` | Put `text` in the composer for the user to edit and send |
-| `newChat()` / `openSession(id)` | Show a new chat / chat `id` |
+| `newChat()` / `openSession(id)` | Show a new chat / chat `id`, closing any view |
 | `toast(text, { type })` | A transient notice; `type` is `"info"` (default) or `"error"` |
 | `api` | The page's API client — the [path prefix](#serving-under-a-path-prefix) and sign-in handling built in |
 | `fetch(path, init)` | `fetch` for your own routes: `path` starts with `/` and gets the path prefix; a 401 gets the page's sign-in handling |
@@ -303,6 +303,7 @@ internal.
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [Message actions](#message-actions) |
+| `registerView(id, view)` / `openView(target)` / `closeView()` | [Views](#views) |
 | `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run context](#run-context) |
 
 ```js
@@ -344,9 +345,10 @@ and doesn't stop the others.
 | --- | --- | --- |
 | `session` | `{ sessionId }` | Another chat is on screen (`null`: a new one); also when a new chat gets saved |
 | `agent` | `{ agent }` | The user picked another agent |
-| `run-start` | `{ sessionId }` | A run began streaming into the view: sent, or reattached after a reload |
-| `run-end` | `{ sessionId, status, usage }` | The view stopped streaming it. `status`: `done` (answered), `error`, `cancelled` (stopped by the user), or `detached` (the user switched chats or the connection dropped; the run may go on server-side). `usage` is the answered run's token usage, else `null` |
+| `run-start` | `{ sessionId }` | A run began streaming into the chat: sent, or reattached after a reload |
+| `run-end` | `{ sessionId, status, usage }` | The chat stopped streaming it. `status`: `done` (answered), `error`, `cancelled` (stopped by the user), or `detached` (the user switched chats or the connection dropped; the run may go on server-side). `usage` is the answered run's token usage, else `null` |
 | `theme` | `{ theme }` | Light or dark took effect |
+| `view` | `{ view }` | A [view](#views) opened (`'exec/perf'`), or the chat came back (`null`) |
 
 ```js
 lovia.on('run-end', ({ status, usage }) => {
@@ -468,6 +470,63 @@ lovia.registerMessageAction('rate-up', {
 
 `examples/35_web_feedback.py` is a complete version: 👍 / 👎 on answers kept
 in SQLite by its own routes, a report page, and a Quote action.
+
+### Views
+
+A view is a page of your own in the main area, in place of the chat: a
+dashboard, a settings form, a list of records. Register it, then link to it —
+a plain link opens it:
+
+```html+jinja
+{% block sidebar_nav %}
+<a href="?view=dashboard">Dashboard</a>
+{% endblock %}
+```
+
+```js
+lovia.registerView('dashboard', {
+  title: 'Dashboard',
+  async render(el, ctx) {
+    const res = await lovia.fetch('/acme/stats');
+    el.replaceChildren(drawStats(await res.json(), { tab: ctx.path }));
+    const off = lovia.on('theme', redrawCharts);
+    return off; // called when the view closes or draws again
+  },
+});
+```
+
+| `view` field | Description |
+| --- | --- |
+| `title` | The top bar's title while the view is open |
+| `render(el, ctx)` | Draw the view into `el`, on each opening and each change of its path. May be async; return a cleanup function. `ctx.path` is what follows the id in `?view=<id>/<path>` (`''` when nothing does) |
+
+- **A view covers the chat, it doesn't leave it.** The chat stays current
+  underneath (`state.sessionId`), a run keeps streaming, and the view's
+  state lives in the URL beside the chat's: `?session=…&view=dashboard`.
+- **Links.** A plain click on a link to `?view=<id>[/<path>]` opens the view
+  in place; a middle or ⌘/Ctrl click opens it in a new tab, which starts on
+  that view. `?view=` (empty) returns to the chat. Write them relative, as
+  above, so they hold under a [path prefix](#serving-under-a-path-prefix).
+  Links inside messages are left alone: model output doesn't navigate.
+- **Back to the chat.** Clicking any chat — the current one too — starting
+  a new chat, `lovia.openSession`, `lovia.newChat` and `lovia.closeView()`
+  close the view. `lovia.send` doesn't: the message goes to the chat
+  underneath. While a view is open and the chat starts waiting on the user
+  (an approval, a question), the page says so. On a phone, opening a view
+  or a chat closes the sidebar drawer.
+- **What shows.** The top bar stays, with the view's title and your
+  `topbar_actions`; the parts that belong to the chat hide. The view draws in
+  `[data-part="view"]`, which you may style. A link in `sidebar_nav` to the
+  open view gets `aria-current="page"` (compared by id, so `?view=exec`
+  stays current on `exec/perf`).
+- **Lifecycle.** The previous cleanup runs before each draw. A render that
+  throws shows a notice in the view; an async one that lands after the view
+  was left is cleaned up at once. Registering under an `id` again redraws it
+  if open; `null` removes it. A theme switch doesn't redraw a view (it would
+  lose form input and scroll), so listen for `theme` if yours follows it.
+- `openView(target)` throws for an id with no view; a link to one, or one in
+  the URL at start, shows a notice instead. Ids use `a-z`, `0-9` and `-`;
+  ids starting `lovia` are reserved.
 
 ## UI components
 

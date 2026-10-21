@@ -2,7 +2,7 @@
 
 > 状态：已实现（v0.9.105）· 2026-10-21 · 范围：`lovia/web`（不改 core）
 >
-> 行号指向 v0.9.104（`129d31d`）。浏览器行为在 Chromium 145 与 WebKit 26 上实测（§3）；Firefox 未能在本机自动化，合并前需手动验证（§7）。修订的是 [web-html-component.md](web-html-component.md) 的“决策 1”。
+> 行号指向 v0.9.104（`129d31d`）。浏览器行为在 Chromium 145 与 WebKit 26（macOS）上实测，又用 `scripts/verify_sandbox_frames.py` 在 Firefox 157、Chromium 156、WebKit 27.2（Linux）上复验（§3）。修订的是 [web-html-component.md](web-html-component.md) 的“决策 1”。
 
 ## 结论
 
@@ -134,13 +134,13 @@ export function proxyDoc(doc, title) → string   // 纯函数，供单测
 | 提议 | 原因 |
 | --- | --- |
 | 同时提供 `ChatUI(frame_src=…)` | 去掉整页 CSP 之后没有需要它的场景；想要页面级 CSP 的部署方用自己的中间件或反向代理，策略完全由他们决定 |
-| 代理改用一个服务端路由（带 CSP 响应头） | meta 下发的 `frame-src` 在两个引擎上都已生效，srcdoc 免去一次请求、子路径和鉴权问题。若 Firefox 验证失败再改用路由，结构不变 |
+| 代理改用一个服务端路由（带 CSP 响应头） | meta 下发的 `frame-src` 在三个引擎上都已生效，srcdoc 免去一次请求、子路径和鉴权问题 |
 | 借机收紧文件预览的子资源 | 文件预览的子资源一直是开放的（web-html-component.md 的 Deferred），收紧会改变现有行为，另行处理 |
 | 父页面向内层发消息的通道 | 今天没有使用者 |
 
 ## 6. 风险
 
-- **Firefox 未验证**（本机 Playwright Firefox 无法启动）。合并前用 §3 的脚本在 Firefox 上手动跑一遍；如果 meta 方式不生效，改用 §5 提到的服务端路由下发代理文档。
+- **浏览器回归**：CI 不跑浏览器，防护的浏览器级行为靠 `scripts/verify_sandbox_frames.py` 手动复验（Chromium、WebKit、Firefox；它要求不带代理的对照组确实泄漏，否则判失败，所以通过即说明是代理在起作用）。改动 `sandbox.js` 或 `html.js` 的启动脚本时应重跑。
 - **多一层框架的开销**：每张 `html` 卡片和每次 HTML 预览多一个文档，内存开销很小；重新打开聊天时 `html` 卡片仍要点击“运行”才启动，不会同时创建大量框架。
 - **内层直接给顶层页面发消息**：内层可以拿到 `top` 并 `postMessage`，但父页面只接受 `event.source === 代理.contentWindow` 的消息，这类消息会被丢弃（与今天检查 `frame.contentWindow` 的逻辑相同）。
 
@@ -154,7 +154,7 @@ export function proxyDoc(doc, title) → string   // 纯函数，供单测
    - `tests/web/js/sandbox.test.mjs`：代理文档里 `frame-src 'none'` 出现在内层 iframe 之前；内层文档中的 `"`、`&` 等无法跳出 `srcdoc` 属性；代理只转发来自内层窗口的消息；
    - `tests/web/test_html.py`：原来断言 CSP 头存在的测试，改为断言聊天页**不**发送 CSP（防止有人以为它还承担防护职责而加回去）。
 4. 端到端（verify skill，Chromium）：`show_html` 页面正常显示、高度跟随、“运行”按钮、点击按钮 `lovia.send` 生效、定时器发送被拒；文件面板 HTML 预览正常；模板里放一个跨源 iframe 能加载。
-5. Firefox 手动跑 §3 脚本。
+5. `scripts/verify_sandbox_frames.py`：§3 的实验做成可重复运行的脚本，直接导入发布的 `sandbox.js`、`html.js`。三个引擎均通过（Firefox 157 在 GitHub Actions 的 Linux runner 上运行，本机的 Playwright Firefox 无法启动）。
 6. 文档：更新 `web-html-component.md`（“The chat page's `frame-src 'none'`”一节、决策 1、spike 表）；`web-server.md`（中英文）的“定制页面”补一句部署方可直接嵌入 iframe 及自定义 CSP 的说明。
 
 ## 审查记录
@@ -170,4 +170,5 @@ export function proxyDoc(doc, title) → string   // 纯函数，供单测
 | 5 | 代理若加 `default-src`，内层继承后取交集，文件预览会被额外收紧 | 代理只放 `frame-src 'none'`（§4.1），实验确认内层 `data:` 图片照常加载 |
 | 6 | 去掉整页 CSP 会不会让别处的不可信内容多出能力？ | 逐一排查 Markdown、Mermaid、PDF 预览、扩展与 block（§4.4），没有依赖它的地方 |
 | 7 | 过度设计检查：是否需要服务端路由承载代理、反向消息通道 | 都不需要（§5）；路由只在 Firefox 验证失败时作为后备 |
-| 8 | Firefox 未验证 | 列为合并前的必做项（§6、§7） |
+| 8 | Firefox 未验证 | 开 PR 后补验：Firefox 157 全部通过（§7） |
+| 9 | 外部评审（Codex）：实验脚本应纳入仓库，形成可重复的浏览器回归 | 新增 `scripts/verify_sandbox_frames.py`（§7） |

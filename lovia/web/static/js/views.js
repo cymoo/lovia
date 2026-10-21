@@ -58,9 +58,9 @@ export function currentView() {
 
 /**
  * The view a link opens, or null when it is no link to a view: another page,
- * another target, a download.
+ * another target, a download, or an anchor on this one.
  * @param {Element} a
- * @param {{ href: string, origin: string, pathname: string }} here
+ * @param {{ href: string, origin: string, pathname: string, search: string }} here
  * @returns {string | null} `''` for `?view=` (back to the chat).
  */
 export function linkTarget(a, here) {
@@ -73,6 +73,9 @@ export function linkTarget(a, here) {
     return null;
   }
   if (url.origin !== here.origin || url.pathname !== here.pathname) return null;
+  // `#bottom` resolves against the current URL, view included: an in-page
+  // jump the browser does itself, not a navigation to redraw the view for.
+  if (url.hash && url.search === here.search) return null;
   return url.searchParams.get('view');
 }
 
@@ -170,17 +173,21 @@ function show(next) {
     note.textContent = t('view.failed');
     el.replaceChildren(note);
   };
+  const adopt = (/** @type {unknown} */ fn) => {
+    if (typeof fn !== 'function') return;
+    if (mine === gen) cleanup = /** @type {() => void} */ (fn);
+    else runCleanup(/** @type {() => void} */ (fn));
+  };
   let out;
   try {
     out = /** @type {View} */ (views.get(next.id)).render(el, Object.freeze({ path: next.path }));
   } catch (err) {
     fail(err);
   }
-  Promise.resolve(out).then((fn) => {
-    if (typeof fn !== 'function') return;
-    if (mine === gen) cleanup = fn;
-    else runCleanup(fn);
-  }, fail);
+  // A cleanup returned synchronously is held at once, so whatever replaces
+  // this view (even from a `view` listener, below) runs it first.
+  if (typeof (/** @type {any} */ (out))?.then === 'function') out.then(adopt, fail);
+  else adopt(out);
   // Listeners hear of the view once it has drawn, so one that opens another
   // view from its listener replaces this one rather than being drawn over.
   host.shown();

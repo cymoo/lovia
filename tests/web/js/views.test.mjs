@@ -159,11 +159,10 @@ test('listeners hear of a view after it drew, and every drawing is reported', ()
   assert.equal(shown - before, 2);
 });
 
-test('a listener that opens another view wins over the one it heard of', async () => {
-  const drawn = [];
-  const cleaned = [];
-  registerView('from', { render: () => (drawn.push('from'), () => cleaned.push('from')) });
-  registerView('to', { render: () => drawn.push('to') });
+test('a listener that opens another view wins, after the first one cleans up', async () => {
+  const log = [];
+  registerView('from', { render: () => (log.push('render from'), () => log.push('cleanup from')) });
+  registerView('to', { render: () => log.push('render to') });
   configureViews({
     changed: (v) => {
       changes.push(v);
@@ -177,8 +176,8 @@ test('a listener that opens another view wins over the one it heard of', async (
     configureViews({ changed: (v) => changes.push(v) });
   }
   assert.equal(currentView(), 'to');
-  assert.deepEqual(drawn, ['from', 'to']);
-  assert.deepEqual(cleaned, ['from']); // its late cleanup still ran
+  // A synchronous cleanup runs before the next render, not a microtask later.
+  assert.deepEqual(log, ['render from', 'cleanup from', 'render to']);
   assert.equal(page.view.children.length, 1);
   assert.deepEqual(changes, ['from', 'to']);
 });
@@ -237,6 +236,19 @@ test('re-registering an open view redraws it; null closes it', () => {
   registerView('re', null);
   assert.equal(currentView(), null);
   assert.throws(() => openView('re'), /no view/);
+});
+
+test('an in-page anchor in a view stays a browser jump', () => {
+  const drawn = [];
+  registerView('docs', { render: () => drawn.push('docs') });
+  openView('docs');
+  // Resolved against ?…&view=docs, `#bottom` carries the view along.
+  assert.equal(linkTarget(link('#bottom'), location), null);
+  assert.equal(linkTarget(link('?session=s1&view=docs#bottom'), location), null);
+  assert.equal(click(link('#bottom')).prevented, false);
+  assert.deepEqual(drawn, ['docs']); // not redrawn
+  // A fragment on a link to another view is still a view link.
+  assert.equal(linkTarget(link('?view=exec#top'), location), 'exec');
 });
 
 test('linkTarget: only same-page links to a view, opened in place', () => {

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
@@ -113,7 +113,7 @@ class AnthropicProvider:
         supports_vision: bool | None = None,
         # Fields merged verbatim into every request body — what this endpoint
         # always needs (``output_config.effort``, ``thinking``,
-        # ``cache_system``). The connection-scoped twin of
+        # ``cache_system``, ``cache_ttl``). The connection-scoped twin of
         # ``ModelSettings.provider_options``: same raw semantics (``None``
         # removes a field), rendered after the typed settings and before the
         # agent's provider options, so the more specific scope wins.
@@ -243,7 +243,11 @@ class AnthropicProvider:
         stream: bool,
     ) -> JsonObject:
         extra = request_extras(self._extra_body, settings, "claude", self.name)
-        cache_system = bool(extra.pop("cache_system", False))
+        cache_ttl = extra.pop("cache_ttl", None)
+        # Setting a TTL is itself the opt-in: a lone ``cache_ttl`` that
+        # silently cached nothing would be the worse surprise.
+        cache_system = bool(extra.pop("cache_system", False)) or cache_ttl is not None
+        cache_control = _cache_control(cache_ttl)
         thinking = extra.get("thinking")
         thinking_off = thinking is None or (
             isinstance(thinking, dict) and thinking.get("type") == "disabled"
@@ -260,15 +264,16 @@ class AnthropicProvider:
             include_images=self.supports_vision,
         )
         if cache_system:
-            # Breakpoints (ephemeral, 5-minute TTL) at each stability boundary:
-            # tools and system below, the conversation's stable prefix here.
-            # Three of the API's four slots.
+            # Breakpoints at each stability boundary: tools and system below,
+            # the conversation's stable prefix here. Three of the API's four
+            # slots, all one TTL — the API rejects a longer TTL after a
+            # shorter one.
             if system_blocks:
                 system_blocks[-1] = {
                     **system_blocks[-1],
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": cache_control,
                 }
-            _mark_history_breakpoint(anthropic_messages)
+            _mark_history_breakpoint(anthropic_messages, cache_control)
 
         payload: JsonObject = {
             "model": self.model,
@@ -288,7 +293,7 @@ class AnthropicProvider:
                 # often than the conversation.
                 anthropic_tools[-1] = {
                     **anthropic_tools[-1],
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": cache_control,
                 }
             payload["tools"] = anthropic_tools
         if response_format is not None:
@@ -604,7 +609,30 @@ def _append_user_message(out: list[JsonObject], content: list[JsonObject]) -> No
     out.append({"role": "user", "content": content})
 
 
-def _mark_history_breakpoint(messages: list[JsonObject]) -> None:
+_CACHE_TTLS = ("5m", "1h")
+
+
+def _cache_control(ttl: Any) -> JsonObject:
+    """The breakpoint marker for ``cache_ttl`` (``None``: the API's 5 minutes).
+
+    ``"1h"`` keeps the cache warm across a user's pause of up to an hour, at
+    2x the 5-minute write price (reads cost the same) — worth it when turns
+    sharing a prefix start 5-60 minutes apart, pure surcharge when they
+    start closer, since every read refreshes either TTL.
+    """
+    if ttl is None or ttl == "5m":
+        return {"type": "ephemeral"}
+    if ttl not in _CACHE_TTLS:
+        raise UserError(
+            f"Unsupported Anthropic cache_ttl {ttl!r}",
+            hint='Use "5m" (the default) or "1h".',
+        )
+    return {"type": "ephemeral", "ttl": ttl}
+
+
+def _mark_history_breakpoint(
+    messages: list[JsonObject], cache_control: JsonObject
+) -> None:
     """Put a cache breakpoint on the conversation's last *stable* block.
 
     The tail of a request is volatile: a new user message, or the reminder
@@ -634,7 +662,7 @@ def _mark_history_breakpoint(messages: list[JsonObject]) -> None:
                 continue
             if kind == "text" and not block.get("text"):
                 continue
-            content[i] = {**block, "cache_control": {"type": "ephemeral"}}
+            content[i] = {**block, "cache_control": cache_control}
             return
 
 

@@ -180,6 +180,17 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
   前缀在下一次请求里逐字节不变。缓存读写分别暴露为 `usage.cache_read_tokens` /
   `usage.cache_write_tokens`。
 
+  断点默认使用 API 的 5 分钟 TTL，每次读取都会刷新它；只要各轮紧挨着发生就够用。
+  如果是聊天场景，用户两条消息之间停顿较久，每次回来都要为整段历史重新付费；
+  `cache_ttl: "1h"` 让缓存保持一小时（同时隐含开启 `cache_system`）：
+
+  ```python
+  settings = ModelSettings(provider_options={"anthropic": {"cache_ttl": "1h"}})
+  ```
+
+  1 小时缓存的写入价格是基础输入价的 2×（5 分钟为 1.25×），因此只有当共享前缀的
+  相邻两轮间隔在 5–60 分钟之间时才划算。兼容网关不一定接受 `ttl` 字段。
+
 无论哪种方式，`usage.input_tokens` 都是**完整** prompt 大小，包含已缓存 token；cache 字段
 只是拆分总量，不额外相加。想受益就要保持前缀稳定：易变的
 [动态指令](agents.md#编写指令)（如时间戳、请求 ID）会导致缓存每轮失效。

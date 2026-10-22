@@ -123,7 +123,7 @@ function ghostBtn(label, onClick) {
  * Common request shapes per API flavor, offered as chips. Each chip writes
  * its object into the JSON below — nothing here is a capability claim, and
  * the endpoint's docs decide which apply. Kept to the two things people
- * reach for (effort, thinking on/off) plus lovia's own Anthropic knob.
+ * reach for (effort, thinking on/off) plus lovia's own Anthropic caching knobs.
  * @type {Record<string, [string, object][]>}
  */
 const EXTRA_BODY_SNIPPETS = {
@@ -136,6 +136,7 @@ const EXTRA_BODY_SNIPPETS = {
     ['output_config.effort', { output_config: { effort: 'medium' } }],
     ['thinking', { thinking: { type: 'adaptive' } }],
     ['cache_system', { cache_system: true }],
+    ['cache_ttl', { cache_ttl: '1h' }],
   ],
 };
 

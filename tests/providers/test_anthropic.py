@@ -593,6 +593,44 @@ def _prefix_through(payload: Any, m: int, b: int) -> str:
     return json.dumps(out)
 
 
+def _ttl_payload(options: dict[str, Any]) -> Any:
+    provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
+    return provider._build_payload(
+        entries=[
+            InputEntry(role="system", content="sys"),
+            InputEntry(role="user", content="go"),
+            *_loop_turn(1),
+        ],
+        tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        response_format=None,
+        settings=ModelSettings(provider_options={"anthropic": options}),
+        stream=False,
+    )
+
+
+def test_cache_ttl_applies_one_ttl_to_every_breakpoint() -> None:
+    # One TTL everywhere: the API rejects a 1h breakpoint after a 5m one.
+    payload = _ttl_payload({"cache_ttl": "1h"})
+    one_hour = {"type": "ephemeral", "ttl": "1h"}
+    assert payload["tools"][-1]["cache_control"] == one_hour
+    assert payload["system"][-1]["cache_control"] == one_hour
+    [(m, b, _)] = _marked(payload)
+    assert payload["messages"][m]["content"][b]["cache_control"] == one_hour
+    # A TTL alone opts in; neither knob reaches the wire.
+    assert "cache_ttl" not in payload and "cache_system" not in payload
+
+
+def test_cache_ttl_5m_is_the_default_marker() -> None:
+    assert _ttl_payload({"cache_system": True, "cache_ttl": "5m"}) == _ttl_payload(
+        {"cache_system": True}
+    )
+
+
+def test_cache_ttl_rejects_unknown_values() -> None:
+    with pytest.raises(UserError, match="cache_ttl"):
+        _ttl_payload({"cache_ttl": "2h"})
+
+
 def test_build_payload_maps_settings_cache_and_structured_output() -> None:
     provider = AnthropicProvider(model="claude-haiku-4-5", api_key="x")
 

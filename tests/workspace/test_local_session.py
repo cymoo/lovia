@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import os
+import shlex
+import signal
+import sys
 
 import pytest
 
@@ -1056,6 +1060,61 @@ async def test_cancelled_run_kills_the_process(tmp_path) -> None:
     await asyncio.sleep(1.2)
     # The child was killed with its process group; no orphan ran to completion.
     assert not marker.exists()
+
+
+@pytest.fixture
+async def escaping_command(tmp_path):
+    """A command whose child leaves the process group, keeping its pipes."""
+    pid_file = tmp_path / "escaped.pid"
+    (tmp_path / "escape.py").write_text(
+        "import os, time\n"
+        "os.setsid()\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    # `&& echo` keeps the shell from exec'ing python in its place.
+    yield f"{shlex.quote(sys.executable)} escape.py && echo done", pid_file
+    # The kill cannot reach it, so the test must.
+    if pid_file.exists():
+        with contextlib.suppress(ProcessLookupError, ValueError):
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        await asyncio.sleep(0.1)  # let the loop see its pipes close
+
+
+_needs_setsid = pytest.mark.skipif(
+    not hasattr(os, "setsid"), reason="Windows kills the whole tree via taskkill"
+)
+
+
+@_needs_setsid
+async def test_run_timeout_is_not_held_by_escaped_descendant(
+    tmp_path, escaping_command
+) -> None:
+    command, _ = escaping_command
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    result = await asyncio.wait_for(session.run(command, timeout=1), 10)
+    assert result.timed_out is True
+    assert loop.time() - start < 1 + local_module._REAP_GRACE + 2
+
+
+@_needs_setsid
+async def test_cancelled_run_is_not_held_by_escaped_descendant(
+    tmp_path, escaping_command
+) -> None:
+    command, pid_file = escaping_command
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    task = asyncio.create_task(session.run(command, timeout=60))
+    while not pid_file.exists():
+        await asyncio.sleep(0.05)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+    assert loop.time() - start < local_module._REAP_GRACE + 2
 
 
 async def test_close_kills_inflight_processes(tmp_path) -> None:

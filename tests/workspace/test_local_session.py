@@ -1168,6 +1168,25 @@ async def test_close_is_not_held_by_escaped_stragglers(
     assert not any(result.ok for result in results)
 
 
+async def test_run_reports_exit_code_when_eof_beats_exit_status(
+    tmp_path, monkeypatch
+) -> None:
+    # Slower child watchers (Linux on 3.10/3.11) can deliver the exit status
+    # after the pipes reach EOF; run() must still wait for it.
+    from asyncio import base_subprocess
+
+    transport = base_subprocess.BaseSubprocessTransport
+    real = transport._process_exited
+
+    def late(self, returncode):
+        self._loop.call_later(0.3, real, self, returncode)
+
+    monkeypatch.setattr(transport, "_process_exited", late)
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    result = await session.run("echo hi")
+    assert result.exit_code == 0 and result.stdout == "hi\n"
+
+
 async def test_run_returns_when_shell_exits_and_kills_leftovers(tmp_path) -> None:
     # `&` leaves a child holding the output pipes after the shell exits; the
     # call must not wait for it, and the child must not outlive the call.

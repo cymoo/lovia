@@ -1295,6 +1295,10 @@ async def _communicate(proc: "asyncio.subprocess.Process") -> tuple[bytes, bytes
         for task in readers:
             if task.done():
                 task.result()  # surface a read error
+        if not pending:
+            # EOF can beat the exit status; with the pipes closed, wait() is
+            # the plain exit wait communicate() ends with.
+            await proc.wait()
     finally:
         for task in readers:
             task.cancel()

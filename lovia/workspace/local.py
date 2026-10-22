@@ -20,6 +20,7 @@ import os
 import re
 import signal
 import stat as stat_module
+import subprocess
 import tempfile
 import uuid
 import weakref
@@ -68,6 +69,31 @@ logger = logging.getLogger(__name__)
 # inherit_env=True, or pass specific vars via env=.
 _ENV_PASSTHROUGH = frozenset(
     {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "TMPDIR"}
+)
+# Winsock expands %SystemRoot% to load mswsock.dll; stripping it can make
+# even socket.socket() fail with WinError 10106. Keep Windows' shell and
+# temp-directory plumbing too, plus the HOME/USER equivalents
+# (Path.home() and getpass.getuser() need them) and the standard folders
+# tools locate themselves by — paths and names only, never secrets.
+_WINDOWS_ENV_PASSTHROUGH = frozenset(
+    {
+        "SYSTEMROOT",
+        "WINDIR",
+        "SYSTEMDRIVE",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+    }
 )
 
 
@@ -399,11 +425,17 @@ class LocalWorkspaceSession:
         if self.inherit_env:
             env = dict(os.environ)
         else:
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if key in _ENV_PASSTHROUGH or key.startswith("LC_")
-            }
+            windows = os.name == "nt"
+            allowed = _ENV_PASSTHROUGH
+            if windows:
+                allowed = allowed | _WINDOWS_ENV_PASSTHROUGH
+            env = {}
+            for key, value in os.environ.items():
+                # Windows environment names are case-insensitive; normalize
+                # them like os.environ so the venv PATH handling below agrees.
+                name = key.upper() if windows else key
+                if name in allowed or name.startswith("LC_"):
+                    env[name] = value
         found = _venv_bin_dir(self._root)
         if found is not None:
             venv_dir, bin_dir = found
@@ -1213,9 +1245,24 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
-    """Kill ``proc`` and its process group (started with start_new_session)."""
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    """Kill ``proc`` and its descendants: its POSIX process group (started
+    with start_new_session), or its Windows process tree."""
+    if os.name == "nt":
+        # No process groups here, and cmd.exe /c runs the real program as its
+        # child, holding the output pipes: killing only the shell would leave
+        # proc.wait() blocked until that child exits. taskkill /T walks the
+        # tree from the parent, so it must run before proc.kill().
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+    else:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
 

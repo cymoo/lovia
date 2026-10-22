@@ -283,8 +283,12 @@ class LocalWorkspaceSession:
             # dead group is suppressed inside _kill_process_group.
             _kill_process_group(bp.proc)
             bp.reader.cancel()
-        # Concurrently: each reap may sit out its full grace period.
-        await asyncio.gather(*map(_reap, procs), *(_reap(bp.proc) for bp in bgs))
+        # One by one is fine: once a reap has sat out its grace period, every
+        # other killed shell has exited too and its wait() returns at once.
+        for proc in procs:
+            await _reap(proc)
+        for bp in bgs:
+            await _reap(bp.proc)
         if bgs:
             # Let the cancelled readers finish unwinding so no task outlives
             # the session; return_exceptions collects their CancelledError.
@@ -1237,8 +1241,9 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
 
 # asyncio's wait() resolves only once the process has exited *and* every pipe
 # has closed, and a descendant that escaped the kill (setsid, a daemonizing
-# tool) can hold the pipes open indefinitely. Its pipes stay open until it
-# exits; the call that killed the shell returns regardless.
+# tool) can hold the pipes open indefinitely. The call that killed the shell
+# returns regardless; our ends of those pipes are released later, normally
+# once that descendant exits.
 _REAP_GRACE = 2.0
 
 

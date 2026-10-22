@@ -89,8 +89,15 @@ ACL 有三个决策值，分别作用于两个执行环节：
 所有截断都会在输出中说明。
 
 shell 执行细节：命令通过系统 shell 运行，默认使用**最小环境**（`PATH`、`HOME`、locale，不传 secrets；
-`inherit_env=True` 才继承完整环境，`env=` 可加特定变量），运行在新的 process group 中；超时会杀掉整个
-process group，并报告 `timed_out=True`。
+`inherit_env=True` 才继承完整环境，`env=` 可加特定变量）。超时报告 `timed_out=True`：
+POSIX 下终止新建的整个 process group；Windows 下只终止直接启动的 shell 进程，
+不保证其后代进程一并终止。
+
+Windows 下还会保留宿主环境中已有的 `SYSTEMROOT`、`WINDIR`、`COMSPEC`、`PATHEXT`、
+`TEMP` 和 `TMP`。其中 Winsock 需要 `SYSTEMROOT` 才能加载 provider DLL；缺少它时，
+仅创建 socket 就可能报 `WinError 10106`。前台和后台命令遵循相同的环境规则。
+API key、代理配置和自定义 CA 变量仍需通过 `env=` 显式传入；
+`lovia web --trust-env` 只控制模型 provider 的 HTTP 请求。
 
 ## 后台进程
 

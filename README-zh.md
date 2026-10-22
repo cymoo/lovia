@@ -386,6 +386,10 @@ agent = Agent(
 )
 ```
 
+Shell 命令继承最小环境，包括 Windows 系统、命令解释器和临时目录变量，确保默认配置下
+socket 可以正常工作。API key 和代理配置不会自动继承；需要的变量通过
+`Workspace.local(..., env={...})` 显式传入。
+
 → [工作区](https://cymoo.github.io/lovia/zh/workspace/)
 
 ### 插件

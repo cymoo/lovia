@@ -69,6 +69,12 @@ logger = logging.getLogger(__name__)
 _ENV_PASSTHROUGH = frozenset(
     {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TZ", "TMPDIR"}
 )
+# Winsock expands %SystemRoot% to load mswsock.dll; stripping it can make
+# even socket.socket() fail with WinError 10106. Keep Windows' shell and
+# temp-directory plumbing too, without inheriting user config or secrets.
+_WINDOWS_ENV_PASSTHROUGH = frozenset(
+    {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"}
+)
 
 
 # Binary/encoding sniffing shared by read_text and grep. A NUL in the leading
@@ -399,11 +405,17 @@ class LocalWorkspaceSession:
         if self.inherit_env:
             env = dict(os.environ)
         else:
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if key in _ENV_PASSTHROUGH or key.startswith("LC_")
-            }
+            windows = os.name == "nt"
+            allowed = _ENV_PASSTHROUGH
+            if windows:
+                allowed = allowed | _WINDOWS_ENV_PASSTHROUGH
+            env = {}
+            for key, value in os.environ.items():
+                # Windows environment names are case-insensitive; normalize
+                # them like os.environ so the venv PATH handling below agrees.
+                name = key.upper() if windows else key
+                if name in allowed or name.startswith("LC_"):
+                    env[name] = value
         found = _venv_bin_dir(self._root)
         if found is not None:
             venv_dir, bin_dir = found
@@ -1213,9 +1225,11 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
-    """Kill ``proc`` and its process group (started with start_new_session)."""
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    """Kill ``proc`` and, on POSIX, its group (started with start_new_session)."""
+    # Windows has no killpg/getpgid; fall back to subprocess termination.
+    if os.name != "nt":
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
 

@@ -42,6 +42,24 @@ jobs:
       - name: Pytest
         run: uv run pytest
 
+  # Keep the Windows child-process environment usable without passing secrets.
+  # The rest of the workspace suite contains POSIX-only shell commands.
+  test-windows-env:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Pytest (shell environment and sockets)
+        run: uv run pytest tests/workspace/test_shell_env.py
+
   # The lockfile pins the mcp SDK at 1.x, but the MCP plugin supports 2.x too:
   # rerun its tests (including a real stdio round trip) on the newest 2.x.
   test-mcp-2:
@@ -173,7 +191,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [lint, test, test-mcp-2, typecheck-web]
+    needs: [lint, test, test-mcp-2, test-windows-env, typecheck-web]
     runs-on: ubuntu-latest
     environment:
       name: pypi

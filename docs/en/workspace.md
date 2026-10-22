@@ -111,8 +111,17 @@ truncation is announced in the output.
 Shell execution details worth knowing: commands run via the system shell
 with a **minimal environment** by default (`PATH`, `HOME`, locale — secrets
 are not passed through; `inherit_env=True` opts into the full environment,
-`env=` adds specific variables), in a fresh process group; a timeout kills
-the whole group and reports `timed_out=True`.
+`env=` adds specific variables). A timeout reports `timed_out=True` and kills
+the fresh process group on POSIX; on Windows it terminates the direct shell
+process, without guaranteeing termination of its descendants.
+
+On Windows, the minimal environment also keeps `SYSTEMROOT`, `WINDIR`,
+`COMSPEC`, `PATHEXT`, `TEMP`, and `TMP` when present in the host environment.
+In particular, Winsock needs `SYSTEMROOT` to load its provider DLLs; removing
+it can cause `WinError 10106` even when creating a socket. Foreground and
+background commands use the same environment rules. API keys, proxy settings,
+and custom CA variables still require explicit `env=` configuration;
+`lovia web --trust-env` only controls model-provider HTTP requests.
 
 ## Background processes
 

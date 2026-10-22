@@ -46,7 +46,17 @@ def test_base_env_keeps_platform_basics_only(tmp_path, monkeypatch, platform):
         expected.update(
             {
                 key.upper(): host[key]
-                for key in ("SystemRoot", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP")
+                for key in (
+                    "SystemRoot",
+                    "windir",
+                    "ComSpec",
+                    "PATHEXT",
+                    "TEMP",
+                    "TMP",
+                    "USERPROFILE",
+                    "APPDATA",
+                    "LOCALAPPDATA",
+                )
             }
         )
     assert session._base_env() == expected
@@ -68,11 +78,13 @@ async def test_shell_socket_and_environment(
     monkeypatch.setenv("LOVIA_TEST_SECRET", "host-secret")
     monkeypatch.setenv("LOVIA_TEST_OVERRIDE", "host")
     (tmp_path / "probe.py").write_text(
-        "import json, os, socket, tempfile\n"
+        "import getpass, json, os, pathlib, socket, tempfile\n"
         "with socket.socket():\n"
         "    pass\n"
         "with tempfile.TemporaryFile() as f:\n"
         "    f.write(b'ok')\n"
+        "pathlib.Path.home()\n"
+        "getpass.getuser()\n"
         "print(json.dumps({\n"
         "    'secret': os.getenv('LOVIA_TEST_SECRET'),\n"
         "    'override': os.getenv('LOVIA_TEST_OVERRIDE'),\n"
@@ -121,10 +133,46 @@ async def test_shell_socket_and_environment(
         await session.close()
 
 
-def test_windows_cleanup_uses_subprocess_termination(monkeypatch):
-    killed = []
-    # These POSIX APIs do not exist on Windows, even for an exited process.
+def test_windows_cleanup_kills_tree_before_shell(monkeypatch):
+    calls = []
+    # killpg/getpgid do not exist on Windows, even for an exited process.
     monkeypatch.setattr(local_module, "os", SimpleNamespace(name="nt"))
-    proc = SimpleNamespace(kill=lambda: killed.append(True))
+    monkeypatch.setattr(
+        local_module.subprocess, "run", lambda args, **_: calls.append(args)
+    )
+    proc = SimpleNamespace(pid=42, kill=lambda: calls.append("kill"))
     local_module._kill_process_group(proc)
-    assert killed == [True]
+    assert calls == [["taskkill", "/F", "/T", "/PID", "42"], "kill"]
+
+
+@pytest.mark.parametrize("background", [False, True], ids=["run", "spawn"])
+async def test_kill_reaps_grandchild_holding_pipes(tmp_path, background):
+    """The shell's child inherits its pipes: killing only the shell would
+    orphan it, and leave run()'s wait() blocked until it exits on its own."""
+    beat = tmp_path / "beat"
+    (tmp_path / "beater.py").write_text(
+        "import time\n"
+        "while True:\n"
+        "    with open('beat', 'a') as f:\n"
+        "        f.write('.')\n"
+        "    time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    python = f'"{sys.executable}"' if os.name == "nt" else shlex.quote(sys.executable)
+    # `&& echo` keeps a POSIX shell from exec'ing python in its place.
+    command = f"{python} beater.py && echo done"
+    session = await Workspace.local(str(tmp_path)).open()
+    try:
+        if background:
+            started = await session.spawn(command)
+            while not beat.exists():
+                await asyncio.sleep(0.05)
+            await asyncio.wait_for(session.kill_process(started.process_id), 20)
+        else:
+            result = await asyncio.wait_for(session.run(command, timeout=2), 20)
+            assert result.timed_out
+        size = beat.stat().st_size
+        await asyncio.sleep(0.5)
+        assert beat.stat().st_size == size, "descendant still running"
+    finally:
+        await asyncio.wait_for(session.close(), 20)

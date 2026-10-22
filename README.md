@@ -414,7 +414,8 @@ agent = Agent(
 ```
 
 Shell commands inherit a minimal environment, including Windows system,
-shell, and temporary-directory variables so sockets work by default.
+shell, temporary-directory, and user-profile variables so sockets and home
+lookups work by default.
 API keys and proxy settings are not inherited; pass required variables via
 `Workspace.local(..., env={...})`.
 

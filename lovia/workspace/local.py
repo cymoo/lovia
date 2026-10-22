@@ -20,6 +20,7 @@ import os
 import re
 import signal
 import stat as stat_module
+import subprocess
 import tempfile
 import uuid
 import weakref
@@ -71,9 +72,28 @@ _ENV_PASSTHROUGH = frozenset(
 )
 # Winsock expands %SystemRoot% to load mswsock.dll; stripping it can make
 # even socket.socket() fail with WinError 10106. Keep Windows' shell and
-# temp-directory plumbing too, without inheriting user config or secrets.
+# temp-directory plumbing too, plus the HOME/USER equivalents
+# (Path.home() and getpass.getuser() need them) and the standard folders
+# tools locate themselves by — paths and names only, never secrets.
 _WINDOWS_ENV_PASSTHROUGH = frozenset(
-    {"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"}
+    {
+        "SYSTEMROOT",
+        "WINDIR",
+        "SYSTEMDRIVE",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "USERNAME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+    }
 )
 
 
@@ -1225,9 +1245,22 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
-    """Kill ``proc`` and, on POSIX, its group (started with start_new_session)."""
-    # Windows has no killpg/getpgid; fall back to subprocess termination.
-    if os.name != "nt":
+    """Kill ``proc`` and its descendants: its POSIX process group (started
+    with start_new_session), or its Windows process tree."""
+    if os.name == "nt":
+        # No process groups here, and cmd.exe /c runs the real program as its
+        # child, holding the output pipes: killing only the shell would leave
+        # proc.wait() blocked until that child exits. taskkill /T walks the
+        # tree from the parent, so it must run before proc.kill().
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+    else:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):

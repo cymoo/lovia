@@ -91,7 +91,9 @@ ACL 有三个决策值，分别作用于两个执行环节：
 shell 执行细节：命令通过系统 shell 运行，默认使用**最小环境**（`PATH`、`HOME`、locale，不传 secrets；
 `inherit_env=True` 才继承完整环境，`env=` 可加特定变量）。超时报告 `timed_out=True`，
 并连同后代进程一起终止：POSIX 下终止新建的整个 process group，Windows 下终止整棵进程树
-（`taskkill /T`）。
+（`taskkill /T`）。前台命令在 shell 退出时也随之结束：如果它启动的进程（`server &`、守护进程）
+两秒后仍占着输出，调用会停止读取、终止命令剩下的进程，并在 `stderr` 中注明；长期运行的进程请用
+`background=true` 启动。
 
 Windows 下还会保留宿主环境中已有的以下变量：系统路径（`SYSTEMROOT`、`WINDIR`、`SYSTEMDRIVE`）、
 命令解释器（`COMSPEC`、`PATHEXT`）、临时目录（`TEMP`、`TMP`）、用户目录与用户名

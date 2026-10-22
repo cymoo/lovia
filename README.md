@@ -394,7 +394,8 @@ File and shell tools scoped to a root, governed by one `allow`/`ask`/`deny`
 policy over paths *and* commands — `ask` decisions ride the normal approval
 channel. `shell(background=true)` runs dev servers, watchers, and long
 builds as session-owned background processes (poll `read_process_output`,
-stop with `kill_process`):
+stop with `kill_process`); a foreground command's leftovers (`cmd &`) die
+with it:
 
 ```python
 from lovia import Agent

@@ -113,7 +113,11 @@ with a **minimal environment** by default (`PATH`, `HOME`, locale — secrets
 are not passed through; `inherit_env=True` opts into the full environment,
 `env=` adds specific variables). A timeout reports `timed_out=True` and kills
 the command with its descendants: the fresh process group on POSIX, the
-process tree (`taskkill /T`) on Windows.
+process tree (`taskkill /T`) on Windows. A foreground command also ends
+when its shell exits: if something it started (`server &`, a daemon) still
+holds the output open two seconds later, the call stops reading, kills what
+is left of the command, and notes it in `stderr` — run long-lived processes
+with `background=true`.
 
 On Windows, the minimal environment also keeps these variables when present
 in the host environment: system paths (`SYSTEMROOT`, `WINDIR`, `SYSTEMDRIVE`),

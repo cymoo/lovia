@@ -1020,8 +1020,8 @@ class LocalWorkspaceSession:
             raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
 
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=command_timeout
+            stdout_b, stderr_b, held = await asyncio.wait_for(
+                _communicate(proc), timeout=command_timeout
             )
         except asyncio.TimeoutError:
             _kill_process_group(proc)
@@ -1041,11 +1041,22 @@ class LocalWorkspaceSession:
         finally:
             self._procs.discard(proc)
 
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        if held:
+            # A foreground command must not outlive its call; long-lived
+            # processes belong in spawn().
+            _kill_process_group(proc)
+            note = (
+                "[the shell exited but a process it started kept the output "
+                "open; stopped reading and killed what was left — run "
+                "long-lived processes with background=true]"
+            )
+            stderr = f"{stderr}\n{note}" if stderr else note
         return self._clip_command_result(
             CommandResult(
                 exit_code=proc.returncode,
                 stdout=stdout_b.decode("utf-8", errors="replace"),
-                stderr=stderr_b.decode("utf-8", errors="replace"),
+                stderr=stderr,
             )
         )
 
@@ -1239,11 +1250,12 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
         await bp.proc.wait()
 
 
-# asyncio's wait() resolves only once the process has exited *and* every pipe
-# has closed, and a descendant that escaped the kill (setsid, a daemonizing
-# tool) can hold the pipes open indefinitely. The call that killed the shell
-# returns regardless; our ends of those pipes are released later, normally
-# once that descendant exits.
+# How long to keep waiting on a shell's pipes once the shell itself is gone.
+# A descendant that outlives it (`cmd &`, setsid, a daemonizing tool) inherits
+# the pipes and can hold them open indefinitely — and asyncio's wait()
+# resolves only once the process has exited *and* every pipe has closed.
+# Callers return regardless; our ends of those pipes are released later,
+# normally once that descendant exits.
 _REAP_GRACE = 2.0
 
 
@@ -1251,6 +1263,42 @@ async def _reap(proc: "asyncio.subprocess.Process") -> None:
     """Wait for a just-killed ``proc``, for at most ``_REAP_GRACE`` seconds."""
     with contextlib.suppress(Exception):
         await asyncio.wait_for(proc.wait(), _REAP_GRACE)
+
+
+async def _communicate(proc: "asyncio.subprocess.Process") -> tuple[bytes, bytes, bool]:
+    """``proc.communicate()``, but done ``_REAP_GRACE`` after the shell exits.
+
+    A process the command left behind (``server &``, a daemon) inherits the
+    pipes and may keep them open for good, so waiting for EOF alone could
+    outlast the command by up to its whole timeout. The flag says whether
+    the pipes were still held when reading stopped.
+    """
+    assert proc.stdout is not None and proc.stderr is not None
+    out, err = bytearray(), bytearray()
+
+    async def drain(stream: asyncio.StreamReader, buf: bytearray) -> None:
+        while chunk := await stream.read(65536):
+            buf += chunk
+
+    readers = [
+        asyncio.create_task(drain(proc.stdout, out)),
+        asyncio.create_task(drain(proc.stderr, err)),
+    ]
+    try:
+        # Poll for the exit: asyncio's own wait() also waits for the pipes.
+        # EOF, the usual case, still wakes this at once.
+        pending: set[asyncio.Task[None]] = set(readers)
+        while pending and proc.returncode is None:
+            _, pending = await asyncio.wait(pending, timeout=0.1)
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=_REAP_GRACE)
+        for task in readers:
+            if task.done():
+                task.result()  # surface a read error
+    finally:
+        for task in readers:
+            task.cancel()
+    return bytes(out), bytes(err), bool(pending)
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
@@ -1270,8 +1318,11 @@ def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
                 timeout=10,
             )
     else:
+        # start_new_session made the shell its group's leader, so the group id
+        # is its pid — and the group outlives the shell while members remain,
+        # where os.getpgid() on the dead shell would fail.
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
 

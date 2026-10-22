@@ -1162,10 +1162,25 @@ async def test_close_is_not_held_by_escaped_stragglers(
     await asyncio.wait_for(session.close(), 10)
     # One grace period for both, not one each.
     assert loop.time() - start < 2 * local_module._REAP_GRACE
-    # Their run() calls still read pipes the stragglers hold; end them here.
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # Their run() calls stop reading too, though the stragglers hold the pipes.
+    results = await asyncio.wait_for(asyncio.gather(*tasks), 10)
+    assert loop.time() - start < 2 * local_module._REAP_GRACE
+    assert not any(result.ok for result in results)
+
+
+async def test_run_returns_when_shell_exits_and_kills_leftovers(tmp_path) -> None:
+    # `&` leaves a child holding the output pipes after the shell exits; the
+    # call must not wait for it, and the child must not outlive the call.
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    marker = tmp_path / "marker"
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    result = await session.run(f"(sleep 3; touch {marker}) & echo hi", timeout=60)
+    assert loop.time() - start < local_module._REAP_GRACE + 1
+    assert result.exit_code == 0 and result.stdout == "hi\n"
+    assert "background=true" in result.stderr
+    await asyncio.sleep(1.5)
+    assert not marker.exists()
 
 
 async def test_close_kills_inflight_processes(tmp_path) -> None:

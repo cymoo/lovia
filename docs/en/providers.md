@@ -214,6 +214,19 @@ they stay cached.
   Cache reads/writes surface as `usage.cache_read_tokens` /
   `usage.cache_write_tokens`.
 
+  Breakpoints default to the API's 5-minute TTL, and every read refreshes
+  it — fine while turns follow each other quickly. A chat where the user
+  pauses longer between messages re-pays the whole history on each return;
+  `cache_ttl: "1h"` keeps it warm for an hour (implies `cache_system`):
+
+  ```python
+  settings = ModelSettings(provider_options={"anthropic": {"cache_ttl": "1h"}})
+  ```
+
+  A 1-hour write costs 2× base input instead of 1.25×, so it pays off only
+  when turns sharing a prefix start 5–60 minutes apart. Compatible gateways
+  may not accept the `ttl` field.
+
 Either way, `usage.input_tokens` is the **full** prompt size, cached tokens
 included — the cache fields break the total down; they don't add to it.
 Keep the prefix stable to benefit: volatile

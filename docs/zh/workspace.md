@@ -93,7 +93,8 @@ shell 执行细节：命令通过系统 shell 运行，默认使用**最小环�
 并连同后代进程一起终止：POSIX 下终止新建的整个 process group，Windows 下终止整棵进程树
 （`taskkill /T`）。前台命令在 shell 退出时也随之结束：如果它启动的进程（`server &`、守护进程）
 两秒后仍占着输出，调用会停止读取、终止命令剩下的进程，并在 `stderr` 中注明；长期运行的进程请用
-`background=true` 启动。
+`background=true` 启动。重定向了输出的残留进程（`nohup x >log 2>&1 &`）不受跟踪，会继续运行，
+`close()` 之后也不例外。
 
 Windows 下还会保留宿主环境中已有的以下变量：系统路径（`SYSTEMROOT`、`WINDIR`、`SYSTEMDRIVE`）、
 命令解释器（`COMSPEC`、`PATHEXT`）、临时目录（`TEMP`、`TMP`）、用户目录与用户名

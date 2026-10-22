@@ -117,7 +117,8 @@ process tree (`taskkill /T`) on Windows. A foreground command also ends
 when its shell exits: if something it started (`server &`, a daemon) still
 holds the output open two seconds later, the call stops reading, kills what
 is left of the command, and notes it in `stderr` — run long-lived processes
-with `background=true`.
+with `background=true`. A leftover that redirected its output
+(`nohup x >log 2>&1 &`) is not tracked: it keeps running, past `close()` too.
 
 On Windows, the minimal environment also keeps these variables when present
 in the host environment: system paths (`SYSTEMROOT`, `WINDIR`, `SYSTEMDRIVE`),

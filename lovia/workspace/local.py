@@ -283,12 +283,12 @@ class LocalWorkspaceSession:
             # dead group is suppressed inside _kill_process_group.
             _kill_process_group(bp.proc)
             bp.reader.cancel()
+        # One by one is fine: once a reap has sat out its grace period, every
+        # other killed shell has exited too and its wait() returns at once.
         for proc in procs:
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
         for bp in bgs:
-            with contextlib.suppress(Exception):
-                await bp.proc.wait()
+            await _reap(bp.proc)
         if bgs:
             # Let the cancelled readers finish unwinding so no task outlives
             # the session; return_exceptions collects their CancelledError.
@@ -1016,8 +1016,7 @@ class LocalWorkspaceSession:
         if self._closed:
             self._procs.discard(proc)
             _kill_process_group(proc)
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
             raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
 
         try:
@@ -1026,8 +1025,7 @@ class LocalWorkspaceSession:
             )
         except asyncio.TimeoutError:
             _kill_process_group(proc)
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
             return CommandResult(
                 exit_code=None,
                 stdout="",
@@ -1038,8 +1036,7 @@ class LocalWorkspaceSession:
             # Cancellation (run aborted, tool timeout) or any other abrupt
             # exit must not orphan the child: kill its whole process group.
             _kill_process_group(proc)
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
             raise
         finally:
             self._procs.discard(proc)
@@ -1133,8 +1130,7 @@ class LocalWorkspaceSession:
             self._bg.pop(process_id, None)
             _kill_process_group(proc)
             bp.reader.cancel()
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await _reap(proc)
             raise WorkspaceClosedError(f"Workspace session {self.id} is closed.")
         return ProcessStart(process_id=process_id, pid=proc.pid, command=command)
 
@@ -1172,8 +1168,7 @@ class LocalWorkspaceSession:
             _kill_process_group(bp.proc)
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(asyncio.shield(bp.reader), timeout=2.0)
-        with contextlib.suppress(Exception):
-            await bp.proc.wait()
+        await _reap(bp.proc)
         return bp.snapshot()
 
     def background_processes(self) -> list[ProcessStatus]:
@@ -1242,6 +1237,20 @@ async def _drain_background(bp: _BackgroundProcess) -> None:
         logger.debug("background %s: output pipe closed (%s)", bp.id, exc)
     with contextlib.suppress(Exception):
         await bp.proc.wait()
+
+
+# asyncio's wait() resolves only once the process has exited *and* every pipe
+# has closed, and a descendant that escaped the kill (setsid, a daemonizing
+# tool) can hold the pipes open indefinitely. The call that killed the shell
+# returns regardless; our ends of those pipes are released later, normally
+# once that descendant exits.
+_REAP_GRACE = 2.0
+
+
+async def _reap(proc: "asyncio.subprocess.Process") -> None:
+    """Wait for a just-killed ``proc``, for at most ``_REAP_GRACE`` seconds."""
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), _REAP_GRACE)
 
 
 def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:

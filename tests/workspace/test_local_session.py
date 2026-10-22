@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import os
+import shlex
+import signal
+import sys
 
 import pytest
 
@@ -1056,6 +1060,112 @@ async def test_cancelled_run_kills_the_process(tmp_path) -> None:
     await asyncio.sleep(1.2)
     # The child was killed with its process group; no orphan ran to completion.
     assert not marker.exists()
+
+
+@pytest.fixture
+async def escaping_command(tmp_path):
+    """Build commands whose child leaves the process group, keeping its pipes.
+
+    ``escaping_command(name)`` returns ``(command, pid_file)``; the pid file
+    appears (atomically) only once the child has escaped.
+    """
+    (tmp_path / "escape.py").write_text(
+        "import os, sys, time\n"
+        "os.setsid()\n"
+        "with open(sys.argv[1] + '.tmp', 'w') as f:\n"
+        "    f.write(str(os.getpid()))\n"
+        "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    pid_files = []
+
+    def build(name: str = "escaped"):
+        pid_files.append(tmp_path / f"{name}.pid")
+        # `&& echo` keeps the shell from exec'ing python in its place.
+        command = f"{shlex.quote(sys.executable)} escape.py {name}.pid && echo done"
+        return command, pid_files[-1]
+
+    yield build
+    # The kill cannot reach them, so the test must.
+    for pid_file in pid_files:
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+    await asyncio.sleep(0.1)  # let the loop see their pipes close
+
+
+async def _await_escape(pid_file, task: asyncio.Task, timeout: float = 10) -> None:
+    """Wait until the child behind ``task`` has escaped, failing fast if the
+    run ends first or the child never starts."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not pid_file.exists():
+        if task.done():
+            pytest.fail(f"run ended before its child escaped: {task.result()!r}")
+        if loop.time() > deadline:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            pytest.fail(f"child never escaped within {timeout}s")
+        await asyncio.sleep(0.05)
+
+
+_needs_setsid = pytest.mark.skipif(
+    not hasattr(os, "setsid"), reason="Windows kills the whole tree via taskkill"
+)
+
+
+@_needs_setsid
+async def test_run_timeout_is_not_held_by_escaped_descendant(
+    tmp_path, escaping_command
+) -> None:
+    command, pid_file = escaping_command()
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    result = await asyncio.wait_for(session.run(command, timeout=2), 10)
+    assert result.timed_out is True
+    assert loop.time() - start < 2 + local_module._REAP_GRACE + 2
+    # Otherwise the shell died before the child escaped: nothing was tested.
+    assert pid_file.exists()
+
+
+@_needs_setsid
+async def test_cancelled_run_is_not_held_by_escaped_descendant(
+    tmp_path, escaping_command
+) -> None:
+    command, pid_file = escaping_command()
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    task = asyncio.create_task(session.run(command, timeout=60))
+    await _await_escape(pid_file, task)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+    assert loop.time() - start < local_module._REAP_GRACE + 2
+
+
+@_needs_setsid
+async def test_close_is_not_held_by_escaped_stragglers(
+    tmp_path, escaping_command
+) -> None:
+    session = await _session(tmp_path, policy=WorkspacePolicy.trusted())
+    tasks = []
+    for name in ("a", "b"):
+        command, pid_file = escaping_command(name)
+        tasks.append(asyncio.create_task(session.run(command, timeout=60)))
+        await _await_escape(pid_file, tasks[-1])
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await asyncio.wait_for(session.close(), 10)
+    # One grace period for both, not one each.
+    assert loop.time() - start < 2 * local_module._REAP_GRACE
+    # Their run() calls still read pipes the stragglers hold; end them here.
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def test_close_kills_inflight_processes(tmp_path) -> None:

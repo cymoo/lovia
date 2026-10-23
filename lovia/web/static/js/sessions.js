@@ -7,7 +7,7 @@ import { toast } from './toast.js';
 import { icon } from './icons.js';
 import { exportSessionHtml, exportFilename } from './export.js';
 import { notificationsEnabled, playCompletionSound } from './settings.js';
-import { formatDateTime, formatTimeSmart } from './util.js';
+import { dateBucket, formatDateTime, formatTimeSmart } from './util.js';
 import { closeView } from './views.js';
 
 const sessionsList = document.getElementById('sessions-list');
@@ -294,6 +294,7 @@ export async function loadSessions(query = sessionSearch?.value.trim() ?? '') {
 let _lastRenderSig = null;
 function sessionsSignature() {
   return JSON.stringify([
+    new Date().toDateString(), // the date groups move at midnight
     store.sessionId,
     _hasMore,
     !!sessionSearch?.value.trim(), // the empty state's wording depends on it
@@ -476,8 +477,19 @@ if (tasksBtn && tasksPopover) {
   });
 }
 
+// The date groups move at midnight even when no data does: re-render then
+// (the poll loop is off while /api/events is live).
+let _midnightTimer = null;
+function scheduleMidnightRender() {
+  clearTimeout(_midnightTimer);
+  const now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  _midnightTimer = setTimeout(renderSessions, midnight.getTime() - now.getTime() + 1000);
+}
+
 function renderSessions() {
   if (!sessionsList) return;
+  scheduleMidnightRender();
   const sig = sessionsSignature();
   if (sig === _lastRenderSig) return; // nothing changed — keep the DOM as-is
   _lastRenderSig = sig;
@@ -493,33 +505,42 @@ function renderSessions() {
     sessionsList.appendChild(empty);
     return;
   }
-  let prevPinned = false;
+  // Pinned, then date groups (the server sorts pinned first, then by recency,
+  // so each group is one run of rows). A lone group needs no heading.
+  const now = new Date();
+  const groupOf = (s) => (s.pinned ? 'pinned' : dateBucket(s.updated_at, now));
+  const headed = new Set(chats.map(groupOf)).size > 1;
+  let prevGroup = null;
   for (const s of chats) {
+    const group = groupOf(s);
+    if (headed && group !== prevGroup) {
+      const head = document.createElement('div');
+      head.className = 'session-group';
+      head.textContent = t(`nav.group.${group}`);
+      sessionsList.appendChild(head);
+    }
+    prevGroup = group;
     const item = document.createElement('div');
     item.className = 'session-item';
     if (s.id === store.sessionId) item.classList.add('active');
     if (store.activeRuns?.has(s.id)) item.classList.add('running');
     if (s.pinned) item.classList.add('pinned');
-    // Visually separate the pinned group from the rest.
-    if (!s.pinned && prevPinned) item.classList.add('pin-divider');
-    prevPinned = !!s.pinned;
     item.dataset.id = s.id;
 
     const main = document.createElement('button');
     main.type = 'button';
     main.className = 'session-main';
-    main.title = s.title || s.id;
-    main.innerHTML = `<div class="session-title"></div><div class="session-meta"></div>`;
-    main.querySelector('.session-title').textContent = s.title || t('session.newChat');
-    const meta = /** @type {HTMLElement} */ (main.querySelector('.session-meta'));
-    meta.textContent = formatTimeSmart(s.updated_at);
-    meta.title = formatDateTime(s.updated_at);
+    main.title = sidebarTooltip(s);
+    const title = document.createElement('span');
+    title.className = 'session-title';
+    title.textContent = s.title || t('session.newChat');
+    main.appendChild(title);
     // Which brain a chat belongs to — only worth pixels when there's a choice.
     if (store.agents.length > 1 && s.agent) {
       const chip = document.createElement('span');
       chip.className = 'session-agent';
       chip.textContent = s.agent;
-      meta.append(' · ', chip);
+      main.appendChild(chip);
     }
     main.addEventListener('click', () => switchSession(s.id));
 
@@ -551,6 +572,11 @@ function renderSessions() {
   }
 }
 
+/** A sidebar row's tooltip: its group says roughly when, this says exactly. */
+function sidebarTooltip(s) {
+  return `${s.title || s.id} · ${formatDateTime(s.updated_at)}`;
+}
+
 // ---- Update a single session's title wherever it shows ------------------
 export function updateSessionTitle(sessionId, title) {
   // Update the cached sessions list
@@ -566,7 +592,10 @@ export function updateSessionTitle(sessionId, title) {
     const titleEl = row.querySelector('.session-title, .all-chats-title');
     if (titleEl) titleEl.textContent = label;
     const main = /** @type {HTMLElement | null} */ (row.querySelector('.session-main, .all-chats-main'));
-    if (main) main.title = title || sessionId; // same fallback the rows render with
+    if (main) {
+      // Same text the rows render with.
+      main.title = s && main.classList.contains('session-main') ? sidebarTooltip(s) : title || sessionId;
+    }
   });
 
   // Update header if this is the active session (fall back when cleared)

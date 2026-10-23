@@ -327,6 +327,24 @@ export function formatTimeSmart(ts) {
   return `${d.getFullYear()}-${md} ${hm}`;
 }
 
+/**
+ * The sidebar's date group for a chat last active at `ts`, in local calendar
+ * days (DST-safe): today, yesterday, the 7 / 30 days before, or older. A
+ * future stamp (clock skew) counts as today.
+ * @param {number} ts
+ * @param {Date} [now]
+ * @returns {'today' | 'yesterday' | 'week' | 'month' | 'older'}
+ */
+export function dateBucket(ts, now = new Date()) {
+  const d = toDate(ts);
+  const daysAgo = (n) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - n);
+  if (d >= daysAgo(0)) return 'today';
+  if (d >= daysAgo(1)) return 'yesterday';
+  if (d >= daysAgo(7)) return 'week';
+  if (d >= daysAgo(30)) return 'month';
+  return 'older';
+}
+
 // ---- Attachments -----------------------------------------------------------
 // Browser-renderable image extensions. Mirrors the server's PREVIEW_IMAGE_EXT
 // (lovia/web/media.py) EXACTLY — keep the two in sync. SVG is excluded: it is

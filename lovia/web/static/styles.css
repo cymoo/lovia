@@ -427,7 +427,9 @@ body.sidebar-collapsed .sidebar {
 .sessions-list {
   flex: 1;
   overflow-y: auto;
-  padding: 2px 10px 10px;
+  /* No top padding: a sticky group heading pins to the very edge, with no
+     sliver for scrolled rows to show through above it. */
+  padding: 0 10px 10px;
   overscroll-behavior: contain;
 }
 .sessions-empty {
@@ -575,13 +577,16 @@ body.sidebar-collapsed .sidebar {
 .session-main {
   flex: 1;
   text-align: left;
-  padding: 9px 12px;
+  padding: 7px 12px;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   border-radius: var(--radius-sm);
 }
 .session-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -620,11 +625,31 @@ body.sidebar-collapsed .sidebar {
     opacity: 0.3;
   }
 }
-.session-meta {
+/* The chat's agent, at the row's end — shown only when there's a choice. */
+.session-agent {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--muted-2);
-  margin-top: 1px;
-  font-variant-numeric: tabular-nums;
+}
+/* Date group heading (Pinned / Today / …). Sticky, so a long group keeps its
+   label while it scrolls; opaque, so rows slide under it. */
+.session-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 12px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted-2);
+  background: var(--surface);
+  transition: background var(--t-fast); /* in step with the sidebar's */
+}
+.session-group:not(:first-child) {
+  margin-top: 6px;
 }
 /* Shared by both chat lists — the sidebar rows and the all-chats dialog rows
    build the same pin/rename/delete cluster. */
@@ -687,18 +712,6 @@ body.sidebar-collapsed .sidebar {
   display: none;
 }
 /* Separator below the pinned group. */
-.session-item.pin-divider {
-  margin-top: 8px;
-}
-.session-item.pin-divider::after {
-  content: "";
-  position: absolute;
-  top: -4.5px;
-  left: 10px;
-  right: 10px;
-  height: 1px;
-  background: var(--border);
-}
 
 .agent-select {
   width: 100%;

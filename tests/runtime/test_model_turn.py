@@ -209,6 +209,42 @@ async def test_cancel_token_stops_retry_backoff() -> None:
     assert attempts["n"] == 1  # cancelled during the first backoff
 
 
+async def test_each_retry_announces_itself_and_a_give_up_does_not() -> None:
+    from lovia.events import ModelRetrying
+    from lovia.exceptions import ProviderError
+    from lovia.reliability import RetryPolicy
+
+    class _Down:
+        name = "down"
+
+        async def stream(
+            self, entries, *, tools=None, response_format=None, settings=None
+        ):
+            raise ProviderError("outage", retryable=True)
+            yield  # pragma: no cover - makes this an async generator
+
+    slept: list[float] = []
+
+    async def _record(delay: float) -> None:
+        slept.append(delay)
+
+    seen = []
+    with pytest.raises(ProviderError):
+        async for d in stream_with_retries(
+            _Down(),
+            [],
+            tools=None,
+            response_format=None,
+            settings=None,
+            retry=RetryPolicy(max_attempts=3, sleep=_record),
+        ):
+            seen.append(d)
+    # Attempts 1 and 2 are retried; the third failure gives up silently.
+    assert [(d.attempt, d.max_attempts) for d in seen] == [(1, 3), (2, 3)]
+    assert [d.delay for d in seen] == slept
+    assert all(isinstance(d, ModelRetrying) and str(d.error) for d in seen)
+
+
 async def test_non_retryable_after_partial_raises_without_orphan_reset() -> None:
     # restart_on_partial arms a reset when a failed attempt already streamed
     # output — but a non-retryable error means no replacing attempt follows,

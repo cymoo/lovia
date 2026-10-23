@@ -255,6 +255,29 @@ class ToolCallFailed(ErrorEvent):
 
 
 @dataclass
+class ModelRetrying(ErrorEvent):
+    """A model call failed transiently and will be tried again.
+
+    Emitted per :class:`~lovia.RetryPolicy`, just before the backoff sleep, so
+    a UI can say "retrying" instead of looking stalled. Non-terminal: the next
+    attempt follows ``delay`` seconds later. A give-up emits no
+    ``ModelRetrying``: the error surfaces as :class:`RunFailed`.
+    """
+
+    error: BaseException
+    """The exception the failed attempt raised."""
+
+    attempt: int
+    """The failed attempt's number, 1-based."""
+
+    max_attempts: int
+    """``RetryPolicy.max_attempts``, so ``attempt + 1`` of it comes next."""
+
+    delay: float
+    """Seconds until the next attempt."""
+
+
+@dataclass
 class RunCompleted(RunEvent):
     result: "RunResult"
 

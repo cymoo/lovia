@@ -41,6 +41,9 @@ Provider 重试默认开启。`Agent.retry` 默认为 `RetryPolicy()`：最多�
 Provider 适配器通常把 HTTP 408、429、5xx、网络超时和流中断标为可重试；配置错误通常
 不可重试。`ContextOverflowError` 会进入[上下文压缩](context.md)，不走重试策略。
 
+每次退避前，事件流会发出 [`ModelRetrying`](streaming.md#模型输出)（`error`、`attempt`、
+`max_attempts`、`delay`），UI 可以据此提示“正在重试”，而不是看起来像卡住了。
+
 ## 流式输出中断
 
 启用 `restart_on_partial` 时，Runner 会发出

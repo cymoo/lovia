@@ -248,6 +248,7 @@ of `event:` / `data:` pairs: the Runner's
 | `approval_required` | `{id, name, arguments}` → answer via `POST /api/chat/approve` |
 | `handoff` | `{from, to}` |
 | `turn_started` | `{turn, agent}` |
+| `retrying` | `{attempt, max_attempts, delay, message}` — the model call failed transiently; attempt `attempt + 1` follows in `delay` seconds |
 | `context_compacted` | `{session_id, reason, reactive, summary, tokens_before, tokens_after, detail}` — a [compaction notice](context.md) |
 | `error` | `{type, message, code, status_code?, retryable?, hint?}` — tool-scoped, or terminal when the stream then ends |
 | `refs` | `{refs}` — the `ref`s of the user messages the run just finished holds, in order; precedes `done`. Absent without a checkpointer, or when the run holds a user entry the stream never showed (a structured-output repair prompt): the next load of the chat names them |

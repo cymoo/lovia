@@ -169,6 +169,62 @@ async def test_reattach_and_co_watch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reattach_replays_a_retry_only_while_it_is_current() -> None:
+    from lovia.transcript import FinishDelta, TextDelta
+
+    in_backoff, end_backoff, answer = (asyncio.Event() for _ in range(3))
+
+    class _CutOffOnce:
+        """Attempt 1 streams half an answer and drops; attempt 2 waits on the
+        test, then answers."""
+
+        name = "cut-off-once"
+        model = "fake-model"
+        calls = 0
+
+        async def stream(self, entries, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield TextDelta(text="half")
+                raise ProviderError("connection reset", retryable=True)
+            await answer.wait()
+            yield TextDelta(text="whole")
+            yield FinishDelta(reason="stop")
+
+    async def gated_sleep(_delay: float) -> None:
+        in_backoff.set()
+        await end_backoff.wait()
+
+    provider = _CutOffOnce()
+    agent = Agent(
+        name="bot", model=provider, retry=RetryPolicy(max_attempts=2, sleep=gated_sleep)
+    )
+    async with _client(_app(agent)) as ac:
+        t0, _ = _spawn(
+            ac, "/api/chat/stream", json={"message": "go", "session_id": "s1"}
+        )
+        await asyncio.wait_for(in_backoff.wait(), timeout=3)
+        t1, during = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)
+        end_backoff.set()
+        for _ in range(150):  # attempt 2 has begun: its reset is published
+            if provider.calls == 2:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)
+        t2, after = _spawn(ac, "/api/chat/reconnect", params={"session_id": "s1"})
+        await asyncio.sleep(0.1)
+        answer.set()
+        await asyncio.wait_for(asyncio.gather(t0, t1, t2), timeout=5)
+    kinds = [e for e, _ in _parse_sse("\n".join(during))]
+    # Replayed after the stale partial text, so the client shows the retry.
+    assert kinds.count("retrying") == 1
+    assert kinds.index("text_delta") < kinds.index("retrying")
+    # Past the backoff the notice is stale: a later reconnect doesn't get it.
+    assert "retrying" not in [e for e, _ in _parse_sse("\n".join(after))]
+
+
+@pytest.mark.asyncio
 async def test_detached_approval_blocks_then_resolves_on_reattach() -> None:
     @tool(needs_approval=True)
     async def sensitive() -> str:

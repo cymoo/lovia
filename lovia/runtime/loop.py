@@ -860,7 +860,9 @@ class RunLoop:
         forwarded = False
         try:
             async for ev in self._call_model(state, provider, view, turn, tracer):
-                forwarded = True
+                # A retry notice is no output: re-running the turn won't repeat it.
+                if not isinstance(ev, events.ModelRetrying):
+                    forwarded = True
                 yield ev
             return
         except ContextOverflowError as overflow:

@@ -7,11 +7,10 @@ import { copyToClipboard, openImageLightbox } from './ui.js';
 import { loadSessions, updateSessionTitle } from './sessions.js';
 import { renderMermaid } from './diagrams.js';
 import { icon } from './icons.js';
-import { enterToSend, followupsEnabled } from './settings.js';
+import { enterToSend, followupsEnabled, openSettings } from './settings.js';
 import { readFollowups, writeFollowups, dropFollowups } from './followup-cache.js';
 import {
   cloneTemplate,
-  escapeHtml,
   formatDateTime,
   formatTimeSmart,
   highlightIn,
@@ -309,14 +308,16 @@ function ensureFooter(bubble) {
 
 function appendBubbleContent(bubble, node) {
   if (!bubble || !node) return;
-  const footer = bubble.querySelector(':scope > .turn-footer');
+  // Content lands above the tail: the waiting dots (syncAwaiting), else the
+  // footer — so a step still sees the activity group it extends.
+  const tail = bubble.querySelector(':scope > .awaiting, :scope > .turn-footer');
   if (isStep(node)) {
-    placeStep(bubble, node, footer);
+    placeStep(bubble, node, tail);
     return;
   }
   // The reply's text has started: the steps before it fold away.
   if (node.classList.contains('body')) sealActivity(bubble);
-  bubble.insertBefore(node, footer);
+  bubble.insertBefore(node, tail);
 }
 
 // ---- Date separators -----------------------------------------------------
@@ -1367,12 +1368,25 @@ function appendContextCompacted(target, data) {
   appendBubbleContent(target, node);
 }
 
+// The error codes a person fixes in the model settings, not by waiting.
+const SETTINGS_FIXABLE = new Set(['provider_auth', 'network']);
+/** The code of the run's last `error` event, for the retry row's offer. */
+let _lastErrorCode = '';
+
 function appendRetry() {
   if (!store.bubble) return;
   const node = cloneTemplate('tmpl-retry');
   const btn = node.querySelector('.retry-btn');
   btn.textContent = t('chat.retry');
   btn.addEventListener('click', () => store.emit('retry'));
+  if (store.canConfigureModels && SETTINGS_FIXABLE.has(_lastErrorCode)) {
+    const settings = document.createElement('button');
+    settings.type = 'button';
+    settings.className = 'btn btn-ghost btn-sm';
+    settings.textContent = t('chat.openModelSettings');
+    settings.addEventListener('click', () => openSettings('models'));
+    node.appendChild(settings);
+  }
   appendBubbleContent(store.bubble, node);
   announce(t('a11y.runFailed'), { assertive: true });
 }
@@ -1444,17 +1458,25 @@ function appendErrorNotice(message, code) {
   if (!store.bubble) return;
   const note = document.createElement('div');
   note.className = 'error-notice';
+  note.innerHTML = icon('triangle-alert', { size: 15, cls: 'error-notice-icon' });
+  const main = document.createElement('div');
+  main.className = 'error-notice-main';
   const hint = humanizeError(message, code);
+  const head = document.createElement('div');
+  head.textContent = hint ?? String(message);
+  main.appendChild(head);
   if (hint) {
-    const head = document.createElement('div');
-    head.textContent = `⚠️ ${hint}`;
-    const detail = document.createElement('div');
+    // The raw error, one click away: friendly never means destroyed.
+    const detail = document.createElement('details');
     detail.className = 'error-notice-detail';
-    detail.textContent = String(message);
-    note.append(head, detail);
-  } else {
-    note.textContent = `⚠️ ${message}`;
+    const summary = document.createElement('summary');
+    summary.textContent = t('chat.errorDetails');
+    const raw = document.createElement('div');
+    raw.textContent = String(message);
+    detail.append(summary, raw);
+    main.appendChild(detail);
   }
+  note.appendChild(main);
   appendBubbleContent(store.bubble, note);
   // Begin a fresh body so any recovery text doesn't merge into the pre-error one.
   store.body = null;
@@ -1641,7 +1663,9 @@ function assistantTurnIsEmpty(node) {
   const bubble = node?.querySelector('.bubble');
   if (!bubble) return true;
   for (const child of bubble.children) {
-    if (!child.classList.contains('turn-footer')) return false;
+    if (!child.classList.contains('turn-footer') && !child.classList.contains('awaiting')) {
+      return false;
+    }
   }
   return true;
 }
@@ -1650,6 +1674,7 @@ function assistantTurnIsEmpty(node) {
 // add a copy button, and reset the live-render pointers so the next turn opens
 // clean. Shared by the run-end paths and the injection bubble rotation.
 function finalizeCurrentAssistantTurn() {
+  document.getElementById('awaiting-model')?.remove(); // re-placed in the next bubble
   finalizeReasoning();
   const node = store.turnNode;
   if (node) {
@@ -2131,7 +2156,56 @@ let _lastEvent = '';
 // signature matches the one `tailSig` recomputes from reloaded history.
 let _lastReply = '';
 
-async function handleEvent({ event, data }) {
+// ---- Waiting on the model ------------------------------------------------
+// From a send (and each model call's turn_started) until the model's first
+// sign of life, the bubble's tail breathes three dots — with a line while the
+// provider is being retried. Re-placed at the tail after every event, so a
+// notice landing meanwhile (a compaction) never buries it.
+/** @type {{ retry: { attempt: number, max_attempts: number, message?: string } | null } | null} */
+let _awaiting = null;
+const MODEL_RESPONDED = new Set([
+  'text_delta', 'reasoning_delta', 'tool_call', 'approval_required',
+  'message_completed', 'error', 'done',
+]);
+
+function syncAwaiting() {
+  let el = document.getElementById('awaiting-model');
+  if (!_awaiting || !store.bubble) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'awaiting-model';
+    el.className = 'awaiting';
+    const dots = document.createElement('span');
+    dots.className = 'awaiting-dots';
+    dots.append(...[0, 1, 2].map(() => document.createElement('i')));
+    const text = document.createElement('span');
+    text.className = 'awaiting-text';
+    el.append(dots, text);
+  }
+  const retry = _awaiting.retry;
+  /** @type {HTMLElement} */ (el.querySelector('.awaiting-text')).textContent = retry
+    ? t('chat.retrying', { n: retry.attempt + 1, max: retry.max_attempts })
+    : '';
+  el.title = retry?.message ?? '';
+  // Last, or just above the footer an adopted (reconnected) bubble carries.
+  const footer = store.bubble.querySelector(':scope > .turn-footer');
+  if (el.parentNode !== store.bubble || el.nextElementSibling !== footer) {
+    store.bubble.insertBefore(el, footer);
+  }
+}
+
+/** @param {{ event: string, data: any }} ev */
+async function handleEvent(ev) {
+  if (MODEL_RESPONDED.has(ev.event)) _awaiting = null;
+  await applyEvent(ev);
+  syncAwaiting();
+}
+
+/** @param {{ event: string, data: any }} ev */
+async function applyEvent({ event, data }) {
   _lastEventWasError = event === 'error';
   _lastEvent = event;
   switch (event) {
@@ -2201,6 +2275,9 @@ async function handleEvent({ event, data }) {
       store.reasoningText = '';
       store.reasoningStart = 0;
       store.reasoningEnd = 0;
+      // The replacing attempt is under way: wait on it (keeping a retry line
+      // that's showing; a reconnect's replayed deltas cleared any other).
+      if (!_awaiting) _awaiting = { retry: null };
       break;
 
     case 'message_completed':
@@ -2302,7 +2379,13 @@ async function handleEvent({ event, data }) {
       appendHandoff(data.from, data.to);
       break;
 
+    case 'retrying':
+      _awaiting = { retry: data };
+      announce(t('chat.retrying', { n: data.attempt + 1, max: data.max_attempts }));
+      break;
+
     case 'turn_started':
+      _awaiting = { retry: null };
       _currentTurn = data.turn;
       if (turnProgressEl) {
         turnProgressEl.textContent = t('topbar.turn', { n: data.turn });
@@ -2318,6 +2401,7 @@ async function handleEvent({ event, data }) {
       // `message` can arrive empty (older servers didn't fall back for
       // message-less exceptions); the class name in `type` beats a bare ⚠️.
       const message = data.message || data.type;
+      _lastErrorCode = data.code ?? '';
       appendErrorNotice(data.hint ? `${message} — ${data.hint}` : message, data.code);
       break;
     }
@@ -2703,6 +2787,8 @@ function enterStreamingUI() {
 /** @param {'done' | 'error' | 'cancelled' | 'detached'} [status] How the run shown went. */
 function exitStreamingUI(status = 'detached') {
   store.streaming = false;
+  _awaiting = null;
+  syncAwaiting();
   syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
@@ -2731,6 +2817,9 @@ export async function runStream(message, attachments = null) {
   _dropRecoveries = 0; // a fresh user action re-arms auto-recovery
   enterStreamingUI();
   startAssistantTurn();
+  _awaiting = { retry: null }; // dots from the send, not from the first frame
+  syncAwaiting();
+  _lastErrorCode = '';
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -2764,11 +2853,8 @@ export async function runStream(message, attachments = null) {
       // The server's message (e.g. "too many concurrent runs") beats a bare
       // status line.
       const err = await apiError(res);
-      const detail = err.message;
-      const hint = humanizeError(detail, err.code);
-      ensureBody().innerHTML =
-        `<span class="error-text">${t('chat.error')}: ${escapeHtml(hint ?? detail)}</span>` +
-        (hint ? `<div class="error-notice-detail">${escapeHtml(detail)}</div>` : '');
+      _lastErrorCode = err.code ?? '';
+      appendErrorNotice(err.message, err.code);
       appendRetry();
       return;
     }

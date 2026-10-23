@@ -156,6 +156,9 @@ def _every_chat_event() -> list[events.Event | UserTurnRefs]:
         events.ApprovalRequired(call=call),
         events.HandoffOccurred(from_agent=agent, to_agent=agent),
         events.TurnStarted(agent=agent, turn=1),
+        events.ModelRetrying(
+            error=ProviderError("x"), attempt=1, max_attempts=3, delay=1.0
+        ),
         events.ContextCompacted(
             session_id="s",
             entries_before=[],

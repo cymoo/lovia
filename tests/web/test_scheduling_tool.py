@@ -39,7 +39,7 @@ def _ctx(
 ) -> RunContext:
     """A minimal RunContext exposing only what the tool reads (agent, session)."""
     agent = SimpleNamespace(name=agent_name) if agent_name is not None else None
-    return RunContext(context=None, entries=[], agent=agent, session_id=session_id)
+    return RunContext(deps=None, entries=[], agent=agent, session_id=session_id)
 
 
 async def _invoke(

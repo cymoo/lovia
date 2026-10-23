@@ -468,7 +468,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 - **富工具结果** —— 工具返回 `ui_result(kind, props)` 即可渲染 UI；内置表格、ECharts 图表
   和沙箱 HTML 页面（`show_table`、`show_chart`、`show_html`）。
 - **页面可定制** —— `ChatUI(...)` 与 `assets=` 修改文案、logo、样式和脚本；脚本通过
-  `window.lovia` 驱动页面，还能在聊天之外加自己的视图；`run_context=` 把用户身份和页面上下文
+  `window.lovia` 驱动页面，还能在聊天之外加自己的视图；`run_deps=` 把用户身份和页面上下文
   交给工具。
 - **也可以不用内置页面** —— 所有能力都是 JSON + SSE REST API（`/api/docs`）；
   `create_app(agent, ui=False)` 为你自己的前端提供服务。

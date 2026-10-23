@@ -24,7 +24,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional env
 from ...agent import Agent
 from ..attachments import build_user_input
 from ..errors import WebError
-from ..run_context import RunTrigger, build_run_context
+from ..run_deps import RunTrigger, build_run_deps
 from ..schemas import (
     AnswerRequest,
     ApprovalRequest,
@@ -97,12 +97,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # workspace) and there's no text — nothing to run.
             raise WebError(422, "invalid_request", "empty message")
         client = req.context or {}
-        # The run_context hook decides first, before anything is written: a
+        # The run_deps hook decides first, before anything is written: a
         # refused message leaves no trace.
         trigger = RunTrigger(
             session_id=sid, agent=agent, source="user", request=request, client=client
         )
-        context = await build_run_context(deps.run_context, trigger)
+        run_deps = await build_run_deps(deps.run_deps, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
         # The chat's interrupted run, superseded by this one: read before the
         # start, deleted only after it, so a refused start (409/429) leaves it
@@ -119,7 +119,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             title_message=req.message,
             autostart=True,
             client=client,
-            context=context,
+            run_deps=run_deps,
             # No client to ask: Runner.run's approval behaviour.
             await_approvals=False,
         )
@@ -162,12 +162,12 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             session_id=sid, agent=agent, source="user", request=request, client=client
         )
         # A message for a live run joins it, in that run's context. Any other
-        # starts one: the run_context hook decides first, before anything is
+        # starts one: the run_deps hook decides first, before anything is
         # written, so a refused message leaves no trace.
         decided = deps.supervisor.get(sid) is None
-        context = None
+        run_deps = None
         if decided:
-            context = await build_run_context(deps.run_context, trigger)
+            run_deps = await build_run_deps(deps.run_deps, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
 
         def attach(live: RunController) -> EventSourceResponse:
@@ -186,7 +186,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             # The live run we would have attached to ended mid-request.
             raise WebError(422, "invalid_request", "empty message")
         if not decided:  # ... and so did the one this message was to join
-            context = await build_run_context(deps.run_context, trigger)
+            run_deps = await build_run_deps(deps.run_deps, trigger)
             # Another may have started while the hook ran: join that one,
             # before the cleanup below could take its checkpoint for stale.
             if (live := deps.supervisor.get(sid)) is not None:
@@ -208,7 +208,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 is_new=is_new,
                 title_message=req.message,
                 client=client,
-                context=context,
+                run_deps=run_deps,
             )
         except WebError as exc:
             # Lost a concurrent-start race (two tabs submitting at once): the
@@ -337,8 +337,8 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # The run's own client context (a checkpoint keeps none), with the
         # reconnecting request for identity.
         client = await store.get_active_context(session_id) or {}
-        context = await build_run_context(
-            deps.run_context,
+        run_deps = await build_run_deps(
+            deps.run_deps,
             RunTrigger(
                 session_id=session_id,
                 agent=agent,
@@ -376,7 +376,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 agent=agent,
                 snapshot=snapshot,
                 client=client,
-                context=context,
+                run_deps=run_deps,
             )
         except WebError as exc:
             # Lost a concurrent-reconnect race: attach to the winner's run.

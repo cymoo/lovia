@@ -124,7 +124,7 @@ retry=None, context_policy=None)`:
   especially, since a delegated agent loops on its own.
 - `budget` is copied per invocation, so its limits apply to each sub-run
   individually rather than accumulating across calls.
-- The sub-run **inherits** the parent's `context` (deps), `cancel_token`
+- The sub-run **inherits** the parent's `deps`, `cancel_token`
   (one cancel stops the whole tree), and tracer (spans join one trace); its
   token usage folds into the parent's `usage`.
 - The sub-run gets its **own mailbox** — deliberately not the parent's,
@@ -175,7 +175,7 @@ The model gets four tools and a per-turn status reminder:
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
 budget=None, max_result_chars=16_000, instructions=None)`:
 
-- Children inherit the parent's `context` (deps) and tracer, and their token
+- Children inherit the parent's `deps` and tracer, and their token
   usage folds into the parent's `usage` — like `as_tool` sub-runs. Each child
   gets its **own** cancel token (that is what `cancel_subagent` trips) and a
   fresh copy of `budget` per spawn.

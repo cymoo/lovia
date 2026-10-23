@@ -61,7 +61,7 @@ from .sse import (
     usage_dict,
 )
 from ..types import JsonObject
-from .run_context import RUN_CLIENT
+from .run_deps import RUN_CLIENT
 from .store import RunRow
 
 if TYPE_CHECKING:
@@ -253,7 +253,7 @@ class RunController:
         source: str,
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
-        context: Any = None,
+        run_deps: Any = None,
         await_approvals: bool = True,
     ) -> None:
         self.deps = deps
@@ -264,11 +264,11 @@ class RunController:
         # False for a turn whose caller can't answer an approval (a blocking
         # /api/chat): the run doesn't park, Runner.run's order decides.
         self.await_approvals = await_approvals
-        # The page's client context and what run_context= built from it: the
+        # The page's client context and what run_deps= built from it: the
         # run's RunContext.deps, shared by every auto-chained leg. The client
         # is persisted beside each leg's checkpoint pointer for a resume.
         self.client = client
-        self.context = context
+        self.run_deps = run_deps
         self.cancel = CancelToken()
         # Caller-supplied for runs steered from outside the HTTP surface
         # (a parent's send_to_subagent pushes into the same channel the
@@ -604,7 +604,7 @@ class RunController:
                 handle = Runner.stream(
                     self.agent,
                     next_input,
-                    context=self.context,
+                    deps=self.run_deps,
                     session=session,
                     session_id=sid,
                     context_policy=deps.context_policy,
@@ -849,14 +849,14 @@ class RunSupervisor:
         source: str = "user",
         mailbox: Mailbox | None = None,
         client: JsonObject | None = None,
-        context: Any = None,
+        run_deps: Any = None,
         await_approvals: bool = True,
     ) -> RunController:
         """Register a run for ``session_id``; the caller begins it
         (``subscribe_live``), or ``autostart`` does.
 
-        ``context`` is the run's ``RunContext.deps``, built by the caller from
-        ``client`` (the page's context) with :func:`build_run_context` before
+        ``run_deps`` is the run's ``RunContext.deps``, built by the caller from
+        ``client`` (the page's context) with :func:`build_run_deps` before
         it writes anything — so a refusal leaves no trace, and no deployer
         code runs between the checks here and the registration.
 
@@ -895,7 +895,7 @@ class RunSupervisor:
             source=source,
             mailbox=mailbox,
             client=client,
-            context=context,
+            run_deps=run_deps,
             await_approvals=await_approvals,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
@@ -929,9 +929,9 @@ class RunSupervisor:
         agent: Agent[Any],
         snapshot: RunSnapshot,
         client: JsonObject | None = None,
-        context: Any = None,
+        run_deps: Any = None,
     ) -> RunController:
-        """Register a resume of ``snapshot``; ``context`` as for :meth:`start`."""
+        """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
@@ -959,7 +959,7 @@ class RunSupervisor:
             # normally does — same run_id), start_run keeps the original source.
             source="user",
             client=client,
-            context=context,
+            run_deps=run_deps,
         )
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client

@@ -144,7 +144,7 @@ class RunLoop:
         *,
         initial_agent: Agent[Any],
         user_input: "str | list[Message]",
-        context: object,
+        deps: object,
         output_type_override: object | None = None,
         extra_instructions: "str | None" = None,
         max_turns: int,
@@ -163,7 +163,7 @@ class RunLoop:
             raise UserError("session_id is required when session is provided")
         self.initial_agent = initial_agent
         self.user_input = user_input
-        self.context = context
+        self.deps = deps
         self.session = session
         self.session_id = session_id
         self.max_turns = max_turns
@@ -594,7 +594,7 @@ class RunLoop:
         # — the same handle tools/hooks receive. ``_resolve_active`` fills in
         # the workspace once it is connected.
         run_ctx: RunContext[Any] = RunContext(
-            context=self.context,
+            deps=self.deps,
             entries=[],
             agent=agent,
             session_id=self.session_id,

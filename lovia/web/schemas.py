@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .run_context import MAX_CLIENT_CONTEXT_BYTES, client_context_size
+from .run_deps import MAX_CLIENT_CONTEXT_BYTES, client_context_size
 
 
 def _bounded_context(value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -172,7 +172,7 @@ class ChatRequest(BaseModel):
     # turn's payload bounded.
     attachments: list[Attachment] | None = Field(default=None, max_length=20)
     # The page's context for a run this message starts (window.lovia's
-    # provideContext): handed to create_app(run_context=...) as trigger.client.
+    # provideContext): handed to create_app(run_deps=...) as trigger.client.
     # Ignored when the message joins a live run, which keeps its own.
     context: dict[str, Any] | None = None
 

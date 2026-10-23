@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from .workspace.protocol import WorkspaceLike
 
 
-TContext = TypeVar("TContext")
+TDeps = TypeVar("TDeps")
 
 
 # An instructions callable receives the run's ``RunContext`` (the same handle
@@ -68,12 +68,12 @@ ApprovalHandler = Callable[
 
 
 @dataclass
-class Agent(Generic[TContext]):
+class Agent(Generic[TDeps]):
     """Declarative description of an agent.
 
-    The generic parameter ``TContext`` is the type of the optional dependency
-    object passed to :meth:`Runner.run` as ``context=...``. Tools annotated
-    with ``RunContext[TContext]`` receive a typed context handle.
+    The generic parameter ``TDeps`` is the type of the optional dependency
+    object passed to :meth:`Runner.run` as ``deps=...``. Tools annotated
+    with ``RunContext[TDeps]`` read it, typed, as ``ctx.deps``.
 
     Two conventions hold across every field (each field documents its own
     specifics — hover it in your editor):
@@ -259,7 +259,7 @@ class Agent(Generic[TContext]):
         self._fragments = (*self._fragments, fn)
         return fn
 
-    def with_instructions(self, fn: InstructionsFn) -> "Agent[TContext]":
+    def with_instructions(self, fn: InstructionsFn) -> "Agent[TDeps]":
         """Return a clone with one additional dynamic instructions fragment."""
         return self.clone(_fragments=(*self._fragments, fn))
 
@@ -326,7 +326,7 @@ class Agent(Generic[TContext]):
             context_policy=context_policy,
         )
 
-    def clone(self, **overrides: Any) -> "Agent[TContext]":
+    def clone(self, **overrides: Any) -> "Agent[TDeps]":
         """Return a copy of this agent with selected fields overridden.
 
         Dynamic system-prompt fragments registered on the source agent are

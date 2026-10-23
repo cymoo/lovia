@@ -25,7 +25,7 @@ from lovia.tools.time import current_date, now, sleep
 
 
 def _ctx() -> RunContext:
-    return RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    return RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------- http

@@ -45,7 +45,7 @@ from lovia.workspace.tools import (
 
 def _ctx(session: LocalWorkspaceSession | None = None) -> RunContext:
     return RunContext(
-        context=None,
+        deps=None,
         entries=[],
         agent=None,
         workspace=session,  # type: ignore[arg-type]

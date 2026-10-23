@@ -16,7 +16,7 @@ All three Runner forms accept the same public options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `context` | `None` | Application dependencies exposed as `ctx.deps` |
+| `deps` | `None` | Application dependencies exposed as `ctx.deps` |
 | `output_type` | Agent setting | Override structured output for this Run |
 | `extra_instructions` | `None` | Append Run-specific system instructions |
 | `max_turns` | `50` | Limit logical model Turns |
@@ -91,7 +91,7 @@ instruction fragments.
 
 | Field | Meaning |
 | --- | --- |
-| `deps` / `context` | Object passed as `Runner.run(..., context=...)` |
+| `deps` | Object passed as `Runner.run(..., deps=...)` |
 | `entries` | Live canonical Transcript; treat as read-only |
 | `messages` | Fresh chat-format projection of `entries` |
 | `agent` | Currently active Agent; changes on Handoff |

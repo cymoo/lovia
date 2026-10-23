@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .errors import WebError
-from .run_context import RunTrigger, build_run_context
+from .run_deps import RunTrigger, build_run_deps
 from .sse import SessionCreatedData
 from .store import RunRow
 from .titles import provisional_title
@@ -239,12 +239,12 @@ class Scheduler:
             target = uuid.uuid4().hex
             is_new = True
 
-        # The run_context hook decides first, before anything is written. A
+        # The run_deps hook decides first, before anything is written. A
         # refusal is a miss, like an unserved agent: recorded, and the schedule
         # moves on — so one that persists can't hold up the schedules after it.
         try:
-            context = await build_run_context(
-                self.deps.run_context,
+            run_deps = await build_run_deps(
+                self.deps.run_deps,
                 RunTrigger(
                     session_id=target,
                     agent=agent,
@@ -274,7 +274,7 @@ class Scheduler:
                 # exactly what makes it this schedule's history/last outcome.
                 source=f"schedule:{sched.id}",
                 client=sched.context,
-                context=context,
+                run_deps=run_deps,
             )
         except WebError as exc:
             live = self.deps.supervisor.get(target)

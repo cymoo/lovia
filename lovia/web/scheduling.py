@@ -38,7 +38,7 @@ from typing import Annotated, Any, Literal
 from ..plugins.base import PluginInstance
 from ..run_context import RunContext
 from ..tools import Tool, tool
-from .run_context import RUN_CLIENT
+from .run_deps import RUN_CLIENT
 from .scheduler import initial_next_fire, validate_trigger
 from .store import ChatStore, ScheduleRow
 

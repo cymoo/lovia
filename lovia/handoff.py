@@ -147,7 +147,7 @@ def agent_as_tool(
     inherit the wrapped agent's own posture, exactly like a direct
     :meth:`Runner.run`. Bound ``max_turns`` especially: a delegated sub-agent
     loops on its own, and the run default is generous. The sub-run inherits the
-    parent's ``context`` and accumulates into its :class:`Usage` automatically.
+    parent's ``deps`` and accumulates into its :class:`Usage` automatically.
     ``budget`` is copied per invocation, so its limits (``max_seconds``,
     ``max_tool_calls``, ...) apply to each sub-run individually rather than
     accumulating across every call of this tool.
@@ -181,7 +181,7 @@ def agent_as_tool(
         result = await Runner.run(
             agent,
             prompt,
-            context=ctx.context,
+            deps=ctx.deps,
             max_turns=max_turns,
             # A fresh copy per invocation: RunBudget carries internal state
             # (its wall-clock start, the tool-call count) that must not leak

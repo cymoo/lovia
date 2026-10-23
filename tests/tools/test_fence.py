@@ -17,7 +17,7 @@ END = "--- END EXTERNAL CONTENT ---"
 
 
 def _ctx() -> RunContext:
-    return RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    return RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
 
 
 def _inner(out: str) -> str:

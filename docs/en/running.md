@@ -50,7 +50,7 @@ All three entry points accept the same keywords:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `context` | `None` | your dependency object, surfaced as `ctx.deps` ([Agents](agents.md#inject-application-dependencies)) |
+| `deps` | `None` | your dependency object, surfaced as `ctx.deps` ([Agents](agents.md#inject-application-dependencies)) |
 | `output_type` | `None` | run-wide override of the agent's [output type](structured-output.md) |
 | `extra_instructions` | `None` | per-run system-prompt addendum, rendered after the agent's own instructions (and re-applied to every agent a handoff reaches) |
 | `max_turns` | `50` | hard cap on model turns; exceeding it raises `MaxTurnsExceeded` |

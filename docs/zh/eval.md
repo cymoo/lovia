@@ -46,7 +46,7 @@ eval: 2/3 cases passed (67%) · 6 samples · 4,812 tokens · 21.4s
 | `name` | 从 input 派生 | 报告标签，也是 `compare()` 的匹配键 |
 | `samples` | `1` | 同一个 case 运行 N 次；把不确定性量出来 |
 | `pass_threshold` | `1.0` | case 判定通过所需的 sample 通过率 |
-| `context` | `None` | 作为运行 deps 转发 |
+| `deps` | `None` | 作为运行 deps 转发 |
 | `output_type` / `max_turns` | agent 的配置 / `50` | 每个 case 的运行设置 |
 | `model` | Agent 的配置 | 使用另一个模型派生 Agent，并运行当前用例 |
 | `timeout` | `None` | 每个 sample 的实际耗时上限；timeout 会记为失败 sample，不会让整个套件中断 |

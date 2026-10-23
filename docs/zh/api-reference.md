@@ -15,7 +15,7 @@
 
 | 选项 | 默认值 | 用途 |
 | --- | --- | --- |
-| `context` | `None` | 作为 `ctx.deps` 暴露的应用依赖 |
+| `deps` | `None` | 作为 `ctx.deps` 暴露的应用依赖 |
 | `output_type` | Agent 配置 | 覆盖本次 Run 的结构化输出类型 |
 | `extra_instructions` | `None` | 追加 Run 级系统指令 |
 | `max_turns` | `50` | 限制逻辑模型 Turn 数量 |
@@ -88,7 +88,7 @@ Handle 只能迭代一次。如果在终止事件前放弃迭代，`result()` �
 
 | 字段 | 含义 |
 | --- | --- |
-| `deps` / `context` | 通过 `Runner.run(..., context=...)` 传入的对象 |
+| `deps` | 通过 `Runner.run(..., deps=...)` 传入的对象 |
 | `entries` | 实时权威 Transcript；应按只读数据处理 |
 | `messages` | 每次访问时重新生成的聊天格式视图 |
 | `agent` | 当前活跃 Agent；Handoff 后会变化 |

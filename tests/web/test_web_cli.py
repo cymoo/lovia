@@ -654,7 +654,7 @@ def test_build_default_agent_injects_current_date(
     args = cli.build_parser().parse_args([])
     agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
 
-    ctx = RunContext(context=None, entries=[], agent=agent)
+    ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
     assert datetime.now().astimezone().strftime("%Y-%m-%d") in system_prompt
 
@@ -673,7 +673,7 @@ def test_build_default_agent_declares_render_surface(
     args = cli.build_parser().parse_args([])
     agent = builder.build_default_agent(args, ChatStore.in_memory(), _provider())
 
-    ctx = RunContext(context=None, entries=[], agent=agent)
+    ctx = RunContext(deps=None, entries=[], agent=agent)
     system_prompt = asyncio.run(agent.render_system_prompt(ctx))
     assert SURFACE_NOTE in system_prompt
 

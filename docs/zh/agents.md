@@ -101,7 +101,7 @@ variant = agent.clone(model="<other-model>")
 ## 注入应用依赖
 
 instructions、工具、hooks 或护栏在运行时需要的依赖，比如数据库连接池、当前用户，
-应该作为本次运行的 `context` 对象传入，而不是放在 agent 状态上：
+应该作为本次运行的 `deps` 对象传入，而不是放在 agent 状态上：
 
 ```python
 from dataclasses import dataclass
@@ -124,7 +124,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
 
 agent: Agent[Deps] = Agent(name="support", model="<model>", tools=[open_tickets])
 
-result = await Runner.run(agent, "我还有未处理工单吗？", context=Deps("u1", db))
+result = await Runner.run(agent, "我还有未处理工单吗？", deps=Deps("u1", db))
 ```
 
 泛型参数（`Agent[Deps]`、`RunContext[Deps]`）是给类型检查器看的；运行时

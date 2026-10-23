@@ -115,7 +115,7 @@ class Plugin(Protocol):
 
     ``ctx`` is the run's live :class:`~lovia.run_context.RunContext` — the
     same handle tools, hooks, and view injectors receive. At setup time its
-    identity fields (``session_id``, ``run_id``, ``context``) are final and
+    identity fields (``session_id``, ``run_id``, ``deps``) are final and
     ``agent``/``workspace`` are the agent being activated; ``entries`` is
     still empty at run start (and mid-conversation on a handoff), so derive
     nothing from it here.

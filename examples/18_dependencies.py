@@ -1,8 +1,8 @@
 """Dependency injection: per-run deps flow into instructions *and* tools.
 
-``Runner.run(..., context=deps)`` carries an arbitrary object through the
-run. ``@agent.instruction`` fragments read it to shape the system prompt;
-a tool receives it by annotating its first parameter as
+``Runner.run(..., deps=deps)`` carries an arbitrary object through the
+run as ``ctx.deps``. ``@agent.instruction`` fragments read it to shape the
+system prompt; a tool receives it by annotating its first parameter as
 ``RunContext[Deps]`` (the runner injects the live context — the parameter
 never appears in the tool's schema). ``extra_instructions`` stacks one more
 per-call layer on top without mutating the agent.
@@ -60,7 +60,7 @@ async def main() -> None:
     result = await Runner.run(
         agent,
         "Any updates on my orders?",
-        context=Deps(
+        deps=Deps(
             user_name="Alex",
             locale="en-GB",
             orders={"A-1001": "shipped", "A-1002": "packing"},

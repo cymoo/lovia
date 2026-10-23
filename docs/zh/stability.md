@@ -35,6 +35,11 @@
 **内置工具名**：`read_file`、`shell`、`todo_write`、`recall_tool_result` 等。工具名会写进每条调用过它的
 transcript，工具视图、审批规则和评测也按名字匹配，所以给内置工具改名属于破坏性改动。
 
+**命令与环境变量**：`lovia` 和 `lovia web` 命令及其子命令和参数（见 `lovia web --help`），以及文档中
+列出的环境变量：CLI 的见[常用 CLI 选项](web-ui.md#常用-cli-选项)，Provider 的见
+[模型字符串](providers.md#模型字符串)和[网络](providers.md#网络超时代理tls)，另有 `TAVILY_API_KEY`、
+`LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` 和 `LOVIA_EVAL_JUDGE_MODEL`。
+
 ## 不作承诺
 
 以下内容在任何版本中都可能变化：
@@ -64,3 +69,4 @@ transcript，工具视图、审批规则和评测也按名字匹配，所以给�
 | 内置工具名 | 见上文 |
 | `MEMORY.md` | 每行一条 `- fact`，其他行会被忽略，因此可以直接手动编辑 |
 | `FileResultStore` | 每个值存为一个 `<key>.txt` 文件 |
+| `.lovia/config.json`（`lovia web` 的设置） | 忽略未知字段 |

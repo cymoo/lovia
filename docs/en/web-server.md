@@ -759,7 +759,8 @@ Off by default: unlike a title, this costs one model call per *run*, so the
 serving layer doesn't presume it. `followup_model` points that call at a
 cheaper model than the Agent's own. The bundled `lovia web` CLI opts in on its
 own behalf — disable it with `--no-followups` or `LOVIA_FOLLOWUPS=0`, and point
-it at a small model with `LOVIA_FOLLOWUP_MODEL`.
+it at a small model by assigning that model the
+[aux role](web-ui.md#models-and-switching).
 
 Pass a callable to replace the built-in suggester entirely — back it with a
 curated FAQ, a vector store, or the same generator under a different prompt:

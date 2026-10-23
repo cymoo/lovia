@@ -141,12 +141,10 @@ Markdown 图片可以直接引用 Workspace 内的文件——`![chart](uploads/
 
 图片是否内联发送由视觉配置决定：
 
-- 官方 OpenAI 和 Anthropic 端点默认按支持视觉处理；其他视觉端点需要声明视觉能力，或设置
-  `LOVIA_VISION=1`。
-- 纯文本主模型可以把视觉角色指派给另一个模型。使用环境变量配置时，对应项是
-  `LOVIA_VISION_MODEL=<vendor>:<model>`；独立端点还可设置 `LOVIA_VISION_BASE_URL` 和
-  `LOVIA_VISION_API_KEY`。此时主模型通过 `see_image` Tool 获得文字结果，图片原始数据不会
-  写入主模型的对话历史。
+- 官方 OpenAI 和 Anthropic 端点默认按支持视觉处理；其他视觉端点需要把该模型配置的视觉能力
+  设为“支持”（即 `config.json` 中的 `"vision": "on"`）。
+- 纯文本主模型可以把视觉角色指派给另一个模型配置。此时主模型通过 `describe_image` Tool
+  获得文字结果，图片原始数据不会写入主模型的对话历史。
 
 单个文件默认不超过 25 MiB，可用 `LOVIA_MAX_UPLOAD_MB` 调整。带扩展名的文件受内置白名单限制；
 `LOVIA_UPLOAD_ALLOWED_EXT` 可覆盖白名单，使用逗号或空格分隔，`*` 表示不限。
@@ -237,6 +235,9 @@ option 的 `dataset`），先用 `validate_chart_option(option)` 检查：它抛
 | `--workspace`，`--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`、`LOVIA_WORKSPACE_MODE` | `.`（coding 模式） |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | 若存在则使用 `AGENTS.md` |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
+| `--max-tokens` | `LOVIA_MAX_TOKENS` | 沿用 Provider 的默认值；模型配置“额外请求参数”里的 `max_tokens` 优先 |
+| `--title` | `LOVIA_TITLE` | `lovia` |
+| `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | 追问建议默认开启 |
 | `--no-subagents` | — | 后台子 Agent 默认开启 |
 | `--check` | — | 检查模型配置并退出 |
@@ -264,8 +265,8 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 ## 追问建议
 
 追问建议来自一次独立模型调用，不会写入 Transcript。关闭它可以避免这次额外调用；服务端使用
-`--no-followups`，也可以用 `LOVIA_FOLLOWUP_MODEL` 指向更便宜的模型。通过 `create_app()`
-托管自定义 Agent 时，该功能默认关闭，需要显式开启。独立端点配置见
+`--no-followups`，也可以把辅助任务角色指派给更便宜的模型（见[模型配置与切换](#模型配置与切换)）。
+通过 `create_app()` 托管自定义 Agent 时，该功能默认关闭，需要显式开启，见
 [Web 服务端](web-server.md#追问建议)。
 
 ## 运行与连接的边界

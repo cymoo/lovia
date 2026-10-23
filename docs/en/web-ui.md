@@ -178,13 +178,11 @@ open in a new tab.
 Vision configuration controls whether images are sent inline:
 
 - Official OpenAI and Anthropic endpoints are treated as vision-capable by
-  default. Other multimodal endpoints need a vision declaration or
-  `LOVIA_VISION=1`.
-- A text-only main model can assign vision to another profile. With environment
-  configuration, use `LOVIA_VISION_MODEL=<vendor>:<model>` and, for a separate
-  endpoint, `LOVIA_VISION_BASE_URL` plus `LOVIA_VISION_API_KEY`. The main model
-  then receives text through the `see_image` Tool; raw image data does not
-  enter its conversation history.
+  default. For another multimodal endpoint, set the profile's vision
+  capability to supported (`"vision": "on"` in `config.json`).
+- A text-only main model can assign the vision role to another profile. The
+  main model then receives text through the `describe_image` Tool; raw image
+  data does not enter its conversation history.
 
 Uploads default to 25 MiB per file (`LOVIA_MAX_UPLOAD_MB`). Named extensions
 must match the built-in allowlist; override it with
@@ -307,6 +305,9 @@ flag, environment variable, then default.
 | `--workspace`, `--readonly` / `--trusted` / `--no-workspace` | `LOVIA_WORKSPACE`, `LOVIA_WORKSPACE_MODE` | `.` in coding mode |
 | `--instructions-file` | `LOVIA_INSTRUCTIONS_FILE` | `AGENTS.md` when present |
 | `--max-retries` / `--max-turns` | `LOVIA_MAX_RETRIES` / `LOVIA_MAX_TURNS` | `4` / `50` |
+| `--max-tokens` | `LOVIA_MAX_TOKENS` | The provider's; a `max_tokens` in a profile's extra request fields wins |
+| `--title` | `LOVIA_TITLE` | `lovia` |
+| `--log-level` | `LOVIA_LOG_LEVEL` | `info` |
 | `--no-followups` | `LOVIA_FOLLOWUPS` | Follow-up suggestions enabled |
 | `--no-subagents` | — | Background subagents enabled |
 | `--check` | — | Check model configuration and exit |
@@ -337,9 +338,9 @@ serve(create_app(agent, question_channel=channel, question_timeout=600))
 
 Follow-up suggestions use a separate model call and never enter the Transcript.
 Disable them to avoid that extra call with `--no-followups`, or point them at a
-cheaper model with `LOVIA_FOLLOWUP_MODEL`. They are opt-in for a custom Agent
-served through `create_app()`. Separate endpoint configuration is documented
-under [Web server](web-server.md#follow-up-suggestions).
+cheaper model by assigning it the aux role ([Models and
+switching](#models-and-switching)). They are opt-in for a custom Agent served
+through `create_app()`; see [Web server](web-server.md#follow-up-suggestions).
 
 ## Run and connection boundaries
 

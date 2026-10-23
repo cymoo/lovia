@@ -40,6 +40,15 @@ and the rest. A name is stored in every transcript that called it, and tool
 views, approval rules and evals match on it, so renaming one is a breaking
 change.
 
+**Commands and environment variables** — the `lovia` and `lovia web`
+commands, their subcommands and flags (`lovia web --help`), and the
+environment variables the docs name: the CLI's in
+[Useful CLI options](web-ui.md#useful-cli-options), the providers' in
+[Model strings](providers.md#model-strings) and
+[Networking](providers.md#networking-timeouts-proxies-tls), plus
+`TAVILY_API_KEY`, `LOVIA_EMBEDDING_BASE_URL` / `LOVIA_EMBEDDING_API_KEY` and
+`LOVIA_EVAL_JUDGE_MODEL`.
+
 ## Not covered
 
 These may change in any release:
@@ -73,3 +82,4 @@ A newer lovia reads what an older one wrote:
 | Built-in tool names | As above |
 | `MEMORY.md` | One `- fact` per line; other lines are ignored, so people can edit it |
 | `FileResultStore` | One `<key>.txt` file per stored value |
+| `.lovia/config.json` (the `lovia web` settings) | Unknown fields are ignored |

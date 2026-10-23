@@ -24,7 +24,7 @@ options:
 
 examples:
   lovia web                                # serve on http://127.0.0.1:8000
-  lovia web --port 9000 --model openai:gpt-5.5
+  lovia web --port 9000 --readonly
 """
 
 

@@ -678,8 +678,7 @@ create_app(agent, followups=True, followup_model="<small-model>")
 `create_app()` 默认关闭该功能，因为每次生成建议都可能增加一次模型调用。
 `followup_model` 可改用比 Agent 主模型更便宜的模型；不设置时沿用 Agent 的模型。
 `lovia web` CLI 默认开启，可通过 `--no-followups` 或 `LOVIA_FOLLOWUPS=0` 关闭，
-也可通过 `LOVIA_FOLLOWUP_MODEL` 指定其他模型。该模型位于独立端点时，再设置
-`LOVIA_FOLLOWUP_BASE_URL` 和 `LOVIA_FOLLOWUP_API_KEY`。
+也可以把[辅助任务角色](web-ui.md#模型配置与切换)指派给一个更便宜的模型。
 
 如果建议来自 FAQ、向量库或自定义提示词，可以把异步函数直接传给 `followups`，
 替换内置建议器：

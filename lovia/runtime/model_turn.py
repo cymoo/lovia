@@ -121,7 +121,9 @@ async def stream_model_turn(
                 if delta.visible:
                     yield events.OutputDiscarded()
                 continue
-            if isinstance(delta, TextDelta):
+            if isinstance(delta, events.ModelRetrying):
+                yield delta
+            elif isinstance(delta, TextDelta):
                 text_buf.append(delta.text)
                 yield events.TextDelta(delta=delta.text)
             elif isinstance(delta, ReasoningDelta):
@@ -231,10 +233,12 @@ async def stream_with_retries(
     settings: ModelSettings | None,
     retry: RetryPolicy | None,
     cancel_token: CancelToken | None = None,
-) -> AsyncIterator[ModelDelta | _StreamReset]:
+) -> AsyncIterator[ModelDelta | _StreamReset | events.ModelRetrying]:
     """Stream one model call, retrying transient failures per ``retry``.
 
     ``max_attempts`` counts attempts, so ``retry=None`` means a single one.
+    Each retry first yields a :class:`~lovia.events.ModelRetrying`, which the
+    caller passes on as is.
     When ``retry.restart_on_partial`` is set (the default), a failure *after*
     output has been forwarded is also recovered: a :class:`_StreamReset` is
     yielded so the caller discards the partial output, and the turn is
@@ -307,6 +311,9 @@ async def stream_with_retries(
             # than paying for one more full attempt.
             if cancel_token is not None:
                 cancel_token.check()
+            yield events.ModelRetrying(
+                error=exc, attempt=attempt, max_attempts=max_attempts, delay=delay
+            )
             await retry.sleep(delay)
             if cancel_token is not None:
                 cancel_token.check()

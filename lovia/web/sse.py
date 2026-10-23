@@ -118,6 +118,13 @@ class ErrorData(_ErrorRequired, total=False):
     hint: str
 
 
+class RetryingData(TypedDict):
+    attempt: int
+    max_attempts: int
+    delay: float
+    message: str
+
+
 class DoneData(TypedDict):
     output: JsonValue
     usage: dict[str, int]
@@ -151,6 +158,7 @@ CHAT_EVENTS: dict[str, type] = {
     "approval_required": ToolCallData,
     "handoff": HandoffData,
     "turn_started": TurnStartedData,
+    "retrying": RetryingData,
     "context_compacted": ContextCompactedData,
     "error": ErrorData,
     "refs": RefsData,
@@ -360,6 +368,16 @@ def event_to_sse(ev: events.Event | UserTurnRefs) -> dict[str, str] | None:
         )
     if isinstance(ev, events.TurnStarted):
         return frame("turn_started", TurnStartedData(turn=ev.turn, agent=ev.agent.name))
+    if isinstance(ev, events.ModelRetrying):
+        return frame(
+            "retrying",
+            RetryingData(
+                attempt=ev.attempt,
+                max_attempts=ev.max_attempts,
+                delay=ev.delay,
+                message=str(ev.error) or type(ev.error).__name__,
+            ),
+        )
     if isinstance(ev, events.ContextCompacted):
         # Forwarded whole, so a field added to CompactionNotice reaches the UI
         # without plumbing — the protocol test keeps ContextCompactedData in step.

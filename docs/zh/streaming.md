@@ -62,6 +62,7 @@ result = await handle.result()
 | `TextDelta` | `delta` | assistant 文本片段 |
 | `ReasoningDelta` | `delta` | reasoning/思考片段，仅限会暴露它的 provider；适合折叠显示或弱化显示，不要依赖它做行为判断 |
 | `OutputDiscarded` | — | 本轮已流出的 delta 作废；清掉你渲染的内容，之后会有一条新的流 |
+| `ModelRetrying` | `error`, `attempt`, `max_attempts`, `delay` | 模型调用遇到暂时性错误；按[重试策略](retries.md)，`delay` 秒后进行第 `attempt + 1` 次尝试 |
 | `MessageCompleted` | `entries` | 一轮 assistant 回复已完整组装：包含它产生的新 `TranscriptEntry` |
 | `UserMessageInjected` | `content`, `turn` | [mailbox](cancellation.md#在运行中追加指令) 消息被折入为用户消息 |
 

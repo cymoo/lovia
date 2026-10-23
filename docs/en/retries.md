@@ -46,6 +46,11 @@ streams as retryable. Configuration errors generally are not. A
 `ContextOverflowError` goes through [context compaction](context.md), not the
 retry policy.
 
+Before each backoff the stream yields
+[`ModelRetrying`](streaming.md#model-output) (`error`, `attempt`,
+`max_attempts`, `delay`), so a UI can say it is retrying instead of looking
+stalled.
+
 ## Partial streams
 
 With `restart_on_partial=True`, the runner emits

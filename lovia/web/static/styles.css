@@ -1565,6 +1565,46 @@ body.sidebar-collapsed .sidebar-expand-btn {
   }
 }
 
+/* Waiting on the model (chat.js syncAwaiting): three breathing dots at the
+   bubble's tail, plus a line while the provider is being retried. */
+.awaiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--muted);
+  animation: fade-in var(--t-med) var(--ease);
+}
+.awaiting-dots {
+  display: inline-flex;
+  gap: 5px;
+}
+.awaiting-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: awaiting-breathe 1.2s var(--ease) infinite;
+}
+.awaiting-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.awaiting-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.awaiting-text:empty {
+  display: none;
+}
+@keyframes awaiting-breathe {
+  40% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
 /* ---- Message copy button ---------------------------------------------------- */
 .btn-copy {
   display: inline-flex;
@@ -2342,33 +2382,53 @@ button.question-option:hover {
 }
 
 .retry-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 12px;
 }
 
 /* ---- Errors ----------------------------------------------------------------------- */
-.error-text {
-  color: var(--danger);
-  font-weight: 500;
-}
-
-/* Quiet inline notice for a recovered run-level error (e.g. a tool that raised). */
+/* An error in the run: a plain-language headline, the raw error folded under
+   it. Also the quiet notice for a recovered error (a tool that raised). */
 .error-notice {
+  display: flex;
+  gap: 9px;
   margin: 10px 0;
-  padding: 8px 13px;
-  font-size: 13px;
+  padding: 9px 13px;
+  font-size: 13.5px;
   line-height: 1.55;
-  color: var(--danger);
+  color: var(--ink);
   background: var(--danger-soft);
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-sm);
 }
-/* The raw provider error under a humanized headline — kept visible (small,
-   mono) so the friendly wording never costs debuggability. */
-.error-notice-detail {
+.error-notice-icon {
+  flex-shrink: 0;
   margin-top: 3px;
-  font-size: 11px;
-  font-family: var(--mono);
+  color: var(--danger);
+}
+.error-notice-main {
+  min-width: 0;
+}
+.error-notice-detail {
+  margin-top: 2px;
+  font-size: 12px;
   color: var(--muted);
+}
+.error-notice-detail summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+.error-notice-detail summary:hover {
+  color: var(--ink-2);
+}
+.error-notice-detail > div {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

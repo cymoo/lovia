@@ -20,6 +20,8 @@ test('a call reads as what it did and to what', () => {
   assert.equal(builtinSummary('web_search', { query: 'lovia' }), 'Web search “lovia”');
   assert.equal(builtinSummary('http_request', { url: 'https://x.dev' }), 'Request GET https://x.dev');
   assert.equal(builtinSummary('list_files', {}), 'List files');
+  assert.equal(builtinSummary('list_files', { path: '.' }), 'List files');
+  assert.equal(builtinSummary('list_files', { path: 'src' }), 'List files src');
   assert.equal(builtinSummary('now', undefined), 'Check the time');
   assert.equal(
     builtinSummary('show_chart', { option: { title: [{ text: 'Sales' }] } }),

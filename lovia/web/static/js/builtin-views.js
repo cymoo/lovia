@@ -23,7 +23,8 @@ const TOOLS = {
   write_file: ['toolview.writeFile', (a) => str(a.path)],
   edit_file: ['toolview.editFile', (a) => str(a.path)],
   view_image: ['toolview.viewImage', (a) => str(a.path)],
-  list_files: ['toolview.listFiles', (a) => str(a.path) ?? ''],
+  // `.` is the workspace root, as an omitted path is: the bare label for both.
+  list_files: ['toolview.listFiles', (a) => str(a.path)?.replace(/^\.\/?$/, '') ?? ''],
   grep_files: ['toolview.grepFiles', (a) => quoted(a.pattern)],
   read_process_output: ['toolview.processOutput', (a) => str(a.process_id)],
   kill_process: ['toolview.killProcess', (a) => str(a.process_id)],

@@ -140,6 +140,7 @@ const MESSAGES = {
     'err.overloaded': '模型服务商当前过载——请稍后再试。',
     'err.timeout': '请求超时——服务商可能响应较慢，重试通常有效。',
     'err.network': '无法连接服务器——请确认 lovia 仍在运行。',
+    'err.providerNetwork': 'lovia 连不上模型服务——请检查 base URL、网络和代理设置。',
     // ---- todo panel
     'todo.plan': '计划',
     'todo.show': '展开计划',
@@ -605,6 +606,8 @@ const EN = {
   'err.timeout':
     'The request timed out — the provider may be slow right now; retrying usually works.',
   'err.network': 'Can’t reach the server — check that lovia is still running.',
+  'err.providerNetwork':
+    'lovia can’t reach the model provider — check the base URL, network and proxy settings.',
   'todo.plan': 'Plan',
   'todo.show': 'Show plan',
   'todo.hide': 'Hide plan',

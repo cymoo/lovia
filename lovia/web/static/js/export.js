@@ -288,6 +288,8 @@ blockquote {
 hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
 table { border-collapse:collapse; margin:0 0 14px; font-size:14px; display:block; overflow-x:auto; }
 th,td { border:1px solid var(--border); padding:6px 11px; text-align:left; }
+th[align=center],td[align=center] { text-align:center; }
+th[align=right],td[align=right] { text-align:right; }
 th { background:var(--surface-2); font-weight:600; }
 /* UI component snapshots (tables.js / charts.js). */
 figure { margin:0; }

@@ -114,7 +114,7 @@ rather not mutate at all.
 ## Inject application dependencies
 
 Anything your instructions, tools, hooks, or guardrails need at runtime — a
-database pool, the current user — travels as the run's `context` object, not
+database pool, the current user — travels as the run's `deps` object, not
 as agent state:
 
 ```python
@@ -138,7 +138,7 @@ async def open_tickets(ctx: RunContext[Deps]) -> str:
 
 agent: Agent[Deps] = Agent(name="support", model="<model>", tools=[open_tickets])
 
-result = await Runner.run(agent, "Any open tickets?", context=Deps("u1", db))
+result = await Runner.run(agent, "Any open tickets?", deps=Deps("u1", db))
 ```
 
 The generic parameter (`Agent[Deps]`, `RunContext[Deps]`) is for your type

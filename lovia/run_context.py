@@ -14,7 +14,7 @@ Example::
 
     @tool
     async def lookup(ctx: RunContext[Deps], user_id: int) -> str:
-        return await ctx.context.db.fetch(user_id)
+        return await ctx.deps.db.fetch(user_id)
 """
 
 from __future__ import annotations
@@ -33,21 +33,20 @@ if TYPE_CHECKING:
     from .workspace.protocol import WorkspaceSession
 
 
-TContext = TypeVar("TContext")
+TDeps = TypeVar("TDeps")
 
 
 @dataclass
-class RunContext(Generic[TContext]):
+class RunContext(Generic[TDeps]):
     """State shared across a single run.
 
     Tools, guardrails, hooks, and instruction fragments all receive the same
     live instance; each field documents itself — hover it in your editor.
     """
 
-    context: TContext | None
+    deps: TDeps | None
     """User-supplied dependency object (whatever was passed via
-    ``Runner.run(..., context=...)``). ``None`` when not supplied. Also
-    reachable as :attr:`deps` — the friendlier name for the same object."""
+    ``Runner.run(..., deps=...)``). ``None`` when not supplied."""
 
     entries: list[TranscriptEntry]
     """Live transcript log. Treat it as **read-only**: it is the canonical
@@ -111,16 +110,6 @@ class RunContext(Generic[TContext]):
     # agent-as-tool sub-runs inherit the parent's tracer and their spans join
     # the same trace.
     _tracer: Tracer | None = field(default=None, repr=False)
-
-    @property
-    def deps(self) -> TContext | None:
-        """Alias for :attr:`context` — the user-supplied dependency object.
-
-        ``ctx.deps.db`` reads more clearly than ``ctx.context.db`` once you
-        have typed the run as ``RunContext[MyDeps]``. Both names point at the
-        same object.
-        """
-        return self.context
 
     @property
     def messages(self) -> list[Message]:

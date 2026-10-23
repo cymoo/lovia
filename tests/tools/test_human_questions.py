@@ -136,7 +136,7 @@ async def test_multi_select_without_options_is_normalized_away() -> None:
     channel = HumanChannel()
     the_tool = ask_human(channel)
     agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
-    ctx: RunContext[None] = RunContext(context=None, entries=[], agent=agent)
+    ctx: RunContext[None] = RunContext(deps=None, entries=[], agent=agent)
 
     async def operator() -> None:
         async for q in channel.questions():
@@ -156,7 +156,7 @@ async def test_question_carries_session_and_run_identity() -> None:
     the_tool = ask_human(channel)
     agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
     ctx: RunContext[None] = RunContext(
-        context=None, entries=[], agent=agent, session_id="s1", run_id="r1"
+        deps=None, entries=[], agent=agent, session_id="s1", run_id="r1"
     )
 
     async def operator() -> None:
@@ -175,7 +175,7 @@ async def test_option_count_is_schema_enforced() -> None:
     channel = HumanChannel()
     the_tool = ask_human(channel)
     agent: Agent[None] = Agent(name="x", model=ScriptedProvider([]))
-    ctx: RunContext[None] = RunContext(context=None, entries=[], agent=agent)
+    ctx: RunContext[None] = RunContext(deps=None, entries=[], agent=agent)
 
     for bad in (
         [{"label": "only one"}],

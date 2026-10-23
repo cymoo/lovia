@@ -1,4 +1,4 @@
-"""create_app(run_context=...): the page's client context and the request's
+"""create_app(run_deps=...): the page's client context and the request's
 identity reach a run's tools as RunContext.deps — on every way a run starts."""
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ async def _auth(request: Request) -> None:
 
 def _app(agent: Agent, *, store: ChatStore | None = None, **kw):
     seen.clear()
-    kw.setdefault("run_context", _build)
+    kw.setdefault("run_deps", _build)
     return create_app(
         agent,
         store=store or ChatStore.in_memory(),
@@ -101,26 +101,26 @@ async def test_blocking_chat_hands_it_over_too() -> None:
     assert repr({"user": "bo", "kb": "tickets", "source": "user"}) in contents
 
 
-async def test_an_async_run_context_is_awaited() -> None:
+async def test_an_async_run_deps_is_awaited() -> None:
     async def build(trigger: RunTrigger) -> str:
         return f"async:{trigger.client.get('kb')}"
 
-    app = _app(_agent([call("whoami", {}), text("ok")]), run_context=build)
+    app = _app(_agent([call("whoami", {}), text("ok")]), run_deps=build)
     events = await _stream(app, {"message": "hi", "context": {"kb": "docs"}})
     assert _tool_result(events) == repr("async:docs")
 
 
-async def test_without_run_context_runs_get_none_and_a_context_is_flagged(
+async def test_without_run_deps_runs_get_none_and_a_context_is_flagged(
     caplog,
 ) -> None:
-    import lovia.web.run_context as rc
+    import lovia.web.run_deps as rd
 
-    rc._warned_unused = False
-    app = _app(_agent([call("whoami", {}), text("ok")]), run_context=None)
-    with caplog.at_level(logging.WARNING, logger="lovia.web.run_context"):
+    rd._warned_unused = False
+    app = _app(_agent([call("whoami", {}), text("ok")]), run_deps=None)
+    with caplog.at_level(logging.WARNING, logger="lovia.web.run_deps"):
         events = await _stream(app, {"message": "hi", "context": {"kb": "docs"}})
     assert _tool_result(events) == "None"
-    assert "no run_context=" in caplog.text
+    assert "no run_deps=" in caplog.text
 
 
 async def test_an_oversized_context_is_refused() -> None:
@@ -216,7 +216,7 @@ async def test_a_schedule_fires_with_the_context_it_was_made_with() -> None:
 
 
 async def test_a_schedule_the_agent_makes_keeps_its_runs_client() -> None:
-    from lovia.web.run_context import RUN_CLIENT
+    from lovia.web.run_deps import RUN_CLIENT
 
     from .test_scheduling_tool import _invoke
 
@@ -277,7 +277,7 @@ def _refusing(trigger: RunTrigger) -> dict:
 async def test_a_refused_turn_leaves_the_interrupted_run_resumable() -> None:
     store = ChatStore.in_memory()
     await _interrupted(store)
-    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    app = _app(_agent([text("ok")]), store=store, run_deps=_refusing)
     async with _client(app) as ac:
         body = {"message": "hi", "session_id": "s1", "context": {"kb": "secret"}}
         res = await ac.post("/api/chat/stream", json=body)
@@ -292,7 +292,7 @@ async def test_a_refused_turn_leaves_the_interrupted_run_resumable() -> None:
 
 async def test_a_refused_new_chat_leaves_no_trace(monkeypatch) -> None:
     store = ChatStore.in_memory()
-    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    app = _app(_agent([text("ok")]), store=store, run_deps=_refusing)
     created: list[str] = []
     monkeypatch.setattr(app.state.deps, "emit", lambda event, _: created.append(event))
     async with _client(app) as ac:
@@ -305,7 +305,7 @@ async def test_a_refused_new_chat_leaves_no_trace(monkeypatch) -> None:
 
 async def test_a_refused_schedule_is_a_miss_and_the_next_one_still_fires() -> None:
     store = ChatStore.in_memory()
-    app = _app(_agent([text("ok")]), store=store, run_context=_refusing)
+    app = _app(_agent([text("ok")]), store=store, run_deps=_refusing)
     deps = app.state.deps
     now = time.time()
     for sid, kb, due in (("bad", "secret", now - 2), ("good", "docs", now - 1)):
@@ -334,7 +334,7 @@ async def test_a_refused_subagent_task_leaves_no_task_chat() -> None:
     from lovia.steering import Mailbox
     from lovia.web.subagents import subagent_runner
 
-    app = _app(_agent([text("ok")]), run_context=_refusing)
+    app = _app(_agent([text("ok")]), run_deps=_refusing)
     deps = app.state.deps
     await deps.store.upsert("parent", agent="bot")
     deps.supervisor.last_client["parent"] = {"kb": "secret"}
@@ -358,7 +358,7 @@ async def _until(cond, timeout: float = 5.0) -> None:
 
 
 def _gated(gate: asyncio.Event, entered: list[RunTrigger], *, when):
-    """A run_context hook that notes each call, and holds those ``when`` picks
+    """A run_deps hook that notes each call, and holds those ``when`` picks
     at ``gate`` — the test acts while their hook still runs."""
 
     async def hook(trigger: RunTrigger) -> None:
@@ -377,7 +377,7 @@ async def test_turns_whose_hooks_return_together_make_one_run() -> None:
     store = ChatStore.in_memory()
     await store.upsert("s", agent="bot")
     hook = _gated(gate, entered, when=lambda t: True)
-    app = _app(_agent([text("one"), text("two")]), store=store, run_context=hook)
+    app = _app(_agent([text("one"), text("two")]), store=store, run_deps=hook)
     async with _client(app) as ac:
         turns = [
             asyncio.create_task(
@@ -418,7 +418,7 @@ async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
     gate, entered = asyncio.Event(), []
     hook = _gated(gate, entered, when=lambda t: t.client.get("kb") == "late")
     store = ChatStore.in_memory()
-    app = _app(agent, store=store, run_context=hook)
+    app = _app(agent, store=store, run_deps=hook)
     sup = app.state.deps.supervisor
 
     upsert, hold_upsert, upsert_held = store.upsert, asyncio.Event(), []
@@ -480,7 +480,7 @@ async def test_a_schedule_whose_chat_got_busy_during_its_hook_joins_that_run() -
     )
     store = ChatStore.in_memory()
     await store.upsert("busy", agent="bot")
-    app = _app(agent, store=store, run_context=hook)
+    app = _app(agent, store=store, run_deps=hook)
     deps = app.state.deps
     now = time.time()
     for sid, target, due in (("fixed", "busy", now - 2), ("fresh", None, now - 1)):
@@ -521,7 +521,7 @@ async def test_a_reconnect_does_not_resume_a_run_finished_while_its_hook_ran() -
     store = ChatStore.in_memory()
     await _interrupted(store)
     hook = _gated(gate, entered, when=lambda t: len(entered) == 1)  # the first
-    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
+    app = _app(Agent(name="bot", model=provider), store=store, run_deps=hook)
     async with _client(app) as ac:
         params = {"session_id": "s1"}
         stale = asyncio.create_task(ac.post("/api/chat/reconnect", params=params))
@@ -540,7 +540,7 @@ async def test_a_stop_while_a_reconnects_hook_runs_drops_the_run() -> None:
     store = ChatStore.in_memory()
     await _interrupted(store)
     hook = _gated(gate, entered, when=lambda t: t.resumed)
-    app = _app(Agent(name="bot", model=provider), store=store, run_context=hook)
+    app = _app(Agent(name="bot", model=provider), store=store, run_deps=hook)
     async with _client(app) as ac:
         params = {"session_id": "s1"}
         resume = asyncio.create_task(ac.post("/api/chat/reconnect", params=params))

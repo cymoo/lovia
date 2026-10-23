@@ -35,7 +35,7 @@ into the loop's fixed slots.
 
 `ctx` is the run's live `RunContext`, the same handle tools and hooks
 receive, so a plugin can shape its contributions per session or user. At
-setup time `session_id`, `run_id`, and `context` are final, and `agent` /
+setup time `session_id`, `run_id`, and `deps` are final, and `agent` /
 `workspace` are the agent being activated; `entries` is empty at run start,
 so derive nothing from it here.
 

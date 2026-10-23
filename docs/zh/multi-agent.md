@@ -113,7 +113,7 @@ retry=None, context_policy=None)`：
   的提示词。`max_turns` 等执行策略由应用代码固定，不会暴露给模型。子 Agent 有自己的
   运行循环，因此尤其建议明确限制 `max_turns`。
 - `budget` 每次调用都会复制一份，所以限制作用于每个子运行，而不是跨调用累计。
-- 子运行会**继承**父运行的 `context`（deps）、`cancel_token`（一次取消停止整棵树）和
+- 子运行会**继承**父运行的 `deps`、`cancel_token`（一次取消停止整棵树）和
   Tracer（子 Span 会加入同一条 Trace）；Token 用量会计入父运行的 `usage`。
 - 子运行拥有**独立的 Mailbox**，不会与父运行共用。Mailbox 中的消息一经读取就会被消费，
   而且每条注入消息只应属于一段对话。
@@ -158,7 +158,7 @@ result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
 budget=None, max_result_chars=16_000, instructions=None)`：
 
-- 子运行继承父运行的 `context`（deps）和 Tracer，Token 用量也计入父运行的
+- 子运行继承父运行的 `deps` 和 Tracer，Token 用量也计入父运行的
   `usage`，这一点与 `as_tool` 相同。每个子 Agent 使用独立的取消令牌；
   `budget` 则在每次启动任务时复制一份。
 - **`deliver` 决定任务是否能脱离当前 Run。** 默认不传 `deliver`：报告进入

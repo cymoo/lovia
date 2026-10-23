@@ -32,7 +32,7 @@ PNG = bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 32
 
 def _ctx(session: LocalWorkspaceSession | None = None) -> RunContext:
     return RunContext(
-        context=None,
+        deps=None,
         entries=[],
         agent=None,  # type: ignore[arg-type]
         workspace=session,  # type: ignore[arg-type]

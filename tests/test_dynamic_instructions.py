@@ -16,7 +16,7 @@ def _ctx(agent: Agent) -> RunContext:
     ``render_system_prompt`` now takes the same handle the runner passes, so the
     unit tests exercise the real signature instead of ``None``.
     """
-    return RunContext(context=None, entries=[], agent=agent)
+    return RunContext(deps=None, entries=[], agent=agent)
 
 
 @pytest.mark.asyncio
@@ -123,7 +123,7 @@ async def test_instruction_fragment_receives_run_context() -> None:
         # Reach user deps via ctx.deps; ctx.turn is 0 (rendered pre-turn).
         return f"user={ctx.deps['name']} turn={ctx.turn}"
 
-    await Runner.run(agent, "hi", context={"name": "Mei"})
+    await Runner.run(agent, "hi", deps={"name": "Mei"})
     sys_msg = provider.calls[0][0]
     assert sys_msg.role == "system"
     assert "user=Mei turn=0" in sys_msg.content

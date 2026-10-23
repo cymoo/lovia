@@ -40,7 +40,7 @@ run the app under another ASGI server, skip `serve()`.
 | `cors_origins` | `None` | Allowed browser origins; unset sends no CORS headers |
 | `token` / `auth` | `None` | Bearer-token guard for business API routes, or your own FastAPI dependency (see below) |
 | `lifespan` | `None` | Your own resources' lifespan, as for `FastAPI(lifespan=...)` (see below) |
-| `run_context` | `None` | Builds each run's `RunContext.deps` from the page's context and the request's identity (see [Run context](#run-context)) |
+| `run_deps` | `None` | Builds each run's `RunContext.deps` from the page's context and the request's identity (see [Run deps](#run-deps)) |
 | `title` | `"lovia"` | Page title and the API's reported title |
 
 `create_app` sets the app's FastAPI `lifespan` itself, to start and stop its
@@ -304,7 +304,7 @@ internal.
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [Message actions](#message-actions) |
 | `registerView(id, view)` / `openView(target)` / `closeView()` | [Views](#views) |
-| `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run context](#run-context) |
+| `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run deps](#run-deps) |
 
 ```js
 // ui/acme.js
@@ -853,10 +853,10 @@ pass `token` or `auth` yourself. `serve()` only judges apps built by
 `create_app()` — an app of your own that mounts `build_api_router` keeps its
 own middleware and is run as is.
 
-## Run context
+## Run deps
 
 Tools often need to know who is asking, and what the user picked on the page —
-the knowledge base in a dropdown by the composer, say. `create_app(run_context=fn)`
+the knowledge base in a dropdown by the composer, say. `create_app(run_deps=fn)`
 builds each run's [`RunContext.deps`](agents.md#inject-application-dependencies)
 from both:
 
@@ -878,7 +878,7 @@ class Deps:
     kb: str
 
 
-def run_context(trigger: RunTrigger) -> Deps:
+def run_deps(trigger: RunTrigger) -> Deps:
     user = trigger.request.state.user if trigger.request else "scheduler"
     kb = trigger.client.get("kb", "docs")
     if kb not in KNOWLEDGE_BASES:
@@ -892,7 +892,7 @@ async def search(ctx: RunContext[Deps], query: str) -> str:
     return await KNOWLEDGE_BASES[ctx.deps.kb].search(query, user=ctx.deps.user)
 
 
-app = create_app(agent, auth=auth, run_context=run_context)
+app = create_app(agent, auth=auth, run_deps=run_deps)
 ```
 
 On the page, an extension script supplies the client side with
@@ -904,7 +904,7 @@ const kb = document.getElementById('acme-kb'); // a <select> in the composer_act
 window.lovia.provideContext('kb', () => kb.value);
 ```
 
-`run_context` is called once per run — sync or async — and what it returns is
+`run_deps` is called once per run — sync or async — and what it returns is
 the run's `ctx.deps`, shared by every leg of an auto-continued run. It runs
 before anything about the run is written, so raising an `HTTPException`
 refuses the run and leaves nothing behind: a chat message gets the error, with
@@ -921,7 +921,7 @@ carries:
 | `resumed` | A reconnect is resuming the run from its checkpoint |
 | `session_id`, `agent` | The chat, and the agent about to run |
 
-Every run gets a context, including the ones nobody sent:
+Every run gets a client context, including the ones nobody sent:
 
 - **Resume after a restart.** A checkpoint keeps no context, so the server
   stores the run's `client` beside its checkpoint pointer and clears it when
@@ -933,9 +933,9 @@ Every run gets a context, including the ones nobody sent:
 - **Subagent tasks and their reports** get the latest context of the chat
   they work for, with `request=None`.
 
-A `client` is capped at 64 KB of JSON. Without `run_context`, runs have no
-context (as with the core `Runner`), and a request that carries one logs a
-warning.
+A `client` is capped at 64 KB of JSON. Without `run_deps`, runs get no deps
+(as with the core `Runner`), and a request that carries a client context logs
+a warning.
 
 ## Serving under a path prefix
 

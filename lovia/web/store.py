@@ -134,7 +134,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("chat_schedules", "expires_at REAL"),
     ("chat_schedules", "fire_count INTEGER NOT NULL DEFAULT 0"),
     ("chat_schedules", "finished_reason TEXT"),
-    # The page's client context for run_context= (0.9.95): the in-flight run's
+    # The page's client context for run_deps= (0.9.95): the in-flight run's
     # (beside its pointer, cleared with it) and a schedule's (for its fires).
     ("chat_sessions", "active_context_json TEXT"),
     ("chat_schedules", "context_json TEXT"),
@@ -224,7 +224,7 @@ class ScheduleRow:
     # Why the scheduler/agent deactivated it; NULL on a plain user pause, so
     # ``active=0 AND finished_reason IS NOT NULL`` reads as "done".
     finished_reason: str | None = None
-    # The client context its fires run with (create_app(run_context=...)): the
+    # The client context its fires run with (create_app(run_deps=...)): the
     # page's, when the schedule was made — a schedule is a deferred message.
     context: JsonObject | None = None
 
@@ -625,7 +625,7 @@ class ChatStore:
         """Record that ``run_id`` is the active (potentially interrupted) run.
 
         ``context`` is the run's client context: a resume after a restart
-        hands it to ``run_context=`` again, since a checkpoint keeps none.
+        hands it to ``run_deps=`` again, since a checkpoint keeps none.
         """
         await self._write(
             "UPDATE chat_sessions SET active_run_id = ?, active_context_json = ? "

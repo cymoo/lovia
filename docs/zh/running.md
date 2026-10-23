@@ -45,7 +45,7 @@ result = await handle.result()   # 返回 RunResult，或抛出运行错误
 
 | 选项 | 默认值 | 作用 |
 | --- | --- | --- |
-| `context` | `None` | 你的依赖对象，会作为 `ctx.deps` 暴露（见 [Agent](agents.md#注入应用依赖)） |
+| `deps` | `None` | 你的依赖对象，会作为 `ctx.deps` 暴露（见 [Agent](agents.md#注入应用依赖)） |
 | `output_type` | `None` | 本次运行覆盖 agent 的[输出类型](structured-output.md) |
 | `extra_instructions` | `None` | 本次运行追加到 system prompt 的内容，渲染在 agent 自身 instructions 后；handoff 到的每个 agent 都会重新应用 |
 | `max_turns` | `50` | 模型轮次的硬上限；超过会抛 `MaxTurnsExceeded` |

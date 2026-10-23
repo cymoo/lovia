@@ -122,7 +122,6 @@ def _probe_agent(captured: dict, script, **agent_kwargs) -> Agent:
     @tool
     def probe(ctx: RunContext) -> str:
         captured["deps"] = ctx.deps
-        captured["context"] = ctx.context
         captured["run_id"] = ctx.run_id
         captured["turn"] = ctx.turn
         captured["budget"] = ctx.budget
@@ -142,12 +141,10 @@ async def test_run_context_exposes_deps_turn_and_system_prompt() -> None:
         instructions="You are a careful calculator.",
     )
     deps = {"db": object()}
-    result = await Runner.run(agent, "go", context=deps)
+    result = await Runner.run(agent, "go", deps=deps)
 
     assert result.output == "done"
-    # deps is the friendly alias of context — same object.
     assert captured["deps"] is deps
-    assert captured["context"] is deps
     # turn is 1-based and set before the tool runs on the first turn.
     assert captured["turn"] == 1
     # system_prompt is the rendered leading system text.

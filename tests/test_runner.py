@@ -139,7 +139,7 @@ async def test_typed_context_smoke() -> None:
         qty: int
 
     agent: Agent[Order, str] = Agent(name="a", model=ScriptedProvider([text("ok")]))
-    res = await Runner.run(agent, "ping", context=Order(id="o1", qty=1))
+    res = await Runner.run(agent, "ping", deps=Order(id="o1", qty=1))
     assert res.output == "ok"
 
 

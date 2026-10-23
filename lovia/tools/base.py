@@ -535,6 +535,6 @@ def _find_context_param(func: Callable[..., Any]) -> str | None:
     if len(matches) > 1:
         raise UserError(
             "Tool functions can have at most one RunContext parameter.",
-            hint="Remove the extra RunContext annotation or pass that value through ctx.context.",
+            hint="Remove the extra RunContext annotation or pass that value through ctx.deps.",
         )
     return matches[0] if matches else None

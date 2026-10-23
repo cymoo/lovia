@@ -30,7 +30,7 @@ from lovia.testing import ScriptedProvider, text
 
 def _state() -> RunState:
     agent = Agent(name="a")
-    run_ctx = RunContext(context=None, entries=[], agent=agent, usage=Usage())
+    run_ctx = RunContext(deps=None, entries=[], agent=agent, usage=Usage())
     active = ActiveAgent(
         agent=agent,
         provider=ScriptedProvider([text("unused")]),

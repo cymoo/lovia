@@ -82,7 +82,7 @@ async def test_retries_receive_fresh_top_level_args() -> None:
             raise RuntimeError("try again")
         return value
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     assert await run_tool(flaky, {"value": "original"}, ctx) == "mutated"
     assert seen == [{"value": "original"}, {"value": "original"}]
 
@@ -105,7 +105,7 @@ async def test_run_tool_does_not_retry_run_control_signals() -> None:
         attempts["budget"] += 1
         raise BudgetExceeded("out of tokens")
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     with pytest.raises(RunCancelled):
         await run_tool(cancelled_tool, {}, ctx)
     with pytest.raises(BudgetExceeded):
@@ -129,7 +129,7 @@ async def test_invalid_arguments_are_not_retried() -> None:
     async def needs_int(count: int) -> str:
         return str(count)
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     with pytest.raises(InvalidToolArguments, match="count"):
         await run_tool(needs_int, {"count": {"not": "an int"}}, ctx)
     assert attempts["n"] == 1
@@ -179,7 +179,7 @@ async def test_policy_can_short_circuit_without_invoking() -> None:
         calls["n"] += 1
         return "fresh"
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     assert await run_tool(expensive, {}, ctx) == "cached"
     assert calls["n"] == 0
 
@@ -197,7 +197,7 @@ async def test_timeout_applies_per_attempt_with_retries() -> None:
             await asyncio.sleep(1.0)
         return "ok"
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     assert await run_tool(slow_then_fast, {}, ctx) == "ok"
     assert attempts["n"] == 2
 
@@ -293,7 +293,7 @@ async def test_result_renderer_non_string_result_uses_default_rendering() -> Non
     async def make_obj() -> dict[str, int]:
         return {"n": 42}
 
-    ctx = RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    ctx = RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
     rendered = await render_tool_result(make_obj, {"n": 42}, ctx)
     assert json.loads(rendered) == {"wrapped": {"n": 42}}
 
@@ -403,12 +403,12 @@ async def test_run_context_injected_by_annotation() -> None:
 
     @tool
     async def whoami(ctx: RunContext[_Deps]) -> str:
-        seen["user_id"] = ctx.context.user_id if ctx.context else None
+        seen["user_id"] = ctx.deps.user_id if ctx.deps else None
         return "ok"
 
     provider = ScriptedProvider([call("whoami", {}), text("done")])
     agent = Agent(name="a", model=provider, tools=[whoami])
-    await Runner.run(agent, "hi", context=_Deps(user_id=42))
+    await Runner.run(agent, "hi", deps=_Deps(user_id=42))
     assert seen["user_id"] == 42
 
 

@@ -28,7 +28,7 @@ from lovia.plugins.skills.source import _parse_frontmatter
 def _make_ctx() -> RunContext[None]:
     """Create a minimal RunContext for testing tool invocations."""
     return RunContext(
-        context=None,
+        deps=None,
         entries=[],
         agent=Agent(name="test", instructions=""),
     )

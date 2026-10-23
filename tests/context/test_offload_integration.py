@@ -68,7 +68,7 @@ async def test_offload_archives_old_result_and_view_carries_marker():
     assert full and full[0].output == BIG
 
     # recall fetches from the store first...
-    ctx = RunContext(context=None, entries=persisted, agent=agent)
+    ctx = RunContext(deps=None, entries=persisted, agent=agent)
     assert await run_tool(make_recall_tool(store), {"ref": BIG_REF}, ctx) == BIG
     # ...falls back to the transcript digest scan when the store has nothing...
     assert await run_tool(make_recall_tool(None), {"ref": BIG_REF}, ctx) == BIG
@@ -152,5 +152,5 @@ async def test_offload_without_store_markers_and_recall_falls_back():
     # ...and although nothing was archived, recall recovers c1 from the
     # transcript via the digest scan (store=None, hash fallback).
     persisted = await sess.load("s1")
-    ctx = RunContext(context=None, entries=persisted, agent=agent)
+    ctx = RunContext(deps=None, entries=persisted, agent=agent)
     assert await run_tool(make_recall_tool(None), {"ref": BIG_REF}, ctx) == BIG

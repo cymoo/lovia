@@ -1,6 +1,6 @@
 // @ts-check
-// Feeds the server's run_context= from the page. Loaded by
-// examples/34_web_run_context.py through ChatUI(scripts=["extension.js"]).
+// Feeds the server's run_deps= from the page. Loaded by
+// examples/34_web_run_deps.py through ChatUI(scripts=["extension.js"]).
 
 const { lovia } = window;
 

@@ -24,7 +24,7 @@ from .runtime.result import RunHandle, RunResult
 from .session import Session
 from .tracing import Tracer
 
-TContext = TypeVar("TContext")
+TDeps = TypeVar("TDeps")
 
 
 class Runner:
@@ -32,10 +32,10 @@ class Runner:
 
     @staticmethod
     def stream(
-        agent: Agent[TContext],
+        agent: Agent[TDeps],
         input: str | list[Message],
         *,
-        context: TContext | None = None,
+        deps: TDeps | None = None,
         output_type: Any = None,
         extra_instructions: str | None = None,
         max_turns: int = 50,
@@ -100,7 +100,7 @@ class Runner:
         loop = RunLoop(
             initial_agent=agent,
             user_input=input,
-            context=context,
+            deps=deps,
             output_type_override=output_type,
             extra_instructions=extra_instructions,
             max_turns=max_turns,
@@ -124,10 +124,10 @@ class Runner:
 
     @staticmethod
     async def run(
-        agent: Agent[TContext],
+        agent: Agent[TDeps],
         input: str | list[Message],
         *,
-        context: TContext | None = None,
+        deps: TDeps | None = None,
         output_type: Any = None,
         extra_instructions: str | None = None,
         max_turns: int = 50,
@@ -151,7 +151,7 @@ class Runner:
         return await Runner.stream(
             agent,
             input,
-            context=context,
+            deps=deps,
             output_type=output_type,
             extra_instructions=extra_instructions,
             cancel_token=cancel_token,
@@ -169,7 +169,7 @@ class Runner:
 
     @staticmethod
     def run_sync(
-        agent: Agent[TContext],
+        agent: Agent[TDeps],
         input: str | list[Message],
         **kwargs: Any,
     ) -> RunResult:

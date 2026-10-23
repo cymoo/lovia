@@ -46,8 +46,8 @@ class Case:
     """Fraction of samples that must pass (``samples=4,
     pass_threshold=0.75`` = at least 3 of 4)."""
 
-    context: Any = None
-    """Forwarded to :meth:`~lovia.Runner.run` as ``context=`` per sample."""
+    deps: Any = None
+    """Forwarded to :meth:`~lovia.Runner.run` as ``deps=`` per sample."""
 
     output_type: Any = None
     """Per-sample ``output_type`` override; ``None`` = the agent's own."""
@@ -146,7 +146,7 @@ async def _run_sample(
         coro = Runner.run(
             resolved,
             case.input,
-            context=case.context,
+            deps=case.deps,
             output_type=case.output_type,
             max_turns=case.max_turns,
         )

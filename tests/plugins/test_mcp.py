@@ -173,7 +173,7 @@ class FakeSession:
 
 
 def _ctx() -> RunContext[Any]:
-    return RunContext(context=None, entries=[], agent=None)  # type: ignore[arg-type]
+    return RunContext(deps=None, entries=[], agent=None)  # type: ignore[arg-type]
 
 
 async def _loaded(session: FakeSession, **kwargs: Any) -> MCPConnection:

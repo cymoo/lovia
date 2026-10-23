@@ -428,7 +428,7 @@ class Subagents:
         return await Runner.run(
             child,
             rec.prompt,
-            context=ctx.context,
+            deps=ctx.deps,
             max_turns=self.max_turns,
             budget=replace(self.budget) if self.budget is not None else None,
             cancel_token=rec.token,

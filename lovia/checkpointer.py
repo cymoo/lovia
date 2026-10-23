@@ -4,7 +4,7 @@ A :class:`Checkpointer` snapshots the parts of a run that are safe to
 serialize after each turn: the transcript (as :class:`TranscriptEntry` list), the
 active agent's name, the accumulated usage, the turn counter, run status,
 JSON-safe output/error payloads, the last observed input-token count, and the
-context policy's opaque per-run state. The opaque ``RunContext.context`` value
+context policy's opaque per-run state. The opaque ``RunContext.deps`` value
 is *not* snapshotted — callers re-supply it on resume.
 
 Concrete implementations live in :mod:`lovia.stores`:

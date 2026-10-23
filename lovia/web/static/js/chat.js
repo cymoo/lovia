@@ -2990,7 +2990,7 @@ export function detachStream() {
  */
 export async function cancelStream() {
   if (_admitting) {
-    // The server is still admitting the run (its run_context hook may take a
+    // The server is still admitting the run (its run_deps hook may take a
     // moment): there's nothing to stop yet. Stop it once the stream names its
     // session — aborting now would only detach from the run about to start.
     _stopOnceAdmitted = true;

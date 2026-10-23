@@ -131,7 +131,7 @@ interface LoviaApi {
   /**
    * Add `key` to the client context each run starts with: `fn()` is read when
    * a message (or a new schedule) is sent, and reaches the server's
-   * `create_app(run_context=...)` as `trigger.client[key]`. Return
+   * `create_app(run_deps=...)` as `trigger.client[key]`. Return
    * JSON-serializable data; undefined leaves the key out. UI state only — the
    * browser controls it, so it is no proof of who the user is.
    */

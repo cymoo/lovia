@@ -12,7 +12,7 @@ from .helpers import FakeProviderWithWindow, FakeResultStore, call, out, user
 
 def _ctx(entries) -> RunContext:
     agent = Agent(name="t", instructions="x", model=FakeProviderWithWindow())
-    return RunContext(context=None, entries=entries, agent=agent)
+    return RunContext(deps=None, entries=entries, agent=agent)
 
 
 async def test_recall_falls_back_to_transcript():

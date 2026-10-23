@@ -1,8 +1,8 @@
 """What a served run's tools see as ``RunContext.deps``.
 
-``create_app(run_context=fn)`` calls ``fn(trigger)`` once per run the server
+``create_app(run_deps=fn)`` calls ``fn(trigger)`` once per run the server
 starts — a chat turn, a resumed run, a scheduled run, a subagent task — and
-passes what it returns to the runner as ``context=``. ``trigger`` says why the
+passes what it returns to the runner as ``deps=``. ``trigger`` says why the
 run started and carries two inputs:
 
 * ``client`` — the JSON object the page sent with the message (extensions add
@@ -47,7 +47,7 @@ RUN_CLIENT: ContextVar[JsonObject | None] = ContextVar("lovia_run_client", defau
 
 @dataclass(frozen=True)
 class RunTrigger:
-    """Why a served run started, handed to ``create_app(run_context=...)``."""
+    """Why a served run started, handed to ``create_app(run_deps=...)``."""
 
     session_id: str
     agent: Agent[Any]
@@ -62,13 +62,13 @@ class RunTrigger:
     """A reconnect is resuming this run from its checkpoint."""
 
 
-#: ``create_app(run_context=...)``: sync or async, returns the run's deps.
-RunContextFn = Callable[[RunTrigger], "Any | Awaitable[Any]"]
+#: ``create_app(run_deps=...)``: sync or async, returns the run's deps.
+RunDepsFn = Callable[[RunTrigger], "Any | Awaitable[Any]"]
 
 _warned_unused = False
 
 
-async def build_run_context(fn: RunContextFn | None, trigger: RunTrigger) -> Any:
+async def build_run_deps(fn: RunDepsFn | None, trigger: RunTrigger) -> Any:
     """``fn(trigger)``, awaited if it returns an awaitable; ``None`` without ``fn``."""
     if fn is None:
         global _warned_unused
@@ -76,7 +76,7 @@ async def build_run_context(fn: RunContextFn | None, trigger: RunTrigger) -> Any
             _warned_unused = True
             log.warning(
                 "a request carried a client context but create_app has no "
-                "run_context=; it is ignored (set run_context to use it)"
+                "run_deps=; it is ignored (set run_deps to use it)"
             )
         return None
     out = fn(trigger)

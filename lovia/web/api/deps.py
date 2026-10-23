@@ -39,7 +39,7 @@ from ..workspaces import WorkspaceSessions
 if TYPE_CHECKING:
     from ..config import ConfigRuntime
     from ..questions import QuestionRegistry
-    from ..run_context import RunContextFn
+    from ..run_deps import RunDepsFn
     from ..supervisor import EventHub, RunSupervisor
 
 log = logging.getLogger(__name__)
@@ -103,8 +103,8 @@ class RouterDeps:
     # routes and no ``model_config`` feature flag.
     config_runtime: "ConfigRuntime | None" = None
     # Builds each run's ``RunContext.deps`` from a RunTrigger (see
-    # run_context.py); ``None`` runs everything without a context, like core.
-    run_context: "RunContextFn | None" = None
+    # run_deps.py); ``None`` runs everything without deps, like core.
+    run_deps: "RunDepsFn | None" = None
     # Hard references to fire-and-forget title tasks: without these the event
     # loop only holds a weak reference and may garbage-collect a task mid-flight.
     _bg_tasks: set[asyncio.Task[Any]] = field(default_factory=set)

@@ -3,15 +3,15 @@
 Run::
 
     pip install -e .[web]
-    python examples/34_web_run_context.py
+    python examples/34_web_run_deps.py
     # open http://127.0.0.1:8000, pick a knowledge base by the message box,
     # and ask "how do refunds work?"
 
 Two inputs reach every run's ``RunContext.deps`` through
-``create_app(run_context=...)``:
+``create_app(run_deps=...)``:
 
 - **What the user picked** — the knowledge base in the composer's dropdown.
-  ``web_run_context/extension.js`` reports it with
+  ``web_run_deps/extension.js`` reports it with
   ``lovia.provideContext("kb", ...)``; the server sees it as
   ``trigger.client["kb"]``. The browser controls this value, so it only
   selects among options the server allows, and never grants anything.
@@ -62,7 +62,7 @@ async def auth(request: Request) -> None:
     request.state.user = request.cookies.get("acme_user", "guest")
 
 
-def run_context(trigger: RunTrigger) -> Deps:
+def run_deps(trigger: RunTrigger) -> Deps:
     # Identity comes from the request — never from trigger.client.
     user = trigger.request.state.user if trigger.request else "scheduler"
     kb = str(trigger.client.get("kb", "docs"))
@@ -92,7 +92,7 @@ def whoami(ctx: RunContext[Deps]) -> str:
 
 
 UI = ChatUI(
-    assets=Path(__file__).parent / "web_run_context",
+    assets=Path(__file__).parent / "web_run_deps",
     scripts=["extension.js"],
     styles=["extension.css"],
     empty_title="Ask the knowledge base",
@@ -117,7 +117,7 @@ def main() -> None:
         model=MODEL,
         tools=[search, whoami],
     )
-    app = create_app(agent, title="Acme KB", ui=UI, auth=auth, run_context=run_context)
+    app = create_app(agent, title="Acme KB", ui=UI, auth=auth, run_deps=run_deps)
     serve(app, host="127.0.0.1", port=8000)
 
 

@@ -30,7 +30,7 @@ Runner 会在**每次运行**调用并等待一次 `setup()`；如果 [Handoff](
 Agent，也会依次执行目标 Agent 插件的 `setup()`。返回内容会合并到运行循环的固定扩展点。
 
 `ctx` 是本次运行的实时 `RunContext`，与工具、钩子拿到的是同一个句柄，插件可以据此按会话或用户
-定制自己的贡献。`setup` 时 `session_id`、`run_id`、`context` 已经确定，`agent` / `workspace`
+定制自己的贡献。`setup` 时 `session_id`、`run_id`、`deps` 已经确定，`agent` / `workspace`
 是正在激活的那个 Agent；`entries` 在运行开始时为空，不要从它推导任何东西。
 
 | `PluginInstance` 字段 | 效果 |

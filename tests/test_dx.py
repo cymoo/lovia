@@ -22,7 +22,8 @@ from lovia.exceptions import (
     OutputValidationError,
     UserError,
 )
-from lovia.stores import InMemoryCheckpointer
+from lovia.stores import InMemoryCheckpointer, InMemorySession
+from lovia.tracing import InMemoryTracer, SpanName
 
 from .scripted_provider import ScriptedProvider, call, text
 
@@ -149,8 +150,8 @@ async def test_run_context_exposes_deps_turn_and_system_prompt() -> None:
     assert captured["turn"] == 1
     # system_prompt is the rendered leading system text.
     assert "careful calculator" in captured["system_prompt"]
-    # No checkpoint / budget configured.
-    assert captured["run_id"] is None
+    # No checkpoint, yet the run still has an id; no budget configured.
+    assert isinstance(captured["run_id"], str) and captured["run_id"]
     assert captured["budget"] is None
 
 
@@ -161,6 +162,24 @@ async def test_run_context_run_id_from_checkpoint() -> None:
     cp = InMemoryCheckpointer()
     await Runner.run(agent, "go", checkpoint=CheckpointOptions(cp, "run-42"))
     assert captured["run_id"] == "run-42"
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_checkpoint_has_one_id_everywhere() -> None:
+    # The context, the session segment and the run span name the run alike.
+    session = InMemorySession()
+    tracer = InMemoryTracer()
+    ids = []
+    for _ in range(2):
+        captured: dict = {}
+        agent = _probe_agent(captured, [call("probe", {}), text("ok")], name="a")
+        await Runner.run(agent, "go", session=session, session_id="s", tracer=tracer)
+        ids.append(captured["run_id"])
+
+    assert ids[0] != ids[1]
+    assert [seg.run_id for seg in await session.segments("s")] == ids
+    run_spans = [s for s in tracer.spans if s.name == SpanName.RUN]
+    assert [s.attrs["run_id"] for s in run_spans] == ids
 
 
 @pytest.mark.asyncio

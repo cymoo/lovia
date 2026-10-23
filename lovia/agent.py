@@ -216,7 +216,7 @@ class Agent(Generic[TDeps]):
             )
         if isinstance(self.model, list):
             raise UserError(
-                f"Agent {self.name!r}: model no longer accepts a list",
+                f"Agent {self.name!r}: model takes one model, not a list",
                 hint="pass a single model; for multi-vendor failover point "
                 "base_url at a routing gateway (LiteLLM, OpenRouter), and rely "
                 "on retry=RetryPolicy(...) for transient errors",

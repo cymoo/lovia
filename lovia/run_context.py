@@ -68,10 +68,12 @@ class RunContext(Generic[TDeps]):
     per-session resources (caches, memory) read it here."""
 
     run_id: str | None = None
-    """Per-run idempotency key when ``checkpoint=`` was passed to
-    :meth:`Runner.run`; ``None`` for runs without a checkpoint. Unlike
-    :attr:`session_id` it is unique to this single run — tools that key
-    per-run resources (scratch files, locks) read it here."""
+    """This run's id. Every run the runner starts has one: the checkpoint's
+    ``run_id`` (the idempotency key) when ``checkpoint=`` was passed to
+    :meth:`Runner.run`, else a fresh one. The session segment and the run's
+    tracing span carry the same id. Unlike :attr:`session_id` it is unique to
+    this single run — tools that key per-run resources (scratch files, locks)
+    read it here. ``None`` only on a context built by hand."""
 
     turn: int = 0
     """1-based index of the model turn currently in flight (``0`` before the

@@ -67,7 +67,7 @@ keyless gateway keeps working.
 
 **Reasoning models** (DeepSeek-style `reasoning_content`, or the `reasoning`
 field vLLM and OpenRouter use): thinking streams as
-[`ReasoningDelta`](streaming.md#model-output) events and is stored as
+[`events.ReasoningDelta`](streaming.md#model-output) events and is stored as
 reasoning entries. On the next request, some hosts *require* those entries
 echoed back (DeepSeek's thinking models return 400 otherwise) while the
 official API rejects the field — so replay defaults per host:
@@ -99,7 +99,7 @@ settings = ModelSettings(
 )
 ```
 
-Thinking streams as `ReasoningDelta`; signatures and `redacted_thinking`
+Thinking streams as `events.ReasoningDelta`; signatures and `redacted_thinking`
 blocks round-trip intact. Replay is host-aware: the official API rejects
 thinking blocks on requests that don't enable thinking, so stale blocks are
 stripped there — while think-by-default compatible hosts (e.g. DeepSeek's
@@ -297,7 +297,11 @@ class Provider(Protocol):
 `stream` receives the transcript view as `TranscriptEntry` values (richer
 than chat messages — reasoning and metadata intact) and yields `ModelDelta`
 values: `TextDelta`, `ReasoningDelta`, `ToolCallDelta`, `UsageDelta`,
-`FinishDelta`, `EntryCompletedDelta`. Three optional protocols make a custom
+`FinishDelta`, `EntryCompletedDelta`, all importable from `lovia.transcript`.
+Two of these share a name with stream events but are different types: the
+provider yields `lovia.transcript.TextDelta(text=...)`, and the runner turns it
+into the `lovia.events.TextDelta(delta=...)` your stream consumer sees (likewise
+`ReasoningDelta`). Three optional protocols make a custom
 provider a first-class citizen of compaction:
 
 ```python

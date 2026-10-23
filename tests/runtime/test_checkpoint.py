@@ -81,7 +81,7 @@ def test_error_payload_shape() -> None:
 
 
 async def test_writer_is_noop_without_checkpointer() -> None:
-    writer = CheckpointWriter(checkpointer=None, run_id=None)
+    writer = CheckpointWriter(checkpointer=None, run_id="r1")
     # All of these must be harmless no-ops.
     await writer.delete()
     await writer.save_running(_state())

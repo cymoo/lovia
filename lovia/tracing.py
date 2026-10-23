@@ -194,10 +194,12 @@ class InMemoryTracer:
 
 
 # ---------------------------------------------------------------------------
-# Typed span helpers — the public span contract
+# Typed span helpers — how the runtime emits the span contract
 #
-# Each function encodes required attributes in its signature so callers get
-# type-checking and IDE completion instead of free-form keyword dicts.
+# The contract a backend sees is the span names (SpanName) and their
+# attributes, as documented in observability.md. These helpers are the
+# runtime's way of emitting it: each encodes the required attributes in its
+# signature, so a call site can't drop one. They are internal, not exported.
 # ---------------------------------------------------------------------------
 
 
@@ -225,3 +227,14 @@ def record_run_end(span: Span, *, turns: int, total_tokens: int) -> None:
     """Set end-of-run metrics on a run span."""
     span.set_attribute("turns", turns)
     span.set_attribute("total_tokens", total_tokens)
+
+
+__all__ = [
+    "ConsoleTracer",
+    "InMemoryTracer",
+    "NoopTracer",
+    "RecordedSpan",
+    "Span",
+    "SpanName",
+    "Tracer",
+]

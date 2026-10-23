@@ -97,7 +97,8 @@ instruction fragments.
 | `agent` | Currently active Agent; changes on Handoff |
 | `usage` | Cumulative usage so far |
 | `turn` | Current 1-based Turn; `0` before the first Turn |
-| `session_id` / `run_id` | Persistence keys, or `None` when unused |
+| `session_id` | The conversation key, or `None` for a one-shot run |
+| `run_id` | This run's id — the checkpoint's when there is one, else a fresh one; never `None` in a run the runner started |
 | `budget` | Active `RunBudget`, if any |
 | `workspace` | Active Workspace session, if any |
 | `cancel_token` | Always-present cooperative cancellation signal |

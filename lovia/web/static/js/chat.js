@@ -2275,6 +2275,9 @@ async function applyEvent({ event, data }) {
       store.reasoningText = '';
       store.reasoningStart = 0;
       store.reasoningEnd = 0;
+      // The replacing attempt is under way: wait on it (keeping a retry line
+      // that's showing; a reconnect's replayed deltas cleared any other).
+      if (!_awaiting) _awaiting = { retry: null };
       break;
 
     case 'message_completed':

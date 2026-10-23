@@ -422,6 +422,51 @@ async def test_reactive_overflow_forwards_the_reported_window(caplog) -> None:
     assert any("learned 8192 tokens" in rec.getMessage() for rec in caplog.records)
 
 
+async def test_overflow_after_a_transient_retry_still_compacts() -> None:
+    # A retry notice is not output: an overflow on the retried attempt must
+    # still take the reactive path, not "already streamed, give up".
+    from lovia.exceptions import ProviderError
+    from lovia.reliability import RetryPolicy
+
+    @tool
+    async def dump() -> str:
+        """Return a huge payload."""
+        return "x" * 40_000
+
+    class _FlakyThenOverflow:
+        """Call 1: request the huge tool result. Call 2: a connection blip
+        (retried). Call 3: reject the prompt. Call 4 (reactive retry): answer."""
+
+        name = "flaky-then-overflow"
+        model = "fake-model"
+        stream_count = 0
+
+        async def stream(self, entries, **kwargs):
+            self.stream_count += 1
+            if self.stream_count == 1:
+                yield ToolCallDelta(index=0, call_id="c1", name="dump", arguments="{}")
+                yield FinishDelta(reason="tool_calls")
+            elif self.stream_count == 2:
+                raise ProviderError("connection reset", retryable=True)
+            elif self.stream_count == 3:
+                raise ContextOverflowError("prompt is too long", reported_window=8_192)
+            else:
+                yield TextDelta(text="recovered")
+                yield FinishDelta(reason="stop")
+
+    async def _no_sleep(_delay: float) -> None:
+        pass
+
+    provider = _FlakyThenOverflow()
+    agent = Agent(name="t", instructions="x", model=provider, tools=[dump])
+
+    result = await Runner.run(
+        agent, "go", retry=RetryPolicy(max_attempts=2, sleep=_no_sleep)
+    )
+    assert result.output == "recovered"
+    assert provider.stream_count == 4
+
+
 # ---------------------------------------------------------------------------
 # Lenient JSON parsing tolerates markdown fences around structured output
 # ---------------------------------------------------------------------------

@@ -454,6 +454,13 @@ class RunController:
     # -- snapshot mirror ------------------------------------------------- #
 
     def _ingest(self, ev: events.Event) -> None:
+        # A retry notice is current only until the next event, so the buffer
+        # holds at most the latest one, as its tail: a reconnect during the
+        # backoff shows the retry, one after it doesn't.
+        if self.in_flight_buffer and isinstance(
+            self.in_flight_buffer[-1], events.ModelRetrying
+        ):
+            self.in_flight_buffer.pop()
         if isinstance(ev, events.TurnStarted):
             self.turns = ev.turn
             self.in_flight_buffer = []
@@ -465,6 +472,7 @@ class RunController:
                 events.TextDelta,
                 events.ReasoningDelta,
                 events.OutputDiscarded,
+                events.ModelRetrying,
                 events.MessageCompleted,
                 events.ToolCallStarted,
                 events.ToolCallCompleted,

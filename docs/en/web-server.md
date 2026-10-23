@@ -149,7 +149,7 @@ with its own job:
 | [Design tokens](#styling) | Colors, fonts, radii, spacing |
 | [`data-part` attributes](#styling) | Targeting a region from your CSS: hiding or restyling it |
 | [`data-i18n` keys](#wording-and-languages) | Wording and languages |
-| [`window.lovia`](#extension-scripts) and `api.js` | Your scripts; talking to the API |
+| [`window.lovia`](#extension-scripts) | Your scripts; talking to the API |
 
 Everything else — class names, element ids, the JavaScript modules — is
 internal and may change between releases.

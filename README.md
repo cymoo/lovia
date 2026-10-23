@@ -55,6 +55,8 @@ This README is a quick tour. For the full guide, start with the
 [core concepts](https://cymoo.github.io/lovia/concepts/) in the
 [documentation](https://cymoo.github.io/lovia/). The
 [examples](./examples/README.md) are a numbered, runnable learning path.
+What 1.0 keeps stable is spelled out in
+[Stability](https://cymoo.github.io/lovia/stability/).
 
 ## Why lovia
 

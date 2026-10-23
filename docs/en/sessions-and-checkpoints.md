@@ -82,6 +82,11 @@ leak back into the next run. `keep_entries=0` empties the session; a count at
 or past the end is a no-op. If the rewound run has a live checkpoint, delete
 it too — a later resume would replay the undone tail.
 
+`rewind` is optional for a custom `Session`. Implement
+`async rewind(session_id, *, keep_entries) -> int` with the semantics above
+and the [web UI](web-ui.md) offers edit-and-resend and regenerate on it; the
+web layer checks for the method and hides both without it.
+
 ## Checkpoints
 
 For runs that must survive crashes — or be safely re-issued — add a

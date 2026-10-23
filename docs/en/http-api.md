@@ -171,7 +171,7 @@ normalizes all three.
 | `GET /api/schedules/{id}/runs` | a schedule's fire history (its run records, newest first) |
 | `GET /api/workspace` · `/files` · `/recent` · `/file` · `/raw` | read-only file panel over the agent's [workspace](workspace.md) |
 | `GET` / `PUT /api/memory?agent=` | read / replace the [Memory notes](memory.md#how-memories-get-written) (`{content, used, budget}`) |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | **UI-internal**, serving the CLI's built-in settings UI and not part of the [stable API](stability.md): the CLI default agent's [model configuration](web-ui.md#models-and-switching) and [skill directories](web-ui.md#skills) — present only when `/api/info` reports `features.model_config`. Keys are write-only (`null` keeps, `""` clears; reads carry `{set, hint}`); writes validate the whole document, persist it, and hot-swap the served agent. `GET /api/config/skills` reports per-directory discovery |
 
 `POST /api/chat` and `/api/chat/stream` take
 `{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`
@@ -298,8 +298,9 @@ for await (const { event, data } of readSSE(res)) {
 }
 ```
 
-Import it, or read it as the reference implementation for any language —
-it is intentionally small.
+Copy it into your own front end, or read it as the reference implementation
+for any language — it is intentionally small. Like the page's other
+JavaScript modules it is not part of the [stable surface](stability.md).
 
 ## ChatStore
 

@@ -49,6 +49,7 @@ Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点�
 这份 README 只做快速介绍。更完整的内容见[文档](https://cymoo.github.io/lovia/zh/)；
 建议先读[快速开始](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)。
 [示例](./examples/README-zh.md)按编号组织，可以作为一条直接运行的学习路径。
+1.0 承诺保持稳定的范围见[稳定性](https://cymoo.github.io/lovia/zh/stability/)。
 
 ## 为什么是 lovia
 

@@ -97,7 +97,7 @@ class SQLiteCheckpointer(SQLiteStore):
     """
 
     def __init__(self, path: str | Path, *, wal: bool = False) -> None:
-        super().__init__(path, _CHECKPOINT_SCHEMA, wal=wal)
+        super().__init__(path, _CHECKPOINT_SCHEMA, name="checkpoint", wal=wal)
 
     async def append(
         self, run_id: str, entries: list[TranscriptEntry], head: RunHead

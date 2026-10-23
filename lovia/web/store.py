@@ -32,7 +32,7 @@ from ..stores import (
     SQLiteCheckpointer,
     SQLiteSession,
 )
-from ..stores._sqlite import SQLiteStore
+from ..stores._sqlite import Migration, SQLiteStore
 
 __all__ = ["ChatMeta", "ChatStore", "RunRow", "ScheduleRow"]
 
@@ -120,10 +120,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_ui_data_session
     ON chat_ui_data(session_id);
 """
 
-# Columns added after their table first shipped, as (table, column definition).
-# ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so
-# ``ChatStore._migrate`` ALTERs each one into an older database. A new column
-# goes in ``_META_SCHEMA`` *and* here.
+# Columns added after their table first shipped, before the chat tables were
+# versioned, as (table, column definition). Frozen: ``_META_SCHEMA`` declares
+# them all, and a later change is a step in ``_MIGRATIONS``.
 _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("chat_sessions", "pinned INTEGER NOT NULL DEFAULT 0"),
     # Subagent child sessions (0.9.17): a task session points at the chat that
@@ -147,6 +146,25 @@ _ADDED_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_chat_sessions_pinned "
     "ON chat_sessions(pinned DESC, updated_at DESC)",
 )
+
+
+def _reconcile_unversioned(conn: sqlite3.Connection) -> None:
+    """Version 1: bring a database from before versioning up to ``_META_SCHEMA``.
+
+    Such a database may stop anywhere in :data:`_ADDED_COLUMNS`, so a column is
+    added only where it is missing; a fresh database already has them all.
+    """
+    for table, column_def in _ADDED_COLUMNS:
+        present = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column_def.split(" ", 1)[0] not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+    for statement in _ADDED_INDEXES:
+        conn.execute(statement)
+
+
+# Changes to the chat tables since ``_META_SCHEMA``, in order (see
+# ``SQLiteStore``). Append a step; never edit one that has shipped.
+_MIGRATIONS: tuple[Migration, ...] = (_reconcile_unversioned,)
 
 
 @dataclass(frozen=True)
@@ -332,33 +350,14 @@ class ChatStore:
         # ``wal`` covers only the metadata store owned here; a caller-supplied
         # Session/Checkpointer configures its own (see ChatStore.sqlite, which
         # sets all three consistently).
-        self._meta = SQLiteStore(str(meta_path), _META_SCHEMA, wal=wal)
+        self._meta = SQLiteStore(
+            str(meta_path), _META_SCHEMA, name="chat", migrations=_MIGRATIONS, wal=wal
+        )
         self.checkpointer: Checkpointer | None = checkpointer
-        self._migrate()
-
-    def _migrate(self) -> None:
-        """Bring an older database up to ``_META_SCHEMA`` (idempotent).
-
-        Adds each of :data:`_ADDED_COLUMNS` a table lacks, then
-        :data:`_ADDED_INDEXES`. A fresh database already has them all.
-        """
-        with self._meta._tx() as conn:
-            present: dict[str, set[str]] = {}
-            for table, column_def in _ADDED_COLUMNS:
-                if table not in present:
-                    rows = conn.execute(f"PRAGMA table_info({table})")
-                    present[table] = {r[1] for r in rows}
-                if column_def.split(" ", 1)[0] in present[table]:
-                    continue
-                try:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
-                except sqlite3.OperationalError as exc:
-                    # Another worker added it between our PRAGMA and this ALTER
-                    # (concurrent multi-worker startup) — only that is fine.
-                    if "duplicate column" not in str(exc).lower():
-                        raise
-            for statement in _ADDED_INDEXES:
-                conn.execute(statement)
+        # Migrate now rather than on the first request, so a database this
+        # lovia can't open fails the server at startup.
+        with self._meta._conn():
+            pass
 
     # ---- low-level helpers ----------------------------------------------
     # One transaction/read dance, shared by every metadata method.

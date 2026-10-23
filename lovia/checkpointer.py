@@ -21,7 +21,13 @@ from typing import Any, Literal, Protocol, get_args
 
 from .types import JsonObject
 from .exceptions import UserError
-from .transcript import TranscriptEntry, entry_from_dict, entry_to_dict, to_json_safe
+from .transcript import (
+    TranscriptEntry,
+    entry_from_dict,
+    entry_to_dict,
+    known_fields,
+    to_json_safe,
+)
 from .messages import Usage
 
 RunStatus = Literal["running", "interrupted", "completed", "failed"]
@@ -90,7 +96,7 @@ class RunHead:
     def from_dict(cls, data: dict[str, Any]) -> "RunHead":
         return cls(
             agent_name=data["agent_name"],
-            usage=Usage(**data.get("usage", {})),
+            usage=Usage(**known_fields(Usage, data.get("usage", {}))),
             turns=data.get("turns", 0),
             status=data["status"],
             output=data.get("output"),

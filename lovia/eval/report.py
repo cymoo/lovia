@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..messages import Usage
-from ..transcript import to_json_safe
+from ..transcript import known_fields, to_json_safe
 from .checks import CheckResult
 
 _SCHEMA_VERSION = 1
@@ -288,7 +288,7 @@ def _sample_from_dict(data: dict[str, Any]) -> SampleResult:
         ],
         output=data.get("output"),
         turns=data.get("turns", 0),
-        usage=Usage(**data.get("usage", {})),
+        usage=Usage(**known_fields(Usage, data.get("usage", {}))),
         latency=data.get("latency", 0.0),
         cost=data.get("cost"),
         error=data.get("error"),

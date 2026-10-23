@@ -375,6 +375,13 @@ def test_migrated_database_matches_a_fresh_one(tmp_path: Path) -> None:
     ChatStore(InMemorySession(), meta_path=old)  # a second open is a no-op
     assert _shape(old) == fresh_shape
 
+    # Both now record the same version, so later steps start from one place.
+    for path in (fresh, old):
+        conn = sqlite3.connect(path)
+        versions = dict(conn.execute("SELECT store, version FROM lovia_schema"))
+        conn.close()
+        assert versions == {"chat": 1}
+
 
 async def test_chat_store_wal_covers_all_three_stores(tmp_path: Path) -> None:
     # ChatStore.sqlite(wal=True) points session, checkpointer, and metadata at

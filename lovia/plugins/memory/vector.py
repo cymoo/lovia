@@ -280,7 +280,7 @@ class VectorIndex(Fusable, SQLiteStore):
         p = str(path)
         if p != ":memory:":
             Path(p).parent.mkdir(parents=True, exist_ok=True)
-        super().__init__(p, _VEC_SCHEMA)
+        super().__init__(p, _VEC_SCHEMA, name="vector_index")
         self._reset_if_embedder_changed()
 
     def _reset_if_embedder_changed(self) -> None:

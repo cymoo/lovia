@@ -63,7 +63,7 @@ def test_the_scaffold_serves_as_is(
     assert "ChatUI(assets=" in capsys.readouterr().out
     ui = ChatUI(assets=tmp_path / "ui", scripts=["extension.js"], styles=["theme.css"])
     agent = Agent(name="bot", model=ScriptedProvider([]))
-    app = create_app(agent, ui=ui, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, ui=ui, titles=False, store=ChatStore.in_memory())
     client = TestClient(app)
     page = client.get("/")
     assert page.status_code == 200

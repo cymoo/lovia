@@ -176,6 +176,25 @@ test('a renderer can wrap the one it replaces, without recursion', () => {
   unmountComponent(/** @type {any} */ (e));
 });
 
+test('unregistering a wrapper brings back, and redraws, the renderer it replaced', () => {
+  const log = [];
+  registerRenderer('builtin', {
+    render(_el, props) {
+      log.push(`builtin:${props}`);
+    },
+  });
+  const off = registerRenderer('builtin', {
+    render(_el, props) {
+      log.push(`custom:${props}`);
+    },
+  });
+  const e = el();
+  mountComponent(/** @type {any} */ (e), { kind: 'builtin', props: 'p' });
+  off();
+  assert.deepEqual(log, ['custom:p', 'builtin:p']);
+  unmountComponent(/** @type {any} */ (e));
+});
+
 test('a throwing or rejecting renderer shows the failure notice', async () => {
   registerRenderer('boom', {
     render() {

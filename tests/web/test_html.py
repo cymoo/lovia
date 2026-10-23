@@ -24,7 +24,7 @@ def _run(args: dict) -> dict:
     """Stream one show_html call; return its tool_result payload."""
     provider = ScriptedProvider([call("show_html", args, call_id="c1"), text("ok")])
     agent = Agent(name="bot", model=provider, tools=[show_html])
-    app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, titles=False, store=ChatStore.in_memory())
     with TestClient(app).stream(
         "POST", "/api/chat/stream", json={"message": "go"}
     ) as res:
@@ -54,6 +54,6 @@ def test_the_chat_page_sets_no_csp() -> None:
     """Untrusted frames carry their own navigation guard (sandbox.js); a page
     policy would only block the deployer's iframes, so the page has none."""
     agent = Agent(name="bot", model=ScriptedProvider([]))
-    app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, titles=False, store=ChatStore.in_memory())
     res = TestClient(app).get("/")
     assert "content-security-policy" not in res.headers

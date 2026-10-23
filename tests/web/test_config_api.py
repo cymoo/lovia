@@ -42,9 +42,7 @@ def served(
     runtime = ConfigRuntime(
         args=args, loaded=loaded, store=ChatStore.in_memory(), question_channel=None
     )
-    app = create_app(
-        {}, store=runtime.store, config_runtime=runtime, generate_titles=False
-    )
+    app = create_app({}, store=runtime.store, config_runtime=runtime, titles=False)
     # base_url localhost => a loopback Host header, passing the rebinding guard.
     with TestClient(app, base_url="http://localhost") as client:
         yield client, runtime, app
@@ -118,7 +116,7 @@ def test_embedder_apps_have_no_config_api() -> None:
         Agent(name="bot", model=ScriptedProvider([text("hi")])),
         session=None,
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     with TestClient(app) as client:
         info = client.get("/api/info").json()
@@ -573,7 +571,7 @@ def test_token_auth_lifts_the_host_restriction(
         {},
         store=runtime.store,
         config_runtime=runtime,
-        generate_titles=False,
+        titles=False,
         token="sesame",
     )
     assert runtime.require_local_host is False

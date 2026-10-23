@@ -41,6 +41,7 @@ const quietly = async (fn) => {
 test('an action needs an id, a label and run; unknown fields are refused', () => {
   const run = () => {};
   assert.throws(() => registerMessageAction('', { label: 'x', run }), /expected an id/);
+  assert.throws(() => registerMessageAction('a', null), /expected an action/);
   assert.throws(() => registerMessageAction('a', { run }), /`label`/);
   assert.throws(() => registerMessageAction('a', { label: 'x' }), /`run` is required/);
   assert.throws(() => registerMessageAction('a', { label: 'x', run, when: true }), /`when`/);
@@ -48,45 +49,60 @@ test('an action needs an id, a label and run; unknown fields are refused', () =>
   assert.throws(() => registerMessageAction('a', { label: 'x', run, icon: 1 }), /`icon`/);
 });
 
-test('when picks the messages; registration order is button order; null removes', () => {
-  registerMessageAction('up', { label: 'Good', run() {}, when: (m) => m.ref !== null });
-  registerMessageAction('note', { label: 'Note', run() {} });
+test('when picks the messages; registration order is button order; disposing removes', () => {
+  const offUp = registerMessageAction('up', { label: 'Good', run() {}, when: (m) => m.ref !== null });
+  const offNote = registerMessageAction('note', { label: 'Note', run() {} });
   assert.deepEqual(ids(messageActionButtons(() => msg())), ['up', 'note']);
   assert.deepEqual(ids(messageActionButtons(() => msg({ ref: null }))), ['note']);
-  registerMessageAction('up', null);
-  registerMessageAction('note', null);
+  offUp();
+  offNote();
+  offNote(); // a second call does nothing
   assert.deepEqual(messageActionButtons(() => msg()), []);
 });
 
+test('disposing a replacement brings back the action it replaced', () => {
+  const offFirst = registerMessageAction('rate', { label: 'Rate', run() {} });
+  const offSecond = registerMessageAction('rate', { label: 'Rate v2', run() {} });
+  const label = () => messageActionButtons(() => msg())[0]?.attrs['aria-label'];
+  assert.equal(label(), 'Rate v2');
+  offSecond();
+  assert.equal(label(), 'Rate');
+  offFirst();
+  assert.equal(label(), undefined);
+});
+
 test('pressed sets aria-pressed; a throwing predicate counts as false', async () => {
-  registerMessageAction('star', { label: 'Star', run() {}, pressed: (m) => m.ref === 'r1:0' });
-  registerMessageAction('bad', { label: 'Bad', run() {}, when: () => { throw new Error('x'); } });
+  const offs = [
+    registerMessageAction('star', { label: 'Star', run() {}, pressed: (m) => m.ref === 'r1:0' }),
+    registerMessageAction('bad', { label: 'Bad', run() {}, when: () => { throw new Error('x'); } }),
+  ];
   const buttons = await quietly(() => messageActionButtons(() => msg()));
   assert.deepEqual(ids(buttons), ['star']);
   assert.equal(buttons[0].attrs['aria-pressed'], 'true');
   assert.equal(buttons[0].attrs['aria-label'], 'Star');
-  registerMessageAction('star', null);
-  registerMessageAction('bad', null);
+  offs.forEach((off) => off());
 });
 
 test('the glyph: a built-in icon, SVG markup, or text (the label by default)', () => {
-  registerMessageAction('a', { label: 'Copy', icon: 'copy', run() {} });
-  registerMessageAction('b', { label: 'Mine', icon: '<svg viewBox="0 0 1 1"></svg>', run() {} });
-  registerMessageAction('c', { label: 'Like', icon: '👍', run() {} });
-  registerMessageAction('d', { label: 'Flag', run() {} });
+  const offs = [
+    registerMessageAction('a', { label: 'Copy', icon: 'copy', run() {} }),
+    registerMessageAction('b', { label: 'Mine', icon: '<svg viewBox="0 0 1 1"></svg>', run() {} }),
+    registerMessageAction('c', { label: 'Like', icon: '👍', run() {} }),
+    registerMessageAction('d', { label: 'Flag', run() {} }),
+  ];
   const [a, b, c, d] = messageActionButtons(() => msg());
   assert.match(a.innerHTML, /^<svg[^>]*width="13"/);
   assert.equal(b.innerHTML, '<svg viewBox="0 0 1 1"></svg>');
   assert.equal(c.textContent, '👍');
   assert.equal(c.innerHTML, '');
   assert.equal(d.textContent, 'Flag');
-  for (const id of 'abcd') registerMessageAction(id, null);
+  offs.forEach((off) => off());
 });
 
 test('a click runs with the message as it is then, once until it settles', async () => {
   const seen = [];
   let release = () => {};
-  registerMessageAction('go', {
+  const off = registerMessageAction('go', {
     label: 'Go',
     run: (m) => {
       seen.push(m.ref);
@@ -113,14 +129,14 @@ test('a click runs with the message as it is then, once until it settles', async
   await done;
   assert.equal(redraws, before + 1); // settled: drawn again, enabled
   assert.equal(messageActionButtons(() => msg({ ref }), turn)[0].disabled, false);
-  registerMessageAction('go', null);
+  off();
 });
 
-test('registering and refreshMessageActions ask the page to redraw', () => {
+test('registering, disposing and refreshMessageActions ask the page to redraw', () => {
   let redraws = 0;
   watchMessageActions(() => redraws++);
-  registerMessageAction('x', { label: 'X', run() {} });
+  const off = registerMessageAction('x', { label: 'X', run() {} });
   refreshMessageActions();
-  registerMessageAction('x', null);
+  off();
   assert.equal(redraws, 3);
 });

@@ -38,7 +38,7 @@ def client(mem: Memory) -> TestClient:
     app = create_app(
         {"bot": bot, "plain": plain},
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     return TestClient(app)
 
@@ -56,7 +56,7 @@ def test_feature_flag_false_without_any_memory() -> None:
     app = create_app(
         {"solo": Agent(name="solo", model=ScriptedProvider([text("hi")]))},
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     c = TestClient(app)
     assert c.get("/api/info").json()["features"]["memory"] is False
@@ -167,7 +167,7 @@ def test_shutdown_drains_background_curation(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(plugin_mod, "_current_month", lambda: "2026-01")
     mem = Memory(tmp_path / "mem", index=None, curate_in_background=True)
     bot = Agent(name="bot", model=ScriptedProvider([text("hi")]), plugins=[mem])
-    app = create_app({"bot": bot}, store=ChatStore.in_memory(), generate_titles=False)
+    app = create_app({"bot": bot}, store=ChatStore.in_memory(), titles=False)
 
     with TestClient(app) as client:  # the context manager runs the lifespan
         assert client.post("/api/chat", json={"message": "hello"}).status_code == 200

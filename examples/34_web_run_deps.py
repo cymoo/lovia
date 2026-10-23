@@ -13,7 +13,7 @@ Two inputs reach every run's ``RunContext.deps`` through
 - **What the user picked** — the knowledge base in the composer's dropdown.
   ``web_run_deps/extension.js`` reports it with
   ``lovia.provideContext("kb", ...)``; the server sees it as
-  ``trigger.client["kb"]``. The browser controls this value, so it only
+  ``trigger.client_context["kb"]``. The browser controls this value, so it only
   selects among options the server allows, and never grants anything.
 - **Who is asking** — set on ``request.state`` by the ``auth=`` dependency
   (here a demo cookie the sidebar's picker sets; a real app checks a session),
@@ -63,9 +63,9 @@ async def auth(request: Request) -> None:
 
 
 def run_deps(trigger: RunTrigger) -> Deps:
-    # Identity comes from the request — never from trigger.client.
+    # Identity comes from the request — never from trigger.client_context.
     user = trigger.request.state.user if trigger.request else "scheduler"
-    kb = str(trigger.client.get("kb", "docs"))
+    kb = str(trigger.client_context.get("kb", "docs"))
     if kb not in KNOWLEDGE_BASES:
         raise HTTPException(400, f"unknown knowledge base {kb!r}")
     return Deps(user=user, kb=kb)

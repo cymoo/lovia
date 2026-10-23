@@ -44,7 +44,11 @@ def _agent(script) -> Agent:
 def _build(trigger: RunTrigger) -> dict:
     seen.append(trigger)
     user = getattr(trigger.request.state, "user", None) if trigger.request else None
-    return {"user": user, "kb": trigger.client.get("kb"), "source": trigger.source}
+    return {
+        "user": user,
+        "kb": trigger.client_context.get("kb"),
+        "source": trigger.source,
+    }
 
 
 async def _auth(request: Request) -> None:
@@ -57,7 +61,7 @@ def _app(agent: Agent, *, store: ChatStore | None = None, **kw):
     return create_app(
         agent,
         store=store or ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
         auth=_auth,
         **kw,
     )
@@ -82,7 +86,7 @@ async def test_stream_hands_client_context_and_identity_to_tools() -> None:
     )
     assert _tool_result(events) == repr({"user": "ada", "kb": "docs", "source": "user"})
     [trigger] = seen
-    assert trigger.client == {"kb": "docs"}
+    assert trigger.client_context == {"kb": "docs"}
     assert trigger.resumed is False
     assert trigger.agent.name == "bot"
 
@@ -103,7 +107,7 @@ async def test_blocking_chat_hands_it_over_too() -> None:
 
 async def test_an_async_run_deps_is_awaited() -> None:
     async def build(trigger: RunTrigger) -> str:
-        return f"async:{trigger.client.get('kb')}"
+        return f"async:{trigger.client_context.get('kb')}"
 
     app = _app(_agent([call("whoami", {}), text("ok")]), run_deps=build)
     events = await _stream(app, {"message": "hi", "context": {"kb": "docs"}})
@@ -252,7 +256,7 @@ async def test_a_report_run_continues_in_its_chats_context() -> None:
     await subagent_deliver(deps)(report)
     await _drain_runs(deps)
     assert seen[-1].source == "subagent-report:t1"
-    assert seen[-1].client == {"kb": "docs"}
+    assert seen[-1].client_context == {"kb": "docs"}
     assert seen[-1].request is None
 
 
@@ -269,7 +273,7 @@ async def test_a_blocking_turn_hands_its_context_to_the_tasks_it_spawns() -> Non
 
 def _refusing(trigger: RunTrigger) -> dict:
     """Refuse any run whose page picked the "secret" knowledge base."""
-    if trigger.client.get("kb") == "secret":
+    if trigger.client_context.get("kb") == "secret":
         raise HTTPException(403, "not your knowledge base")
     return _build(trigger)
 
@@ -416,7 +420,7 @@ async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
     script = [call("block", {}), text("a"), call("block", {}), text("c"), text("b")]
     agent = Agent(name="bot", model=ScriptedProvider(script), tools=[block])
     gate, entered = asyncio.Event(), []
-    hook = _gated(gate, entered, when=lambda t: t.client.get("kb") == "late")
+    hook = _gated(gate, entered, when=lambda t: t.client_context.get("kb") == "late")
     store = ChatStore.in_memory()
     app = _app(agent, store=store, run_deps=hook)
     sup = app.state.deps.supervisor
@@ -450,7 +454,7 @@ async def test_a_message_whose_run_ended_joins_the_next_one_not_drops_it(
         await _until(lambda: sup.get("s") is None)  # A ended meanwhile
         hold_upsert.set()
         # So the message calls the hook after all (A's call is in `entered` too).
-        await _until(lambda: any(t.client.get("kb") == "late" for t in entered))
+        await _until(lambda: any(t.client_context.get("kb") == "late" for t in entered))
         nxt = asyncio.create_task(
             ac.post("/api/chat/stream", json={"message": "c", "session_id": "s"})
         )

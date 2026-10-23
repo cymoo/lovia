@@ -9,11 +9,12 @@
 // No DOM access at import time (the pure helpers are unit-tested under node).
 
 import { t } from './i18n.js';
+import { Registry } from './registry.js';
 
 const ID = /^[a-z0-9][a-z0-9-]*$/;
 
-/** @type {Map<string, View>} */
-const views = new Map();
+/** @type {Registry<View>} */
+const views = new Registry();
 /** @type {{ id: string, path: string } | null} */
 let open = null;
 /** @type {string | null} */
@@ -81,7 +82,9 @@ export function linkTarget(a, here) {
 
 /**
  * @param {string} id
- * @param {View | null} view
+ * @param {View} view
+ * @returns {() => void} Removes it, bringing back the view it replaced; an
+ *   open view with nothing left under its id closes.
  */
 export function registerView(id, view) {
   if (typeof id !== 'string' || !ID.test(id) || id.startsWith('lovia')) {
@@ -89,16 +92,17 @@ export function registerView(id, view) {
       `lovia.registerView: invalid id ${JSON.stringify(id)} (a-z, 0-9 and '-'; "lovia…" is reserved)`,
     );
   }
-  if (view === null) {
-    views.delete(id);
-    if (open?.id === id) closeView();
-    return;
-  }
   if (!view || typeof view.render !== 'function') {
     throw new TypeError('lovia.registerView: expected a view with render(el, ctx)');
   }
-  views.set(id, view);
-  if (open?.id === id) show(open);
+  const redraw = () => {
+    if (open?.id !== id) return;
+    if (views.has(id)) show(open);
+    else closeView();
+  };
+  const dispose = views.add(id, view, redraw);
+  redraw();
+  return dispose;
 }
 
 /** @param {string} target `'exec'`, or `'exec/perf'` with a path. */

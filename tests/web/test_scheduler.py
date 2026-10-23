@@ -43,7 +43,7 @@ def _agent(script, *, name="bot", tools=None):
 
 
 def _app(agent, store):
-    return create_app(agent, store=store, generate_titles=False)
+    return create_app(agent, store=store, titles=False)
 
 
 def _row(**kw) -> ScheduleRow:
@@ -514,7 +514,7 @@ def _embedded_app(agent, *, scheduler_poll: float):
     deps = RouterDeps(
         agents={agent.name: agent},
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
         scheduler_poll=scheduler_poll,
     )
     app = FastAPI(lifespan=deps.lifespan)
@@ -533,7 +533,7 @@ def test_scheduler_lifespan_fires_end_to_end(embedded: bool) -> None:
         app = create_app(
             agent,
             store=ChatStore.in_memory(),
-            generate_titles=False,
+            titles=False,
             scheduler_poll=0.05,  # tick fast so the test doesn't dawdle
         )
     with TestClient(app) as c:  # entering the context runs the lifespan
@@ -664,7 +664,7 @@ def test_api_create_requires_agent_when_ambiguous() -> None:
         "alpha": _agent([text("a")], name="alpha"),
         "beta": _agent([text("b")], name="beta"),
     }
-    app = create_app(agents, store=ChatStore.in_memory(), generate_titles=False)
+    app = create_app(agents, store=ChatStore.in_memory(), titles=False)
     # Omitting `agent` with >1 agent (no default) → 400 with a clear message,
     # not a confusing "unknown agent None".
     r = TestClient(app).post(
@@ -688,7 +688,7 @@ async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
     block = _blocking_tool(release)
     store = ChatStore.in_memory()
     agent = _agent([call("block", {}, call_id="c1"), text("done")], tools=[block])
-    app = create_app(agent, store=store, generate_titles=False, max_background_runs=1)
+    app = create_app(agent, store=store, titles=False, max_background_runs=1)
     deps = app.state.deps
     sched = Scheduler(deps)
     now = time.time()
@@ -920,7 +920,7 @@ def test_cors_origins_enables_cross_origin_requests() -> None:
     app = create_app(
         _agent([text("hi")]),
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
         cors_origins=["http://localhost:5173"],
     )
     c = TestClient(app)
@@ -1015,7 +1015,7 @@ async def test_fire_resolves_agent_self_name_to_registry_key() -> None:
     # (create_app({"alias": agent})), the scheduler recovers by self-name.
     store = ChatStore.in_memory()
     agent = _agent([text("aliased ok")], name="inner-name")
-    app = create_app({"alias": agent}, store=store, generate_titles=False)
+    app = create_app({"alias": agent}, store=store, titles=False)
     deps = app.state.deps
     now = time.time()
     await store.add_schedule(

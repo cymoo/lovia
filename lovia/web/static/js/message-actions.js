@@ -4,51 +4,49 @@
 // footers when watchMessageActions says the actions changed.
 
 import { ICONS, icon } from './icons.js';
+import { Registry } from './registry.js';
 import { toast } from './toast.js';
 
 const FIELDS = new Set(['label', 'icon', 'when', 'pressed', 'run']);
 
-/** @type {Map<string, MessageAction>} */
-const actions = new Map();
+/** @type {Registry<MessageAction>} */
+const actions = new Registry();
 /** @type {Set<() => void>} */
 const watchers = new Set();
 
 /**
- * Add an action to the messages' footers, or replace the one under `id`;
- * `null` removes it.
+ * Add an action to the messages' footers, or replace the one under `id`.
  * @param {string} id
- * @param {MessageAction | null} action
+ * @param {MessageAction} action
+ * @returns {() => void} Removes it, bringing back the action it replaced.
  */
 export function registerMessageAction(id, action) {
   if (typeof id !== 'string' || !id) {
     throw new TypeError('lovia.registerMessageAction: expected an id');
   }
-  if (action === null) {
-    actions.delete(id);
-  } else {
-    if (!action || typeof action !== 'object') {
-      throw new TypeError(`lovia.registerMessageAction(${JSON.stringify(id)}): expected an action`);
-    }
-    for (const key of Object.keys(action)) {
-      if (!FIELDS.has(key)) {
-        throw new TypeError(`lovia.registerMessageAction: unknown field ${JSON.stringify(key)}`);
-      }
-    }
-    if (typeof action.label !== 'string' || !action.label) {
-      throw new TypeError('lovia.registerMessageAction: `label` must be a non-empty string');
-    }
-    if (action.icon !== undefined && typeof action.icon !== 'string') {
-      throw new TypeError('lovia.registerMessageAction: `icon` must be a string');
-    }
-    for (const key of /** @type {const} */ (['when', 'pressed', 'run'])) {
-      if (action[key] !== undefined && typeof action[key] !== 'function') {
-        throw new TypeError(`lovia.registerMessageAction: \`${key}\` must be a function`);
-      }
-    }
-    if (!action.run) throw new TypeError('lovia.registerMessageAction: `run` is required');
-    actions.set(id, Object.freeze({ ...action }));
+  if (!action || typeof action !== 'object') {
+    throw new TypeError(`lovia.registerMessageAction(${JSON.stringify(id)}): expected an action`);
   }
+  for (const key of Object.keys(action)) {
+    if (!FIELDS.has(key)) {
+      throw new TypeError(`lovia.registerMessageAction: unknown field ${JSON.stringify(key)}`);
+    }
+  }
+  if (typeof action.label !== 'string' || !action.label) {
+    throw new TypeError('lovia.registerMessageAction: `label` must be a non-empty string');
+  }
+  if (action.icon !== undefined && typeof action.icon !== 'string') {
+    throw new TypeError('lovia.registerMessageAction: `icon` must be a string');
+  }
+  for (const key of /** @type {const} */ (['when', 'pressed', 'run'])) {
+    if (action[key] !== undefined && typeof action[key] !== 'function') {
+      throw new TypeError(`lovia.registerMessageAction: \`${key}\` must be a function`);
+    }
+  }
+  if (!action.run) throw new TypeError('lovia.registerMessageAction: `run` is required');
+  const dispose = actions.add(id, Object.freeze({ ...action }), refreshMessageActions);
   refreshMessageActions();
+  return dispose;
 }
 
 /** Draw every message's actions again — `when` and `pressed` are re-asked. */
@@ -114,7 +112,7 @@ export function messageActionButtons(describe, message = describe) {
   const msg = describe();
   /** @type {HTMLButtonElement[]} */
   const out = [];
-  for (const [id, action] of actions) {
+  for (const [id, action] of actions.entries()) {
     if (!ask(id, action.when, msg, true)) continue;
     const btn = document.createElement('button');
     btn.type = 'button';

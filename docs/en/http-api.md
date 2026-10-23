@@ -176,7 +176,7 @@ normalizes all three.
 `POST /api/chat` and `/api/chat/stream` take
 `{message, session_id?, agent?, attachments?, context?}`, and `POST /api/schedules`
 takes a `context` too. `context` is a JSON object of at most 64 KB — the client
-context `create_app(run_deps=...)` receives as `trigger.client` (see
+context `create_app(run_deps=...)` receives as `trigger.client_context` (see
 [Run deps](web-server.md#run-deps)). A message that joins a live run
 doesn't change that run's context.
 

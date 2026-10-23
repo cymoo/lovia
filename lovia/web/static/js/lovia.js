@@ -5,11 +5,12 @@
 // supplies what the page implements through configureLovia and relays the
 // page's events through emitLovia.
 
-import { api, request } from './api.js';
+import { basePath, request } from './api.js';
 import { getRenderer, registerRenderer } from './components.js';
 import { t } from './i18n.js';
 import { refreshMessageActions, registerMessageAction } from './message-actions.js';
 import { pageConfig } from './page-config.js';
+import { Registry } from './registry.js';
 import { registerToolView } from './tool-views.js';
 import { closeView, openView, registerView } from './views.js';
 
@@ -57,8 +58,21 @@ export function emitLovia(name, payload) {
   }
 }
 
-/** @type {Map<string, () => unknown>} */
-const providers = new Map();
+/** @type {Registry<() => unknown>} */
+const providers = new Registry();
+
+/**
+ * `path`, checked to be an app path (fetch and url take the same).
+ * @param {string} method
+ * @param {unknown} path
+ * @returns {string}
+ */
+function appPath(method, path) {
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    throw new TypeError(`lovia.${method}: expected an app path starting with '/'`);
+  }
+  return path;
+}
 
 /**
  * The client context a run starts with: each `provideContext` key's current
@@ -68,7 +82,7 @@ const providers = new Map();
 export function collectContext() {
   /** @type {[string, unknown][]} */
   const entries = [];
-  for (const [key, fn] of providers) {
+  for (const [key, fn] of providers.entries()) {
     try {
       const value = fn();
       if (value !== undefined) entries.push([key, value]);
@@ -124,7 +138,7 @@ export const lovia = Object.freeze({
     if (typeof fn !== 'function') {
       throw new TypeError('lovia.provideContext: expected a function returning the value');
     }
-    providers.set(key, fn);
+    return providers.add(key, fn);
   },
   send(text) {
     const message = typeof text === 'string' ? text.trim() : '';
@@ -142,12 +156,11 @@ export const lovia = Object.freeze({
   toast(text, opts) {
     host.toast(String(text), { type: opts?.type === 'error' ? 'error' : 'info' });
   },
-  api,
   fetch(path, init) {
-    if (typeof path !== 'string' || !path.startsWith('/')) {
-      throw new TypeError("lovia.fetch: expected an app path starting with '/'");
-    }
-    return request(path, init);
+    return request(appPath('fetch', path), init);
+  },
+  url(path) {
+    return basePath() + appPath('url', path);
   },
   t,
 });

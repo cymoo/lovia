@@ -20,7 +20,7 @@ from .test_web import _parse_sse  # noqa: E402
 
 
 def _app(agent: Agent, **kw):
-    return create_app(agent, generate_titles=False, store=ChatStore.in_memory(), **kw)
+    return create_app(agent, titles=False, store=ChatStore.in_memory(), **kw)
 
 
 def test_ui_result_inline_props() -> None:

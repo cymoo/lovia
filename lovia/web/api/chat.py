@@ -100,7 +100,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
         # The run_deps hook decides first, before anything is written: a
         # refused message leaves no trace.
         trigger = RunTrigger(
-            session_id=sid, agent=agent, source="user", request=request, client=client
+            session_id=sid,
+            agent=agent,
+            source="user",
+            request=request,
+            client_context=client,
         )
         run_deps = await build_run_deps(deps.run_deps, trigger)
         await upsert_session(sid, deps.name_of(agent), req.message, is_new=is_new)
@@ -159,7 +163,11 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
             raise WebError(422, "invalid_request", "empty message")
         client = req.context or {}
         trigger = RunTrigger(
-            session_id=sid, agent=agent, source="user", request=request, client=client
+            session_id=sid,
+            agent=agent,
+            source="user",
+            request=request,
+            client_context=client,
         )
         # A message for a live run joins it, in that run's context. Any other
         # starts one: the run_deps hook decides first, before anything is
@@ -344,7 +352,7 @@ def build_chat_router(deps: RouterDeps) -> APIRouter:
                 agent=agent,
                 source="user",
                 request=request,
-                client=client,
+                client_context=client,
                 resumed=True,
             ),
         )

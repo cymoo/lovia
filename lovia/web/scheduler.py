@@ -249,7 +249,7 @@ class Scheduler:
                     session_id=target,
                     agent=agent,
                     source=f"schedule:{sched.id}",
-                    client=sched.context or {},
+                    client_context=sched.context or {},
                 ),
             )
         except Exception as exc:

@@ -141,7 +141,7 @@ def test_new_session_gets_provisional_title_immediately() -> None:
     sidebar shows the user's first message until (if ever) a better title lands."""
     app = create_app(
         Agent(name="bot", model=ScriptedProvider([text("hi")])),
-        generate_titles=False,
+        titles=False,
     )
     c = TestClient(app)
     sid = c.post("/api/chat", json={"message": "How do I write a TCP server?"}).json()[

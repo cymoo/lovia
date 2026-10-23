@@ -88,7 +88,7 @@ def ws_app(tmp_path: Path):
     return create_app(
         {"bot": bot, "plain": plain},
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
 
 
@@ -122,7 +122,7 @@ def test_feature_flag_false_without_any_workspace() -> None:
     app = create_app(
         Agent(name="solo", model=ScriptedProvider([text("hi")])),
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     c = TestClient(app)
     assert c.get("/api/info").json()["features"]["workspace"] is False

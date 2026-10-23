@@ -104,7 +104,10 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 run_deps = await build_run_deps(
                     deps.run_deps,
                     RunTrigger(
-                        session_id=sid, agent=agent, source=source, client=client or {}
+                        session_id=sid,
+                        agent=agent,
+                        source=source,
+                        client_context=client or {},
                     ),
                 )
             except Exception as exc:
@@ -194,7 +197,7 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 session_id=child_sid,
                 agent=spec.agent,
                 source=f"subagent:{child_sid}",
-                client=client or {},
+                client_context=client or {},
             ),
         )
         await deps.store.upsert(

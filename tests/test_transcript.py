@@ -129,10 +129,20 @@ def test_entry_from_dict_rejects_unknown_type() -> None:
         entry_from_dict({"type": "nope"})
 
 
-def test_entry_from_dict_rejects_unknown_field() -> None:
-    """Extra fields surface as TypeError rather than being silently dropped."""
-    with pytest.raises(TypeError):
-        entry_from_dict({"type": "assistant_text", "content": "hi", "mystery_field": 1})
+@pytest.mark.parametrize(
+    "entry",
+    [
+        InputEntry(role="user", content="hi"),
+        AssistantTextEntry(content="hi", id="a1"),
+        ReasoningEntry(content="hmm", provider="anthropic", metadata={"sig": "s"}),
+        ToolCallEntry(call_id="c1", name="add", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="3"),
+    ],
+)
+def test_entry_from_dict_ignores_unknown_fields(entry) -> None:
+    """A field a newer lovia added never stops this one reading the entry."""
+    data = {**entry_to_dict(entry), "added_later": {"x": 1}}
+    assert entry_from_dict(data) == entry
 
 
 def test_entry_to_dict_preserves_type_discriminator() -> None:

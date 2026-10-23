@@ -1008,6 +1008,23 @@ def test_snapshot_from_dict_defaults_missing_optional_fields() -> None:
     assert snap.updated_at > 0
 
 
+def test_snapshot_from_dict_ignores_fields_added_later() -> None:
+    # The other direction: a payload a newer lovia wrote, with fields this one
+    # doesn't know — in the head, its usage, and its entries — still loads.
+    snap = RunSnapshot.from_dict(
+        {
+            "run_id": "r",
+            "entries": [{"type": "assistant_text", "content": "hi", "new": 1}],
+            "agent_name": "a",
+            "status": "running",
+            "usage": {"input_tokens": 3, "reasoning_tokens": 2},
+            "added_later": True,
+        }
+    )
+    assert snap.usage.input_tokens == 3
+    assert snap.entries == [AssistantTextEntry(content="hi")]
+
+
 def test_snapshot_round_trips_pending_handoff() -> None:
     snap = RunSnapshot(
         run_id="r",

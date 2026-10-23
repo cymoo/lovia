@@ -266,7 +266,7 @@ class SQLiteSession(SQLiteStore, Session):
     """
 
     def __init__(self, path: str | Path, *, wal: bool = False) -> None:
-        super().__init__(path, _SESSION_SCHEMA, wal=wal)
+        super().__init__(path, _SESSION_SCHEMA, name="session", wal=wal)
 
     async def segments(self, session_id: str) -> list[Segment]:
         def _impl() -> list[Segment]:

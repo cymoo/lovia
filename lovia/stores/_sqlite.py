@@ -8,13 +8,40 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, TypeVar
+from typing import Callable, Iterator, Sequence, TypeVar
 
 from .._fdlimit import out_of_file_descriptors
+from ..exceptions import LoviaError
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# One schema change, applied inside the transaction that records it.
+Migration = Callable[[sqlite3.Connection], None]
+
+# Each store's schema version, by store name. A table rather than
+# ``PRAGMA user_version``: several stores share one file (``ChatStore.sqlite``
+# puts three there) and the pragma holds one number per file.
+_VERSIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS lovia_schema (
+    store TEXT PRIMARY KEY,
+    version INTEGER NOT NULL
+)
+"""
+
+
+def _statements(script: str) -> Iterator[str]:
+    """Split a SQL script into whole statements (trigger bodies included)."""
+    pending = ""
+    for line in script.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            yield pending
+            pending = ""
+    if pending.strip():
+        yield pending
+
 
 # How long a connection waits on a lock held by another connection (another
 # process, or a sibling store writing to the same file) before raising
@@ -98,11 +125,29 @@ class SQLiteStore:
     so the store still works; the mode is read back and a refusal is logged
     once per database file — not once per store, since several of them share
     one file and the journal mode belongs to the file.
+
+    ``schema`` is the store's tables at version 0 and stays frozen; every later
+    change is a step appended to ``migrations``, so a fresh database and an
+    old one reach the current version by the same path. The version reached
+    is recorded under ``name`` in the ``lovia_schema`` table, and ``schema``
+    runs only while there is none (see :meth:`_ensure_schema`). A database
+    recorded at a version past ``len(migrations)`` was written by a newer
+    lovia and is refused rather than read with the wrong schema.
     """
 
-    def __init__(self, path: str | Path, schema: str, *, wal: bool = False) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        schema: str,
+        *,
+        name: str,
+        migrations: Sequence[Migration] = (),
+        wal: bool = False,
+    ) -> None:
         self._path = str(path)
         self._schema = schema
+        self._name = name
+        self._migrations = tuple(migrations)
         self._wal = wal and self._path != ":memory:"
         self._schema_ready = False
         self._lock = asyncio.Lock()
@@ -110,9 +155,55 @@ class SQLiteStore:
         if self._path == ":memory:":
             self._shared = sqlite3.connect(self._path, check_same_thread=False)
             self._shared.row_factory = sqlite3.Row
-            self._shared.executescript(self._schema)
-            self._shared.commit()
+            self._ensure_schema(self._shared)
             self._schema_ready = True
+
+    def _version(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            "SELECT version FROM lovia_schema WHERE store = ?", (self._name,)
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Bring this store's tables to the current version, in one transaction.
+
+        The version-0 ``schema`` runs only while the store has no recorded
+        version: replayed over a migrated database, it would recreate what a
+        step dropped or index a column a step renamed. It still runs on a store
+        from before versioning (tables present, no row), so it must stay
+        ``IF NOT EXISTS``. All of it happens under the write lock, so a worker
+        that opens the file while another migrates it sees either side, never
+        the middle.
+        """
+        target = len(self._migrations)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(_VERSIONS_SCHEMA)
+            current = self._version(conn)
+            if current == 0:
+                # Statement by statement: ``executescript`` would commit first
+                # and give up the lock.
+                for statement in _statements(self._schema):
+                    conn.execute(statement)
+            if current > target:
+                raise LoviaError(
+                    f"sqlite ({self._path}): the {self._name!r} tables are at "
+                    f"schema version {current}, newer than this lovia knows "
+                    f"({target})",
+                    hint="a newer lovia wrote this database — upgrade lovia to open it",
+                )
+            for migrate in self._migrations[current:]:
+                migrate(conn)
+            if current != target:
+                conn.execute(
+                    "INSERT OR REPLACE INTO lovia_schema (store, version) "
+                    "VALUES (?, ?)",
+                    (self._name, target),
+                )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
 
     def _connect(self) -> sqlite3.Connection:
         if self._shared is not None:
@@ -143,8 +234,11 @@ class SQLiteStore:
                         mode,
                     )
         if not self._schema_ready:
-            conn.executescript(self._schema)
-            conn.commit()
+            try:
+                self._ensure_schema(conn)
+            except BaseException:
+                conn.close()
+                raise
             self._schema_ready = True
         return conn
 

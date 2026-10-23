@@ -182,6 +182,14 @@ Both SQLite stores accept `wal=True` (off by default): WAL journal mode
 plus a busy timeout, for a database file shared with other writers —
 several stores in one file, or a multi-process deployment.
 
+Across lovia versions, each SQLite store records its schema version in a
+`lovia_schema` table in its file and migrates an older database the first
+time it opens it. A database that a newer lovia has migrated past what this
+version knows is refused with an "upgrade lovia" error, never read with the
+wrong schema. Stored entries are read leniently instead: fields this version
+doesn't know are ignored, so what a newer lovia wrote still loads. Only an
+unknown entry `type` is an error.
+
 ## Sharp edges
 
 - **Reusing a completed `run_id` silently drops your new input** — by

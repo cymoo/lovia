@@ -212,7 +212,9 @@ class KeywordIndex(Fusable, SQLiteStore):
         p = str(path)
         if p != ":memory:":
             Path(p).parent.mkdir(parents=True, exist_ok=True)
-        super().__init__(p, _FTS_SCHEMA if self._use_fts else _PLAIN_SCHEMA)
+        super().__init__(
+            p, _FTS_SCHEMA if self._use_fts else _PLAIN_SCHEMA, name="keyword_index"
+        )
         self._table = "memory_fts" if self._use_fts else "memory_docs"
 
     async def add(self, docs: list[Doc]) -> None:

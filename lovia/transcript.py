@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Any, Callable, Literal, Union, cast
 
 from .types import JsonObject
@@ -332,12 +332,22 @@ def to_json_safe(value: object) -> Any:
     return None
 
 
+def known_fields(cls: type, data: Mapping[str, Any]) -> dict[str, Any]:
+    """``data`` narrowed to the fields of dataclass ``cls``.
+
+    Readers of persisted records drop keys they don't know, so a field a newer
+    lovia adds never stops an older one from reading what it wrote.
+    """
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in data.items() if k in names}
+
+
 def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
     """Deserialize a :class:`TranscriptEntry` produced by :func:`entry_to_dict`.
 
-    Raises ``ValueError`` on unknown discriminator — callers are expected
-    to have a stable schema (we don't silently drop unknown fields, since
-    that's how reasoning entries get lost).
+    An unknown ``type`` raises ``ValueError``: skipping a whole entry is how
+    reasoning entries get lost, and a dangling tool call breaks the provider.
+    Unknown *fields* are ignored (see :func:`known_fields`).
     """
     type_ = data.get("type")
     if type_ not in _ENTRY_TYPES:
@@ -367,10 +377,7 @@ def entry_from_dict(data: dict[str, Any]) -> TranscriptEntry:
             is_error=data.get("is_error", False),
             parts=parts,
         )
-    # Strip ``type`` since it's the dataclass default; pass everything else
-    # through so we surface unknown fields as a clean TypeError.
-    payload = {k: v for k, v in data.items() if k != "type"}
-    return cls(**payload)
+    return cls(**known_fields(cast(type, cls), data))
 
 
 def _content_to_dict(

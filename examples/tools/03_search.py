@@ -20,7 +20,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, events, model_from_env
-from lovia.tools.search import duckduckgo_search
+from lovia.tools import duckduckgo_search
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset

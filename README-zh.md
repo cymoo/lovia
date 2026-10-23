@@ -312,8 +312,7 @@ agent = Agent(
 每次请求的预算和时间限制，则在运行时传入：
 
 ```python
-from lovia import Agent, RetryPolicy, RunBudget, Runner
-from lovia.exceptions import GuardrailTripped
+from lovia import Agent, GuardrailTripped, RetryPolicy, RunBudget, Runner
 
 
 async def must_cite(output, ctx):
@@ -343,8 +342,7 @@ hooks 可以监听每个运行事件，事件类型和流式输出一致。通�
 你可以在运行中追加一条用户消息，让模型在下一轮看到；运行本身也可以这样调整自己：
 
 ```python
-from lovia import Mailbox, RunContext, Runner, events
-from lovia.hooks import AgentHooks
+from lovia import AgentHooks, Mailbox, RunContext, Runner, events
 
 hooks = AgentHooks()
 

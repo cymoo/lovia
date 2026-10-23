@@ -19,8 +19,7 @@ runner dispatches every event through them — the *same* typed events
 consumes the stream.
 
 ```python
-from lovia import Agent, RunContext, events
-from lovia.hooks import AgentHooks
+from lovia import Agent, AgentHooks, RunContext, events
 
 hooks = AgentHooks()
 

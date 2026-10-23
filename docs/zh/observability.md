@@ -17,8 +17,7 @@ Agent 的问题常发生在运行途中，例如工具变慢或某一轮 Token �
 观测逻辑仍会正常工作。
 
 ```python
-from lovia import Agent, RunContext, events
-from lovia.hooks import AgentHooks
+from lovia import Agent, AgentHooks, RunContext, events
 
 hooks = AgentHooks()
 

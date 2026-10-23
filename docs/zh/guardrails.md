@@ -4,8 +4,7 @@
 调用前检查对话，**输出护栏**在返回最终答案前检查结果。
 
 ```python
-from lovia import Agent
-from lovia.exceptions import GuardrailTripped
+from lovia import Agent, GuardrailTripped
 
 
 async def no_email_addresses(messages, ctx):

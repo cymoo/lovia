@@ -5,8 +5,7 @@ a run: **input guardrails** check the conversation before the first model call,
 and **output guardrails** check the final result before it returns.
 
 ```python
-from lovia import Agent
-from lovia.exceptions import GuardrailTripped
+from lovia import Agent, GuardrailTripped
 
 
 async def no_email_addresses(messages, ctx):

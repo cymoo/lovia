@@ -174,7 +174,7 @@ gated = dataclasses.replace(http_request, needs_approval=writes_need_approval)
 
 ## Web search
 
-`lovia.tools.search` — a pluggable search tool. Two backends are bundled:
+`web_search` — a pluggable search tool. Two backends are bundled:
 DuckDuckGo (keyless, behind the `ddg` extra) and Tavily (no extra install —
 set `TAVILY_API_KEY` or pass `api_key=`):
 
@@ -183,7 +183,7 @@ pip install "lovia[ddg]"   # only needed for the DuckDuckGo backend
 ```
 
 ```python
-from lovia.tools.search import duckduckgo_search, tavily_search, web_search
+from lovia.tools import duckduckgo_search, tavily_search, web_search
 
 tools = [duckduckgo_search()]            # keyless, requires lovia[ddg]
 tools = [tavily_search()]                # Tavily API, reads TAVILY_API_KEY
@@ -210,7 +210,7 @@ construction time, not mid-run.
 
 ## Time
 
-`lovia.tools.time` — three small utilities:
+Three small utilities:
 
 - **`now`** (tool) — current wall-clock time as ISO-8601; optional `tz`
   takes an IANA name (`"Asia/Shanghai"`). Defaults to the server's local
@@ -234,12 +234,12 @@ construction time, not mid-run.
 
 ## Ask a human
 
-`lovia.tools.human.ask_human(channel)` — lets the *model* request operator
-input mid-run (the inverse of approval, where the *runner* asks):
+`ask_human(channel)` — lets the *model* request operator input mid-run (the
+inverse of approval, where the *runner* asks):
 
 ```python
 from lovia import Agent
-from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools import HumanChannel, ask_human
 
 channel = HumanChannel()
 agent = Agent(name="assistant", model="<model>", tools=[ask_human(channel)])

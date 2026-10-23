@@ -6,7 +6,7 @@ model invokes the tool, the runner emits a future that any external code
 :class:`HumanChannel`. The idiomatic consumer is an ``async for`` over
 :meth:`HumanChannel.questions`::
 
-    from lovia.tools.human import HumanChannel, ask_human
+    from lovia.tools import HumanChannel, ask_human
 
     channel = HumanChannel()
     agent = Agent(name="x", tools=[ask_human(channel)])

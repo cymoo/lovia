@@ -187,4 +187,5 @@ from lovia import (
 ```
 
 Integration-specific types remain in focused modules, such as
-`lovia.workspace`, `lovia.web`, and `lovia.eval`.
+`lovia.workspace`, `lovia.web`, and `lovia.eval`. [Stability](stability.md)
+lists the modules whose names 1.0 keeps stable.

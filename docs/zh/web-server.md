@@ -141,7 +141,7 @@ lovia 把这个目录挂在 `<app>/ui/` 下。除模板（`*.html`）和以点�
 | [设计变量](#样式) | 颜色、字体、圆角、间距 |
 | [`data-part` 属性](#样式) | 在自己的 CSS 里定位某个区域：隐藏它，或改它的样式 |
 | [`data-i18n` key](#文案与语言) | 文案与语言 |
-| [`window.lovia`](#扩展脚本) 和 `api.js` | 你的脚本；调用 API |
+| [`window.lovia`](#扩展脚本) | 你的脚本；调用 API |
 
 其余一切——CSS 类名、元素 id、JavaScript 模块——都属于内部实现，可能随版本变化。
 
@@ -678,8 +678,7 @@ create_app(agent, followups=True, followup_model="<small-model>")
 `create_app()` 默认关闭该功能，因为每次生成建议都可能增加一次模型调用。
 `followup_model` 可改用比 Agent 主模型更便宜的模型；不设置时沿用 Agent 的模型。
 `lovia web` CLI 默认开启，可通过 `--no-followups` 或 `LOVIA_FOLLOWUPS=0` 关闭，
-也可通过 `LOVIA_FOLLOWUP_MODEL` 指定其他模型。该模型位于独立端点时，再设置
-`LOVIA_FOLLOWUP_BASE_URL` 和 `LOVIA_FOLLOWUP_API_KEY`。
+也可以把[辅助任务角色](web-ui.md#模型配置与切换)指派给一个更便宜的模型。
 
 如果建议来自 FAQ、向量库或自定义提示词，可以把异步函数直接传给 `followups`，
 替换内置建议器：

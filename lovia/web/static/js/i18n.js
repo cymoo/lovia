@@ -440,7 +440,7 @@ const MESSAGES = {
     'cfg.saved': '已保存',
     'cfg.roles': '角色指派',
     'cfg.roleVision': '视觉理解',
-    'cfg.roleVisionHint': '对话模型不支持图片时，由它代看（see_image）',
+    'cfg.roleVisionHint': '对话模型不支持图片时，由它代看（describe_image）',
     'cfg.roleAux': '辅助任务',
     'cfg.roleAuxHint': '生成标题与追问建议，可指一个更便宜的模型',
     'cfg.roleNone': '关闭',
@@ -898,7 +898,7 @@ const EN = {
   'cfg.roles': 'Role assignment',
   'cfg.roleVision': 'Vision',
   'cfg.roleVisionHint':
-    'Looks at images (see_image) when the chat model cannot',
+    'Looks at images (describe_image) when the chat model cannot',
   'cfg.roleAux': 'Aux tasks',
   'cfg.roleAuxHint':
     'Titles and follow-up suggestions; a cheaper model works well',

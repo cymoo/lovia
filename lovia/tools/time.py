@@ -2,7 +2,7 @@
 
 Both are stateless module-level :class:`Tool` instances::
 
-    from lovia.tools.time import now, sleep
+    from lovia.tools import now, sleep
     agent = Agent(name="x", tools=[now, sleep])
 """
 

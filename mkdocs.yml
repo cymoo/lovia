@@ -102,6 +102,7 @@ plugins:
             Testing: 测试
             Reference: 参考
             API reference: API 参考
+            Stability: 稳定性
             Troubleshooting: 故障排查
             Internals: 内部机制
             Architecture: Architecture（英文）
@@ -172,6 +173,7 @@ nav:
       - Evals: eval.md
   - Reference:
       - API reference: api-reference.md
+      - Stability: stability.md
       - Troubleshooting: troubleshooting.md
   - Internals:
       - Architecture: architecture.md

@@ -203,7 +203,7 @@ Provider 缓存能让长 agent 循环的成本变得可控。system prompt 和�
 
 | 来源 | 何时生效 |
 | --- | --- |
-| 显式配置 | `Compaction(context_window=…)`——`lovia web` 里也可用 `--context-window` / `LOVIA_CONTEXT_WINDOW` 设置。这是**唯一**面向用户的旋钮；下面各条全部自动 |
+| 显式配置 | `Compaction(context_window=…)`——`lovia web` 里是模型配置中的上下文窗口。这是**唯一**面向用户的旋钮；下面各条全部自动 |
 | **端点自己的拒绝** | 撞墙一次之后：provider 会在报错里点名上限（`maximum context length is 65536 tokens`） |
 | **端点的 `/models` 列表** | vLLM / SGLang 公布 `max_model_len`；Anthropic 官方 API 公布 `max_input_tokens`；Groq、Together、OpenRouter 也各自公布 |
 | 内置表 | 按 **host** 索引：`api.openai.com` 上的 OpenAI 别名、`api.anthropic.com` 上的整条 Claude 线、`api.deepseek.com` 上的 DeepSeek |

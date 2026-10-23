@@ -55,6 +55,8 @@ This README is a quick tour. For the full guide, start with the
 [core concepts](https://cymoo.github.io/lovia/concepts/) in the
 [documentation](https://cymoo.github.io/lovia/). The
 [examples](./examples/README.md) are a numbered, runnable learning path.
+What 1.0 keeps stable is spelled out in
+[Stability](https://cymoo.github.io/lovia/stability/).
 
 ## Why lovia
 
@@ -337,8 +339,7 @@ Guardrails veto runs at the input/output boundary. Reliability follows one
 placement rule — retry posture on the agent, per-run limits on the run:
 
 ```python
-from lovia import Agent, RetryPolicy, RunBudget, Runner
-from lovia.exceptions import GuardrailTripped
+from lovia import Agent, GuardrailTripped, RetryPolicy, RunBudget, Runner
 
 
 async def must_cite(output, ctx):
@@ -369,8 +370,7 @@ mailbox is the inbound dual of cancellation — push a message into a live run
 and the model sees it next turn. A run can even steer itself:
 
 ```python
-from lovia import Mailbox, RunContext, Runner, events
-from lovia.hooks import AgentHooks
+from lovia import AgentHooks, Mailbox, RunContext, Runner, events
 
 hooks = AgentHooks()
 

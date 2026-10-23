@@ -165,7 +165,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `POST /api/workspace/upload?agent=` | 将一个文件上传到工作区的 `uploads/` 目录；受扩展名白名单和大小上限约束 |
 | `GET` / `PUT /api/memory?agent=` | 读取 / 替换 [Memory Notes](memory.md#记忆如何写入)（`{content, used, budget, dreamed_at}`） |
 | `POST /api/memory/dream?agent=` | 立即[整理 Memory Notes](memory.md#定期整理)，返回 `{content, used, budget, dreamed_at, before, after}` |
-| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
+| `GET /api/config` · `POST /api/config/models` · `PUT`/`DELETE /api/config/models/{id}` · `PUT /api/config/roles` · `PUT /api/config/search` · `PUT`/`GET /api/config/skills` · `POST /api/config/test` | **UI 内部接口**，服务于 CLI 内置的设置界面，不属于[稳定 API](stability.md)：CLI 默认 Agent 的[模型配置](web-ui.md#模型配置与切换)与 [Skill 目录](web-ui.md#skills)——仅当 `/api/info` 报告 `features.model_config` 时存在。密钥只写不读（`null` 保留、`""` 清除；读取返回 `{set, hint}`）；写入会整体校验、持久化并热切换所服务的 Agent。`GET /api/config/skills` 返回逐目录的发现报告 |
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
@@ -281,7 +281,8 @@ for await (const { event, data } of readSSE(res)) {
 }
 ```
 
-可以直接导入这个模块，也可以将其作为其他语言客户端的参考实现。代码量很小，便于移植。
+可以把它复制到自己的前端里，也可以将其作为其他语言客户端的参考实现。代码量很小，便于移植。
+它和页面的其他 JavaScript 模块一样不在[稳定范围](stability.md)内。
 
 ## ChatStore
 

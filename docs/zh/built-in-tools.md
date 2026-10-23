@@ -160,7 +160,7 @@ gated = dataclasses.replace(http_request, needs_approval=writes_need_approval)
 
 ## Web 搜索
 
-`lovia.tools.search` 提供可插拔的搜索工具，自带两种后端：DuckDuckGo 无需 API 密钥，
+`web_search` 是可插拔的搜索工具，自带两种后端：DuckDuckGo 无需 API 密钥，
 但要安装 `ddg` extra；Tavily 无需安装额外依赖，但要设置 `TAVILY_API_KEY` 或传入
 `api_key=`。
 
@@ -169,7 +169,7 @@ pip install "lovia[ddg]"   # 仅 DuckDuckGo 后端需要
 ```
 
 ```python
-from lovia.tools.search import duckduckgo_search, tavily_search, web_search
+from lovia.tools import duckduckgo_search, tavily_search, web_search
 
 tools = [duckduckgo_search()]            # 无需 API 密钥，需要 lovia[ddg]
 tools = [tavily_search()]                # Tavily API，读取 TAVILY_API_KEY
@@ -194,7 +194,7 @@ class WebSearch(Protocol):
 
 ## 时间
 
-`lovia.tools.time`：三个小工具。
+三个小工具：
 
 - **`now`**（工具）：当前系统时钟时间，ISO-8601 格式；可选 `tz` 接收 IANA
   名称（如 `"Asia/Shanghai"`）。默认使用服务器本地时区。（Windows 上 IANA 名称需要
@@ -214,12 +214,12 @@ class WebSearch(Protocol):
 
 ## 询问人工
 
-`lovia.tools.human.ask_human(channel)` 让**模型**在运行中请求操作员输入。它与审批的
+`ask_human(channel)` 让**模型**在运行中请求操作员输入。它与审批的
 方向相反：审批由 **Runner** 询问“是否允许执行”。
 
 ```python
 from lovia import Agent
-from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools import HumanChannel, ask_human
 
 channel = HumanChannel()
 agent = Agent(name="assistant", model="<model>", tools=[ask_human(channel)])

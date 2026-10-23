@@ -15,8 +15,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncIterator
 
-from lovia import Agent, Runner
-from lovia.providers.base import ModelSettings
+from lovia import Agent, ModelSettings, Runner, Usage
 from lovia.transcript import (
     FinishDelta,
     ModelDelta,
@@ -25,7 +24,6 @@ from lovia.transcript import (
     UsageDelta,
     entries_to_messages,
 )
-from lovia.messages import Usage
 
 
 class EchoProvider:

@@ -268,8 +268,8 @@ class OpenAIChatProvider:
         supports_vision: Whether this deployment's model accepts image inputs.
             ``None`` (default) assumes vision only on the official OpenAI host —
             compatible endpoints vary and it can't be inferred from the model
-            id. Pass True/False to declare it; the web CLI wires ``LOVIA_VISION``
-            here.
+            id. Pass True/False to declare it; the web CLI passes a model
+            profile's ``vision`` setting here.
         extra_body: Fields merged verbatim into every request body — what
             this *endpoint* always needs (vLLM's ``chat_template_kwargs``, a
             ``reasoning_effort``, a gateway's ``service_tier``). The
@@ -341,7 +341,7 @@ class OpenAIChatProvider:
         Vision support varies wildly across OpenAI-compatible endpoints and
         cannot be inferred from the model id, so this defaults to True only for
         the official OpenAI host and False elsewhere. Override via the
-        constructor parameter (the web CLI wires ``LOVIA_VISION`` to it).
+        constructor parameter (the web CLI sets it from a profile's ``vision``).
         """
         if self._supports_vision is not None:
             return self._supports_vision

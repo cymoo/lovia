@@ -242,7 +242,7 @@ chain, most trustworthy first:
 
 | Source | When it answers |
 | --- | --- |
-| Explicit config | `Compaction(context_window=…)` — also settable via `--context-window` / `LOVIA_CONTEXT_WINDOW` in `lovia web`. The **one** user-facing knob; everything below is automatic |
+| Explicit config | `Compaction(context_window=…)` — in `lovia web`, the model profile's context window. The **one** user-facing knob; everything below is automatic |
 | **The endpoint's own rejection** | after one overflow: providers name the limit ("maximum context length is 65536 tokens") |
 | **The endpoint's `/models` listing** | vLLM and SGLang publish `max_model_len`; the official Anthropic API publishes `max_input_tokens`; Groq, Together and OpenRouter publish theirs |
 | The bundled table | keyed by **host**: OpenAI's aliases on `api.openai.com`, the whole Claude line on `api.anthropic.com`, DeepSeek's on `api.deepseek.com` |

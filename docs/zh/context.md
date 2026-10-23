@@ -162,7 +162,7 @@ required_sections=...)`，不要 fork 这段实现。
 `scratch` dict，以及一个 `usage` 累加器：策略自己发起的模型调用把开销加进去，runner 会并入
 本次运行的 usage 和预算。
 返回 view，加上 `changed`/`compacted` 标志和可选 token 数。可选 `tools()` 方法可以贡献工具；
-`lovia.tools.recall` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
+`lovia.tools` 里的 `make_recall_tool(store)` 是 `Compaction` 用来提供 recall 的工厂，
 任何会丢内容的策略都可以复用。`lovia/context/policy.py` 很短，一屏就能读完。
 
 ## 使用建议

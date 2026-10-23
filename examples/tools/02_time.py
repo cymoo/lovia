@@ -12,7 +12,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, model_from_env
-from lovia.tools.time import now, sleep
+from lovia.tools import now, sleep
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset

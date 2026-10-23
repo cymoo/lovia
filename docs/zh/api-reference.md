@@ -182,3 +182,4 @@ from lovia import (
 ```
 
 集成相关类型保留在专门模块中，例如 `lovia.workspace`、`lovia.web` 和 `lovia.eval`。
+1.0 承诺保持稳定的模块见[稳定性](stability.md)。

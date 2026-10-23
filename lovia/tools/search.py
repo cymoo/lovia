@@ -6,7 +6,7 @@ bundled: :func:`duckduckgo_search` (keyless, behind the optional
 ``lovia[ddg]`` extra) and :func:`tavily_search` (no extra install — httpx is
 a core dependency — but needs ``TAVILY_API_KEY``)::
 
-    from lovia.tools.search import duckduckgo_search, tavily_search, web_search
+    from lovia.tools import duckduckgo_search, tavily_search, web_search
 
     search = duckduckgo_search()         # requires lovia[ddg]
     keyed = tavily_search()              # requires TAVILY_API_KEY

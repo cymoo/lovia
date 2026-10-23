@@ -17,7 +17,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from lovia import Agent, Runner, model_from_env
-from lovia.tools.human import HumanChannel, ask_human
+from lovia.tools import HumanChannel, ask_human
 
 load_dotenv()
 MODEL = model_from_env()  # LOVIA_MODEL etc.; raises with a hint if unset

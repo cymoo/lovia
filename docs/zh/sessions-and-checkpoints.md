@@ -71,6 +71,10 @@ removed = await session.rewind("u1", keep_entries=12)
 不做任何操作。若被回退的运行仍留有 checkpoint，也应一并删除，否则后续恢复会重新写入
 已经撤销的尾部内容。
 
+自定义 `Session` 可以选择实现 `rewind`。只要按上述语义实现
+`async rewind(session_id, *, keep_entries) -> int`，[Web UI](web-ui.md) 就会提供“编辑后重发”和
+“重新生成”；Web 层会检测这个方法，没有时隐藏这两项操作。
+
 ## Checkpoint
 
 如果运行需要在进程崩溃后恢复，或需要安全地重复提交，应启用 checkpoint：

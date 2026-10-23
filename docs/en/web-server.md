@@ -149,7 +149,7 @@ with its own job:
 | [Design tokens](#styling) | Colors, fonts, radii, spacing |
 | [`data-part` attributes](#styling) | Targeting a region from your CSS: hiding or restyling it |
 | [`data-i18n` keys](#wording-and-languages) | Wording and languages |
-| [`window.lovia`](#extension-scripts) and `api.js` | Your scripts; talking to the API |
+| [`window.lovia`](#extension-scripts) | Your scripts; talking to the API |
 
 Everything else — class names, element ids, the JavaScript modules — is
 internal and may change between releases.
@@ -759,7 +759,8 @@ Off by default: unlike a title, this costs one model call per *run*, so the
 serving layer doesn't presume it. `followup_model` points that call at a
 cheaper model than the Agent's own. The bundled `lovia web` CLI opts in on its
 own behalf — disable it with `--no-followups` or `LOVIA_FOLLOWUPS=0`, and point
-it at a small model with `LOVIA_FOLLOWUP_MODEL`.
+it at a small model by assigning that model the
+[aux role](web-ui.md#models-and-switching).
 
 Pass a callable to replace the built-in suggester entirely — back it with a
 curated FAQ, a vector store, or the same generator under a different prompt:

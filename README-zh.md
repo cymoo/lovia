@@ -49,6 +49,7 @@ Anthropic 也内置支持：配置 `ANTHROPIC_API_KEY`；使用非默认端点�
 这份 README 只做快速介绍。更完整的内容见[文档](https://cymoo.github.io/lovia/zh/)；
 建议先读[快速开始](https://cymoo.github.io/lovia/zh/quickstart/)和[核心概念](https://cymoo.github.io/lovia/zh/concepts/)。
 [示例](./examples/README-zh.md)按编号组织，可以作为一条直接运行的学习路径。
+1.0 承诺保持稳定的范围见[稳定性](https://cymoo.github.io/lovia/zh/stability/)。
 
 ## 为什么是 lovia
 
@@ -311,8 +312,7 @@ agent = Agent(
 每次请求的预算和时间限制，则在运行时传入：
 
 ```python
-from lovia import Agent, RetryPolicy, RunBudget, Runner
-from lovia.exceptions import GuardrailTripped
+from lovia import Agent, GuardrailTripped, RetryPolicy, RunBudget, Runner
 
 
 async def must_cite(output, ctx):
@@ -342,8 +342,7 @@ hooks 可以监听每个运行事件，事件类型和流式输出一致。通�
 你可以在运行中追加一条用户消息，让模型在下一轮看到；运行本身也可以这样调整自己：
 
 ```python
-from lovia import Mailbox, RunContext, Runner, events
-from lovia.hooks import AgentHooks
+from lovia import AgentHooks, Mailbox, RunContext, Runner, events
 
 hooks = AgentHooks()
 

@@ -1522,6 +1522,14 @@ body.sidebar-collapsed .sidebar-expand-btn {
   text-align: left;
   vertical-align: top;
 }
+/* GFM column alignment (`:---:` / `---:`) arrives as an `align` attribute,
+   which the rule above would otherwise override. */
+.turn .body :is(th, td)[align="center"] {
+  text-align: center;
+}
+.turn .body :is(th, td)[align="right"] {
+  text-align: right;
+}
 .turn .body th {
   background: var(--surface-2);
   font-weight: 600;
@@ -4010,10 +4018,17 @@ body.files-splitting {
     border-left: 1px solid var(--border);
     box-shadow: var(--shadow-lg);
     transform: translateX(102%);
-    transition: transform var(--t-slow) var(--ease);
+    /* Closed: hidden once the slide-out ends, so its shadow doesn't bleed
+       onto the screen edge and Tab can't land inside the off-screen drawer. */
+    visibility: hidden;
+    transition:
+      transform var(--t-slow) var(--ease),
+      visibility 0s linear var(--t-slow);
   }
   .files-panel.open {
     transform: none;
+    visibility: visible;
+    transition: transform var(--t-slow) var(--ease);
   }
   .files-resizer {
     display: none;
@@ -4299,11 +4314,17 @@ body.files-splitting {
     height: 100dvh;
     z-index: 50;
     transform: translateX(-100%);
-    transition: transform var(--t-slow) var(--ease);
     box-shadow: var(--shadow-lg);
+    /* Hidden once closed, as the files drawer is (see there). */
+    visibility: hidden;
+    transition:
+      transform var(--t-slow) var(--ease),
+      visibility 0s linear var(--t-slow);
   }
   .sidebar.open {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform var(--t-slow) var(--ease);
   }
 
   .sidebar-overlay {

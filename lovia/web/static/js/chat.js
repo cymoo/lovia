@@ -1164,7 +1164,8 @@ function updateContextMeter(usage) {
   if (!el) return;
   const window_ = store.agents.find((a) => a.name === store.agent)?.context_window;
   const fill = contextFill(usage);
-  if (fill == null) {
+  if (!fill) {
+    // null, or 0 — no prompt is empty, so 0 is a provider that reports no usage
     hideContextMeter();
     return;
   }
@@ -1402,7 +1403,9 @@ const ERROR_CODE_HINTS = {
   provider_auth: t('err.auth'),
   overloaded: t('err.overloaded'),
   timeout: t('err.timeout'),
-  network: t('err.network'),
+  // The server's `network` is lovia → provider; err.network (below) is the
+  // browser → lovia leg.
+  network: t('err.providerNetwork'),
 };
 /** @type {Array<[RegExp, string]>} */
 const ERROR_HINTS = [
@@ -2330,8 +2333,9 @@ async function handleEvent({ event, data }) {
       if (turnProgressEl) turnProgressEl.classList.add('hidden');
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
-      // already on the wire; hovering shows the input/output split.
-      const tokens = formatTokens(data?.usage?.total_tokens);
+      // already on the wire; hovering shows the input/output split. A zero
+      // total means the provider reported no usage, not a free run.
+      const tokens = data?.usage?.total_tokens ? formatTokens(data.usage.total_tokens) : null;
       if (tokens && store.bubble) {
         const footer = ensureFooter(store.bubble);
         if (footer && !footer.querySelector('.usage')) {

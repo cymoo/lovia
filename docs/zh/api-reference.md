@@ -94,7 +94,8 @@ Handle 只能迭代一次。如果在终止事件前放弃迭代，`result()` �
 | `agent` | 当前活跃 Agent；Handoff 后会变化 |
 | `usage` | 当前累计用量 |
 | `turn` | 当前 Turn，从 1 开始；第一轮前为 `0` |
-| `session_id` / `run_id` | 持久化键；未使用时为 `None` |
+| `session_id` | 对话的键；一次性运行时为 `None` |
+| `run_id` | 本次运行的 id：开了 checkpoint 时就是 checkpoint 的 `run_id`，否则新生成一个；由 runner 启动的运行里不会是 `None` |
 | `budget` | 当前 `RunBudget`，如有 |
 | `workspace` | 当前 Workspace Session，如有 |
 | `cancel_token` | 始终存在的协作式取消信号 |

@@ -21,6 +21,7 @@ import asyncio
 import inspect
 import logging
 import time
+import uuid
 from collections import Counter
 from contextlib import AsyncExitStack, suppress
 from dataclasses import asdict, dataclass, field
@@ -193,7 +194,12 @@ class RunLoop:
         # already resolved this to the agent's policy. Compaction() sizes
         # itself to the provider's advertised window at call time.
         self.context_policy: ContextPolicy = context_policy or Compaction()
-        self.run_id = checkpoint.resolved_run_id if checkpoint is not None else None
+        # Every run has an id: the checkpoint's when there is one, else one minted
+        # here. The run context, the run span and the session segment all name
+        # the run by it.
+        self.run_id: str = (
+            checkpoint.resolved_run_id if checkpoint is not None else uuid.uuid4().hex
+        )
         self.checkpointer = checkpoint.checkpointer if checkpoint is not None else None
         # Resolved lazily in ``_resolve_resume``: a snapshot passed in directly,
         # or one loaded by ``run_id`` per the ``if_run_exists`` policy.
@@ -237,7 +243,7 @@ class RunLoop:
         # Log-attribution tag; _resolve_active re-sets it on handoff.
         token = CURRENT_AGENT.set(agent.name)
         try:
-            with run_span(tracer, agent=agent.name, run_id=self.run_id or "") as span:
+            with run_span(tracer, agent=agent.name, run_id=self.run_id) as span:
                 async for ev in self._stream_inner(tracer, span):
                     yield ev
         finally:
@@ -525,7 +531,7 @@ class RunLoop:
         """
         snapshot = self.resume_from
         if snapshot is None:
-            if self.checkpointer is None or self.run_id is None:
+            if self.checkpointer is None:
                 return None
             if self.if_run_exists == "restart":
                 # Discard the stored run's rows so fresh turns don't append to

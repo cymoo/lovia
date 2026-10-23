@@ -57,7 +57,7 @@ trust_env=None, replay_reasoning=None, official_dialect=None)`
 覆盖——方言只关乎请求形状，鉴权仍然跟随真实 host，所以无 key 的网关照常工作。
 
 **Reasoning 模型**（DeepSeek 风格的 `reasoning_content`，或 vLLM、OpenRouter 用的
-`reasoning` 字段）：thinking 会作为 [`ReasoningDelta`](streaming.md#模型输出) 事件流出，
+`reasoning` 字段）：thinking 会作为 [`events.ReasoningDelta`](streaming.md#模型输出) 事件流出，
 并保存成 reasoning entry。下一次请求时，
 有些端点要求把这些 entry 回放回去（DeepSeek thinking 模型否则会返回 400），而官方 API
 拒绝这个字段。所以回放默认按端点决定：`api.deepseek.com` 开启，官方 API 关闭，其他兼容端点开启。
@@ -85,7 +85,7 @@ settings = ModelSettings(
 )
 ```
 
-thinking 会作为 `ReasoningDelta` 流出；signature 和 `redacted_thinking` block 会原样
+thinking 会作为 `events.ReasoningDelta` 流出；signature 和 `redacted_thinking` block 会原样
 往返。回放也按端点处理：官方 API 会拒绝没有开启 thinking 的请求里携带 thinking
 block，所以官方 API 会剥掉陈旧 block；而默认会思考的兼容端点（如 DeepSeek 的
 `/anthropic` 方言）会始终收到回放。
@@ -250,7 +250,10 @@ class Provider(Protocol):
 
 `stream` 接收 transcript view，类型是 `TranscriptEntry`（比 chat message 丰富，保留
 reasoning 和元数据），并产出 `ModelDelta`：`TextDelta`、`ReasoningDelta`、
-`ToolCallDelta`、`UsageDelta`、`FinishDelta`、`EntryCompletedDelta`。三个可选
+`ToolCallDelta`、`UsageDelta`、`FinishDelta`、`EntryCompletedDelta`，都从 `lovia.transcript`
+导入。其中两个和流事件同名，但不是同一个类型：provider 产出的是
+`lovia.transcript.TextDelta(text=...)`，runner 把它转换成流的使用方看到的
+`lovia.events.TextDelta(delta=...)`（`ReasoningDelta` 同理）。三个可选
 protocol 能让自定义 provider 在压缩中更接近内置 provider 的体验：
 
 ```python

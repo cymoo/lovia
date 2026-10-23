@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 class CheckpointWriter:
     """Persists run snapshots when a checkpointer is configured.
 
-    All methods are no-ops when ``checkpointer`` or ``run_id`` is ``None``,
-    so the loop can call them unconditionally.
+    All methods are no-ops when ``checkpointer`` is ``None``, so the loop can
+    call them unconditionally.
 
     Failure semantics are deliberately asymmetric. :meth:`save_running` (and
     :meth:`complete`) propagate store errors and thereby **abort the run**:
@@ -46,7 +46,7 @@ class CheckpointWriter:
     """
 
     checkpointer: Checkpointer | None
-    run_id: str | None
+    run_id: str
     delete_on_success: bool = False
     # Count of this run's entries already appended to the checkpoint, so each
     # save persists only the new tail. On resume the loop seeds this with the
@@ -63,7 +63,7 @@ class CheckpointWriter:
 
     async def delete(self) -> None:
         """Drop this run's snapshot (no-op when checkpointing is off)."""
-        if self.checkpointer is not None and self.run_id is not None:
+        if self.checkpointer is not None:
             await self.checkpointer.delete(self.run_id)
         self._persisted = 0
 
@@ -93,7 +93,7 @@ class CheckpointWriter:
         run_id replays if that append fails — deleting first would leave the
         run nowhere, and the re-issue would start over.
         """
-        if self.checkpointer is None or self.run_id is None:
+        if self.checkpointer is None:
             return
         safe_output = to_json_safe(output)
         error: JsonObject | None = None
@@ -162,7 +162,7 @@ class CheckpointWriter:
         """Append this run's new entries and refresh the head. ``output`` must
         already be JSON-safe: ``complete`` pre-serializes it;
         ``save_running``/``save_terminal`` pass ``None``."""
-        if self.checkpointer is None or self.run_id is None:
+        if self.checkpointer is None:
             return
         run_entries = state.run_entries
         delta = run_entries[self._persisted :]

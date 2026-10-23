@@ -351,10 +351,11 @@ async def test_restart_on_partial_gives_up_after_max_attempts() -> None:
     assert discarded == 2
 
 
-def test_model_list_is_rejected_with_migration_hint() -> None:
+def test_model_list_is_rejected_with_failover_hint() -> None:
     agent = Agent(name="a", model=[ScriptedProvider([text("x")])])  # type: ignore[arg-type]
-    with pytest.raises(UserError, match="no longer accepts a list"):
+    with pytest.raises(UserError, match="one model, not a list") as info:
         agent.resolve_provider()
+    assert "routing gateway" in str(info.value)
 
 
 def test_budget_max_seconds_trips_after_elapsed() -> None:

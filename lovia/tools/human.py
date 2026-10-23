@@ -90,7 +90,8 @@ class HumanQuestion:
     """``RunContext.session_id`` of the asking run, for consumers that route
     questions across sessions (``None`` for one-shot runs)."""
     run_id: str | None = None
-    """``RunContext.run_id`` of the asking run (``None`` without a checkpoint)."""
+    """``RunContext.run_id`` of the asking run (``None`` only when the question
+    didn't come from a run, e.g. one built directly on the channel)."""
 
 
 @dataclass

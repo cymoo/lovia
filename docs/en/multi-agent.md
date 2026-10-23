@@ -175,17 +175,21 @@ The model gets four tools and a per-turn status reminder:
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
 budget=None, max_result_chars=16_000, instructions=None)`:
 
-- Children inherit the parent's `deps` and tracer, and their token
-  usage folds into the parent's `usage` — like `as_tool` sub-runs. Each child
-  gets its **own** cancel token (that is what `cancel_subagent` trips) and a
-  fresh copy of `budget` per spawn.
+- With the built-in runner, children inherit the parent's `deps` and tracer,
+  and their token usage folds into the parent's `usage` — like `as_tool`
+  sub-runs. Each child gets its **own** cancel token (that is what
+  `cancel_subagent` trips) and a fresh copy of `budget` per spawn. A
+  `run_child` override decides the child's deps itself (below).
 - **Lifecycle is keyed on `deliver`.** With the default (`deliver=None`,
   *bounded*), reports push into the run's mailbox and anything still running
   when the run ends is cancelled — children never outlive the run, and the
   built-in instructions tell the model to `wait_subagents` or cancel before
   finishing. With a callback (*detached*), every report goes through it
   instead and children may outlive the run — that is the serving-layer mode
-  ([web delivery](web-ui.md)).
+  ([web delivery](web-ui.md)). Detached children on the built-in runner keep
+  using the parent's very `deps` object after the parent run has ended, so
+  keep anything closed at run end (a database session, a request-scoped
+  client) out of it, or build the child's deps in a `run_child` override.
 - Children run headless: an approval request nobody resolves is **denied by
   default**, so give children approval-free toolsets for unattended work.
   (Under the web UI, children become observable task sessions where a human
@@ -197,7 +201,11 @@ budget=None, max_result_chars=16_000, instructions=None)`:
   `ChildSpec` and returns the child's `RunResult` — this is the seam the web
   layer uses to route children through its run supervisor. Pair it with
   `deliver`; on its own, bounded-mode teardown would orphan the children it
-  cannot cancel.
+  cannot cancel. `ChildSpec` carries no deps on purpose: a child that may
+  outlive its parent, or run in another process, needs its own. The override
+  builds them, as the web layer does through
+  [`create_app(run_deps=...)`](web-server.md#run-deps), whose trigger then
+  has `source="subagent:<session>"`.
 
 ## Compose larger patterns
 

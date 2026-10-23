@@ -158,14 +158,17 @@ result = await Runner.run(agent, "调研 X 和 Y，然后对比总结。")
 `Subagents(agents=(), deliver=None, max_concurrent=4, max_turns=50,
 budget=None, max_result_chars=16_000, instructions=None)`：
 
-- 子运行继承父运行的 `deps` 和 Tracer，Token 用量也计入父运行的
+- 使用内置 runner 时，子运行继承父运行的 `deps` 和 Tracer，Token 用量也计入父运行的
   `usage`，这一点与 `as_tool` 相同。每个子 Agent 使用独立的取消令牌；
-  `budget` 则在每次启动任务时复制一份。
+  `budget` 则在每次启动任务时复制一份。替换了 `run_child` 时，子运行的 deps 由替换实现自己决定（见下文）。
 - **`deliver` 决定任务是否能脱离当前 Run。** 默认不传 `deliver`：报告进入
   当前 Run 的消息队列；Run 结束时，尚未完成的任务会被取消。内置提示会要求模型
   在结束前等待这些任务，或明确取消它们。传入 `deliver` 回调后，报告全部交给
   回调处理，子 Agent 也可以在父 Run 结束后继续运行。这种方式主要供 Web 服务等
-  托管场景使用，详见 [Web UI](web-ui.md#后台子-agent)。
+  托管场景使用，详见 [Web UI](web-ui.md#后台子-agent)。此时如果用的是内置 runner，
+  父 Run 结束后，子运行仍在使用父运行的同一个 `deps` 对象。所以不要在 deps 里放随运行
+  结束就关闭的资源（比如数据库会话、请求级的客户端），或者在 `run_child` 替换实现里
+  为子运行单独构造 deps。
 - 默认模式下，子 Agent 无人值守运行。没有人处理的工具审批会被**自动拒绝**，
   因此应只给它配置无需人工审批的工具。在 Web UI 中，后台任务是可查看的独立会话，
   可以直接处理其中的审批。
@@ -175,7 +178,10 @@ budget=None, max_result_chars=16_000, instructions=None)`：
 - `run_child` 是面向服务层的高级扩展点，用来接管子 Agent 的执行过程。它接收
   `ChildSpec` 并返回子运行的 `RunResult`；Web 层借此把任务交给自己的运行管理器。
   应将它与 `deliver` 配套设置。若只替换 `run_child`，当前 Run 结束时，
-  `Subagents` 无法取消由外部管理的任务。
+  `Subagents` 无法取消由外部管理的任务。`ChildSpec` 有意不带 deps：一个可能比父运行
+  活得更久、或者在另一个进程里运行的子任务，需要自己的 deps。由替换实现来构造，就像
+  Web 层通过 [`create_app(run_deps=...)`](web-server.md#运行依赖) 所做的那样，此时 trigger 的
+  `source` 是 `"subagent:<session>"`。
 
 ## 组合更复杂的流程
 

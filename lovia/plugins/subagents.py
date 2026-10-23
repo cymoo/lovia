@@ -94,7 +94,12 @@ DeliverFn = Callable[[SubagentReport], Awaitable[None]]
 
 @dataclass
 class ChildSpec:
-    """One spawn request, as handed to a :data:`RunChildFn` override."""
+    """One spawn request, as handed to a :data:`RunChildFn` override.
+
+    It carries no deps on purpose. A child that may outlive its parent run, or
+    run in another process, needs deps of its own, so the override builds them.
+    ``lovia.web`` does so with its ``run_deps`` hook.
+    """
 
     id: str
     """Run-scoped task id (``t1``, ``t2``, …)."""

@@ -62,7 +62,7 @@ def _make_agent(script) -> Agent:
 
 def _app(agent_or_agents, **kw):
     """Convenience: tests don't need title-gen polluting their scripts."""
-    kw.setdefault("generate_titles", False)
+    kw.setdefault("titles", False)
     kw.setdefault("store", ChatStore.in_memory())
     return create_app(agent_or_agents, **kw)
 
@@ -1189,7 +1189,7 @@ def test_info_multi_agent_has_no_default() -> None:
 
 
 def test_info_reflects_custom_title_and_title_flag() -> None:
-    app = _app(_make_agent([text("hi")]), title="My Bot", generate_titles=True)
+    app = _app(_make_agent([text("hi")]), title="My Bot", titles=True)
     data = TestClient(app).get("/api/info").json()
     assert data["title"] == "My Bot"
     assert data["features"]["titles"] is True
@@ -1356,7 +1356,7 @@ def test_ui_false_serves_api_without_html() -> None:
         _make_agent([text("hi")]),
         ui=False,
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     c = TestClient(app)
     assert c.get("/").status_code == 404  # no bundled chat page
@@ -1856,7 +1856,7 @@ def test_lifespan_wraps_lovias_own(monkeypatch) -> None:
 
     agent = Agent(name="bot", model=ScriptedProvider([]))
     app = create_app(
-        agent, generate_titles=False, store=ChatStore.in_memory(), lifespan=resources
+        agent, titles=False, store=ChatStore.in_memory(), lifespan=resources
     )
 
     @app.get("/probe")

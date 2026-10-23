@@ -17,7 +17,6 @@ import { configureApi } from '../../../lovia/web/static/js/api.js';
 
 test('the API surface is exactly the documented one', () => {
   assert.deepEqual(Object.keys(lovia).sort(), [
-    'api',
     'closeView',
     'fetch',
     'getRenderer',
@@ -37,6 +36,7 @@ test('the API surface is exactly the documented one', () => {
     'state',
     't',
     'toast',
+    'url',
     'version',
   ]);
   assert.deepEqual([...EVENTS], ['session', 'agent', 'run-start', 'run-end', 'theme', 'view']);
@@ -94,6 +94,22 @@ test('provideContext: values read at send time; a failing or empty one is left o
   assert.throws(() => lovia.provideContext('x', 1), /expected a function/);
 });
 
+test('provideContext: disposing a provider brings back the one it replaced', () => {
+  const quiet = console.error;
+  console.error = () => {}; // the earlier test's broken provider
+  try {
+    const offA = lovia.provideContext('team', () => 'a');
+    const offB = lovia.provideContext('team', () => 'b');
+    assert.equal(collectContext().team, 'b');
+    offB();
+    assert.equal(collectContext().team, 'a');
+    offA();
+    assert.equal('team' in collectContext(), false);
+  } finally {
+    console.error = quiet;
+  }
+});
+
 test('provideContext: a "__proto__" key is a key like any other', () => {
   lovia.provideContext('__proto__', () => ({ x: 1 }));
   const quiet = console.error;
@@ -136,6 +152,17 @@ test('actions reach the page, normalized', async () => {
   assert.equal(state.sessionId, 's1');
   assert.equal(state.busy, true);
   assert.ok(Object.isFrozen(state));
+});
+
+test('url() turns an app path into a URL under the mount prefix', () => {
+  try {
+    assert.equal(lovia.url('/api/events'), '/api/events');
+    configureApi({ base: '/lovia/' });
+    assert.equal(lovia.url('/api/events'), '/lovia/api/events');
+    assert.throws(() => lovia.url('api/events'), /lovia\.url: expected an app path/);
+  } finally {
+    configureApi({ base: '' });
+  }
 });
 
 test('fetch() takes an app path and adds the mount prefix', async () => {

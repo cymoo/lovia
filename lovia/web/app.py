@@ -186,7 +186,7 @@ def create_app(
     store: ChatStore | None = None,
     context_policy: ContextPolicy | None = None,
     title_model: str | Provider | None = None,
-    generate_titles: bool = True,
+    titles: bool = True,
     followups: bool | FollowupFn = False,
     followup_model: str | Provider | None = None,
     title: str = "lovia",
@@ -217,8 +217,9 @@ def create_app(
     * ``session`` — bring-your-own :class:`Session`; metadata kept in-memory.
     * neither — default: SQLite file ``./.lovia/<agent_name>.db``.
 
-    ``title_model`` overrides the model used to generate chat titles; defaults
-    to the first agent's own ``model``.
+    ``titles`` generates each new chat's title in the background (one model
+    call per new chat); ``title_model`` overrides the model it uses, which
+    defaults to the first agent's own ``model``.
 
     ``followups`` offers suggested next questions as clickable chips once a
     turn finishes: ``False`` (default) is off, ``True`` uses the built-in
@@ -328,7 +329,7 @@ def create_app(
         # (or the loop's default Compaction) applies per run.
         context_policy=context_policy,
         title_model=title_model,
-        generate_titles=generate_titles,
+        titles=titles,
         followups=followups,
         followup_model=followup_model,
         max_turns=max_turns,

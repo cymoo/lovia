@@ -422,7 +422,7 @@ def _scheduling_app(store: ChatStore):
         ]
     )
     agent = Agent(name="bot", model=provider, plugins=[Scheduling(store)])
-    return create_app(agent, store=store, generate_titles=False)
+    return create_app(agent, store=store, titles=False)
 
 
 @pytest.mark.asyncio
@@ -474,7 +474,7 @@ async def test_tool_created_row_fires_via_scheduler() -> None:
     store = ChatStore.in_memory()
     provider = ScriptedProvider([text("fired output")])
     agent = Agent(name="bot", model=provider, plugins=[Scheduling(store)])
-    app = create_app(agent, store=store, generate_titles=False)
+    app = create_app(agent, store=store, titles=False)
     deps = app.state.deps
 
     # A one-shot 'at' a second in the past → immediately due.
@@ -526,7 +526,7 @@ async def test_fired_run_cancels_its_own_schedule_without_approval() -> None:
         ]
     )
     agent = Agent(name="bot", model=provider, plugins=[Scheduling(store)])
-    app = create_app(agent, store=store, generate_titles=False)
+    app = create_app(agent, store=store, titles=False)
     deps = app.state.deps
 
     await Scheduler(deps).run_due()

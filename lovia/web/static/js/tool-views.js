@@ -2,6 +2,8 @@
 // `window.lovia.registerToolView(name | '*', view)`. A pure registry (no DOM):
 // tools.js applies the views to cards, export.js asks them for snapshots.
 
+import { Registry } from './registry.js';
+
 /**
  * What a view sees of one call: a frozen copy, rebuilt on every change.
  * @typedef {object} ToolInfo
@@ -34,8 +36,8 @@ export const ANY_TOOL = '*';
 export const TOOL_VIEW_KIND = 'lovia.tool-view';
 const FIELDS = ['summary', 'render', 'snapshot'];
 
-/** @type {Map<string, ToolView>} */
-const views = new Map();
+/** @type {Registry<ToolView>} */
+const views = new Registry();
 /**
  * lovia's own views of its built-in tools (builtin-views.js), below every
  * registered one — the '*' fallback included — plus the short label an
@@ -51,6 +53,7 @@ const watchers = new Set();
  * one of its own (`'*'`). Cards already on screen take it up at once.
  * @param {string} name
  * @param {ToolView} view
+ * @returns {() => void} Unregisters it, bringing back the view it replaced.
  */
 export function registerToolView(name, view) {
   if (typeof name !== 'string' || !name) {
@@ -62,8 +65,13 @@ export function registerToolView(name, view) {
       'lovia.registerToolView: expected { summary?, render?, snapshot? } functions',
     );
   }
-  views.set(name, Object.freeze({ summary: view.summary, render: view.render, snapshot: view.snapshot }));
-  for (const fn of watchers) fn(name);
+  const notify = () => {
+    for (const fn of watchers) fn(name);
+  };
+  const frozen = Object.freeze({ summary: view.summary, render: view.render, snapshot: view.snapshot });
+  const dispose = views.add(name, frozen, notify);
+  notify();
+  return dispose;
 }
 
 /**

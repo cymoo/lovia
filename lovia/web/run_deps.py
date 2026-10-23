@@ -5,16 +5,16 @@ starts — a chat turn, a resumed run, a scheduled run, a subagent task — and
 passes what it returns to the runner as ``deps=``. ``trigger`` says why the
 run started and carries two inputs:
 
-* ``client`` — the JSON object the page sent with the message (extensions add
-  to it with ``window.lovia.provideContext``): UI state, such as the knowledge
-  base picked in the composer. The browser controls it, so never trust it for
-  who the user is.
+* ``client_context`` — the JSON object the page sent with the message
+  (extensions add to it with ``window.lovia.provideContext``): UI state, such
+  as the knowledge base picked in the composer. The browser controls it, so
+  never trust it for who the user is.
 * ``request`` — the HTTP request that started the run, after your ``auth=``
   dependency ran: the place for identity (``request.state.user``). ``None``
   for runs nobody requested (schedules, subagents, their reports).
 
-A resumed run (reconnecting after a restart) gets the ``client`` of the run it
-continues, persisted with the run, and the reconnecting request.
+A resumed run (reconnecting after a restart) gets the ``client_context`` of the
+run it continues, persisted with the run, and the reconnecting request.
 """
 
 from __future__ import annotations
@@ -56,8 +56,9 @@ class RunTrigger:
     ``"schedule:<id>"``, ``"subagent:<session>"`` or ``"subagent-report:<id>"``."""
     request: Request | None = None
     """The request that started the run; ``None`` when nobody requested it."""
-    client: Mapping[str, JsonValue] = field(default_factory=dict)
-    """The page's context for this run — UI state, not identity."""
+    client_context: Mapping[str, JsonValue] = field(default_factory=dict)
+    """The page's context for this run — UI state, not identity. (Not
+    ``request.client``, which is Starlette's client address.)"""
     resumed: bool = False
     """A reconnect is resuming this run from its checkpoint."""
 
@@ -72,7 +73,7 @@ async def build_run_deps(fn: RunDepsFn | None, trigger: RunTrigger) -> Any:
     """``fn(trigger)``, awaited if it returns an awaitable; ``None`` without ``fn``."""
     if fn is None:
         global _warned_unused
-        if trigger.client and not _warned_unused:
+        if trigger.client_context and not _warned_unused:
             _warned_unused = True
             log.warning(
                 "a request carried a client context but create_app has no "

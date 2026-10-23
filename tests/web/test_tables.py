@@ -33,7 +33,7 @@ def _run(args: dict) -> dict:
     """Stream one show_table call; return its tool_result payload."""
     provider = ScriptedProvider([call("show_table", args, call_id="c1"), text("ok")])
     agent = Agent(name="bot", model=provider, tools=[show_table])
-    app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, titles=False, store=ChatStore.in_memory())
     with TestClient(app).stream(
         "POST", "/api/chat/stream", json={"message": "table"}
     ) as res:

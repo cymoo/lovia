@@ -22,7 +22,7 @@ TOKEN = "sesame-open"
 def _client(**kw) -> TestClient:
     agent = Agent(name="bot", model=ScriptedProvider([text("hi")]))
     kw.setdefault("store", ChatStore.in_memory())
-    kw.setdefault("generate_titles", False)
+    kw.setdefault("titles", False)
     return TestClient(create_app(agent, **kw))
 
 
@@ -147,7 +147,7 @@ def _agent() -> Agent:
 
 def _app(**kw) -> object:
     kw.setdefault("store", ChatStore.in_memory())
-    kw.setdefault("generate_titles", False)
+    kw.setdefault("titles", False)
     return create_app(_agent(), **kw)
 
 

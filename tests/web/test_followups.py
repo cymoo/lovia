@@ -168,7 +168,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 
 def _app(provider: ScriptedProvider, **kw: object) -> object:
-    kw.setdefault("generate_titles", False)
+    kw.setdefault("titles", False)
     return create_app(Agent(name="bot", model=provider), **kw)  # type: ignore[arg-type]
 
 

@@ -52,9 +52,7 @@ def _report(
 
 
 def _app(agent_or_agents):
-    return create_app(
-        agent_or_agents, store=ChatStore.in_memory(), generate_titles=False
-    )
+    return create_app(agent_or_agents, store=ChatStore.in_memory(), titles=False)
 
 
 async def _poll(predicate, *, timeout: float = 5.0) -> None:
@@ -82,7 +80,7 @@ def test_create_app_auto_wires_and_manual_wire_is_idempotent() -> None:
     create_app(
         Agent(name="bot", model=None, plugins=[plugin2]),
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
         wire_subagents=False,
     )
     assert plugin2.deliver is None and plugin2.run_child is None

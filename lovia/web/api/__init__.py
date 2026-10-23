@@ -59,7 +59,7 @@ def build_api_router(deps: RouterDeps) -> APIRouter:
             configured=bool(deps.agents),
             features={
                 "checkpointing": deps.store.checkpointer is not None,
-                "titles": deps.generate_titles,
+                "titles": deps.titles,
                 # Truthy for both `followups=True` and a custom FollowupFn, so
                 # the UI only asks for chips on servers that can produce them.
                 "followups": bool(deps.followups),

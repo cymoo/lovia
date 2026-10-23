@@ -109,21 +109,26 @@ interface LoviaApi {
   /** Listen for an event; returns a function that stops listening. */
   on<E extends keyof LoviaEvents>(event: E, fn: (payload: LoviaEvents[E]) => void): () => void;
 
+  // Every register* call, and provideContext, returns a function that undoes
+  // it. Undoing brings back what it replaced under the same key (a built-in
+  // renderer, an earlier view), whatever order the undos come in.
+
   /** Draw the UI component `kind` that tools return with `ui_result(kind, …)`. */
   registerRenderer: typeof import('./js/components.js').registerRenderer;
   /** The renderer registered for `kind`, e.g. to wrap a built-in one. */
   getRenderer: typeof import('./js/components.js').getRenderer;
   /** Change how tool `name`'s cards (or, with '*', every other tool's) read. */
   registerToolView: typeof import('./js/tool-views.js').registerToolView;
-  /** Add a button to messages' footers, or replace the one under `id`; null removes it. */
-  registerMessageAction(id: string, action: MessageAction | null): void;
+  /** Add a button to messages' footers, or replace the one under `id`. */
+  registerMessageAction(id: string, action: MessageAction): () => void;
   /** Draw every message's actions again, after the state their `when` or `pressed` read changed. */
   refreshMessageActions(): void;
   /**
-   * Add view `id` (a-z, 0-9 and '-'), or replace the one under it; null
-   * removes it. Plain links open it: `<a href="?view=id">`.
+   * Add view `id` (a-z, 0-9 and '-'), or replace the one under it. Plain
+   * links open it: `<a href="?view=id">`. An open view whose id is left with
+   * nothing closes.
    */
-  registerView(id: string, view: View | null): void;
+  registerView(id: string, view: View): () => void;
   /** Show view `'id'`, or `'id/path'` (its `ctx.path`). The chat stays current underneath. */
   openView(target: string): void;
   /** Back to the chat, as it was. */
@@ -131,11 +136,11 @@ interface LoviaApi {
   /**
    * Add `key` to the client context each run starts with: `fn()` is read when
    * a message (or a new schedule) is sent, and reaches the server's
-   * `create_app(run_deps=...)` as `trigger.client[key]`. Return
+   * `create_app(run_deps=...)` as `trigger.client_context[key]`. Return
    * JSON-serializable data; undefined leaves the key out. UI state only — the
    * browser controls it, so it is no proof of who the user is.
    */
-  provideContext(key: string, fn: () => unknown): void;
+  provideContext(key: string, fn: () => unknown): () => void;
 
   /** Send `text` as the user (queued for the next turn while a run streams). */
   send(text: string): void;
@@ -148,10 +153,10 @@ interface LoviaApi {
   /** A transient notification. */
   toast(text: string, opts?: { type?: 'info' | 'error' }): void;
 
-  /** The page's API client: the mount prefix and sign-in handling built in. */
-  readonly api: typeof import('./js/api.js').api;
-  /** `fetch` for your own routes: `path` (starting with '/') gets the mount prefix, and a 401 the page's sign-in handling. */
+  /** `fetch` for an app route: `path` (starting with '/') gets the mount prefix, and a 401 the page's sign-in handling. */
   fetch(path: string, init?: RequestInit): Promise<Response>;
+  /** The URL of an app path (starting with '/'), mount prefix included: for `<img src>`, `EventSource`, links. */
+  url(path: string): string;
   /** A UI string in the page's language (`{name}` placeholders from `params`). */
   t(key: string, params?: Record<string, string | number>): string;
 }

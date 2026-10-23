@@ -14,6 +14,8 @@
 // labels and the render context through `configureComponents`, which keeps
 // this module unit-testable under node.
 
+import { Registry } from './registry.js';
+
 /**
  * @typedef {object} UiComponent
  * @property {string} kind
@@ -107,8 +109,8 @@ export function parseEnvelope(text, args) {
   return props === undefined ? null : { kind: env.kind, props };
 }
 
-/** @type {Map<string, Renderer>} */
-const renderers = new Map();
+/** @type {Registry<Renderer>} */
+const renderers = new Registry();
 /** @type {Set<Mount>} */
 const mounts = new Set();
 
@@ -173,6 +175,7 @@ export function getRenderer(kind) {
  * render again, so script load order never matters.
  * @param {string} kind
  * @param {Renderer} renderer
+ * @returns {() => void} Unregisters it, bringing back the renderer it replaced.
  */
 export function registerRenderer(kind, renderer) {
   if (typeof kind !== 'string' || !KIND_RE.test(kind)) {
@@ -184,8 +187,12 @@ export function registerRenderer(kind, renderer) {
   if (renderer.snapshot != null && typeof renderer.snapshot !== 'function') {
     throw new TypeError('lovia.registerRenderer: snapshot must be a function');
   }
-  renderers.set(kind, renderer);
-  for (const m of mounts) if (m.kind === kind) run(m);
+  const redraw = () => {
+    for (const m of mounts) if (m.kind === kind) run(m);
+  };
+  const dispose = renderers.add(kind, renderer, redraw);
+  redraw();
+  return dispose;
 }
 
 /**

@@ -67,7 +67,7 @@ def _ws_agent(root: Path, script) -> Agent:
 
 
 def _app(agent, **kw):
-    kw.setdefault("generate_titles", False)
+    kw.setdefault("titles", False)
     kw.setdefault("store", ChatStore.in_memory())
     return create_app(agent, **kw)
 

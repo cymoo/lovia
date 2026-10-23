@@ -261,7 +261,7 @@ def test_route_errors_answer_with_the_coded_body() -> None:
     app = create_app(
         Agent(name="bot", model=ScriptedProvider([])),
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     r = TestClient(app).get("/api/agents/nope")
     assert r.status_code == 404

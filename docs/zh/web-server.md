@@ -31,7 +31,7 @@ serve(create_app(agent, db_path="lovia.db"), host="127.0.0.1", port=8000)
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript 和聊天元数据存储 |
 | `max_turns` / `budget` / `retry` / `context_policy` | — | 应用于每个托管 Run 的设置 |
 | `tracer` | `None` | 托管 Run 的 Span 记录器 |
-| `generate_titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
+| `titles` / `title_model` | `True` / Agent 模型 | 在后台生成对话标题 |
 | `followups` / `followup_model` | `False` / Agent 模型 | 回答结束后生成追问建议（见下文） |
 | `approval_timeout` | `None` | 超过指定秒数后自动拒绝未处理的审批 |
 | `max_background_runs` | `8` | 并发托管 Run；达到上限后，新请求返回 429 |
@@ -274,14 +274,17 @@ ui = ChatUI(
 | `setDraft(text)` | 把 `text` 放进输入框，由用户修改后发送 |
 | `newChat()` / `openSession(id)` | 打开一个新对话 / 打开对话 `id`，并关闭视图 |
 | `toast(text, { type })` | 短暂提示；`type` 为 `"info"`（默认）或 `"error"` |
-| `api` | 页面的 API 客户端，已处理[路径前缀](#部署在路径前缀下)和登录 |
-| `fetch(path, init)` | 用来请求你自己的路由的 `fetch`：`path` 以 `/` 开头，会加上路径前缀；遇到 401 时走页面的登录处理 |
+| `fetch(path, init)` | 用来请求应用路由（你自己的，或 [HTTP API](http-api.md) 的）的 `fetch`：`path` 以 `/` 开头，会加上[路径前缀](#部署在路径前缀下)；遇到 401 时走页面的登录处理 |
+| `url(path)` | 应用内路径对应的 URL，已加上路径前缀，用于 `<img src>`、`EventSource`、链接 |
 | `t(key, params)` | 当前语言下的界面文案，包括你[自己的 key](#文案与语言) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI 组件](#ui-组件) |
 | `registerToolView(name, view)` | [工具视图](#工具视图) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [消息操作](#消息操作) |
 | `registerView(id, view)` / `openView(target)` / `closeView()` | [视图](#视图) |
 | `provideContext(key, fn)` | 把 `key` 加进运行开始时的上下文，发送时读取 `fn()` 的值，见[运行依赖](#运行依赖) |
+
+所有 `register*` 调用和 `provideContext` 都会返回一个撤销函数，用法和 `on` 一样。撤销后，会恢复同一个
+key 下被它替换掉的那一项（比如你包装过的内置渲染器、更早注册的视图）；不管按什么顺序撤销，结果都对。
 
 ```js
 // ui/acme.js
@@ -422,8 +425,8 @@ lovia.registerMessageAction('rate-up', {
   可以让操作等到那时再出现；不需要 `ref` 的操作（引用、翻译）立即显示。
 - 操作只显示在已经定稿的消息上：还在流式输出的回复、还在排队的消息都没有。
 - `when` 和 `pressed` 在绘制消息底部时调用。它们依赖的状态变化后（保存了评分、为刚打开的对话取回了
-  评分），调用 `lovia.refreshMessageActions()`。用同一个 `id` 再次注册会替换原来的操作，传 `null`
-  则移除。
+  评分），调用 `lovia.refreshMessageActions()`。用同一个 `id` 再次注册会替换原来的操作；调用
+  `registerMessageAction` 返回的函数会移除它，并恢复被它替换的那个操作。
 
 完整示例见 `examples/35_web_feedback.py`：回答上的 👍 / 👎 由示例自己的路由存进 SQLite，另有报表
 页面和一个"引用"操作。
@@ -469,7 +472,8 @@ lovia.registerView('dashboard', {
   `aria-current="page"`（按 id 比较，所以打开 `exec/perf` 时 `?view=exec` 仍显示选中）。
 - **生命周期。** 每次绘制前先执行上一次的清理函数。`render` 抛错时视图里显示一条提示；异步
   `render` 完成时视图已被切走，就立即调用它返回的清理函数。用同一个 `id` 再次注册，正打开的视图
-  会重新绘制；传 `null` 则移除。切换主题不会重新绘制视图（会丢掉表单输入和滚动位置），需要跟随
+  会重新绘制；调用 `registerView` 返回的函数会移除它，正打开的视图随之换成被它替换的那个，没有则关闭。
+  切换主题不会重新绘制视图（会丢掉表单输入和滚动位置），需要跟随
   主题时监听 `theme` 事件。
 - `openView(target)` 遇到没有注册的 id 会抛错；链接指向这样的 id、或启动时 URL 里是这样的 id，
   则只显示一条提示。id 只能用 `a-z`、`0-9` 和 `-`，以 `lovia` 开头的留给 lovia 自己。
@@ -792,7 +796,7 @@ class Deps:
 
 def run_deps(trigger: RunTrigger) -> Deps:
     user = trigger.request.state.user if trigger.request else "scheduler"
-    kb = trigger.client.get("kb", "docs")
+    kb = trigger.client_context.get("kb", "docs")
     if kb not in KNOWLEDGE_BASES:
         raise HTTPException(400, f"unknown knowledge base {kb!r}")
     return Deps(user=user, kb=kb)
@@ -823,7 +827,7 @@ window.lovia.provideContext('kb', () => kb.value);
 
 | 字段 | 说明 |
 | --- | --- |
-| `client` | 页面提供的上下文（`provideContext` 的各个 key）：UI 状态。**它由浏览器控制，绝不要据此判断身份或权限** |
+| `client_context` | 页面提供的上下文（`provideContext` 的各个 key）：UI 状态。**它由浏览器控制，绝不要据此判断身份或权限。** 注意不是 `request.client`，后者是客户端的网络地址 |
 | `request` | 发起这次运行的请求，`auth=` 已经执行过：身份在这里（`request.state`）。没有人发起的运行为 `None` |
 | `source` | 运行的来源：`user`（一条消息，或重连时恢复的运行）、`schedule:<id>`、`subagent:<session>`、`subagent-report:<task>` |
 | `resumed` | 是否是重连时从 checkpoint 恢复的运行 |
@@ -831,14 +835,14 @@ window.lovia.provideContext('kb', () => kb.value);
 
 每次运行都有客户端上下文，包括没有人发起的那些：
 
-- **重启后恢复。** checkpoint 不保存上下文，所以服务端把这次运行的 `client` 存在它的
+- **重启后恢复。** checkpoint 不保存上下文，所以服务端把这次运行的 `client_context` 存在它的
   checkpoint 指针旁边，运行结束时清掉；恢复时取回它，`request` 是重连的那个请求。
 - **定时任务。** 定时任务相当于一条延后发送的消息：在定时任务对话框里创建的，保存创建那一刻
   页面的上下文；agent 用 `schedule_run` 创建的，保存它所在运行的上下文。每次触发都用它，
   `request=None`。
 - **子 agent 任务及其汇报**使用所属对话最近一次的上下文，`request=None`。
 
-`client` 编码成 JSON 后上限 64 KB。不设置 `run_deps` 时，运行没有 deps（和 core 的
+客户端上下文编码成 JSON 后上限 64 KB。不设置 `run_deps` 时，运行没有 deps（和 core 的
 `Runner` 一样）；如果请求带了客户端上下文，服务端会记一条警告日志。
 
 ## 部署在路径前缀下

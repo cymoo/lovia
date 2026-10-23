@@ -174,7 +174,7 @@ async def test_answer_endpoint_404_without_question_channel() -> None:
     app = create_app(
         Agent(name="bot", model=ScriptedProvider([])),
         store=ChatStore.in_memory(),
-        generate_titles=False,
+        titles=False,
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:

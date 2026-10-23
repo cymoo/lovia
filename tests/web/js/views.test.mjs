@@ -227,15 +227,19 @@ test('an async render that lands after its view was left is cleaned up at once',
   assert.deepEqual(cleaned, ['slow']);
 });
 
-test('re-registering an open view redraws it; null closes it', () => {
+test('re-registering an open view redraws it; disposing brings back v1, then closes', () => {
   const drawn = [];
-  registerView('re', { render: () => drawn.push('v1') });
+  const offV1 = registerView('re', { render: () => drawn.push('v1') });
   openView('re');
-  registerView('re', { render: () => drawn.push('v2') });
+  const offV2 = registerView('re', { render: () => drawn.push('v2') });
   assert.deepEqual(drawn, ['v1', 'v2']);
-  registerView('re', null);
+  offV2(); // v1 is back, and drawn again
+  assert.deepEqual(drawn, ['v1', 'v2', 'v1']);
+  assert.equal(currentView(), 're');
+  offV1(); // nothing left under the id: the open view closes
   assert.equal(currentView(), null);
   assert.throws(() => openView('re'), /no view/);
+  assert.throws(() => registerView('re', /** @type {any} */ (null)), /render\(el, ctx\)/);
 });
 
 test('an in-page anchor in a view stays a browser jump', () => {

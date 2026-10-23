@@ -65,7 +65,7 @@ class RouterDeps:
     title: str = "lovia"
     context_policy: ContextPolicy | None = None
     title_model: str | Provider | None = None
-    generate_titles: bool = True
+    titles: bool = True
     # Suggested follow-up questions after a turn. ``False`` (default) is off,
     # ``True`` uses the built-in LLM suggester, or pass your own ``FollowupFn``.
     # Unlike titles this costs a call per *run*, so the serving layer doesn't
@@ -239,7 +239,7 @@ class RouterDeps:
         self, session_id: str, user_msg: str, output: Any, agent_name: str
     ) -> None:
         """Generate a chat title in the background; failures never propagate."""
-        if not self.generate_titles:
+        if not self.titles:
             return
         # The provisional title the session was inserted with. The generated
         # title is only applied if this is still in place — see _run_title.

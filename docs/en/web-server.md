@@ -32,7 +32,7 @@ run the app under another ASGI server, skip `serve()`.
 | `db_path` / `store` / `session` | `./.lovia/<agent>.db` | Transcript and chat metadata storage |
 | `max_turns` / `budget` / `retry` / `context_policy` | — | Settings applied to every served Run |
 | `tracer` | `None` | Span recorder for served Runs |
-| `generate_titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
+| `titles` / `title_model` | `True` / Agent model | Generate conversation titles in the background |
 | `followups` / `followup_model` | `False` / Agent model | Suggest follow-up questions after a reply (see below) |
 | `approval_timeout` | `None` | Auto-deny unresolved approvals after N seconds |
 | `max_background_runs` | `8` | Concurrent supervised Runs; excess starts return 429 |
@@ -297,14 +297,19 @@ internal.
 | `setDraft(text)` | Put `text` in the composer for the user to edit and send |
 | `newChat()` / `openSession(id)` | Show a new chat / chat `id`, closing any view |
 | `toast(text, { type })` | A transient notice; `type` is `"info"` (default) or `"error"` |
-| `api` | The page's API client — the [path prefix](#serving-under-a-path-prefix) and sign-in handling built in |
-| `fetch(path, init)` | `fetch` for your own routes: `path` starts with `/` and gets the path prefix; a 401 gets the page's sign-in handling |
+| `fetch(path, init)` | `fetch` for an app route — yours, or one of the [HTTP API](http-api.md)'s: `path` starts with `/` and gets the [path prefix](#serving-under-a-path-prefix); a 401 gets the page's sign-in handling |
+| `url(path)` | The URL of an app path, path prefix included — for `<img src>`, `EventSource`, links |
 | `t(key, params)` | A UI string in the page's language, including your [own keys](#wording-and-languages) |
 | `registerRenderer(kind, renderer)` / `getRenderer(kind)` | [UI components](#ui-components) |
 | `registerToolView(name, view)` | [Tool views](#tool-views) |
 | `registerMessageAction(id, action)` / `refreshMessageActions()` | [Message actions](#message-actions) |
 | `registerView(id, view)` / `openView(target)` / `closeView()` | [Views](#views) |
 | `provideContext(key, fn)` | Add `key` to the context runs start with, read from `fn()` at send time — see [Run deps](#run-deps) |
+
+Every `register*` call, and `provideContext`, returns a function that undoes
+it, like `on`. Undoing brings back what it replaced under the same key (a
+built-in renderer you wrapped, an earlier view), whatever order the undos
+come in.
 
 ```js
 // ui/acme.js
@@ -466,7 +471,8 @@ lovia.registerMessageAction('rate-up', {
 - `when` and `pressed` are asked when a footer is drawn. After the state they
   read changes (a rating saved, ratings fetched for the chat that came on
   screen), call `lovia.refreshMessageActions()`. Registering under an `id`
-  again replaces the action; `null` removes it.
+  again replaces the action; the function `registerMessageAction` returns
+  removes it, bringing back the one it replaced.
 
 `examples/35_web_feedback.py` is a complete version: 👍 / 👎 on answers kept
 in SQLite by its own routes, a report page, and a Quote action.
@@ -522,7 +528,8 @@ lovia.registerView('dashboard', {
 - **Lifecycle.** The previous cleanup runs before each draw. A render that
   throws shows a notice in the view; an async one that lands after the view
   was left is cleaned up at once. Registering under an `id` again redraws it
-  if open; `null` removes it. A theme switch doesn't redraw a view (it would
+  if open; the function `registerView` returns removes it, and an open view
+  then shows the view it replaced, or closes. A theme switch doesn't redraw a view (it would
   lose form input and scroll), so listen for `theme` if yours follows it.
 - `openView(target)` throws for an id with no view; a link to one, or one in
   the URL at start, shows a notice instead. Ids use `a-z`, `0-9` and `-`;
@@ -880,7 +887,7 @@ class Deps:
 
 def run_deps(trigger: RunTrigger) -> Deps:
     user = trigger.request.state.user if trigger.request else "scheduler"
-    kb = trigger.client.get("kb", "docs")
+    kb = trigger.client_context.get("kb", "docs")
     if kb not in KNOWLEDGE_BASES:
         raise HTTPException(400, f"unknown knowledge base {kb!r}")
     return Deps(user=user, kb=kb)
@@ -915,7 +922,7 @@ carries:
 
 | Field | Description |
 | --- | --- |
-| `client` | The page's context (`provideContext`'s keys): UI state. **The browser controls it — never derive identity or permissions from it** |
+| `client_context` | The page's context (`provideContext`'s keys): UI state. **The browser controls it — never derive identity or permissions from it.** Not `request.client`, which is the client's network address |
 | `request` | The request that started the run, after `auth=` ran: identity lives here (`request.state`). `None` when nobody requested the run |
 | `source` | Why the run started: `user` (a message, or a reconnect resuming a run), `schedule:<id>`, `subagent:<session>`, `subagent-report:<task>` |
 | `resumed` | A reconnect is resuming the run from its checkpoint |
@@ -924,7 +931,7 @@ carries:
 Every run gets a client context, including the ones nobody sent:
 
 - **Resume after a restart.** A checkpoint keeps no context, so the server
-  stores the run's `client` beside its checkpoint pointer and clears it when
+  stores the run's `client_context` beside its checkpoint pointer and clears it when
   the run ends; the resume gets it back, with the reconnecting `request`.
 - **Schedules.** A schedule is a deferred message: one made from the
   Schedules dialog stores the page's context at that moment, one the agent
@@ -933,7 +940,7 @@ Every run gets a client context, including the ones nobody sent:
 - **Subagent tasks and their reports** get the latest context of the chat
   they work for, with `request=None`.
 
-A `client` is capped at 64 KB of JSON. Without `run_deps`, runs get no deps
+A client context is capped at 64 KB of JSON. Without `run_deps`, runs get no deps
 (as with the core `Runner`), and a request that carries a client context logs
 a warning.
 

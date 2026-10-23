@@ -169,7 +169,7 @@ API 路由抛出的错误都使用同一种响应体：
 
 `POST /api/chat` 和 `/api/chat/stream` 的请求体为 `{message, session_id?, agent?, attachments?, context?}`，
 `POST /api/schedules` 同样接受 `context`。`context` 是一个不超过 64 KB 的 JSON 对象，即
-`create_app(run_deps=...)` 以 `trigger.client` 收到的客户端上下文（见[运行依赖](web-server.md#运行依赖)）。
+`create_app(run_deps=...)` 以 `trigger.client_context` 收到的客户端上下文（见[运行依赖](web-server.md#运行依赖)）。
 加入一个进行中运行的消息不会改变那次运行的上下文。
 
 ### 生命周期事件

@@ -42,7 +42,7 @@ def _run(option: object) -> dict:
         [call("show_chart", {"option": option}, call_id="c1"), text("ok")]
     )
     agent = Agent(name="bot", model=provider, tools=[show_chart])
-    app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, titles=False, store=ChatStore.in_memory())
     with TestClient(app).stream(
         "POST", "/api/chat/stream", json={"message": "chart"}
     ) as res:
@@ -114,7 +114,7 @@ def test_series_allowlist_matches_the_client() -> None:
 
 def test_page_config_carries_the_static_prefix() -> None:
     agent = Agent(name="bot", model=ScriptedProvider([]))
-    app = create_app(agent, generate_titles=False, store=ChatStore.in_memory())
+    app = create_app(agent, titles=False, store=ChatStore.in_memory())
     page = TestClient(app, root_path="/lovia").get("/").text
     base = _app_config(page)["static_base"]
     assert re.fullmatch(r"/lovia/static/[^/]+/", base)

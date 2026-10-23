@@ -34,7 +34,7 @@ async def query() -> str:
 def _client(store: ChatStore, **kw) -> TestClient:
     provider = ScriptedProvider([call("query", {}, call_id="c1"), text("done")])
     agent = Agent(name="bot", model=provider, tools=[query])
-    return TestClient(create_app(agent, generate_titles=False, store=store, **kw))
+    return TestClient(create_app(agent, titles=False, store=store, **kw))
 
 
 def _ref(output: str) -> str:

@@ -27,8 +27,21 @@ _VERSIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS lovia_schema (
     store TEXT PRIMARY KEY,
     version INTEGER NOT NULL
-);
+)
 """
+
+
+def _statements(script: str) -> Iterator[str]:
+    """Split a SQL script into whole statements (trigger bodies included)."""
+    pending = ""
+    for line in script.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            yield pending
+            pending = ""
+    if pending.strip():
+        yield pending
+
 
 # How long a connection waits on a lock held by another connection (another
 # process, or a sibling store writing to the same file) before raising
@@ -116,7 +129,8 @@ class SQLiteStore:
     ``schema`` is the store's tables at version 0 and stays frozen; every later
     change is a step appended to ``migrations``, so a fresh database and an
     old one reach the current version by the same path. The version reached
-    is recorded under ``name`` in the ``lovia_schema`` table. A database
+    is recorded under ``name`` in the ``lovia_schema`` table, and ``schema``
+    runs only while there is none (see :meth:`_ensure_schema`). A database
     recorded at a version past ``len(migrations)`` was written by a newer
     lovia and is refused rather than read with the wrong schema.
     """
@@ -151,16 +165,26 @@ class SQLiteStore:
         return int(row[0]) if row is not None else 0
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
-        """Create the version-0 tables, then apply the migrations not yet run."""
-        conn.executescript(self._schema + _VERSIONS_SCHEMA)
+        """Bring this store's tables to the current version, in one transaction.
+
+        The version-0 ``schema`` runs only while the store has no recorded
+        version: replayed over a migrated database, it would recreate what a
+        step dropped or index a column a step renamed. It still runs on a store
+        from before versioning (tables present, no row), so it must stay
+        ``IF NOT EXISTS``. All of it happens under the write lock, so a worker
+        that opens the file while another migrates it sees either side, never
+        the middle.
+        """
         target = len(self._migrations)
-        if self._version(conn) == target:
-            return
-        # Take the write lock before re-reading: concurrent workers opening
-        # one file must not both apply the same step.
         conn.execute("BEGIN IMMEDIATE")
         try:
+            conn.execute(_VERSIONS_SCHEMA)
             current = self._version(conn)
+            if current == 0:
+                # Statement by statement: ``executescript`` would commit first
+                # and give up the lock.
+                for statement in _statements(self._schema):
+                    conn.execute(statement)
             if current > target:
                 raise LoviaError(
                     f"sqlite ({self._path}): the {self._name!r} tables are at "
@@ -170,10 +194,12 @@ class SQLiteStore:
                 )
             for migrate in self._migrations[current:]:
                 migrate(conn)
-            conn.execute(
-                "INSERT OR REPLACE INTO lovia_schema (store, version) VALUES (?, ?)",
-                (self._name, target),
-            )
+            if current != target:
+                conn.execute(
+                    "INSERT OR REPLACE INTO lovia_schema (store, version) "
+                    "VALUES (?, ?)",
+                    (self._name, target),
+                )
             conn.commit()
         except BaseException:
             conn.rollback()

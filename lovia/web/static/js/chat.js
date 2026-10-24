@@ -31,7 +31,6 @@ import {
 } from './tools.js';
 import { BlockStream } from './stream-blocks.js';
 import { isStep, placeStep, removeStep, sealActivity } from './activity.js';
-import { toolLabel } from './tool-views.js';
 import { collectContext } from './lovia.js';
 import { messageActionButtons, watchMessageActions } from './message-actions.js';
 import {
@@ -2130,9 +2129,6 @@ export function renderEmptyState() {
 }
 
 // ---- SSE ---------------------------------------------------------------
-const turnProgressEl = document.getElementById('turn-progress');
-let _currentTurn = 0; // the pill shows "Turn N · <current tool>…"
-
 // True while the most recent SSE event was `error`. If the stream then ends
 // (no `done`), the failure was terminal — offer a Retry; a mid-run tool error
 // is followed by more events, which reset this.
@@ -2337,10 +2333,6 @@ async function applyEvent({ event, data }) {
       appendTool(data);
       // ask_human parks the run on the user: draw the interactive card too.
       if (data.name === QUESTION_TOOL) appendQuestion(data);
-      // The pill says what the run is doing, not just how far it is.
-      if (turnProgressEl && _currentTurn) {
-        turnProgressEl.textContent = `${t('topbar.turn', { n: _currentTurn })} · ${toolLabel(data.name)}…`;
-      }
       break;
 
     case 'tool_result':
@@ -2386,11 +2378,6 @@ async function applyEvent({ event, data }) {
 
     case 'turn_started':
       _awaiting = { retry: null };
-      _currentTurn = data.turn;
-      if (turnProgressEl) {
-        turnProgressEl.textContent = t('topbar.turn', { n: data.turn });
-        turnProgressEl.classList.remove('hidden');
-      }
       break;
 
     case 'context_compacted':
@@ -2414,7 +2401,6 @@ async function applyEvent({ event, data }) {
       _sawDone = true;
       if (_shownRun) _shownRun.usage = data?.usage ?? null;
       _dropRecoveries = 0; // the connection proved healthy — re-arm recovery
-      if (turnProgressEl) turnProgressEl.classList.add('hidden');
       updateContextMeter(data?.usage);
       // Stamp the run's token spend into the turn footer — the data is
       // already on the wire; hovering shows the input/output split. A zero
@@ -2641,6 +2627,17 @@ let _streamAbortController = null;
 // run, and a stop waits for it (see cancelStream).
 let _admitting = false;
 let _stopOnceAdmitted = false;
+// When the run on screen started (epoch seconds; 0: unknown), for the Stop
+// button's tooltip: how long it's gone on, there when wanted, never on screen.
+let _runStartedAt = 0;
+
+/** @param {number} sec */
+function formatDuration(sec) {
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return t('dur.s', { s });
+  if (s < 3600) return t('dur.ms', { m: Math.floor(s / 60), s: s % 60 });
+  return t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) });
+}
 
 // ---- Dropped-stream recovery ---------------------------------------------
 // A clean SSE EOF without a `done` (and no error event) means the connection
@@ -2775,6 +2772,7 @@ function enterStreamingUI() {
     stopBtn.style.display = '';
     stopBtn.title = t('composer.stopTip');
   }
+  scrollBtn?.classList.add('live');
   if (promptEl) promptEl.placeholder = t('composer.queuePlaceholder');
   updateSendEnabled();
   // Keep screen readers from re-announcing every 60 ms streaming re-render;
@@ -2789,6 +2787,8 @@ function exitStreamingUI(status = 'detached') {
   store.streaming = false;
   _awaiting = null;
   syncAwaiting();
+  scrollBtn?.classList.remove('live');
+  _runStartedAt = 0;
   syncAttachButton();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
@@ -2820,6 +2820,7 @@ export async function runStream(message, attachments = null) {
   _awaiting = { retry: null }; // dots from the send, not from the first frame
   syncAwaiting();
   _lastErrorCode = '';
+  _runStartedAt = Date.now() / 1000;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -2917,7 +2918,6 @@ export async function runStream(message, attachments = null) {
       flushQueuedTurns();
       exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
-      if (turnProgressEl) turnProgressEl.classList.add('hidden');
       // A new chat's title is generated server-side just after the first turn —
       // poll for it (bounded). Other turns only need one refresh so the session
       // jumps to the top of the list.
@@ -2949,6 +2949,8 @@ export async function runStream(message, attachments = null) {
 export async function runReconnect(sessionId) {
   enterStreamingUI();
   startAssistantTurn();
+  // The run began before this page did: its start is on the live-run row.
+  _runStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;
@@ -3016,7 +3018,6 @@ export async function runReconnect(sessionId) {
       flushQueuedTurns();
       exitStreamingUI(runStatus({ cancelled, readFailed: flags.readFailed, terminal }));
       _streamAbortController = null;
-      if (turnProgressEl) turnProgressEl.classList.add('hidden');
       loadSessions();
       if (dropped) {
         recoverDroppedStream(sessionId);
@@ -3059,7 +3060,6 @@ export function detachStream() {
   //  - queued/pending buffers, else a later run's finally flushes stale bubbles
   //    or resends a raced message into the wrong chat (accepted injects still
   //    replay from the server mailbox on reconnect; an un-accepted one is dropped);
-  //  - the turn-progress pill (un-hidden by turn_started);
   //  - the todo panel (only renderHistory rebuilds it — a failed switch won't);
   //  - any in-flight follow-up request, whose chips would land in the new view;
   //  - a stop waiting for the run's admission: leaving isn't stopping.
@@ -3067,7 +3067,6 @@ export function detachStream() {
   _pendingResend = [];
   _admitting = false;
   _stopOnceAdmitted = false;
-  if (turnProgressEl) turnProgressEl.classList.add('hidden');
   clearTodoPanel();
   clearFollowups();
   if (store.streaming) exitStreamingUI();
@@ -3635,4 +3634,14 @@ export function initComposer() {
   });
 
   stopBtn?.addEventListener('click', () => cancelStream());
+  // Computed on hover/focus: no ticking timer for a figure few look at.
+  const refreshStopTip = () => {
+    if (!stopBtn) return;
+    const tip = t('composer.stopTip');
+    stopBtn.title = _runStartedAt
+      ? `${t('chat.runningFor', { d: formatDuration(Date.now() / 1000 - _runStartedAt) })} · ${tip}`
+      : tip;
+  };
+  stopBtn?.addEventListener('mouseenter', refreshStopTip);
+  stopBtn?.addEventListener('focus', refreshStopTip);
 }

@@ -1831,6 +1831,11 @@ function syncLoadEarlier() {
   btn.title = store.streaming ? t('chat.loadEarlierBusy') : '';
 }
 
+// Bumped whenever the transcript gains turns or is redrawn (a run starts, a
+// history window renders), so a fetch made for the view before can tell it's
+// stale — even if a whole run began and ended while it was out.
+let _viewVersion = 0;
+
 // "Load earlier" redraws the whole window from _historyEntries, so it first
 // refetches them: turns streamed live since the history loaded aren't in the
 // snapshot and would vanish. History only grows at the tail, so the window's
@@ -1841,6 +1846,7 @@ async function loadEarlierHistory() {
   const sessionId = store.sessionId;
   if (!el || !sessionId || store.streaming) return;
   const epoch = store.chatEpoch;
+  const version = _viewVersion;
   let data;
   try {
     data = await api.getSession(sessionId);
@@ -1848,8 +1854,11 @@ async function loadEarlierHistory() {
     toast(t('toast.loadChatsFailed'), { type: 'error' });
     return;
   }
-  // Superseded: the user switched chats, or a run started meanwhile.
-  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
+  // Superseded: another chat, or this one changed (a run, a redraw) meanwhile —
+  // the fetched history may predate what's on screen now.
+  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || _viewVersion !== version) {
+    return;
+  }
   _historyEntries = Array.isArray(data.entries) ? data.entries : [];
   const prevHeight = el.scrollHeight;
   const prevTop = el.scrollTop;
@@ -1865,6 +1874,7 @@ async function loadEarlierHistory() {
 function renderHistoryWindow({ stickBottom }) {
   const transcriptEl = document.getElementById('transcript');
   if (!transcriptEl) return;
+  _viewVersion++;
   const entries = _historyEntries;
   // Swapping the transcript collapses scrollHeight and snaps scrollTop to 0,
   // firing a 'scroll' event the handler would misread as the user scrolling up
@@ -2797,6 +2807,7 @@ async function* readStream(res, flags) {
 // makes queuing discoverable.
 function enterStreamingUI() {
   store.streaming = true;
+  _viewVersion++; // the run draws new turns
   syncAttachButton();
   syncLoadEarlier();
   document.getElementById('reconnect-row')?.remove(); // superseded by a live stream

@@ -67,6 +67,22 @@ async def _none(value: Any) -> bool:
     return value is None
 
 
+async def _task_of(deps: Any, parent: str, *, live: bool = False) -> Any:
+    """``parent``'s one task session once registered (and with ``live``, its
+    run started): a detached spawn registers it in the background, possibly
+    after the parent's run has ended."""
+
+    async def ready() -> bool:
+        kids = await deps.store.list_children(parent)
+        return len(kids) == 1 and (
+            not live or deps.supervisor.get(kids[0].id) is not None
+        )
+
+    await _poll(ready)
+    (task,) = await deps.store.list_children(parent)
+    return task
+
+
 def test_create_app_auto_wires_and_manual_wire_is_idempotent() -> None:
     plugin = Subagents()
     app = _app(Agent(name="bot", model=None, plugins=[plugin]))
@@ -208,10 +224,8 @@ async def test_wired_plugin_delivers_end_to_end(caplog) -> None:
 
     # The spawn became a task session: parent_id set, [t1]-prefixed title,
     # its own supervised run record.
+    task = await _task_of(deps, "s3")
     assert not [r for r in await deps.store.list() if r.parent_id]  # chats only
-    task_rows = list(await deps.store.list_children("s3"))
-    assert len(task_rows) == 1
-    task = task_rows[0]
     assert task.title is not None and task.title.startswith("[t1]")
     assert task.agent == "bot"  # follow-ups in the task chat use a served key
     child_run = await deps.store.latest_run_for(f"subagent:{task.id}")
@@ -322,7 +336,7 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
         source="user",
     )
     await _poll(lambda: _none(deps.supervisor.get("s4")))
-    (task,) = await deps.store.list_children("s4")
+    task = await _task_of(deps, "s4")
 
     async def _cancelled() -> bool:
         run = await deps.store.latest_run_for(f"subagent:{task.id}")
@@ -355,8 +369,7 @@ async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
         source="user",
     )
     await _poll(lambda: _none(deps.supervisor.get("s6")))
-    (task,) = await deps.store.list_children("s6")
-    assert deps.supervisor.get(task.id) is not None  # outlived its parent's run
+    task = await _task_of(deps, "s6", live=True)  # outlives its parent's run
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:

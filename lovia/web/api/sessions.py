@@ -316,16 +316,19 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
 
     @router.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
-        # Its subagent tasks go with it (``store.delete``), so they stop too —
-        # re-reading the tree, as a task winding down may have spawned another.
-        stopped: set[str] = set()
-        while fresh := set(await store.task_tree(session_id)) - stopped:
+        # Its subagent tasks go with it (``store.delete``), so they stop too.
+        # Marking the tree closes it to new tasks (see ``run_child``), so the
+        # tree read here is the whole tree.
+        async with deps._tree_lock:
+            tree = await store.task_tree(session_id)
+            deps._deleting.update(tree)
+        try:
             # Stop live runs first (discarding their partial transcripts) —
             # otherwise they keep burning tokens and re-persist entries for the
             # deleted chats when they wind down.
-            for sid in fresh:
+            for sid in tree:
                 deps.supervisor.cancel(sid, discard=True)
-            for sid in fresh:
+            for sid in tree:
                 # Stopping is cooperative: a final model call already in flight
                 # still completes, and the run then appends itself to the
                 # Session. Wait out the wind-down before deleting the rows (on
@@ -336,8 +339,9 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 # background processes deliberately survive run ends, so this
                 # is where they die.
                 await deps.workspaces.close(sid)
-            stopped.update(fresh)
-        await store.delete(session_id)
+            await store.delete(session_id)
+        finally:
+            deps._deleting.difference_update(tree)
         return {"ok": True}
 
     # One rewind of a chat at a time: each maps its target onto the transcript

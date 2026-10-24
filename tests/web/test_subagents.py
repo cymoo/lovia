@@ -369,6 +369,49 @@ async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
     assert await deps.store.latest_run_for("subagent-report:t1") is None
 
 
+async def test_a_spawn_still_in_run_deps_does_not_outlive_a_deleted_chat() -> None:
+    # The spawn's run_deps outlasts its parent run and the delete; once it
+    # returns, the task must not register under the deleted chat.
+    import httpx
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def run_deps(trigger: Any) -> None:
+        if trigger.source.startswith("subagent:"):
+            entered.set()
+            await release.wait()
+
+    child = Agent(name="child", model=ScriptedProvider([text("done")]))
+    plugin = Subagents(child)
+    provider = ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")])
+    agent = Agent(name="bot", model=provider, plugins=[plugin])
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, run_deps=run_deps
+    )
+    deps = app.state.deps
+    await deps.store.upsert("s7", agent="bot", title="chat")
+    ctrl = await deps.supervisor.start(
+        session_id="s7",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    assert ctrl.task is not None
+    await asyncio.wait_for(ctrl.task, 5)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        assert (await ac.delete("/api/sessions/s7")).status_code == 200
+    release.set()
+    await asyncio.gather(*plugin._detached, return_exceptions=True)
+    assert await deps.store.list_children("s7") == []
+    assert list(deps.supervisor) == []
+
+
 async def test_failed_child_delivers_failure_report() -> None:
     child = Agent(name="doomed", model=ScriptedProvider([call("missing_tool", {})]))
     provider = ScriptedProvider(

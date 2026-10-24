@@ -41,16 +41,6 @@ _T = TypeVar("_T")
 # Column order shared by every ``ChatMeta`` SELECT (and ``ChatMeta.from_row``).
 _META_COLS = "id, title, agent, created_at, updated_at, pinned, parent_id"
 
-# The ids of a chat and its subagent task sessions at any depth, with the chat's
-# id bound to the one ``?``. UNION (not UNION ALL) ends a parent cycle. A
-# subquery rather than a leading WITH: sqlite3 opens its implicit transaction
-# only before a statement that starts with DML, so a WITH ... DELETE autocommits.
-_TASK_TREE = (
-    "(WITH RECURSIVE tree(id) AS (SELECT ? UNION "
-    "SELECT s.id FROM chat_sessions s JOIN tree ON s.parent_id = tree.id) "
-    "SELECT id FROM tree)"
-)
-
 # Column order shared by every ``ScheduleRow`` SELECT (and ``from_row``).
 _SCHED_COLS = (
     "id, agent, input, session_id, trigger_kind, trigger_expr, "
@@ -540,23 +530,25 @@ class ChatStore:
         ``active_run_id`` is unreadable, so an interrupted run's snapshot would
         otherwise be stranded (unreachable, never resumable, never cleaned up).
         The metadata goes last, in one transaction, so a delete that fails part
-        way leaves every chat in place for a retry.
+        way leaves every chat in place for a retry. Every step deletes the same
+        snapshot of the tree: a task added meanwhile is left whole, not stripped
+        of its metadata alone.
         """
-        for sid in await self.task_tree(session_id):
+        ids = await self.task_tree(session_id)
+        for sid in ids:
             await self._drop_checkpoint(sid)
             await self.session.clear(sid)
 
         def _impl() -> None:
             with self._meta._tx() as conn:
-                # chat_sessions last: the tree is read from it.
                 for table, column in (
                     ("chat_runs", "session_id"),
                     ("chat_ui_data", "session_id"),
                     ("chat_sessions", "id"),
                 ):
-                    conn.execute(
-                        f"DELETE FROM {table} WHERE {column} IN {_TASK_TREE}",
-                        (session_id,),
+                    conn.executemany(
+                        f"DELETE FROM {table} WHERE {column} = ?",
+                        [(sid,) for sid in ids],
                     )
 
         await self._meta._run(_impl)
@@ -937,8 +929,13 @@ class ChatStore:
 
     async def task_tree(self, session_id: str) -> Sequence[str]:
         """``session_id`` and its task sessions at any depth — what ``delete`` removes."""
+        # UNION (not UNION ALL) ends a parent cycle.
         return await self._read_all(
-            f"SELECT id FROM {_TASK_TREE}", (session_id,), lambda row: row[0]
+            "WITH RECURSIVE tree(id) AS (SELECT ? UNION "
+            "SELECT s.id FROM chat_sessions s JOIN tree ON s.parent_id = tree.id) "
+            "SELECT id FROM tree",
+            (session_id,),
+            lambda row: row[0],
         )
 
     async def latest_run_statuses(self, session_ids: Sequence[str]) -> dict[str, str]:

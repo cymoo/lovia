@@ -200,39 +200,47 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 client_context=client or {},
             ),
         )
-        await deps.store.upsert(
-            child_sid,
-            agent=agent_key,
-            title=f"[{spec.id}] {provisional_title(spec.prompt)}",
-            parent_id=spec.parent_session_id,
-        )
-        try:
-            ctrl = await deps.supervisor.start(
-                session_id=child_sid,
-                agent=spec.agent,
-                input=spec.prompt,
-                is_new=False,  # no title generation for task sessions
-                title_message=None,
-                autostart=True,
-                source=f"subagent:{child_sid}",
-                # The parent's send_to_subagent pushes into this same channel,
-                # joining whatever the task chat's own /inject sends.
-                mailbox=spec.mailbox,
-                client=client,
-                run_deps=run_deps,
+        # Registered under the tree lock (see RouterDeps._tree_lock): the
+        # parent chat may have been deleted while run_deps ran.
+        async with deps._tree_lock:
+            parent = spec.parent_session_id
+            if parent is not None and (
+                parent in deps._deleting or await deps.store.get(parent) is None
+            ):
+                raise RunCancelled("the chat that spawned this task was deleted")
+            await deps.store.upsert(
+                child_sid,
+                agent=agent_key,
+                title=f"[{spec.id}] {provisional_title(spec.prompt)}",
+                parent_id=parent,
             )
-        except WebError as exc:
-            # No-op for today's 409/429 (both raise before the workspace
-            # binding), but keeps "delete session ⇒ close its workspace"
-            # airtight if start()'s failure points ever move.
-            await deps.workspaces.close(child_sid)
-            await deps.store.delete(child_sid)
-            if exc.code == "too_many_runs":
-                raise RuntimeError(
-                    "the server is at its concurrent-run limit; "
-                    "wait for other work to finish and spawn again"
-                ) from exc
-            raise
+            try:
+                ctrl = await deps.supervisor.start(
+                    session_id=child_sid,
+                    agent=spec.agent,
+                    input=spec.prompt,
+                    is_new=False,  # no title generation for task sessions
+                    title_message=None,
+                    autostart=True,
+                    source=f"subagent:{child_sid}",
+                    # The parent's send_to_subagent pushes into this same
+                    # channel, joining whatever the task chat's own /inject sends.
+                    mailbox=spec.mailbox,
+                    client=client,
+                    run_deps=run_deps,
+                )
+            except WebError as exc:
+                # No-op for today's 409/429 (both raise before the workspace
+                # binding), but keeps "delete session ⇒ close its workspace"
+                # airtight if start()'s failure points ever move.
+                await deps.workspaces.close(child_sid)
+                await deps.store.delete(child_sid)
+                if exc.code == "too_many_runs":
+                    raise RuntimeError(
+                        "the server is at its concurrent-run limit; "
+                        "wait for other work to finish and spawn again"
+                    ) from exc
+                raise
         assert ctrl.task is not None  # autostart began it
         log.info(
             "subagent %s: task session %s started (agent=%s, parent=%s)",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import time
 from pathlib import Path
@@ -180,6 +181,32 @@ async def test_delete_takes_its_task_sessions_at_any_depth(tmp_path: Path) -> No
     assert [r.session_id for r in await store.list_runs()] == ["other"]
     assert await store.task_tree("other") == ["other"]  # a bystander is untouched
     assert await store.session.load("other") != []
+
+
+async def test_delete_removes_one_snapshot_of_the_tree(monkeypatch) -> None:
+    # A task added while the delete runs is left whole — never stripped of its
+    # metadata while its transcript stays behind, unreachable.
+    store = ChatStore.in_memory()
+    await store.upsert("chat")
+    entered, release = asyncio.Event(), asyncio.Event()
+    clear = store.session.clear
+
+    async def slow_clear(session_id: str) -> None:
+        await clear(session_id)
+        if session_id == "chat":
+            entered.set()
+            await release.wait()
+
+    monkeypatch.setattr(store.session, "clear", slow_clear)
+    deleting = asyncio.create_task(store.delete("chat"))
+    await asyncio.wait_for(entered.wait(), 5)
+    await store.upsert("late", parent_id="chat")
+    await store.session.append("late", [AssistantTextEntry(content="kept")])
+    release.set()
+    await deleting
+    assert await store.get("chat") is None
+    assert await store.get("late") is not None
+    assert await store.session.load("late") != []
 
 
 async def test_a_failed_delete_leaves_every_chat_row(tmp_path: Path) -> None:

@@ -114,6 +114,14 @@ class RouterDeps:
     # Lazily-built process-wide lifecycle bus behind ``GET /api/events``
     # (run started/finished, session created/retitled); see ``bus``/``emit``.
     _bus: EventHub | None = field(default=None, init=False, repr=False)
+    # Deleting a chat vs spawning a task under it (api/sessions.py,
+    # subagents.py): under this lock a delete marks its task tree in
+    # ``_deleting``, and a spawn registers only under a parent that is
+    # unmarked and still stored — so no task lands in a tree being deleted.
+    _tree_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
+    _deleting: set[str] = field(default_factory=set, init=False, repr=False)
 
     @property
     def session(self) -> Session:

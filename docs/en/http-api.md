@@ -158,7 +158,7 @@ normalizes all three.
 | `POST /api/chat/cancel?session_id=` | stop the live run (completed turns are kept) |
 | `POST /api/chat/inject` / `uninject` | queue / withdraw a [steering message](cancellation.md#steering-a-live-run) for the live run |
 | `GET /api/sessions?q=&limit=&offset=` | list / search chats (pinned first, paged); `DELETE` clears all |
-| `GET /api/runs` | live supervised runs; `started_at`, and `leg_started_at` for the current leg of an auto-chained run |
+| `GET /api/runs` | live supervised runs |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | persisted run records (outcome, error, duration, token usage); `since` filters to runs finished after that timestamp |
 | `GET /api/events` | **SSE**: subscribe to process-wide lifecycle events (no history replay) |
 | `GET` / `PATCH` / `DELETE /api/sessions/{id}` | transcript · rename/pin · delete (with its subagent tasks and the schedules bound to it). Each user message carries a `ref` — `"<run_id>:<n>"`, stable across reloads and rewinds; `null` until its run has finished. The answer that ends a run carries its `duration` in seconds, and timestamps are real where the run recorded its timing |
@@ -236,7 +236,7 @@ of `event:` / `data:` pairs: the Runner's
 | SSE event | Payload |
 | --- | --- |
 | `session` | `{session_id}` — first frame of a new stream |
-| `snapshot` | `{session_id, status, entries}` — re-attach prologue: the completed turns so far |
+| `snapshot` | `{session_id, status, entries, leg_started_at}` — re-attach prologue: the completed turns so far, and when the run's current leg began (epoch seconds; what its answer's duration counts from) |
 | `text_delta` | `{delta}` |
 | `reasoning_delta` | `{delta}` |
 | `output_discarded` | `{}` — clear the current turn's rendered deltas |

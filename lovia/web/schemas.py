@@ -294,9 +294,6 @@ class RunInfo(BaseModel):
     source: str = "user"
     # Epoch seconds when the run began — the sidebar's elapsed ticker.
     started_at: float | None = None
-    # Epoch seconds when its current leg began (an auto-chained run has one leg
-    # per segment): what that leg's answer duration counts from.
-    leg_started_at: float | None = None
 
 
 class RunRecordInfo(BaseModel):

@@ -60,6 +60,37 @@ def test_untimed_runs_spread_between_their_known_neighbours() -> None:
     assert [o.duration for o in outs] == [None, None, None, 10.0, None, None]
 
 
+def test_a_stopped_run_ending_on_a_tool_result_finishes_on_its_answer() -> None:
+    # A user stop can leave the segment ending on a tool result; the answer
+    # carrying the duration is still the one stamped with the finish.
+    entries = [
+        InputEntry(role="user", content="go"),
+        ToolCallEntry(call_id="c1", name="look", arguments="{}"),
+        ToolResultEntry(call_id="c1", output="seen"),
+    ]
+    outs = segments_to_out(
+        [Segment("r1", entries, _timing(100.0, 160.0))], created_at=0, updated_at=999
+    )
+    assert [(o.role, o.timestamp, o.duration) for o in outs] == [
+        ("user", 100.0, None),
+        ("assistant", 160.0, 60.0),
+        ("tool", 160.0, None),
+    ]
+
+
+def test_gaps_stay_in_order_whatever_the_bounds() -> None:
+    # A bound past the first timed run (a view built with "now" as the chat's
+    # start) must not put older messages after newer ones.
+    segments = [
+        Segment("old", _exchange("a", "b")),
+        Segment("r1", _exchange("c", "d"), _timing(100.0, 110.0)),
+    ]
+    stamps = [
+        o.timestamp for o in segments_to_out(segments, created_at=500, updated_at=500)
+    ]
+    assert stamps == sorted(stamps)
+
+
 def test_with_no_timing_the_spread_is_as_before() -> None:
     segments = [
         Segment("a", _exchange("q1", "a1")),

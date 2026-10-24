@@ -149,7 +149,6 @@ def build_sessions_router(deps: RouterDeps) -> APIRouter:
                 turns=c.turns,
                 source=c.source,
                 started_at=c.started_at,
-                leg_started_at=c.leg_started_at,
             )
             for sid, c in deps.supervisor
         ]

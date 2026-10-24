@@ -41,6 +41,9 @@ class SnapshotData(TypedDict):
     session_id: str
     status: str
     entries: list[JsonObject]
+    # Epoch seconds the run's current leg began: what its answer's duration
+    # counts from (an auto-chained run has one leg per segment).
+    leg_started_at: float
 
 
 class DeltaData(TypedDict):

@@ -228,6 +228,7 @@ class _Attachment:
     buffered: list[events.Event | UserTurnRefs]
     subscription: _Subscription
     status: str
+    leg_started_at: float
 
 
 class RunController:
@@ -257,6 +258,7 @@ class RunController:
         client: JsonObject | None = None,
         run_deps: Any = None,
         await_approvals: bool = True,
+        chat_created_at: float | None = None,
     ) -> None:
         self.deps = deps
         self.supervisor = supervisor
@@ -292,9 +294,18 @@ class RunController:
         # The exception behind ``final_error``, when one ended the run.
         self.final_exception: Exception | None = None
         self.started_at = time.time()
-        # When the current leg began (an auto-chained run has one per segment);
-        # set as each leg starts.
-        self.leg_started_at = self.started_at
+        # When the current leg began (an auto-chained run has one per segment),
+        # sent with every snapshot so a reconnect times the leg's answer; set
+        # as each leg starts — here already for a resume, whose snapshot goes
+        # out before its task begins, from the run's original start.
+        resumed = first_checkpoint.resume_from if first_checkpoint else None
+        self.leg_started_at = (
+            resumed.started_at
+            if resumed is not None and resumed.started_at is not None
+            else self.started_at
+        )
+        # Where a snapshot's untimed (pre-timing) history starts from.
+        self.chat_created_at = chat_created_at or self.started_at
         # Cumulative usage across auto-chained legs, for the durable run record.
         self.usage = Usage()
         # Final model call's prompt size (context fill), from the last leg that
@@ -353,12 +364,14 @@ class RunController:
         begun. Subscribe first, then begin, so no early event is missed.
         """
         sub = self.hub.subscribe()
-        now = time.time()
         attachment = _Attachment(
-            snapshot=view_messages(runs, created_at=now, updated_at=now),
+            snapshot=view_messages(
+                runs, created_at=self.chat_created_at, updated_at=time.time()
+            ),
             buffered=[],  # nothing has been published yet — the tail IS the run
             subscription=sub,
             status=self.status,
+            leg_started_at=self.leg_started_at,
         )
         self._ensure_begun()
         return attachment
@@ -372,8 +385,9 @@ class RunController:
             # This run's turns get their refs when it finishes (the refs
             # frame), not before.
             runs = [*self.history_runs, Run(None, self.completed_mirror)]
-            now = time.time()
-            snapshot = view_messages(runs, created_at=now, updated_at=now)
+            snapshot = view_messages(
+                runs, created_at=self.chat_created_at, updated_at=time.time()
+            )
         else:
             snapshot = []
         # Belt-and-suspenders: a parked approval is in the buffer, but re-add it
@@ -381,7 +395,11 @@ class RunController:
         if self.pending_approval is not None and self.pending_approval not in buffered:
             buffered = [*buffered, self.pending_approval]
         return _Attachment(
-            snapshot=snapshot, buffered=buffered, subscription=sub, status=self.status
+            snapshot=snapshot,
+            buffered=buffered,
+            subscription=sub,
+            status=self.status,
+            leg_started_at=self.leg_started_at,
         )
 
     def inject(self, message: str) -> int:
@@ -892,6 +910,7 @@ class RunSupervisor:
         agent's ``approval_handler`` decides, else the call is denied.
         """
         self._check_slot(session_id)
+        meta = await self.deps.store.get(session_id)
         # Every run of one web session shares that session's workspace session
         # (lazily opened here), so background processes survive across runs —
         # they die with the *chat* (deletion/shutdown), not with the turn.
@@ -925,6 +944,7 @@ class RunSupervisor:
             client=client,
             run_deps=run_deps,
             await_approvals=await_approvals,
+            chat_created_at=meta.created_at if meta else None,
         )
         # Reserve the session slot BEFORE the checkpoint await: two concurrent
         # starts (e.g. two tabs submitting at once) would otherwise both pass the
@@ -961,6 +981,7 @@ class RunSupervisor:
     ) -> RunController:
         """Register a resume of ``snapshot``; ``run_deps`` as for :meth:`start`."""
         self._check_slot(session_id, cap=False)
+        meta = await self.deps.store.get(session_id)
         # Same chat-scoped workspace binding as start(): the resumed leg's
         # background processes are gone (they never survive a restart), but
         # its shell/file tools must land on the chat's one live session.
@@ -988,6 +1009,7 @@ class RunSupervisor:
             source="user",
             client=client,
             run_deps=run_deps,
+            chat_created_at=meta.created_at if meta else None,
         )
         self._controllers[session_id] = ctrl
         self.last_client[session_id] = client
@@ -1110,6 +1132,7 @@ async def forward(
                 session_id=sid,
                 status=source.status,
                 entries=[m.model_dump() for m in source.snapshot],
+                leg_started_at=source.leg_started_at,
             ),
         )
         for ev in source.buffered:

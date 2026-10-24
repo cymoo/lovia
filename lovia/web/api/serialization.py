@@ -168,7 +168,8 @@ Runs = list[Run]
 
 def _fill_gaps(times: list[float | None], first: float, last: float) -> list[float]:
     """``times`` with each stretch of unknowns spread evenly between its known
-    neighbours, exclusive — or ``first``/``last``, inclusive, at either end."""
+    neighbours, exclusive — or ``first``/``last``, inclusive, at either end,
+    though never past a known neighbour: the result stays in order."""
     out = list(times)
     i, n = 0, len(out)
     while i < n:
@@ -181,6 +182,8 @@ def _fill_gaps(times: list[float | None], first: float, last: float) -> list[flo
         lo = out[i - 1] if i > 0 else None
         hi = out[j] if j < n else None
         a = first if lo is None else lo
+        if hi is not None:
+            a = min(a, hi)
         b = max(a, last if hi is None else hi)
         steps = (j - i - 1) + (lo is not None) + (hi is not None)
         for k in range(j - i):
@@ -196,8 +199,7 @@ def _runs_to_out(
     """Each run's messages, and the index where each run's messages end.
 
     A timed run's messages span its start (its opening user turn) to its finish
-    (its last message), evenly between, and its last answer carries its
-    ``duration``. An untimed run's — written before timing was, or still in
+    (its last answer, which carries its ``duration``), evenly between. An untimed run's — written before timing was, or still in
     flight — spread between their known neighbours, the session's
     ``created_at``/``updated_at`` standing in at the ends. Runs never merge
     (each opens with a fresh user turn), so projecting run by run matches
@@ -213,11 +215,22 @@ def _runs_to_out(
         msgs = [message_to_out(m) for m in entries_to_messages(kept)]
         if run.timing is not None and msgs:
             start, finish = run.timing
-            span = max(len(msgs) - 1, 1)
-            times.extend(start + (finish - start) * i / span for i in range(len(msgs)))
-            last = next((m for m in reversed(msgs) if m.role == "assistant"), None)
-            if last is not None:
-                last.duration = max(0.0, finish - start)
+            # The answer is where the finish shows: anything after it (a
+            # stopped run's trailing tool result) finished then too.
+            end = next(
+                (
+                    i
+                    for i in range(len(msgs) - 1, -1, -1)
+                    if msgs[i].role == "assistant"
+                ),
+                len(msgs) - 1,
+            )
+            span = max(end, 1)
+            times.extend(
+                start + (finish - start) * min(i, end) / span for i in range(len(msgs))
+            )
+            if msgs[end].role == "assistant":
+                msgs[end].duration = max(0.0, finish - start)
         else:
             times.extend([None] * len(msgs))
         outs.extend(msgs)

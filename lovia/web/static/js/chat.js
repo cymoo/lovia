@@ -2276,6 +2276,8 @@ async function applyEvent({ event, data }) {
       // a bubble of its own.
       renderHistory(data.entries || []);
       if (!resumeTailAssistantTurn()) startAssistantTurn();
+      // A reconnect or resume joins a leg it didn't see start.
+      _legStartedAt = data.leg_started_at || _legStartedAt;
       break;
 
     case 'text_delta':
@@ -3026,9 +3028,7 @@ export async function runReconnect(sessionId) {
   enterStreamingUI();
   startAssistantTurn();
   // The run began before this page did: its start is on the live-run row.
-  const row = store.runsBySession?.get(sessionId);
-  _runStartedAt = row?.started_at ?? 0;
-  _legStartedAt = row?.leg_started_at ?? 0;
+  _runStartedAt = store.runsBySession?.get(sessionId)?.started_at ?? 0;
   const streamEpoch = store.chatEpoch;
   _lastEventWasError = false;
   _sawDone = false;

@@ -4465,6 +4465,7 @@ body.files-splitting {
   }
   /* metadata always visible where there is no hover */
   .turn .timestamp,
+  .turn-footer .duration,
   .turn-footer .usage {
     opacity: 1;
   }
@@ -4614,6 +4615,7 @@ body.files-splitting {
     pointer-events: auto;
   }
   .turn .timestamp,
+  .turn-footer .duration,
   .turn-footer .usage {
     opacity: 1;
   }

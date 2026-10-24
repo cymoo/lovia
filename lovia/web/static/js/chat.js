@@ -336,14 +336,13 @@ function stampDuration(bubble, sec) {
 }
 
 /**
- * Replay: each finished run's last answer gets its recorded duration. A user
- * turn's ref is `<run_id>:<n>`, so the answers after it belong to that run.
+ * Replay: each finished run's last answer gets its recorded duration, and its
+ * real finish time in place of the evenly spread one the history carries. A
+ * user turn's ref is `<run_id>:<n>`, so the answers after it are that run's.
  * @param {Array<{ run_id: string, started_at: number, finished_at: number | null }>} records
  */
 function stampRunDurations(records) {
-  const took = new Map(
-    records.filter((r) => r.finished_at).map((r) => [r.run_id, r.finished_at - r.started_at]),
-  );
+  const finished = new Map(records.filter((r) => r.finished_at).map((r) => [r.run_id, r]));
   /** @type {Map<string, Element>} */
   const lastAnswer = new Map();
   let run = null;
@@ -352,7 +351,12 @@ function stampRunDurations(records) {
     if (turn.classList.contains('user')) run = ref ? ref.slice(0, ref.lastIndexOf(':')) : null;
     else if (run && turn.classList.contains('assistant')) lastAnswer.set(run, turn);
   }
-  for (const [id, turn] of lastAnswer) stampDuration(turn.querySelector('.bubble'), took.get(id));
+  for (const [id, turn] of lastAnswer) {
+    const r = finished.get(id);
+    if (!r?.finished_at) continue;
+    setTurnTimestamp(/** @type {HTMLElement} */ (turn), r.finished_at * 1000);
+    stampDuration(turn.querySelector('.bubble'), r.finished_at - r.started_at);
+  }
 }
 
 function appendBubbleContent(bubble, node) {

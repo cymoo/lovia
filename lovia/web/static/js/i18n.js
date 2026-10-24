@@ -124,9 +124,10 @@ const MESSAGES = {
     'chat.openModelSettings': '模型设置',
     'chat.took': '用时 {d}',
     'chat.runningFor': '已运行 {d}',
-    'dur.s': '{s} 秒',
-    'dur.ms': '{m} 分 {s} 秒',
-    'dur.hm': '{h} 小时 {m} 分',
+    // No spaces: in the footer's mono font each one is a full, gappy cell.
+    'dur.s': '{s}秒',
+    'dur.ms': '{m}分{s}秒',
+    'dur.hm': '{h}小时{m}分',
     'chat.copy': '复制消息',
     'chat.copyCode': '复制',
     'chat.copied': '已复制！',

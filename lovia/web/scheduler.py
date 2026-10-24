@@ -256,26 +256,37 @@ class Scheduler:
             await self._miss(sched, now, agent_name, f"run refused: {exc}")
             return None
 
+        # Every fire registers through the delete gate (see
+        # RouterDeps._chat_alive): a fixed chat deleted while run_deps ran takes
+        # this schedule with it, and the fire must not bring the chat back; a
+        # delete-all in progress turns away even a fresh chat. The chat need
+        # not be stored — a fire may create it. A refused fire leaves next_fire
+        # due, so a schedule that outlives the delete fires on a later poll.
+        title = provisional_title(sched.input) if is_new else None
         try:
-            title = provisional_title(sched.input) if is_new else None
-            await self.store.upsert(
-                target,
-                agent=agent_name,  # registry key — the identity pick() speaks
-                title=title,
-            )
-            await self.deps.supervisor.start(
-                session_id=target,
-                agent=agent,
-                input=fire_input(sched),
-                is_new=is_new,
-                title_message=sched.input,
-                autostart=True,  # clientless: begin the run with no subscriber
-                # The supervisor records the run under this source, which is
-                # exactly what makes it this schedule's history/last outcome.
-                source=f"schedule:{sched.id}",
-                client=sched.context,
-                run_deps=run_deps,
-            )
+            async with self.deps._chat_alive(target, stored=False) as alive:
+                if not alive or await self.store.get_schedule(sched.id) is None:
+                    log.info("schedule %s: a delete is under way; skipped", sched.id)
+                    return None
+                await self.store.upsert(
+                    target,
+                    agent=agent_name,  # registry key — the identity pick() speaks
+                    title=title,
+                )
+                await self.deps.supervisor.start(
+                    session_id=target,
+                    agent=agent,
+                    input=fire_input(sched),
+                    is_new=is_new,
+                    title_message=sched.input,
+                    autostart=True,  # clientless: begin the run with no subscriber
+                    # The supervisor records the run under this source, which
+                    # is exactly what makes it this schedule's history/last
+                    # outcome.
+                    source=f"schedule:{sched.id}",
+                    client=sched.context,
+                    run_deps=run_deps,
+                )
         except WebError as exc:
             live = self.deps.supervisor.get(target)
             if exc.code == "run_active" and live is not None:
@@ -289,10 +300,11 @@ class Scheduler:
                 # Drop the freshly-created session row so repeated 429s on a
                 # fresh-session schedule don't leak empty chats (each retry mints
                 # a new UUID). start() raises 429 before any state change, so the
-                # only side effect to undo is our own upsert above.
+                # only side effect to undo is our own upsert above — not the
+                # schedule bound to that chat, which retries.
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
                 if is_new:
-                    await self.store.delete(target)
+                    await self.store.delete(target, schedules=False)
                 return None
             raise
         if is_new:

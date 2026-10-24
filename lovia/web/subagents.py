@@ -118,17 +118,26 @@ def subagent_deliver(deps: "RouterDeps") -> DeliverFn:
                 )
                 return
             try:
-                await deps.supervisor.start(
-                    session_id=sid,
-                    agent=agent,
-                    input=report.text,
-                    is_new=False,
-                    title_message=None,
-                    autostart=True,  # clientless: consume the report unattended
-                    source=source,
-                    client=client,
-                    run_deps=run_deps,
-                )
+                # The chat may have been deleted while run_deps ran.
+                async with deps._chat_alive(sid) as alive:
+                    if not alive:
+                        log.info(
+                            "subagent %s: session %s is gone; report dropped",
+                            report.id,
+                            sid,
+                        )
+                        return
+                    await deps.supervisor.start(
+                        session_id=sid,
+                        agent=agent,
+                        input=report.text,
+                        is_new=False,
+                        title_message=None,
+                        autostart=True,  # clientless: consume the report unattended
+                        source=source,
+                        client=client,
+                        run_deps=run_deps,
+                    )
                 log.info(
                     "subagent %s: report delivered to idle session %s via a new run",
                     report.id,
@@ -200,13 +209,13 @@ def subagent_runner(deps: "RouterDeps") -> RunChildFn:
                 client_context=client or {},
             ),
         )
-        # Registered under the tree lock (see RouterDeps._tree_lock): the
-        # parent chat may have been deleted while run_deps ran.
-        async with deps._tree_lock:
-            parent = spec.parent_session_id
-            if parent is not None and (
-                parent in deps._deleting or await deps.store.get(parent) is None
-            ):
+        # The parent chat may have been deleted while run_deps ran.
+        parent = spec.parent_session_id
+        gate: contextlib.AbstractAsyncContextManager[bool] = (
+            deps._chat_alive(parent) if parent else contextlib.nullcontext(True)
+        )
+        async with gate as alive:
+            if not alive:
                 raise RunCancelled("the chat that spawned this task was deleted")
             await deps.store.upsert(
                 child_sid,

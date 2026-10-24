@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections import Counter
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -114,14 +115,12 @@ class RouterDeps:
     # Lazily-built process-wide lifecycle bus behind ``GET /api/events``
     # (run started/finished, session created/retitled); see ``bus``/``emit``.
     _bus: EventHub | None = field(default=None, init=False, repr=False)
-    # Deleting a chat vs spawning a task under it (api/sessions.py,
-    # subagents.py): under this lock a delete marks its task tree in
-    # ``_deleting``, and a spawn registers only under a parent that is
-    # unmarked and still stored — so no task lands in a tree being deleted.
+    # Chats being deleted (counted) and the lock guarding them; see
+    # ``_deleting_tree`` / ``_chat_alive``.
     _tree_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
-    _deleting: set[str] = field(default_factory=set, init=False, repr=False)
+    _deleting: Counter[str] = field(default_factory=Counter, init=False, repr=False)
 
     @property
     def session(self) -> Session:
@@ -158,6 +157,37 @@ class RouterDeps:
         own hub.
         """
         self.bus.publish(frame(event, data))
+
+    # Deleting a chat vs registering something that must die with it — a run
+    # in it, a task under it. Both sides hold ``_tree_lock`` while they decide,
+    # so a registration either lands before the delete reads the tree (and is
+    # stopped with it) or sees the mark and backs off.
+
+    @asynccontextmanager
+    async def _deleting_tree(self, session_id: str) -> AsyncIterator[Sequence[str]]:
+        """Mark ``session_id`` and its task sessions as being deleted for the
+        block; yields them. The mark is counted, so overlapping deletes of one
+        chat lift it only when the last one ends."""
+        async with self._tree_lock:
+            tree = await self.store.task_tree(session_id)
+            self._deleting.update(tree)
+        try:
+            yield tree
+        finally:
+            self._deleting.subtract(tree)
+            for sid in tree:
+                if self._deleting[sid] <= 0:
+                    del self._deleting[sid]
+
+    @asynccontextmanager
+    async def _chat_alive(self, session_id: str) -> AsyncIterator[bool]:
+        """Whether ``session_id`` is stored and not being deleted — held for the
+        block, so register the run or task inside it."""
+        async with self._tree_lock:
+            yield (
+                session_id not in self._deleting
+                and await self.store.get(session_id) is not None
+            )
 
     @asynccontextmanager
     async def lifespan(self, _app: Any = None) -> AsyncIterator[None]:

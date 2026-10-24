@@ -337,10 +337,11 @@ async def test_cancel_subagent_cancels_supervised_child() -> None:
 async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
     import httpx
 
-    gate = asyncio.Event()  # never set: the child stays parked
+    gate = asyncio.Event()  # parks the child in its model call
     child = Agent(name="slow", model=GatedProvider(ScriptedProvider([text("x")]), gate))
     provider = ScriptedProvider([call("spawn_subagent", {"prompt": "dig"}), text("ok")])
-    agent = Agent(name="bot", model=provider, plugins=[Subagents(child)])
+    plugin = Subagents(child)
+    agent = Agent(name="bot", model=provider, plugins=[plugin])
     app = _app(agent)
     deps = app.state.deps
     await deps.store.upsert("s6", agent="bot", title="chat")
@@ -359,14 +360,18 @@ async def test_deleting_a_chat_stops_and_deletes_its_tasks() -> None:
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
-        assert (await ac.delete("/api/sessions/s6")).status_code == 200
-    assert deps.supervisor.get(task.id) is None
+        delete = asyncio.create_task(ac.delete("/api/sessions/s6"))
+        await _poll(lambda: _none(deps.supervisor.get(task.id)))  # stopped
+        # A stop is cooperative: the model call in flight completes first,
+        # and the delete waits that out.
+        gate.set()
+        assert (await asyncio.wait_for(delete, 5)).status_code == 200
     assert await deps.store.get(task.id) is None
     assert await deps.session.load(task.id) == []
     assert await deps.store.list_runs() == []
     # A task stopped by the delete reports nothing to the deleted chat.
-    await asyncio.sleep(0.1)
-    assert await deps.store.latest_run_for("subagent-report:t1") is None
+    await asyncio.gather(*plugin._detached, return_exceptions=True)
+    assert list(deps.supervisor) == []
 
 
 async def test_a_spawn_still_in_run_deps_does_not_outlive_a_deleted_chat() -> None:
@@ -410,6 +415,68 @@ async def test_a_spawn_still_in_run_deps_does_not_outlive_a_deleted_chat() -> No
     await asyncio.gather(*plugin._detached, return_exceptions=True)
     assert await deps.store.list_children("s7") == []
     assert list(deps.supervisor) == []
+
+
+async def test_a_report_still_in_run_deps_does_not_restart_a_deleted_chat() -> None:
+    import httpx
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def run_deps(trigger: Any) -> None:
+        if trigger.source.startswith("subagent-report:"):
+            entered.set()
+            await release.wait()
+
+    child = Agent(name="child", model=ScriptedProvider([text("findings")]))
+    plugin = Subagents(child)
+    provider = ScriptedProvider(
+        [call("spawn_subagent", {"prompt": "dig"}), text("ok"), text("noted")]
+    )
+    agent = Agent(name="bot", model=provider, plugins=[plugin])
+    app = create_app(
+        agent, store=ChatStore.in_memory(), titles=False, run_deps=run_deps
+    )
+    deps = app.state.deps
+    await deps.store.upsert("s8", agent="bot", title="chat")
+    await deps.supervisor.start(
+        session_id="s8",
+        agent=agent,
+        input="go",
+        is_new=False,
+        title_message=None,
+        autostart=True,
+        source="user",
+    )
+    await asyncio.wait_for(entered.wait(), 5)  # the task is done; its report waits
+    await _poll(lambda: _none(deps.supervisor.get("s8")))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        assert (await ac.delete("/api/sessions/s8")).status_code == 200
+    release.set()
+    await asyncio.gather(*plugin._detached, return_exceptions=True)
+    assert list(deps.supervisor) == []
+    assert await deps.session.load("s8") == []
+    assert await deps.store.list_runs() == []
+
+
+async def test_overlapping_deletes_keep_the_tree_closed_until_the_last_ends() -> None:
+    deps = _app(Agent(name="bot", model=ScriptedProvider([]))).state.deps
+    await deps.store.upsert("c", agent="bot")
+    await deps.store.upsert("t", agent="bot", parent_id="c")
+
+    async def alive(sid: str) -> bool:
+        async with deps._chat_alive(sid) as ok:
+            return ok
+
+    assert await alive("c") and await alive("t")
+    async with deps._deleting_tree("c") as tree:
+        assert sorted(tree) == ["c", "t"]
+        async with deps._deleting_tree("c"):
+            pass  # an overlapping delete of the same chat ends (or fails) first
+        assert not await alive("c") and not await alive("t")
+    assert await alive("c") and await alive("t")
+    assert not deps._deleting
 
 
 async def test_failed_child_delivers_failure_report() -> None:

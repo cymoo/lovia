@@ -256,26 +256,40 @@ class Scheduler:
             await self._miss(sched, now, agent_name, f"run refused: {exc}")
             return None
 
+        # A fire into a fixed chat registers through the delete gate (see
+        # RouterDeps._chat_alive): deleting the chat while run_deps ran deletes
+        # this schedule too, and the fire must not bring the chat back. The
+        # chat need not be stored — a schedule may name one it creates.
+        gate: contextlib.AbstractAsyncContextManager[bool] = (
+            self.deps._chat_alive(target, stored=False)
+            if sched.session_id is not None
+            else contextlib.nullcontext(True)
+        )
+        title = provisional_title(sched.input) if is_new else None
         try:
-            title = provisional_title(sched.input) if is_new else None
-            await self.store.upsert(
-                target,
-                agent=agent_name,  # registry key — the identity pick() speaks
-                title=title,
-            )
-            await self.deps.supervisor.start(
-                session_id=target,
-                agent=agent,
-                input=fire_input(sched),
-                is_new=is_new,
-                title_message=sched.input,
-                autostart=True,  # clientless: begin the run with no subscriber
-                # The supervisor records the run under this source, which is
-                # exactly what makes it this schedule's history/last outcome.
-                source=f"schedule:{sched.id}",
-                client=sched.context,
-                run_deps=run_deps,
-            )
+            async with gate as alive:
+                if not alive or await self.store.get_schedule(sched.id) is None:
+                    log.info("schedule %s: deleted while firing; skipped", sched.id)
+                    return None
+                await self.store.upsert(
+                    target,
+                    agent=agent_name,  # registry key — the identity pick() speaks
+                    title=title,
+                )
+                await self.deps.supervisor.start(
+                    session_id=target,
+                    agent=agent,
+                    input=fire_input(sched),
+                    is_new=is_new,
+                    title_message=sched.input,
+                    autostart=True,  # clientless: begin the run with no subscriber
+                    # The supervisor records the run under this source, which
+                    # is exactly what makes it this schedule's history/last
+                    # outcome.
+                    source=f"schedule:{sched.id}",
+                    client=sched.context,
+                    run_deps=run_deps,
+                )
         except WebError as exc:
             live = self.deps.supervisor.get(target)
             if exc.code == "run_active" and live is not None:

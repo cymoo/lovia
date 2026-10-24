@@ -524,7 +524,8 @@ class ChatStore:
     async def delete(self, session_id: str) -> None:
         """Remove transcript, checkpoint, AND metadata for ``session_id`` and
         its subagent task sessions — listed only under their chat, a task left
-        behind would be unreachable.
+        behind would be unreachable. Schedules bound to them go too (with their
+        run history): one would otherwise bring the chat back on its next fire.
 
         Checkpoints are dropped first: once a metadata row is gone its
         ``active_run_id`` is unreadable, so an interrupted run's snapshot would
@@ -541,6 +542,17 @@ class ChatStore:
 
         def _impl() -> None:
             with self._meta._tx() as conn:
+                schedules = [
+                    (row[0],)
+                    for sid in ids
+                    for row in conn.execute(
+                        "SELECT id FROM chat_schedules WHERE session_id = ?", (sid,)
+                    )
+                ]
+                conn.executemany(
+                    "DELETE FROM chat_runs WHERE source = 'schedule:' || ?", schedules
+                )
+                conn.executemany("DELETE FROM chat_schedules WHERE id = ?", schedules)
                 for table, column in (
                     ("chat_runs", "session_id"),
                     ("chat_ui_data", "session_id"),
@@ -554,7 +566,8 @@ class ChatStore:
         await self._meta._run(_impl)
 
     async def delete_all(self) -> None:
-        """Remove ALL transcripts, checkpoints, and metadata."""
+        """Remove ALL transcripts, checkpoints, and metadata — and the
+        schedules bound to a chat (as ``delete``)."""
         # Read every id directly — ``list`` caps at its limit, which would
         # leave the transcripts/checkpoints of sessions beyond one page orphaned
         # while the unconditional row delete below wiped their metadata.
@@ -564,6 +577,7 @@ class ChatStore:
         for session_id in ids:
             await self._drop_checkpoint(session_id)
             await self.session.clear(session_id)
+        await self._write("DELETE FROM chat_schedules WHERE session_id IS NOT NULL")
         await self._write("DELETE FROM chat_sessions")
         await self._write("DELETE FROM chat_runs")
         await self._write("DELETE FROM chat_ui_data")

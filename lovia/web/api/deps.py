@@ -180,13 +180,15 @@ class RouterDeps:
                     del self._deleting[sid]
 
     @asynccontextmanager
-    async def _chat_alive(self, session_id: str) -> AsyncIterator[bool]:
-        """Whether ``session_id`` is stored and not being deleted — held for the
-        block, so register the run or task inside it."""
+    async def _chat_alive(
+        self, session_id: str, *, stored: bool = True
+    ) -> AsyncIterator[bool]:
+        """Whether ``session_id`` is not being deleted and (with ``stored``)
+        still stored — held for the block, so register the run or task inside
+        it. ``stored=False`` is for a caller that may create the chat."""
         async with self._tree_lock:
-            yield (
-                session_id not in self._deleting
-                and await self.store.get(session_id) is not None
+            yield session_id not in self._deleting and (
+                not stored or await self.store.get(session_id) is not None
             )
 
     @asynccontextmanager

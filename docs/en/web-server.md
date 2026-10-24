@@ -1003,7 +1003,8 @@ The Web package stores durable schedules and supports three trigger forms:
 `Scheduling(store)` contributes the approval-gated `schedule_run` Tool. The
 model can propose a future run, but it is not created until a user approves the
 Tool call. With `continue_session=True`, a fire joins the same chat and injects
-its instruction into an active Run. With `continue_session=False`, each fire
+its instruction into an active Run; deleting that chat deletes the schedule
+with it. With `continue_session=False`, each fire
 starts a new Session and is skipped rather than queued while the previous fire
 is still running. After downtime, multiple missed fire times coalesce into one.
 

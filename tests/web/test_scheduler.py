@@ -1090,6 +1090,89 @@ async def test_schedule_info_derives_status_and_history_from_records() -> None:
         assert [r["run_id"] for r in by_source] == [r["run_id"] for r in history]
 
 
+# --------------------------------------------------------------------------- #
+# a schedule bound to a chat goes with it
+# --------------------------------------------------------------------------- #
+
+
+async def test_deleting_a_chat_deletes_the_schedules_bound_to_it() -> None:
+    # Left behind, a bound schedule would bring the deleted chat back on its
+    # next fire.
+    from lovia.web.store import RunRow
+
+    store = ChatStore.in_memory()
+    now = time.time()
+    await store.upsert("chat")
+    await store.upsert("task", parent_id="chat")
+    await store.upsert("other")
+    for sid, bound in (("a", "chat"), ("b", "task"), ("c", "other"), ("d", None)):
+        await store.add_schedule(_row(id=sid, session_id=bound, now=now))
+        # A miss record: no session, so only its source ties it to the schedule.
+        await store.start_run(
+            RunRow(
+                id=f"miss-{sid}",
+                session_id=None,
+                agent="bot",
+                source=f"schedule:{sid}",
+                status="failed",
+                error="run refused",
+                started_at=now,
+                finished_at=now,
+                usage=None,
+            )
+        )
+
+    await store.delete("chat")
+    assert sorted(s.id for s in await store.list_schedules()) == ["c", "d"]
+    assert sorted(r.id for r in await store.list_runs()) == ["miss-c", "miss-d"]
+
+    await store.delete_all()  # every chat goes; an unbound schedule stays
+    assert [s.id for s in await store.list_schedules()] == ["d"]
+
+
+async def test_a_fire_still_in_run_deps_does_not_bring_back_a_deleted_chat() -> None:
+    import httpx
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def run_deps(trigger) -> None:
+        entered.set()
+        await release.wait()
+
+    store = ChatStore.in_memory()
+    app = create_app(_agent([text("hi")]), store=store, titles=False, run_deps=run_deps)
+    deps = app.state.deps
+    now = time.time()
+    await store.upsert("conv", agent="bot", title="mine")
+    await store.add_schedule(
+        _row(id="s", session_id="conv", next_fire=now - 1, now=now)
+    )
+    fire = asyncio.create_task(Scheduler(deps).run_due())
+    await asyncio.wait_for(entered.wait(), 5)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        assert (await ac.delete("/api/sessions/conv")).status_code == 200
+    release.set()
+    await asyncio.wait_for(fire, 5)
+    assert list(deps.supervisor) == []
+    assert await store.get("conv") is None
+    assert await store.session.load("conv") == []
+    assert await store.list_schedules() == []
+
+
+async def test_a_schedule_may_name_a_chat_its_first_fire_creates() -> None:
+    store = ChatStore.in_memory()
+    deps = _app(_agent([text("hi")]), store).state.deps
+    now = time.time()
+    await store.add_schedule(
+        _row(id="s", session_id="reports", next_fire=now - 1, now=now)
+    )
+    await Scheduler(deps).run_due()
+    await _drain_runs(deps)
+    assert await store.get("reports") is not None
+
+
 async def test_pre_0_8_34_db_gains_stop_condition_columns(tmp_path) -> None:
     """A pre-0.8.34 DB whose ``chat_schedules`` lacks the stop-condition
     columns opens cleanly: the migration adds them and old rows read back with

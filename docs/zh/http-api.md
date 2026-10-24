@@ -153,7 +153,7 @@ API 路由抛出的错误都使用同一种响应体：
 | `GET /api/runs` | 正在运行的服务端托管任务 |
 | `GET /api/runs/history?session_id=&source=&since=&limit=&offset=` | 查询持久化的运行记录，包括结果、错误、时长和 token 用量；`since` 按结束时间过滤 |
 | `GET /api/events` | **SSE**：订阅进程级生命周期事件（不重放历史事件） |
-| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除（连同其后台任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null` |
+| `GET` / `PATCH` / `DELETE /api/sessions/{id}` | 查看 transcript；重命名或置顶；删除（连同其后台任务和绑定它的定时任务）。每条用户消息带 `ref`（`"<run_id>:<n>"`），刷新和回退后不变；其 Run 结束之前为 `null` |
 | `GET /api/sessions/{id}/todos` | 当前 [Todo 列表](todo.md)，从 Transcript 重建 |
 | `POST /api/sessions/{id}/followups` | 生成追问建议，返回 `{followups: [...]}`；功能未启用或建议器未返回内容时为 `[]`。该操作可能消耗模型 token，因此使用 POST |
 | `POST /api/sessions/{id}/rewind` | 从某条用户消息起删除后续内容；用它的 `ref` 指定，或用 `user_turn`（它在用户消息中的索引，从 0 开始）；`ref` 已不在聊天中时返回 404，运行中返回 409，不支持 `rewind` 时返回 501 |

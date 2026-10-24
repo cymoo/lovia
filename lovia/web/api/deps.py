@@ -115,12 +115,13 @@ class RouterDeps:
     # Lazily-built process-wide lifecycle bus behind ``GET /api/events``
     # (run started/finished, session created/retitled); see ``bus``/``emit``.
     _bus: EventHub | None = field(default=None, init=False, repr=False)
-    # Chats being deleted (counted) and the lock guarding them; see
-    # ``_deleting_tree`` / ``_chat_alive``.
+    # Chats being deleted (counted; ``_deleting_all`` for every chat at once)
+    # and the lock guarding them; see ``_deleting_tree`` / ``_chat_alive``.
     _tree_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
     _deleting: Counter[str] = field(default_factory=Counter, init=False, repr=False)
+    _deleting_all: int = field(default=0, init=False, repr=False)
 
     @property
     def session(self) -> Session:
@@ -180,6 +181,16 @@ class RouterDeps:
                     del self._deleting[sid]
 
     @asynccontextmanager
+    async def _deleting_every_chat(self) -> AsyncIterator[None]:
+        """``_deleting_tree`` for every chat at once (``DELETE /api/sessions``)."""
+        async with self._tree_lock:
+            self._deleting_all += 1
+        try:
+            yield
+        finally:
+            self._deleting_all -= 1
+
+    @asynccontextmanager
     async def _chat_alive(
         self, session_id: str, *, stored: bool = True
     ) -> AsyncIterator[bool]:
@@ -187,8 +198,10 @@ class RouterDeps:
         still stored — held for the block, so register the run or task inside
         it. ``stored=False`` is for a caller that may create the chat."""
         async with self._tree_lock:
-            yield session_id not in self._deleting and (
-                not stored or await self.store.get(session_id) is not None
+            yield (
+                not self._deleting_all
+                and session_id not in self._deleting
+                and (not stored or await self.store.get(session_id) is not None)
             )
 
     @asynccontextmanager

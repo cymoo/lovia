@@ -682,19 +682,25 @@ def test_api_create_requires_agent_when_ambiguous() -> None:
 # --------------------------------------------------------------------------- #
 
 
-async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
-    """A fire that hits the concurrency cap (429) must not leave an orphan chat."""
+@pytest.mark.parametrize("bound", [None, "later"])
+async def test_scheduler_defers_at_capacity_without_leaking_sessions(bound) -> None:
+    """A fire that hits the concurrency cap (429) must not leave an orphan chat
+    — nor, undoing a chat it named and just created, delete its schedule."""
     release = asyncio.Event()
     block = _blocking_tool(release)
     store = ChatStore.in_memory()
-    agent = _agent([call("block", {}, call_id="c1"), text("done")], tools=[block])
+    agent = _agent(
+        [call("block", {}, call_id="c1"), text("done"), text("second")], tools=[block]
+    )
     app = create_app(agent, store=store, titles=False, max_background_runs=1)
     deps = app.state.deps
     sched = Scheduler(deps)
     now = time.time()
     # 'a' sorts first (earlier next_fire) and grabs the only slot; 'b' hits the cap.
     await store.add_schedule(_row(id="a", next_fire=now - 2, now=now))
-    await store.add_schedule(_row(id="b", input="second", next_fire=now - 1, now=now))
+    await store.add_schedule(
+        _row(id="b", input="second", session_id=bound, next_fire=now - 1, now=now)
+    )
 
     try:
         await sched.run_due()  # a fires (blocks); b hits 429 and defers
@@ -708,6 +714,12 @@ async def test_scheduler_defers_at_capacity_without_leaking_sessions() -> None:
     finally:
         release.set()
         await _drain_runs(deps)
+
+    await sched.run_due()  # the slot is free: b's retry fires
+    await _drain_runs(deps)
+    assert len(await store.list()) == 2
+    if bound:
+        assert await store.get(bound) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -1171,6 +1183,50 @@ async def test_a_schedule_may_name_a_chat_its_first_fire_creates() -> None:
     await Scheduler(deps).run_due()
     await _drain_runs(deps)
     assert await store.get("reports") is not None
+
+
+async def test_a_fire_during_delete_all_does_not_repopulate_its_chat(
+    monkeypatch,
+) -> None:
+    import httpx
+
+    fire_entered, fire_release = asyncio.Event(), asyncio.Event()
+    clear_entered, clear_release = asyncio.Event(), asyncio.Event()
+
+    async def run_deps(trigger) -> None:
+        fire_entered.set()
+        await fire_release.wait()
+
+    store = ChatStore.in_memory()
+    app = create_app(_agent([text("hi")]), store=store, titles=False, run_deps=run_deps)
+    deps = app.state.deps
+    now = time.time()
+    await store.upsert("conv", agent="bot")
+    await store.add_schedule(
+        _row(id="s", session_id="conv", next_fire=now - 1, now=now)
+    )
+    clear = store.session.clear
+
+    async def slow_clear(session_id: str) -> None:
+        await clear(session_id)
+        clear_entered.set()
+        await clear_release.wait()
+
+    monkeypatch.setattr(store.session, "clear", slow_clear)
+    fire = asyncio.create_task(Scheduler(deps).run_due())
+    await asyncio.wait_for(fire_entered.wait(), 5)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        delete = asyncio.create_task(ac.delete("/api/sessions"))
+        await asyncio.wait_for(clear_entered.wait(), 5)  # transcripts cleared
+        fire_release.set()  # the fire resumes mid-delete
+        await asyncio.wait_for(fire, 5)
+        assert list(deps.supervisor) == []
+        clear_release.set()
+        assert (await asyncio.wait_for(delete, 5)).status_code == 200
+    assert await store.session.load("conv") == []
+    assert await store.list_schedules() == []
 
 
 async def test_pre_0_8_34_db_gains_stop_condition_columns(tmp_path) -> None:

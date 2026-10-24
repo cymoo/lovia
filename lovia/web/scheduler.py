@@ -303,10 +303,11 @@ class Scheduler:
                 # Drop the freshly-created session row so repeated 429s on a
                 # fresh-session schedule don't leak empty chats (each retry mints
                 # a new UUID). start() raises 429 before any state change, so the
-                # only side effect to undo is our own upsert above.
+                # only side effect to undo is our own upsert above — not the
+                # schedule bound to that chat, which retries.
                 log.info("schedule %s: at concurrency cap; deferring", sched.id)
                 if is_new:
-                    await self.store.delete(target)
+                    await self.store.delete(target, schedules=False)
                 return None
             raise
         if is_new:

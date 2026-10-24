@@ -521,11 +521,13 @@ class ChatStore:
             ChatMeta.from_row,
         )
 
-    async def delete(self, session_id: str) -> None:
+    async def delete(self, session_id: str, *, schedules: bool = True) -> None:
         """Remove transcript, checkpoint, AND metadata for ``session_id`` and
         its subagent task sessions — listed only under their chat, a task left
         behind would be unreachable. Schedules bound to them go too (with their
         run history): one would otherwise bring the chat back on its next fire.
+        ``schedules=False`` keeps them — for undoing a chat a schedule's own
+        fire just created.
 
         Checkpoints are dropped first: once a metadata row is gone its
         ``active_run_id`` is unreadable, so an interrupted run's snapshot would
@@ -542,17 +544,17 @@ class ChatStore:
 
         def _impl() -> None:
             with self._meta._tx() as conn:
-                schedules = [
+                bound = [
                     (row[0],)
-                    for sid in ids
+                    for sid in (ids if schedules else ())
                     for row in conn.execute(
                         "SELECT id FROM chat_schedules WHERE session_id = ?", (sid,)
                     )
                 ]
                 conn.executemany(
-                    "DELETE FROM chat_runs WHERE source = 'schedule:' || ?", schedules
+                    "DELETE FROM chat_runs WHERE source = 'schedule:' || ?", bound
                 )
-                conn.executemany("DELETE FROM chat_schedules WHERE id = ?", schedules)
+                conn.executemany("DELETE FROM chat_schedules WHERE id = ?", bound)
                 for table, column in (
                     ("chat_runs", "session_id"),
                     ("chat_ui_data", "session_id"),

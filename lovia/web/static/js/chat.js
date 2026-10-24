@@ -1821,9 +1821,36 @@ export function renderHistory(entries) {
   renderHistoryWindow({ stickBottom: true });
 }
 
-function loadEarlierHistory() {
+/** The "load earlier" button waits out a run: its redraw would wipe the live answer. */
+function syncLoadEarlier() {
+  const btn = /** @type {HTMLButtonElement | null} */ (
+    document.querySelector('#transcript .load-earlier')
+  );
+  if (!btn) return;
+  btn.disabled = !!store.streaming;
+  btn.title = store.streaming ? t('chat.loadEarlierBusy') : '';
+}
+
+// "Load earlier" redraws the whole window from _historyEntries, so it first
+// refetches them: turns streamed live since the history loaded aren't in the
+// snapshot and would vanish. History only grows at the tail, so the window's
+// start index holds across the refetch. A redraw mid-stream would wipe the
+// live answer, so the button waits out a run (syncLoadEarlier).
+async function loadEarlierHistory() {
   const el = document.getElementById('transcript');
-  if (!el) return;
+  const sessionId = store.sessionId;
+  if (!el || !sessionId || store.streaming) return;
+  const epoch = store.chatEpoch;
+  let data;
+  try {
+    data = await api.getSession(sessionId);
+  } catch {
+    toast(t('toast.loadChatsFailed'), { type: 'error' });
+    return;
+  }
+  // Superseded: the user switched chats, or a run started meanwhile.
+  if (store.chatEpoch !== epoch || store.sessionId !== sessionId || store.streaming) return;
+  _historyEntries = Array.isArray(data.entries) ? data.entries : [];
   const prevHeight = el.scrollHeight;
   const prevTop = el.scrollTop;
   _historyStart = alignHistoryStart(_historyStart - HISTORY_PAGE);
@@ -1883,6 +1910,7 @@ function renderHistoryWindow({ stickBottom }) {
     more.textContent = t('chat.loadEarlier', { n: _historyStart });
     more.addEventListener('click', loadEarlierHistory);
     transcriptEl.appendChild(more);
+    syncLoadEarlier(); // a re-attach snapshot draws it mid-run
   }
 
   let currentBubble = null;
@@ -2770,6 +2798,7 @@ async function* readStream(res, flags) {
 function enterStreamingUI() {
   store.streaming = true;
   syncAttachButton();
+  syncLoadEarlier();
   document.getElementById('reconnect-row')?.remove(); // superseded by a live stream
   if (stopBtn) {
     stopBtn.style.display = '';
@@ -2790,6 +2819,7 @@ function exitStreamingUI(status = 'detached') {
   _awaiting = null;
   syncAwaiting();
   syncAttachButton();
+  syncLoadEarlier();
   if (stopBtn) stopBtn.style.display = 'none';
   if (promptEl) {
     promptEl.placeholder = t('composer.placeholder');

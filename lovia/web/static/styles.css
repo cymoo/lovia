@@ -778,8 +778,7 @@ body.view-open #files-panel,
 body.view-open #chat-title,
 body.view-open #tasks-wrap,
 body.view-open #export-wrap,
-body.view-open #files-btn,
-body.view-open #turn-progress {
+body.view-open #files-btn {
   display: none !important;
 }
 .view-failed {
@@ -879,17 +878,6 @@ body.sidebar-collapsed .sidebar-expand-btn {
   }
 }
 
-.turn-progress {
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  padding: 2.5px 9px;
-  border-radius: 999px;
-}
-
 /* ---- Chat region --------------------------------------------------------- */
 .chat-region {
   flex: 1;
@@ -938,6 +926,23 @@ body.sidebar-collapsed .sidebar-expand-btn {
 .scroll-bottom-btn:hover {
   background: var(--surface-2);
   color: var(--ink);
+}
+/* A run streams below the fold: a breathing accent ring says the tail is live. */
+.scroll-bottom-btn.live::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  opacity: 0.25;
+  animation: scroll-live 1.6s var(--ease) infinite;
+  pointer-events: none;
+}
+@keyframes scroll-live {
+  50% {
+    opacity: 0.8;
+    transform: scale(1.06);
+  }
 }
 
 .transcript {
@@ -1147,6 +1152,7 @@ body.sidebar-collapsed .sidebar-expand-btn {
   display: none;
 }
 .turn .timestamp,
+.turn-footer .duration,
 .turn-footer .usage {
   font-size: 11px;
   color: var(--muted-2);
@@ -1154,18 +1160,22 @@ body.sidebar-collapsed .sidebar-expand-btn {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.turn-footer .duration::before,
 .turn-footer .usage::before {
   content: "\00b7";
   margin-right: 6px;
 }
 /* Metadata whispers: visible on hover/focus, silent otherwise. */
 .turn .timestamp,
+.turn-footer .duration,
 .turn-footer .usage {
   opacity: 0;
   transition: opacity var(--t-med) var(--ease);
 }
 .turn .bubble:hover .timestamp,
 .turn .bubble:focus-within .timestamp,
+.turn .bubble:hover .duration,
+.turn .bubble:focus-within .duration,
 .turn .bubble:hover .usage,
 .turn .bubble:focus-within .usage {
   opacity: 1;

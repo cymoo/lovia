@@ -329,36 +329,38 @@ function formatDuration(sec) {
 }
 
 /**
+ * Set (or replace — a later stamp is the truer one) a bubble's duration.
  * @param {Element | null} bubble
- * @param {number | undefined} sec
+ * @param {number} sec
  */
 function stampDuration(bubble, sec) {
-  if (!bubble || !sec || sec < DURATION_MIN_S) return;
+  if (!bubble) return;
+  const old = /** @type {HTMLElement | null} */ (
+    bubble.querySelector(':scope > .turn-footer .duration')
+  );
+  if (sec < DURATION_MIN_S) {
+    old?.remove();
+    return;
+  }
   const footer = ensureFooter(bubble);
-  if (!footer || footer.querySelector('.duration')) return;
-  const span = document.createElement('span');
+  if (!footer) return;
+  const span = old ?? document.createElement('span');
   span.className = 'duration';
   span.textContent = formatDuration(sec);
   span.title = t('chat.took', { d: span.textContent });
-  footer.querySelector('.timestamp')?.after(span);
+  if (!old) footer.querySelector('.timestamp')?.after(span);
 }
-
-/**
- * @typedef {{ run_id: string, status: string, started_at: number, finished_at: number | null }} RunRecord
- * The session's run records (restoreFromRunHistory), kept so every rebuild of
- * the transcript (an earlier page, a re-attach snapshot) can stamp again.
- * @type {{ sessionId: string, records: RunRecord[] } | null}
- */
-let _runRecords = null;
 
 /**
  * Replay: each finished run's last answer (lastAnswerOfRun) gets its recorded
  * duration, and its real finish time in place of the evenly spread one the
- * history carries.
+ * history carries. `records` must be fetched after the transcript was drawn:
+ * a record exists from its run's start, so every segment on screen then has
+ * one or is a chained leg — the premise lastAnswerOfRun stands on.
+ * @param {Array<{ run_id: string, status: string, started_at: number, finished_at: number | null }>} records
  */
-function stampRunDurations() {
-  if (!_runRecords || _runRecords.sessionId !== store.sessionId) return;
-  const byId = new Map(_runRecords.records.map((r) => [r.run_id, r]));
+function stampRunDurations(records) {
+  const byId = new Map(records.map((r) => [r.run_id, r]));
   const turns = /** @type {HTMLElement[]} */ ([...document.querySelectorAll('#transcript .turn')]);
   const runOf = (/** @type {HTMLElement} */ t) => {
     const ref = t.dataset.ref;
@@ -1342,15 +1344,19 @@ export function initContextRing() {
 
 // Usage is a property of the conversation on screen — switching away clears
 // it, and entering a chat restores it from the durable run record (so the
-// ring survives reloads). Restore hooks 'render-history', which fires after
-// 'sync-agent' — the window lookup needs the chat's own agent in place.
-// Sessions rewound this page-view are skipped: their latest record describes
-// a transcript that's gone; the next completed run un-marks them.
-// The same records give the replayed answers their run durations.
+// ring survives reloads). The restore runs at the end of every transcript
+// rebuild (renderHistoryWindow); a session's first one comes from
+// 'render-history', which fires after 'sync-agent', so the window lookup has
+// the chat's own agent in place. Sessions rewound this page-view are skipped:
+// their latest record describes a transcript that's gone; the next completed
+// run un-marks them. The same records give the replayed answers their run
+// durations — hence fetched anew per rebuild: never older than what's on screen.
 const _staleMeterSessions = new Set();
+let _restoreSeq = 0; // only the latest restore applies
 
 async function restoreFromRunHistory(sessionId) {
   if (!sessionId) return;
+  const seq = ++_restoreSeq;
   let records = [];
   try {
     // Newest first; a chat with more runs leaves its oldest answers unstamped.
@@ -1358,9 +1364,9 @@ async function restoreFromRunHistory(sessionId) {
   } catch {
     return; // cosmetic — a failed restore just leaves the ring and durations out
   }
-  if (store.sessionId !== sessionId) return; // the user switched on
-  _runRecords = { sessionId, records };
-  stampRunDurations();
+  // Superseded: the user switched on, or a later rebuild fetched again.
+  if (seq !== _restoreSeq || store.sessionId !== sessionId) return;
+  stampRunDurations(records);
   const usage = records.find((r) => r.usage)?.usage; // bad fires store none
   // Bail when a live `done` beat us, or the latest record is stale.
   if (!usage || _lastUsage || _staleMeterSessions.has(sessionId)) return;
@@ -1368,7 +1374,6 @@ async function restoreFromRunHistory(sessionId) {
 }
 
 store.on('session-switched', hideContextMeter);
-store.on('render-history', () => restoreFromRunHistory(store.sessionId));
 
 // Surface why compaction fired and how much it saved. Policy-agnostic: the
 // numeric fields (tokens_before/after) ride at the top level and the policy
@@ -2061,7 +2066,9 @@ function renderHistoryWindow({ stickBottom }) {
   // Remove streaming markers
   transcriptEl.querySelectorAll('.turn.streaming').forEach(n => n.classList.remove('streaming'));
   renderAllMessageActions(); // the replies were still marked streaming above
-  stampRunDurations(); // every rebuild: an earlier page, a snapshot, a rewind
+  // Every rebuild (a session's history, an earlier page, a snapshot, a
+  // rewind): stamp from records fetched now, so never older than the DOM.
+  restoreFromRunHistory(store.sessionId);
   store.bubble = null;
   store.body = null;
   store.rawText = '';

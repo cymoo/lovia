@@ -27,6 +27,14 @@ test('an auto-chained leg (no record of its own) extends the run before it', () 
   assert.deepEqual(lastAnswerOfRun(turns, new Set(['a', 'b'])), new Map([['a', 3], ['b', 5]]));
 });
 
+test('records older than the transcript misread a new run as a chained leg', () => {
+  // The premise chat.js keeps by fetching records after every rebuild: with
+  // run `b` missing from stale records, `a`'s duration would land on `b`'s answer.
+  const turns = [user('a'), answer, user('b'), answer];
+  assert.deepEqual(lastAnswerOfRun(turns, new Set(['a'])), new Map([['a', 3]]));
+  assert.deepEqual(lastAnswerOfRun(turns, new Set(['a', 'b'])), new Map([['a', 1], ['b', 3]]));
+});
+
 test('segments before any record, and turns without a ref, go unstamped', () => {
   const old = [user('x'), answer, user('a'), answer];
   assert.deepEqual(lastAnswerOfRun(old, new Set(['a'])), new Map([['a', 3]]));
